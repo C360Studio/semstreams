@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "json_to_entity.v1.json",
+  "type": "object",
+  "title": "json_to_entity Configuration",
+  "description": "Converts GenericJSON (core.json.v1) to Entity (graph.Entity.v1) for semantic graph processing",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "json_to_entity",
+    "type": "processor",
+    "protocol": "json_to_entity",
+    "domain": "processing",
+    "version": "0.1.0"
+  }
+}

@@ -1,0 +1,401 @@
+{
+  "package": "robotapi",
+  "schema_path": "schema.graphql",
+  "output_dir": "generated",
+
+  "queries": {
+    "robot": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.robot.get",
+      "timeout": "5s"
+    },
+    "task": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.task.get"
+    },
+    "sensor": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.sensor.get"
+    },
+
+    "robots": {
+      "resolver": "QueryEntitiesByIDs",
+      "subject": "graph.robot.list"
+    },
+    "allRobots": {
+      "resolver": "QueryEntitiesByType",
+      "subject": "graph.robot.list",
+      "entity_type": "robot"
+    },
+    "tasks": {
+      "resolver": "QueryEntitiesByIDs",
+      "subject": "graph.task.list"
+    },
+    "allTasks": {
+      "resolver": "QueryEntitiesByType",
+      "subject": "graph.task.list",
+      "entity_type": "task"
+    },
+
+    "robotTasks": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.robot.tasks"
+    },
+    "robotSensors": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.robot.sensors"
+    },
+    "taskRobot": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.task.robot"
+    },
+
+    "searchRobots": {
+      "resolver": "SemanticSearch",
+      "subject": "graph.query.semantic",
+      "entity_type": "robot"
+    },
+    "searchTasks": {
+      "resolver": "SemanticSearch",
+      "subject": "graph.query.semantic",
+      "entity_type": "task"
+    },
+
+    "robotsByZone": {
+      "custom_query": true
+    },
+    "tasksByPriority": {
+      "custom_query": true
+    },
+    "lowBatteryRobots": {
+      "custom_query": true
+    }
+  },
+
+  "subscriptions": {
+    "robotStatusChanged": {
+      "subject": "robot.status.changed.{robotID}",
+      "entity_type": "robot"
+    },
+    "lowBatteryAlert": {
+      "subject": "robot.battery.low.{threshold}",
+      "entity_type": "robot"
+    },
+    "taskStatusChanged": {
+      "subject": "task.status.changed.{taskID}",
+      "entity_type": "task"
+    },
+    "robotTelemetry": {
+      "subject": "robot.telemetry.{robotID}",
+      "stream": "ROBOT_TELEMETRY"
+    }
+  },
+
+  "types": {
+    "Robot": {
+      "entity_type": "robot",
+      "id_field": "id",
+      "cache_ttl": "30s"
+    },
+    "Task": {
+      "entity_type": "task",
+      "id_field": "id"
+    },
+    "Sensor": {
+      "entity_type": "sensor",
+      "id_field": "id"
+    },
+    "Waypoint": {
+      "entity_type": "waypoint",
+      "id_field": "id"
+    },
+    "Telemetry": {
+      "entity_type": "telemetry"
+    }
+  },
+
+  "fields": {
+    "Robot.id": {
+      "property": "id",
+      "type": "string"
+    },
+    "Robot.name": {
+      "property": "properties.name",
+      "type": "string"
+    },
+    "Robot.model": {
+      "property": "properties.model",
+      "type": "string"
+    },
+    "Robot.status": {
+      "property": "properties.status",
+      "type": "string"
+    },
+    "Robot.location": {
+      "property": "properties.location",
+      "type": "map[string]interface{}"
+    },
+    "Robot.batteryLevel": {
+      "property": "properties.battery_level",
+      "type": "int"
+    },
+    "Robot.firmwareVersion": {
+      "property": "properties.firmware_version",
+      "type": "string"
+    },
+    "Robot.capabilities": {
+      "property": "properties.capabilities",
+      "type": "[]string"
+    },
+    "Robot.tasks": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.robot.tasks",
+      "edge_type": "assigned_to"
+    },
+    "Robot.sensors": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.robot.sensors",
+      "edge_type": "has_sensor"
+    },
+    "Robot.telemetry": {
+      "custom_resolver": true
+    },
+    "Robot.lastHeartbeat": {
+      "property": "properties.last_heartbeat",
+      "type": "string"
+    },
+    "Robot.createdAt": {
+      "property": "createdAt",
+      "type": "string"
+    },
+    "Robot.updatedAt": {
+      "property": "updatedAt",
+      "type": "string"
+    },
+
+    "Task.id": {
+      "property": "id",
+      "type": "string"
+    },
+    "Task.title": {
+      "property": "properties.title",
+      "type": "string"
+    },
+    "Task.description": {
+      "property": "properties.description",
+      "type": "string",
+      "nullable": true
+    },
+    "Task.type": {
+      "property": "properties.type",
+      "type": "string"
+    },
+    "Task.priority": {
+      "property": "properties.priority",
+      "type": "int"
+    },
+    "Task.status": {
+      "property": "properties.status",
+      "type": "string"
+    },
+    "Task.assignedTo": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.task.robot",
+      "edge_type": "assigned_to",
+      "direction": "incoming"
+    },
+    "Task.scheduledStart": {
+      "property": "properties.scheduled_start",
+      "type": "string",
+      "nullable": true
+    },
+    "Task.actualStart": {
+      "property": "properties.actual_start",
+      "type": "string",
+      "nullable": true
+    },
+    "Task.completedAt": {
+      "property": "properties.completed_at",
+      "type": "string",
+      "nullable": true
+    },
+    "Task.estimatedDuration": {
+      "property": "properties.estimated_duration",
+      "type": "int",
+      "nullable": true
+    },
+    "Task.actualDuration": {
+      "property": "properties.actual_duration",
+      "type": "int",
+      "nullable": true
+    },
+    "Task.waypoints": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.task.waypoints",
+      "edge_type": "has_waypoint"
+    },
+    "Task.createdAt": {
+      "property": "createdAt",
+      "type": "string"
+    },
+    "Task.updatedAt": {
+      "property": "updatedAt",
+      "type": "string"
+    },
+
+    "Sensor.id": {
+      "property": "id",
+      "type": "string"
+    },
+    "Sensor.type": {
+      "property": "properties.type",
+      "type": "string"
+    },
+    "Sensor.name": {
+      "property": "properties.name",
+      "type": "string"
+    },
+    "Sensor.robot": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.sensor.robot",
+      "edge_type": "has_sensor",
+      "direction": "incoming"
+    },
+    "Sensor.status": {
+      "property": "properties.status",
+      "type": "string"
+    },
+    "Sensor.lastReading": {
+      "property": "properties.last_reading",
+      "type": "map[string]interface{}",
+      "nullable": true
+    },
+    "Sensor.calibratedAt": {
+      "property": "properties.calibrated_at",
+      "type": "string",
+      "nullable": true
+    },
+
+    "Location.latitude": {
+      "property": "latitude",
+      "type": "float64"
+    },
+    "Location.longitude": {
+      "property": "longitude",
+      "type": "float64"
+    },
+    "Location.altitude": {
+      "property": "altitude",
+      "type": "float64",
+      "nullable": true
+    },
+    "Location.zone": {
+      "property": "zone",
+      "type": "string"
+    },
+
+    "Waypoint.id": {
+      "property": "id",
+      "type": "string"
+    },
+    "Waypoint.location": {
+      "property": "properties.location",
+      "type": "map[string]interface{}"
+    },
+    "Waypoint.action": {
+      "property": "properties.action",
+      "type": "string",
+      "nullable": true
+    },
+    "Waypoint.sequence": {
+      "property": "properties.sequence",
+      "type": "int"
+    },
+    "Waypoint.reachedAt": {
+      "property": "properties.reached_at",
+      "type": "string",
+      "nullable": true
+    },
+
+    "SensorReading.timestamp": {
+      "property": "timestamp",
+      "type": "string"
+    },
+    "SensorReading.value": {
+      "property": "value",
+      "type": "float64"
+    },
+    "SensorReading.unit": {
+      "property": "unit",
+      "type": "string"
+    },
+    "SensorReading.quality": {
+      "property": "quality",
+      "type": "float64",
+      "nullable": true
+    },
+
+    "Telemetry.robotID": {
+      "property": "robot_id",
+      "type": "string"
+    },
+    "Telemetry.timestamp": {
+      "property": "timestamp",
+      "type": "string"
+    },
+    "Telemetry.velocity": {
+      "property": "velocity",
+      "type": "float64"
+    },
+    "Telemetry.heading": {
+      "property": "heading",
+      "type": "float64"
+    },
+    "Telemetry.battery": {
+      "property": "battery",
+      "type": "float64"
+    },
+    "Telemetry.cpuUsage": {
+      "property": "cpu_usage",
+      "type": "float64"
+    },
+    "Telemetry.memoryUsage": {
+      "property": "memory_usage",
+      "type": "float64"
+    },
+    "Telemetry.networkLatency": {
+      "property": "network_latency",
+      "type": "int"
+    },
+    "Telemetry.errorCount": {
+      "property": "error_count",
+      "type": "int"
+    }
+  },
+
+  "error_mapping": {
+    "NOT_FOUND": "Robot, task, or sensor not found",
+    "INVALID_INPUT": "Invalid query parameters",
+    "TIMEOUT": "Request timeout - robot may be offline",
+    "PERMISSION_DENIED": "Permission denied - check API key",
+    "INTERNAL_ERROR": "Internal error - please try again"
+  },
+
+  "dataloaders": {
+    "Robot": {
+      "batch_size": 50,
+      "wait": "10ms",
+      "cache": true
+    },
+    "Task": {
+      "batch_size": 100,
+      "wait": "16ms",
+      "cache": true
+    },
+    "Sensor": {
+      "batch_size": 50,
+      "wait": "10ms",
+      "cache": true
+    }
+  }
+}

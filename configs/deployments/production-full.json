@@ -1,0 +1,58 @@
+{
+  "$schema": "Configuration file with all available options documented",
+
+  "port": 8080,
+  "log_level": "info",
+
+  "nats": {
+    "url": "nats://nats:4222",
+    "max_reconnects": -1,
+    "reconnect_wait": "5s",
+    "drain_timeout": "30s"
+  },
+
+  "tls": {
+    "enabled": true,
+    "cert_file": "/certs/server.crt",
+    "key_file": "/certs/server.key",
+    "ca_file": "/certs/ca.crt",
+    "verify_client": false
+  },
+
+  "metrics": {
+    "enabled": true,
+    "port": 8080,
+    "path": "/metrics"
+  },
+
+  "health": {
+    "enabled": true,
+    "path": "/health"
+  },
+
+  "resources": {
+    "max_memory_mb": 2048,
+    "max_cpu_percent": 80,
+    "worker_pool_size": 10
+  },
+
+  "security": {
+    "allowed_origins": ["https://ui.semstreams.local"],
+    "allowed_methods": ["GET", "POST", "PUT", "DELETE"],
+    "allowed_headers": ["Content-Type", "Authorization"],
+    "enable_cors": true
+  },
+
+  "storage": {
+    "data_dir": "/data",
+    "temp_dir": "/tmp"
+  },
+
+  "features": {
+    "semantic_search": true,
+    "graph_processing": true,
+    "temporal_indexing": true
+  },
+
+  "debug": false
+}

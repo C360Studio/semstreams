@@ -1,0 +1,99 @@
+{
+  "version": "1.0.1",
+  "platform": {
+    "org": "c360",
+    "id": "streamkit-edge",
+    "type": "edge-gateway",
+    "region": "edge",
+    "instance_id": "edge-001",
+    "environment": "development"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9091,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "edge.raw.data",
+              "type": "nats",
+              "description": "Raw UDP data from edge devices"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "json_filter": {
+      "type": "processor",
+      "name": "json_filter",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "filter_in",
+              "subject": "edge.raw.data",
+              "type": "nats"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "filter_out",
+              "subject": "edge.filtered.data",
+              "type": "nats",
+              "description": "Filtered data ready for federation"
+            }
+          ]
+        },
+        "criteria": {}
+      }
+    },
+    "websocket": {
+      "type": "output",
+      "name": "websocket",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "ws_in",
+              "subject": "edge.filtered.data",
+              "type": "nats"
+            }
+          ],
+          "outputs": []
+        },
+        "http_port": 8082,
+        "path": "/stream",
+        "delivery_mode": "at-least-once",
+        "ack_timeout": "5s"
+      }
+    }
+  }
+}

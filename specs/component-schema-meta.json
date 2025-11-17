@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "component-schema-meta.json",
+  "title": "SemStreams Component Schema Meta-Schema",
+  "description": "Defines the structure that all component configuration schemas must follow",
+  "type": "object",
+  "required": ["$schema", "$id", "type", "title", "description", "properties", "x-component-metadata"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "http://json-schema.org/draft-07/schema#",
+      "description": "Must reference JSON Schema draft-07"
+    },
+    "$id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+\\.v[0-9]+\\.json$",
+      "description": "Component ID with version (e.g., udp.v1.json)"
+    },
+    "type": {
+      "type": "string",
+      "const": "object",
+      "description": "Component configs are always objects"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable title for the component configuration"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Component description"
+    },
+    "properties": {
+      "type": "object",
+      "description": "Configuration properties",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["string", "number", "boolean", "array", "object"],
+            "description": "Property type"
+          },
+          "description": {
+            "type": "string",
+            "description": "Property description"
+          },
+          "default": {
+            "description": "Default value for the property"
+          },
+          "enum": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed enum values"
+          },
+          "minimum": {
+            "type": "integer",
+            "description": "Minimum value for numeric types"
+          },
+          "maximum": {
+            "type": "integer",
+            "description": "Maximum value for numeric types"
+          },
+          "items": {
+            "type": "object",
+            "description": "Item schema for array types"
+          }
+        }
+      }
+    },
+    "required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of required property names"
+    },
+    "x-component-metadata": {
+      "type": "object",
+      "required": ["name", "type", "protocol", "domain", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+$",
+          "description": "Component name (lowercase, alphanumeric with dashes/underscores)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["input", "processor", "output", "storage", "gateway"],
+          "description": "Component type"
+        },
+        "protocol": {
+          "type": "string",
+          "description": "Technical protocol (udp, tcp, websocket, etc.)"
+        },
+        "domain": {
+          "type": "string",
+          "description": "Business domain (robotics, semantic, network, storage)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (e.g., 1.0.0)"
+        }
+      },
+      "description": "Component metadata for OpenAPI integration"
+    }
+  },
+  "additionalProperties": false
+}

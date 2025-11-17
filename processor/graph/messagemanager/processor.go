@@ -1,0 +1,556 @@
+// Package messagemanager handles all message processing business logic
+package messagemanager
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/c360/semstreams/errors"
+	gtypes "github.com/c360/semstreams/graph"
+	"github.com/c360/semstreams/message"
+	"github.com/c360/semstreams/storage/objectstore"
+)
+
+// Manager implements the MessageHandler interface
+type Manager struct {
+	// Dependencies
+	deps   Dependencies
+	config Config
+
+	// Statistics tracking
+	messagesProcessed int64
+	lastActivity      time.Time
+	mu                sync.RWMutex
+
+	// Error handling
+	errorCallback func(string)
+}
+
+// NewManager creates a new message manager
+func NewManager(config Config, deps Dependencies, errorCallback func(string)) *Manager {
+	return &Manager{
+		deps:          deps,
+		config:        config,
+		errorCallback: errorCallback,
+		lastActivity:  time.Now(),
+	}
+}
+
+// ProcessWork processes raw message data from worker pool
+func (mp *Manager) ProcessWork(ctx context.Context, data []byte) error {
+	// Add panic recovery to prevent worker crashes
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Errorf("panic: %v", r)
+			err := errors.WrapFatal(msg, "MessageManager", "ProcessMessage",
+				"message processing panic")
+			mp.deps.Logger.Error("Message processing panic", "panic", r, "data_len", len(data))
+			mp.recordError(err.Error())
+		}
+	}()
+
+	// Create context for this message processing that respects parent deadline
+	var msgCtx context.Context
+	var cancel context.CancelFunc
+
+	// Check if parent has a deadline and respect it
+	if deadline, ok := ctx.Deadline(); ok {
+		// Use minimum of remaining time or 30 seconds
+		remaining := time.Until(deadline)
+		if remaining > 30*time.Second {
+			msgCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		} else if remaining > 0 {
+			// Use parent's remaining time
+			msgCtx, cancel = context.WithTimeout(ctx, remaining)
+		} else {
+			// Already past deadline
+			return context.DeadlineExceeded
+		}
+	} else {
+		// No parent deadline, use 30 second timeout
+		msgCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancel()
+
+	// Update message processing stats
+	atomic.AddInt64(&mp.messagesProcessed, 1)
+	mp.mu.Lock()
+	mp.lastActivity = time.Now()
+	mp.mu.Unlock()
+
+	// Always unmarshal as BaseMessage (transport envelope) - enforces clean architecture
+	var baseMsg message.BaseMessage
+	if err := json.Unmarshal(data, &baseMsg); err != nil {
+		mp.recordError(fmt.Sprintf("failed to unmarshal BaseMessage: %v", err))
+		return err
+	}
+
+	// Extract message type for logging
+	messageType := "unknown"
+	if msgType := baseMsg.Type(); msgType.Domain != "" && msgType.Category != "" {
+		messageType = msgType.Domain + "." + msgType.Category
+	}
+
+	// Extract payload from transport envelope
+	payload := baseMsg.Payload()
+
+	// Handle StoredMessage payloads (from ObjectStore)
+	if storedMsg, ok := payload.(*objectstore.StoredMessage); ok {
+		mp.deps.Logger.Debug("Processing StoredMessage from BaseMessage",
+			"entity_id", storedMsg.EntityID(),
+			"message_type", storedMsg.MessageType(),
+			"has_storage_ref", storedMsg.StorageRef() != nil,
+			"transport_type", messageType)
+
+		// Process as Storable with storage reference
+		entityStates, err := mp.ProcessMessage(msgCtx, storedMsg)
+		if err != nil {
+			mp.recordError(fmt.Sprintf("failed to process StoredMessage: %v", err))
+			return err
+		}
+
+		mp.deps.Logger.Debug("Processed StoredMessage into entity states", "count", len(entityStates))
+
+		// Store each entity state
+		for _, state := range entityStates {
+			if _, err := mp.deps.DataHandler.UpdateEntity(msgCtx, state); err != nil {
+				mp.recordError(fmt.Sprintf("failed to store entity %s: %v", state.Node.ID, err))
+				continue
+			}
+			// Indexes are now updated via KV watch pattern
+		}
+		return nil
+	}
+
+	// Handle other payload types (generic processing)
+	mp.deps.Logger.Debug("Processing generic payload from BaseMessage", "type", messageType)
+
+	// Process message into entity states
+	entityStates, err := mp.ProcessMessage(msgCtx, payload)
+	if err != nil {
+		mp.recordError(fmt.Sprintf("failed to process payload: %v", err))
+		return err
+	}
+
+	mp.deps.Logger.Debug("Processed entity states from payload", "count", len(entityStates))
+
+	// Store each entity state
+	for _, state := range entityStates {
+		if _, err := mp.deps.DataHandler.UpdateEntity(msgCtx, state); err != nil {
+			mp.recordError(fmt.Sprintf("failed to store entity %s: %v", state.Node.ID, err))
+			continue
+		}
+		// Indexes are now updated via KV watch pattern
+	}
+
+	return nil
+}
+
+// ProcessMessage processes any message type into entity states
+func (mp *Manager) ProcessMessage(ctx context.Context, msg any) ([]*gtypes.EntityState, error) {
+	// Default empty ObjectRef (for backward compatibility)
+	objectRef := ""
+
+	// Check if message implements Storable interface (has storage reference)
+	if storable, ok := msg.(message.Storable); ok {
+		// Extract ObjectRef from StorageReference
+		if ref := storable.StorageRef(); ref != nil {
+			objectRef = ref.Key // Use storage key as ObjectRef
+			mp.deps.Logger.Debug("Extracted ObjectRef from Storable",
+				"object_ref", objectRef,
+				"storage_instance", ref.StorageInstance)
+		}
+		// Process as Graphable (Storable embeds Graphable)
+		return mp.processSimpleGraphable(ctx, storable, objectRef)
+	}
+
+	// Check if message implements Graphable interface (no storage reference)
+	if graphable, ok := msg.(message.Graphable); ok {
+		mp.deps.Logger.Debug("Processing Graphable without storage reference")
+		return mp.processSimpleGraphable(ctx, graphable, objectRef)
+	}
+
+	// Fall back to basic entity extraction for backward compatibility
+	return mp.processNonGraphableMessage(ctx, msg, objectRef)
+}
+
+// processSimpleGraphable processes a message using the Graphable interface
+func (mp *Manager) processSimpleGraphable(
+	ctx context.Context, graphable message.Graphable, objectRef string,
+) ([]*gtypes.EntityState, error) {
+	entityID := graphable.EntityID()
+	if entityID == "" {
+		return []*gtypes.EntityState{}, nil
+	}
+
+	// Resolve alias to actual entity ID
+	actualEntityID, err := mp.deps.IndexManager.ResolveAlias(ctx, entityID)
+	if err != nil {
+		mp.deps.Logger.Debug("Failed to resolve alias, using original ID", "entity_id", entityID, "error", err)
+		actualEntityID = entityID
+	}
+
+	if actualEntityID != entityID {
+		mp.deps.Logger.Debug("Resolved alias to entity ID", "alias", entityID, "entity_id", actualEntityID)
+	}
+
+	// Get triples and separate properties from relationships
+	triples := graphable.Triples()
+	mp.deps.Logger.Debug("Extracted triples from Graphable",
+		"entity_id", actualEntityID,
+		"triple_count", len(triples))
+
+	properties, relationships := mp.extractPropertiesAndRelationships(triples)
+	mp.deps.Logger.Debug("Separated triples",
+		"property_count", len(properties),
+		"relationship_count", len(relationships))
+
+	// Convert relationship triples to edges
+	edges := mp.buildEdgesFromRelationships(relationships)
+	mp.deps.Logger.Debug("Built edges from relationships",
+		"edge_count", len(edges))
+
+	// Extract message type if available (for semantic search filtering)
+	var messageType string
+	if msg, ok := graphable.(message.Message); ok {
+		messageType = msg.Type().String() // e.g., "alerts.critical.v1"
+	}
+
+	// Create entity state
+	state := &gtypes.EntityState{
+		Node: gtypes.NodeProperties{
+			ID:         actualEntityID,
+			Type:       mp.extractTypeFromEntityID(actualEntityID),
+			Properties: properties,
+			Status:     gtypes.StatusActive,
+		},
+		Edges:       edges,
+		Triples:     triples, // CRITICAL: Preserve original triples for spatial index and other semantic operations
+		ObjectRef:   objectRef,
+		MessageType: messageType, // Original message type for filtering (domain.category.version)
+		Version:     1,
+		UpdatedAt:   time.Now(),
+	}
+
+	// Check for existing entity to merge edges and increment version
+	existing, err := mp.deps.DataHandler.GetEntity(ctx, actualEntityID)
+	var entityExists = (err == nil && existing != nil)
+	if entityExists {
+		// Entity exists, merge edges, triples, and increment version
+		mp.deps.Logger.Debug("Entity exists, merging edges and triples",
+			"entity_id", actualEntityID,
+			"existing_edges", len(existing.Edges),
+			"new_edges", len(edges),
+			"existing_triples", len(existing.Triples),
+			"new_triples", len(state.Triples))
+
+		// Merge existing edges with new edges (avoid duplicates)
+		existingEdgeMap := make(map[string]gtypes.Edge)
+		for _, edge := range existing.Edges {
+			key := fmt.Sprintf("%s:%s", edge.ToEntityID, edge.EdgeType)
+			existingEdgeMap[key] = edge
+		}
+		// Add new edges (overwriting if they already exist)
+		for _, edge := range edges {
+			key := fmt.Sprintf("%s:%s", edge.ToEntityID, edge.EdgeType)
+			existingEdgeMap[key] = edge
+		}
+		// Convert map back to slice
+		mergedEdges := []gtypes.Edge{}
+		for _, edge := range existingEdgeMap {
+			mergedEdges = append(mergedEdges, edge)
+		}
+		state.Edges = mergedEdges
+
+		// CRITICAL FIX: Merge triples from existing and new entity
+		// This preserves all semantic data across entity updates
+		state.Triples = gtypes.MergeTriples(existing.Triples, state.Triples)
+
+		state.Version = existing.Version + 1
+
+		mp.deps.Logger.Debug("Merged edges and triples complete",
+			"entity_id", actualEntityID,
+			"final_edge_count", len(state.Edges),
+			"final_triple_count", len(state.Triples))
+
+		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
+			return nil, errors.WrapTransient(updateErr, "MessageManager",
+				"processSimpleGraphable", "entity update failed")
+		}
+	} else {
+		// Entity doesn't exist, create it with new edges
+		mp.deps.Logger.Debug("Creating new entity with edges",
+			"entity_id", actualEntityID,
+			"edge_count", len(edges))
+
+		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
+			return nil, errors.WrapFatal(createErr, "MessageManager",
+				"processSimpleGraphable", "entity creation failed")
+		}
+	}
+
+	return []*gtypes.EntityState{state}, nil
+}
+
+// processNonGraphableMessage handles messages that don't implement Graphable
+func (mp *Manager) processNonGraphableMessage(
+	ctx context.Context, msg any, objectRef string,
+) ([]*gtypes.EntityState, error) {
+	// Check for basic EntityID interface for backward compatibility
+	identifiable, ok := msg.(interface{ EntityID() string })
+	if !ok {
+		// Try to handle map[string]any from JSON unmarshaling (common case)
+		if msgMap, isMap := msg.(map[string]any); isMap {
+			return mp.processMapMessage(ctx, msgMap, objectRef)
+		}
+		return nil, errors.WrapInvalid(errors.ErrInvalidData, "message manager",
+			"processNonGraphableMessage", "message missing required interfaces")
+	}
+
+	entityID := identifiable.EntityID()
+
+	// Check for Type interface
+	var entityType string
+	if typed, ok := msg.(interface{ Type() string }); ok {
+		entityType = typed.Type()
+	} else {
+		entityType = "unknown"
+	}
+
+	// Basic properties
+	properties := map[string]any{
+		"entity_class": message.ClassThing, // Default for non-Graphable
+		"entity_role":  message.RolePrimary,
+		"confidence":   0.5, // Medium confidence for non-Graphable
+		"source":       "legacy_interface",
+	}
+
+	// Create entity state
+	state := &gtypes.EntityState{
+		Node: gtypes.NodeProperties{
+			ID:         entityID,
+			Type:       entityType,
+			Properties: properties,
+			Status:     gtypes.StatusActive,
+		},
+		Edges:     []gtypes.Edge{},
+		ObjectRef: objectRef,
+		Version:   1,
+		UpdatedAt: time.Now(),
+	}
+
+	// Check for existing entity to preserve edges and increment version
+	existing, err := mp.deps.DataHandler.GetEntity(ctx, entityID)
+	var entityExists = (err == nil && existing != nil)
+	if entityExists {
+		// Entity exists, preserve edges and increment version
+		state.Edges = existing.Edges
+		state.Version = existing.Version + 1
+		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
+			return nil, errors.WrapTransient(updateErr, "MessageManager", "unknown_function", "entity update failed")
+		}
+	} else {
+		// Entity doesn't exist, create it
+		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
+			return nil, errors.WrapFatal(createErr, "MessageManager", "unknown_function", "entity creation failed")
+		}
+	}
+
+	return []*gtypes.EntityState{state}, nil
+}
+
+// processMapMessage processes a map[string]any message
+func (mp *Manager) processMapMessage(
+	ctx context.Context, msgMap map[string]any, objectRef string,
+) ([]*gtypes.EntityState, error) {
+	// Extract entity information from map structure
+	var entityID string
+	var entityType string
+
+	// Try to extract standard fields
+	if id, exists := msgMap["id"]; exists {
+		entityID = fmt.Sprintf("%v", id)
+	}
+	if eType, exists := msgMap["type"]; exists {
+		entityType = fmt.Sprintf("%v", eType)
+	}
+
+	// Use defaults if not provided
+	if entityID == "" {
+		entityID = fmt.Sprintf("%s.%s.map.%d",
+			mp.config.DefaultNamespace, mp.config.DefaultPlatform, time.Now().UnixNano())
+	}
+	if entityType == "" {
+		entityType = "map_message"
+	}
+
+	// Use remaining map entries as properties (excluding standard fields)
+	properties := make(map[string]any)
+	for key, value := range msgMap {
+		if key != "id" && key != "type" {
+			properties[key] = value
+		}
+	}
+
+	// Add processing metadata
+	properties["processed_at"] = time.Now().Format(time.RFC3339)
+	properties["source_type"] = "map_message"
+
+	if objectRef == "" {
+		objectRef = fmt.Sprintf("map_%s_%d", entityID, time.Now().UnixNano())
+	}
+
+	state := &gtypes.EntityState{
+		Node: gtypes.NodeProperties{
+			ID:         entityID,
+			Type:       entityType,
+			Properties: properties,
+			Status:     gtypes.StatusActive,
+		},
+		Edges:     []gtypes.Edge{},
+		ObjectRef: objectRef,
+		Version:   1,
+		UpdatedAt: time.Now(),
+	}
+
+	// Check for existing entity to preserve edges and increment version
+	existing, err := mp.deps.DataHandler.GetEntity(ctx, entityID)
+	var entityExists = (err == nil && existing != nil)
+	if entityExists {
+		// Entity exists, preserve edges and increment version
+		state.Edges = existing.Edges
+		state.Version = existing.Version + 1
+		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
+			return nil, errors.WrapTransient(updateErr, "MessageManager", "unknown_function", "entity update failed")
+		}
+	} else {
+		// Entity doesn't exist, create it
+		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
+			return nil, errors.WrapFatal(createErr, "MessageManager", "unknown_function", "entity creation failed")
+		}
+	}
+
+	return []*gtypes.EntityState{state}, nil
+}
+
+// extractPropertiesAndRelationships separates triples into properties and relationships
+func (mp *Manager) extractPropertiesAndRelationships(triples []message.Triple) (map[string]any, []message.Triple) {
+	properties := make(map[string]any)
+	relationships := []message.Triple{}
+
+	// Separate property triples from relationship triples
+	for _, triple := range triples {
+		if triple.IsRelationship() {
+			// This triple represents a relationship to another entity
+			relationships = append(relationships, triple)
+		} else {
+			// This triple represents a property value
+			properties[triple.Predicate] = triple.Object
+		}
+	}
+
+	// Add default metadata properties
+	properties["entity_class"] = message.ClassThing
+	properties["entity_role"] = message.RolePrimary
+	properties["confidence"] = 1.0 // High confidence for Graphable messages
+	properties["source"] = "graphable_interface"
+
+	return properties, relationships
+}
+
+// buildEdgesFromRelationships converts relationship triples to graph edges
+func (mp *Manager) buildEdgesFromRelationships(relationships []message.Triple) []gtypes.Edge {
+	edges := []gtypes.Edge{}
+
+	for _, rel := range relationships {
+		// rel.Object is the target entity ID (validated by IsRelationship)
+		targetID, ok := rel.Object.(string)
+		if !ok {
+			mp.deps.Logger.Warn("Relationship triple has non-string object",
+				"predicate", rel.Predicate,
+				"object", rel.Object)
+			continue
+		}
+
+		// Extract edge type from predicate (e.g., "robotics.component.has" -> "has_component")
+		edgeType := mp.predicateToEdgeType(rel.Predicate)
+
+		edge := gtypes.Edge{
+			ToEntityID: targetID,
+			EdgeType:   edgeType,
+			Weight:     rel.Confidence,
+			Properties: map[string]any{
+				"source":    rel.Source,
+				"predicate": rel.Predicate,
+				"context":   rel.Context,
+			},
+			CreatedAt: rel.Timestamp,
+		}
+
+		edges = append(edges, edge)
+	}
+
+	return edges
+}
+
+// predicateToEdgeType converts a semantic predicate to an edge type
+func (mp *Manager) predicateToEdgeType(predicate string) string {
+	// Convert dotted predicate notation to edge type
+	// Examples:
+	//   "robotics.component.has" -> "has_component"
+	//   "system.parent" -> "parent_of"
+	//   "location.near" -> "near_to"
+
+	parts := strings.Split(predicate, ".")
+	if len(parts) >= 2 {
+		// Take the last two parts for edge type
+		return fmt.Sprintf("%s_%s", parts[len(parts)-1], parts[len(parts)-2])
+	}
+	return predicate // Fallback to full predicate if not dotted
+}
+
+// extractTypeFromEntityID extracts entity type from fully qualified entity ID
+func (mp *Manager) extractTypeFromEntityID(entityID string) string {
+	// Entity ID format: org.platform.domain.system.type.instance
+	// Example: c360.platform1.robotics.mav1.battery.0
+	parts := strings.Split(entityID, ".")
+	if len(parts) >= 5 {
+		return parts[4] // type is the 5th part (0-indexed)
+	}
+	return "entity" // fallback for malformed IDs
+}
+
+// recordError records an error for debugging
+func (mp *Manager) recordError(errorMsg string) {
+	if mp.errorCallback != nil {
+		mp.errorCallback(errorMsg)
+	}
+	mp.deps.Logger.Error("Message manager error", "error", errorMsg)
+}
+
+// GetStats returns processing statistics
+func (mp *Manager) GetStats() ProcessingStats {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+
+	return ProcessingStats{
+		MessagesProcessed: atomic.LoadInt64(&mp.messagesProcessed),
+		LastActivity:      mp.lastActivity,
+	}
+}
+
+// SetIndexManager sets the index manager dependency (for circular dependency resolution)
+func (mp *Manager) SetIndexManager(indexManager IndexManager) {
+	mp.deps.IndexManager = indexManager
+}
+
+// ProcessingStats holds processing statistics
+type ProcessingStats struct {
+	MessagesProcessed int64     `json:"messages_processed"`
+	LastActivity      time.Time `json:"last_activity"`
+}

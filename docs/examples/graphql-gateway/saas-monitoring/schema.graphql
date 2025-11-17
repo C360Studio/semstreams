@@ -1,0 +1,252 @@
+# SaaS Monitoring Domain GraphQL Schema
+# Example: Multi-tenant application monitoring and observability platform
+
+# Service being monitored
+type Service {
+  id: ID!
+  name: String!
+  displayName: String!
+  type: ServiceType!
+  status: ServiceStatus!
+  healthScore: Float!
+  version: String!
+  environment: Environment!
+  owner: String!
+  dependencies: [Service!]
+  dependents: [Service!]
+  metrics: [Metric!]
+  alerts: [Alert!]
+  incidents: [Incident!]
+  deployments: [Deployment!]
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Service type
+enum ServiceType {
+  API
+  WORKER
+  DATABASE
+  CACHE
+  QUEUE
+  FRONTEND
+  GATEWAY
+}
+
+# Service operational status
+enum ServiceStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  UNKNOWN
+  MAINTENANCE
+}
+
+# Deployment environment
+enum Environment {
+  PRODUCTION
+  STAGING
+  DEVELOPMENT
+  TESTING
+}
+
+# Metric collected from service
+type Metric {
+  id: ID!
+  service: Service!
+  name: String!
+  type: MetricType!
+  value: Float!
+  unit: String!
+  labels: [Label!]
+  timestamp: String!
+  aggregation: Aggregation
+}
+
+# Metric type
+enum MetricType {
+  COUNTER
+  GAUGE
+  HISTOGRAM
+  SUMMARY
+}
+
+# Metric label for filtering
+type Label {
+  key: String!
+  value: String!
+}
+
+# Time series aggregation
+type Aggregation {
+  window: String!
+  function: AggregationFunction!
+  samples: Int!
+}
+
+# Aggregation function
+enum AggregationFunction {
+  SUM
+  AVG
+  MIN
+  MAX
+  COUNT
+  P50
+  P95
+  P99
+}
+
+# Alert rule
+type Alert {
+  id: ID!
+  service: Service!
+  name: String!
+  condition: String!
+  severity: Severity!
+  status: AlertStatus!
+  threshold: Float!
+  currentValue: Float
+  evaluatedAt: String
+  triggeredAt: String
+  acknowledgedAt: String
+  resolvedAt: String
+  incidents: [Incident!]
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Alert severity level
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+# Alert status
+enum AlertStatus {
+  ACTIVE
+  PENDING
+  ACKNOWLEDGED
+  RESOLVED
+  SUPPRESSED
+}
+
+# Incident triggered by alerts
+type Incident {
+  id: ID!
+  title: String!
+  description: String
+  severity: Severity!
+  status: IncidentStatus!
+  service: Service!
+  alerts: [Alert!]
+  assignee: String
+  rootCause: String
+  resolution: String
+  impactedUsers: Int
+  detectedAt: String!
+  acknowledgedAt: String
+  resolvedAt: String
+  duration: Int
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Incident status
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  IDENTIFIED
+  MONITORING
+  RESOLVED
+  CLOSED
+}
+
+# Service deployment
+type Deployment {
+  id: ID!
+  service: Service!
+  version: String!
+  environment: Environment!
+  status: DeploymentStatus!
+  deployedBy: String!
+  commitSHA: String
+  rollbackCommitSHA: String
+  startedAt: String!
+  completedAt: String
+  duration: Int
+  rollback: Boolean!
+  incidents: [Incident!]
+}
+
+# Deployment status
+enum DeploymentStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  ROLLED_BACK
+}
+
+# Time series data point
+type TimeSeriesPoint {
+  timestamp: String!
+  value: Float!
+}
+
+# Root query type
+type Query {
+  # Single entity queries
+  service(id: ID!): Service
+  metric(id: ID!): Metric
+  alert(id: ID!): Alert
+  incident(id: ID!): Incident
+  deployment(id: ID!): Deployment
+
+  # List queries
+  services(ids: [ID!]): [Service!]
+  allServices(limit: Int, environment: Environment, status: ServiceStatus): [Service!]!
+  alerts(ids: [ID!]): [Alert!]
+  allAlerts(limit: Int, severity: Severity, status: AlertStatus): [Alert!]!
+  incidents(ids: [ID!]): [Incident!]
+  allIncidents(limit: Int, severity: Severity, status: IncidentStatus): [Incident!]!
+
+  # Relationship queries
+  serviceDependencies(serviceID: ID!): [Service!]!
+  serviceDependents(serviceID: ID!): [Service!]!
+  serviceMetrics(serviceID: ID!, metricName: String): [Metric!]!
+  serviceAlerts(serviceID: ID!, severity: Severity): [Alert!]!
+  serviceIncidents(serviceID: ID!, status: IncidentStatus): [Incident!]!
+  alertIncidents(alertID: ID!): [Incident!]!
+
+  # Search queries
+  searchServices(query: String!, limit: Int): [Service!]!
+  searchIncidents(query: String!, limit: Int): [Incident!]!
+
+  # Analytics queries
+  criticalAlerts: [Alert!]!
+  openIncidents: [Incident!]!
+  unhealthyServices: [Service!]!
+  recentDeployments(environment: Environment!, limit: Int): [Deployment!]!
+  serviceHealthTimeSeries(serviceID: ID!, startTime: String!, endTime: String!): [TimeSeriesPoint!]!
+}
+
+# Real-time subscriptions
+type Subscription {
+  # Service status changes
+  serviceStatusChanged(serviceID: ID): Service!
+
+  # Alert triggers
+  alertTriggered(serviceID: ID, severity: Severity): Alert!
+
+  # Incident updates
+  incidentUpdated(incidentID: ID, severity: Severity): Incident!
+
+  # Deployment events
+  deploymentStatusChanged(serviceID: ID, environment: Environment): Deployment!
+
+  # Metric stream
+  metricUpdated(serviceID: ID!, metricName: String!): Metric!
+}

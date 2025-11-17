@@ -1,0 +1,227 @@
+# Optional External Services for SemStreams
+#
+# This compose file provides optional containerized services that enhance
+# SemStreams functionality. Services are organized by profiles for selective startup.
+#
+# Usage:
+#   docker compose -f docker-compose.services.yml --profile embedding up -d
+#   docker compose -f docker-compose.services.yml --profile tls up -d
+#   docker compose -f docker-compose.services.yml --profile all up -d
+#
+# Profiles:
+#   - embedding: Semantic embedding service (SemEmbed - fastembed-rs based)
+#   - summarization: Text summarization service (SemSummarize - Candle + T5/BART)
+#   - tls: Certificate authority (step-ca)
+#   - observability: Metrics and monitoring (Prometheus + Grafana)
+#   - all: All optional services
+#
+# SemStreams gracefully degrades when these services are unavailable.
+
+services:
+  # SemEmbed - Lightweight Embedding Service
+  # Optional: IndexManager semantic search (automatic BM25 fallback if unavailable)
+  # Provides: Neural text embeddings via OpenAI-compatible API
+  # Uses: fastembed-rs with native ONNX Runtime (supports arm64 + amd64)
+  semembed:
+    profiles: ["embedding", "all"]
+    build:
+      context: ../semembed
+      dockerfile: Dockerfile
+    image: semstreams-semembed:latest
+    container_name: semstreams-semembed
+    ports:
+      - "8081:8081"  # OpenAI-compatible /v1/embeddings endpoint
+    environment:
+      # Model selection (fastembed downloads automatically on first run)
+      - SEMEMBED_MODEL=BAAI/bge-small-en-v1.5  # 384 dims, fast, good quality
+      # Alternative models (uncomment one):
+      # - SEMEMBED_MODEL=BAAI/bge-base-en-v1.5  # 768 dims, higher quality
+      # - SEMEMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2  # 384 dims, fast
+      - SEMEMBED_PORT=8081
+      - RUST_LOG=info
+    volumes:
+      # Model cache persistence (fastembed caches to ~/.cache/fastembed)
+      - semembed-cache:/home/semembed/.cache/fastembed
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - semstreams-services
+    restart: unless-stopped
+    # Resource limits (smaller footprint than TEI)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # SemSummarize - Lightweight Summarization Service
+  # Optional: LLM-based community summarization (automatic statistical fallback if unavailable)
+  # Provides: Text summarization via Candle + T5/BART models
+  # Uses: Rust + Candle with HuggingFace Hub (supports arm64 + amd64)
+  semsummarize:
+    profiles: ["summarization", "all"]
+    build:
+      context: ../semsummarize
+      dockerfile: Dockerfile
+    image: semstreams-semsummarize:latest
+    container_name: semstreams-semsummarize
+    ports:
+      - "8083:8083"  # POST /summarize endpoint
+    environment:
+      # Model selection (HuggingFace Hub downloads automatically on first run)
+      - SEMSUMMARIZE_MODEL=google/flan-t5-small  # 77M params, fast, good quality
+      # Alternative models (uncomment one):
+      # - SEMSUMMARIZE_MODEL=google/flan-t5-base  # 250M params, higher quality
+      # - SEMSUMMARIZE_MODEL=facebook/bart-base  # 140M params, narrative style
+      - SEMSUMMARIZE_PORT=8083
+      - RUST_LOG=info
+    volumes:
+      # Model cache persistence (HuggingFace Hub caches to ~/.cache/huggingface)
+      - semsummarize-cache:/home/semsummarize/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s  # Model download may take time on first run
+    networks:
+      - semstreams-services
+    restart: unless-stopped
+    # Resource limits (CPU-optimized inference)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Step-CA Certificate Authority (Tier 3 ACME)
+  # Required by: TLS-enabled components when using automated cert management
+  # Provides: Automated certificate issuance and renewal via ACME protocol
+  #
+  # Configuration Notes:
+  #   - ACME provisioner enabled for automated certificate lifecycle
+  #   - Supports both HTTP-01 and TLS-ALPN-01 challenges
+  #   - Default 24-hour certificate lifetime for edge deployments
+  #   - Federation support via shared root CA
+  step-ca:
+    profiles: ["tls", "all"]
+    image: smallstep/step-ca:latest
+    container_name: semstreams-step-ca
+    ports:
+      - "9000:9000"  # HTTPS API and ACME directory
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=SemStreams CA
+      - DOCKER_STEPCA_INIT_DNS_NAMES=localhost,step-ca,semstreams
+      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=acme  # ACME provisioner
+      # Optional: Set certificate lifetime (default: 24h)
+      # - DOCKER_STEPCA_INIT_DEFAULT_CERT_VALIDITY=24h
+    volumes:
+      - step-ca-data:/home/step
+    healthcheck:
+      test: ["CMD", "step", "ca", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - semstreams-services
+    restart: unless-stopped
+
+  # Prometheus Metrics Server
+  # Required by: Grafana dashboards and monitoring
+  # Provides: Metrics collection and storage
+  prometheus:
+    profiles: ["observability", "all"]
+    image: prom/prometheus:latest
+    container_name: semstreams-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - semstreams-services
+    restart: unless-stopped
+    # Resource limits to prevent excessive storage usage
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Grafana Visualization
+  # Required by: SemStreams observability and monitoring
+  # Provides: Pre-configured dashboards and visualization
+  grafana:
+    profiles: ["observability", "all"]
+    image: grafana/grafana:latest
+    container_name: semstreams-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./configs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/semstreams-overview.json
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - semstreams-services
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+networks:
+  semstreams-services:
+    driver: bridge
+
+volumes:
+  semembed-cache:
+    driver: local
+  semsummarize-cache:
+    driver: local
+  step-ca-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

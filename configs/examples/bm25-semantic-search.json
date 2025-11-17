@@ -1,0 +1,152 @@
+{
+  "version": "1.0.0",
+  "platform": {
+    "org": "example",
+    "id": "bm25-semantic-demo",
+    "type": "production-ready",
+    "region": "local",
+    "instance_id": "bm25-001",
+    "environment": "production"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams BM25 Semantic Search API",
+          "description": "Production-ready semantic search using BM25 (zero dependencies)",
+          "version": "0.7.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    }
+  },
+  "components": {
+    "graph-processor": {
+      "type": "processor",
+      "name": "graph-processor",
+      "enabled": true,
+      "config": {
+        "workers": 4,
+        "queue_size": 5000,
+        "input_subject": "events.graph.entity.*",
+        "message_handler": {
+          "processing_timeout": "5s",
+          "max_retries": 3
+        },
+        "data_manager": {
+          "kv_bucket": "graph_entities_bm25",
+          "kv_options": {
+            "max_retries": 10,
+            "timeout": "10s"
+          },
+          "enable_edge_tracking": true,
+          "edge_batch_size": 100
+        },
+        "indexer": {
+          "indexes": {
+            "predicate": true,
+            "incoming": true,
+            "alias": true,
+            "spatial": true,
+            "temporal": true
+          },
+          "buckets": {
+            "alias": "ALIAS_INDEX",
+            "predicate": "PREDICATE_INDEX",
+            "incoming": "INCOMING_INDEX",
+            "spatial": "SPATIAL_INDEX",
+            "temporal": "TEMPORAL_INDEX"
+          },
+          "batch_processing": {
+            "size": 50
+          },
+          "embedding": {
+            "enabled": true,
+            "provider": "bm25",
+            "text_fields": ["title", "content", "description", "summary", "name", "text"],
+            "retention_window": "24h",
+            "skip_types": [
+              "telemetry.*.*",
+              "sensors.*.*",
+              "metrics.*.*"
+            ]
+          }
+        },
+        "querier": {
+          "cache_enabled": true,
+          "cache_ttl": "15m",
+          "max_cache_size": 5000,
+          "query_timeout": "10s",
+          "result_limit": 1000
+        }
+      }
+    },
+    "api-gateway": {
+      "type": "gateway",
+      "name": "http",
+      "enabled": true,
+      "config": {
+        "enable_cors": true,
+        "cors_origins": ["*"],
+        "max_request_size": 1048576,
+        "routes": [
+          {
+            "path": "/search/semantic",
+            "method": "POST",
+            "nats_subject": "graph.query.semantic",
+            "timeout": "5s",
+            "description": "BM25-powered semantic search across indexed entities"
+          },
+          {
+            "path": "/search/spatial",
+            "method": "POST",
+            "nats_subject": "graph.query.spatial",
+            "timeout": "5s",
+            "description": "Geospatial search within bounding box"
+          },
+          {
+            "path": "/search/temporal",
+            "method": "POST",
+            "nats_subject": "graph.query.temporal",
+            "timeout": "5s",
+            "description": "Time-based query within date range"
+          },
+          {
+            "path": "/entity/:id",
+            "method": "GET",
+            "nats_subject": "graph.query.entity",
+            "timeout": "2s",
+            "description": "Retrieve single entity by ID"
+          },
+          {
+            "path": "/entity/:id/relationships",
+            "method": "GET",
+            "nats_subject": "graph.query.relationships",
+            "timeout": "3s",
+            "description": "Get entity relationships (incoming/outgoing)"
+          }
+        ]
+      }
+    }
+  }
+}

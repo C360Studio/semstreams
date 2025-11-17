@@ -1,0 +1,86 @@
+{
+  "version": "1.0.1",
+  "platform": {
+    "org": "c360",
+    "id": "streamkit-cloud",
+    "type": "cloud-hub",
+    "region": "cloud",
+    "instance_id": "cloud-001",
+    "environment": "development"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4223"]
+  },
+  "services": {
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9092,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    }
+  },
+  "components": {
+    "websocket_input": {
+      "type": "input",
+      "name": "websocket_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "ws_data",
+              "subject": "cloud.federated.data",
+              "type": "nats",
+              "description": "Data received from edge via WebSocket"
+            }
+          ]
+        },
+        "mode": "client",
+        "client": {
+          "url": "ws://edge:8082/stream",
+          "reconnect": {
+            "enabled": true,
+            "max_retries": 10,
+            "initial_interval": "1s",
+            "max_interval": "60s",
+            "multiplier": 2.0
+          }
+        },
+        "backpressure": {
+          "enabled": true,
+          "queue_size": 1000,
+          "on_full": "drop_oldest"
+        }
+      }
+    },
+    "file": {
+      "type": "output",
+      "name": "file",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "file_in",
+              "subject": "cloud.federated.data",
+              "type": "nats"
+            }
+          ],
+          "outputs": []
+        },
+        "directory": "/tmp",
+        "file_prefix": "cloud-federated",
+        "format": "jsonl"
+      }
+    }
+  }
+}

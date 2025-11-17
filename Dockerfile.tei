@@ -1,0 +1,46 @@
+# Hugging Face Text Embeddings Inference (TEI) for SemStreams
+#
+# This Dockerfile provides a ready-to-use TEI service optimized for SemStreams semantic search.
+# TEI is a high-performance, production-ready embedding service from Hugging Face.
+#
+# Features:
+# - Fast inference with optimized models
+# - OpenAI-compatible API (works with SemStreams HTTP embedder)
+# - Automatic model download on first start
+# - CPU and GPU support
+#
+# Model: all-MiniLM-L6-v2 (default)
+# - Dimensions: 384
+# - Performance: ~50-100ms per batch
+# - Quality: Good for general semantic similarity
+# - Size: ~90MB
+#
+# Alternative models (edit docker-compose.services.yml):
+# - sentence-transformers/all-mpnet-base-v2 (768 dims, higher quality)
+# - BAAI/bge-small-en-v1.5 (384 dims, multilingual)
+# - sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 (384 dims, 50+ languages)
+
+# Use latest CPU image (supports ARM64 + x86_64)
+# Note: CPU-only, no GPU acceleration (fine for our use case)
+FROM ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+
+# Default model (override via docker-compose environment variables)
+ENV MODEL_ID=sentence-transformers/all-MiniLM-L6-v2
+
+# Optional: Hugging Face token for private/gated models
+# ENV HUGGING_FACE_HUB_TOKEN=your_token_here
+
+# Use SemStreams core services port (8082 - avoids Ollama collision on 11434)
+EXPOSE 8082
+
+# Health check (TEI provides /health endpoint)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl --fail http://localhost:8082/health || exit 1
+
+# TEI automatically downloads the model on first start
+# Model cache is stored in /data (mount as volume for persistence)
+VOLUME /data
+
+# The base image provides the entrypoint
+# Pass model configuration via command args (use port 8082 from SemStreams core range)
+CMD ["--model-id", "sentence-transformers/all-MiniLM-L6-v2", "--port", "8082"]

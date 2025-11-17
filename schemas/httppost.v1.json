@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "httppost.v1.json",
+  "type": "object",
+  "title": "httppost Configuration",
+  "description": "HTTP POST output for sending messages to HTTP endpoints with retries",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "httppost",
+    "type": "output",
+    "protocol": "httppost",
+    "domain": "network",
+    "version": "0.1.0"
+  }
+}

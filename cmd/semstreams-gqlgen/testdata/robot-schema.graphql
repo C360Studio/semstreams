@@ -1,0 +1,25 @@
+type Query {
+	robot(id: ID!): Robot
+	robots(ids: [ID!]!): [Robot!]!
+	task(id: ID!): Task
+	tasks(ids: [ID!]!): [Task!]!
+	searchRobots(query: String!, limit: Int): [Robot!]!
+}
+
+type Robot {
+	id: ID!
+	name: String!
+	status: String!
+	model: String
+	location: String
+	tasks: [Task!]!
+}
+
+type Task {
+	id: ID!
+	title: String!
+	description: String
+	status: String!
+	priority: Int!
+	assignedRobots: [Robot!]!
+}

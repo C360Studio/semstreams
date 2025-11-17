@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "json_generic.v1.json",
+  "type": "object",
+  "title": "json_generic Configuration",
+  "description": "Wraps plain JSON into GenericJSON (core .json.v1) format",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "json_generic",
+    "type": "processor",
+    "protocol": "json_generic",
+    "domain": "processing",
+    "version": "0.1.0"
+  }
+}

@@ -1,0 +1,19 @@
+# Grafana dashboard provisioning configuration
+#
+# This tells Grafana where to find dashboard JSON files
+# and automatically loads them on startup.
+
+apiVersion: 1
+
+providers:
+  - name: 'SemStreams'
+    orgId: 1
+    folder: 'SemStreams'
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true

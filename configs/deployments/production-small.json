@@ -1,0 +1,23 @@
+{
+  "port": 8080,
+  "log_level": "warn",
+  "nats": {
+    "url": "nats://nats:4222",
+    "max_reconnects": -1,
+    "reconnect_wait": "5s"
+  },
+  "metrics": {
+    "enabled": true,
+    "port": 8080,
+    "path": "/metrics"
+  },
+  "health": {
+    "enabled": true,
+    "path": "/health"
+  },
+  "resources": {
+    "max_memory_mb": 512,
+    "max_cpu_percent": 50
+  },
+  "debug": false
+}

@@ -1,0 +1,110 @@
+{
+  "org": "example",
+  "platform": "demo",
+  "services": {
+    "service-manager": {
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams HTTP Gateway API",
+          "description": "HTTP Gateway exposing semantic search and graph queries",
+          "version": "0.7.0"
+        }
+      }
+    },
+    "component-manager": {
+      "enabled": true
+    }
+  },
+  "components": {
+    "graph-processor": {
+      "type": "processor",
+      "name": "graph",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_stream",
+              "type": "nats",
+              "subject": "events.entity.>",
+              "required": true,
+              "description": "Entity event stream for graph indexing"
+            }
+          ]
+        },
+        "indexer": {
+          "embedding": {
+            "enabled": true,
+            "provider": "bm25",
+            "text_fields": ["title", "content", "description", "summary"],
+            "retention_window": "24h"
+          },
+          "spatial": {
+            "enabled": true
+          },
+          "temporal": {
+            "enabled": true,
+            "retention_window": "7d"
+          }
+        }
+      }
+    },
+    "api-gateway": {
+      "type": "gateway",
+      "name": "http",
+      "enabled": true,
+      "config": {
+        "enable_cors": true,
+        "cors_origins": ["*"],
+        "max_request_size": 1048576,
+        "routes": [
+          {
+            "path": "/search/semantic",
+            "method": "POST",
+            "nats_subject": "graph.query.semantic",
+            "timeout": "5s",
+            "description": "Semantic similarity search across indexed entities"
+          },
+          {
+            "path": "/search/spatial",
+            "method": "POST",
+            "nats_subject": "graph.query.spatial",
+            "timeout": "5s",
+            "description": "Geospatial search within bounding box"
+          },
+          {
+            "path": "/search/temporal",
+            "method": "POST",
+            "nats_subject": "graph.query.temporal",
+            "timeout": "5s",
+            "description": "Time-based query within date range"
+          },
+          {
+            "path": "/entity/:id",
+            "method": "GET",
+            "nats_subject": "graph.query.entity",
+            "timeout": "2s",
+            "description": "Retrieve single entity by ID"
+          },
+          {
+            "path": "/entity/:id/relationships",
+            "method": "GET",
+            "nats_subject": "graph.query.relationships",
+            "timeout": "3s",
+            "description": "Get entity relationships (incoming/outgoing)"
+          },
+          {
+            "path": "/entity/:id/path",
+            "method": "POST",
+            "nats_subject": "graph.query.path",
+            "timeout": "10s",
+            "description": "Traverse graph path from entity"
+          }
+        ]
+      }
+    }
+  }
+}

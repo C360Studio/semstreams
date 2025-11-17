@@ -1,0 +1,221 @@
+{
+  "version": "1.0.1",
+  "platform": {
+    "org": "c360",
+    "id": "streamkit-pure",
+    "type": "flow-orchestration",
+    "region": "local",
+    "instance_id": "streamkit-001",
+    "environment": "development"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    },
+    "message-logger": {
+      "name": "message-logger",
+      "enabled": true,
+      "config": {
+        "buffer_size": 10000,
+        "monitor_subjects": ["*"],
+        "enable_kv_query": true,
+        "log_level": "INFO"
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "json_generic": {
+      "type": "processor",
+      "name": "json_generic",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "generic_in",
+              "subject": "raw.udp.messages",
+              "type": "nats",
+              "description": "Plain JSON from UDP"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "generic_out",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core .json.v1",
+              "description": "GenericJSON wrapped messages"
+            }
+          ]
+        }
+      }
+    },
+    "json_filter": {
+      "type": "processor",
+      "name": "json_filter",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "filter_in",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core .json.v1"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "filter_out",
+              "subject": "filtered.messages",
+              "type": "nats"
+            }
+          ]
+        },
+        "criteria": {}
+      }
+    },
+    "json_map": {
+      "type": "processor",
+      "name": "json_map",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "map_in",
+              "subject": "filtered.messages",
+              "type": "nats"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "map_out",
+              "subject": "mapped.messages",
+              "type": "nats"
+            }
+          ]
+        },
+        "mappings": []
+      }
+    },
+    "file": {
+      "type": "output",
+      "name": "file",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "file_in",
+              "subject": "mapped.messages",
+              "type": "nats",
+              "interface": "core .json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "directory": "/tmp",
+        "file_prefix": "streamkit-test",
+        "format": "jsonl"
+      }
+    },
+    "httppost": {
+      "type": "output",
+      "name": "httppost",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "http_in",
+              "subject": "mapped.messages",
+              "type": "nats",
+              "interface": "core .json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "url": "http://localhost:9999/webhook",
+        "retry_max": 3
+      }
+    },
+    "websocket": {
+      "type": "output",
+      "name": "websocket",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "ws_in",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ],
+          "outputs": []
+        },
+        "http_port": 8082,
+        "path": "/ws"
+      }
+    },
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "store_in",
+              "subject": "mapped.messages",
+              "type": "nats",
+              "interface": "core .json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "bucket_name": "streamkit_test_store",
+        "data_cache": {
+          "enabled": true,
+          "strategy": "lru",
+          "max_size": 1000
+        }
+      }
+    }
+  }
+}

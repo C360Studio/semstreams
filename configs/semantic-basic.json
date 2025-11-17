@@ -1,0 +1,148 @@
+{
+  "version": "1.0.0",
+  "platform": {
+    "org": "c360",
+    "id": "semstreams-semantic-basic",
+    "type": "semantic-processing",
+    "region": "local",
+    "instance_id": "semantic-001",
+    "environment": "test"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "json_generic": {
+      "type": "processor",
+      "name": "json_generic",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "generic_in",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "generic_out",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ]
+        }
+      }
+    },
+    "json_to_entity": {
+      "type": "processor",
+      "name": "json_to_entity",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_in",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "entity_out",
+              "subject": "events.graph.entity.sensor",
+              "type": "nats",
+              "interface": "graph.Entity.v1"
+            }
+          ]
+        },
+        "entity_id_field": "entity_id",
+        "entity_type_field": "entity_type",
+        "entity_class": "Object",
+        "entity_role": "primary",
+        "source_field": "json_to_entity"
+      }
+    },
+    "graph": {
+      "type": "processor",
+      "name": "graph-processor",
+      "enabled": true,
+      "config": {
+        "workers": 4,
+        "queue_size": 1000,
+        "input_subject": "events.graph.entity.*",
+        "message_handler": {
+          "processing_timeout": "5s",
+          "max_retries": 3
+        },
+        "data_manager": {
+          "kv_bucket": "graph_entities",
+          "kv_options": {
+            "max_retries": 10,
+            "timeout": "5s"
+          }
+        },
+        "indexer": {
+          "indexes": {
+            "predicate": true,
+            "incoming": true,
+            "alias": true,
+            "spatial": true,
+            "temporal": true
+          },
+          "buckets": {
+            "alias": "ALIAS_INDEX",
+            "predicate": "PREDICATE_INDEX",
+            "incoming": "INCOMING_INDEX",
+            "spatial": "SPATIAL_INDEX",
+            "temporal": "TEMPORAL_INDEX"
+          }
+        },
+        "querier": {
+          "cache_enabled": true,
+          "cache_ttl": "5m",
+          "max_cache_size": 1000
+        }
+      }
+    }
+  }
+}

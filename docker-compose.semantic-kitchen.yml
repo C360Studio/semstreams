@@ -1,0 +1,143 @@
+# E2E Test Environment for SemStreams Kitchen Sink (Full Semantic Stack)
+#
+# ⚠️  THIS FILE IS FOR KITCHEN SINK E2E TESTING ONLY - DO NOT USE DIRECTLY ⚠️
+#
+# This compose file is designed to work with task commands:
+#   - task e2e:semantic-kitchen-sink  - Run kitchen sink test
+#   - task e2e:clean                  - Clean up test environment
+#
+# Running this directly will start services but NOT run tests.
+# The E2E tests are executed from the host via cmd/e2e/e2e binary.
+#
+# Following Observer Pattern: E2E tests are external observers of the running system
+services:
+  # SemEmbed - Lightweight embedding service using fastembed-rs
+  # For semantic search testing with OpenAI-compatible API
+  semembed:
+    build:
+      context: ../semembed
+      dockerfile: Dockerfile
+    image: semstreams-semembed:latest
+    container_name: semstreams-kitchen-semembed
+    ports:
+      - "8081:8081"  # OpenAI-compatible /v1/embeddings endpoint
+    environment:
+      - SEMEMBED_MODEL=BAAI/bge-small-en-v1.5
+      - SEMEMBED_PORT=8081
+      - RUST_LOG=info
+    volumes:
+      - semembed-kitchen-cache:/home/semembed/.cache/fastembed
+    networks:
+      - semstreams-kitchen-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # SemSummarize - Lightweight summarization service using Candle + SmolLM2
+  # For LLM-based community summarization testing
+  semsummarize:
+    build:
+      context: ../semsummarize
+      dockerfile: Dockerfile
+    image: semstreams-semsummarize:latest
+    container_name: semstreams-kitchen-semsummarize
+    ports:
+      - "8084:8083"  # POST /summarize endpoint (host:8084 -> container:8083)
+    environment:
+      - SEMSUMMARIZE_MODEL=HuggingFaceTB/SmolLM2-135M-Instruct  # 135M params, fast, good quality
+      - SEMSUMMARIZE_PORT=8083
+      - RUST_LOG=info
+    volumes:
+      - semsummarize-kitchen-cache:/home/semsummarize/.cache/huggingface
+    networks:
+      - semstreams-kitchen-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s  # Model download may take time on first run
+
+  # NATS Server with JetStream
+  nats:
+    image: nats:2.11.7-alpine
+    container_name: semstreams-kitchen-nats
+    ports:
+      - "4222:4222" # Client connections
+      - "8222:8222" # HTTP monitoring
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-kitchen-nats"]
+    volumes:
+      - nats-semstreams-kitchen-data:/data
+    networks:
+      - semstreams-kitchen-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # SemStreams Application (kitchen sink config with all features)
+  semstreams:
+    build:
+      context: ..
+      dockerfile: semstreams/Dockerfile
+      target: production
+    container_name: semstreams-kitchen-app
+    command: ["--config", "/app/configs/semantic-kitchen-sink.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      semembed:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - EMBEDDING_PROVIDER=http
+      - EMBEDDING_HTTP_ENDPOINT=http://semembed:8081/v1/embeddings
+      - EMBEDDING_HTTP_MODEL=BAAI/bge-small-en-v1.5
+    volumes:
+      - ./configs:/app/configs:ro
+    ports:
+      - "8080:8080" # HTTP API (health, components)
+      - "9090:9090" # Prometheus metrics
+      - "14550:14550/udp" # UDP input
+      - "8083:8082" # WebSocket output (host:8083 -> container:8082)
+    networks:
+      - semstreams-kitchen-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-kitchen-net:
+    driver: bridge
+
+volumes:
+  nats-semstreams-kitchen-data:
+    driver: local
+  semembed-kitchen-cache:
+    driver: local
+  semsummarize-kitchen-cache:
+    driver: local

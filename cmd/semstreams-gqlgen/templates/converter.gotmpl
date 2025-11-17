@@ -1,0 +1,17 @@
+{{/* Type converter template - converts Entity to GraphQL model */}}
+// convertEntityTo{{ .TypeName }} converts a generic Entity to {{ .TypeName }} GraphQL model
+func convertEntityTo{{ .TypeName }}(entity *graphql.Entity) *model.{{ .TypeName }} {
+	if entity == nil {
+		return nil
+	}
+
+	return &model.{{ .TypeName }}{
+		{{- range $fieldName, $propPath := .Fields }}
+		{{ $fieldName }}: {{ $.FieldConverter $fieldName $propPath }},
+		{{- end }}
+		{{- if .HasTimestamps }}
+		CreatedAt: entity.CreatedAt,
+		UpdatedAt: entity.UpdatedAt,
+		{{- end }}
+	}
+}

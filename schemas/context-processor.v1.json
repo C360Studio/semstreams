@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "context-processor.v1.json",
+  "type": "object",
+  "title": "context-processor Configuration",
+  "description": "Context processor for derived state computation and complex rules",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "context-processor",
+    "type": "processor",
+    "protocol": "context",
+    "domain": "semantic",
+    "version": "1.0.0"
+  }
+}

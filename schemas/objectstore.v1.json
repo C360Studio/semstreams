@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "objectstore.v1.json",
+  "type": "object",
+  "title": "objectstore Configuration",
+  "description": "NATS ObjectStore component for immutable message storage",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "objectstore",
+    "type": "storage",
+    "protocol": "objectstore",
+    "domain": "storage",
+    "version": "1.0.0"
+  }
+}

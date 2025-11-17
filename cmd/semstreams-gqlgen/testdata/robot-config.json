@@ -1,0 +1,84 @@
+{
+	"package": "robotapi",
+	"schema_path": "testdata/robot-schema.graphql",
+	"queries": {
+		"robot": {
+			"resolver": "QueryEntityByID",
+			"subject": "graph.robot.get"
+		},
+		"robots": {
+			"resolver": "QueryEntitiesByIDs",
+			"subject": "graph.robot.list"
+		},
+		"task": {
+			"resolver": "QueryEntityByID",
+			"subject": "graph.task.get"
+		},
+		"tasks": {
+			"resolver": "QueryEntitiesByIDs",
+			"subject": "graph.task.list"
+		},
+		"searchRobots": {
+			"resolver": "SemanticSearch",
+			"subject": "graph.robot.search"
+		}
+	},
+	"fields": {
+		"Robot.id": {
+			"property": "id",
+			"type": "string"
+		},
+		"Robot.name": {
+			"property": "properties.name",
+			"type": "string"
+		},
+		"Robot.status": {
+			"property": "properties.status",
+			"type": "string"
+		},
+		"Robot.model": {
+			"property": "properties.model",
+			"type": "string"
+		},
+		"Robot.location": {
+			"property": "properties.location",
+			"type": "string"
+		},
+		"Robot.tasks": {
+			"resolver": "QueryRelationships",
+			"subject": "graph.robot.tasks"
+		},
+		"Task.id": {
+			"property": "id",
+			"type": "string"
+		},
+		"Task.title": {
+			"property": "properties.title",
+			"type": "string"
+		},
+		"Task.description": {
+			"property": "properties.description",
+			"type": "string"
+		},
+		"Task.status": {
+			"property": "properties.status",
+			"type": "string"
+		},
+		"Task.priority": {
+			"property": "properties.priority",
+			"type": "int"
+		},
+		"Task.assignedRobots": {
+			"resolver": "QueryRelationships",
+			"subject": "graph.task.robots"
+		}
+	},
+	"types": {
+		"Robot": {
+			"entity_type": "robot"
+		},
+		"Task": {
+			"entity_type": "task"
+		}
+	}
+}

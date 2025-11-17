@@ -1,0 +1,16 @@
+{
+  "platform": {
+    "id": "test-platform",
+    "org": "c360",
+    "environment": "test",
+    "region": "local",
+    "log_level": "info"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"],
+    "max_reconnects": 10,
+    "reconnect_wait": "2s"
+  },
+  "services": {},
+  "components": {}
+}

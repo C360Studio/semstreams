@@ -1,0 +1,179 @@
+# Robotics Domain GraphQL Schema
+# Example: Fleet management system for autonomous robots
+
+# Robot entity - autonomous mobile robot
+type Robot {
+  id: ID!
+  name: String!
+  model: String!
+  status: RobotStatus!
+  location: Location!
+  batteryLevel: Int!
+  firmwareVersion: String!
+  capabilities: [String!]!
+  tasks: [Task!]
+  sensors: [Sensor!]
+  telemetry: Telemetry
+  lastHeartbeat: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Robot operational status
+enum RobotStatus {
+  IDLE
+  ACTIVE
+  CHARGING
+  MAINTENANCE
+  ERROR
+  OFFLINE
+}
+
+# Geographic location
+type Location {
+  latitude: Float!
+  longitude: Float!
+  altitude: Float
+  zone: String!
+}
+
+# Task assigned to robot
+type Task {
+  id: ID!
+  title: String!
+  description: String
+  type: TaskType!
+  priority: Int!
+  status: TaskStatus!
+  assignedTo: Robot
+  scheduledStart: String
+  actualStart: String
+  completedAt: String
+  estimatedDuration: Int
+  actualDuration: Int
+  waypoints: [Waypoint!]
+  createdAt: String!
+  updatedAt: String!
+}
+
+# Task type
+enum TaskType {
+  DELIVERY
+  PATROL
+  INSPECTION
+  CLEANING
+  TRANSPORT
+}
+
+# Task status
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+# Navigation waypoint
+type Waypoint {
+  id: ID!
+  location: Location!
+  action: String
+  sequence: Int!
+  reachedAt: String
+}
+
+# Sensor attached to robot
+type Sensor {
+  id: ID!
+  type: SensorType!
+  name: String!
+  robot: Robot!
+  status: SensorStatus!
+  lastReading: SensorReading
+  calibratedAt: String
+}
+
+# Sensor type
+enum SensorType {
+  LIDAR
+  CAMERA
+  IMU
+  GPS
+  ULTRASONIC
+  TEMPERATURE
+  BATTERY
+}
+
+# Sensor status
+enum SensorStatus {
+  ACTIVE
+  INACTIVE
+  CALIBRATING
+  ERROR
+}
+
+# Sensor reading
+type SensorReading {
+  timestamp: String!
+  value: Float!
+  unit: String!
+  quality: Float
+}
+
+# Real-time telemetry
+type Telemetry {
+  robotID: ID!
+  timestamp: String!
+  velocity: Float!
+  heading: Float!
+  battery: Float!
+  cpuUsage: Float!
+  memoryUsage: Float!
+  networkLatency: Int!
+  errorCount: Int!
+}
+
+# Root query type
+type Query {
+  # Single entity queries
+  robot(id: ID!): Robot
+  task(id: ID!): Task
+  sensor(id: ID!): Sensor
+
+  # List queries
+  robots(ids: [ID!]): [Robot!]
+  allRobots(limit: Int, status: RobotStatus): [Robot!]!
+  tasks(ids: [ID!]): [Task!]
+  allTasks(limit: Int, status: TaskStatus): [Task!]!
+
+  # Relationship queries
+  robotTasks(robotID: ID!, status: TaskStatus): [Task!]!
+  robotSensors(robotID: ID!, type: SensorType): [Sensor!]!
+  taskRobot(taskID: ID!): Robot
+
+  # Search queries
+  searchRobots(query: String!, limit: Int): [Robot!]!
+  searchTasks(query: String!, limit: Int): [Task!]!
+
+  # Analytics queries
+  robotsByZone(zone: String!): [Robot!]!
+  tasksByPriority(minPriority: Int!): [Task!]!
+  lowBatteryRobots(threshold: Int!): [Robot!]!
+}
+
+# Real-time subscriptions
+type Subscription {
+  # Robot status changes
+  robotStatusChanged(robotID: ID): Robot!
+
+  # Battery level alerts
+  lowBatteryAlert(threshold: Int!): Robot!
+
+  # Task updates
+  taskStatusChanged(taskID: ID): Task!
+
+  # Telemetry stream
+  robotTelemetry(robotID: ID!): Telemetry!
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "http.v1.json",
+  "type": "object",
+  "title": "http Configuration",
+  "description": "HTTP gateway for bidirectional NATS request/reply",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "http",
+    "type": "gateway",
+    "protocol": "http",
+    "domain": "network",
+    "version": "0.1.0"
+  }
+}

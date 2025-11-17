@@ -1,0 +1,323 @@
+{
+  "version": "1.0.0",
+  "platform": {
+    "org": "c360",
+    "id": "semstreams-kitchen-sink",
+    "type": "comprehensive-semantic",
+    "region": "local",
+    "instance_id": "semantic-999",
+    "environment": "test"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Kitchen Sink API",
+          "description": "Comprehensive semantic processing with HTTP Gateway",
+          "version": "0.7.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    },
+    "message-logger": {
+      "name": "message-logger",
+      "enabled": true,
+      "config": {
+        "buffer_size": 10000,
+        "monitor_subjects": ["*"],
+        "enable_kv_query": true,
+        "log_level": "INFO"
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "json_generic": {
+      "type": "processor",
+      "name": "json_generic",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "generic_in",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "generic_out",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ]
+        }
+      }
+    },
+    "json_filter": {
+      "type": "processor",
+      "name": "json_filter",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "filter_in",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "entities_out",
+              "subject": "generic.entities",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ]
+        },
+        "criteria": {
+          "type": {
+            "equals": "telemetry"
+          }
+        }
+      }
+    },
+    "json_to_entity": {
+      "type": "processor",
+      "name": "json_to_entity",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_in",
+              "subject": "generic.entities",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "entity_out",
+              "subject": "events.graph.entity.telemetry",
+              "type": "nats",
+              "interface": "graph.Entity.v1"
+            }
+          ]
+        },
+        "entity_id_field": "entity_id",
+        "entity_type_field": "entity_type",
+        "entity_class": "Object",
+        "entity_role": "primary",
+        "source_field": "json_to_entity"
+      }
+    },
+    "graph": {
+      "type": "processor",
+      "name": "graph-processor",
+      "enabled": true,
+      "config": {
+        "workers": 8,
+        "queue_size": 5000,
+        "input_subject": "events.graph.entity.*",
+        "message_handler": {
+          "processing_timeout": "5s",
+          "max_retries": 5
+        },
+        "data_manager": {
+          "kv_bucket": "graph_entities_kitchen",
+          "kv_options": {
+            "max_retries": 15,
+            "timeout": "10s"
+          },
+          "enable_edge_tracking": true,
+          "edge_batch_size": 100
+        },
+        "indexer": {
+          "indexes": {
+            "predicate": true,
+            "incoming": true,
+            "alias": true,
+            "spatial": true,
+            "temporal": true
+          },
+          "buckets": {
+            "alias": "ALIAS_INDEX",
+            "predicate": "PREDICATE_INDEX",
+            "incoming": "INCOMING_INDEX",
+            "spatial": "SPATIAL_INDEX",
+            "temporal": "TEMPORAL_INDEX"
+          },
+          "batch_processing": {
+            "size": 50
+          },
+          "embedding": {
+            "enabled": true
+          }
+        },
+        "querier": {
+          "cache_enabled": true,
+          "cache_ttl": "15m",
+          "max_cache_size": 5000,
+          "query_timeout": "10s",
+          "result_limit": 1000
+        }
+      }
+    },
+    "file": {
+      "type": "output",
+      "name": "file",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "file_in",
+              "subject": "generic.entities",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "directory": "/tmp",
+        "file_prefix": "semstreams-kitchen-sink",
+        "format": "jsonl"
+      }
+    },
+    "httppost": {
+      "type": "output",
+      "name": "httppost",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "http_in",
+              "subject": "generic.entities",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "url": "http://localhost:9999/webhook",
+        "retry_max": 3
+      }
+    },
+    "websocket": {
+      "type": "output",
+      "name": "websocket",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "ws_in",
+              "subject": "raw.udp.messages",
+              "type": "nats"
+            }
+          ],
+          "outputs": []
+        },
+        "http_port": 8082,
+        "path": "/ws"
+      }
+    },
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "store_in",
+              "subject": "generic.entities",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "bucket_name": "semstreams_kitchen_sink_store",
+        "data_cache": {
+          "enabled": true,
+          "strategy": "hybrid",
+          "max_size": 5000,
+          "ttl": "1h",
+          "cleanup_interval": "5m"
+        }
+      }
+    },
+    "api-gateway": {
+      "type": "gateway",
+      "name": "http",
+      "enabled": true,
+      "config": {
+        "enable_cors": true,
+        "cors_origins": ["*"],
+        "max_request_size": 1048576,
+        "routes": [
+          {
+            "path": "/search/semantic",
+            "method": "POST",
+            "nats_subject": "graph.query.semantic",
+            "timeout": "5s",
+            "description": "Semantic similarity search across indexed entities"
+          },
+          {
+            "path": "/entity/:id",
+            "method": "GET",
+            "nats_subject": "graph.query.entity",
+            "timeout": "2s",
+            "description": "Retrieve single entity by ID"
+          }
+        ]
+      }
+    }
+  }
+}

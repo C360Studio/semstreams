@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "udp.v1.json",
+  "type": "object",
+  "title": "udp Configuration",
+  "description": "UDP input component for receiving MAVLink and other UDP data",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "udp",
+    "type": "input",
+    "protocol": "udp",
+    "domain": "network",
+    "version": "1.0.0"
+  }
+}

@@ -1,0 +1,45 @@
+# Prometheus configuration for SemStreams
+#
+# This configuration scrapes metrics from SemStreams components.
+# All metrics are exposed at a single endpoint with component labels.
+
+global:
+  scrape_interval: 15s      # How frequently to scrape targets
+  evaluation_interval: 15s  # How frequently to evaluate rules
+
+  # Attach these labels to any time series or alerts
+  external_labels:
+    monitor: 'semstreams'
+    environment: 'local'
+
+# Scrape configurations
+scrape_configs:
+  # SemStreams unified metrics endpoint
+  # All component metrics are exposed here with 'component' labels
+  - job_name: 'semstreams'
+    static_configs:
+      - targets:
+          # For Docker host: host.docker.internal:PORT
+          # For Docker network: service-name:PORT
+          - 'host.docker.internal:9090'  # Metrics service port
+    metrics_path: '/metrics'  # Single unified endpoint
+    scrape_interval: 10s      # More frequent for real-time visibility
+    scrape_timeout: 5s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+    scrape_timeout: 5s
+
+# Alerting configuration (optional - can be extended later)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Rule files (optional - can be added for custom rules)
+# rule_files:
+#   - "rules/*.yml"

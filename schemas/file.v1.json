@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "file.v1.json",
+  "type": "object",
+  "title": "file Configuration",
+  "description": "File output for writing messages to disk in JSON, JSONL, or raw format",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "file",
+    "type": "output",
+    "protocol": "file",
+    "domain": "storage",
+    "version": "0.1.0"
+  }
+}

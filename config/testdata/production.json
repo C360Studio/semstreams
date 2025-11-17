@@ -1,0 +1,9 @@
+{
+  "platform": {
+    "environment": "production",
+    "log_level": "warn"
+  },
+  "nats": {
+    "urls": ["nats://prod-server:4222"]
+  }
+}

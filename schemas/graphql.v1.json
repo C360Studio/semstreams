@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "graphql.v1.json",
+  "type": "object",
+  "title": "graphql Configuration",
+  "description": "GraphQL gateway for schema-driven NATS queries",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "graphql",
+    "type": "gateway",
+    "protocol": "graphql",
+    "domain": "network",
+    "version": "0.1.0"
+  }
+}

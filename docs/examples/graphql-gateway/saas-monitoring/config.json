@@ -1,0 +1,334 @@
+{
+  "package": "monitoringapi",
+  "schema_path": "schema.graphql",
+  "output_dir": "generated",
+
+  "queries": {
+    "service": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.service.get",
+      "timeout": "5s"
+    },
+    "metric": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.metric.get"
+    },
+    "alert": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.alert.get"
+    },
+    "incident": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.incident.get"
+    },
+    "deployment": {
+      "resolver": "QueryEntityByID",
+      "subject": "graph.deployment.get"
+    },
+
+    "services": {
+      "resolver": "QueryEntitiesByIDs",
+      "subject": "graph.service.list"
+    },
+    "allServices": {
+      "resolver": "QueryEntitiesByType",
+      "subject": "graph.service.list",
+      "entity_type": "service"
+    },
+    "alerts": {
+      "resolver": "QueryEntitiesByIDs",
+      "subject": "graph.alert.list"
+    },
+    "allAlerts": {
+      "resolver": "QueryEntitiesByType",
+      "subject": "graph.alert.list",
+      "entity_type": "alert"
+    },
+    "incidents": {
+      "resolver": "QueryEntitiesByIDs",
+      "subject": "graph.incident.list"
+    },
+    "allIncidents": {
+      "resolver": "QueryEntitiesByType",
+      "subject": "graph.incident.list",
+      "entity_type": "incident"
+    },
+
+    "serviceDependencies": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.dependencies"
+    },
+    "serviceDependents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.dependents"
+    },
+    "serviceMetrics": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.metrics"
+    },
+    "serviceAlerts": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.alerts"
+    },
+    "serviceIncidents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.incidents"
+    },
+    "alertIncidents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.alert.incidents"
+    },
+
+    "searchServices": {
+      "resolver": "SemanticSearch",
+      "subject": "graph.query.semantic",
+      "entity_type": "service"
+    },
+    "searchIncidents": {
+      "resolver": "SemanticSearch",
+      "subject": "graph.query.semantic",
+      "entity_type": "incident"
+    },
+
+    "criticalAlerts": {
+      "custom_query": true
+    },
+    "openIncidents": {
+      "custom_query": true
+    },
+    "unhealthyServices": {
+      "custom_query": true
+    },
+    "recentDeployments": {
+      "custom_query": true
+    },
+    "serviceHealthTimeSeries": {
+      "custom_query": true
+    }
+  },
+
+  "subscriptions": {
+    "serviceStatusChanged": {
+      "subject": "service.status.changed.{serviceID}",
+      "entity_type": "service"
+    },
+    "alertTriggered": {
+      "subject": "alert.triggered.{serviceID}.{severity}",
+      "entity_type": "alert"
+    },
+    "incidentUpdated": {
+      "subject": "incident.updated.{incidentID}.{severity}",
+      "entity_type": "incident"
+    },
+    "deploymentStatusChanged": {
+      "subject": "deployment.status.changed.{serviceID}.{environment}",
+      "entity_type": "deployment"
+    },
+    "metricUpdated": {
+      "subject": "metric.updated.{serviceID}.{metricName}",
+      "stream": "METRICS_STREAM"
+    }
+  },
+
+  "types": {
+    "Service": {
+      "entity_type": "service",
+      "id_field": "id",
+      "cache_ttl": "30s"
+    },
+    "Metric": {
+      "entity_type": "metric",
+      "id_field": "id",
+      "cache_ttl": "10s"
+    },
+    "Alert": {
+      "entity_type": "alert",
+      "id_field": "id"
+    },
+    "Incident": {
+      "entity_type": "incident",
+      "id_field": "id"
+    },
+    "Deployment": {
+      "entity_type": "deployment",
+      "id_field": "id"
+    }
+  },
+
+  "fields": {
+    "Service.id": {"property": "id", "type": "string"},
+    "Service.name": {"property": "properties.name", "type": "string"},
+    "Service.displayName": {"property": "properties.display_name", "type": "string"},
+    "Service.type": {"property": "properties.type", "type": "string"},
+    "Service.status": {"property": "properties.status", "type": "string"},
+    "Service.healthScore": {"property": "properties.health_score", "type": "float64"},
+    "Service.version": {"property": "properties.version", "type": "string"},
+    "Service.environment": {"property": "properties.environment", "type": "string"},
+    "Service.owner": {"property": "properties.owner", "type": "string"},
+    "Service.dependencies": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.dependencies",
+      "edge_type": "depends_on"
+    },
+    "Service.dependents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.dependents",
+      "edge_type": "depends_on",
+      "direction": "incoming"
+    },
+    "Service.metrics": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.metrics",
+      "edge_type": "has_metric"
+    },
+    "Service.alerts": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.alerts",
+      "edge_type": "has_alert"
+    },
+    "Service.incidents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.incidents",
+      "edge_type": "has_incident"
+    },
+    "Service.deployments": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.service.deployments",
+      "edge_type": "deployed_to"
+    },
+    "Service.createdAt": {"property": "createdAt", "type": "string"},
+    "Service.updatedAt": {"property": "updatedAt", "type": "string"},
+
+    "Metric.id": {"property": "id", "type": "string"},
+    "Metric.service": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.metric.service",
+      "edge_type": "has_metric",
+      "direction": "incoming"
+    },
+    "Metric.name": {"property": "properties.name", "type": "string"},
+    "Metric.type": {"property": "properties.type", "type": "string"},
+    "Metric.value": {"property": "properties.value", "type": "float64"},
+    "Metric.unit": {"property": "properties.unit", "type": "string"},
+    "Metric.labels": {"property": "properties.labels", "type": "map[string]interface{}"},
+    "Metric.timestamp": {"property": "properties.timestamp", "type": "string"},
+    "Metric.aggregation": {"property": "properties.aggregation", "type": "map[string]interface{}", "nullable": true},
+
+    "Alert.id": {"property": "id", "type": "string"},
+    "Alert.service": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.alert.service",
+      "edge_type": "has_alert",
+      "direction": "incoming"
+    },
+    "Alert.name": {"property": "properties.name", "type": "string"},
+    "Alert.condition": {"property": "properties.condition", "type": "string"},
+    "Alert.severity": {"property": "properties.severity", "type": "string"},
+    "Alert.status": {"property": "properties.status", "type": "string"},
+    "Alert.threshold": {"property": "properties.threshold", "type": "float64"},
+    "Alert.currentValue": {"property": "properties.current_value", "type": "float64", "nullable": true},
+    "Alert.evaluatedAt": {"property": "properties.evaluated_at", "type": "string", "nullable": true},
+    "Alert.triggeredAt": {"property": "properties.triggered_at", "type": "string", "nullable": true},
+    "Alert.acknowledgedAt": {"property": "properties.acknowledged_at", "type": "string", "nullable": true},
+    "Alert.resolvedAt": {"property": "properties.resolved_at", "type": "string", "nullable": true},
+    "Alert.incidents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.alert.incidents",
+      "edge_type": "triggered_by"
+    },
+    "Alert.createdAt": {"property": "createdAt", "type": "string"},
+    "Alert.updatedAt": {"property": "updatedAt", "type": "string"},
+
+    "Incident.id": {"property": "id", "type": "string"},
+    "Incident.title": {"property": "properties.title", "type": "string"},
+    "Incident.description": {"property": "properties.description", "type": "string", "nullable": true},
+    "Incident.severity": {"property": "properties.severity", "type": "string"},
+    "Incident.status": {"property": "properties.status", "type": "string"},
+    "Incident.service": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.incident.service",
+      "edge_type": "has_incident",
+      "direction": "incoming"
+    },
+    "Incident.alerts": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.incident.alerts",
+      "edge_type": "triggered_by",
+      "direction": "incoming"
+    },
+    "Incident.assignee": {"property": "properties.assignee", "type": "string", "nullable": true},
+    "Incident.rootCause": {"property": "properties.root_cause", "type": "string", "nullable": true},
+    "Incident.resolution": {"property": "properties.resolution", "type": "string", "nullable": true},
+    "Incident.impactedUsers": {"property": "properties.impacted_users", "type": "int", "nullable": true},
+    "Incident.detectedAt": {"property": "properties.detected_at", "type": "string"},
+    "Incident.acknowledgedAt": {"property": "properties.acknowledged_at", "type": "string", "nullable": true},
+    "Incident.resolvedAt": {"property": "properties.resolved_at", "type": "string", "nullable": true},
+    "Incident.duration": {"property": "properties.duration", "type": "int", "nullable": true},
+    "Incident.createdAt": {"property": "createdAt", "type": "string"},
+    "Incident.updatedAt": {"property": "updatedAt", "type": "string"},
+
+    "Deployment.id": {"property": "id", "type": "string"},
+    "Deployment.service": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.deployment.service",
+      "edge_type": "deployed_to",
+      "direction": "incoming"
+    },
+    "Deployment.version": {"property": "properties.version", "type": "string"},
+    "Deployment.environment": {"property": "properties.environment", "type": "string"},
+    "Deployment.status": {"property": "properties.status", "type": "string"},
+    "Deployment.deployedBy": {"property": "properties.deployed_by", "type": "string"},
+    "Deployment.commitSHA": {"property": "properties.commit_sha", "type": "string", "nullable": true},
+    "Deployment.rollbackCommitSHA": {"property": "properties.rollback_commit_sha", "type": "string", "nullable": true},
+    "Deployment.startedAt": {"property": "properties.started_at", "type": "string"},
+    "Deployment.completedAt": {"property": "properties.completed_at", "type": "string", "nullable": true},
+    "Deployment.duration": {"property": "properties.duration", "type": "int", "nullable": true},
+    "Deployment.rollback": {"property": "properties.rollback", "type": "bool"},
+    "Deployment.incidents": {
+      "resolver": "QueryRelationships",
+      "subject": "graph.deployment.incidents",
+      "edge_type": "caused_by"
+    },
+
+    "Label.key": {"property": "key", "type": "string"},
+    "Label.value": {"property": "value", "type": "string"},
+
+    "Aggregation.window": {"property": "window", "type": "string"},
+    "Aggregation.function": {"property": "function", "type": "string"},
+    "Aggregation.samples": {"property": "samples", "type": "int"},
+
+    "TimeSeriesPoint.timestamp": {"property": "timestamp", "type": "string"},
+    "TimeSeriesPoint.value": {"property": "value", "type": "float64"}
+  },
+
+  "error_mapping": {
+    "NOT_FOUND": "Service, metric, alert, or incident not found",
+    "INVALID_INPUT": "Invalid query parameters",
+    "TIMEOUT": "Request timeout - service may be experiencing issues",
+    "PERMISSION_DENIED": "Permission denied - check authentication",
+    "INTERNAL_ERROR": "Internal error - please contact support"
+  },
+
+  "dataloaders": {
+    "Service": {
+      "batch_size": 50,
+      "wait": "10ms",
+      "cache": true
+    },
+    "Metric": {
+      "batch_size": 200,
+      "wait": "5ms",
+      "cache": true
+    },
+    "Alert": {
+      "batch_size": 100,
+      "wait": "10ms",
+      "cache": true
+    },
+    "Incident": {
+      "batch_size": 50,
+      "wait": "10ms",
+      "cache": true
+    }
+  }
+}

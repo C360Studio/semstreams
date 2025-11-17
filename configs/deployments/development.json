@@ -1,0 +1,19 @@
+{
+  "port": 8080,
+  "log_level": "debug",
+  "nats": {
+    "url": "nats://localhost:4222",
+    "max_reconnects": 10,
+    "reconnect_wait": "2s"
+  },
+  "metrics": {
+    "enabled": true,
+    "port": 8080,
+    "path": "/metrics"
+  },
+  "health": {
+    "enabled": true,
+    "path": "/health"
+  },
+  "debug": true
+}

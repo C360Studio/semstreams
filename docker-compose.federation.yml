@@ -1,0 +1,155 @@
+# Federation E2E Test Environment
+#
+# ⚠️  THIS FILE IS FOR FEDERATION E2E TESTING ONLY ⚠️
+#
+# This compose file creates a two-instance federation topology:
+#   Edge Instance  → WebSocket Output :8082
+#   Cloud Instance → WebSocket Input (client) → File Output
+#
+# Use with task commands:
+#   - task e2e:federation - Run federation test scenario
+#   - task e2e:clean      - Clean up test environment
+#
+services:
+  # Edge NATS Server
+  nats-edge:
+    image: nats:2.10-alpine
+    container_name: streamkit-edge-nats
+    ports:
+      - "4222:4222" # Client connections
+      - "8221:8222" # HTTP monitoring (mapped to avoid conflict)
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "streamkit-edge-nats"]
+    volumes:
+      - nats-edge-data:/data
+    networks:
+      - streamkit-federation-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Cloud NATS Server
+  nats-cloud:
+    image: nats:2.10-alpine
+    container_name: streamkit-cloud-nats
+    ports:
+      - "4223:4222" # Client connections (different external port)
+      - "8223:8222" # HTTP monitoring
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "streamkit-cloud-nats"]
+    volumes:
+      - nats-cloud-data:/data
+    networks:
+      - streamkit-federation-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Edge StreamKit Instance
+  streamkit-edge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: streamkit-edge
+    depends_on:
+      nats-edge:
+        condition: service_healthy
+    environment:
+      - STREAMKIT_CONFIG=/app/configs/edge-federation.json
+      - STREAMKIT_NATS_URLS=nats://nats-edge:4222
+      - STREAMKIT_LOG_LEVEL=debug
+    volumes:
+      - ./configs:/app/configs:ro
+    ports:
+      - "8080:8080" # HTTP API
+      - "9091:9091" # Prometheus metrics
+      - "14550:14550/udp" # UDP input
+      - "8082:8082" # WebSocket output (federation)
+    networks:
+      streamkit-federation-net:
+        aliases:
+          - edge
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Cloud StreamKit Instance
+  streamkit-cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: streamkit-cloud
+    depends_on:
+      nats-cloud:
+        condition: service_healthy
+      streamkit-edge:
+        condition: service_healthy
+    environment:
+      - STREAMKIT_CONFIG=/app/configs/cloud-federation.json
+      - STREAMKIT_NATS_URLS=nats://nats-cloud:4222
+      - STREAMKIT_LOG_LEVEL=debug
+    volumes:
+      - ./configs:/app/configs:ro
+      - /tmp:/tmp # Share /tmp for file output verification
+    ports:
+      - "8081:8080" # HTTP API (different external port)
+      - "9092:9092" # Prometheus metrics
+    networks:
+      streamkit-federation-net:
+        aliases:
+          - cloud
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  streamkit-federation-net:
+    driver: bridge
+
+volumes:
+  nats-edge-data:
+    driver: local
+  nats-cloud-data:
+    driver: local

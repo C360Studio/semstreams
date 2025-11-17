@@ -1,0 +1,39 @@
+{{/* Query resolver template - generates query methods for a GraphQL type */}}
+// {{ .TypeName }} resolver - queries single entity by ID
+func (r *queryResolver) {{ .QueryName }}(ctx context.Context, id string) (*model.{{ .TypeName }}, error) {
+	entity, err := r.base.QueryEntityByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if entity == nil {
+		return nil, nil // Not found - return GraphQL null
+	}
+
+	if entity.Type != "{{ .EntityType }}" {
+		return nil, fmt.Errorf("entity %s is not a {{ .TypeName }} (type: %s)", id, entity.Type)
+	}
+
+	return convertEntityTo{{ .TypeName }}(entity), nil
+}
+
+// {{ .QueryNamePlural }} resolver - batch queries entities by IDs
+func (r *queryResolver) {{ .QueryNamePlural }}(ctx context.Context, ids []string) ([]*model.{{ .TypeName }}, error) {
+	if len(ids) == 0 {
+		return []*model.{{ .TypeName }}{}, nil
+	}
+
+	entities, err := r.base.QueryEntitiesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*model.{{ .TypeName }}, 0, len(entities))
+	for _, entity := range entities {
+		if entity.Type == "{{ .EntityType }}" {
+			results = append(results, convertEntityTo{{ .TypeName }}(entity))
+		}
+	}
+
+	return results, nil
+}

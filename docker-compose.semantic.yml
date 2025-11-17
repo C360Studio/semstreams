@@ -1,0 +1,84 @@
+# E2E Test Environment for SemStreams Semantic Processing
+#
+# ⚠️  THIS FILE IS FOR SEMANTIC E2E TESTING ONLY - DO NOT USE DIRECTLY ⚠️
+#
+# This compose file is designed to work with task commands:
+#   - task e2e:semantic-basic    - Run basic semantic test
+#   - task e2e:semantic          - Run all semantic tests
+#   - task e2e:clean             - Clean up test environment
+#
+# Running this directly will start services but NOT run tests.
+# The E2E tests are executed from the host via cmd/e2e/e2e binary.
+#
+# Following Observer Pattern: E2E tests are external observers of the running system
+services:
+  # NATS Server with JetStream
+  nats:
+    image: nats:2.11.7-alpine
+    container_name: semstreams-semantic-nats
+    ports:
+      - "4222:4222" # Client connections
+      - "8222:8222" # HTTP monitoring
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-semantic-nats"]
+    volumes:
+      - nats-semstreams-semantic-data:/data
+    networks:
+      - semstreams-semantic-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # SemStreams Application (semantic processing)
+  semstreams:
+    build:
+      context: ..
+      dockerfile: semstreams/Dockerfile
+      target: production
+    container_name: semstreams-semantic-app
+    command: ["--config", "/app/configs/semantic-basic.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+    volumes:
+      - ./configs:/app/configs:ro
+    ports:
+      - "8080:8080" # HTTP API (health, components)
+      - "9090:9090" # Prometheus metrics
+      - "14550:14550/udp" # UDP input
+    networks:
+      - semstreams-semantic-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/health",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-semantic-net:
+    driver: bridge
+
+volumes:
+  nats-semstreams-semantic-data:
+    driver: local

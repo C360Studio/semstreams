@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "websocket.v1.json",
+  "type": "object",
+  "title": "websocket Configuration",
+  "description": "WebSocket output component for real-time visualization and data streaming",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "websocket",
+    "type": "output",
+    "protocol": "websocket",
+    "domain": "network",
+    "version": "1.0.0"
+  }
+}

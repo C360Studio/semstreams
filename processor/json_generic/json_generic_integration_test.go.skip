@@ -1,0 +1,339 @@
+package jsongeneric_test
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/c360/streamkit/component"
+	"github.com/c360/streamkit/message"
+	"github.com/c360/streamkit/natsclient"
+	jsongeneric "github.com/c360/streamkit/processor/json_generic"
+)
+
+// Package-level shared test client to avoid Docker resource exhaustion
+var (
+	sharedTestClient *natsclient.TestClient
+	sharedNATSClient *natsclient.Client
+)
+
+// TestMain sets up a single shared NATS container for all JSON generic processor tests
+func TestMain(m *testing.M) {
+	if os.Getenv("INTEGRATION_TESTS") != "" {
+		// Create a single shared test client for integration tests
+		testClient, err := natsclient.NewSharedTestClient(
+			natsclient.WithJetStream(),
+			natsclient.WithKV(),
+			natsclient.WithTestTimeout(5*time.Second),
+			natsclient.WithStartTimeout(30*time.Second),
+		)
+		if err != nil {
+			panic("Failed to create shared test client: " + err.Error())
+		}
+
+		sharedTestClient = testClient
+		sharedNATSClient = testClient.Client
+	}
+
+	// Run all tests
+	exitCode := m.Run()
+
+	// Cleanup integration test resources if they were created
+	if sharedTestClient != nil {
+		sharedTestClient.Terminate()
+	}
+
+	os.Exit(exitCode)
+}
+
+// getSharedNATSClient returns the shared NATS client for integration tests
+func getSharedNATSClient(t *testing.T) *natsclient.Client {
+	if os.Getenv("INTEGRATION_TESTS") == "" {
+		t.Skip("Skipping integration test. Set INTEGRATION_TESTS=1 to run.")
+	}
+	if sharedNATSClient == nil {
+		t.Fatal("Shared NATS client not initialized - TestMain should have created it")
+	}
+	return sharedNATSClient
+}
+
+// TestIntegration_JSONGenericWrapping tests JSON generic processor wrapping plain JSON
+func TestIntegration_JSONGenericWrapping(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	// Create JSON generic config
+	config := jsongeneric.JSONGenericConfig{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{Name: "input", Type: "nats", Subject: "test.jsongeneric.raw", Required: true},
+			},
+			Outputs: []component.PortDefinition{
+				{Name: "output", Type: "nats", Subject: "test.jsongeneric.wrapped", Interface: "core .json.v1", Required: true},
+			},
+		},
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.ComponentDependencies{
+		NATSClient: natsClient,
+	}
+
+	// Create JSON generic processor
+	processor, err := jsongeneric.NewJSONGenericProcessor(rawConfig, deps)
+	require.NoError(t, err)
+
+	// Subscribe to output before starting processor
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	outputChan := make(chan []byte, 10)
+	sub, err := natsClient.Subscribe(ctx, "test.jsongeneric.wrapped", func(_ context.Context, msg []byte) error {
+		outputChan <- msg
+		return nil
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Start the processor
+	err = processor.Start(ctx)
+	require.NoError(t, err)
+	defer processor.Stop(ctx)
+
+	// Wait for processor to be ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Publish plain JSON message
+	plainJSON := map[string]any{
+		"sensor": "temp-001",
+		"value":  23.5,
+		"unit":   "celsius",
+	}
+	plainData, err := json.Marshal(plainJSON)
+	require.NoError(t, err)
+
+	err = natsClient.Publish(ctx, "test.jsongeneric.raw", plainData)
+	require.NoError(t, err)
+
+	// Wait for wrapped message
+	select {
+	case wrappedMsg := <-outputChan:
+		// Parse wrapped message
+		var payload message.GenericJSONPayload
+		err := json.Unmarshal(wrappedMsg, &payload)
+		require.NoError(t, err)
+
+		// Verify wrapped data
+		assert.Equal(t, "temp-001", payload.Data["sensor"])
+		assert.Equal(t, 23.5, payload.Data["value"])
+		assert.Equal(t, "celsius", payload.Data["unit"])
+
+		// Verify it conforms to GenericJSON interface
+		err = payload.Validate()
+		assert.NoError(t, err)
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for wrapped message")
+	}
+}
+
+// TestIntegration_JSONGenericMultipleMessages tests processing multiple messages
+func TestIntegration_JSONGenericMultipleMessages(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	config := jsongeneric.JSONGenericConfig{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{Name: "input", Type: "nats", Subject: "test.jsongeneric.multi.raw", Required: true},
+			},
+			Outputs: []component.PortDefinition{
+				{Name: "output", Type: "nats", Subject: "test.jsongeneric.multi.wrapped", Interface: "core .json.v1", Required: true},
+			},
+		},
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.ComponentDependencies{
+		NATSClient: natsClient,
+	}
+
+	processor, err := jsongeneric.NewJSONGenericProcessor(rawConfig, deps)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	outputChan := make(chan []byte, 10)
+	sub, err := natsClient.Subscribe(ctx, "test.jsongeneric.multi.wrapped", func(_ context.Context, msg []byte) error {
+		outputChan <- msg
+		return nil
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	err = processor.Start(ctx)
+	require.NoError(t, err)
+	defer processor.Stop(ctx)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Publish multiple messages
+	messages := []map[string]any{
+		{"id": "1", "value": 100},
+		{"id": "2", "value": 200},
+		{"id": "3", "value": 300},
+	}
+
+	for _, msg := range messages {
+		data, err := json.Marshal(msg)
+		require.NoError(t, err)
+		err = natsClient.Publish(ctx, "test.jsongeneric.multi.raw", data)
+		require.NoError(t, err)
+	}
+
+	// Collect all wrapped messages
+	received := 0
+	timeout := time.After(5 * time.Second)
+
+	for received < len(messages) {
+		select {
+		case wrappedMsg := <-outputChan:
+			var payload message.GenericJSONPayload
+			err := json.Unmarshal(wrappedMsg, &payload)
+			require.NoError(t, err)
+
+			// Verify wrapped
+			assert.Contains(t, payload.Data, "id")
+			assert.Contains(t, payload.Data, "value")
+			received++
+
+		case <-timeout:
+			t.Fatalf("Timeout: only received %d/%d messages", received, len(messages))
+		}
+	}
+
+	assert.Equal(t, len(messages), received, "Should receive all messages")
+}
+
+// TestIntegration_JSONGenericInvalidJSON tests handling of invalid JSON
+func TestIntegration_JSONGenericInvalidJSON(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	config := jsongeneric.JSONGenericConfig{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{Name: "input", Type: "nats", Subject: "test.jsongeneric.invalid.raw", Required: true},
+			},
+			Outputs: []component.PortDefinition{
+				{Name: "output", Type: "nats", Subject: "test.jsongeneric.invalid.wrapped", Interface: "core .json.v1", Required: true},
+			},
+		},
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.ComponentDependencies{
+		NATSClient: natsClient,
+	}
+
+	processor, err := jsongeneric.NewJSONGenericProcessor(rawConfig, deps)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	outputChan := make(chan []byte, 10)
+	sub, err := natsClient.Subscribe(ctx, "test.jsongeneric.invalid.wrapped", func(_ context.Context, msg []byte) error {
+		outputChan <- msg
+		return nil
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	err = processor.Start(ctx)
+	require.NoError(t, err)
+	defer processor.Stop(ctx)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Publish invalid JSON
+	invalidJSON := []byte(`{invalid json}`)
+	err = natsClient.Publish(ctx, "test.jsongeneric.invalid.raw", invalidJSON)
+	require.NoError(t, err)
+
+	// Publish valid JSON after invalid
+	validJSON := []byte(`{"sensor": "test-001", "value": 42}`)
+	err = natsClient.Publish(ctx, "test.jsongeneric.invalid.raw", validJSON)
+	require.NoError(t, err)
+
+	// Should only receive the valid message (invalid is logged and skipped)
+	select {
+	case wrappedMsg := <-outputChan:
+		var payload message.GenericJSONPayload
+		err := json.Unmarshal(wrappedMsg, &payload)
+		require.NoError(t, err)
+
+		// Verify it's the valid message
+		assert.Equal(t, "test-001", payload.Data["sensor"])
+		assert.Equal(t, float64(42), payload.Data["value"])
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for valid message")
+	}
+
+	// Should not receive any more messages (invalid was skipped)
+	select {
+	case <-outputChan:
+		t.Fatal("Should not receive message for invalid JSON")
+	case <-time.After(500 * time.Millisecond):
+		// Expected - no additional messages
+	}
+}
+
+// TestIntegration_JSONGenericLifecycle tests Start/Stop lifecycle
+func TestIntegration_JSONGenericLifecycle(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	config := jsongeneric.DefaultConfig()
+	config.Ports.Inputs[0].Subject = "test.jsongeneric.lifecycle.raw"
+	config.Ports.Outputs[0].Subject = "test.jsongeneric.lifecycle.wrapped"
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.ComponentDependencies{
+		NATSClient: natsClient,
+	}
+
+	processor, err := jsongeneric.NewJSONGenericProcessor(rawConfig, deps)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Start processor
+	err = processor.Start(ctx)
+	require.NoError(t, err)
+
+	// Verify processor is started (if IsStarted method exists)
+	if starter, ok := processor.(interface{ IsStarted() bool }); ok {
+		assert.True(t, starter.IsStarted())
+	}
+
+	// Stop processor
+	err = processor.Stop(ctx)
+	require.NoError(t, err)
+
+	// Verify processor is stopped
+	if starter, ok := processor.(interface{ IsStarted() bool }); ok {
+		assert.False(t, starter.IsStarted())
+	}
+}

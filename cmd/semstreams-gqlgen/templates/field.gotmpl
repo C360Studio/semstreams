@@ -1,0 +1,50 @@
+{{/* Field resolver template - generates relationship field resolvers */}}
+// {{ .FieldName }} resolver for {{ .TypeName }} - resolves {{ .EdgeType }} relationships
+func (r *{{ .ResolverName }}) {{ .FieldName }}(ctx context.Context, obj *model.{{ .TypeName }}) ([]*model.{{ .TargetType }}, error) {
+	filters := graphql.RelationshipFilters{
+		EntityID:  obj.ID,
+		Direction: "{{ .Direction }}",
+		EdgeTypes: []string{"{{ .EdgeType }}"},
+	}
+
+	relationships, err := r.base.QueryRelationships(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(relationships) == 0 {
+		return []*model.{{ .TargetType }}{}, nil
+	}
+
+	// Extract target IDs from relationships
+	targetIDs := make([]string, 0, len(relationships))
+	for _, rel := range relationships {
+		{{- if eq .Direction "outgoing" }}
+		targetIDs = append(targetIDs, rel.ToEntityID)
+		{{- else if eq .Direction "incoming" }}
+		targetIDs = append(targetIDs, rel.FromEntityID)
+		{{- else }}
+		// For "both" direction, collect both source and target
+		if rel.FromEntityID != obj.ID {
+			targetIDs = append(targetIDs, rel.FromEntityID)
+		}
+		if rel.ToEntityID != obj.ID {
+			targetIDs = append(targetIDs, rel.ToEntityID)
+		}
+		{{- end }}
+	}
+
+	// Batch load target entities
+	entities, err := r.base.QueryEntitiesByIDs(ctx, targetIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to target type
+	results := make([]*model.{{ .TargetType }}, 0, len(entities))
+	for _, entity := range entities {
+		results = append(results, convertEntityTo{{ .TargetType }}(entity))
+	}
+
+	return results, nil
+}

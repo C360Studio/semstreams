@@ -1,0 +1,61 @@
+{
+  "platform": {
+    "org": "c360",
+    "id": "mavlink-demo",
+    "type": "ground-station"
+  },
+  "nats": {
+    "urls": ["nats://localhost:4222"],
+    "jetstream": { "enabled": true }
+  },
+  "services": {
+    "message_logger": {"enabled": true},
+    "discovery": {"enabled": true}
+  },
+  "components": {
+    "udp-input": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "port": 14550
+      }
+    },
+    "mavlink-processor": {
+      "type": "processor",
+      "name": "robotics",
+      "enabled": true,
+      "config": {
+        "protocol": "mavlink"
+      }
+    },
+    "websocket-output": {
+      "type": "output",
+      "name": "websocket",
+      "enabled": true,
+      "config": {
+        "endpoint": "ws://localhost:8080/stream"
+      }
+    },
+    "graph-processor": {
+      "type": "processor",
+      "name": "graph",
+      "enabled": true,
+      "config": {
+        "entity_states": {
+          "ttl": "0",
+          "history": 10,
+          "replicas": 1
+        }
+      }
+    },
+    "message-store": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "bucket_name": "messages"
+      }
+    }
+  }
+}

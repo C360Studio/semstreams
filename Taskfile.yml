@@ -1,0 +1,337 @@
+version: '3'
+
+tasks:
+  # Build tasks
+  build:
+    desc: Build SemStreams binary
+    cmds:
+      - go build -o bin/semstreams ./cmd/semstreams
+      - echo "✅ SemStreams binary built at bin/semstreams"
+
+  build:e2e:
+    desc: Build E2E test binary
+    cmds:
+      - cd cmd/e2e && go build -o e2e .
+      - echo "✅ E2E test binary built at cmd/e2e/e2e"
+
+  # Test tasks
+  test:
+    desc: Run all unit tests
+    cmds:
+      - go test ./...
+
+  test:race:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race ./...
+
+  test:integration:
+    desc: Run integration tests
+    env:
+      INTEGRATION_TESTS: "1"
+    cmds:
+      - go test ./...
+
+  # Clean tasks
+  clean:bins:
+    desc: Remove local binaries
+    cmds:
+      - echo "[CLEAN] Removing local binaries..."
+      - rm -f bin/semstreams
+      - rm -f cmd/e2e/e2e
+      - echo "[OK] Local binaries removed"
+
+  clean:docker:
+    desc: Clean Docker build cache and SemStreams images
+    cmds:
+      - echo "[CLEAN] Cleaning Docker build cache and images..."
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15 2>/dev/null || true
+      - docker volume ls -q --filter name=semstreams | xargs -r docker volume rm 2>/dev/null || true
+      - docker images --filter reference=semstreams-semstreams --format "{{.ID}}" | xargs -r docker rmi -f 2>/dev/null || true
+      - docker builder prune -f
+      - echo "[OK] Docker cache and images cleaned"
+
+  clean:go:
+    desc: Clean Go build and test cache
+    cmds:
+      - echo "[CLEAN] Cleaning Go build cache..."
+      - go clean -cache -testcache -modcache
+      - echo "[OK] Go cache cleaned"
+
+  clean:all:
+    desc: Clean everything (binaries, Docker, Go cache)
+    deps: [clean:bins, clean:docker, clean:go]
+    cmds:
+      - echo "[OK] Complete cleanup finished"
+
+  # E2E tasks
+  e2e:check-ports:
+    desc: Check if required E2E ports are available
+    silent: false
+    cmds:
+      - |
+        echo "[CHECK] Verifying ports are available..."
+        if lsof -Pi :8080 -sTCP:LISTEN -t >/dev/null 2>&1; then
+          echo "[ERROR] Port 8080 is already in use"
+          lsof -Pi :8080 -sTCP:LISTEN
+          exit 1
+        fi
+      - |
+        if lsof -Pi :14550 -t >/dev/null 2>&1; then
+          echo "[ERROR] Port 14550 (UDP) is already in use"
+          lsof -i :14550
+          exit 1
+        fi
+      - echo "[OK] All ports available"
+
+  e2e:clean:
+    desc: Clean E2E test environment
+    silent: false
+    cmds:
+      - echo "[E2E CLEAN] Cleaning SemStreams E2E environment..."
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15 2>/dev/null || true
+      - docker volume ls -q --filter name=semstreams-e2e | xargs -r docker volume rm 2>/dev/null || true
+      - echo "[OK] E2E environment cleaned"
+
+  e2e:
+    desc: Run all SemStreams core E2E tests
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[E2E] Starting SemStreams E2E environment..."
+      - docker compose -f docker-compose.e2e.yml up -d
+      - echo "[E2E] Waiting for services to be ready..."
+      - |
+        for i in {1..30}; do
+          if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+            echo "[OK] SemStreams is ready"
+            break
+          fi
+          echo "Waiting for SemStreams... ($i/30)"
+          sleep 2
+        done
+      - echo "[E2E] Running ALL E2E tests..."
+      - cmd: cd cmd/e2e && ./e2e --scenario all
+        ignore_error: true
+      - echo "[E2E] Cleaning up..."
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15
+
+  e2e:health:
+    desc: Run core health check scenario
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[E2E] Starting SemStreams E2E environment..."
+      - docker compose -f docker-compose.e2e.yml up -d --wait
+      - echo "[OK] All services are healthy"
+      - echo "[E2E] Running health check..."
+      - cmd: cd cmd/e2e && ./e2e --scenario core-health
+        ignore_error: true
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15
+
+  e2e:dataflow:
+    desc: Run core dataflow scenario
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[E2E] Starting SemStreams E2E environment..."
+      - docker compose -f docker-compose.e2e.yml up -d --wait
+      - echo "[OK] All services are healthy"
+      - echo "[E2E] Running dataflow test..."
+      - cmd: cd cmd/e2e && ./e2e --scenario core-dataflow
+        ignore_error: true
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15
+
+  e2e:rebuild:
+    desc: Rebuild Docker images and run E2E tests
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[E2E] Building Docker images..."
+      - docker compose -f docker-compose.e2e.yml build
+      - echo "[E2E] Starting test environment..."
+      - docker compose -f docker-compose.e2e.yml up -d --wait
+      - echo "[OK] All services are healthy"
+      - echo "[E2E] Running tests..."
+      - cmd: cd cmd/e2e && ./e2e --scenario all
+        ignore_error: true
+      - docker compose -f docker-compose.e2e.yml down -v --timeout 15
+
+  e2e:debug:
+    desc: Start E2E environment for debugging (leaves containers running)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports]
+    cmds:
+      - echo "[E2E DEBUG] Starting SemStreams E2E environment..."
+      - docker compose -f docker-compose.e2e.yml up -d
+      - echo "[E2E DEBUG] Waiting for NATS to be ready..."
+      - |
+        for i in {1..30}; do
+          if curl -sf http://localhost:8222/healthz > /dev/null 2>&1; then
+            echo "[OK] NATS is ready"
+            break
+          fi
+          echo "Waiting for NATS... ($i/30)"
+          sleep 2
+        done
+      - echo "[E2E DEBUG] Waiting 5 seconds for SemStreams to start..."
+      - sleep 5
+      - echo "[E2E DEBUG] Checking SemStreams logs..."
+      - docker logs semstreams-e2e-app
+      - echo ""
+      - echo "[E2E DEBUG] Environment is running. Use the following commands:"
+      - echo "  docker logs -f semstreams-e2e-app    (Follow SemStreams logs)"
+      - echo "  docker logs -f semstreams-e2e-nats   (Follow NATS logs)"
+      - echo "  curl http://localhost:8080/health   (Test health endpoint)"
+      - echo "  task e2e:clean                      (Clean up when done)"
+
+  e2e:rebuild:
+    desc: Force rebuild Docker images from scratch (use when code changes not picked up)
+    deps: [e2e:clean, clean:bins]
+    cmds:
+      - echo "[E2E REBUILD] Force rebuilding Docker images with --no-cache..."
+      - docker compose -f docker-compose.e2e.yml build --no-cache
+      - echo "[OK] Docker images rebuilt from scratch"
+      - echo "Tip - Now run task e2e:health or task e2e to test with fresh images"
+
+  # Semantic E2E tasks
+  e2e:semantic-basic:
+    desc: Run basic semantic E2E test (UDP → JSONGeneric → Graph)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[SEMANTIC E2E] Starting basic semantic test..."
+      - docker compose -f docker-compose.semantic.yml up -d --wait
+      - echo "[OK] Semantic services are healthy"
+      - echo "[SEMANTIC E2E] Running basic semantic test..."
+      - cmd: cd cmd/e2e && ./e2e --scenario semantic-basic
+        ignore_error: true
+      - docker compose -f docker-compose.semantic.yml down -v --timeout 15
+
+  e2e:semantic-indexes:
+    desc: Run semantic indexes E2E test (fast, no external dependencies)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[SEMANTIC E2E] Starting semantic indexes test (core indexing only)..."
+      - docker compose -f docker-compose.semantic.yml up -d --wait
+      - echo "[OK] Semantic services are healthy"
+      - echo "[SEMANTIC E2E] Running indexes test..."
+      - cmd: cd cmd/e2e && ./e2e --scenario semantic-indexes
+        ignore_error: true
+      - docker compose -f docker-compose.semantic.yml down -v --timeout 15
+
+  e2e:semantic-kitchen-sink:
+    desc: Run kitchen sink semantic E2E test (Full semantic stack)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[SEMANTIC E2E] Starting kitchen sink semantic test..."
+      - docker compose -f docker-compose.semantic-kitchen.yml up -d --wait
+      - echo "[OK] Semantic services are healthy"
+      - echo "[SEMANTIC E2E] Running kitchen sink test..."
+      - cmd: cd cmd/e2e && ./e2e --scenario semantic-kitchen-sink
+        ignore_error: true
+      - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
+
+  e2e:semantic:
+    desc: Run all semantic E2E tests (basic + indexes + kitchen-sink)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[SEMANTIC E2E] Running all semantic scenarios..."
+      - docker compose -f docker-compose.semantic-kitchen.yml up -d --wait
+      - echo "[OK] Semantic services are healthy (including SemEmbed)"
+      - echo "[SEMANTIC E2E] Running semantic test suite (basic + indexes + kitchen-sink)..."
+      - cmd: cd cmd/e2e && ./e2e --scenario semantic
+        ignore_error: true
+      - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
+
+  # Optional Services Management
+  services:start:embedding:
+    desc: Start embedding service (SemEmbed)
+    cmds:
+      - echo "[SERVICES] Starting embedding service..."
+      - docker compose -f docker-compose.services.yml --profile embedding up -d
+      - echo "[OK] Embedding service started at http://localhost:8081"
+      - echo "     Components with Embedding.Enabled=true will now have semantic search"
+
+  services:start:tls:
+    desc: Start certificate authority (step-ca)
+    cmds:
+      - echo "[SERVICES] Starting certificate authority..."
+      - docker compose -f docker-compose.services.yml --profile tls up -d
+      - echo "[OK] Certificate authority started at https://localhost:9000"
+      - echo "     Use step-ca for automated certificate management"
+
+  services:start:observability:
+    desc: Start observability stack (Prometheus + Grafana)
+    cmds:
+      - echo "[SERVICES] Starting observability stack..."
+      - docker compose -f docker-compose.services.yml --profile observability up -d
+      - echo "[OK] Observability stack started"
+      - 'echo "     Prometheus: http://localhost:9090"'
+      - 'echo "     Grafana:    http://localhost:3000 (admin/admin)"'
+      - 'echo "     Dashboards: SemStreams Overview, Cache Performance, IndexManager, Graph Processor"'
+
+  services:start:all:
+    desc: Start all optional services
+    cmds:
+      - echo "[SERVICES] Starting all optional services..."
+      - docker compose -f docker-compose.services.yml --profile all up -d
+      - echo "[OK] All optional services started"
+
+  services:stop:
+    desc: Stop all optional services
+    cmds:
+      - echo "[SERVICES] Stopping optional services..."
+      - docker compose -f docker-compose.services.yml --profile all down
+      - echo "[OK] Optional services stopped"
+
+  services:status:
+    desc: Show status of optional services
+    cmds:
+      - docker compose -f docker-compose.services.yml ps
+
+  services:logs:
+    desc: Show logs from optional services
+    cmds:
+      - docker compose -f docker-compose.services.yml logs -f
+
+  # Linting
+  lint:
+    desc: Run Go linters (vet, fmt, revive)
+    cmds:
+      - go vet ./...
+      - go fmt ./...
+      - revive -config .revive.toml -formatter friendly ./...
+
+  # Schema generation tasks
+  schema:generate:
+    desc: Generate component schemas and OpenAPI spec
+    cmds:
+      - mkdir -p schemas specs
+      - go run ./cmd/schema-exporter -out ./schemas -openapi ./specs/openapi.v3.yaml
+      - echo "✅ Schemas and OpenAPI spec generated"
+
+  schema:validate:
+    desc: Validate generated schemas against meta-schema
+    cmds:
+      - echo "⚠️  Schema validation not yet implemented"
+
+  schema:check-changes:
+    desc: Check for uncommitted schema changes
+    cmds:
+      - git diff --exit-code schemas/ specs/openapi.v3.yaml || (echo "⚠️  Schema/OpenAPI files changed! Run 'task schema:generate' and commit."; exit 1)
+
+  schema:docs:
+    desc: Serve OpenAPI docs at http://localhost:8081
+    cmds:
+      - npx @redocly/cli preview-docs specs/openapi.v3.yaml --port 8081
+
+  # Check all
+  check:
+    desc: Run all checks (lint + test)
+    cmds:
+      - task: lint
+      - task: test

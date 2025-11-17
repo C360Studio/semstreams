@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "json_map.v1.json",
+  "type": "object",
+  "title": "json_map Configuration",
+  "description": "GenericJSON (core .json.v1) field transformer for renaming, adding, and removing fields",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "json_map",
+    "type": "processor",
+    "protocol": "json_map",
+    "domain": "processing",
+    "version": "0.1.0"
+  }
+}
