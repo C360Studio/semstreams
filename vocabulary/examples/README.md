@@ -5,6 +5,7 @@
 ## Purpose
 
 These examples demonstrate how applications should:
+
 1. Define domain-specific vocabulary in their own packages
 2. Register predicates with the vocabulary registry
 3. Configure alias semantics for entity resolution
@@ -78,6 +79,7 @@ func main() {
 ## Priority
 
 Lower number = higher priority for conflict resolution.
+
 - Priority 0: Most authoritative (e.g., primary IDs)
 - Priority 1-10: Standard aliases
 - Priority 999: Display-only labels

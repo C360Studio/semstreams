@@ -2,12 +2,9 @@
 
 **Purpose**: Semantic vocabulary management with dotted notation predicates and optional IRI mappings for standards compliance.
 
-**Last Updated**: 2025-11-13
-**Status**: Production Ready
-
 ## Design Philosophy: Pragmatic Semantic Web
 
-The vocabulary package follows a "pragmatic semantic web" approach that balances clean internal architecture with customer requirements for standards compliance.
+The vocabulary package follows a pragmatic semantic web approach that balances clean internal architecture with customer requirements for standards compliance.
 
 ### Core Principles
 
@@ -275,6 +272,7 @@ aliases := vocabulary.DiscoverAliasPredicates()
 Common standard vocabulary IRIs are provided in `standards.go`:
 
 ### OWL (Web Ontology Language)
+
 ```go
 const (
     OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs"
@@ -283,6 +281,7 @@ const (
 ```
 
 ### SKOS (Simple Knowledge Organization System)
+
 ```go
 const (
     SKOS_PREF_LABEL = "http://www.w3.org/2004/02/skos/core#prefLabel"
@@ -291,6 +290,7 @@ const (
 ```
 
 ### Schema.org
+
 ```go
 const (
     SCHEMA_NAME           = "http://schema.org/name"
@@ -300,6 +300,7 @@ const (
 ```
 
 ### Dublin Core
+
 ```go
 const (
     DC_IDENTIFIER   = "http://purl.org/dc/terms/identifier"
@@ -308,6 +309,7 @@ const (
 ```
 
 ### FOAF (Friend of a Friend)
+
 ```go
 const (
     FOAF_NAME        = "http://xmlns.com/foaf/0.1/name"
@@ -493,7 +495,7 @@ The vocabulary package provides standard relationship predicates for linking ent
 
 All relationship predicates follow the pattern `graph.rel.*` and are registered with Dublin Core, Schema.org, and PROV-O mappings where applicable.
 
-**Hierarchical Relationships**
+#### Hierarchical Relationships
 
 ```go
 vocabulary.GraphRelContains     // Parent contains child
@@ -503,7 +505,7 @@ vocabulary.GraphRelDependsOn    // Subject depends on object
 - `graph.rel.contains` → `prov:hadMember` - Hierarchical containment (platform contains sensors)
 - `graph.rel.depends_on` → `dcterms:requires` - Dependency relationship (spec depends on spec)
 
-**Reference Relationships**
+#### Reference Relationships
 
 ```go
 vocabulary.GraphRelReferences   // Directional reference
@@ -515,7 +517,7 @@ vocabulary.GraphRelDiscusses    // Discussion/commentary
 - `graph.rel.related_to` → `dcterms:relation` - Generic relationship
 - `graph.rel.discusses` → `schema:about` - Discussion about a topic
 
-**Causal Relationships**
+#### Causal Relationships
 
 ```go
 vocabulary.GraphRelInfluences   // Causal/impact relationship
@@ -525,7 +527,7 @@ vocabulary.GraphRelTriggeredBy  // Event causation
 - `graph.rel.influences` - Decision influences implementation
 - `graph.rel.triggered_by` - Alert triggered by threshold
 
-**Implementation Relationships**
+#### Implementation Relationships
 
 ```go
 vocabulary.GraphRelImplements   // Implementation relationship
@@ -537,7 +539,7 @@ vocabulary.GraphRelBlockedBy    // Blocking relationship
 - `graph.rel.supersedes` → `dcterms:replaces` - v2 supersedes v1
 - `graph.rel.blocked_by` - Issue blocked by another issue
 
-**Spatial/Communication Relationships**
+#### Spatial/Communication Relationships
 
 ```go
 vocabulary.GraphRelNear         // Spatial proximity
@@ -587,20 +589,5 @@ Applications should define their own domain-specific vocabularies. See `examples
 - `examples/` - Reference domain vocabulary implementations
 - `message/triple.go` - Triple structure for semantic facts
 - `message/types.go` - EntityID, EntityType, Type patterns
-
-## Migration from Legacy Code
-
-If you have code using colon notation ("robotics:Drone"), update to dotted notation:
-
-**Before:**
-```go
-iri := vocabulary.EntityTypeIRI("robotics:Drone")
-```
-
-**After:**
-```go
-entityType := message.EntityType{Domain: "robotics", Type: "drone"}
-typeStr := entityType.Key()  // "robotics.drone"
-```
 
 The vocabulary package focuses on **predicate management**, not IRI generation. For entity-level IRI needs, use the entity's own methods.

@@ -1,5 +1,9 @@
 # SemStreams Implementation Documentation
 
+## Work In Progress
+
+**All repos in ecosystem are under heavy and active dev.**
+
 This directory contains **implementation-specific** documentation for the SemStreams service.
 
 ## 📚 Documentation Organization
@@ -9,6 +13,7 @@ This directory contains **implementation-specific** documentation for the SemStr
 **For architecture, concepts, guides, deployment**: See the centralized [semdocs repository](https://github.com/c360/semdocs).
 
 Ecosystem docs migrated to semdocs:
+
 - Architecture overview
 - Federation guide
 - PathRAG guide

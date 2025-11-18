@@ -163,10 +163,6 @@
 //
 // Request/Reply patterns enabled:
 //   - Backpressure: "Slow down, queue full" → adjust send rate
-//   - Selective subscription: "Only send type=sensor" → filter upstream
-//   - Historical query: "Send last 100 messages" → replay from buffer
-//   - Status queries: "What's your throughput?" → observability
-//   - Dynamic routing: "I handle region=us-west" → route by capability
 //   - Acknowledgment: "Received batch ID=123" → reliable delivery
 //
 // This maps naturally to NATS request/reply pattern, exposed over WebSocket:
@@ -179,12 +175,6 @@
 //	Instance B → Instance A:
 //	  Request: {"type": "backpressure", "rate_limit": 100, "unit": "msg/sec"}
 //	  Reply:   {"status": "ok", "current_rate": 250, "adjusted_to": 100}
-//
-// Example: Selective Subscription
-//
-//	Instance B → Instance A:
-//	  Request: {"type": "subscribe", "filter": "$.severity >= 'warning'"}
-//	  Reply:   {"status": "ok", "subscription_id": "sub-123"}
 //
 // This bidirectional capability transforms federation from simple data
 // forwarding into a distributed control plane.
@@ -346,7 +336,7 @@
 //
 // # Version
 //
-// Current: v0.2.0-alpha (Two-layer framework)
+// Current: v0.4.0-alpha (Two-layer framework)
 //
 // This version merges protocol and semantic capabilities into a unified
 // framework with clean layer separation. Domain-specific code has been

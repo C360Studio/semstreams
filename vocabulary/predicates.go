@@ -1,8 +1,7 @@
 package vocabulary
 
 // Predicate vocabulary using three-level dotted notation: domain.category.property
-// This maintains consistency with the unified semantic architecture from Alpha Week 1
-// where ALL notation uses dots (no colons anywhere).
+// This maintains consistency with the unified semantic architecture.
 //
 // Design principles:
 //   - Three levels: domain.category.property (e.g., "sensor.temperature.celsius")

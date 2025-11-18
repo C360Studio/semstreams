@@ -11,7 +11,7 @@ import (
 
 // Base IRI constants for the SemStreams vocabulary
 const (
-	SemStreamsBase  = "https://semstreams.c360.io"
+	SemStreamsBase  = "https://semstreams.semanticstream.ing"
 	GraphNamespace  = SemStreamsBase + "/graph"
 	SystemNamespace = SemStreamsBase + "/system"
 )
@@ -19,7 +19,7 @@ const (
 // EntityTypeIRI converts a dotted entity type to an IRI format for RDF export.
 //
 // Input format: "domain.type" using EntityType.Key() (e.g., "robotics.drone")
-// Output format: "https://semstreams.c360.io/domain#type"
+// Output format: "https://semstreams.semanticstream.ing#type"
 //
 // This function is intended for RDF/Turtle export at API boundaries only.
 // Internal code should always use dotted notation.
@@ -29,7 +29,7 @@ const (
 // Example:
 //
 //	entityType := message.EntityType{Domain: "robotics", Type: "drone"}
-//	iri := EntityTypeIRI(entityType.Key())  // "https://semstreams.c360.io/robotics#drone"
+//	iri := EntityTypeIRI(entityType.Key())  // "https://semstreams.semanticstream.ing/robotics#drone"
 func EntityTypeIRI(dottedType string) string {
 	if dottedType == "" {
 		return ""
@@ -67,14 +67,14 @@ func EntityTypeIRI(dottedType string) string {
 // This creates a unique identifier for entities in federated scenarios.
 //
 // Input format: "domain.type" using EntityType.Key() (e.g., "robotics.drone")
-// Output format: "https://semstreams.c360.io/entities/{platform_id}[/{region}]/{domain}/{type}/{local_id}"
+// Output format: "https://semstreams.semanticstream.ing/entities/{platform_id}[/{region}]/{domain}/{type}/{local_id}"
 //
 // This function is intended for RDF/Turtle export at API boundaries only.
 // Internal code should always use EntityID.Key() for dotted notation.
 //
 // Examples:
-//   - With region: "https://semstreams.c360.io/entities/us-west-prod/gulf_mexico/robotics/drone/drone_1"
-//   - Without region: "https://semstreams.c360.io/entities/standalone/robotics/battery/battery_main"
+//   - With region: "https://semstreams.semanticstream.ing/entities/us-west-prod/gulf_mexico/robotics/drone/drone_1"
+//   - Without region: "https://semstreams.semanticstream.ing/entities/standalone/robotics/battery/battery_main"
 //
 // Returns empty string if platform.ID, localID is empty, or dottedType is invalid.
 //
@@ -114,9 +114,9 @@ func EntityIRI(dottedType string, platform config.PlatformConfig, localID string
 // Handles various naming conventions and converts them to kebab-case.
 //
 // Examples:
-//   - "POWERED_BY" -> "https://semstreams.c360.io/relationships#powered-by"
-//   - "HAS_COMPONENT" -> "https://semstreams.c360.io/relationships#has-component"
-//   - "PoweredBy" -> "https://semstreams.c360.io/relationships#powered-by"
+//   - "POWERED_BY" -> "https://semstreams.semanticstream.ing/relationships#powered-by"
+//   - "HAS_COMPONENT" -> "https://semstreams.semanticstream.ing/relationships#has-component"
+//   - "PoweredBy" -> "https://semstreams.semanticstream.ing/relationships#powered-by"
 //
 // Returns empty string for empty input.
 func RelationshipIRI(relType string) string {
@@ -137,8 +137,8 @@ func RelationshipIRI(relType string) string {
 // Converts dot-separated subjects to path-separated IRIs.
 //
 // Examples:
-//   - "semantic.robotics.heartbeat" -> "https://semstreams.c360.io/subjects/semantic/robotics/heartbeat"
-//   - "raw.udp.mavlink" -> "https://semstreams.c360.io/subjects/raw/udp/mavlink"
+//   - "semantic.robotics.heartbeat" -> "https://semstreams.semanticstream.ing/subjects/semantic/robotics/heartbeat"
+//   - "raw.udp.mavlink" -> "https://semstreams.semanticstream.ing/subjects/raw/udp/mavlink"
 //
 // Returns empty string for empty input or malformed subjects (leading/trailing dots).
 func SubjectIRI(subject string) string {
