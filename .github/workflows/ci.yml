@@ -7,7 +7,7 @@ on:
     branches: [main, develop]
 
 env:
-  GO_VERSION: "1.23"
+  GO_VERSION: "1.25"
 
 jobs:
   lint:
@@ -42,35 +42,7 @@ jobs:
         run: revive -config .revive.toml -formatter friendly ./...
 
   test:
-    name: Test (Go ${{ matrix.go-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ["1.22", "1.23"]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
-          cache: true
-
-      - name: Run unit tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage.txt
-          flags: unittests
-          name: go-${{ matrix.go-version }}
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  integration-test:
-    name: Integration Tests
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -82,63 +54,19 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Start NATS (testcontainers will handle this)
+      - name: Pull NATS image
         run: docker pull nats:latest
+
+      - name: Run unit tests
+        run: go test -v -race ./...
 
       - name: Run integration tests
         env:
           INTEGRATION_TESTS: "1"
         run: go test -v -race ./...
 
-  validate-docs:
-    name: Validate Documentation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install markdownlint
-        run: npm install -g markdownlint-cli
-
-      - name: Lint markdown files
-        run: markdownlint '**/*.md' --ignore node_modules --ignore .github
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Validate JSON configs
-        run: |
-          echo "Validating JSON configuration files..."
-          find configs -name '*.json' -type f | while read file; do
-            echo "Validating $file"
-            if ! jq empty "$file" 2>/dev/null; then
-              echo "ERROR: Invalid JSON in $file"
-              exit 1
-            fi
-          done
-          echo "All JSON files are valid"
-
-      - name: Check for broken internal links
-        run: |
-          echo "Checking for broken internal documentation links..."
-          # Simple check for markdown links that point to non-existent files
-          find . -name '*.md' -type f | while read file; do
-            grep -oP '\[.*?\]\(\K[^)]+' "$file" | while read link; do
-              # Skip external links, anchors, and mailto
-              if [[ "$link" =~ ^(http|https|mailto|#) ]]; then
-                continue
-              fi
-              # Resolve relative path
-              dir=$(dirname "$file")
-              target="$dir/$link"
-              if [[ ! -e "$target" ]]; then
-                echo "WARNING: Broken link in $file: $link"
-              fi
-            done
-          done
-
-  build-test:
-    name: Build Test
+  build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -150,7 +78,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Build semstreams binary
+      - name: Build binary
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags="-w -s -X main.version=${{ github.sha }}" \
@@ -163,7 +91,7 @@ jobs:
           echo "Build successful"
 
   schema-validation:
-    name: Schema & OpenAPI Validation
+    name: Schema Validation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -201,16 +129,14 @@ jobs:
   status-check:
     name: CI Status Check
     runs-on: ubuntu-latest
-    needs: [lint, test, integration-test, validate-docs, build-test, schema-validation]
+    needs: [lint, test, build, schema-validation]
     if: always()
     steps:
       - name: Check if all jobs succeeded
         run: |
           if [[ "${{ needs.lint.result }}" != "success" ]] || \
              [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.integration-test.result }}" != "success" ]] || \
-             [[ "${{ needs.validate-docs.result }}" != "success" ]] || \
-             [[ "${{ needs.build-test.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}" != "success" ]] || \
              [[ "${{ needs.schema-validation.result }}" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1

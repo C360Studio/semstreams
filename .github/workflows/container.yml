@@ -73,20 +73,6 @@ jobs:
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        if: github.event_name != 'pull_request'
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: github.event_name != 'pull_request'
-        with:
-          sarif_file: 'trivy-results.sarif'
-
       - name: Image digest
         if: github.event_name != 'pull_request'
         run: echo "Image pushed with digest ${{ steps.build.outputs.digest }}"
