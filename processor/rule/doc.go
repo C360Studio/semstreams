@@ -22,7 +22,7 @@
 //	    Name() string
 //	    Subscribe() []string
 //	    Evaluate(messages []message.Message) bool
-//	    ExecuteEvents(messages []message.Message) ([]gtypes.Event, error)
+//	    ExecuteEvents(messages []message.Message) ([]rtypes.Event, error)
 //	}
 //
 // # Creating Custom Rules
@@ -49,19 +49,18 @@
 //	    conditions []expression.ConditionExpression
 //	}
 //
-//	func (r *MyRule) ExecuteEvents(messages []message.Message) ([]gtypes.Event, error) {
+//	func (r *MyRule) ExecuteEvents(messages []message.Message) ([]rtypes.Event, error) {
 //	    // Generate events directly in Go code
-//	    events := []gtypes.Event{
-//	        {
-//	            Type:     gtypes.EventAlert,
-//	            EntityID: "alert.my-rule." + r.id,
-//	            Properties: map[string]interface{}{
-//	                "triggered": true,
-//	                "timestamp": time.Now(),
-//	            },
+//	    // gtypes.Event implements rtypes.Event interface
+//	    event := &gtypes.Event{
+//	        Type:     gtypes.EventEntityUpdate,
+//	        EntityID: "alert.my-rule." + r.id,
+//	        Properties: map[string]interface{}{
+//	            "triggered": true,
+//	            "timestamp": time.Now(),
 //	        },
 //	    }
-//	    return events, nil
+//	    return []rtypes.Event{event}, nil
 //	}
 //
 // 3. Register the factory:

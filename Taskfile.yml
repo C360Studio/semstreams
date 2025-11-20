@@ -247,6 +247,46 @@ tasks:
         ignore_error: true
       - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
 
+  # Rule Processor E2E tasks
+  e2e:rules-graph:
+    desc: Run rule processor → graph processor integration test
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[RULES E2E] Starting rule processor graph integration test..."
+      - docker compose -f docker-compose.semantic-kitchen.yml up -d --wait
+      - echo "[OK] Services are healthy (rule + graph processors)"
+      - echo "[RULES E2E] Running rules-graph scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario rules-graph
+        ignore_error: true
+      - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
+
+  e2e:rules-performance:
+    desc: Run rule processor performance test (throughput, latency, stability)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[RULES E2E] Starting rule processor performance test..."
+      - docker compose -f docker-compose.semantic-kitchen.yml up -d --wait
+      - echo "[OK] Services are healthy"
+      - echo "[RULES E2E] Running rules-performance scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario rules-performance
+        ignore_error: true
+      - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
+
+  e2e:rules:
+    desc: Run all rule processor E2E tests (graph integration + performance)
+    silent: false
+    deps: [e2e:clean, e2e:check-ports, build:e2e]
+    cmds:
+      - echo "[RULES E2E] Running all rule processor scenarios..."
+      - docker compose -f docker-compose.semantic-kitchen.yml up -d --wait
+      - echo "[OK] Services are healthy (rule + graph processors)"
+      - echo "[RULES E2E] Running rule processor test suite (graph + performance)..."
+      - cmd: cd cmd/e2e && ./e2e --scenario rules
+        ignore_error: true
+      - docker compose -f docker-compose.semantic-kitchen.yml down -v --timeout 15
+
   # Optional Services Management
   services:start:embedding:
     desc: Start embedding service (SemEmbed)

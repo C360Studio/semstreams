@@ -1,0 +1,223 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  GO_VERSION: "1.23"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache: true
+
+      - name: Install revive
+        run: go install github.com/mgechev/revive@latest
+
+      - name: Run go vet
+run: go vet ./...
+
+      - name: Run go fmt
+run: |
+          fmt_output=$(go fmt ./...)
+          if [ -n "$fmt_output" ]; then
+            echo "The following files need formatting:"
+            echo "$fmt_output"
+            exit 1
+          fi
+
+      - name: Run revive
+        run: revive -config .revive.toml -formatter friendly ./...
+
+  test:
+    name: Test (Go ${{ matrix.go-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ["1.22", "1.23"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache: true
+
+      - name: Run unit tests
+run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.txt
+          flags: unittests
+          name: go-${{ matrix.go-version }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache: true
+
+      - name: Start NATS (testcontainers will handle this)
+        run: docker pull nats:latest
+
+      - name: Run integration tests
+env:
+          INTEGRATION_TESTS: "1"
+        run: go test -v -race ./...
+
+  validate-docs:
+    name: Validate Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install markdownlint
+        run: npm install -g markdownlint-cli
+
+      - name: Lint markdown files
+        run: markdownlint '**/*.md' --ignore node_modules --ignore .github
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Validate JSON configs
+        run: |
+          echo "Validating JSON configuration files..."
+          find configs -name '*.json' -type f | while read file; do
+            echo "Validating $file"
+            if ! jq empty "$file" 2>/dev/null; then
+              echo "ERROR: Invalid JSON in $file"
+              exit 1
+            fi
+          done
+          echo "All JSON files are valid"
+
+      - name: Check for broken internal links
+        run: |
+          echo "Checking for broken internal documentation links..."
+          # Simple check for markdown links that point to non-existent files
+          find . -name '*.md' -type f | while read file; do
+            grep -oP '\[.*?\]\(\K[^)]+' "$file" | while read link; do
+              # Skip external links, anchors, and mailto
+              if [[ "$link" =~ ^(http|https|mailto|#) ]]; then
+                continue
+              fi
+              # Resolve relative path
+              dir=$(dirname "$file")
+              target="$dir/$link"
+              if [[ ! -e "$target" ]]; then
+                echo "WARNING: Broken link in $file: $link"
+              fi
+            done
+          done
+
+  build-test:
+    name: Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache: true
+
+      - name: Build semstreams binary
+run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-w -s -X main.version=${{ github.sha }}" \
+            -o semstreams-linux-amd64 \
+            ./cmd/semstreams
+
+      - name: Test binary execution
+run: |
+          ./semstreams-linux-amd64 --version || true
+          echo "Build successful"
+
+  schema-validation:
+    name: Schema & OpenAPI Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache: true
+
+      - name: Install task
+        run: |
+          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Generate schemas and OpenAPI spec
+run: task schema:generate
+
+      - name: Run schema exporter tests
+run: go test -v ./cmd/schema-exporter
+
+      - name: Check for uncommitted schema changes
+run: |
+          if ! git diff --exit-code schemas/ specs/openapi.v3.yaml; then
+            echo "❌ Schema or OpenAPI files have uncommitted changes!"
+            echo ""
+            echo "The following files changed after running 'task schema:generate':"
+            git diff --name-only schemas/ specs/openapi.v3.yaml
+            echo ""
+            echo "Please run 'task schema:generate' locally and commit the changes."
+            exit 1
+          fi
+          echo "✅ All schemas and OpenAPI spec are up to date"
+
+  status-check:
+    name: CI Status Check
+    runs-on: ubuntu-latest
+    needs: [lint, test, integration-test, validate-docs, build-test, schema-validation]
+    if: always()
+    steps:
+      - name: Check if all jobs succeeded
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.integration-test.result }}" != "success" ]] || \
+             [[ "${{ needs.validate-docs.result }}" != "success" ]] || \
+             [[ "${{ needs.build-test.result }}" != "success" ]] || \
+             [[ "${{ needs.schema-validation.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+          echo "All CI jobs passed successfully"

@@ -1,0 +1,112 @@
+# Production Single-Node Deployment
+#
+# This is a production-ready Docker Compose configuration for a single edge device.
+# It includes resource limits, health checks, and proper restart policies.
+#
+# Usage:
+#   docker compose -f docker-compose.production.yml up -d
+#
+# Prerequisites:
+#   - Create config.json in the same directory
+#   - Set NATS_PASSWORD environment variable
+#
+# Resource Requirements:
+#   - CPU: 2+ cores
+#   - RAM: 4GB
+#   - Storage: 8GB+ (SSD recommended for NATS JetStream)
+
+services:
+  nats:
+    image: nats:latest
+    container_name: semstreams-nats
+    ports:
+      - "4222:4222"    # Client connections (internal only - firewall!)
+      - "8222:8222"    # HTTP monitoring (internal only - firewall!)
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "--max_mem_store=512M"
+      - "--max_file_store=2G"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # Resource limits for edge device
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    networks:
+      - internal
+
+  semstreams:
+    image: ghcr.io/c360studio/semstreams:latest  # Pin to specific version in production
+    container_name: semstreams
+    ports:
+      - "8080:8080"    # HTTP API (expose to network if needed)
+    environment:
+      # Configuration overrides (non-sensitive)
+      SEMSTREAMS_NATS_URL: nats://nats:4222
+      SEMSTREAMS_LOG_LEVEL: info
+      SEMSTREAMS_METRICS_ENABLED: true
+
+      # Secrets (from environment or Docker secrets)
+      SEMSTREAMS_NATS_PASSWORD: ${NATS_PASSWORD}
+    volumes:
+      - ./config.json:/etc/semstreams/config.json:ro
+      - semstreams-data:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    # Resource limits for edge device
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    # Security hardening
+    read_only: false  # Set to true if your flows don't write to filesystem
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE  # Only needed if binding to port < 1024
+    networks:
+      - internal
+      - external
+
+volumes:
+  nats-data:
+    driver: local
+  semstreams-data:
+    driver: local
+
+networks:
+  # Internal network - NATS not exposed to host
+  internal:
+    driver: bridge
+    internal: true
+
+  # External network - only SemStreams API exposed
+  external:
+    driver: bridge

@@ -4,11 +4,11 @@
 # Supports multi-arch: linux/amd64, linux/arm64
 #
 # Build from repository root:
-#   docker build -f semstreams/Dockerfile -t semstreams:latest .
+#   docker build -t semstreams:latest .
 #
 # Build with buildx for multi-arch:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -f semstreams/Dockerfile -t semstreams:latest .
+#     -t semstreams:latest .
 
 # Build arguments
 ARG GO_VERSION=1.25
@@ -26,25 +26,14 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /build
 
-# Copy go workspace files
-COPY go.work go.work.sum ./
-
-# Copy all workspace modules (for go.work)
-COPY semembed/go.mod semembed/go.sum ./semembed/
-COPY semmem/go.mod semmem/go.sum ./semmem/
-COPY semops/go.mod semops/go.sum ./semops/
-COPY semstreams/go.mod semstreams/go.sum ./semstreams/
-
-WORKDIR /build/semstreams
+# Copy go module files
+COPY go.mod go.sum ./
 
 # Download dependencies (cached layer)
 RUN go mod download
 
-# Copy all workspace source code
-COPY semembed/ ../semembed/
-COPY semmem/ ../semmem/
-COPY semops/ ../semops/
-COPY semstreams/ .
+# Copy source code
+COPY . .
 
 # Build arguments for version info
 ARG VERSION
@@ -84,7 +73,7 @@ WORKDIR /app
 COPY --from=builder --chown=semstreams:semstreams /build/semstreams-bin /app/semstreams
 
 # Copy example configs (optional, users should mount their own)
-COPY --from=builder --chown=semstreams:semstreams /build/semstreams/configs /app/configs
+COPY --from=builder --chown=semstreams:semstreams /build/configs /app/configs
 
 # Create config directory for mounted configs
 RUN mkdir -p /etc/semstreams && \

@@ -93,9 +93,9 @@ func (r *TestRule) evaluateConditions(data map[string]interface{}) bool {
 }
 
 // ExecuteEvents generates events when rule triggers
-func (r *TestRule) ExecuteEvents(messages []message.Message) ([]gtypes.Event, error) {
+func (r *TestRule) ExecuteEvents(messages []message.Message) ([]rtypes.Event, error) {
 	if !r.shouldTrigger || len(messages) == 0 {
-		return []gtypes.Event{}, nil
+		return []rtypes.Event{}, nil
 	}
 
 	msg := messages[len(messages)-1]
@@ -121,7 +121,7 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]gtypes.Event, er
 	}
 
 	r.shouldTrigger = false // Reset trigger state
-	return []gtypes.Event{event}, nil
+	return []rtypes.Event{&event}, nil
 }
 
 // extractNestedValue extracts a value from nested map using dot notation

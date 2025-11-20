@@ -14,10 +14,7 @@ services:
   # SemEmbed - Lightweight embedding service using fastembed-rs
   # For semantic search testing with OpenAI-compatible API
   semembed:
-    build:
-      context: ../semembed
-      dockerfile: Dockerfile
-    image: semstreams-semembed:latest
+    image: ghcr.io/c360studio/semembed:latest
     container_name: semstreams-kitchen-semembed
     ports:
       - "8081:8081"  # OpenAI-compatible /v1/embeddings endpoint
@@ -39,10 +36,7 @@ services:
   # SemSummarize - Lightweight summarization service using Candle + SmolLM2
   # For LLM-based community summarization testing
   semsummarize:
-    build:
-      context: ../semsummarize
-      dockerfile: Dockerfile
-    image: semstreams-semsummarize:latest
+    image: ghcr.io/c360studio/semsummarize:latest
     container_name: semstreams-kitchen-semsummarize
     ports:
       - "8084:8083"  # POST /summarize endpoint (host:8084 -> container:8083)
@@ -91,8 +85,7 @@ services:
   # SemStreams Application (kitchen sink config with all features)
   semstreams:
     build:
-      context: ..
-      dockerfile: semstreams/Dockerfile
+      context: .
       target: production
     container_name: semstreams-kitchen-app
     command: ["--config", "/app/configs/semantic-kitchen-sink.json"]

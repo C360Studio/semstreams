@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/c360/semstreams/errors"
-	gtypes "github.com/c360/semstreams/types/graph"
+	rtypes "github.com/c360/semstreams/types/rule"
 )
 
 // publishGraphEvents publishes a batch of graph events to appropriate NATS subjects
-func (rp *Processor) publishGraphEvents(ctx context.Context, events []gtypes.Event) error {
+// Accepts generic Event interface, works with any event type that implements it
+func (rp *Processor) publishGraphEvents(ctx context.Context, events []rtypes.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -43,7 +44,7 @@ func (rp *Processor) publishGraphEvents(ctx context.Context, events []gtypes.Eve
 
 		// Update metrics
 		if rp.metrics != nil {
-			rp.metrics.eventsPublishedTotal.WithLabelValues(subject, string(event.Type)).Inc()
+			rp.metrics.eventsPublishedTotal.WithLabelValues(subject, event.EventType()).Inc()
 		}
 
 		atomic.AddInt64(&rp.eventsPublished, 1)

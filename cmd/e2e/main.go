@@ -80,9 +80,13 @@ func main() {
 		fmt.Printf(
 			"  semantic-kitchen-sink - Comprehensive semantic: Indexes + Embedding + Metrics + HTTP Gateway\n",
 		)
+		fmt.Println("\nRule Processor:")
+		fmt.Printf("  rules-graph          - Rule → Graph integration with EnableGraphIntegration flag\n")
+		fmt.Printf("  rules-performance    - Load testing (throughput, latency, stability)\n")
 		fmt.Println("\nTest Suites:")
 		fmt.Printf("  all                 - Runs all core scenarios (excludes federation and kitchen sink)\n")
 		fmt.Printf("  semantic            - Runs all semantic scenarios\n")
+		fmt.Printf("  rules               - Runs all rule processor scenarios\n")
 		os.Exit(0)
 	}
 
@@ -131,6 +135,10 @@ func main() {
 		// Run all semantic scenarios
 		logger.Info("Running all semantic scenarios...")
 		exitCode = runSemanticScenarios(ctx, logger, edgeClient, *udpEndpoint)
+	} else if *scenarioName == "rules" {
+		// Run all rule processor scenarios
+		logger.Info("Running all rule processor scenarios...")
+		exitCode = runRulesScenarios(ctx, logger, edgeClient, *udpEndpoint)
 	} else {
 		// Run specific scenario
 		scenario := createScenario(*scenarioName, edgeClient, cloudClient, *udpEndpoint, *wsEndpoint)
@@ -143,6 +151,8 @@ func main() {
 			fmt.Println("  semantic-basic         - Basic semantic processing")
 			fmt.Println("  semantic-indexes       - Core semantic indexes (fast)")
 			fmt.Println("  semantic-kitchen-sink  - Comprehensive semantic stack")
+			fmt.Println("  rules-graph            - Rule → Graph integration")
+			fmt.Println("  rules-performance      - Rule processor load testing")
 			exitCode = 1
 		} else {
 			logger.Info("Running scenario", "name", *scenarioName)
@@ -174,6 +184,10 @@ func createScenario(
 		return scenarios.NewSemanticIndexesScenario(edgeClient, udpEndpoint, nil)
 	case "semantic-kitchen-sink", "kitchen-sink", "kitchen":
 		return scenarios.NewSemanticKitchenSinkScenario(edgeClient, udpEndpoint, nil)
+	case "rules-graph", "rules-graph-integration":
+		return scenarios.NewRulesGraphScenario(edgeClient, udpEndpoint, nil)
+	case "rules-performance", "rules-perf":
+		return scenarios.NewRulesPerformanceScenario(edgeClient, udpEndpoint, nil)
 	default:
 		return nil
 	}
@@ -285,6 +299,45 @@ func runSemanticScenarios(
 	}
 
 	logger.Info("Semantic test suite complete",
+		"passed", passed,
+		"failed", failed,
+		"total", len(tests))
+
+	if failed > 0 {
+		return 1
+	}
+	return 0
+}
+
+// runRulesScenarios executes all rule processor scenarios
+func runRulesScenarios(
+	ctx context.Context,
+	logger *slog.Logger,
+	obsClient *client.ObservabilityClient,
+	udpEndpoint string,
+) int {
+	tests := []scenarios.Scenario{
+		scenarios.NewRulesGraphScenario(obsClient, udpEndpoint, nil),
+		scenarios.NewRulesPerformanceScenario(obsClient, udpEndpoint, nil),
+	}
+
+	passed := 0
+	failed := 0
+
+	for _, scenario := range tests {
+		logger.Info("Running rule processor scenario", "name", scenario.Name())
+		exitCode := runScenario(ctx, logger, scenario)
+
+		if exitCode == 0 {
+			passed++
+			logger.Info("Rule processor scenario PASSED", "name", scenario.Name())
+		} else {
+			failed++
+			logger.Error("Rule processor scenario FAILED", "name", scenario.Name())
+		}
+	}
+
+	logger.Info("Rule processor test suite complete",
 		"passed", passed,
 		"failed", failed,
 		"total", len(tests))

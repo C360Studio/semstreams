@@ -24,10 +24,7 @@ services:
   # Uses: fastembed-rs with native ONNX Runtime (supports arm64 + amd64)
   semembed:
     profiles: ["embedding", "all"]
-    build:
-      context: ../semembed
-      dockerfile: Dockerfile
-    image: semstreams-semembed:latest
+    image: ghcr.io/c360studio/semembed:latest
     container_name: semstreams-semembed
     ports:
       - "8081:8081"  # OpenAI-compatible /v1/embeddings endpoint
@@ -67,10 +64,7 @@ services:
   # Uses: Rust + Candle with HuggingFace Hub (supports arm64 + amd64)
   semsummarize:
     profiles: ["summarization", "all"]
-    build:
-      context: ../semsummarize
-      dockerfile: Dockerfile
-    image: semstreams-semsummarize:latest
+    image: ghcr.io/c360studio/semsummarize:latest
     container_name: semstreams-semsummarize
     ports:
       - "8083:8083"  # POST /summarize endpoint

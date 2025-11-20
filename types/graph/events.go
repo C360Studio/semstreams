@@ -103,6 +103,37 @@ func (e *Event) Subject() string {
 	return fmt.Sprintf("graph.events.%s", strings.ReplaceAll(string(e.Type), "_", "."))
 }
 
+// EventType returns the event type as a string.
+// This method implements the rule.Event interface, allowing graph events
+// to be used generically by the rule processor.
+func (e *Event) EventType() string {
+	return string(e.Type)
+}
+
+// Payload returns the event data as a generic map.
+// This method implements the rule.Event interface, providing access to
+// the event's properties in a generic format.
+func (e *Event) Payload() map[string]any {
+	// Return a map containing all event fields for generic handling
+	payload := map[string]any{
+		"entity_id":  e.EntityID,
+		"confidence": e.Confidence,
+		"metadata":   e.Metadata,
+	}
+
+	// Add target ID for relationship events
+	if e.TargetID != "" {
+		payload["target_id"] = e.TargetID
+	}
+
+	// Merge in properties
+	for k, v := range e.Properties {
+		payload[k] = v
+	}
+
+	return payload
+}
+
 // NewEntityUpdateEvent creates an entity update event with the specified parameters.
 // This is a convenience constructor for the common case of updating entity properties.
 func NewEntityUpdateEvent(entityID string, properties map[string]any, metadata EventMetadata) *Event {
@@ -141,7 +172,7 @@ func NewAlertEvent(alertType string, entityID string, properties map[string]any,
 	
 	properties["alert_type"] = alertType
 	properties["source_entity"] = entityID
-	properties["status"] = StatusWarning // Default to warning status
+	properties["status"] = "warning" // Default to warning status
 	
 	// Generate unique alert ID based on type, entity, and timestamp
 	alertID := fmt.Sprintf("alert_%s_%s_%d", alertType, entityID, metadata.Timestamp.Unix())

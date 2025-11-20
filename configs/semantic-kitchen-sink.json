@@ -155,6 +155,32 @@
         "source_field": "json_to_entity"
       }
     },
+    "rule": {
+      "type": "processor",
+      "name": "rule",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "rule_in",
+              "subject": "generic.messages",
+              "type": "nats",
+              "interface": "core.json.v1"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "rule_out",
+              "subject": "events.rule.triggered",
+              "type": "nats"
+            }
+          ]
+        },
+        "enable_graph_integration": true,
+        "graph_event_subject_prefix": "events.graph.entity"
+      }
+    },
     "graph": {
       "type": "processor",
       "name": "graph-processor",
