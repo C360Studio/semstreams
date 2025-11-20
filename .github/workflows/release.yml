@@ -91,6 +91,12 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "TAG=${PREV_TAG}" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -101,8 +107,8 @@ jobs:
         run: |
           echo "Generating changelog for ${{ steps.version.outputs.VERSION }}"
 
-          # Get previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Get previous tag from prev_tag step
+          PREV_TAG="${{ steps.prev_tag.outputs.TAG }}"
 
           if [ -z "$PREV_TAG" ]; then
             echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
@@ -156,9 +162,9 @@ jobs:
 
             ## Documentation
 
-            - [Configuration Guide](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/CONFIGURATION.md)
-            - [Production Deployment](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/PRODUCTION.md)
-            - [Operations Runbook](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/OPERATIONS.md)
+            - [Configuration Guide](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/configuration.md)
+            - [Production Deployment](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/production.md)
+            - [Operations Runbook](https://github.com/C360Studio/semstreams/blob/main/docs/deployment/operations.md)
 
             ## Docker Compose Quick Start
 
@@ -175,7 +181,7 @@ jobs:
 
             ---
 
-            **Full Changelog**: https://github.com/C360Studio/semstreams/compare/${{ steps.prev_tag.outputs.TAG }}...${{ steps.version.outputs.VERSION }}
+            ${{ steps.prev_tag.outputs.TAG && format('**Full Changelog**: https://github.com/C360Studio/semstreams/compare/{0}...{1}', steps.prev_tag.outputs.TAG, steps.version.outputs.VERSION) || '**First Release**' }}
           files: ./release-artifacts/**/*
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'rc') }}
@@ -184,6 +190,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update latest release pointer
-        if: "!contains(steps.version.outputs.VERSION, 'alpha') && !contains(steps.version.outputs.VERSION, 'beta') && !contains(steps.version.outputs.VERSION, 'rc')"
+        if: ${{ !contains(steps.version.outputs.VERSION, 'alpha') && !contains(steps.version.outputs.VERSION, 'beta') && !contains(steps.version.outputs.VERSION, 'rc') }}
         run: |
           echo "Updating latest release to ${{ steps.version.outputs.VERSION }}"

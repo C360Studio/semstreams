@@ -58,6 +58,7 @@ jobs:
             org.opencontainers.image.licenses=MIT
 
       - name: Build and push container
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -113,18 +114,23 @@ jobs:
 
       - name: Test container health
         run: |
+          echo "Starting NATS for container test..."
+          docker run -d --name nats-test \
+            -p 4222:4222 \
+            nats:latest
+
           echo "Starting container for health check..."
           docker run -d --name semstreams-test \
+            --network host \
             -e SEMSTREAMS_NATS_URL=nats://localhost:4222 \
-            -p 8080:8080 \
             semstreams:test
 
           echo "Waiting for container to start..."
-          sleep 5
+          sleep 10
 
           echo "Checking container logs..."
           docker logs semstreams-test
 
           echo "Container test completed"
-          docker stop semstreams-test
-          docker rm semstreams-test
+          docker stop semstreams-test nats-test
+          docker rm semstreams-test nats-test

@@ -22,16 +22,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache: true
 
       - name: Install revive
         run: go install github.com/mgechev/revive@latest
 
       - name: Run go vet
-run: go vet ./...
+        run: go vet ./...
 
       - name: Run go fmt
-run: |
+        run: |
           fmt_output=$(go fmt ./...)
           if [ -n "$fmt_output" ]; then
             echo "The following files need formatting:"
@@ -57,10 +56,9 @@ run: |
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
-          cache: true
 
       - name: Run unit tests
-run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -83,13 +81,12 @@ run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache: true
 
       - name: Start NATS (testcontainers will handle this)
         run: docker pull nats:latest
 
       - name: Run integration tests
-env:
+        env:
           INTEGRATION_TESTS: "1"
         run: go test -v -race ./...
 
@@ -152,17 +149,16 @@ env:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache: true
 
       - name: Build semstreams binary
-run: |
+        run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags="-w -s -X main.version=${{ github.sha }}" \
             -o semstreams-linux-amd64 \
             ./cmd/semstreams
 
       - name: Test binary execution
-run: |
+        run: |
           ./semstreams-linux-amd64 --version || true
           echo "Build successful"
 
@@ -178,20 +174,19 @@ run: |
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache: true
 
       - name: Install task
         run: |
           sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
       - name: Generate schemas and OpenAPI spec
-run: task schema:generate
+        run: task schema:generate
 
       - name: Run schema exporter tests
-run: go test -v ./cmd/schema-exporter
+        run: go test -v ./cmd/schema-exporter
 
       - name: Check for uncommitted schema changes
-run: |
+        run: |
           if ! git diff --exit-code schemas/ specs/openapi.v3.yaml; then
             echo "❌ Schema or OpenAPI files have uncommitted changes!"
             echo ""
