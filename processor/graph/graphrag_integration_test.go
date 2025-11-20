@@ -275,11 +275,11 @@ func TestE2E_LocalSearch(t *testing.T) {
 
 	// Create robotics community
 	roboticsCommunity := &graphclustering.Community{
-		ID:       "comm-0-robotics",
-		Level:    0,
-		Members:  memberIDs,
-		StatisticalSummary:  "Robotics and autonomous systems community",
-		Keywords: []string{"robotics", "autonomous", "drone", "sensor"},
+		ID:                 "comm-0-robotics",
+		Level:              0,
+		Members:            memberIDs,
+		StatisticalSummary: "Robotics and autonomous systems community",
+		Keywords:           []string{"robotics", "autonomous", "drone", "sensor"},
 	}
 	err := communityStorage.SaveCommunity(ctx, roboticsCommunity)
 	require.NoError(t, err, "Failed to save robotics community")
@@ -291,11 +291,11 @@ func TestE2E_LocalSearch(t *testing.T) {
 	require.NoError(t, err)
 
 	networkCommunity := &graphclustering.Community{
-		ID:       "comm-0-network",
-		Level:    0,
-		Members:  []string{"net-1"},
-		StatisticalSummary:  "Network infrastructure community",
-		Keywords: []string{"network", "router"},
+		ID:                 "comm-0-network",
+		Level:              0,
+		Members:            []string{"net-1"},
+		StatisticalSummary: "Network infrastructure community",
+		Keywords:           []string{"network", "router"},
 	}
 	err = communityStorage.SaveCommunity(ctx, networkCommunity)
 	require.NoError(t, err, "Failed to save network community")
@@ -412,11 +412,11 @@ func TestE2E_GlobalSearch(t *testing.T) {
 		}
 
 		community := &graphclustering.Community{
-			ID:       comm.id,
-			Level:    0,
-			Members:  memberIDs,
-			StatisticalSummary:  comm.summary,
-			Keywords: comm.keywords,
+			ID:                 comm.id,
+			Level:              0,
+			Members:            memberIDs,
+			StatisticalSummary: comm.summary,
+			Keywords:           comm.keywords,
 		}
 		err := communityStorage.SaveCommunity(ctx, community)
 		require.NoError(t, err, "Failed to save community %s", comm.id)
@@ -502,13 +502,13 @@ func TestE2E_CommunitySummaries(t *testing.T) {
 
 	// Create community with statistical summary
 	community := &graphclustering.Community{
-		ID:          "comm-0-ml",
-		Level:       0,
-		Members:     memberIDs,
-		StatisticalSummary:     "Machine learning and neural network training community",
-		Keywords:    []string{"machine-learning", "cnn", "training", "neural-network"},
-		RepEntities: []string{"ml-1"}, // CNN is representative
-		SummaryStatus:  "statistical",
+		ID:                 "comm-0-ml",
+		Level:              0,
+		Members:            memberIDs,
+		StatisticalSummary: "Machine learning and neural network training community",
+		Keywords:           []string{"machine-learning", "cnn", "training", "neural-network"},
+		RepEntities:        []string{"ml-1"}, // CNN is representative
+		SummaryStatus:      "statistical",
 	}
 	err := communityStorage.SaveCommunity(ctx, community)
 	require.NoError(t, err)
@@ -569,11 +569,11 @@ func TestE2E_PerformanceComparison(t *testing.T) {
 		}
 
 		community := &graphclustering.Community{
-			ID:       fmt.Sprintf("comm-0-perf%d", c),
-			Level:    0,
-			Members:  memberIDs,
-			StatisticalSummary:  fmt.Sprintf("Performance test community %d", c),
-			Keywords: []string{"performance", "test", fmt.Sprintf("comm%d", c)},
+			ID:                 fmt.Sprintf("comm-0-perf%d", c),
+			Level:              0,
+			Members:            memberIDs,
+			StatisticalSummary: fmt.Sprintf("Performance test community %d", c),
+			Keywords:           []string{"performance", "test", fmt.Sprintf("comm%d", c)},
 		}
 		err := communityStorage.SaveCommunity(ctx, community)
 		require.NoError(t, err)
@@ -649,11 +649,11 @@ func TestE2E_ResourceLimits(t *testing.T) {
 		}
 
 		community := &graphclustering.Community{
-			ID:       fmt.Sprintf("comm-0-large%d", c),
-			Level:    0,
-			Members:  memberIDs, // 5500 members (simulated)
-			StatisticalSummary:  fmt.Sprintf("Large test community %d", c),
-			Keywords: []string{"large", "test"},
+			ID:                 fmt.Sprintf("comm-0-large%d", c),
+			Level:              0,
+			Members:            memberIDs, // 5500 members (simulated)
+			StatisticalSummary: fmt.Sprintf("Large test community %d", c),
+			Keywords:           []string{"large", "test"},
 		}
 		err := communityStorage.SaveCommunity(ctx, community)
 		require.NoError(t, err)
@@ -699,8 +699,8 @@ func TestE2E_LLMSummarization(t *testing.T) {
 		{
 			"drone-1", "robotics.drone",
 			map[string]any{
-				"name":        "Autonomous Delivery Drone",
-				"description": "UAV for package delivery with obstacle avoidance",
+				"name":         "Autonomous Delivery Drone",
+				"description":  "UAV for package delivery with obstacle avoidance",
 				"capabilities": "navigation, object-detection, path-planning",
 			},
 		},

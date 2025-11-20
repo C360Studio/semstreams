@@ -14,12 +14,12 @@ import (
 // instead of directly mutating the graph, allowing for better decoupling,
 // auditability, and potential event replay functionality.
 type Event struct {
-	Type       EventType              `json:"type"`       // Event type enum
-	EntityID   string                 `json:"entity_id"`  // Primary entity ID
-	TargetID   string                 `json:"target_id"`  // Target entity ID (for relationships)
+	Type       EventType      `json:"type"`       // Event type enum
+	EntityID   string         `json:"entity_id"`  // Primary entity ID
+	TargetID   string         `json:"target_id"`  // Target entity ID (for relationships)
 	Properties map[string]any `json:"properties"` // Properties to set/update
-	Metadata   EventMetadata          `json:"metadata"`   // Event metadata
-	Confidence float64                `json:"confidence"` // Confidence score (0.0-1.0)
+	Metadata   EventMetadata  `json:"metadata"`   // Event metadata
+	Confidence float64        `json:"confidence"` // Confidence score (0.0-1.0)
 }
 
 // EventType defines types of graph events that can be emitted by rules.
@@ -46,11 +46,11 @@ const (
 // This information is crucial for debugging, auditing, and understanding
 // the decision-making process of the rule system.
 type EventMetadata struct {
-	RuleName  string    `json:"rule_name"`  // Name of the rule that generated this event
-	Timestamp time.Time `json:"timestamp"`  // When the event was generated
-	Source    string    `json:"source"`     // Component that generated the event
-	Reason    string    `json:"reason"`     // Human-readable reason for the event
-	Version   string    `json:"version"`    // Event schema version (default "1.0.0")
+	RuleName  string    `json:"rule_name"` // Name of the rule that generated this event
+	Timestamp time.Time `json:"timestamp"` // When the event was generated
+	Source    string    `json:"source"`    // Component that generated the event
+	Reason    string    `json:"reason"`    // Human-readable reason for the event
+	Version   string    `json:"version"`   // Event schema version (default "1.0.0")
 }
 
 // Validate checks if the Event is valid and contains all required fields.
@@ -169,14 +169,14 @@ func NewAlertEvent(alertType string, entityID string, properties map[string]any,
 	if properties == nil {
 		properties = make(map[string]any)
 	}
-	
+
 	properties["alert_type"] = alertType
 	properties["source_entity"] = entityID
 	properties["status"] = "warning" // Default to warning status
-	
+
 	// Generate unique alert ID based on type, entity, and timestamp
 	alertID := fmt.Sprintf("alert_%s_%s_%d", alertType, entityID, metadata.Timestamp.Unix())
-	
+
 	return &Event{
 		Type:       EventEntityCreate,
 		EntityID:   alertID,
@@ -192,9 +192,9 @@ func NewEntityCreateEvent(entityID string, entityType string, properties map[str
 	if properties == nil {
 		properties = make(map[string]any)
 	}
-	
+
 	properties["type"] = entityType
-	
+
 	return &Event{
 		Type:       EventEntityCreate,
 		EntityID:   entityID,
@@ -208,7 +208,7 @@ func NewEntityCreateEvent(entityID string, entityType string, properties map[str
 // This is used when rules determine that an entity should be removed from the graph.
 func NewEntityDeleteEvent(entityID string, reason string, metadata EventMetadata) *Event {
 	metadata.Reason = reason // Override reason with deletion-specific reason
-	
+
 	return &Event{
 		Type:       EventEntityDelete,
 		EntityID:   entityID,

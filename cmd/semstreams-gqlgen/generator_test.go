@@ -87,9 +87,9 @@ func TestLoadConfig(t *testing.T) {
 
 func TestParseSchema(t *testing.T) {
 	tests := []struct {
-		name       string
-		schema     string
-		wantErr    bool
+		name        string
+		schema      string
+		wantErr     bool
 		wantQueries int
 		wantTypes   int
 	}{
@@ -107,7 +107,7 @@ func TestParseSchema(t *testing.T) {
 					status: String
 				}
 			`,
-			wantErr:    false,
+			wantErr:     false,
 			wantQueries: 2, // Only custom queries (may include introspection)
 			wantTypes:   1, // Robot (Query is not counted in Types)
 		},
@@ -118,7 +118,7 @@ func TestParseSchema(t *testing.T) {
 					robot(id ID!): Robot  # Missing colon
 				}
 			`,
-			wantErr:    true,
+			wantErr:     true,
 			wantQueries: 0,
 			wantTypes:   0,
 		},
@@ -440,7 +440,7 @@ func TestGenerate(t *testing.T) {
 
 		expectedConverters := []string{
 			"package generated",
-			"func getID",  // ID is capitalized per GraphQL conventions
+			"func getID", // ID is capitalized per GraphQL conventions
 			"func getName",
 			"func getStatus",
 		}
@@ -455,11 +455,11 @@ func TestGenerate(t *testing.T) {
 
 func TestParseFieldPath(t *testing.T) {
 	tests := []struct {
-		name          string
-		path          string
-		wantType      string
-		wantField     string
-		wantErr       bool
+		name      string
+		path      string
+		wantType  string
+		wantField string
+		wantErr   bool
 	}{
 		{
 			name:      "valid path",
@@ -512,7 +512,7 @@ func TestParseFieldPath(t *testing.T) {
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
 		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-		containsInMiddle(s, substr)))
+			containsInMiddle(s, substr)))
 }
 
 func containsInMiddle(s, substr string) bool {

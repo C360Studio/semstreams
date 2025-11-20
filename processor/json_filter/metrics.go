@@ -10,10 +10,10 @@ import (
 // filterMetrics holds Prometheus metrics for JSON Filter Processor operations.
 type filterMetrics struct {
 	// Message counters
-	messagesTotal   *prometheus.CounterVec // By component_name and status (matched/rejected/error)
-	matched         *prometheus.CounterVec // By component_name
-	rejected        *prometheus.CounterVec // By component_name
-	errors          *prometheus.CounterVec // By component_name and error_type
+	messagesTotal *prometheus.CounterVec // By component_name and status (matched/rejected/error)
+	matched       *prometheus.CounterVec // By component_name
+	rejected      *prometheus.CounterVec // By component_name
+	errors        *prometheus.CounterVec // By component_name and error_type
 
 	// Performance metrics
 	evaluationDuration *prometheus.HistogramVec // By component_name

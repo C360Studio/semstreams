@@ -35,9 +35,9 @@ import (
 	"github.com/c360/semstreams/errors"
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	dto "github.com/prometheus/client_model/go"
 )
 
 // RuntimeMetricsResponse represents the JSON response for runtime metrics

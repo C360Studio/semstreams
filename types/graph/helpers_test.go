@@ -28,7 +28,7 @@ func TestGetPropertyValue(t *testing.T) {
 			},
 			{
 				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO", // Relationship predicate
+				Predicate: "CONNECTED_TO",                         // Relationship predicate
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},
@@ -154,7 +154,7 @@ func TestGetProperties(t *testing.T) {
 			},
 			{
 				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO", // Relationship - should be excluded
+				Predicate: "CONNECTED_TO",                         // Relationship - should be excluded
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},
@@ -193,12 +193,12 @@ func TestGetRelationshipTriples(t *testing.T) {
 			},
 			{
 				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO", // Relationship
+				Predicate: "CONNECTED_TO",                         // Relationship
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 			{
 				Subject:   "test.entity",
-				Predicate: "POWERED_BY", // Relationship
+				Predicate: "POWERED_BY",                          // Relationship
 				Object:    "c360.platform1.power.battery.main.0", // Valid 6-part EntityID
 			},
 		},
@@ -237,7 +237,7 @@ func TestGetPropertyTriples(t *testing.T) {
 			},
 			{
 				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO", // Relationship - should be excluded
+				Predicate: "CONNECTED_TO",                         // Relationship - should be excluded
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},

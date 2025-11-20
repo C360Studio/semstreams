@@ -651,8 +651,8 @@ func (p *Processor) publishContextReady(
 
 	// Wrap in BaseMessage for transport (enforces clean architecture)
 	baseMsg := message.NewBaseMessage(
-		payload.Schema(), // message type: "core.json.v1"
-		payload,          // the GenericJSONPayload
+		payload.Schema(),    // message type: "core.json.v1"
+		payload,             // the GenericJSONPayload
 		"context-processor", // source component
 	)
 

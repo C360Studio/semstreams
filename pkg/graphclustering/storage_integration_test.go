@@ -398,4 +398,3 @@ func TestIntegration_CommunitySummaryFields(t *testing.T) {
 	assert.Equal(t, community.SummaryStatus, retrieved.SummaryStatus)
 	assert.Equal(t, "robotics", retrieved.Metadata["domain"])
 }
-

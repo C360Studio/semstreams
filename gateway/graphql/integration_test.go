@@ -69,7 +69,7 @@ func TestIntegration_NATSQueryEntityByID(t *testing.T) {
 
 		responseData := struct {
 			Entity *graphql.Entity `json:"entity"`
-			Error  string           `json:"error,omitempty"`
+			Error  string          `json:"error,omitempty"`
 		}{
 			Entity: &response,
 		}
@@ -312,7 +312,7 @@ func TestIntegration_NATSErrorResponse(t *testing.T) {
 	_, err = nc.Subscribe("graph.query.entity", func(msg *nats.Msg) {
 		responseData := struct {
 			Entity *graphql.Entity `json:"entity"`
-			Error  string           `json:"error,omitempty"`
+			Error  string          `json:"error,omitempty"`
 		}{
 			Error: "entity not found",
 		}

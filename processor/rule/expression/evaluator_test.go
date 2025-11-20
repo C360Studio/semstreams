@@ -227,7 +227,7 @@ func TestExpressionEvaluator_LogicOperators(t *testing.T) {
 			name: "and_one_false",
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},  // false
+					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},    // false
 					{Field: "robotics.system.status", Operator: OpContains, Value: "ARMED", Required: true}, // true
 				},
 				Logic: LogicAnd,
@@ -238,7 +238,7 @@ func TestExpressionEvaluator_LogicOperators(t *testing.T) {
 			name: "or_one_true",
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},  // false
+					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},    // false
 					{Field: "robotics.system.status", Operator: OpContains, Value: "ARMED", Required: true}, // true
 				},
 				Logic: LogicOr,
@@ -249,7 +249,7 @@ func TestExpressionEvaluator_LogicOperators(t *testing.T) {
 			name: "or_both_false",
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},     // false
+					{Field: "robotics.battery.level", Operator: OpLessThan, Value: 50.0, Required: true},       // false
 					{Field: "robotics.system.status", Operator: OpContains, Value: "DISARMED", Required: true}, // false
 				},
 				Logic: LogicOr,
@@ -313,8 +313,8 @@ func TestExpressionEvaluator_MissingFields(t *testing.T) {
 			name: "and_with_required_missing",
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "robotics.battery.level", Operator: OpGreaterThan, Value: 80.0, Required: true},    // true
-					{Field: "robotics.wifi.strength", Operator: OpGreaterThan, Value: 0.5, Required: true},     // missing - error
+					{Field: "robotics.battery.level", Operator: OpGreaterThan, Value: 80.0, Required: true}, // true
+					{Field: "robotics.wifi.strength", Operator: OpGreaterThan, Value: 0.5, Required: true},  // missing - error
 				},
 				Logic: LogicAnd,
 			},
@@ -325,8 +325,8 @@ func TestExpressionEvaluator_MissingFields(t *testing.T) {
 			name: "and_with_optional_missing",
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "robotics.battery.level", Operator: OpGreaterThan, Value: 80.0, Required: true},     // true
-					{Field: "robotics.wifi.strength", Operator: OpGreaterThan, Value: 0.5, Required: false},     // missing - false
+					{Field: "robotics.battery.level", Operator: OpGreaterThan, Value: 80.0, Required: true}, // true
+					{Field: "robotics.wifi.strength", Operator: OpGreaterThan, Value: 0.5, Required: false}, // missing - false
 				},
 				Logic: LogicAnd,
 			},

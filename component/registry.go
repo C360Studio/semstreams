@@ -373,7 +373,6 @@ func (r *Registry) RegisterWithConfig(config RegistrationConfig) error {
 	return r.RegisterFactory(config.Name, registration)
 }
 
-
 // ListAvailable returns information about all available component types
 // This provides metadata about what types of components can be created.
 func (r *Registry) ListAvailable() map[string]Info {

@@ -10,9 +10,9 @@ import (
 // mapMetrics holds Prometheus metrics for JSON Map Processor operations.
 type mapMetrics struct {
 	// Transformation counters
-	transformationsTotal  *prometheus.CounterVec // By component_name
-	fieldExtractions      *prometheus.CounterVec // By component_name
-	extractionErrors      *prometheus.CounterVec // By component_name and error_type
+	transformationsTotal *prometheus.CounterVec // By component_name
+	fieldExtractions     *prometheus.CounterVec // By component_name
+	extractionErrors     *prometheus.CounterVec // By component_name and error_type
 
 	// Operation errors
 	errors *prometheus.CounterVec // By component_name and error_type

@@ -63,10 +63,16 @@ func getSharedNATSClient(t *testing.T) *natsclient.Client {
 	return sharedNATSClient
 }
 
-// createGenericJSONMessage creates a GenericJSONPayload
+// createGenericJSONMessage creates a BaseMessage with GenericJSONPayload
 func createGenericJSONMessage(data map[string]any) ([]byte, error) {
 	payload := message.NewGenericJSON(data)
-	return json.Marshal(payload)
+	msgType := message.Type{
+		Domain:   "core",
+		Category: "json",
+		Version:  "v1",
+	}
+	baseMsg := message.NewBaseMessage(msgType, payload, "test-source")
+	return json.Marshal(baseMsg)
 }
 
 // TestIntegration_JSONFilterProcessing tests JSON filter processor with GenericJSON payloads
@@ -136,11 +142,13 @@ func TestIntegration_JSONFilterProcessing(t *testing.T) {
 	var receiveMu sync.Mutex
 
 	err = natsClient.Subscribe(ctx, "test.jsonfilter.output", func(_ context.Context, data []byte) {
-		var payload message.GenericJSONPayload
-		if err := json.Unmarshal(data, &payload); err == nil {
-			receiveMu.Lock()
-			receivedMessages = append(receivedMessages, payload)
-			receiveMu.Unlock()
+		var baseMsg message.BaseMessage
+		if err := json.Unmarshal(data, &baseMsg); err == nil {
+			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				receiveMu.Lock()
+				receivedMessages = append(receivedMessages, *payload)
+				receiveMu.Unlock()
+			}
 		}
 	})
 	require.NoError(t, err)
@@ -252,11 +260,13 @@ func TestIntegration_MultipleRules(t *testing.T) {
 	var receiveMu sync.Mutex
 
 	err = natsClient.Subscribe(ctx, "test.jsonfilter.multi.output", func(_ context.Context, data []byte) {
-		var payload message.GenericJSONPayload
-		if err := json.Unmarshal(data, &payload); err == nil {
-			receiveMu.Lock()
-			receivedMessages = append(receivedMessages, payload)
-			receiveMu.Unlock()
+		var baseMsg message.BaseMessage
+		if err := json.Unmarshal(data, &baseMsg); err == nil {
+			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				receiveMu.Lock()
+				receivedMessages = append(receivedMessages, *payload)
+				receiveMu.Unlock()
+			}
 		}
 	})
 	require.NoError(t, err)
@@ -355,11 +365,13 @@ func TestIntegration_ContainsOperator(t *testing.T) {
 	var receiveMu sync.Mutex
 
 	err = natsClient.Subscribe(ctx, "test.jsonfilter.contains.output", func(_ context.Context, data []byte) {
-		var payload message.GenericJSONPayload
-		if err := json.Unmarshal(data, &payload); err == nil {
-			receiveMu.Lock()
-			receivedMessages = append(receivedMessages, payload)
-			receiveMu.Unlock()
+		var baseMsg message.BaseMessage
+		if err := json.Unmarshal(data, &baseMsg); err == nil {
+			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				receiveMu.Lock()
+				receivedMessages = append(receivedMessages, *payload)
+				receiveMu.Unlock()
+			}
 		}
 	})
 	require.NoError(t, err)
@@ -454,11 +466,13 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 	var receiveMu sync.Mutex
 
 	err = natsClient.Subscribe(ctx, "test.jsonfilter.reject.output", func(_ context.Context, data []byte) {
-		var payload message.GenericJSONPayload
-		if err := json.Unmarshal(data, &payload); err == nil {
-			receiveMu.Lock()
-			receivedMessages = append(receivedMessages, payload)
-			receiveMu.Unlock()
+		var baseMsg message.BaseMessage
+		if err := json.Unmarshal(data, &baseMsg); err == nil {
+			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				receiveMu.Lock()
+				receivedMessages = append(receivedMessages, *payload)
+				receiveMu.Unlock()
+			}
 		}
 	})
 	require.NoError(t, err)
@@ -473,7 +487,9 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 
 	// Publish GenericJSON with nil data (should be rejected due to validation)
 	invalidPayload := &message.GenericJSONPayload{Data: nil}
-	invalidJSON, err := json.Marshal(invalidPayload)
+	msgType := message.Type{Domain: "core", Category: "json", Version: "v1"}
+	invalidMsg := message.NewBaseMessage(msgType, invalidPayload, "test-source")
+	invalidJSON, err := json.Marshal(invalidMsg)
 	require.NoError(t, err)
 	err = natsClient.Publish(ctx, "test.jsonfilter.reject.input", invalidJSON)
 	require.NoError(t, err)

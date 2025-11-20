@@ -23,7 +23,6 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 		rules:      make(map[string]rtypes.Rule),
 	}
 
-
 	tests := []struct {
 		name      string
 		changes   map[string]any
@@ -170,7 +169,6 @@ func TestRuntimeConfigurable_ApplyConfigUpdate(t *testing.T) {
 		rules:      make(map[string]rtypes.Rule),
 		config:     &Config{},
 	}
-
 
 	// Test adding a new rule
 	t.Run("add_new_rule", func(t *testing.T) {
@@ -354,7 +352,6 @@ func TestDynamicRuleCRUD(t *testing.T) {
 		rules:      make(map[string]rtypes.Rule),
 		config:     &Config{},
 	}
-
 
 	// CREATE - Add a new rule
 	createChanges := map[string]any{

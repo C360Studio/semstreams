@@ -86,28 +86,28 @@ func (e *EvaluationError) Unwrap() error {
 // Supported operators by field type
 const (
 	// Numeric operators
-	OpEqual              = "eq"
-	OpNotEqual           = "ne"
-	OpLessThan          = "lt"
-	OpLessThanEqual     = "lte"
-	OpGreaterThan       = "gt"
-	OpGreaterThanEqual  = "gte"
-	OpBetween           = "between"
+	OpEqual            = "eq"
+	OpNotEqual         = "ne"
+	OpLessThan         = "lt"
+	OpLessThanEqual    = "lte"
+	OpGreaterThan      = "gt"
+	OpGreaterThanEqual = "gte"
+	OpBetween          = "between"
 
 	// String operators
-	OpContains      = "contains"
-	OpStartsWith    = "starts_with"
-	OpEndsWith      = "ends_with"
-	OpRegexMatch    = "regex"
+	OpContains   = "contains"
+	OpStartsWith = "starts_with"
+	OpEndsWith   = "ends_with"
+	OpRegexMatch = "regex"
 
 	// Boolean operators (eq/ne only)
 
 	// Array operators
-	OpIn        = "in"
-	OpNotIn     = "not_in"
-	OpLengthEq  = "length_eq"
-	OpLengthGt  = "length_gt"
-	OpLengthLt  = "length_lt"
+	OpIn            = "in"
+	OpNotIn         = "not_in"
+	OpLengthEq      = "length_eq"
+	OpLengthGt      = "length_gt"
+	OpLengthLt      = "length_lt"
 	OpArrayContains = "array_contains"
 )
 

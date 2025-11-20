@@ -70,8 +70,8 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 			shouldErr: false, // test_rule factory accepts any definition
 		},
 		{
-			name: "empty_definition",
-			def:  rule.RuleDefinition{},
+			name:      "empty_definition",
+			def:       rule.RuleDefinition{},
 			shouldErr: false, // test_rule factory is permissive for testing
 		},
 	}

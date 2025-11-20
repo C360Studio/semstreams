@@ -13,11 +13,11 @@ import (
 
 // TestRule is a functional rule implementation for testing
 type TestRule struct {
-	id          string
-	name        string
-	subscribed  []string
-	enabled     bool
-	conditions  []expression.ConditionExpression
+	id            string
+	name          string
+	subscribed    []string
+	enabled       bool
+	conditions    []expression.ConditionExpression
 	shouldTrigger bool // Set to true when conditions match
 }
 

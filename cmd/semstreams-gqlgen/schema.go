@@ -11,9 +11,9 @@ import (
 
 // SchemaInfo contains parsed GraphQL schema information
 type SchemaInfo struct {
-	Schema *ast.Schema
+	Schema  *ast.Schema
 	Queries map[string]*ast.FieldDefinition
-	Types map[string]*ast.Definition
+	Types   map[string]*ast.Definition
 }
 
 // ParseSchema loads and parses a GraphQL schema file
@@ -55,9 +55,9 @@ func ParseSchema(schemaPath string) (*SchemaInfo, error) {
 	}
 
 	return &SchemaInfo{
-		Schema: schema,
+		Schema:  schema,
 		Queries: queries,
-		Types: types,
+		Types:   types,
 	}, nil
 }
 

@@ -28,7 +28,7 @@ func (rp *Processor) watchEntityStates(ctx context.Context) error {
 		Description: "Entity state storage",
 		History:     10,
 		TTL:         7 * 24 * time.Hour, // 7 days
-		MaxBytes:    -1,                  // Unlimited
+		MaxBytes:    -1,                 // Unlimited
 	})
 	if err != nil {
 		rp.logger.Warn("Failed to create/access ENTITY_STATES bucket, skipping entity watch", "error", err)
@@ -119,10 +119,10 @@ func (rp *Processor) entityStateToMessage(action, entityKey string, entityState 
 
 	// Create payload data
 	payloadData := map[string]any{
-		"action":     action,
-		"entity_id":  entityKey,
-		"timestamp":  time.Now(),
-		"source":     "kv-watch",
+		"action":    action,
+		"entity_id": entityKey,
+		"timestamp": time.Now(),
+		"source":    "kv-watch",
 	}
 
 	// Add entity state data if not deleted

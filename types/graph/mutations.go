@@ -103,10 +103,10 @@ type CreateEntityWithEdgesResponse struct {
 // UpdateEntityWithEdgesResponse response for atomic entity+edges update
 type UpdateEntityWithEdgesResponse struct {
 	MutationResponse
-	Entity        *EntityState `json:"entity,omitempty"`
-	EdgesAdded    int          `json:"edges_added"`
-	EdgesRemoved  int          `json:"edges_removed"`
-	Version       int64        `json:"version,omitempty"`
+	Entity       *EntityState `json:"entity,omitempty"`
+	EdgesAdded   int          `json:"edges_added"`
+	EdgesRemoved int          `json:"edges_removed"`
+	Version      int64        `json:"version,omitempty"`
 }
 
 // AddEdgeResponse response for edge addition

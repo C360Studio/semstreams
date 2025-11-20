@@ -68,12 +68,12 @@ var jsonFilterSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
 // Processor implements a GenericJSON message filter
 type Processor struct {
-	name         string
-	subjects     []string
-	outputSubjs  []string // Support multiple output subjects
-	rules        []FilterRule
-	natsClient   *natsclient.Client
-	logger       *slog.Logger
+	name        string
+	subjects    []string
+	outputSubjs []string // Support multiple output subjects
+	rules       []FilterRule
+	natsClient  *natsclient.Client
+	logger      *slog.Logger
 
 	// Lifecycle management
 	shutdown    chan struct{}
@@ -487,7 +487,7 @@ func (f *Processor) OutputPorts() []component.Port {
 			Config: component.NATSPort{
 				Subject: subject,
 				Interface: &component.InterfaceContract{
-					Type:    "core.json.v1",
+					Type:    "core .json.v1",
 					Version: "v1",
 				},
 			},

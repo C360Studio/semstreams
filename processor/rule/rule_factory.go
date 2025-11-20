@@ -14,16 +14,16 @@ import (
 
 // RuleDefinition represents a JSON rule configuration
 type RuleDefinition struct {
-	ID          string                              `json:"id"`
-	Type        string                              `json:"type"`
-	Name        string                              `json:"name"`
-	Description string                              `json:"description"`
-	Enabled     bool                                `json:"enabled"`
-	Conditions  []expression.ConditionExpression    `json:"conditions"`
-	Logic       string                              `json:"logic"`
-	Cooldown    string                              `json:"cooldown,omitempty"`
-	Entity      EntityConfig                        `json:"entity,omitempty"`
-	Metadata    map[string]interface{}              `json:"metadata,omitempty"`
+	ID          string                           `json:"id"`
+	Type        string                           `json:"type"`
+	Name        string                           `json:"name"`
+	Description string                           `json:"description"`
+	Enabled     bool                             `json:"enabled"`
+	Conditions  []expression.ConditionExpression `json:"conditions"`
+	Logic       string                           `json:"logic"`
+	Cooldown    string                           `json:"cooldown,omitempty"`
+	Entity      EntityConfig                     `json:"entity,omitempty"`
+	Metadata    map[string]interface{}           `json:"metadata,omitempty"`
 }
 
 // EntityConfig defines entity-specific configuration

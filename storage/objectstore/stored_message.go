@@ -96,11 +96,11 @@ func (s *StoredMessage) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON provides JSON deserialization for StoredMessage
 func (s *StoredMessage) UnmarshalJSON(data []byte) error {
 	var tmp struct {
-		EntityID    string                   `json:"entity_id"`
-		Triples     []message.Triple         `json:"triples"`
+		EntityID    string                    `json:"entity_id"`
+		Triples     []message.Triple          `json:"triples"`
 		StorageRef  *message.StorageReference `json:"storage_ref"`
-		StoredAt    time.Time                `json:"stored_at"`
-		MessageType string                   `json:"message_type"`
+		StoredAt    time.Time                 `json:"stored_at"`
+		MessageType string                    `json:"message_type"`
 	}
 
 	if err := json.Unmarshal(data, &tmp); err != nil {

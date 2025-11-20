@@ -37,4 +37,3 @@ type Rule interface {
 	// ExecuteEvents generates events when rule conditions are satisfied
 	ExecuteEvents(messages []message.Message) ([]Event, error)
 }
-

@@ -45,15 +45,15 @@ type Config struct {
 
 // ConstructorConfig holds all configuration needed to construct an Output instance
 type ConstructorConfig struct {
-	Name            string                    // Component name (empty = auto-generate)
-	Port            int                       // WebSocket server port
-	Path            string                    // WebSocket endpoint path
-	Subjects        []string                  // NATS subjects to subscribe to
-	NATSClient      *natsclient.Client        // NATS client for messaging
-	MetricsRegistry *metric.MetricsRegistry   // Optional Prometheus metrics registry
-	Security        security.Config           // Security configuration
-	DeliveryMode    DeliveryMode              // Reliability semantics
-	AckTimeout      time.Duration             // Acknowledgment timeout for at-least-once
+	Name            string                  // Component name (empty = auto-generate)
+	Port            int                     // WebSocket server port
+	Path            string                  // WebSocket endpoint path
+	Subjects        []string                // NATS subjects to subscribe to
+	NATSClient      *natsclient.Client      // NATS client for messaging
+	MetricsRegistry *metric.MetricsRegistry // Optional Prometheus metrics registry
+	Security        security.Config         // Security configuration
+	DeliveryMode    DeliveryMode            // Reliability semantics
+	AckTimeout      time.Duration           // Acknowledgment timeout for at-least-once
 }
 
 // DefaultConstructorConfig returns sensible defaults for Output construction

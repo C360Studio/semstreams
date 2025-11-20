@@ -112,7 +112,7 @@ func (p *QueryManagerGraphProvider) GetEdgeWeight(ctx context.Context, fromID, t
 // This is more practical for real-world use: cluster entities of specific types
 type PredicateGraphProvider struct {
 	queryManager  querymanager.Querier
-	predicate     string // Entity type/predicate to cluster
+	predicate     string          // Entity type/predicate to cluster
 	validEntities map[string]bool // Cached set of valid entity IDs
 }
 

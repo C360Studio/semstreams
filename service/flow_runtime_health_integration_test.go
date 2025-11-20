@@ -197,10 +197,10 @@ func TestGetComponentsHealth_ComponentStates(t *testing.T) {
 	// We test the mapping logic by examining the output for components in various lifecycle states
 
 	tests := []struct {
-		name           string
-		componentState component.State
-		healthStatus   component.HealthStatus
-		expectedStatus string
+		name            string
+		componentState  component.State
+		healthStatus    component.HealthStatus
+		expectedStatus  string
 		expectedHealthy bool
 	}{
 		{
@@ -212,7 +212,7 @@ func TestGetComponentsHealth_ComponentStates(t *testing.T) {
 				ErrorCount: 0,
 				Uptime:     60 * time.Second,
 			},
-			expectedStatus: "running",
+			expectedStatus:  "running",
 			expectedHealthy: true,
 		},
 		{
@@ -225,7 +225,7 @@ func TestGetComponentsHealth_ComponentStates(t *testing.T) {
 				LastError:  "connection slow",
 				Uptime:     60 * time.Second,
 			},
-			expectedStatus: "degraded",
+			expectedStatus:  "degraded",
 			expectedHealthy: false,
 		},
 		{
@@ -238,7 +238,7 @@ func TestGetComponentsHealth_ComponentStates(t *testing.T) {
 				LastError:  "fatal error",
 				Uptime:     0,
 			},
-			expectedStatus: "error",
+			expectedStatus:  "error",
 			expectedHealthy: false,
 		},
 		{
@@ -250,7 +250,7 @@ func TestGetComponentsHealth_ComponentStates(t *testing.T) {
 				ErrorCount: 0,
 				Uptime:     0,
 			},
-			expectedStatus: "stopped",
+			expectedStatus:  "stopped",
 			expectedHealthy: false,
 		},
 	}

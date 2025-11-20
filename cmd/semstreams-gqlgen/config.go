@@ -10,17 +10,17 @@ import (
 
 // Config represents the code generation configuration
 type Config struct {
-	Package    string                  `json:"package"`
-	SchemaPath string                  `json:"schema_path"`
-	Queries    map[string]QueryConfig  `json:"queries"`
-	Fields     map[string]FieldConfig  `json:"fields"`
-	Types      map[string]TypeConfig   `json:"types"`
+	Package    string                 `json:"package"`
+	SchemaPath string                 `json:"schema_path"`
+	Queries    map[string]QueryConfig `json:"queries"`
+	Fields     map[string]FieldConfig `json:"fields"`
+	Types      map[string]TypeConfig  `json:"types"`
 }
 
 // QueryConfig defines how to resolve a GraphQL query
 type QueryConfig struct {
-	Resolver   string `json:"resolver"`             // BaseResolver method name
-	Subject    string `json:"subject"`              // NATS subject for the query
+	Resolver   string `json:"resolver"`              // BaseResolver method name
+	Subject    string `json:"subject"`               // NATS subject for the query
 	EntityType string `json:"entity_type,omitempty"` // Entity type for QueryEntitiesByType
 }
 
@@ -88,17 +88,17 @@ func (c *Config) Validate() error {
 
 		// Validate resolver method exists
 		validResolvers := map[string]bool{
-			"QueryEntityByID":      true,
-			"QueryEntityByAlias":   true,
-			"QueryEntitiesByIDs":   true,
-			"QueryEntitiesByType":  true,
-			"QueryRelationships":   true,
-			"SemanticSearch":       true,
-			"LocalSearch":          true,
-			"GlobalSearch":         true,
-			"GetCommunity":         true,
-			"GetEntityCommunity":   true,
-			"Custom":               true, // Custom resolvers handled manually
+			"QueryEntityByID":     true,
+			"QueryEntityByAlias":  true,
+			"QueryEntitiesByIDs":  true,
+			"QueryEntitiesByType": true,
+			"QueryRelationships":  true,
+			"SemanticSearch":      true,
+			"LocalSearch":         true,
+			"GlobalSearch":        true,
+			"GetCommunity":        true,
+			"GetEntityCommunity":  true,
+			"Custom":              true, // Custom resolvers handled manually
 		}
 		if !validResolvers[queryConfig.Resolver] {
 			return errors.WrapInvalid(
@@ -119,17 +119,17 @@ func (c *Config) Validate() error {
 		// If resolver is specified, validate it
 		if fieldConfig.Resolver != "" {
 			validResolvers := map[string]bool{
-				"QueryEntityByID":      true,
-				"QueryEntityByAlias":   true,
-				"QueryEntitiesByIDs":   true,
-				"QueryEntitiesByType":  true,
-				"QueryRelationships":   true,
-				"SemanticSearch":       true,
-				"LocalSearch":          true,
-				"GlobalSearch":         true,
-				"GetCommunity":         true,
-				"GetEntityCommunity":   true,
-				"Custom":               true, // Custom field resolvers handled manually
+				"QueryEntityByID":     true,
+				"QueryEntityByAlias":  true,
+				"QueryEntitiesByIDs":  true,
+				"QueryEntitiesByType": true,
+				"QueryRelationships":  true,
+				"SemanticSearch":      true,
+				"LocalSearch":         true,
+				"GlobalSearch":        true,
+				"GetCommunity":        true,
+				"GetEntityCommunity":  true,
+				"Custom":              true, // Custom field resolvers handled manually
 			}
 			if !validResolvers[fieldConfig.Resolver] {
 				return errors.WrapInvalid(
@@ -178,11 +178,11 @@ func (c *Config) Validate() error {
 		// Validate type is supported (skip validation for complex objects - they use GraphQL types)
 		if fieldConfig.Type != "" && !fieldConfig.ComplexObject {
 			validTypes := map[string]bool{
-				"string":  true,
-				"int":     true,
-				"float64": true,
-				"bool":    true,
-				"[]string": true,
+				"string":                 true,
+				"int":                    true,
+				"float64":                true,
+				"bool":                   true,
+				"[]string":               true,
 				"map[string]interface{}": true,
 			}
 			if !validTypes[fieldConfig.Type] {

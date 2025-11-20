@@ -427,7 +427,7 @@ func BenchmarkPageRank_LargeGraph(b *testing.B) {
 	// Create larger graph (100 nodes, random connections)
 	nodes := make([]string, 100)
 	for i := 0; i < 100; i++ {
-		nodes[i] = string(rune('A' + (i % 26))) + string(rune('0' + (i / 26)))
+		nodes[i] = string(rune('A'+(i%26))) + string(rune('0'+(i/26)))
 	}
 
 	for i := 0; i < 100; i++ {

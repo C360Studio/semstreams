@@ -4,7 +4,7 @@ package graph
 import (
 	"encoding/json"
 	"time"
-	
+
 	"github.com/c360/semstreams/message"
 )
 
@@ -86,32 +86,32 @@ func (es EntityStatus) IsOperational() bool {
 
 // EntityState represents complete local graph state for an entity
 type EntityState struct {
-	Node      NodeProperties     `json:"node"`       // Entity properties
-	Edges     []Edge             `json:"edges"`      // Outgoing edges ONLY
-	Triples   []message.Triple   `json:"triples"`    // Semantic triples (properties + relationships)
-	ObjectRef string             `json:"object_ref"` // Reference to full message in ObjectStore
-	Version   uint64             `json:"version"`    // Explicit versioning for conflict resolution
-	UpdatedAt time.Time          `json:"updated_at"`
+	Node      NodeProperties   `json:"node"`       // Entity properties
+	Edges     []Edge           `json:"edges"`      // Outgoing edges ONLY
+	Triples   []message.Triple `json:"triples"`    // Semantic triples (properties + relationships)
+	ObjectRef string           `json:"object_ref"` // Reference to full message in ObjectStore
+	Version   uint64           `json:"version"`    // Explicit versioning for conflict resolution
+	UpdatedAt time.Time        `json:"updated_at"`
 }
 
 // NodeProperties contains entity identification and query-essential properties
 type NodeProperties struct {
-	ID         string                 `json:"id"`         // e.g., "drone_001"
-	Type       string                 `json:"type"`       // e.g., "robotics.drone"
+	ID         string         `json:"id"`         // e.g., "drone_001"
+	Type       string         `json:"type"`       // e.g., "robotics.drone"
 	Properties map[string]any `json:"properties"` // Query-essential only
-	Position   *Position              `json:"position,omitempty"`
-	Status     EntityStatus           `json:"status"` // Entity operational status
+	Position   *Position      `json:"position,omitempty"`
+	Status     EntityStatus   `json:"status"` // Entity operational status
 }
 
 // Edge represents a directed relationship (outgoing only)
 type Edge struct {
-	ToEntityID string                 `json:"to_entity_id"`
-	EdgeType   string                 `json:"edge_type"`              // "POWERED_BY", "NEAR", etc.
-	Weight     float64                `json:"weight,omitempty"`       // Distance, strength, etc.
-	Confidence float64                `json:"confidence,omitempty"`   // 0.0-1.0
+	ToEntityID string         `json:"to_entity_id"`
+	EdgeType   string         `json:"edge_type"`            // "POWERED_BY", "NEAR", etc.
+	Weight     float64        `json:"weight,omitempty"`     // Distance, strength, etc.
+	Confidence float64        `json:"confidence,omitempty"` // 0.0-1.0
 	Properties map[string]any `json:"properties,omitempty"`
-	CreatedAt  time.Time              `json:"created_at"`
-	ExpiresAt  *time.Time             `json:"expires_at,omitempty"` // For temporary relationships
+	CreatedAt  time.Time      `json:"created_at"`
+	ExpiresAt  *time.Time     `json:"expires_at,omitempty"` // For temporary relationships
 }
 
 // Position represents geographic location

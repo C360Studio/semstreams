@@ -130,9 +130,9 @@ func TestPropertyExtraction(t *testing.T) {
 		ID:   "test-1",
 		Type: "TestEntity",
 		Properties: map[string]interface{}{
-			"name":  "Test Entity",
-			"count": 42,
-			"price": 19.99,
+			"name":   "Test Entity",
+			"count":  42,
+			"price":  19.99,
 			"active": true,
 			"tags":   []interface{}{"tag1", "tag2"},
 			"metadata": map[string]interface{}{
@@ -515,15 +515,15 @@ type mockCommunityImpl struct {
 	summaryStatus      string
 }
 
-func (m *mockCommunityImpl) GetID() string                    { return m.id }
-func (m *mockCommunityImpl) GetLevel() int                    { return m.level }
-func (m *mockCommunityImpl) GetMembers() []string             { return m.members }
-func (m *mockCommunityImpl) GetStatisticalSummary() string    { return m.statisticalSummary }
-func (m *mockCommunityImpl) GetLLMSummary() string            { return m.llmSummary }
-func (m *mockCommunityImpl) GetKeywords() []string            { return m.keywords }
-func (m *mockCommunityImpl) GetRepEntities() []string         { return m.repEntities }
-func (m *mockCommunityImpl) GetSummaryStatus() string         { return m.summaryStatus }
-func (m *mockCommunityImpl) GetParentID() *string             { return nil }
+func (m *mockCommunityImpl) GetID() string                       { return m.id }
+func (m *mockCommunityImpl) GetLevel() int                       { return m.level }
+func (m *mockCommunityImpl) GetMembers() []string                { return m.members }
+func (m *mockCommunityImpl) GetStatisticalSummary() string       { return m.statisticalSummary }
+func (m *mockCommunityImpl) GetLLMSummary() string               { return m.llmSummary }
+func (m *mockCommunityImpl) GetKeywords() []string               { return m.keywords }
+func (m *mockCommunityImpl) GetRepEntities() []string            { return m.repEntities }
+func (m *mockCommunityImpl) GetSummaryStatus() string            { return m.summaryStatus }
+func (m *mockCommunityImpl) GetParentID() *string                { return nil }
 func (m *mockCommunityImpl) GetMetadata() map[string]interface{} { return nil }
 
 // Implement required Querier interface methods (stubs)

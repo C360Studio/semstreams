@@ -82,9 +82,9 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 	}
 
 	// Build adjacency structure (only edges within subset)
-	outLinks := make([][]int, n)     // outLinks[i] = nodes that i links to
-	inLinkCount := make([]int, n)    // inLinkCount[i] = number of nodes linking to i
-	outLinkCount := make([]int, n)   // outLinkCount[i] = number of nodes i links to
+	outLinks := make([][]int, n)   // outLinks[i] = nodes that i links to
+	inLinkCount := make([]int, n)  // inLinkCount[i] = number of nodes linking to i
+	outLinkCount := make([]int, n) // outLinkCount[i] = number of nodes i links to
 
 	for i, fromID := range nodeIDs {
 		neighbors, err := provider.GetNeighbors(ctx, fromID, "outgoing")

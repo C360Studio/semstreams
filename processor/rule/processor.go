@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/c360/semstreams/pkg/cache"
 	"github.com/c360/semstreams/component"
 	"github.com/c360/semstreams/errors"
 	message "github.com/c360/semstreams/message"
 	"github.com/c360/semstreams/metric"
 	"github.com/c360/semstreams/natsclient"
+	"github.com/c360/semstreams/pkg/cache"
 	rtypes "github.com/c360/semstreams/types/rule"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -56,7 +56,7 @@ type Processor struct {
 
 	// Rule processing resources
 	natsClient  *natsclient.Client
-	rules       map[string]rtypes.Rule   // Self-loaded rules
+	rules       map[string]rtypes.Rule    // Self-loaded rules
 	ruleConfigs map[string]map[string]any // Original rule configurations for GetRuntimeConfig
 
 	// Message cache
@@ -64,7 +64,7 @@ type Processor struct {
 
 	// Configuration
 	config *Config
-	
+
 	// Dependencies
 	metricsRegistry *metric.MetricsRegistry
 
@@ -85,13 +85,13 @@ type Processor struct {
 
 	// JetStream consumer for entity events
 	entityConsumer jetstream.Consumer
-	
+
 	// KV watchers for entity state changes
 	entityWatchers []jetstream.KeyWatcher
-	
+
 	// Prometheus metrics
 	metrics *RuleMetrics
-	
+
 	// Logger
 	logger *slog.Logger
 }
@@ -188,8 +188,6 @@ func (rp *Processor) ConfigSchema() component.ConfigSchema {
 	return schema
 }
 
-
-
 // Health returns current health status
 func (rp *Processor) Health() component.HealthStatus {
 	rp.mu.RLock()
@@ -203,7 +201,6 @@ func (rp *Processor) Health() component.HealthStatus {
 
 	return rp.health
 }
-
 
 // DataFlow returns current data flow metrics
 func (rp *Processor) DataFlow() component.FlowMetrics {
@@ -249,7 +246,7 @@ func (rp *Processor) Initialize() error {
 // run is the main background goroutine that handles processor lifecycle
 func (rp *Processor) run(ctx context.Context) {
 	defer close(rp.done)
-	
+
 	// Start KV watchers for entity state changes
 	if err := rp.watchEntityStates(ctx); err != nil {
 		rp.logger.Warn("Failed to start entity state watching", "error", err)
@@ -261,7 +258,7 @@ func (rp *Processor) run(ctx context.Context) {
 		rp.logger.Error("Failed to setup subscriptions", "error", err)
 		return
 	}
-	
+
 	// Wait for shutdown signal or context cancellation
 	select {
 	case <-rp.shutdown:
@@ -371,7 +368,7 @@ func (rp *Processor) Stop(timeout time.Duration) error {
 	// Clean up resources
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
-	
+
 	// Stop all entity watchers
 	for _, watcher := range rp.entityWatchers {
 		if err := watcher.Stop(); err != nil {
@@ -431,11 +428,8 @@ func (rp *Processor) GetRuleMetrics() map[string]any {
 
 // Register, CreateRuleProcessor, and convertDefinitionToPort are in factory.go
 
-
 // Validation functions (ValidateConfigUpdate, validateSingleRuleConfig, validateExpressionRule,
 // isKnownRuleType, isValidOperator, createRuleFromConfig, and helper functions) are in config_validation.go
-
-
 
 // Runtime configuration functions (ApplyConfigUpdate, applyRuleChanges, GetRuntimeConfig,
 // extractConditions, RuntimeConfigWrapper, and related methods) are in runtime_config.go

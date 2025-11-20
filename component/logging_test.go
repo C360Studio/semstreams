@@ -80,11 +80,11 @@ func TestComponentLogger_LogLevels(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	tests := []struct {
-		name     string
-		logFunc  func()
-		wantMsg  string
-		wantLvl  LogLevel
-		wantErr  bool
+		name    string
+		logFunc func()
+		wantMsg string
+		wantLvl LogLevel
+		wantErr bool
 	}{
 		{
 			name: "Debug level",

@@ -93,14 +93,14 @@ func main() {
 
 // ComponentSchema represents the exported component schema
 type ComponentSchema struct {
-	Schema      string                       `json:"$schema"`
-	ID          string                       `json:"$id"`
-	Type        string                       `json:"type"`
-	Title       string                       `json:"title"`
-	Description string                       `json:"description"`
-	Properties  map[string]PropertySchema    `json:"properties"`
-	Required    []string                     `json:"required"`
-	Metadata    ComponentMetadata            `json:"x-component-metadata"`
+	Schema      string                    `json:"$schema"`
+	ID          string                    `json:"$id"`
+	Type        string                    `json:"type"`
+	Title       string                    `json:"title"`
+	Description string                    `json:"description"`
+	Properties  map[string]PropertySchema `json:"properties"`
+	Required    []string                  `json:"required"`
+	Metadata    ComponentMetadata         `json:"x-component-metadata"`
 }
 
 // ComponentMetadata holds component metadata for OpenAPI integration
@@ -114,12 +114,12 @@ type ComponentMetadata struct {
 
 // PropertySchema represents a JSON Schema property definition
 type PropertySchema struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Default     any      `json:"default,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Minimum     *int     `json:"minimum,omitempty"`
-	Maximum     *int     `json:"maximum,omitempty"`
+	Type        string          `json:"type"`
+	Description string          `json:"description,omitempty"`
+	Default     any             `json:"default,omitempty"`
+	Enum        []string        `json:"enum,omitempty"`
+	Minimum     *int            `json:"minimum,omitempty"`
+	Maximum     *int            `json:"maximum,omitempty"`
 	Items       *PropertySchema `json:"items,omitempty"` // For array types
 }
 

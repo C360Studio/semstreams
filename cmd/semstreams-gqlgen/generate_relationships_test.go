@@ -11,12 +11,12 @@ import (
 // TestBuildFieldResolvers tests relationship field resolver generation
 func TestBuildFieldResolvers(t *testing.T) {
 	tests := []struct {
-		name               string
-		schema             string
-		config             *Config
-		expectedResolvers  int
-		expectedFields     map[string]int // type -> field count
-		expectError        bool
+		name              string
+		schema            string
+		config            *Config
+		expectedResolvers int
+		expectedFields    map[string]int // type -> field count
+		expectError       bool
 	}{
 		{
 			name: "single type with outgoing relationship",

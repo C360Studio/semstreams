@@ -132,10 +132,10 @@ func TestSanitizeError(t *testing.T) {
 	g := &HTTPGateway{}
 
 	tests := []struct {
-		name              string
-		err               error
-		expectedMsg       string
-		shouldNotContain  []string
+		name             string
+		err              error
+		expectedMsg      string
+		shouldNotContain []string
 	}{
 		{
 			name:             "invalid error sanitized",
@@ -194,52 +194,52 @@ func TestSanitizeError(t *testing.T) {
 
 func TestApplyCORS(t *testing.T) {
 	tests := []struct {
-		name                string
-		allowedOrigins      []string
-		requestOrigin       string
-		expectCORSHeaders   bool
+		name                 string
+		allowedOrigins       []string
+		requestOrigin        string
+		expectCORSHeaders    bool
 		expectedOriginHeader string
 	}{
 		{
-			name:                "exact origin match",
-			allowedOrigins:      []string{"https://example.com"},
-			requestOrigin:       "https://example.com",
-			expectCORSHeaders:   true,
+			name:                 "exact origin match",
+			allowedOrigins:       []string{"https://example.com"},
+			requestOrigin:        "https://example.com",
+			expectCORSHeaders:    true,
 			expectedOriginHeader: "https://example.com",
 		},
 		{
-			name:                "wildcard allows any origin",
-			allowedOrigins:      []string{"*"},
-			requestOrigin:       "https://example.com",
-			expectCORSHeaders:   true,
+			name:                 "wildcard allows any origin",
+			allowedOrigins:       []string{"*"},
+			requestOrigin:        "https://example.com",
+			expectCORSHeaders:    true,
 			expectedOriginHeader: "https://example.com",
 		},
 		{
-			name:                "wildcard without origin header",
-			allowedOrigins:      []string{"*"},
-			requestOrigin:       "",
-			expectCORSHeaders:   true,
+			name:                 "wildcard without origin header",
+			allowedOrigins:       []string{"*"},
+			requestOrigin:        "",
+			expectCORSHeaders:    true,
 			expectedOriginHeader: "*",
 		},
 		{
-			name:                "origin not in allowed list",
-			allowedOrigins:      []string{"https://allowed.com"},
-			requestOrigin:       "https://notallowed.com",
-			expectCORSHeaders:   false,
+			name:                 "origin not in allowed list",
+			allowedOrigins:       []string{"https://allowed.com"},
+			requestOrigin:        "https://notallowed.com",
+			expectCORSHeaders:    false,
 			expectedOriginHeader: "",
 		},
 		{
-			name:                "multiple allowed origins - first match",
-			allowedOrigins:      []string{"https://app1.com", "https://app2.com"},
-			requestOrigin:       "https://app1.com",
-			expectCORSHeaders:   true,
+			name:                 "multiple allowed origins - first match",
+			allowedOrigins:       []string{"https://app1.com", "https://app2.com"},
+			requestOrigin:        "https://app1.com",
+			expectCORSHeaders:    true,
 			expectedOriginHeader: "https://app1.com",
 		},
 		{
-			name:                "multiple allowed origins - second match",
-			allowedOrigins:      []string{"https://app1.com", "https://app2.com"},
-			requestOrigin:       "https://app2.com",
-			expectCORSHeaders:   true,
+			name:                 "multiple allowed origins - second match",
+			allowedOrigins:       []string{"https://app1.com", "https://app2.com"},
+			requestOrigin:        "https://app2.com",
+			expectCORSHeaders:    true,
 			expectedOriginHeader: "https://app2.com",
 		},
 	}
@@ -287,9 +287,9 @@ func TestWriteError(t *testing.T) {
 	g := &HTTPGateway{}
 
 	tests := []struct {
-		name        string
-		statusCode  int
-		message     string
+		name       string
+		statusCode int
+		message    string
 	}{
 		{
 			name:       "400 bad request",

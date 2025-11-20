@@ -465,9 +465,9 @@ func (s *SemanticKitchenSinkScenario) executeTestSemanticSearch(ctx context.Cont
 		embeddingProvider := strings.Contains(metricsText, "indexengine_embedding_provider")
 
 		result.Details["semantic_search_test"] = map[string]any{
-			"semembed_healthy":         true,
-			"messages_sent":            len(semanticTestMessages),
-			"embedding_tested":         true,
+			"semembed_healthy":            true,
+			"messages_sent":               len(semanticTestMessages),
+			"embedding_tested":            true,
 			"embeddings_generated_metric": embeddingsGenerated,
 			"embeddings_active_metric":    embeddingsActive,
 			"embedding_provider_metric":   embeddingProvider,
@@ -659,8 +659,8 @@ func (s *SemanticKitchenSinkScenario) executeValidateMetrics(ctx context.Context
 	// Note: Graph processor Prometheus metrics are not yet implemented
 	// so we verify basic dataflow metrics instead
 	requiredMetrics := []string{
-		"semstreams_cache_hits_total",      // DataManager L1/L2 cache
-		"semstreams_cache_misses_total",    // DataManager cache misses
+		"semstreams_cache_hits_total",          // DataManager L1/L2 cache
+		"semstreams_cache_misses_total",        // DataManager cache misses
 		"semstreams_json_filter_matched_total", // JSON filter metrics
 	}
 

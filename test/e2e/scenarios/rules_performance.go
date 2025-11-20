@@ -25,15 +25,15 @@ type RulesPerformanceScenario struct {
 // RulesPerformanceConfig contains configuration for rules performance test
 type RulesPerformanceConfig struct {
 	// Load generation configuration
-	RuleCount       int           `json:"rule_count"`        // Number of rules to create
-	MessageCount    int           `json:"message_count"`     // Total messages to send
-	MessageRate     int           `json:"message_rate"`      // Messages per second
-	TestDuration    time.Duration `json:"test_duration"`     // How long to run the test
-	WarmupDuration  time.Duration `json:"warmup_duration"`   // Warmup period before measuring
-	CooldownDelay   time.Duration `json:"cooldown_delay"`    // Wait after sending for processing
+	RuleCount      int           `json:"rule_count"`      // Number of rules to create
+	MessageCount   int           `json:"message_count"`   // Total messages to send
+	MessageRate    int           `json:"message_rate"`    // Messages per second
+	TestDuration   time.Duration `json:"test_duration"`   // How long to run the test
+	WarmupDuration time.Duration `json:"warmup_duration"` // Warmup period before measuring
+	CooldownDelay  time.Duration `json:"cooldown_delay"`  // Wait after sending for processing
 
 	// Performance targets
-	ThroughputTarget int           `json:"throughput_target"` // Min messages/sec
+	ThroughputTarget int           `json:"throughput_target"`  // Min messages/sec
 	LatencyTargetP95 time.Duration `json:"latency_target_p95"` // Max p95 latency
 }
 
@@ -46,7 +46,7 @@ func DefaultRulesPerformanceConfig() *RulesPerformanceConfig {
 		TestDuration:     10 * time.Second,
 		WarmupDuration:   2 * time.Second,
 		CooldownDelay:    5 * time.Second,
-		ThroughputTarget: 100,         // 100 msg/sec minimum
+		ThroughputTarget: 100,                   // 100 msg/sec minimum
 		LatencyTargetP95: 50 * time.Millisecond, // 50ms p95
 	}
 }
@@ -411,8 +411,8 @@ func calculatePercentiles(latencies []time.Duration) (p50, p95, p99 time.Duratio
 
 	// Approximate percentiles
 	p50 = sum / time.Duration(len(latencies)) // Mean as p50 approximation
-	p95 = max * 95 / 100                       // Approximate p95
-	p99 = max * 99 / 100                       // Approximate p99
+	p95 = max * 95 / 100                      // Approximate p95
+	p99 = max * 99 / 100                      // Approximate p99
 
 	return p50, p95, p99
 }

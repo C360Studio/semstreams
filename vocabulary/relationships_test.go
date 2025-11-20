@@ -9,11 +9,11 @@ import (
 
 func TestRelationshipPredicates(t *testing.T) {
 	tests := []struct {
-		name            string
-		predicate       string
-		expectedDomain  string
+		name             string
+		predicate        string
+		expectedDomain   string
 		expectedCategory string
-		expectedIRI     string
+		expectedIRI      string
 	}{
 		{
 			name:             "GraphRelContains",

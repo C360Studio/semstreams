@@ -40,7 +40,7 @@ func (m *mockCommunity) GetMetadata() map[string]interface{} { return m.metadata
 
 // mockCommunityDetector implements communityDetectorInterface for testing
 type mockCommunityDetector struct {
-	communities map[string]graphinterfaces.Community // by ID
+	communities map[string]graphinterfaces.Community         // by ID
 	entityComm  map[string]map[int]graphinterfaces.Community // by entityID -> level -> community
 	getErr      error
 	listErr     error
@@ -99,7 +99,7 @@ func (m *mockDataHandler) BatchGet(ctx context.Context, ids []string) ([]*gtypes
 }
 
 // Stub implementations for interface compliance (not used in these tests)
-func (m *mockDataHandler) Run(ctx context.Context) error                         { return nil }
+func (m *mockDataHandler) Run(ctx context.Context) error { return nil }
 func (m *mockDataHandler) CreateEntity(ctx context.Context, entity *gtypes.EntityState) (*gtypes.EntityState, error) {
 	return nil, nil
 }
@@ -110,7 +110,9 @@ func (m *mockDataHandler) DeleteEntity(ctx context.Context, id string) error { r
 func (m *mockDataHandler) GetEntity(ctx context.Context, id string) (*gtypes.EntityState, error) {
 	return m.entities[id], nil
 }
-func (m *mockDataHandler) ExistsEntity(ctx context.Context, id string) (bool, error) { return false, nil }
+func (m *mockDataHandler) ExistsEntity(ctx context.Context, id string) (bool, error) {
+	return false, nil
+}
 func (m *mockDataHandler) CreateEntityWithEdges(ctx context.Context, entity *gtypes.EntityState, edges []gtypes.Edge) (*gtypes.EntityState, error) {
 	return nil, nil
 }
@@ -163,11 +165,11 @@ func Test_scoreCommunitySummaries(t *testing.T) {
 	t.Run("Score by summary match", func(t *testing.T) {
 		communities := []graphinterfaces.Community{
 			&mockCommunity{
-				id:      "comm-1",
+				id:                 "comm-1",
 				statisticalSummary: "This is about robotics and automation",
 			},
 			&mockCommunity{
-				id:      "comm-2",
+				id:                 "comm-2",
 				statisticalSummary: "This is about web development",
 			},
 		}
@@ -200,19 +202,19 @@ func Test_scoreCommunitySummaries(t *testing.T) {
 	t.Run("Combined scoring", func(t *testing.T) {
 		communities := []graphinterfaces.Community{
 			&mockCommunity{
-				id:       "comm-1",
-				statisticalSummary:  "Machine learning models",
-				keywords: []string{"ml", "ai"},
+				id:                 "comm-1",
+				statisticalSummary: "Machine learning models",
+				keywords:           []string{"ml", "ai"},
 			},
 			&mockCommunity{
-				id:       "comm-2",
-				statisticalSummary:  "AI and machine learning techniques",
-				keywords: []string{"machine-learning", "deep-learning"},
+				id:                 "comm-2",
+				statisticalSummary: "AI and machine learning techniques",
+				keywords:           []string{"machine-learning", "deep-learning"},
 			},
 			&mockCommunity{
-				id:       "comm-3",
-				statisticalSummary:  "Web development frameworks",
-				keywords: []string{"web", "http"},
+				id:                 "comm-3",
+				statisticalSummary: "Web development frameworks",
+				keywords:           []string{"web", "http"},
 			},
 		}
 
@@ -359,9 +361,9 @@ func TestLocalSearch_Success(t *testing.T) {
 
 	// Setup mock community detector
 	comm := &mockCommunity{
-		id:      "comm-0-robotics",
-		level:   0,
-		members: []string{"e1", "e2", "e3"},
+		id:                 "comm-0-robotics",
+		level:              0,
+		members:            []string{"e1", "e2", "e3"},
 		statisticalSummary: "Robotics community",
 	}
 
@@ -457,18 +459,18 @@ func TestGlobalSearch_Success(t *testing.T) {
 
 	// Setup communities
 	comm1 := &mockCommunity{
-		id:       "comm-0-robotics",
-		level:    0,
-		members:  []string{"e1", "e2"},
-		statisticalSummary:  "Robotics and autonomous systems",
-		keywords: []string{"robotics", "autonomous", "drone"},
+		id:                 "comm-0-robotics",
+		level:              0,
+		members:            []string{"e1", "e2"},
+		statisticalSummary: "Robotics and autonomous systems",
+		keywords:           []string{"robotics", "autonomous", "drone"},
 	}
 	comm2 := &mockCommunity{
-		id:       "comm-0-network",
-		level:    0,
-		members:  []string{"e3"},
-		statisticalSummary:  "Network infrastructure",
-		keywords: []string{"network", "router", "switch"},
+		id:                 "comm-0-network",
+		level:              0,
+		members:            []string{"e3"},
+		statisticalSummary: "Network infrastructure",
+		keywords:           []string{"network", "router", "switch"},
 	}
 
 	detector := &mockCommunityDetector{
@@ -554,11 +556,11 @@ func TestGlobalSearch_MaxCommunitiesLimit(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		id := fmt.Sprintf("comm-0-%d", i)
 		communities[id] = &mockCommunity{
-			id:       id,
-			level:    0,
-			members:  []string{fmt.Sprintf("e%d", i)},
-			statisticalSummary:  fmt.Sprintf("Community %d about testing", i),
-			keywords: []string{"test", "community"},
+			id:                 id,
+			level:              0,
+			members:            []string{fmt.Sprintf("e%d", i)},
+			statisticalSummary: fmt.Sprintf("Community %d about testing", i),
+			keywords:           []string{"test", "community"},
 		}
 	}
 
@@ -642,9 +644,9 @@ func BenchmarkLocalSearch(b *testing.B) {
 	}
 
 	comm := &mockCommunity{
-		id:      "bench-comm",
-		level:   0,
-		members: memberIDs,
+		id:                 "bench-comm",
+		level:              0,
+		members:            memberIDs,
 		statisticalSummary: "IoT sensor network for environmental monitoring",
 	}
 
@@ -694,11 +696,11 @@ func BenchmarkGlobalSearch(b *testing.B) {
 
 		commID := fmt.Sprintf("comm-%d", commIdx)
 		communities[commID] = &mockCommunity{
-			id:       commID,
-			level:    0,
-			members:  memberIDs,
-			statisticalSummary:  fmt.Sprintf("Community %d with test entities", commIdx),
-			keywords: []string{fmt.Sprintf("test-%d", commIdx), "benchmark"},
+			id:                 commID,
+			level:              0,
+			members:            memberIDs,
+			statisticalSummary: fmt.Sprintf("Community %d with test entities", commIdx),
+			keywords:           []string{fmt.Sprintf("test-%d", commIdx), "benchmark"},
 		}
 	}
 
@@ -727,10 +729,10 @@ func BenchmarkScoreCommunitySummaries(b *testing.B) {
 	communities := make([]graphinterfaces.Community, 100)
 	for i := 0; i < 100; i++ {
 		communities[i] = &mockCommunity{
-			id:       fmt.Sprintf("comm-%d", i),
-			level:    0,
-			statisticalSummary:  fmt.Sprintf("Community about robotics automation and sensor networks topic-%d", i),
-			keywords: []string{"robotics", "automation", "sensors", fmt.Sprintf("topic-%d", i)},
+			id:                 fmt.Sprintf("comm-%d", i),
+			level:              0,
+			statisticalSummary: fmt.Sprintf("Community about robotics automation and sensor networks topic-%d", i),
+			keywords:           []string{"robotics", "automation", "sensors", fmt.Sprintf("topic-%d", i)},
 		}
 	}
 

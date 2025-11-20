@@ -23,7 +23,7 @@ func TestFederatedEntity_GetEntityIRI(t *testing.T) {
 				Region:     "gulf_mexico",
 			},
 			entityType: "robotics.drone",                                                                      // INPUT: Dotted notation
-			expected:   "https://semstreams.c360.io/entities/us-west-prod/gulf_mexico/robotics/drone/drone_1", // OUTPUT: Full entity IRI
+			expected:   "https://semstreams.semanticstream.ing/entities/us-west-prod/gulf_mexico/robotics/drone/drone_1", // OUTPUT: Full entity IRI
 		},
 		{
 			name: "valid federated entity without region",
@@ -34,7 +34,7 @@ func TestFederatedEntity_GetEntityIRI(t *testing.T) {
 				Region:     "",
 			},
 			entityType: "robotics.battery",
-			expected:   "https://semstreams.c360.io/entities/standalone/robotics/battery/battery_main",
+			expected:   "https://semstreams.semanticstream.ing/entities/standalone/robotics/battery/battery_main",
 		},
 		{
 			name: "entity with empty platform ID returns empty",
@@ -106,7 +106,7 @@ func TestFederatedEntity_GetEntityIRI_Integration(t *testing.T) {
 		iri := fed.GetEntityIRI(
 			"robotics.drone",
 		) // INPUT: Dotted notation for IRI generation
-		expected := "https://semstreams.c360.io/entities/test-platform/test-region/robotics/drone/test_drone" // OUTPUT: Full entity IRI
+		expected := "https://semstreams.semanticstream.ing/entities/test-platform/test-region/robotics/drone/test_drone" // OUTPUT: Full entity IRI
 		assert.Equal(t, expected, iri)
 	})
 }

@@ -3,13 +3,13 @@ package graph
 import (
 	"testing"
 	"time"
-	
+
 	"github.com/c360/semstreams/message"
 )
 
 func TestEntityState_TriplesField(t *testing.T) {
 	now := time.Now()
-	
+
 	// Create sample triples
 	triples := []message.Triple{
 		{
@@ -37,13 +37,13 @@ func TestEntityState_TriplesField(t *testing.T) {
 			Confidence: 0.9,
 		},
 	}
-	
+
 	// Test EntityState with Triples field
 	entityState := EntityState{
 		Node: NodeProperties{
-			ID:       "c360.platform1.robotics.mav1.drone.0",
-			Type:     "robotics.drone",
-			Status:   StatusActive,
+			ID:     "c360.platform1.robotics.mav1.drone.0",
+			Type:   "robotics.drone",
+			Status: StatusActive,
 		},
 		Edges:     []Edge{},
 		Triples:   triples,
@@ -51,12 +51,12 @@ func TestEntityState_TriplesField(t *testing.T) {
 		Version:   1,
 		UpdatedAt: now,
 	}
-	
+
 	// Verify Triples field exists and contains expected data
 	if len(entityState.Triples) != 3 {
 		t.Errorf("Expected 3 triples, got %d", len(entityState.Triples))
 	}
-	
+
 	// Verify specific triple content
 	batteryTriple := entityState.Triples[0]
 	if batteryTriple.Subject != "c360.platform1.robotics.mav1.drone.0" {
@@ -68,7 +68,7 @@ func TestEntityState_TriplesField(t *testing.T) {
 	if batteryTriple.Object != 85.5 {
 		t.Errorf("Expected object 85.5, got %v", batteryTriple.Object)
 	}
-	
+
 	// Test relationship triple (Object is entity ID)
 	relationTriple := entityState.Triples[2]
 	if relationTriple.Predicate != "robotics.component.powered_by" {
@@ -81,7 +81,7 @@ func TestEntityState_TriplesField(t *testing.T) {
 
 func TestEntityState_EmptyTriples(t *testing.T) {
 	now := time.Now()
-	
+
 	// Test EntityState with empty Triples slice
 	entityState := EntityState{
 		Node: NodeProperties{
@@ -95,7 +95,7 @@ func TestEntityState_EmptyTriples(t *testing.T) {
 		Version:   1,
 		UpdatedAt: now,
 	}
-	
+
 	if entityState.Triples == nil {
 		t.Error("Expected non-nil Triples slice")
 	}
@@ -106,7 +106,7 @@ func TestEntityState_EmptyTriples(t *testing.T) {
 
 func TestEntityState_NilTriples(t *testing.T) {
 	now := time.Now()
-	
+
 	// Test EntityState with nil Triples
 	entityState := EntityState{
 		Node: NodeProperties{
@@ -120,7 +120,7 @@ func TestEntityState_NilTriples(t *testing.T) {
 		Version:   1,
 		UpdatedAt: now,
 	}
-	
+
 	// Should not panic and should handle nil gracefully
 	if len(entityState.Triples) != 0 {
 		t.Errorf("Expected 0 triples for nil slice, got %d", len(entityState.Triples))
@@ -131,7 +131,7 @@ func TestEntityState_NilTriples(t *testing.T) {
 // even with the new Triples field
 func TestEntityState_BackwardCompatibility(t *testing.T) {
 	now := time.Now()
-	
+
 	// Test existing patterns without Triples field
 	entityState := EntityState{
 		Node: NodeProperties{
@@ -157,7 +157,7 @@ func TestEntityState_BackwardCompatibility(t *testing.T) {
 		UpdatedAt: now,
 		// Triples field not set - should default to nil/empty
 	}
-	
+
 	// Existing functionality should still work
 	if entityState.Node.ID != "c360.platform1.robotics.mav1.drone.3" {
 		t.Errorf("Expected ID 'c360.platform1.robotics.mav1.drone.3', got '%s'", entityState.Node.ID)
@@ -168,7 +168,7 @@ func TestEntityState_BackwardCompatibility(t *testing.T) {
 	if entityState.Node.Properties["battery_level"] != 75.0 {
 		t.Errorf("Expected battery_level 75.0, got %v", entityState.Node.Properties["battery_level"])
 	}
-	
+
 	// New Triples field should be empty/nil by default
 	if len(entityState.Triples) != 0 {
 		t.Errorf("Expected 0 triples by default, got %d", len(entityState.Triples))

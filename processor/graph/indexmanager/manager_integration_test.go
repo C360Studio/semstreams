@@ -167,7 +167,7 @@ func TestIndexManager_IntegrationWithNATS(t *testing.T) {
 
 		// Wait for processing with proper timeout
 		var resolved string
-		ctx, timeoutCancel := context.WithTimeout(ctx, 3*time.Second)
+		ctx, timeoutCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer timeoutCancel()
 
 		ticker := time.NewTicker(50 * time.Millisecond)

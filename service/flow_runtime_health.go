@@ -32,14 +32,14 @@ import (
 
 // RuntimeHealthResponse represents the JSON response for runtime health
 type RuntimeHealthResponse struct {
-	Timestamp  time.Time          `json:"timestamp"`
-	Overall    OverallHealth      `json:"overall"`
-	Components []ComponentHealth  `json:"components"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Overall    OverallHealth     `json:"overall"`
+	Components []ComponentHealth `json:"components"`
 }
 
 // OverallHealth provides aggregate health status and counts
 type OverallHealth struct {
-	Status        string `json:"status"`         // "healthy", "degraded", "error"
+	Status        string `json:"status"` // "healthy", "degraded", "error"
 	RunningCount  int    `json:"running_count"`
 	DegradedCount int    `json:"degraded_count"`
 	ErrorCount    int    `json:"error_count"`
@@ -49,13 +49,13 @@ type OverallHealth struct {
 type ComponentHealth struct {
 	Name          string     `json:"name"`
 	Type          string     `json:"type"`
-	Status        string     `json:"status"`         // "running", "degraded", "error", "stopped"
+	Status        string     `json:"status"` // "running", "degraded", "error", "stopped"
 	Healthy       bool       `json:"healthy"`
 	Message       string     `json:"message"`
-	StartTime     *time.Time `json:"start_time"`      // ISO 8601 timestamp, null if not started
-	LastActivity  *time.Time `json:"last_activity"`   // ISO 8601 timestamp, null if no activity
-	UptimeSeconds *float64   `json:"uptime_seconds"`  // null if not started
-	Details       any        `json:"details"`         // Additional details for degraded/error states
+	StartTime     *time.Time `json:"start_time"`     // ISO 8601 timestamp, null if not started
+	LastActivity  *time.Time `json:"last_activity"`  // ISO 8601 timestamp, null if no activity
+	UptimeSeconds *float64   `json:"uptime_seconds"` // null if not started
+	Details       any        `json:"details"`        // Additional details for degraded/error states
 }
 
 // handleRuntimeHealth handles GET /flows/{id}/runtime/health

@@ -62,8 +62,8 @@ func (m *MockGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID stri
 
 // MockCommunityStorage implements CommunityStorage for testing
 type MockCommunityStorage struct {
-	communities      map[string]*Community
-	entityCommunity  map[int]map[string]string // level -> entityID -> communityID
+	communities     map[string]*Community
+	entityCommunity map[int]map[string]string // level -> entityID -> communityID
 }
 
 func NewMockCommunityStorage() *MockCommunityStorage {

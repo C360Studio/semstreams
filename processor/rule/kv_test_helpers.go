@@ -271,7 +271,7 @@ func CreateRuleTestConfig(enabledRules []string, watchPatterns []string) Config 
 
 	// Set reasonable test values
 	config.BufferWindowSize = "10m"
-	config.AlertCooldownPeriod = "100ms" // Short cooldown for tests
+	config.AlertCooldownPeriod = "100ms"  // Short cooldown for tests
 	config.EnableGraphIntegration = false // Simplify tests
 
 	return config

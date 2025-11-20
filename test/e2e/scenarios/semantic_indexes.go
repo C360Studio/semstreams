@@ -147,7 +147,7 @@ func (s *SemanticIndexesScenario) executeVerifyComponents(ctx context.Context, r
 
 	// Required components for semantic indexing
 	requiredComponents := []string{
-		"udp",         // Input
+		"udp",          // Input
 		"json_generic", // Parser
 		"graph",        // Semantic processor with indexes
 	}
@@ -171,7 +171,7 @@ func (s *SemanticIndexesScenario) executeVerifyComponents(ctx context.Context, r
 	}
 
 	result.Details["components_verified"] = map[string]any{
-		"required": requiredComponents,
+		"required":    requiredComponents,
 		"total_found": len(components),
 	}
 

@@ -17,14 +17,14 @@ import (
 
 // RuleConfigManager manages rules through NATS KV configuration
 type RuleConfigManager struct {
-	processor   *Processor
-	kvStore     *natsclient.KVStore
-	configMgr   *config.Manager
-	updateChan  <-chan config.Update  // Channel received from ConfigManager
-	ctx         context.Context
-	cancel      context.CancelFunc
-	logger      *slog.Logger
-	mu          sync.RWMutex
+	processor  *Processor
+	kvStore    *natsclient.KVStore
+	configMgr  *config.Manager
+	updateChan <-chan config.Update // Channel received from ConfigManager
+	ctx        context.Context
+	cancel     context.CancelFunc
+	logger     *slog.Logger
+	mu         sync.RWMutex
 }
 
 // NewRuleConfigManager creates a new rule configuration manager

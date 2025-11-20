@@ -12,10 +12,10 @@ import (
 
 // OpenAPISpec represents the OpenAPI 3.0 specification structure
 type OpenAPISpec struct {
-	OpenAPI    string                       `yaml:"openapi"`
-	Info       OpenAPIInfo                  `yaml:"info"`
-	Paths      map[string]interface{}       `yaml:"paths"`
-	Components OpenAPIComponents            `yaml:"components"`
+	OpenAPI    string                 `yaml:"openapi"`
+	Info       OpenAPIInfo            `yaml:"info"`
+	Paths      map[string]interface{} `yaml:"paths"`
+	Components OpenAPIComponents      `yaml:"components"`
 }
 
 type OpenAPIInfo struct {
@@ -314,4 +314,3 @@ func TestOpenAPISchemaReferences(t *testing.T) {
 		}
 	}
 }
-

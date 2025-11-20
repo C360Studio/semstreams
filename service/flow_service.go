@@ -36,11 +36,11 @@ type FlowServiceConfig struct {
 type FlowService struct {
 	*BaseService
 
-	flowStore      *flowstore.Store
-	flowEngine     *flowengine.Engine
-	configMgr      *config.Manager
-	serviceMgr     *Manager // Access to other services (ComponentManager)
-	config         FlowServiceConfig
+	flowStore  *flowstore.Store
+	flowEngine *flowengine.Engine
+	configMgr  *config.Manager
+	serviceMgr *Manager // Access to other services (ComponentManager)
+	config     FlowServiceConfig
 
 	mu sync.RWMutex
 }

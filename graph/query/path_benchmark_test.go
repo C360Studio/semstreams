@@ -186,8 +186,7 @@ func generateSyntheticGraph(entityCount int) map[string]*gtypes.EntityState {
 				EdgeType:   "related_to",
 				ToEntityID: targetID,
 				Weight:     1.0,
-				Properties: map[string]any{
-				},
+				Properties: map[string]any{},
 			}
 			entity.Edges = append(entity.Edges, edge)
 		}

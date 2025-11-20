@@ -135,45 +135,45 @@ func TestRuntimeHealthResponse_NullFields(t *testing.T) {
 // TestCalculateOverallStatus verifies overall status calculation
 func TestCalculateOverallStatus(t *testing.T) {
 	tests := []struct {
-		name          string
-		runningCount  int
-		degradedCount int
-		errorCount    int
+		name           string
+		runningCount   int
+		degradedCount  int
+		errorCount     int
 		expectedStatus string
 	}{
 		{
-			name:          "all healthy",
-			runningCount:  3,
-			degradedCount: 0,
-			errorCount:    0,
+			name:           "all healthy",
+			runningCount:   3,
+			degradedCount:  0,
+			errorCount:     0,
 			expectedStatus: "healthy",
 		},
 		{
-			name:          "one degraded",
-			runningCount:  2,
-			degradedCount: 1,
-			errorCount:    0,
+			name:           "one degraded",
+			runningCount:   2,
+			degradedCount:  1,
+			errorCount:     0,
 			expectedStatus: "degraded",
 		},
 		{
-			name:          "one error",
-			runningCount:  2,
-			degradedCount: 0,
-			errorCount:    1,
+			name:           "one error",
+			runningCount:   2,
+			degradedCount:  0,
+			errorCount:     1,
 			expectedStatus: "error",
 		},
 		{
-			name:          "degraded and error",
-			runningCount:  1,
-			degradedCount: 1,
-			errorCount:    1,
+			name:           "degraded and error",
+			runningCount:   1,
+			degradedCount:  1,
+			errorCount:     1,
 			expectedStatus: "error",
 		},
 		{
-			name:          "all stopped",
-			runningCount:  0,
-			degradedCount: 0,
-			errorCount:    3,
+			name:           "all stopped",
+			runningCount:   0,
+			degradedCount:  0,
+			errorCount:     3,
 			expectedStatus: "error",
 		},
 	}
@@ -207,10 +207,10 @@ func TestCalculateOverallStatus(t *testing.T) {
 // TestComponentStatusMapping verifies component state to status mapping
 func TestComponentStatusMapping(t *testing.T) {
 	tests := []struct {
-		name           string
-		state          component.State
-		healthStatus   component.HealthStatus
-		expectedStatus string
+		name            string
+		state           component.State
+		healthStatus    component.HealthStatus
+		expectedStatus  string
 		expectedHealthy bool
 	}{
 		{
@@ -223,7 +223,7 @@ func TestComponentStatusMapping(t *testing.T) {
 				LastError:  "",
 				Uptime:     30 * time.Second,
 			},
-			expectedStatus: "running",
+			expectedStatus:  "running",
 			expectedHealthy: true,
 		},
 		{
@@ -236,7 +236,7 @@ func TestComponentStatusMapping(t *testing.T) {
 				LastError:  "connection timeout",
 				Uptime:     30 * time.Second,
 			},
-			expectedStatus: "degraded",
+			expectedStatus:  "degraded",
 			expectedHealthy: false,
 		},
 		{
@@ -249,7 +249,7 @@ func TestComponentStatusMapping(t *testing.T) {
 				LastError:  "fatal error",
 				Uptime:     0,
 			},
-			expectedStatus: "error",
+			expectedStatus:  "error",
 			expectedHealthy: false,
 		},
 		{
@@ -262,7 +262,7 @@ func TestComponentStatusMapping(t *testing.T) {
 				LastError:  "",
 				Uptime:     0,
 			},
-			expectedStatus: "stopped",
+			expectedStatus:  "stopped",
 			expectedHealthy: false,
 		},
 		{
@@ -275,7 +275,7 @@ func TestComponentStatusMapping(t *testing.T) {
 				LastError:  "",
 				Uptime:     0,
 			},
-			expectedStatus: "stopped",
+			expectedStatus:  "stopped",
 			expectedHealthy: false,
 		},
 	}
@@ -315,33 +315,33 @@ func TestComponentStatusMapping(t *testing.T) {
 // TestUptimeCalculation verifies uptime calculation from health status
 func TestUptimeCalculation(t *testing.T) {
 	tests := []struct {
-		name           string
-		uptime         time.Duration
+		name            string
+		uptime          time.Duration
 		expectedSeconds float64
 	}{
 		{
-			name:           "zero uptime",
-			uptime:         0,
+			name:            "zero uptime",
+			uptime:          0,
 			expectedSeconds: 0.0,
 		},
 		{
-			name:           "30 seconds",
-			uptime:         30 * time.Second,
+			name:            "30 seconds",
+			uptime:          30 * time.Second,
 			expectedSeconds: 30.0,
 		},
 		{
-			name:           "1 minute",
-			uptime:         60 * time.Second,
+			name:            "1 minute",
+			uptime:          60 * time.Second,
 			expectedSeconds: 60.0,
 		},
 		{
-			name:           "1.5 hours",
-			uptime:         90 * time.Minute,
+			name:            "1.5 hours",
+			uptime:          90 * time.Minute,
 			expectedSeconds: 5400.0,
 		},
 		{
-			name:           "fractional seconds",
-			uptime:         2500 * time.Millisecond,
+			name:            "fractional seconds",
+			uptime:          2500 * time.Millisecond,
 			expectedSeconds: 2.5,
 		},
 	}
@@ -380,15 +380,15 @@ func TestStartTimeCalculation(t *testing.T) {
 // TestComponentHealthDetails verifies details field for degraded/error states
 func TestComponentHealthDetails(t *testing.T) {
 	tests := []struct {
-		name          string
-		healthy       bool
-		errorCount    int
+		name            string
+		healthy         bool
+		errorCount      int
 		expectedDetails any
 	}{
 		{
-			name:          "healthy - no details",
-			healthy:       true,
-			errorCount:    0,
+			name:            "healthy - no details",
+			healthy:         true,
+			errorCount:      0,
 			expectedDetails: nil,
 		},
 		{
@@ -400,9 +400,9 @@ func TestComponentHealthDetails(t *testing.T) {
 			},
 		},
 		{
-			name:          "unhealthy no errors",
-			healthy:       false,
-			errorCount:    0,
+			name:            "unhealthy no errors",
+			healthy:         false,
+			errorCount:      0,
 			expectedDetails: nil,
 		},
 	}

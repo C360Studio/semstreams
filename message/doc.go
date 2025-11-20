@@ -417,19 +417,22 @@
 //   - Provide clear error messages with context
 //
 // 4. Use Type Constants
+//
 //   - Define message types as package constants
+//
 //   - Don't inline type construction at call sites
+//
 //   - Example:
 //
-//	// Good: Type as constant
-//	var TemperatureType = message.Type{
-//	    Domain: "sensors", Category: "temperature", Version: "v1",
-//	}
+//     // Good: Type as constant
+//     var TemperatureType = message.Type{
+//     Domain: "sensors", Category: "temperature", Version: "v1",
+//     }
 //
-//	// Bad: Inline type construction
-//	msg := NewBaseMessage(
-//	    message.Type{Domain: "sensors", Category: "temperature", Version: "v1"},
-//	    payload, source)
+//     // Bad: Inline type construction
+//     msg := NewBaseMessage(
+//     message.Type{Domain: "sensors", Category: "temperature", Version: "v1"},
+//     payload, source)
 //
 // ## Message Creation
 //
@@ -451,15 +454,18 @@
 // ## Message Processing
 //
 // 1. Type Assertion Pattern
+//
 //   - Use comma-ok idiom for capability discovery
+//
 //   - Don't assume interfaces are implemented
+//
 //   - Example:
 //
-//	if graphable, ok := msg.Payload().(Graphable); ok {
-//	    // Safe to use graphable methods
-//	} else {
-//	    // Payload doesn't implement Graphable, skip or handle differently
-//	}
+//     if graphable, ok := msg.Payload().(Graphable); ok {
+//     // Safe to use graphable methods
+//     } else {
+//     // Payload doesn't implement Graphable, skip or handle differently
+//     }
 //
 // 2. Error Handling
 //   - Always check validation errors before processing

@@ -7,16 +7,16 @@ import (
 
 // RuleMetrics holds Prometheus metrics for RuleProcessor component
 type RuleMetrics struct {
-	messagesReceived      *prometheus.CounterVec
-	evaluationsTotal      *prometheus.CounterVec
-	triggersTotal         *prometheus.CounterVec
-	evaluationDuration    *prometheus.HistogramVec
-	bufferSize            *prometheus.GaugeVec
-	bufferExpiredTotal    *prometheus.CounterVec
-	cooldownActive        *prometheus.GaugeVec
-	eventsPublishedTotal  *prometheus.CounterVec
-	errorsTotal           *prometheus.CounterVec
-	activeRules           prometheus.Gauge
+	messagesReceived     *prometheus.CounterVec
+	evaluationsTotal     *prometheus.CounterVec
+	triggersTotal        *prometheus.CounterVec
+	evaluationDuration   *prometheus.HistogramVec
+	bufferSize           *prometheus.GaugeVec
+	bufferExpiredTotal   *prometheus.CounterVec
+	cooldownActive       *prometheus.GaugeVec
+	eventsPublishedTotal *prometheus.CounterVec
+	errorsTotal          *prometheus.CounterVec
+	activeRules          prometheus.Gauge
 }
 
 // newRuleMetrics creates and registers RuleProcessor metrics

@@ -125,8 +125,8 @@ type ConverterTemplateData struct {
 
 // TypeFieldResolverData contains field resolvers for a GraphQL type
 type TypeFieldResolverData struct {
-	TypeName string                    // GraphQL type name (e.g., "Spec")
-	Fields   []RelationshipFieldData   // Relationship fields that need resolvers
+	TypeName string                  // GraphQL type name (e.g., "Spec")
+	Fields   []RelationshipFieldData // Relationship fields that need resolvers
 }
 
 // RelationshipFieldData contains data for a relationship field resolver

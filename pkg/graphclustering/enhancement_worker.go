@@ -18,10 +18,10 @@ type EnhancementWorker struct {
 	mu sync.RWMutex
 
 	// Dependencies
-	storage       CommunityStorage
-	llm           *HTTPLLMSummarizer
-	provider      GraphProvider
-	querier       querymanager.Querier
+	storage         CommunityStorage
+	llm             *HTTPLLMSummarizer
+	provider        GraphProvider
+	querier         querymanager.Querier
 	communityBucket jetstream.KeyValue
 
 	// KV watching

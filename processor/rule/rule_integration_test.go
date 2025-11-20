@@ -390,7 +390,6 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 	assert.Equal(t, 1, runtimeConfig["rule_count"])
 }
 
-
 // TestIntegration_PrometheusMetrics tests metrics recording during rule processing
 func TestIntegration_PrometheusMetrics(t *testing.T) {
 	natsClient := getTestNATSClient(t)

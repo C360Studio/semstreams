@@ -813,12 +813,12 @@ func convertCommunityToGraphQL(comm graphinterfaces.Community) *Community {
 	}
 
 	return &Community{
-		ID:           comm.GetID(),
-		Level:        comm.GetLevel(),
-		Members:      comm.GetMembers(),
-		Summary:      summary,
-		Keywords:     comm.GetKeywords(),
-		RepEntities:  comm.GetRepEntities(),
+		ID:            comm.GetID(),
+		Level:         comm.GetLevel(),
+		Members:       comm.GetMembers(),
+		Summary:       summary,
+		Keywords:      comm.GetKeywords(),
+		RepEntities:   comm.GetRepEntities(),
 		SummaryStatus: comm.GetSummaryStatus(),
 	}
 }

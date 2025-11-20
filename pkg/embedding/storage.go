@@ -43,7 +43,7 @@ type EmbeddingRecord struct {
 // DedupRecord stores content-addressed embeddings for deduplication
 type DedupRecord struct {
 	Vector         []float32 `json:"vector"`
-	EntityIDs      []string  `json:"entity_ids"`      // Entities sharing this content
+	EntityIDs      []string  `json:"entity_ids"` // Entities sharing this content
 	FirstGenerated time.Time `json:"first_generated"`
 }
 

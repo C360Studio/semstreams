@@ -11,12 +11,12 @@ import (
 
 // OpenAPIDocument represents the complete OpenAPI 3.0 specification
 type OpenAPIDocument struct {
-	OpenAPI    string                  `yaml:"openapi"`
-	Info       InfoObject              `yaml:"info"`
-	Servers    []ServerObject          `yaml:"servers"`
-	Paths      map[string]PathItem     `yaml:"paths"`
-	Components ComponentsObject        `yaml:"components"`
-	Tags       []TagObject             `yaml:"tags"`
+	OpenAPI    string              `yaml:"openapi"`
+	Info       InfoObject          `yaml:"info"`
+	Servers    []ServerObject      `yaml:"servers"`
+	Paths      map[string]PathItem `yaml:"paths"`
+	Components ComponentsObject    `yaml:"components"`
+	Tags       []TagObject         `yaml:"tags"`
 }
 
 // InfoObject contains API metadata
@@ -51,17 +51,17 @@ type Operation struct {
 
 // Parameter describes an operation parameter
 type Parameter struct {
-	Name        string      `yaml:"name"`
-	In          string      `yaml:"in"` // "query", "path", "header"
-	Required    bool        `yaml:"required,omitempty"`
-	Description string      `yaml:"description,omitempty"`
-	Schema      SchemaRef   `yaml:"schema"`
+	Name        string    `yaml:"name"`
+	In          string    `yaml:"in"` // "query", "path", "header"
+	Required    bool      `yaml:"required,omitempty"`
+	Description string    `yaml:"description,omitempty"`
+	Schema      SchemaRef `yaml:"schema"`
 }
 
 // Response describes an operation response
 type Response struct {
-	Description string                `yaml:"description"`
-	Content     map[string]MediaType  `yaml:"content,omitempty"`
+	Description string               `yaml:"description"`
+	Content     map[string]MediaType `yaml:"content,omitempty"`
 }
 
 // MediaType describes a media type and schema

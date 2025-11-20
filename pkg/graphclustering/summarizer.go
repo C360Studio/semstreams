@@ -426,11 +426,11 @@ type HTTPLLMSummarizer struct {
 
 // summarizeRequest matches semsummarize API request format
 type summarizeRequest struct {
-	Text       string `json:"text"`
-	MaxLength  int    `json:"max_length,omitempty"`
-	MinLength  int    `json:"min_length,omitempty"`
-	NumBeams   int    `json:"num_beams,omitempty"`
-	DoSample   bool   `json:"do_sample,omitempty"`
+	Text        string  `json:"text"`
+	MaxLength   int     `json:"max_length,omitempty"`
+	MinLength   int     `json:"min_length,omitempty"`
+	NumBeams    int     `json:"num_beams,omitempty"`
+	DoSample    bool    `json:"do_sample,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
 }
 

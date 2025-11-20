@@ -182,7 +182,7 @@ func TestEvent_Validate_Metadata(t *testing.T) {
 				Metadata:   tt.metadata,
 				Confidence: 1.0,
 			}
-			
+
 			err := event.Validate()
 			if err == nil {
 				t.Errorf("Event.Validate() error = nil, want error")
@@ -336,7 +336,7 @@ func TestNewAlertEvent(t *testing.T) {
 	entityID := "drone_001"
 	properties := map[string]any{
 		"battery_level": 15.0,
-		"threshold":    20.0,
+		"threshold":     20.0,
 	}
 	metadata := EventMetadata{
 		RuleName:  "battery_alert_rule",
@@ -460,10 +460,10 @@ func TestNewRelationshipDeleteEvent(t *testing.T) {
 
 // Helper function to check if a string contains a substring
 func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || 
-		(len(s) > len(substr) && (s[:len(substr)] == substr || 
-		s[len(s)-len(substr):] == substr || 
-		findSubstring(s, substr))))
+	return len(s) >= len(substr) && (s == substr ||
+		(len(s) > len(substr) && (s[:len(substr)] == substr ||
+			s[len(s)-len(substr):] == substr ||
+			findSubstring(s, substr))))
 }
 
 func findSubstring(s, substr string) bool {
