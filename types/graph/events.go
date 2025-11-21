@@ -172,7 +172,7 @@ func NewAlertEvent(alertType string, entityID string, properties map[string]any,
 
 	properties["alert_type"] = alertType
 	properties["source_entity"] = entityID
-	properties["status"] = "warning" // Default to warning status
+	properties["status"] = StatusWarning // Default to warning status
 
 	// Generate unique alert ID based on type, entity, and timestamp
 	alertID := fmt.Sprintf("alert_%s_%s_%d", alertType, entityID, metadata.Timestamp.Unix())

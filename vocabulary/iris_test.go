@@ -17,7 +17,7 @@ func TestEntityTypeIRI(t *testing.T) {
 	}{
 		{
 			name:        "valid system device type",
-			domainType:  "system.device",                            // INPUT: Dotted notation
+			domainType:  "system.device",                                       // INPUT: Dotted notation
 			expected:    "https://semstreams.semanticstream.ing/system#Device", // OUTPUT: IRI format (capitalized)
 			expectError: false,
 		},
