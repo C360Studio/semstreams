@@ -18,19 +18,19 @@ func TestEntityTypeIRI(t *testing.T) {
 		{
 			name:        "valid system device type",
 			domainType:  "system.device",                            // INPUT: Dotted notation
-			expected:    "https://semstreams.c360.io/system#Device", // OUTPUT: IRI format (capitalized)
+			expected:    "https://semstreams.semanticstream.ing/system#Device", // OUTPUT: IRI format (capitalized)
 			expectError: false,
 		},
 		{
 			name:        "valid graph node type",
 			domainType:  "graph.node",
-			expected:    "https://semstreams.c360.io/graph#Node",
+			expected:    "https://semstreams.semanticstream.ing/graph#Node",
 			expectError: false,
 		},
 		{
 			name:        "valid system component type",
 			domainType:  "system.component",
-			expected:    "https://semstreams.c360.io/system#Component",
+			expected:    "https://semstreams.semanticstream.ing/system#Component",
 			expectError: false,
 		},
 		{
@@ -90,7 +90,7 @@ func TestEntityIRI(t *testing.T) {
 				Region: "gulf_mexico",
 			},
 			localID:  "device_1",
-			expected: "https://semstreams.c360.io/entities/us-west-prod/gulf_mexico/system/device/device_1",
+			expected: "https://semstreams.semanticstream.ing/entities/us-west-prod/gulf_mexico/system/device/device_1",
 		},
 		{
 			name:       "valid entity without region",
@@ -99,7 +99,7 @@ func TestEntityIRI(t *testing.T) {
 				ID: "standalone",
 			},
 			localID:  "component_main",
-			expected: "https://semstreams.c360.io/entities/standalone/system/component/component_main",
+			expected: "https://semstreams.semanticstream.ing/entities/standalone/system/component/component_main",
 		},
 		{
 			name:       "empty platform ID returns empty",
@@ -150,27 +150,27 @@ func TestRelationshipIRI(t *testing.T) {
 		{
 			name:     "POWERED_BY converts to kebab-case",
 			relType:  "POWERED_BY",
-			expected: "https://semstreams.c360.io/relationships#powered-by",
+			expected: "https://semstreams.semanticstream.ing/relationships#powered-by",
 		},
 		{
 			name:     "HAS_COMPONENT converts to kebab-case",
 			relType:  "HAS_COMPONENT",
-			expected: "https://semstreams.c360.io/relationships#has-component",
+			expected: "https://semstreams.semanticstream.ing/relationships#has-component",
 		},
 		{
 			name:     "PART_OF converts to kebab-case",
 			relType:  "PART_OF",
-			expected: "https://semstreams.c360.io/relationships#part-of",
+			expected: "https://semstreams.semanticstream.ing/relationships#part-of",
 		},
 		{
 			name:     "already lowercase stays unchanged",
 			relType:  "connects-to",
-			expected: "https://semstreams.c360.io/relationships#connects-to",
+			expected: "https://semstreams.semanticstream.ing/relationships#connects-to",
 		},
 		{
 			name:     "mixed case gets converted",
 			relType:  "PoweredBy",
-			expected: "https://semstreams.c360.io/relationships#powered-by",
+			expected: "https://semstreams.semanticstream.ing/relationships#powered-by",
 		},
 		{
 			name:     "empty string returns empty",
@@ -180,7 +180,7 @@ func TestRelationshipIRI(t *testing.T) {
 		{
 			name:     "single word lowercase",
 			relType:  "CONNECTS",
-			expected: "https://semstreams.c360.io/relationships#connects",
+			expected: "https://semstreams.semanticstream.ing/relationships#connects",
 		},
 	}
 
@@ -201,22 +201,22 @@ func TestSubjectIRI(t *testing.T) {
 		{
 			name:     "semantic system status",
 			subject:  "semantic.system.status",
-			expected: "https://semstreams.c360.io/subjects/semantic/system/status",
+			expected: "https://semstreams.semanticstream.ing/subjects/semantic/system/status",
 		},
 		{
 			name:     "raw udp mavlink",
 			subject:  "raw.udp.mavlink",
-			expected: "https://semstreams.c360.io/subjects/raw/udp/mavlink",
+			expected: "https://semstreams.semanticstream.ing/subjects/raw/udp/mavlink",
 		},
 		{
 			name:     "entity events device",
 			subject:  "entity.events.device",
-			expected: "https://semstreams.c360.io/subjects/entity/events/device",
+			expected: "https://semstreams.semanticstream.ing/subjects/entity/events/device",
 		},
 		{
 			name:     "graph events node",
 			subject:  "graph.events.node",
-			expected: "https://semstreams.c360.io/subjects/graph/events/node",
+			expected: "https://semstreams.semanticstream.ing/subjects/graph/events/node",
 		},
 		{
 			name:     "empty string returns empty",
@@ -226,12 +226,12 @@ func TestSubjectIRI(t *testing.T) {
 		{
 			name:     "single segment",
 			subject:  "status",
-			expected: "https://semstreams.c360.io/subjects/status",
+			expected: "https://semstreams.semanticstream.ing/subjects/status",
 		},
 		{
 			name:     "complex nested subject",
 			subject:  "platform.us-west.region.gulf.entity.device.status",
-			expected: "https://semstreams.c360.io/subjects/platform/us-west/region/gulf/entity/device/status",
+			expected: "https://semstreams.semanticstream.ing/subjects/platform/us-west/region/gulf/entity/device/status",
 		},
 	}
 
@@ -246,7 +246,7 @@ func TestSubjectIRI(t *testing.T) {
 // Test constants and namespace definitions
 func TestNamespaceConstants(t *testing.T) {
 	// Verify namespace constants are properly defined
-	assert.Equal(t, "https://semstreams.c360.io", SemStreamsBase)
+	assert.Equal(t, "https://semstreams.semanticstream.ing", SemStreamsBase)
 	// RoboticsNamespace moved to domain modules (semops, streamkit-robotics)
 	// assert.Equal(t, SemStreamsBase+"/robotics", RoboticsNamespace)
 	assert.Equal(t, SemStreamsBase+"/graph", GraphNamespace)
@@ -264,7 +264,7 @@ func TestIRIGenerationEdgeCases(t *testing.T) {
 		result := EntityTypeIRI("  system.device  ")
 		assert.Equal(
 			t,
-			"https://semstreams.c360.io/system#Device",
+			"https://semstreams.semanticstream.ing/system#Device",
 			result,
 			"should trim whitespace and process normally",
 		)
@@ -272,7 +272,7 @@ func TestIRIGenerationEdgeCases(t *testing.T) {
 
 	t.Run("RelationshipIRI with special characters", func(t *testing.T) {
 		result := RelationshipIRI("HAS_COMPONENT_123")
-		assert.Equal(t, "https://semstreams.c360.io/relationships#has-component-123", result)
+		assert.Equal(t, "https://semstreams.semanticstream.ing/relationships#has-component-123", result)
 	})
 
 	t.Run("SubjectIRI with leading/trailing dots", func(t *testing.T) {

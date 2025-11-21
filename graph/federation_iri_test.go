@@ -22,7 +22,7 @@ func TestFederatedEntity_GetEntityIRI(t *testing.T) {
 				PlatformID: "us-west-prod",
 				Region:     "gulf_mexico",
 			},
-			entityType: "robotics.drone",                                                                      // INPUT: Dotted notation
+			entityType: "robotics.drone",                                                                                 // INPUT: Dotted notation
 			expected:   "https://semstreams.semanticstream.ing/entities/us-west-prod/gulf_mexico/robotics/drone/drone_1", // OUTPUT: Full entity IRI
 		},
 		{
