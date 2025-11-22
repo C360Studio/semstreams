@@ -65,26 +65,22 @@ func TestHandleRuntimeLogs_BasicStreaming(t *testing.T) {
 	req = req.WithContext(reqCtx)
 	req.SetPathValue("id", flowID)
 
-	// Create response recorder with SSE support
-	rec := httptest.NewRecorder()
+	// Create thread-safe response recorder for concurrent access
+	rec := newSafeResponseRecorder()
 
 	// Start SSE handler in background
 	done := make(chan struct{})
-	handlerReady := make(chan struct{})
 
 	go func() {
 		defer close(done)
 		fs.handleRuntimeLogs(rec, req)
 	}()
 
-	// Wait for SSE headers to be written (indicates handler is ready)
+	// Wait for handler to be ready by checking for the "connected" event
 	require.Eventually(t, func() bool {
-		return rec.Header().Get("Content-Type") == "text/event-stream"
-	}, 2*time.Second, 10*time.Millisecond, "Handler should set SSE headers")
-
-	// Small delay to ensure subscription is established
-	time.Sleep(50 * time.Millisecond)
-	close(handlerReady)
+		body := rec.BodyString()
+		return strings.Contains(body, `"connected"`) || strings.Contains(body, "event: connected")
+	}, 2*time.Second, 10*time.Millisecond, "Handler should send connected event")
 
 	// Publish some test logs
 	testLogs := []component.LogEntry{
@@ -121,7 +117,7 @@ func TestHandleRuntimeLogs_BasicStreaming(t *testing.T) {
 
 	// Wait for logs to appear in the response body
 	require.Eventually(t, func() bool {
-		body := rec.Body.String()
+		body := rec.BodyString()
 		return strings.Contains(body, "Test log message 1") || strings.Contains(body, "Test error message")
 	}, 2*time.Second, 50*time.Millisecond, "Should receive log events")
 
@@ -141,7 +137,7 @@ func TestHandleRuntimeLogs_BasicStreaming(t *testing.T) {
 	assert.Equal(t, "keep-alive", rec.Header().Get("Connection"))
 
 	// Parse SSE events
-	body := rec.Body.String()
+	body := rec.BodyString()
 	events := parseSSEEvents(t, body)
 
 	// Should have at least connected event + log events
@@ -187,7 +183,7 @@ func TestHandleRuntimeLogs_LevelFiltering(t *testing.T) {
 	req = req.WithContext(reqCtx)
 	req.SetPathValue("id", flowID)
 
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	done := make(chan struct{})
 	go func() {
@@ -195,13 +191,11 @@ func TestHandleRuntimeLogs_LevelFiltering(t *testing.T) {
 		fs.handleRuntimeLogs(rec, req)
 	}()
 
-	// Wait for SSE headers to be written
+	// Wait for handler to be ready by checking for the "connected" event
 	require.Eventually(t, func() bool {
-		return rec.Header().Get("Content-Type") == "text/event-stream"
-	}, 2*time.Second, 10*time.Millisecond, "Handler should set SSE headers")
-
-	// Small delay to ensure subscription is established
-	time.Sleep(50 * time.Millisecond)
+		body := rec.BodyString()
+		return strings.Contains(body, `"connected"`) || strings.Contains(body, "event: connected")
+	}, 2*time.Second, 10*time.Millisecond, "Handler should send connected event")
 
 	// Publish logs with different levels
 	testLogs := []component.LogEntry{
@@ -243,7 +237,7 @@ func TestHandleRuntimeLogs_LevelFiltering(t *testing.T) {
 
 	// Wait for error log to appear
 	require.Eventually(t, func() bool {
-		body := rec.Body.String()
+		body := rec.BodyString()
 		return strings.Contains(body, "Error message - should be received")
 	}, 2*time.Second, 50*time.Millisecond, "Should receive ERROR log")
 
@@ -256,7 +250,7 @@ func TestHandleRuntimeLogs_LevelFiltering(t *testing.T) {
 	}
 
 	// Parse events and verify only ERROR level logs received
-	body := rec.Body.String()
+	body := rec.BodyString()
 	events := parseSSEEvents(t, body)
 
 	logEventCount := 0
@@ -297,7 +291,7 @@ func TestHandleRuntimeLogs_ComponentFiltering(t *testing.T) {
 	req = req.WithContext(reqCtx)
 	req.SetPathValue("id", flowID)
 
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	done := make(chan struct{})
 	go func() {
@@ -305,13 +299,11 @@ func TestHandleRuntimeLogs_ComponentFiltering(t *testing.T) {
 		fs.handleRuntimeLogs(rec, req)
 	}()
 
-	// Wait for SSE headers to be written
+	// Wait for handler to be ready by checking for the "connected" event
 	require.Eventually(t, func() bool {
-		return rec.Header().Get("Content-Type") == "text/event-stream"
-	}, 2*time.Second, 10*time.Millisecond, "Handler should set SSE headers")
-
-	// Small delay to ensure subscription is established
-	time.Sleep(50 * time.Millisecond)
+		body := rec.BodyString()
+		return strings.Contains(body, `"connected"`) || strings.Contains(body, "event: connected")
+	}, 2*time.Second, 10*time.Millisecond, "Handler should send connected event")
 
 	// Publish logs from different components
 	testLogs := []component.LogEntry{
@@ -346,7 +338,7 @@ func TestHandleRuntimeLogs_ComponentFiltering(t *testing.T) {
 
 	// Wait for component-a log to appear
 	require.Eventually(t, func() bool {
-		body := rec.Body.String()
+		body := rec.BodyString()
 		return strings.Contains(body, "Message from component-a")
 	}, 2*time.Second, 50*time.Millisecond, "Should receive component-a log")
 
@@ -359,7 +351,7 @@ func TestHandleRuntimeLogs_ComponentFiltering(t *testing.T) {
 	}
 
 	// Parse events and verify only component-a logs received
-	body := rec.Body.String()
+	body := rec.BodyString()
 	events := parseSSEEvents(t, body)
 
 	logEventCount := 0

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,7 +118,7 @@ func TestHandleRuntimeLogs_SSEReconnectionHeaders(t *testing.T) {
 	req.SetPathValue("id", flowID)
 	req.Header.Set("Last-Event-ID", "42")
 
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	done := make(chan struct{})
 	go func() {
@@ -125,13 +126,11 @@ func TestHandleRuntimeLogs_SSEReconnectionHeaders(t *testing.T) {
 		fs.handleRuntimeLogs(rec, req)
 	}()
 
-	// Wait for SSE headers
+	// Wait for initial SSE setup to complete by checking for retry directive in response
 	require.Eventually(t, func() bool {
-		return rec.Header().Get("Content-Type") == "text/event-stream"
-	}, 2*time.Second, 10*time.Millisecond, "Handler should set SSE headers")
-
-	// Wait for some data
-	time.Sleep(100 * time.Millisecond)
+		body := rec.BodyString()
+		return strings.Contains(body, "retry:")
+	}, 2*time.Second, 50*time.Millisecond, "Should receive SSE setup messages")
 
 	reqCancel()
 
@@ -142,7 +141,7 @@ func TestHandleRuntimeLogs_SSEReconnectionHeaders(t *testing.T) {
 	}
 
 	// Verify retry directive is present
-	body := rec.Body.String()
+	body := rec.BodyString()
 	assert.Contains(t, body, "retry: 5000", "Should include retry directive")
 
 	// Verify event IDs are present
