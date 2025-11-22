@@ -194,14 +194,9 @@ func Register(name string, opts ...Option) {
 		opt(&meta)
 	}
 
-	// Store in registry
+	// Store in registry (allows overriding framework defaults)
 	registryMu.Lock()
 	defer registryMu.Unlock()
-
-	if _, exists := predicateRegistry[name]; exists {
-		// Allow override - enables domain-specific overrides of framework defaults
-		// In production, this would log the override
-	}
 
 	predicateRegistry[name] = meta
 }
@@ -243,13 +238,10 @@ func parseDomainCategory(name string) (domain, category string) {
 // RegisterPredicate registers a predicate using the PredicateMetadata struct directly.
 // This function is provided for backward compatibility and testing.
 // New code should use Register() with functional options.
+// Allows overriding framework defaults.
 func RegisterPredicate(meta PredicateMetadata) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
-
-	if _, exists := predicateRegistry[meta.Name]; exists {
-		// Allow override - enables domain-specific overrides of framework defaults
-	}
 
 	predicateRegistry[meta.Name] = meta
 }

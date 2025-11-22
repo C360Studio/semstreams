@@ -1,3 +1,4 @@
+// Package main provides a command-line tool for exporting semantic graph schemas.
 package main
 
 import (

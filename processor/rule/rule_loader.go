@@ -8,8 +8,8 @@ import (
 )
 
 // loadRuleDefinitionsFromFiles loads rule definitions from JSON files
-func (rp *Processor) loadRuleDefinitionsFromFiles() ([]RuleDefinition, error) {
-	var allDefinitions []RuleDefinition
+func (rp *Processor) loadRuleDefinitionsFromFiles() ([]Definition, error) {
+	var allDefinitions []Definition
 
 	for _, filePath := range rp.config.RulesFiles {
 		rp.logger.Debug("Loading rules from file", "path", filePath)
@@ -21,17 +21,17 @@ func (rp *Processor) loadRuleDefinitionsFromFiles() ([]RuleDefinition, error) {
 		}
 
 		// Parse JSON - support both single rule and array of rules
-		var definitions []RuleDefinition
+		var definitions []Definition
 
 		// Try parsing as array first
 		if err := json.Unmarshal(data, &definitions); err != nil {
 			// Try parsing as single rule
-			var singleDef RuleDefinition
+			var singleDef Definition
 			if err2 := json.Unmarshal(data, &singleDef); err2 != nil {
 				return nil, fmt.Errorf("failed to parse rules file %s: %w (also tried as single rule: %v)",
 					filePath, err, err2)
 			}
-			definitions = []RuleDefinition{singleDef}
+			definitions = []Definition{singleDef}
 		}
 
 		rp.logger.Info("Loaded rule definitions from file", "path", filePath, "count", len(definitions))
@@ -69,7 +69,7 @@ func (rp *Processor) loadRules() error {
 	allDefinitions := append(fileDefinitions, rp.config.InlineRules...)
 
 	// Create rules from definitions using factory pattern
-	ruleDeps := RuleDependencies{
+	ruleDeps := Dependencies{
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
 	}

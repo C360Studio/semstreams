@@ -869,6 +869,122 @@ func (si *SpatialIndex) HandleDelete(ctx context.Context, entityID string) error
 	return nil
 }
 
+// extractGeoCoordinates extracts latitude, longitude, and altitude from entity triples
+func extractGeoCoordinates(state *gtypes.EntityState) (lat, lon, alt *float64) {
+	for _, triple := range state.Triples {
+		switch triple.Predicate {
+		case "geo.location.latitude":
+			if latVal, ok := triple.Object.(float64); ok {
+				lat = &latVal
+			}
+		case "geo.location.longitude":
+			if lonVal, ok := triple.Object.(float64); ok {
+				lon = &lonVal
+			}
+		case "geo.location.altitude":
+			if altVal, ok := triple.Object.(float64); ok {
+				alt = &altVal
+			}
+		}
+	}
+	return lat, lon, alt
+}
+
+// createSpatialEntityData creates the entity position data structure
+func createSpatialEntityData(_ string, latitude, longitude, altitude float64) map[string]interface{} {
+	return map[string]interface{}{
+		"lat":     latitude,
+		"lon":     longitude,
+		"alt":     altitude,
+		"updated": time.Now().Unix(),
+	}
+}
+
+// mergeSpatialData merges entity data into existing spatial index data
+func mergeSpatialData(currentBytes []byte, entityID string, latitude, longitude, altitude float64) ([]byte, error) {
+	var spatialData map[string]interface{}
+
+	if len(currentBytes) > 0 {
+		if err := json.Unmarshal(currentBytes, &spatialData); err != nil {
+			return nil, errors.WrapInvalid(err, "IndexManager", "updateSpatialIndex", "spatial data unmarshal failed")
+		}
+	} else {
+		spatialData = map[string]interface{}{
+			"entities":    map[string]interface{}{},
+			"last_update": time.Now().Unix(),
+		}
+	}
+
+	entities, ok := spatialData["entities"].(map[string]interface{})
+	if !ok {
+		entities = map[string]interface{}{}
+	}
+
+	entities[entityID] = createSpatialEntityData(entityID, latitude, longitude, altitude)
+	spatialData["entities"] = entities
+	spatialData["last_update"] = time.Now().Unix()
+
+	return json.Marshal(spatialData)
+}
+
+// updateWithKVStore updates spatial index using KVStore with retry
+func (si *SpatialIndex) updateWithKVStore(ctx context.Context, geohash, entityID string, latitude, longitude, altitude float64) error {
+	err := si.kvStore.UpdateWithRetry(ctx, geohash, func(currentBytes []byte) ([]byte, error) {
+		return mergeSpatialData(currentBytes, entityID, latitude, longitude, altitude)
+	})
+
+	if err != nil {
+		errMsg := fmt.Sprintf("update spatial index for geohash %s", geohash)
+		return errors.WrapTransient(err, "SpatialIndex", "updateSpatialIndex", errMsg)
+	}
+	return nil
+}
+
+// updateWithManualRetry updates spatial index using manual retry pattern (fallback for tests)
+func (si *SpatialIndex) updateWithManualRetry(ctx context.Context, geohash, entityID string, latitude, longitude, altitude float64) error {
+	entry, err := si.bucket.Get(ctx, geohash)
+
+	var currentBytes []byte
+	if err == nil {
+		currentBytes = entry.Value()
+	}
+
+	data, err := mergeSpatialData(currentBytes, entityID, latitude, longitude, altitude)
+	if err != nil {
+		return err
+	}
+
+	if entry != nil {
+		_, err = si.bucket.Update(ctx, geohash, data, entry.Revision())
+		if errors.IsTransient(err) {
+			si.logger.Debug("Spatial index update conflict, retrying", "geohash", geohash)
+			return si.updateSpatialIndex(ctx, entityID, &gtypes.EntityState{
+				Node: gtypes.NodeProperties{ID: entityID},
+				Triples: []message.Triple{
+					{Predicate: "geo.location.latitude", Object: latitude},
+					{Predicate: "geo.location.longitude", Object: longitude},
+					{Predicate: "geo.location.altitude", Object: altitude},
+				},
+			})
+		}
+	} else {
+		_, err = si.bucket.Create(ctx, geohash, data)
+		if errors.IsTransient(err) {
+			si.logger.Debug("Spatial index create conflict, retrying", "geohash", geohash)
+			return si.updateSpatialIndex(ctx, entityID, &gtypes.EntityState{
+				Node: gtypes.NodeProperties{ID: entityID},
+				Triples: []message.Triple{
+					{Predicate: "geo.location.latitude", Object: latitude},
+					{Predicate: "geo.location.longitude", Object: longitude},
+					{Predicate: "geo.location.altitude", Object: altitude},
+				},
+			})
+		}
+	}
+
+	return err
+}
+
 // updateSpatialIndex updates spatial index if entity has position data
 func (si *SpatialIndex) updateSpatialIndex(ctx context.Context, entityID string, entityState interface{}) error {
 	state, ok := entityState.(*gtypes.EntityState)
@@ -876,150 +992,24 @@ func (si *SpatialIndex) updateSpatialIndex(ctx context.Context, entityID string,
 		return errors.WrapInvalid(errors.ErrInvalidData, "SpatialIndex", "HandleCreate", "invalid entity state type")
 	}
 
-	// Extract latitude and longitude from triples (TRIPLES ONLY - no fallbacks)
-	var latitude, longitude, altitude *float64
-	for _, triple := range state.Triples {
-		switch triple.Predicate {
-		case "geo.location.latitude":
-			if lat, ok := triple.Object.(float64); ok {
-				latitude = &lat
-			}
-		case "geo.location.longitude":
-			if lon, ok := triple.Object.(float64); ok {
-				longitude = &lon
-			}
-		case "geo.location.altitude":
-			if alt, ok := triple.Object.(float64); ok {
-				altitude = &alt
-			}
-		}
-	}
+	latitude, longitude, altitude := extractGeoCoordinates(state)
 
 	if latitude == nil || longitude == nil {
 		return nil // No position data, skip spatial indexing
 	}
 
-	// Set default altitude if not provided
 	altValue := 0.0
 	if altitude != nil {
 		altValue = *altitude
 	}
 
-	// Calculate geohash with configurable precision
 	geohash := si.calculateGeohash(*latitude, *longitude, si.precision)
 
-	// REFERENCE IMPLEMENTATION: Use KVStore.UpdateWithRetry for clean CAS operations
-	// Multiple entities may share the same geohash, so we must merge, not overwrite
 	if si.kvStore != nil {
-		// Use the clean CAS pattern from natsclient
-		err := si.kvStore.UpdateWithRetry(ctx, geohash, func(currentBytes []byte) ([]byte, error) {
-			var spatialData map[string]interface{}
-
-			if len(currentBytes) > 0 {
-				// Existing geohash bucket - merge our entity into it
-				if err := json.Unmarshal(currentBytes, &spatialData); err != nil {
-					return nil, errors.WrapInvalid(
-						err,
-						"IndexManager",
-						"updateSpatialIndex",
-						"spatial data unmarshal failed",
-					)
-				}
-			} else {
-				// New geohash bucket - initialize structure
-				spatialData = map[string]interface{}{
-					"entities":    map[string]interface{}{},
-					"last_update": time.Now().Unix(),
-				}
-			}
-
-			// Get or create entities map
-			entities, ok := spatialData["entities"].(map[string]interface{})
-			if !ok {
-				entities = map[string]interface{}{}
-			}
-
-			// Add/update this entity's position
-			entities[entityID] = map[string]interface{}{
-				"lat":     *latitude,
-				"lon":     *longitude,
-				"alt":     altValue,
-				"updated": time.Now().Unix(),
-			}
-
-			spatialData["entities"] = entities
-			spatialData["last_update"] = time.Now().Unix()
-
-			// Return the updated data
-			return json.Marshal(spatialData)
-		})
-
-		if err != nil {
-			errMsg := fmt.Sprintf("update spatial index for geohash %s", geohash)
-			return errors.WrapTransient(err, "SpatialIndex", "updateSpatialIndex", errMsg)
-		}
-		return nil
+		return si.updateWithKVStore(ctx, geohash, entityID, *latitude, *longitude, altValue)
 	}
 
-	// Fallback to manual retry pattern if kvStore not available (for tests)
-	var spatialData map[string]interface{}
-
-	// Get existing data for this geohash
-	entry, err := si.bucket.Get(ctx, geohash)
-	if err == nil {
-		// Existing geohash bucket - merge our entity into it
-		if err := json.Unmarshal(entry.Value(), &spatialData); err != nil {
-			return errors.WrapInvalid(err, "SpatialIndex", "updateSpatialIndex", "unmarshal existing spatial data")
-		}
-	} else {
-		// New geohash bucket - initialize structure
-		spatialData = map[string]interface{}{
-			"entities":    map[string]interface{}{},
-			"last_update": time.Now().Unix(),
-		}
-	}
-
-	// Get or create entities map
-	entities, ok := spatialData["entities"].(map[string]interface{})
-	if !ok {
-		entities = map[string]interface{}{}
-	}
-
-	// Add/update this entity's position
-	entities[entityID] = map[string]interface{}{
-		"lat":     *latitude,
-		"lon":     *longitude,
-		"alt":     altValue,
-		"updated": time.Now().Unix(),
-	}
-
-	spatialData["entities"] = entities
-	spatialData["last_update"] = time.Now().Unix()
-
-	// Store updated spatial index
-	data, err := json.Marshal(spatialData)
-	if err != nil {
-		return errors.WrapInvalid(err, "SpatialIndex", "updateSpatialIndex", "marshal spatial data")
-	}
-
-	// Use Update with revision for existing entries, Create for new ones
-	if entry != nil {
-		_, err = si.bucket.Update(ctx, geohash, data, entry.Revision())
-		if errors.IsTransient(err) {
-			// Revision mismatch - someone else updated, retry
-			si.logger.Debug("Spatial index update conflict, retrying", "geohash", geohash)
-			return si.updateSpatialIndex(ctx, entityID, entityState)
-		}
-	} else {
-		_, err = si.bucket.Create(ctx, geohash, data)
-		if errors.IsTransient(err) {
-			// Someone else created it first, retry
-			si.logger.Debug("Spatial index create conflict, retrying", "geohash", geohash)
-			return si.updateSpatialIndex(ctx, entityID, entityState)
-		}
-	}
-
-	return err
+	return si.updateWithManualRetry(ctx, geohash, entityID, *latitude, *longitude, altValue)
 }
 
 // calculateGeohash calculates a configurable-precision geohash for spatial indexing

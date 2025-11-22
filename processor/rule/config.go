@@ -13,9 +13,9 @@ type Config struct {
 	Ports *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration for inputs (KV watch: ENTITY_STATES PREDICATE_INDEX) and outputs (NATS: control commands),category:basic"`
 
 	// Rule configuration sources
-	RulesFiles   []string         `json:"rules_files" schema:"type:array,description:Paths to JSON rule definition files,default:[],category:basic"`
-	InlineRules  []RuleDefinition `json:"inline_rules,omitempty" schema:"type:array,description:Inline rule definitions (alternative to files),category:basic"`
-	EnabledRules []string         `json:"enabled_rules" schema:"type:array,description:List of rule IDs to enable for processing (deprecated: use rules_files),category:basic"`
+	RulesFiles   []string     `json:"rules_files" schema:"type:array,description:Paths to JSON rule definition files,default:[],category:basic"`
+	InlineRules  []Definition `json:"inline_rules,omitempty" schema:"type:array,description:Inline rule definitions (alternative to files),category:basic"`
+	EnabledRules []string     `json:"enabled_rules" schema:"type:array,description:List of rule IDs to enable for processing (deprecated: use rules_files),category:basic"`
 
 	// Message cache configuration (not exposed in schema - internal config)
 	MessageCache cache.Config `json:"message_cache"`

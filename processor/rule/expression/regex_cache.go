@@ -17,7 +17,7 @@ var globalRegexCache cache.Cache[*regexp.Regexp]
 func init() {
 	var err error
 	globalRegexCache, err = cache.NewLRU[*regexp.Regexp](100,
-		cache.WithEvictionCallback(func(key string, re *regexp.Regexp) {
+		cache.WithEvictionCallback(func(_ string, _ *regexp.Regexp) {
 			// Optional: Could log evictions for debugging
 			// logger.Debug("Evicted regex pattern from cache", "pattern", key)
 		}),

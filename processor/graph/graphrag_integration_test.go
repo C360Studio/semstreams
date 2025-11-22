@@ -21,10 +21,10 @@ import (
 	"github.com/c360/semstreams/processor/graph/querymanager"
 )
 
-// testGraphProvider adapts datamanager.DataHandler to graphclustering.GraphProvider
+// testGraphProvider adapts datamanager.EntityReader to graphclustering.GraphProvider
 type testGraphProvider struct {
-	dataHandler datamanager.DataHandler
-	kvBucket    jetstream.KeyValue
+	entityReader datamanager.EntityReader
+	kvBucket     jetstream.KeyValue
 }
 
 func (p *testGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
@@ -43,7 +43,7 @@ func (p *testGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, erro
 
 func (p *testGraphProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
 	// Get the entity to access its edges
-	entity, err := p.dataHandler.GetEntity(ctx, entityID)
+	entity, err := p.entityReader.GetEntity(ctx, entityID)
 	if err != nil {
 		return []string{}, err
 	}
@@ -74,7 +74,7 @@ func (p *testGraphProvider) GetNeighbors(ctx context.Context, entityID string, d
 
 func (p *testGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
 	// Get the source entity
-	entity, err := p.dataHandler.GetEntity(ctx, fromID)
+	entity, err := p.entityReader.GetEntity(ctx, fromID)
 	if err != nil {
 		return 0.0, err
 	}
@@ -185,8 +185,8 @@ func setupGraphRAGTest(t *testing.T) *graphRAGTestSetup {
 
 	// Create GraphProvider that wraps the processor's data handler
 	graphProvider := &testGraphProvider{
-		dataHandler: processor.dataManager,
-		kvBucket:    entityBucket,
+		entityReader: processor.entityManager,
+		kvBucket:     entityBucket,
 	}
 
 	// Create LPA community detector
@@ -202,7 +202,7 @@ func setupGraphRAGTest(t *testing.T) *graphRAGTestSetup {
 	queryConfig := querymanager.Config{}
 	queryDeps := querymanager.Deps{
 		Config:            queryConfig,
-		DataHandler:       processor.dataManager,
+		EntityReader:      processor.entityManager,
 		IndexManager:      processor.indexManager,
 		CommunityDetector: detectorAdapter,
 		Registry:          metric.NewMetricsRegistry(),
@@ -228,7 +228,7 @@ func setupGraphRAGTest(t *testing.T) *graphRAGTestSetup {
 }
 
 // createTestEntity helper to create entities with properties
-func createTestEntity(processor *Processor, ctx context.Context, id string, entityType string, properties map[string]any) (*gtypes.EntityState, error) {
+func createTestEntity(ctx context.Context, processor *Processor, id string, entityType string, properties map[string]any) (*gtypes.EntityState, error) {
 	entity := &gtypes.EntityState{
 		Node: gtypes.NodeProperties{
 			ID:         id,
@@ -238,7 +238,7 @@ func createTestEntity(processor *Processor, ctx context.Context, id string, enti
 		UpdatedAt: time.Now(),
 		Version:   1,
 	}
-	return processor.dataManager.CreateEntity(ctx, entity)
+	return processor.entityManager.CreateEntity(ctx, entity)
 }
 
 // TestE2E_LocalSearch tests local community search end-to-end
@@ -265,7 +265,7 @@ func TestE2E_LocalSearch(t *testing.T) {
 
 	memberIDs := make([]string, len(roboticsEntities))
 	for i, spec := range roboticsEntities {
-		_, err := createTestEntity(processor, ctx, spec.id, spec.entityType, map[string]any{
+		_, err := createTestEntity(ctx, processor, spec.id, spec.entityType, map[string]any{
 			"name":        spec.name,
 			"description": "Robotics component for autonomous systems",
 		})
@@ -285,7 +285,7 @@ func TestE2E_LocalSearch(t *testing.T) {
 	require.NoError(t, err, "Failed to save robotics community")
 
 	// Also create a network community (should not be returned by local search)
-	_, err = createTestEntity(processor, ctx, "net-1", "network.router", map[string]any{
+	_, err = createTestEntity(ctx, processor, "net-1", "network.router", map[string]any{
 		"name": "Core Router",
 	})
 	require.NoError(t, err)
@@ -404,7 +404,7 @@ func TestE2E_GlobalSearch(t *testing.T) {
 	for _, comm := range communities {
 		memberIDs := make([]string, len(comm.entities))
 		for i, entity := range comm.entities {
-			_, err := createTestEntity(processor, ctx, entity.id, entity.entityType, map[string]any{
+			_, err := createTestEntity(ctx, processor, entity.id, entity.entityType, map[string]any{
 				"name": entity.name,
 			})
 			require.NoError(t, err, "Failed to create entity %s", entity.id)
@@ -492,7 +492,7 @@ func TestE2E_CommunitySummaries(t *testing.T) {
 
 	memberIDs := make([]string, len(entities))
 	for i, spec := range entities {
-		_, err := createTestEntity(processor, ctx, spec.id, spec.entityType, map[string]any{
+		_, err := createTestEntity(ctx, processor, spec.id, spec.entityType, map[string]any{
 			"name":        spec.name,
 			"description": "Machine learning component",
 		})
@@ -560,7 +560,7 @@ func TestE2E_PerformanceComparison(t *testing.T) {
 		memberIDs := make([]string, entitiesPerCommunity)
 		for e := 0; e < entitiesPerCommunity; e++ {
 			id := fmt.Sprintf("perf-c%d-e%d", c, e)
-			_, err := createTestEntity(processor, ctx, id, "test.entity", map[string]any{
+			_, err := createTestEntity(ctx, processor, id, "test.entity", map[string]any{
 				"name":      fmt.Sprintf("Entity %d-%d", c, e),
 				"community": c,
 			})
@@ -640,7 +640,7 @@ func TestE2E_ResourceLimits(t *testing.T) {
 			id := fmt.Sprintf("large-c%d-e%d", c, e)
 			// Only create a subset of entities to keep test fast
 			if e < 100 { // Create 100 entities per community
-				_, err := createTestEntity(processor, ctx, id, "test.large", map[string]any{
+				_, err := createTestEntity(ctx, processor, id, "test.large", map[string]any{
 					"name": fmt.Sprintf("Large Entity %d-%d", c, e),
 				})
 				require.NoError(t, err)
@@ -726,7 +726,7 @@ func TestE2E_LLMSummarization(t *testing.T) {
 	memberIDs := make([]string, len(entities))
 	createdEntities := make([]*gtypes.EntityState, len(entities))
 	for i, spec := range entities {
-		entity, err := createTestEntity(processor, ctx, spec.id, spec.entityType, spec.properties)
+		entity, err := createTestEntity(ctx, processor, spec.id, spec.entityType, spec.properties)
 		require.NoError(t, err, "Failed to create entity %s", spec.id)
 		memberIDs[i] = spec.id
 		createdEntities[i] = entity
@@ -816,8 +816,8 @@ func TestE2E_ProgressiveEnhancement(t *testing.T) {
 		LLMSummarizer: llmSummarizer,
 		Storage:       communityStorage,
 		GraphProvider: &testGraphProvider{
-			dataHandler: processor.dataManager,
-			kvBucket:    nil, // Not needed for this test
+			entityReader: processor.entityManager,
+			kvBucket:     nil, // Not needed for this test
 		},
 		Querier:         setup.queryManager,
 		CommunityBucket: setup.communityBucket, // For KV watch
@@ -868,7 +868,7 @@ func TestE2E_ProgressiveEnhancement(t *testing.T) {
 
 	// Create entities in the graph
 	for _, spec := range entities {
-		_, err := createTestEntity(processor, ctx, spec.id, spec.entityType, spec.properties)
+		_, err := createTestEntity(ctx, processor, spec.id, spec.entityType, spec.properties)
 		require.NoError(t, err, "Failed to create entity %s", spec.id)
 	}
 

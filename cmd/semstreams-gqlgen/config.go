@@ -1,3 +1,4 @@
+// Package main provides a GraphQL code generator for semstreams.
 package main
 
 import (

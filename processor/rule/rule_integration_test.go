@@ -81,7 +81,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	}
 
 	// Create a rule that triggers on battery level changes
-	ruleDef := rule.RuleDefinition{
+	ruleDef := rule.Definition{
 		ID:   "battery_low_watch",
 		Type: "test_rule",
 		Name: "Battery Low Watcher",
@@ -122,7 +122,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 			},
 		},
 	}
-	config.InlineRules = []rule.RuleDefinition{ruleDef}
+	config.InlineRules = []rule.Definition{ruleDef}
 	config.EntityWatchPatterns = []string{"c360.platform1.test.>"}
 	config.EnableGraphIntegration = false // We're testing KV watch, not graph integration
 
@@ -332,7 +332,7 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 	tempDir := t.TempDir()
 	ruleFile := tempDir + "/test_rule.json"
 
-	ruleDef := rule.RuleDefinition{
+	ruleDef := rule.Definition{
 		ID:   "json_dsl_test",
 		Type: "test_rule",
 		Name: "JSON DSL Test Rule",
@@ -421,7 +421,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 	}
 
 	// Add a test rule
-	ruleDef := rule.RuleDefinition{
+	ruleDef := rule.Definition{
 		ID:   "metrics_test_rule",
 		Type: "test_rule",
 		Name: "Metrics Test Rule",
@@ -436,7 +436,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 	}
-	config.InlineRules = []rule.RuleDefinition{ruleDef}
+	config.InlineRules = []rule.Definition{ruleDef}
 	config.EnableGraphIntegration = false
 
 	processor := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
@@ -514,7 +514,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 	}
 
 	// Add a rule that generates graph events
-	ruleDef := rule.RuleDefinition{
+	ruleDef := rule.Definition{
 		ID:   "graph_test_rule",
 		Type: "test_rule",
 		Name: "Graph Integration Rule",
@@ -529,7 +529,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 	}
-	config.InlineRules = []rule.RuleDefinition{ruleDef}
+	config.InlineRules = []rule.Definition{ruleDef}
 	config.EnableGraphIntegration = true // Enable graph integration
 
 	processor := rule.NewProcessor(natsClient, &config)

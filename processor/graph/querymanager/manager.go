@@ -25,9 +25,9 @@ type Manager struct {
 	config Config
 
 	// Dependencies - pure orchestration, no caching
-	dataHandler       datamanager.DataHandler // Handles entity operations and caching
-	indexManager      indexmanager.Indexer    // Will handle query result caching
-	communityDetector any                     // Optional: CommunityDetector for GraphRAG search (type-erased to avoid import cycle)
+	entityReader      datamanager.EntityReader // Read-only entity access with caching
+	indexManager      indexmanager.Indexer     // Will handle query result caching
+	communityDetector any                      // Optional: CommunityDetector for GraphRAG search (type-erased to avoid import cycle)
 
 	// Metrics (simplified - no cache metrics)
 	metrics *Metrics
@@ -44,12 +44,12 @@ type Manager struct {
 
 // Deps holds runtime dependencies for query manager component
 type Deps struct {
-	Config            Config                  // Business logic configuration
-	DataHandler       datamanager.DataHandler // Runtime dependency for entity access
-	IndexManager      indexmanager.Indexer    // Runtime dependency
-	CommunityDetector any                     // Optional: CommunityDetector for GraphRAG search (type-erased to avoid import cycle)
-	Registry          *metric.MetricsRegistry // Runtime dependency
-	Logger            *slog.Logger            // Runtime dependency
+	Config            Config                   // Business logic configuration
+	EntityReader      datamanager.EntityReader // Runtime dependency for read-only entity access
+	IndexManager      indexmanager.Indexer     // Runtime dependency
+	CommunityDetector any                      // Optional: CommunityDetector for GraphRAG search (type-erased to avoid import cycle)
+	Registry          *metric.MetricsRegistry  // Runtime dependency
+	Logger            *slog.Logger             // Runtime dependency
 }
 
 // NewManager creates a new Querier instance using idiomatic Go constructor pattern
@@ -71,7 +71,7 @@ func NewManager(deps Deps) (Querier, error) {
 
 	m := &Manager{
 		config:            deps.Config,
-		dataHandler:       deps.DataHandler,
+		entityReader:      deps.EntityReader,
 		indexManager:      deps.IndexManager,
 		communityDetector: deps.CommunityDetector, // Optional dependency
 		lastActivity:      time.Now(),
@@ -100,14 +100,14 @@ func (m *Manager) GetEntity(ctx context.Context, id string) (*gtypes.EntityState
 		defer cancel()
 	}
 
-	// Fetch from DataHandler (which has its own L1/L2 cache)
-	entity, err := m.dataHandler.GetEntity(ctx, id)
+	// Fetch from EntityReader (which has its own L1/L2 cache)
+	entity, err := m.entityReader.GetEntity(ctx, id)
 	if err != nil {
 		m.recordError("GetEntity", err)
 
 		// Record metrics for failure
 		if m.metrics != nil {
-			m.metrics.RecordEntityGet("query_engine", time.Since(start), "datahandler_error", false)
+			m.metrics.RecordEntityGet("query_engine", time.Since(start), "entityreader_error", false)
 		}
 
 		// Wrap error appropriately
@@ -121,7 +121,7 @@ func (m *Manager) GetEntity(ctx context.Context, id string) (*gtypes.EntityState
 
 	// Record metrics for success
 	if m.metrics != nil {
-		m.metrics.RecordEntityGet("query_engine", time.Since(start), "datahandler", true)
+		m.metrics.RecordEntityGet("query_engine", time.Since(start), "entityreader", true)
 	}
 
 	return entity, nil
@@ -141,8 +141,8 @@ func (m *Manager) GetEntities(ctx context.Context, ids []string) ([]*gtypes.Enti
 		defer cancel()
 	}
 
-	// Fetch all entities from DataHandler (which has its own cache)
-	results, err := m.dataHandler.BatchGet(ctx, ids)
+	// Fetch all entities from EntityReader (which has its own cache)
+	results, err := m.entityReader.BatchGet(ctx, ids)
 	if err != nil {
 		m.recordError("GetEntities", err)
 		return nil, err
@@ -311,16 +311,16 @@ func (m *Manager) InvalidateEntity(_ string) error {
 	return nil
 }
 
-// WarmCache pre-loads entities into DataHandler's cache
+// WarmCache pre-loads entities into EntityReader's cache
 func (m *Manager) WarmCache(ctx context.Context, entityIDs []string) error {
-	// Simply fetch entities, which will warm DataHandler's cache
+	// Simply fetch entities, which will warm EntityReader's cache
 	_, err := m.GetEntities(ctx, entityIDs)
 	if err != nil {
 		return errors.WrapTransient(err, "QueryManager", "WarmCache",
 			"batch cache warming failed")
 	}
 
-	// Entity caching is now handled by DataHandler
+	// Entity caching is now handled by EntityReader
 	// Query result caching happens automatically when queries are executed
 	return nil
 }
@@ -329,7 +329,7 @@ func (m *Manager) WarmCache(ctx context.Context, entityIDs []string) error {
 
 // GetCacheStats returns empty stats since query manager is now stateless
 func (m *Manager) GetCacheStats() CacheStats {
-	// No cache at query manager level - DataHandler and index manager manage their own caches
+	// No cache at query manager level - EntityReader and index manager manage their own caches
 	return CacheStats{}
 }
 

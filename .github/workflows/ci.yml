@@ -39,7 +39,7 @@ jobs:
           fi
 
       - name: Run revive
-        run: revive -config .revive.toml -formatter friendly ./...
+        run: revive -config revive.toml -formatter friendly ./...
 
   test:
     name: Test

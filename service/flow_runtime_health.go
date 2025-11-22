@@ -112,7 +112,7 @@ func (fs *FlowService) handleRuntimeHealth(w http.ResponseWriter, r *http.Reques
 
 // getComponentsHealth retrieves health status for specified components
 func (fs *FlowService) getComponentsHealth(
-	ctx context.Context,
+	_ context.Context,
 	componentNames []string,
 	componentTypes map[string]string,
 ) (*RuntimeHealthResponse, error) {
@@ -125,7 +125,33 @@ func (fs *FlowService) getComponentsHealth(
 	// Get all managed components with their state
 	managedComponents := componentManager.GetManagedComponents()
 
-	// Build response
+	// Build component health list and collect counts
+	components, runningCount, degradedCount, errorCount := fs.buildComponentHealthList(
+		componentNames,
+		componentTypes,
+		managedComponents,
+	)
+
+	// Calculate overall status based on counts
+	overallStatus := fs.calculateOverallStatus(errorCount, degradedCount)
+
+	return &RuntimeHealthResponse{
+		Overall: OverallHealth{
+			Status:        overallStatus,
+			RunningCount:  runningCount,
+			DegradedCount: degradedCount,
+			ErrorCount:    errorCount,
+		},
+		Components: components,
+	}, nil
+}
+
+// buildComponentHealthList builds the component health list and returns status counts
+func (fs *FlowService) buildComponentHealthList(
+	componentNames []string,
+	componentTypes map[string]string,
+	managedComponents map[string]*component.ManagedComponent,
+) ([]ComponentHealth, int, int, int) {
 	components := make([]ComponentHealth, 0, len(componentNames))
 	runningCount := 0
 	degradedCount := 0
@@ -153,62 +179,10 @@ func (fs *FlowService) getComponentsHealth(
 		}
 
 		// Calculate timing information
-		var startTime *time.Time
-		var lastActivity *time.Time
-		var uptimeSeconds *float64
-
-		// Get start time from managed component state
-		// If component is started, calculate start time from uptime
-		if mc.State == component.StateStarted && healthStatus.Uptime > 0 {
-			st := time.Now().Add(-time.Duration(healthStatus.Uptime)).UTC()
-			startTime = &st
-
-			// Calculate uptime in seconds
-			uptime := healthStatus.Uptime.Seconds()
-			uptimeSeconds = &uptime
-		}
-
-		// Get last activity from health status
-		if !healthStatus.LastCheck.IsZero() {
-			la := healthStatus.LastCheck.UTC()
-			lastActivity = &la
-		}
+		startTime, lastActivity, uptimeSeconds := fs.calculateComponentTiming(mc, healthStatus)
 
 		// Determine status and healthy state
-		status := "stopped"
-		healthy := false
-		message := healthStatus.LastError
-
-		switch mc.State {
-		case component.StateStarted:
-			if healthStatus.Healthy {
-				status = "running"
-				healthy = true
-				if message == "" {
-					message = "Component running normally"
-				}
-			} else {
-				status = "degraded"
-				healthy = false
-				if message == "" {
-					message = "Component unhealthy"
-				}
-			}
-		case component.StateFailed:
-			status = "error"
-			healthy = false
-			if message == "" && mc.LastError != nil {
-				message = mc.LastError.Error()
-			}
-		case component.StateInitialized:
-			status = "stopped"
-			healthy = false
-			message = "Component initialized but not started"
-		default:
-			status = "stopped"
-			healthy = false
-			message = "Component not running"
-		}
+		status, healthy, message := fs.determineComponentStatus(mc, healthStatus)
 
 		// Build component health
 		compHealth := ComponentHealth{
@@ -241,23 +215,90 @@ func (fs *FlowService) getComponentsHealth(
 		}
 	}
 
-	// Calculate overall status
-	overallStatus := "healthy"
-	if errorCount > 0 {
-		overallStatus = "error"
-	} else if degradedCount > 0 {
-		overallStatus = "degraded"
+	return components, runningCount, degradedCount, errorCount
+}
+
+// calculateComponentTiming calculates start time, last activity, and uptime for a component
+func (fs *FlowService) calculateComponentTiming(
+	mc *component.ManagedComponent,
+	healthStatus component.HealthStatus,
+) (*time.Time, *time.Time, *float64) {
+	var startTime *time.Time
+	var lastActivity *time.Time
+	var uptimeSeconds *float64
+
+	// Get start time from managed component state
+	// If component is started, calculate start time from uptime
+	if mc.State == component.StateStarted && healthStatus.Uptime > 0 {
+		st := time.Now().Add(-time.Duration(healthStatus.Uptime)).UTC()
+		startTime = &st
+
+		// Calculate uptime in seconds
+		uptime := healthStatus.Uptime.Seconds()
+		uptimeSeconds = &uptime
 	}
 
-	return &RuntimeHealthResponse{
-		Overall: OverallHealth{
-			Status:        overallStatus,
-			RunningCount:  runningCount,
-			DegradedCount: degradedCount,
-			ErrorCount:    errorCount,
-		},
-		Components: components,
-	}, nil
+	// Get last activity from health status
+	if !healthStatus.LastCheck.IsZero() {
+		la := healthStatus.LastCheck.UTC()
+		lastActivity = &la
+	}
+
+	return startTime, lastActivity, uptimeSeconds
+}
+
+// determineComponentStatus determines the status string, healthy flag, and message from component state
+func (fs *FlowService) determineComponentStatus(
+	mc *component.ManagedComponent,
+	healthStatus component.HealthStatus,
+) (status string, healthy bool, message string) {
+	status = "stopped"
+	healthy = false
+	message = healthStatus.LastError
+
+	switch mc.State {
+	case component.StateStarted:
+		if healthStatus.Healthy {
+			status = "running"
+			healthy = true
+			if message == "" {
+				message = "Component running normally"
+			}
+		} else {
+			status = "degraded"
+			healthy = false
+			if message == "" {
+				message = "Component unhealthy"
+			}
+		}
+	case component.StateFailed:
+		status = "error"
+		healthy = false
+		if message == "" && mc.LastError != nil {
+			message = mc.LastError.Error()
+		}
+	case component.StateInitialized:
+		status = "stopped"
+		healthy = false
+		message = "Component initialized but not started"
+	default:
+		status = "stopped"
+		healthy = false
+		message = "Component not running"
+	}
+
+	return status, healthy, message
+}
+
+// calculateOverallStatus calculates overall health status from error and degraded counts
+func (fs *FlowService) calculateOverallStatus(errorCount, degradedCount int) string {
+	if errorCount > 0 {
+		return "error"
+	}
+	if degradedCount > 0 {
+		return "degraded"
+	}
+	return "healthy"
 }
 
 // getComponentManager retrieves the ComponentManager service

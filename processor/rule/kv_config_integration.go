@@ -15,8 +15,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// RuleConfigManager manages rules through NATS KV configuration
-type RuleConfigManager struct {
+// ConfigManager manages rules through NATS KV configuration
+type ConfigManager struct {
 	processor  *Processor
 	kvStore    *natsclient.KVStore
 	configMgr  *config.Manager
@@ -27,15 +27,15 @@ type RuleConfigManager struct {
 	mu         sync.RWMutex
 }
 
-// NewRuleConfigManager creates a new rule configuration manager
-func NewRuleConfigManager(processor *Processor, configMgr *config.Manager, logger *slog.Logger) *RuleConfigManager {
+// NewConfigManager creates a new rule configuration manager
+func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *slog.Logger) *ConfigManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &RuleConfigManager{
+	return &ConfigManager{
 		processor: processor,
 		configMgr: configMgr,
 		ctx:       ctx,
@@ -45,7 +45,7 @@ func NewRuleConfigManager(processor *Processor, configMgr *config.Manager, logge
 }
 
 // Start begins watching for rule configuration updates
-func (rcm *RuleConfigManager) Start(ctx context.Context) error {
+func (rcm *ConfigManager) Start(_ context.Context) error {
 	// Subscribe to rules.* pattern for configuration updates
 	rcm.updateChan = rcm.configMgr.OnChange("rules.*")
 
@@ -57,7 +57,7 @@ func (rcm *RuleConfigManager) Start(ctx context.Context) error {
 }
 
 // Stop stops the configuration manager
-func (rcm *RuleConfigManager) Stop() error {
+func (rcm *ConfigManager) Stop() error {
 	rcm.cancel()
 
 	// The channel from ConfigManager will be closed when ConfigManager stops
@@ -68,7 +68,7 @@ func (rcm *RuleConfigManager) Stop() error {
 }
 
 // processConfigUpdates handles configuration change notifications
-func (rcm *RuleConfigManager) processConfigUpdates() {
+func (rcm *ConfigManager) processConfigUpdates() {
 	for {
 		select {
 		case <-rcm.ctx.Done():
@@ -80,7 +80,7 @@ func (rcm *RuleConfigManager) processConfigUpdates() {
 }
 
 // handleConfigUpdate processes a single configuration update
-func (rcm *RuleConfigManager) handleConfigUpdate(update config.Update) {
+func (rcm *ConfigManager) handleConfigUpdate(update config.Update) {
 	rcm.logger.Debug("Received configuration update", "path", update.Path)
 
 	// Parse the path to determine the operation
@@ -128,7 +128,7 @@ func (rcm *RuleConfigManager) handleConfigUpdate(update config.Update) {
 }
 
 // extractRulesConfig extracts rule configurations from the full config
-func (rcm *RuleConfigManager) extractRulesConfig(cfg *config.SafeConfig) map[string]any {
+func (rcm *ConfigManager) extractRulesConfig(cfg *config.SafeConfig) map[string]any {
 	if cfg == nil {
 		return nil
 	}
@@ -144,7 +144,7 @@ func (rcm *RuleConfigManager) extractRulesConfig(cfg *config.SafeConfig) map[str
 }
 
 // SaveRule saves a rule configuration to NATS KV
-func (rcm *RuleConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef RuleDefinition) error {
+func (rcm *ConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef Definition) error {
 	key := fmt.Sprintf("rules.%s", ruleID)
 
 	// Convert to JSON
@@ -164,14 +164,14 @@ func (rcm *RuleConfigManager) SaveRule(ctx context.Context, ruleID string, ruleD
 }
 
 // saveViaConfigManager saves through the ConfigManager's KV bucket
-func (rcm *RuleConfigManager) saveViaConfigManager(ctx context.Context, key string, ruleDef RuleDefinition) error {
+func (rcm *ConfigManager) saveViaConfigManager(_ context.Context, _ string, _ Definition) error {
 	// This would typically be exposed by ConfigManager
 	// For now, we'll return an error indicating this needs implementation
 	return fmt.Errorf("direct KV save not yet implemented - use ConfigManager.Update()")
 }
 
 // DeleteRule removes a rule configuration from NATS KV
-func (rcm *RuleConfigManager) DeleteRule(ctx context.Context, ruleID string) error {
+func (rcm *ConfigManager) DeleteRule(ctx context.Context, ruleID string) error {
 	key := fmt.Sprintf("rules.%s", ruleID)
 
 	if rcm.kvStore != nil {
@@ -182,12 +182,12 @@ func (rcm *RuleConfigManager) DeleteRule(ctx context.Context, ruleID string) err
 }
 
 // deleteViaConfigManager deletes through the ConfigManager's KV bucket
-func (rcm *RuleConfigManager) deleteViaConfigManager(ctx context.Context, key string) error {
+func (rcm *ConfigManager) deleteViaConfigManager(_ context.Context, _ string) error {
 	return fmt.Errorf("direct KV delete not yet implemented - use ConfigManager.Update()")
 }
 
 // GetRule retrieves a rule configuration from NATS KV
-func (rcm *RuleConfigManager) GetRule(ctx context.Context, ruleID string) (*RuleDefinition, error) {
+func (rcm *ConfigManager) GetRule(ctx context.Context, ruleID string) (*Definition, error) {
 	key := fmt.Sprintf("rules.%s", ruleID)
 
 	if rcm.kvStore != nil {
@@ -199,7 +199,7 @@ func (rcm *RuleConfigManager) GetRule(ctx context.Context, ruleID string) (*Rule
 			return nil, fmt.Errorf("failed to get rule: %w", err)
 		}
 
-		var ruleDef RuleDefinition
+		var ruleDef Definition
 		if err := json.Unmarshal(entry.Value, &ruleDef); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal rule definition: %w", err)
 		}
@@ -211,14 +211,14 @@ func (rcm *RuleConfigManager) GetRule(ctx context.Context, ruleID string) (*Rule
 }
 
 // getRuleViaConfigManager retrieves through the ConfigManager
-func (rcm *RuleConfigManager) getRuleViaConfigManager(ctx context.Context, ruleID string) (*RuleDefinition, error) {
+func (rcm *ConfigManager) getRuleViaConfigManager(_ context.Context, ruleID string) (*Definition, error) {
 	// Get current config from processor
 	currentConfig := rcm.processor.GetRuntimeConfig()
 
 	if rulesMap, ok := currentConfig["rules"].(map[string]any); ok {
 		if ruleConfig, ok := rulesMap[ruleID].(map[string]any); ok {
-			// Convert map to RuleDefinition
-			def := RuleDefinition{
+			// Convert map to Definition
+			def := Definition{
 				ID:      ruleID,
 				Type:    getStringWithDefault(ruleConfig, "type", ""),
 				Name:    getStringWithDefault(ruleConfig, "name", ruleID),
@@ -232,8 +232,8 @@ func (rcm *RuleConfigManager) getRuleViaConfigManager(ctx context.Context, ruleI
 }
 
 // ListRules returns all rule configurations
-func (rcm *RuleConfigManager) ListRules(ctx context.Context) (map[string]RuleDefinition, error) {
-	rules := make(map[string]RuleDefinition)
+func (rcm *ConfigManager) ListRules(_ context.Context) (map[string]Definition, error) {
+	rules := make(map[string]Definition)
 
 	// Get current config from processor
 	currentConfig := rcm.processor.GetRuntimeConfig()
@@ -241,7 +241,7 @@ func (rcm *RuleConfigManager) ListRules(ctx context.Context) (map[string]RuleDef
 	if rulesMap, ok := currentConfig["rules"].(map[string]any); ok {
 		for ruleID, ruleConfig := range rulesMap {
 			if configMap, ok := ruleConfig.(map[string]any); ok {
-				rules[ruleID] = RuleDefinition{
+				rules[ruleID] = Definition{
 					ID:      ruleID,
 					Type:    getStringWithDefault(configMap, "type", ""),
 					Name:    getStringWithDefault(configMap, "name", ruleID),
@@ -255,7 +255,7 @@ func (rcm *RuleConfigManager) ListRules(ctx context.Context) (map[string]RuleDef
 }
 
 // WatchRules watches for rule changes and returns active rules
-func (rcm *RuleConfigManager) WatchRules(ctx context.Context, callback func(ruleID string, rule rtypes.Rule, operation string)) error {
+func (rcm *ConfigManager) WatchRules(_ context.Context, _ func(ruleID string, rule rtypes.Rule, operation string)) error {
 	// This would set up a more sophisticated watcher
 	// For now, we use the existing subscription mechanism
 
@@ -266,7 +266,7 @@ func (rcm *RuleConfigManager) WatchRules(ctx context.Context, callback func(rule
 }
 
 // InitializeKVStore initializes the KVStore for direct KV operations
-func (rcm *RuleConfigManager) InitializeKVStore(natsClient *natsclient.Client) error {
+func (rcm *ConfigManager) InitializeKVStore(natsClient *natsclient.Client) error {
 	rcm.mu.Lock()
 	defer rcm.mu.Unlock()
 

@@ -10,8 +10,8 @@
 // # Architecture
 //
 // Rules consist of three main components:
-//   - RuleDefinition: JSON configuration (conditions, logic, metadata)
-//   - RuleFactory: Creates Rule instances from definitions
+//   - Definition: JSON configuration (conditions, logic, metadata)
+//   - Factory: Creates Rule instances from definitions
 //   - Rule: Evaluates conditions and generates events
 //
 // # Rule Interface
@@ -33,11 +33,11 @@
 //	    ruleType string
 //	}
 //
-//	func (f *MyRuleFactory) Create(id string, def RuleDefinition, deps RuleDependencies) (rtypes.Rule, error) {
+//	func (f *MyRuleFactory) Create(id string, def Definition, deps Dependencies) (rtypes.Rule, error) {
 //	    return &MyRule{...}, nil
 //	}
 //
-//	func (f *MyRuleFactory) Validate(def RuleDefinition) error {
+//	func (f *MyRuleFactory) Validate(def Definition) error {
 //	    // Validate rule configuration
 //	    return nil
 //	}

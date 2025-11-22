@@ -453,19 +453,18 @@ func (c *Config) validateBuckets() error {
 	return nil
 }
 
-// ApplyDefaults applies default values to unset fields
-func (c *Config) ApplyDefaults() {
-	defaults := DefaultConfig()
-
-	// Apply buffer defaults
+// applyBufferDefaults applies default values for event buffer configuration
+func (c *Config) applyBufferDefaults(defaults Config) {
 	if c.EventBuffer.Capacity == 0 {
 		c.EventBuffer.Capacity = defaults.EventBuffer.Capacity
 	}
 	if c.EventBuffer.OverflowPolicy == "" {
 		c.EventBuffer.OverflowPolicy = defaults.EventBuffer.OverflowPolicy
 	}
+}
 
-	// Apply deduplication defaults
+// applyDeduplicationDefaults applies default values for deduplication configuration
+func (c *Config) applyDeduplicationDefaults(defaults Config) {
 	if c.Deduplication.Window == 0 {
 		c.Deduplication.Window = defaults.Deduplication.Window
 	}
@@ -475,29 +474,33 @@ func (c *Config) ApplyDefaults() {
 	if c.Deduplication.TTL == 0 {
 		c.Deduplication.TTL = defaults.Deduplication.TTL
 	}
+}
 
-	// Apply batch processing defaults
+// applyBatchProcessingDefaults applies default values for batch processing configuration
+func (c *Config) applyBatchProcessingDefaults(defaults Config) {
 	if c.BatchProcessing.Size == 0 {
 		c.BatchProcessing.Size = defaults.BatchProcessing.Size
 	}
 	if c.BatchProcessing.Interval == 0 {
 		c.BatchProcessing.Interval = defaults.BatchProcessing.Interval
 	}
+}
 
-	// Apply worker defaults
+// applyWorkerAndTimeoutDefaults applies default values for worker and timeout configuration
+func (c *Config) applyWorkerAndTimeoutDefaults(defaults Config) {
 	if c.Workers == 0 {
 		c.Workers = defaults.Workers
 	}
-
-	// Apply timeout defaults
 	if c.ProcessTimeout == 0 {
 		c.ProcessTimeout = defaults.ProcessTimeout
 	}
 	if c.QueryTimeout == 0 {
 		c.QueryTimeout = defaults.QueryTimeout
 	}
+}
 
-	// Apply bucket name defaults
+// applyBucketDefaults applies default values for bucket configuration
+func (c *Config) applyBucketDefaults(defaults Config) {
 	if c.Buckets.EntityStates == "" {
 		c.Buckets.EntityStates = defaults.Buckets.EntityStates
 	}
@@ -516,13 +519,14 @@ func (c *Config) ApplyDefaults() {
 	if c.Buckets.Temporal == "" {
 		c.Buckets.Temporal = defaults.Buckets.Temporal
 	}
+}
 
-	// Apply embedding defaults
+// applyEmbeddingAndHealthCheckDefaults applies default values for embedding and health check configuration
+func (c *Config) applyEmbeddingAndHealthCheckDefaults(defaults Config) {
 	if c.Embedding.RetentionWindow == 0 {
 		c.Embedding.RetentionWindow = defaults.Embedding.RetentionWindow
 	}
 
-	// Apply health check defaults
 	if c.HealthCheck.Interval == 0 {
 		c.HealthCheck.Interval = defaults.HealthCheck.Interval
 	}
@@ -535,6 +539,18 @@ func (c *Config) ApplyDefaults() {
 	if c.HealthCheck.MaxErrors == 0 {
 		c.HealthCheck.MaxErrors = defaults.HealthCheck.MaxErrors
 	}
+}
+
+// ApplyDefaults applies default values to unset fields
+func (c *Config) ApplyDefaults() {
+	defaults := DefaultConfig()
+
+	c.applyBufferDefaults(defaults)
+	c.applyDeduplicationDefaults(defaults)
+	c.applyBatchProcessingDefaults(defaults)
+	c.applyWorkerAndTimeoutDefaults(defaults)
+	c.applyBucketDefaults(defaults)
+	c.applyEmbeddingAndHealthCheckDefaults(defaults)
 }
 
 // GetEnabledIndexes returns a list of enabled index types

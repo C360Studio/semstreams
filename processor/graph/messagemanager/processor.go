@@ -118,7 +118,7 @@ func (mp *Manager) ProcessWork(ctx context.Context, data []byte) error {
 
 		// Store each entity state
 		for _, state := range entityStates {
-			if _, err := mp.deps.DataHandler.UpdateEntity(msgCtx, state); err != nil {
+			if _, err := mp.deps.EntityManager.UpdateEntity(msgCtx, state); err != nil {
 				mp.recordError(fmt.Sprintf("failed to store entity %s: %v", state.Node.ID, err))
 				continue
 			}
@@ -141,7 +141,7 @@ func (mp *Manager) ProcessWork(ctx context.Context, data []byte) error {
 
 	// Store each entity state
 	for _, state := range entityStates {
-		if _, err := mp.deps.DataHandler.UpdateEntity(msgCtx, state); err != nil {
+		if _, err := mp.deps.EntityManager.UpdateEntity(msgCtx, state); err != nil {
 			mp.recordError(fmt.Sprintf("failed to store entity %s: %v", state.Node.ID, err))
 			continue
 		}
@@ -238,7 +238,7 @@ func (mp *Manager) processSimpleGraphable(
 	}
 
 	// Check for existing entity to merge edges and increment version
-	existing, err := mp.deps.DataHandler.GetEntity(ctx, actualEntityID)
+	existing, err := mp.deps.EntityManager.GetEntity(ctx, actualEntityID)
 	var entityExists = (err == nil && existing != nil)
 	if entityExists {
 		// Entity exists, merge edges, triples, and increment version
@@ -278,7 +278,7 @@ func (mp *Manager) processSimpleGraphable(
 			"final_edge_count", len(state.Edges),
 			"final_triple_count", len(state.Triples))
 
-		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
+		if _, updateErr := mp.deps.EntityManager.UpdateEntity(ctx, state); updateErr != nil {
 			return nil, errors.WrapTransient(updateErr, "MessageManager",
 				"processSimpleGraphable", "entity update failed")
 		}
@@ -288,7 +288,7 @@ func (mp *Manager) processSimpleGraphable(
 			"entity_id", actualEntityID,
 			"edge_count", len(edges))
 
-		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
+		if _, createErr := mp.deps.EntityManager.CreateEntity(ctx, state); createErr != nil {
 			return nil, errors.WrapFatal(createErr, "MessageManager",
 				"processSimpleGraphable", "entity creation failed")
 		}
@@ -345,19 +345,19 @@ func (mp *Manager) processNonGraphableMessage(
 	}
 
 	// Check for existing entity to preserve edges and increment version
-	existing, err := mp.deps.DataHandler.GetEntity(ctx, entityID)
+	existing, err := mp.deps.EntityManager.GetEntity(ctx, entityID)
 	var entityExists = (err == nil && existing != nil)
 	if entityExists {
 		// Entity exists, preserve edges and increment version
 		state.Edges = existing.Edges
 		state.Version = existing.Version + 1
-		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
-			return nil, errors.WrapTransient(updateErr, "MessageManager", "unknown_function", "entity update failed")
+		if _, updateErr := mp.deps.EntityManager.UpdateEntity(ctx, state); updateErr != nil {
+			return nil, errors.WrapTransient(updateErr, "MessageManager", "processNonGraphableMessage", "entity update failed")
 		}
 	} else {
 		// Entity doesn't exist, create it
-		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
-			return nil, errors.WrapFatal(createErr, "MessageManager", "unknown_function", "entity creation failed")
+		if _, createErr := mp.deps.EntityManager.CreateEntity(ctx, state); createErr != nil {
+			return nil, errors.WrapFatal(createErr, "MessageManager", "processNonGraphableMessage", "entity creation failed")
 		}
 	}
 
@@ -419,19 +419,19 @@ func (mp *Manager) processMapMessage(
 	}
 
 	// Check for existing entity to preserve edges and increment version
-	existing, err := mp.deps.DataHandler.GetEntity(ctx, entityID)
+	existing, err := mp.deps.EntityManager.GetEntity(ctx, entityID)
 	var entityExists = (err == nil && existing != nil)
 	if entityExists {
 		// Entity exists, preserve edges and increment version
 		state.Edges = existing.Edges
 		state.Version = existing.Version + 1
-		if _, updateErr := mp.deps.DataHandler.UpdateEntity(ctx, state); updateErr != nil {
-			return nil, errors.WrapTransient(updateErr, "MessageManager", "unknown_function", "entity update failed")
+		if _, updateErr := mp.deps.EntityManager.UpdateEntity(ctx, state); updateErr != nil {
+			return nil, errors.WrapTransient(updateErr, "MessageManager", "processMapMessage", "entity update failed")
 		}
 	} else {
 		// Entity doesn't exist, create it
-		if _, createErr := mp.deps.DataHandler.CreateEntity(ctx, state); createErr != nil {
-			return nil, errors.WrapFatal(createErr, "MessageManager", "unknown_function", "entity creation failed")
+		if _, createErr := mp.deps.EntityManager.CreateEntity(ctx, state); createErr != nil {
+			return nil, errors.WrapFatal(createErr, "MessageManager", "processMapMessage", "entity creation failed")
 		}
 	}
 

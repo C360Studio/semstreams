@@ -5,8 +5,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// RuleMetrics holds Prometheus metrics for RuleProcessor component
-type RuleMetrics struct {
+// Metrics holds Prometheus metrics for RuleProcessor component
+type Metrics struct {
 	messagesReceived     *prometheus.CounterVec
 	evaluationsTotal     *prometheus.CounterVec
 	triggersTotal        *prometheus.CounterVec
@@ -20,13 +20,13 @@ type RuleMetrics struct {
 }
 
 // newRuleMetrics creates and registers RuleProcessor metrics
-func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *RuleMetrics {
+func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 	// Return nil if no registry provided (nil input = nil feature pattern)
 	if registry == nil {
 		return nil
 	}
 
-	metrics := &RuleMetrics{
+	metrics := &Metrics{
 		messagesReceived: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "semstreams",
 			Subsystem: "rule",

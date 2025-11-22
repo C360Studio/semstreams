@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,9 +96,12 @@ func TestComponentManagerConfigUpdates(t *testing.T) {
 	defer testClient.Terminate()
 
 	// Register a test component factory
+	var mu sync.RWMutex
 	testFactoryCalled := 0
 	var lastConfig json.RawMessage
 	testFactory := func(config json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		testFactoryCalled++
 		lastConfig = config
 		return &TestMockComponent{
@@ -207,21 +211,27 @@ func TestComponentManagerConfigUpdates(t *testing.T) {
 
 		// Debug logging
 		t.Logf("After config update, components: %v", cm.ListComponents())
-		t.Logf("Factory called %d times", testFactoryCalled)
+		mu.RLock()
+		factoryCalls := testFactoryCalled
+		configCopy := lastConfig
+		mu.RUnlock()
+		t.Logf("Factory called %d times", factoryCalls)
 
 		// Verify component was created
 		components := cm.ListComponents()
 		assert.Contains(t, components, "test-component-1", "Component should be created from config update")
 
 		// Verify factory was called
-		assert.Equal(t, 1, testFactoryCalled, "Factory should be called once")
-		assert.JSONEq(t, `{"setting":"value1"}`, string(lastConfig), "Factory should receive correct config")
+		assert.Equal(t, 1, factoryCalls, "Factory should be called once")
+		assert.JSONEq(t, `{"setting":"value1"}`, string(configCopy), "Factory should receive correct config")
 	})
 
 	// Test 2: Update existing component's config
 	t.Run("Update existing component config", func(t *testing.T) {
 		// Reset factory call counter
+		mu.Lock()
 		testFactoryCalled = 0
+		mu.Unlock()
 
 		// Update config with different settings
 		updatedConfig := &config.Config{
@@ -248,8 +258,12 @@ func TestComponentManagerConfigUpdates(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 
 		// Verify factory was called again (component restarted)
-		assert.Equal(t, 1, testFactoryCalled, "Factory should be called for restart")
-		assert.JSONEq(t, `{"setting":"value2"}`, string(lastConfig), "Factory should receive updated config")
+		mu.RLock()
+		factoryCalls := testFactoryCalled
+		configCopy := lastConfig
+		mu.RUnlock()
+		assert.Equal(t, 1, factoryCalls, "Factory should be called for restart")
+		assert.JSONEq(t, `{"setting":"value2"}`, string(configCopy), "Factory should receive updated config")
 
 		// Component should still exist
 		components := cm.ListComponents()

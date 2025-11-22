@@ -50,11 +50,7 @@ func Generate(config *Config, schema *SchemaInfo, outputDir string) error {
 		return errors.WrapFatal(err, "Generate", "GenerateConvertersCode",
 			"generate converters code")
 	}
-	if err := writeFile(filepath.Join(outputDir, "generated_converters.go"), convertersCode); err != nil {
-		return err
-	}
-
-	return nil
+	return writeFile(filepath.Join(outputDir, "generated_converters.go"), convertersCode)
 }
 
 // buildQueryTemplates builds query resolver template data

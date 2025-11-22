@@ -81,10 +81,8 @@ type Manager struct {
 	wg sync.WaitGroup
 }
 
-// Note: EntityWrite is already defined in interface.go
-
-// Ensure Manager implements DataHandler interface
-var _ DataHandler = (*Manager)(nil)
+// Note: EntityWrite is already defined in types.go
+// Compile-time verification that Manager implements all interfaces is now in interfaces.go
 
 // NewDataManager creates a new data manager using framework components
 func NewDataManager(deps Dependencies) (*Manager, error) {

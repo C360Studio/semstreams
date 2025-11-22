@@ -10,7 +10,6 @@ import (
 
 	gtypes "github.com/c360/semstreams/graph"
 	"github.com/c360/semstreams/pkg/graphinterfaces"
-	"github.com/c360/semstreams/processor/graph/datamanager"
 )
 
 // mockCommunity implements graphinterfaces.Community for testing
@@ -46,7 +45,7 @@ type mockCommunityDetector struct {
 	listErr     error
 }
 
-func (m *mockCommunityDetector) GetCommunity(ctx context.Context, communityID string) (graphinterfaces.Community, error) {
+func (m *mockCommunityDetector) GetCommunity(_ context.Context, communityID string) (graphinterfaces.Community, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -56,7 +55,7 @@ func (m *mockCommunityDetector) GetCommunity(ctx context.Context, communityID st
 	return m.communities[communityID], nil
 }
 
-func (m *mockCommunityDetector) GetEntityCommunity(ctx context.Context, entityID string, level int) (graphinterfaces.Community, error) {
+func (m *mockCommunityDetector) GetEntityCommunity(_ context.Context, entityID string, level int) (graphinterfaces.Community, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -69,7 +68,7 @@ func (m *mockCommunityDetector) GetEntityCommunity(ctx context.Context, entityID
 	return nil, nil
 }
 
-func (m *mockCommunityDetector) GetCommunitiesByLevel(ctx context.Context, level int) ([]graphinterfaces.Community, error) {
+func (m *mockCommunityDetector) GetCommunitiesByLevel(_ context.Context, level int) ([]graphinterfaces.Community, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -82,13 +81,24 @@ func (m *mockCommunityDetector) GetCommunitiesByLevel(ctx context.Context, level
 	return result, nil
 }
 
-// mockDataHandler implements minimal DataHandler for testing
-type mockDataHandler struct {
+// mockEntityReader implements EntityReader interface for testing
+type mockEntityReader struct {
 	entities map[string]*gtypes.EntityState
 }
 
-// BatchGet implements the only method we need for GraphRAG search tests
-func (m *mockDataHandler) BatchGet(ctx context.Context, ids []string) ([]*gtypes.EntityState, error) {
+// GetEntity returns an entity by ID
+func (m *mockEntityReader) GetEntity(_ context.Context, id string) (*gtypes.EntityState, error) {
+	return m.entities[id], nil
+}
+
+// ExistsEntity checks if an entity exists
+func (m *mockEntityReader) ExistsEntity(_ context.Context, id string) (bool, error) {
+	_, ok := m.entities[id]
+	return ok, nil
+}
+
+// BatchGet retrieves multiple entities efficiently
+func (m *mockEntityReader) BatchGet(_ context.Context, ids []string) ([]*gtypes.EntityState, error) {
 	result := make([]*gtypes.EntityState, 0, len(ids))
 	for _, id := range ids {
 		if entity, ok := m.entities[id]; ok {
@@ -97,62 +107,6 @@ func (m *mockDataHandler) BatchGet(ctx context.Context, ids []string) ([]*gtypes
 	}
 	return result, nil
 }
-
-// Stub implementations for interface compliance (not used in these tests)
-func (m *mockDataHandler) Run(ctx context.Context) error { return nil }
-func (m *mockDataHandler) CreateEntity(ctx context.Context, entity *gtypes.EntityState) (*gtypes.EntityState, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) UpdateEntity(ctx context.Context, entity *gtypes.EntityState) (*gtypes.EntityState, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) DeleteEntity(ctx context.Context, id string) error { return nil }
-func (m *mockDataHandler) GetEntity(ctx context.Context, id string) (*gtypes.EntityState, error) {
-	return m.entities[id], nil
-}
-func (m *mockDataHandler) ExistsEntity(ctx context.Context, id string) (bool, error) {
-	return false, nil
-}
-func (m *mockDataHandler) CreateEntityWithEdges(ctx context.Context, entity *gtypes.EntityState, edges []gtypes.Edge) (*gtypes.EntityState, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) UpdateEntityWithEdges(ctx context.Context, entity *gtypes.EntityState, addEdges []gtypes.Edge, removeEdges []string) (*gtypes.EntityState, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) AddEdge(ctx context.Context, fromEntityID string, edge gtypes.Edge) error {
-	return nil
-}
-func (m *mockDataHandler) RemoveEdge(ctx context.Context, fromEntityID, toEntityID, edgeType string) error {
-	return nil
-}
-func (m *mockDataHandler) GetEdges(ctx context.Context, id string, direction string) ([]gtypes.Edge, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) BatchWrite(ctx context.Context, writes []datamanager.EntityWrite) error {
-	return nil
-}
-func (m *mockDataHandler) List(ctx context.Context, pattern string) ([]string, error) {
-	return nil, nil
-}
-func (m *mockDataHandler) CreateRelationship(ctx context.Context, fromEntityID, toEntityID string, edgeType string, properties map[string]any) error {
-	return nil
-}
-func (m *mockDataHandler) DeleteRelationship(ctx context.Context, fromEntityID, toEntityID string) error {
-	return nil
-}
-func (m *mockDataHandler) CleanupIncomingReferences(ctx context.Context, deletedEntityID string, outgoingEdges []gtypes.Edge) error {
-	return nil
-}
-func (m *mockDataHandler) CheckOutgoingEdgesConsistency(ctx context.Context, entityID string, entity *gtypes.EntityState, status *datamanager.EntityIndexStatus) {
-}
-func (m *mockDataHandler) HasEdgeToEntity(entity *gtypes.EntityState, targetEntityID string) bool {
-	return false
-}
-func (m *mockDataHandler) GetCacheStats() datamanager.CacheStats {
-	return datamanager.CacheStats{}
-}
-func (m *mockDataHandler) FlushPendingWrites(ctx context.Context) error { return nil }
-func (m *mockDataHandler) GetPendingWriteCount() int                    { return 0 }
 
 func Test_scoreCommunitySummaries(t *testing.T) {
 	m := &Manager{}
@@ -374,7 +328,7 @@ func TestLocalSearch_Success(t *testing.T) {
 	}
 
 	// Setup mock data handler
-	dataHandler := &mockDataHandler{
+	dataHandler := &mockEntityReader{
 		entities: map[string]*gtypes.EntityState{
 			"e1": {
 				Node: gtypes.NodeProperties{
@@ -408,7 +362,7 @@ func TestLocalSearch_Success(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       dataHandler,
+		entityReader:      dataHandler,
 	}
 
 	result, err := m.LocalSearch(ctx, "e1", "robotics", 0)
@@ -429,7 +383,7 @@ func TestLocalSearch_EntityNotInCommunity(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       &mockDataHandler{entities: map[string]*gtypes.EntityState{}},
+		entityReader:      &mockEntityReader{entities: map[string]*gtypes.EntityState{}},
 	}
 
 	result, err := m.LocalSearch(ctx, "nonexistent", "query", 0)
@@ -444,7 +398,7 @@ func TestLocalSearch_CommunityDetectorUnavailable(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: nil,
-		dataHandler:       &mockDataHandler{entities: map[string]*gtypes.EntityState{}},
+		entityReader:      &mockEntityReader{entities: map[string]*gtypes.EntityState{}},
 	}
 
 	result, err := m.LocalSearch(ctx, "e1", "query", 0)
@@ -480,7 +434,7 @@ func TestGlobalSearch_Success(t *testing.T) {
 		},
 	}
 
-	dataHandler := &mockDataHandler{
+	dataHandler := &mockEntityReader{
 		entities: map[string]*gtypes.EntityState{
 			"e1": {
 				Node: gtypes.NodeProperties{
@@ -514,7 +468,7 @@ func TestGlobalSearch_Success(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       dataHandler,
+		entityReader:      dataHandler,
 	}
 
 	result, err := m.GlobalSearch(ctx, "robotics autonomous", 0, 1)
@@ -536,7 +490,7 @@ func TestGlobalSearch_EmptyCommunities(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       &mockDataHandler{entities: map[string]*gtypes.EntityState{}},
+		entityReader:      &mockEntityReader{entities: map[string]*gtypes.EntityState{}},
 	}
 
 	result, err := m.GlobalSearch(ctx, "query", 0, 5)
@@ -583,13 +537,13 @@ func TestGlobalSearch_MaxCommunitiesLimit(t *testing.T) {
 		}
 	}
 
-	dataHandler := &mockDataHandler{
+	dataHandler := &mockEntityReader{
 		entities: entities,
 	}
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       dataHandler,
+		entityReader:      dataHandler,
 	}
 
 	// Request only top 3 communities
@@ -608,7 +562,7 @@ func TestGlobalSearch_DefaultMaxCommunities(t *testing.T) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       &mockDataHandler{entities: map[string]*gtypes.EntityState{}},
+		entityReader:      &mockEntityReader{entities: map[string]*gtypes.EntityState{}},
 	}
 
 	// maxCommunities = 0 should default to 5
@@ -658,7 +612,7 @@ func BenchmarkLocalSearch(b *testing.B) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       &mockDataHandler{entities: entities},
+		entityReader:      &mockEntityReader{entities: entities},
 	}
 
 	b.ResetTimer()
@@ -710,7 +664,7 @@ func BenchmarkGlobalSearch(b *testing.B) {
 
 	m := &Manager{
 		communityDetector: detector,
-		dataHandler:       &mockDataHandler{entities: allEntities},
+		entityReader:      &mockEntityReader{entities: allEntities},
 	}
 
 	b.ResetTimer()

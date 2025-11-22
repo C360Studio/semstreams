@@ -23,7 +23,7 @@ type filterMetrics struct {
 }
 
 // newFilterMetrics creates and registers JSON filter metrics with the provided registry.
-func newFilterMetrics(registry *metric.MetricsRegistry, componentName string) (*filterMetrics, error) {
+func newFilterMetrics(registry *metric.MetricsRegistry, _ string) (*filterMetrics, error) {
 	if registry == nil {
 		return nil, nil // Metrics disabled
 	}

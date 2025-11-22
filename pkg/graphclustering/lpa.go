@@ -346,7 +346,7 @@ func (d *LPADetector) detectHierarchicalLevel(
 }
 
 // UpdateCommunities incrementally updates communities based on changed entities
-func (d *LPADetector) UpdateCommunities(ctx context.Context, entityIDs []string) error {
+func (d *LPADetector) UpdateCommunities(ctx context.Context, _ []string) error {
 	// Don't lock here - DetectCommunities handles its own locking
 	// For MVP, we'll do full recomputation
 	// Future optimization: local label propagation only around changed entities

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,10 @@ import (
 
 // Helper function to get the shared test NATS client
 func createTestNATSClientForBase(t *testing.T) *natsclient.Client {
+	// Skip if running unit tests without INTEGRATION_TESTS set
+	if os.Getenv("INTEGRATION_TESTS") == "" {
+		t.Skip("Skipping integration test - set INTEGRATION_TESTS=1 to run")
+	}
 	// Use the shared client created in TestMain
 	return getSharedNATSClient(t)
 }

@@ -215,7 +215,7 @@ func (f *TestRuleFactory) Type() string {
 }
 
 // Create creates a test rule from definition
-func (f *TestRuleFactory) Create(ruleID string, def RuleDefinition, deps RuleDependencies) (rtypes.Rule, error) {
+func (f *TestRuleFactory) Create(ruleID string, def Definition, _ Dependencies) (rtypes.Rule, error) {
 	// Create test rule with conditions from definition
 	// For test rules, subscribe to all subjects by default to simplify testing
 	subjects := []string{">"}
@@ -231,22 +231,22 @@ func (f *TestRuleFactory) Create(ruleID string, def RuleDefinition, deps RuleDep
 }
 
 // Validate validates the rule definition
-func (f *TestRuleFactory) Validate(def RuleDefinition) error {
+func (f *TestRuleFactory) Validate(_ Definition) error {
 	// Test rules accept any definition
 	return nil
 }
 
 // Schema returns the test rule schema
-func (f *TestRuleFactory) Schema() RuleSchema {
-	return RuleSchema{
+func (f *TestRuleFactory) Schema() Schema {
+	return Schema{
 		Type:     "test_rule",
 		Required: []string{"id", "name"},
 	}
 }
 
 // Examples returns test rule examples
-func (f *TestRuleFactory) Examples() []RuleExample {
-	return []RuleExample{
+func (f *TestRuleFactory) Examples() []Example {
+	return []Example{
 		{
 			Name:        "Basic Test Rule",
 			Description: "Simple test rule for integration tests",

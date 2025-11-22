@@ -28,7 +28,7 @@ type mapMetrics struct {
 }
 
 // newMapMetrics creates and registers JSON map metrics with the provided registry.
-func newMapMetrics(registry *metric.MetricsRegistry, componentName string) (*mapMetrics, error) {
+func newMapMetrics(registry *metric.MetricsRegistry, _ string) (*mapMetrics, error) {
 	if registry == nil {
 		return nil, nil // Metrics disabled
 	}

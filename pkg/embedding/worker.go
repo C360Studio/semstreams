@@ -12,12 +12,12 @@ import (
 	"github.com/c360/semstreams/errors"
 )
 
-// EmbeddingWorker processes pending embedding requests asynchronously
-type EmbeddingWorker struct {
+// Worker processes pending embedding requests asynchronously
+type Worker struct {
 	mu sync.RWMutex
 
 	// Dependencies
-	storage  *EmbeddingStorage
+	storage  *Storage
 	embedder Embedder // HTTP or BM25 embedder
 
 	// KV watching
@@ -38,18 +38,18 @@ type EmbeddingWorker struct {
 	logger *slog.Logger
 }
 
-// NewEmbeddingWorker creates a new async embedding worker
-func NewEmbeddingWorker(
-	storage *EmbeddingStorage,
+// NewWorker creates a new async embedding worker
+func NewWorker(
+	storage *Storage,
 	embedder Embedder,
 	indexBucket jetstream.KeyValue,
 	logger *slog.Logger,
-) *EmbeddingWorker {
+) *Worker {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	return &EmbeddingWorker{
+	return &Worker{
 		storage:     storage,
 		embedder:    embedder,
 		indexBucket: indexBucket,
@@ -59,13 +59,13 @@ func NewEmbeddingWorker(
 }
 
 // WithWorkers sets the number of concurrent workers
-func (w *EmbeddingWorker) WithWorkers(n int) *EmbeddingWorker {
+func (w *Worker) WithWorkers(n int) *Worker {
 	w.workers = n
 	return w
 }
 
 // Start begins watching for pending embeddings and processing them
-func (w *EmbeddingWorker) Start(ctx context.Context) error {
+func (w *Worker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -80,7 +80,7 @@ func (w *EmbeddingWorker) Start(ctx context.Context) error {
 	watcher, err := w.indexBucket.WatchAll(w.ctx)
 	if err != nil {
 		w.cancel()
-		return errors.WrapTransient(err, "EmbeddingWorker", "Start", "failed to create KV watcher")
+		return errors.WrapTransient(err, "Worker", "Start", "failed to create KV watcher")
 	}
 	w.watcher = watcher
 
@@ -99,7 +99,7 @@ func (w *EmbeddingWorker) Start(ctx context.Context) error {
 }
 
 // Stop stops the embedding worker gracefully
-func (w *EmbeddingWorker) Stop() error {
+func (w *Worker) Stop() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -130,7 +130,7 @@ func (w *EmbeddingWorker) Stop() error {
 }
 
 // processEmbeddings watches for KV changes and processes pending embeddings
-func (w *EmbeddingWorker) processEmbeddings(workerID int) {
+func (w *Worker) processEmbeddings(workerID int) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.logger.Error("Embedding worker panic recovered", "worker_id", workerID, "panic", r)
@@ -164,9 +164,9 @@ func (w *EmbeddingWorker) processEmbeddings(workerID int) {
 }
 
 // handleKVEntry processes a KV entry to check if it needs embedding generation
-func (w *EmbeddingWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
+func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
 	// Parse the record to check status
-	var record EmbeddingRecord
+	var record Record
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		w.logger.Warn("Failed to unmarshal embedding record", "key", entry.Key(), "error", err)
 		return
@@ -233,7 +233,7 @@ func (w *EmbeddingWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID 
 }
 
 // markFailed marks an embedding as failed
-func (w *EmbeddingWorker) markFailed(entityID, errorMsg string) {
+func (w *Worker) markFailed(entityID, errorMsg string) {
 	if err := w.storage.SaveFailed(w.ctx, entityID, errorMsg); err != nil {
 		w.logger.Error("Failed to mark embedding as failed", "entity_id", entityID, "error", err)
 	}

@@ -1,3 +1,4 @@
+// Package graphclustering provides graph clustering algorithms and community detection.
 package graphclustering
 
 import (
@@ -225,7 +226,7 @@ func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerI
 }
 
 // markFailed marks a community enhancement as failed
-func (w *EnhancementWorker) markFailed(communityID, errorMsg string) {
+func (w *EnhancementWorker) markFailed(communityID, _ string) {
 	community, err := w.storage.GetCommunity(w.ctx, communityID)
 	if err != nil || community == nil {
 		w.logger.Error("Failed to fetch community for failed status", "community_id", communityID, "error", err)

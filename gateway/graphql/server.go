@@ -186,7 +186,7 @@ func (s *Server) Stop(timeout time.Duration) error {
 }
 
 // handleHealth handles health check requests
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	running := s.running
 	s.mu.RUnlock()

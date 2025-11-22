@@ -48,95 +48,128 @@ func (m *Manager) initializeSemanticSearch(buckets map[string]jetstream.KeyValue
 	m.logger.Info("Initializing semantic search", "provider", provider)
 
 	// Create embedding cache if configured
-	var embeddingCache embedding.Cache
-	if m.config.Embedding.CacheBucket != "" {
-		cacheBucket, ok := buckets[m.config.Embedding.CacheBucket]
-		if ok && cacheBucket != nil {
-			embeddingCache = embedding.NewNATSCache(cacheBucket)
-			m.logger.Info("Embedding cache enabled", "bucket", m.config.Embedding.CacheBucket)
-		} else {
-			m.logger.Warn("Embedding cache bucket not found, caching disabled", "bucket", m.config.Embedding.CacheBucket)
-		}
-	}
+	embeddingCache := m.createEmbeddingCache(buckets)
 
 	// Create embedder based on provider with automatic fallback
-	var err error
+	if err := m.createEmbedder(provider, embeddingCache); err != nil {
+		return err
+	}
+
+	// Initialize TTL caches and storage
+	return m.initializeCachesAndStorage(buckets)
+}
+
+// createEmbeddingCache creates the embedding cache from configured bucket
+func (m *Manager) createEmbeddingCache(buckets map[string]jetstream.KeyValue) embedding.Cache {
+	if m.config.Embedding.CacheBucket == "" {
+		return nil
+	}
+
+	cacheBucket, ok := buckets[m.config.Embedding.CacheBucket]
+	if ok && cacheBucket != nil {
+		m.logger.Info("Embedding cache enabled", "bucket", m.config.Embedding.CacheBucket)
+		return embedding.NewNATSCache(cacheBucket)
+	}
+
+	m.logger.Warn("Embedding cache bucket not found, caching disabled", "bucket", m.config.Embedding.CacheBucket)
+	return nil
+}
+
+// createEmbedder creates the embedder based on provider with automatic fallback
+func (m *Manager) createEmbedder(provider string, embeddingCache embedding.Cache) error {
 	switch provider {
 	case "http":
-		// HTTP embedder for semembed, LocalAI, OpenAI, etc.
-		httpConfig := embedding.HTTPConfig{
-			BaseURL: m.config.Embedding.HTTPEndpoint,
-			Model:   m.config.Embedding.HTTPModel,
-			Cache:   embeddingCache,
-			Logger:  m.logger,
-		}
-		m.embedder, err = embedding.NewHTTPEmbedder(httpConfig)
-		if err != nil {
-			return errors.WrapTransient(
-				err,
-				"IndexManager",
-				"initializeSemanticSearch",
-				"failed to create HTTP embedder",
-			)
-		}
-
-		// Test connectivity with a simple embedding request
-		testCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, testErr := m.embedder.Generate(testCtx, []string{"connectivity test"})
-		if testErr != nil {
-			m.logger.Warn("HTTP embedding service unavailable - falling back to BM25",
-				"endpoint", m.config.Embedding.HTTPEndpoint,
-				"error", testErr.Error(),
-				"fallback", "bm25",
-				"hint", "Start embedding service with: task services:start:embedding")
-
-			// Automatic fallback to BM25 instead of disabling
-			m.embedder = embedding.NewBM25Embedder(embedding.BM25Config{
-				Dimensions: 384,
-				K1:         1.5,
-				B:          0.75,
-			})
-			m.logger.Info("Fallback to BM25 embedder successful",
-				"dimensions", m.embedder.Dimensions(),
-				"model", m.embedder.Model())
-
-			// Record fallback event
-			if m.promMetrics != nil {
-				m.promMetrics.embeddingFallbacks.Inc()
-				m.promMetrics.embeddingProvider.Set(1) // 1 = BM25
-			}
-		} else {
-			// HTTP embedder is working
-			if m.promMetrics != nil {
-				m.promMetrics.embeddingProvider.Set(2) // 2 = HTTP
-			}
-		}
-
+		return m.createHTTPEmbedder(embeddingCache)
 	case "bm25":
-		// Pure Go BM25 embedder - no external dependencies
-		m.embedder = embedding.NewBM25Embedder(embedding.BM25Config{
-			Dimensions: 384,  // Match neural embedding dimensions for compatibility
-			K1:         1.5,  // Standard BM25 parameter
-			B:          0.75, // Standard BM25 parameter
-		})
-		m.logger.Info("BM25 embedder initialized (pure Go lexical search)",
-			"dimensions", m.embedder.Dimensions(),
-			"model", m.embedder.Model())
-
-		// Record provider
-		if m.promMetrics != nil {
-			m.promMetrics.embeddingProvider.Set(1) // 1 = BM25
-		}
-
+		m.createBM25Embedder()
+		return nil
 	default:
 		return errors.WrapInvalid(
 			fmt.Errorf("unknown embedding provider: %s", provider),
 			"IndexManager", "initializeSemanticSearch",
 			"supported providers: http, bm25, disabled")
 	}
+}
 
-	// Initialize TTL caches for embeddings and metadata
+// createHTTPEmbedder creates HTTP embedder and tests connectivity with BM25 fallback
+func (m *Manager) createHTTPEmbedder(embeddingCache embedding.Cache) error {
+	httpConfig := embedding.HTTPConfig{
+		BaseURL: m.config.Embedding.HTTPEndpoint,
+		Model:   m.config.Embedding.HTTPModel,
+		Cache:   embeddingCache,
+		Logger:  m.logger,
+	}
+
+	embedder, err := embedding.NewHTTPEmbedder(httpConfig)
+	if err != nil {
+		return errors.WrapTransient(
+			err,
+			"IndexManager",
+			"initializeSemanticSearch",
+			"failed to create HTTP embedder",
+		)
+	}
+	m.embedder = embedder
+
+	// Test connectivity with a simple embedding request
+	testCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, testErr := m.embedder.Generate(testCtx, []string{"connectivity test"})
+	if testErr != nil {
+		m.handleHTTPEmbedderFallback(testErr)
+	} else {
+		// HTTP embedder is working
+		if m.promMetrics != nil {
+			m.promMetrics.embeddingProvider.Set(2) // 2 = HTTP
+		}
+	}
+
+	return nil
+}
+
+// handleHTTPEmbedderFallback handles fallback from HTTP to BM25 embedder
+func (m *Manager) handleHTTPEmbedderFallback(testErr error) {
+	m.logger.Warn("HTTP embedding service unavailable - falling back to BM25",
+		"endpoint", m.config.Embedding.HTTPEndpoint,
+		"error", testErr.Error(),
+		"fallback", "bm25",
+		"hint", "Start embedding service with: task services:start:embedding")
+
+	// Automatic fallback to BM25 instead of disabling
+	m.createBM25Embedder()
+
+	m.logger.Info("Fallback to BM25 embedder successful",
+		"dimensions", m.embedder.Dimensions(),
+		"model", m.embedder.Model())
+
+	// Record fallback event
+	if m.promMetrics != nil {
+		m.promMetrics.embeddingFallbacks.Inc()
+		m.promMetrics.embeddingProvider.Set(1) // 1 = BM25
+	}
+}
+
+// createBM25Embedder creates pure Go BM25 embedder with standard parameters
+func (m *Manager) createBM25Embedder() {
+	m.embedder = embedding.NewBM25Embedder(embedding.BM25Config{
+		Dimensions: 384,  // Match neural embedding dimensions for compatibility
+		K1:         1.5,  // Standard BM25 parameter
+		B:          0.75, // Standard BM25 parameter
+	})
+
+	m.logger.Info("BM25 embedder initialized (pure Go lexical search)",
+		"dimensions", m.embedder.Dimensions(),
+		"model", m.embedder.Model())
+
+	// Record provider
+	if m.promMetrics != nil {
+		m.promMetrics.embeddingProvider.Set(1) // 1 = BM25
+	}
+}
+
+// initializeCachesAndStorage initializes TTL caches and persistent storage
+func (m *Manager) initializeCachesAndStorage(buckets map[string]jetstream.KeyValue) error {
 	ctx := context.Background()
 
 	// Create vector cache with configured retention window
@@ -174,10 +207,10 @@ func (m *Manager) initializeSemanticSearch(buckets map[string]jetstream.KeyValue
 	embeddingDedupBucket, hasDedupBucket := buckets["EMBEDDING_DEDUP"]
 
 	if hasIndexBucket && hasDedupBucket {
-		m.embeddingStorage = embedding.NewEmbeddingStorage(embeddingIndexBucket, embeddingDedupBucket)
+		m.embeddingStorage = embedding.NewStorage(embeddingIndexBucket, embeddingDedupBucket)
 
 		// Initialize embedding worker for async generation
-		m.embeddingWorker = embedding.NewEmbeddingWorker(
+		m.embeddingWorker = embedding.NewWorker(
 			m.embeddingStorage,
 			m.embedder,
 			embeddingIndexBucket,

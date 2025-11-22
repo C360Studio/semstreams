@@ -24,6 +24,7 @@ package service
 //   data: {"error":"subscription failed","details":"..."}
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -67,22 +68,48 @@ func (fs *FlowService) handleRuntimeLogs(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	flowID := r.PathValue("id")
 
-	// Validate flow ID to prevent NATS subject injection
-	if !isValidFlowID(flowID) {
-		fs.logger.Warn("Invalid flow ID", "flow_id", flowID)
-		http.Error(w, "Invalid flow ID: must not contain NATS wildcards (>, *, .)", http.StatusBadRequest)
+	// Validate request parameters and verify flow exists
+	levelFilter, componentFilter, statusCode, err := fs.validateLogStreamRequest(ctx, flowID, r)
+	if err != nil {
+		http.Error(w, err.Error(), statusCode)
 		return
 	}
 
+	// Setup SSE connection
+	fs.setupSSEHeaders(w)
+
+	// Create log subscription
+	logChan, sub, err := fs.createLogSubscription(ctx, flowID, levelFilter, componentFilter)
+	if err != nil {
+		fs.sendSSEError(w, "Failed to subscribe to logs", err)
+		return
+	}
+	defer func() {
+		if err := sub.Drain(); err != nil {
+			fs.logger.Warn("Failed to drain subscription", "error", err, "flow_id", flowID)
+		}
+	}()
+
+	// Stream logs to client
+	fs.streamLogsToClient(ctx, w, flowID, levelFilter, componentFilter, logChan)
+}
+
+// validateLogStreamRequest validates all request parameters and checks flow existence
+func (fs *FlowService) validateLogStreamRequest(ctx context.Context, flowID string, r *http.Request) (levelFilter, componentFilter string, statusCode int, err error) {
+	// Validate flow ID to prevent NATS subject injection
+	if !isValidFlowID(flowID) {
+		fs.logger.Warn("Invalid flow ID", "flow_id", flowID)
+		return "", "", http.StatusBadRequest, fmt.Errorf("invalid flow ID: must not contain NATS wildcards (>, *, .)")
+	}
+
 	// Parse query parameters for filtering
-	levelFilter := strings.ToUpper(r.URL.Query().Get("level"))
-	componentFilter := r.URL.Query().Get("component")
+	levelFilter = strings.ToUpper(r.URL.Query().Get("level"))
+	componentFilter = r.URL.Query().Get("component")
 
 	// Validate component filter to prevent NATS subject injection
 	if !isValidComponentName(componentFilter) {
 		fs.logger.Warn("Invalid component name", "component", componentFilter)
-		http.Error(w, "Invalid component name: must not contain NATS wildcards (>, *, .)", http.StatusBadRequest)
-		return
+		return "", "", http.StatusBadRequest, fmt.Errorf("invalid component name: must not contain NATS wildcards (>, *, .)")
 	}
 
 	// Validate level filter if provided
@@ -95,20 +122,22 @@ func (fs *FlowService) handleRuntimeLogs(w http.ResponseWriter, r *http.Request)
 		}
 		if !validLevels[levelFilter] {
 			fs.logger.Warn("Invalid level filter", "level", levelFilter)
-			http.Error(w, "Invalid level filter. Valid values: DEBUG, INFO, WARN, ERROR", http.StatusBadRequest)
-			return
+			return "", "", http.StatusBadRequest, fmt.Errorf("invalid level filter. Valid values: DEBUG, INFO, WARN, ERROR")
 		}
 	}
 
 	// Verify flow exists
-	_, err := fs.flowStore.Get(ctx, flowID)
-	if err != nil {
-		fs.logger.Error("Flow not found for logs", "flow_id", flowID, "error", err)
-		http.Error(w, "Flow not found", http.StatusNotFound)
-		return
+	_, flowErr := fs.flowStore.Get(ctx, flowID)
+	if flowErr != nil {
+		fs.logger.Error("Flow not found for logs", "flow_id", flowID, "error", flowErr)
+		return "", "", http.StatusNotFound, fmt.Errorf("flow not found")
 	}
 
-	// Set SSE headers
+	return levelFilter, componentFilter, 0, nil
+}
+
+// setupSSEHeaders configures SSE headers and flushes response
+func (fs *FlowService) setupSSEHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -118,7 +147,13 @@ func (fs *FlowService) handleRuntimeLogs(w http.ResponseWriter, r *http.Request)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
 
+// createLogSubscription creates NATS subscription with filtering logic
+func (fs *FlowService) createLogSubscription(
+	ctx context.Context,
+	flowID, levelFilter, componentFilter string,
+) (chan *component.LogEntry, *nats.Subscription, error) {
 	// Subscribe to all logs for this flow
 	subject := fmt.Sprintf("logs.%s.>", flowID)
 	fs.logger.Info("Subscribing to logs", "flow_id", flowID, "subject", subject, "level_filter", levelFilter, "component_filter", componentFilter)
@@ -134,28 +169,19 @@ func (fs *FlowService) handleRuntimeLogs(w http.ResponseWriter, r *http.Request)
 
 	// Done channel for cleanup coordination
 	done := make(chan struct{})
-	defer close(done)
+	go func() {
+		<-ctx.Done()
+		close(done)
+	}()
 
 	// Get NATS connection from BaseService
 	natsConn := fs.nats.GetConnection()
 	if natsConn == nil {
 		fs.logger.Error("NATS connection not available")
-		http.Error(w, "NATS connection not available", http.StatusServiceUnavailable)
-		return
+		return nil, nil, fmt.Errorf("NATS connection not available")
 	}
 
-	// Event ID counter for SSE reconnection support
-	var eventID atomic.Uint64
-
-	// Check for Last-Event-ID header to support reconnection
-	lastEventIDStr := r.Header.Get("Last-Event-ID")
-	if lastEventIDStr != "" {
-		// Note: In a production system, you'd need to replay events from the last ID.
-		// For now, we just acknowledge and start from current position.
-		fs.logger.Info("Client reconnecting", "last_event_id", lastEventIDStr, "flow_id", flowID)
-	}
-
-	// Create NATS subscription
+	// Create NATS subscription with filtering
 	sub, err := natsConn.Subscribe(subject, func(msg *nats.Msg) {
 		var entry component.LogEntry
 		if err := json.Unmarshal(msg.Data, &entry); err != nil {
@@ -185,17 +211,21 @@ func (fs *FlowService) handleRuntimeLogs(w http.ResponseWriter, r *http.Request)
 
 	if err != nil {
 		fs.logger.Error("Failed to subscribe to logs", "error", err)
-		fs.sendSSEError(w, "Failed to subscribe to logs", err)
-		return
+		return nil, nil, err
 	}
 
-	// Use Drain() for graceful shutdown instead of Unsubscribe()
-	// Drain() processes pending messages before unsubscribing
-	defer func() {
-		if err := sub.Drain(); err != nil {
-			fs.logger.Warn("Failed to drain subscription", "error", err, "flow_id", flowID)
-		}
-	}()
+	return logChan, sub, nil
+}
+
+// streamLogsToClient streams log entries to the client via SSE
+func (fs *FlowService) streamLogsToClient(
+	ctx context.Context,
+	w http.ResponseWriter,
+	flowID, levelFilter, componentFilter string,
+	logChan chan *component.LogEntry,
+) {
+	// Event ID counter for SSE reconnection support
+	var eventID atomic.Uint64
 
 	// Send initial connection success event with retry directive
 	fs.sendSSEEventWithID(w, "connected", map[string]string{

@@ -82,7 +82,7 @@ func TestIntegration_QueryAPIs(t *testing.T) {
 	}
 
 	// Store the entity
-	_, err = processor.dataManager.CreateEntity(ctx, testEntity)
+	_, err = processor.entityManager.CreateEntity(ctx, testEntity)
 	require.NoError(t, err)
 
 	// Give time for indexing and caching
@@ -328,9 +328,9 @@ func TestIntegration_EdgeOperations(t *testing.T) {
 	}
 
 	// Store both entities
-	_, err = processor.dataManager.CreateEntity(ctx, entity1)
+	_, err = processor.entityManager.CreateEntity(ctx, entity1)
 	require.NoError(t, err)
-	_, err = processor.dataManager.CreateEntity(ctx, entity2)
+	_, err = processor.entityManager.CreateEntity(ctx, entity2)
 	require.NoError(t, err)
 
 	// Give time for entities to be fully created and indexed
@@ -344,7 +344,7 @@ func TestIntegration_EdgeOperations(t *testing.T) {
 	}
 
 	// Use the edge manager to add the edge
-	err = processor.dataManager.AddEdge(ctx, entity1ID, edge)
+	err = processor.edgeManager.AddEdge(ctx, entity1ID, edge)
 	require.NoError(t, err)
 
 	// Give time for asynchronous processing
@@ -370,8 +370,8 @@ func TestIntegration_EdgeOperations(t *testing.T) {
 	}
 
 	// Clean up entities to avoid conflicts with other tests
-	processor.dataManager.DeleteEntity(ctx, entity1ID)
-	processor.dataManager.DeleteEntity(ctx, entity2ID)
+	processor.entityManager.DeleteEntity(ctx, entity1ID)
+	processor.entityManager.DeleteEntity(ctx, entity2ID)
 
 	// Cancel context to trigger shutdown
 	cancel()

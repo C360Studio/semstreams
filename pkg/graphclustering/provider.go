@@ -20,7 +20,7 @@ func NewQueryManagerGraphProvider(qm querymanager.Querier) *QueryManagerGraphPro
 }
 
 // GetAllEntityIDs returns all entity IDs in the graph
-func (p *QueryManagerGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+func (p *QueryManagerGraphProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
 	// QueryManager doesn't have a "get all entities" method
 	// We'll need to query by common predicates or use a different approach
 

@@ -121,7 +121,7 @@ func applyMTLSConfig(tlsConfig *tls.Config, mtlsCfg security.ServerMTLSConfig) e
 
 	// Optional: CN whitelist verification
 	if len(mtlsCfg.AllowedClientCNs) > 0 {
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		tlsConfig.VerifyPeerCertificate = func(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
 			return verifyAllowedClientCN(verifiedChains, mtlsCfg.AllowedClientCNs)
 		}
 	}

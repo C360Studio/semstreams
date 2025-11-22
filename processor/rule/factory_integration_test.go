@@ -39,12 +39,12 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		def       rule.RuleDefinition
+		def       rule.Definition
 		shouldErr bool
 	}{
 		{
 			name: "valid_rule_definition",
-			def: rule.RuleDefinition{
+			def: rule.Definition{
 				ID:   "test-001",
 				Type: "test_rule",
 				Name: "Valid Test Rule",
@@ -63,7 +63,7 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 		},
 		{
 			name: "missing_id",
-			def: rule.RuleDefinition{
+			def: rule.Definition{
 				Type: "test_rule",
 				Name: "No ID Rule",
 			},
@@ -71,7 +71,7 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 		},
 		{
 			name:      "empty_definition",
-			def:       rule.RuleDefinition{},
+			def:       rule.Definition{},
 			shouldErr: false, // test_rule factory is permissive for testing
 		},
 	}
@@ -95,7 +95,7 @@ func TestIntegration_FactoryCreate(t *testing.T) {
 	require.NotNil(t, testFactory)
 
 	// Create test rule definition
-	ruleDef := rule.RuleDefinition{
+	ruleDef := rule.Definition{
 		ID:   "factory-test-001",
 		Type: "test_rule",
 		Name: "Factory Test Rule",
@@ -112,7 +112,7 @@ func TestIntegration_FactoryCreate(t *testing.T) {
 	}
 
 	// Create rule via factory
-	deps := rule.RuleDependencies{} // Empty dependencies for test
+	deps := rule.Dependencies{} // Empty dependencies for test
 	ruleInstance, err := testFactory.Create("factory-test-001", ruleDef, deps)
 	require.NoError(t, err)
 	require.NotNil(t, ruleInstance)
@@ -176,7 +176,7 @@ func TestIntegration_FactoryErrorHandling(t *testing.T) {
 	require.NotNil(t, testFactory)
 
 	// Test creating rule with mismatched type
-	invalidDef := rule.RuleDefinition{
+	invalidDef := rule.Definition{
 		ID:   "invalid-001",
 		Type: "nonexistent_type", // Wrong type
 		Name: "Invalid Type Rule",
@@ -184,7 +184,7 @@ func TestIntegration_FactoryErrorHandling(t *testing.T) {
 
 	// Note: test_rule factory accepts any type (permissive for testing)
 	// This test documents the behavior; stricter factories would error here
-	_, err := testFactory.Create("invalid-001", invalidDef, rule.RuleDependencies{})
+	_, err := testFactory.Create("invalid-001", invalidDef, rule.Dependencies{})
 
 	// test_rule factory is permissive, so this should not error
 	// Future factories (battery_monitor, etc.) should validate type strictly

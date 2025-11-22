@@ -202,8 +202,8 @@ func (rp *Processor) isValidOperator(operator string) bool {
 
 // createRuleFromConfig creates a rule instance from configuration
 func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any) (rtypes.Rule, error) {
-	// Convert map to RuleDefinition
-	def := RuleDefinition{
+	// Convert map to Definition
+	def := Definition{
 		ID:      ruleID,
 		Type:    ruleMap["type"].(string),
 		Name:    getStringWithDefault(ruleMap, "name", ruleID),
@@ -245,7 +245,7 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 	}
 
 	// Create dependencies
-	deps := RuleDependencies{
+	deps := Dependencies{
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
 	}

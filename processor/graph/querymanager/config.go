@@ -271,9 +271,8 @@ func (c *Config) validateIndexManager() error {
 	return nil
 }
 
-// SetDefaults sets default values for the configuration
-func (c *Config) SetDefaults() {
-	// Set cache defaults
+// setCacheDefaults sets default values for cache configuration
+func (c *Config) setCacheDefaults() {
 	if c.Cache.L1Hot.Size == 0 {
 		c.Cache.L1Hot.Size = 1000
 	}
@@ -306,8 +305,10 @@ func (c *Config) SetDefaults() {
 	if c.Cache.L3Results.Component == "" {
 		c.Cache.L3Results.Component = "query_l3"
 	}
+}
 
-	// Set invalidation defaults
+// setInvalidationDefaults sets default values for invalidation configuration
+func (c *Config) setInvalidationDefaults() {
 	if len(c.Invalidation.Patterns) == 0 {
 		c.Invalidation.Patterns = []string{"c360.platform1.robotics.*.>", "c360.platform1.sensors.*.>"}
 	}
@@ -317,8 +318,10 @@ func (c *Config) SetDefaults() {
 	if c.Invalidation.BatchInterval == 0 {
 		c.Invalidation.BatchInterval = 10 * time.Millisecond
 	}
+}
 
-	// Set query defaults
+// setQueryDefaults sets default values for query configuration
+func (c *Config) setQueryDefaults() {
 	if c.Query.MaxQueryDepth == 0 {
 		c.Query.MaxQueryDepth = 10
 	}
@@ -328,8 +331,10 @@ func (c *Config) SetDefaults() {
 	if c.Query.MaxConcurrency == 0 {
 		c.Query.MaxConcurrency = 10
 	}
+}
 
-	// Set timeout defaults
+// setTimeoutDefaults sets default values for timeout configuration
+func (c *Config) setTimeoutDefaults() {
 	if c.Timeouts.EntityGet == 0 {
 		c.Timeouts.EntityGet = 5 * time.Second
 	}
@@ -339,8 +344,10 @@ func (c *Config) SetDefaults() {
 	if c.Timeouts.Shutdown == 0 {
 		c.Timeouts.Shutdown = 5 * time.Second
 	}
+}
 
-	// Set health check defaults
+// setHealthCheckDefaults sets default values for health check configuration
+func (c *Config) setHealthCheckDefaults() {
 	if c.HealthCheck.Interval == 0 {
 		c.HealthCheck.Interval = 30 * time.Second
 	}
@@ -350,17 +357,32 @@ func (c *Config) SetDefaults() {
 	if c.HealthCheck.MaxErrorRate == 0 {
 		c.HealthCheck.MaxErrorRate = 0.1
 	}
+}
 
-	// Set index manager defaults
+// setIndexManagerDefaults sets default values for index manager configuration
+func (c *Config) setIndexManagerDefaults() {
 	if c.IndexManager.ConnectionTimeout == 0 {
 		c.IndexManager.ConnectionTimeout = 5 * time.Second
 	}
 	if c.IndexManager.MaxRetries == 0 {
 		c.IndexManager.MaxRetries = 3
 	}
+}
 
-	// Set bucket defaults
+// setBucketDefaults sets default values for bucket configuration
+func (c *Config) setBucketDefaults() {
 	if c.Buckets.EntityStates == "" {
 		c.Buckets.EntityStates = "ENTITY_STATES"
 	}
+}
+
+// SetDefaults sets default values for the configuration
+func (c *Config) SetDefaults() {
+	c.setCacheDefaults()
+	c.setInvalidationDefaults()
+	c.setQueryDefaults()
+	c.setTimeoutDefaults()
+	c.setHealthCheckDefaults()
+	c.setIndexManagerDefaults()
+	c.setBucketDefaults()
 }

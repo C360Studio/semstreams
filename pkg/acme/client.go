@@ -173,11 +173,7 @@ func (c *Client) loadOrCreateAccount() error {
 	}
 
 	// Save account (registration will be populated later)
-	if err := c.saveAccount(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.saveAccount()
 }
 
 // saveAccount persists the ACME account to disk
@@ -279,7 +275,7 @@ func (c *Client) initializeLegoClient() error {
 }
 
 // ObtainCertificate requests a new certificate from ACME server
-func (c *Client) ObtainCertificate(ctx context.Context) (*tls.Certificate, error) {
+func (c *Client) ObtainCertificate(_ context.Context) (*tls.Certificate, error) {
 	request := certificate.ObtainRequest{
 		Domains: c.config.Domains,
 		Bundle:  true,
@@ -312,7 +308,7 @@ func (c *Client) ObtainCertificate(ctx context.Context) (*tls.Certificate, error
 }
 
 // RenewCertificateIfNeeded checks expiry and renews if necessary
-func (c *Client) RenewCertificateIfNeeded(ctx context.Context) (*tls.Certificate, bool, error) {
+func (c *Client) RenewCertificateIfNeeded(_ context.Context) (*tls.Certificate, bool, error) {
 	certPath := filepath.Join(c.config.StoragePath, "certificate.pem")
 	keyPath := filepath.Join(c.config.StoragePath, "certificate.key")
 

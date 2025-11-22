@@ -42,8 +42,8 @@ func getOrGenerateRequestID(r *http.Request) string {
 	return hex.EncodeToString(b)
 }
 
-// HTTPGateway implements the Gateway interface for HTTP protocol
-type HTTPGateway struct {
+// Gateway implements the Gateway interface for HTTP protocol
+type Gateway struct {
 	name       string
 	config     gateway.Config
 	routes     []gateway.RouteMapping
@@ -65,24 +65,24 @@ type HTTPGateway struct {
 	lastActivity    time.Time
 }
 
-// NewHTTPGateway creates a new HTTP gateway from configuration
-func NewHTTPGateway(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
+// NewGateway creates a new HTTP gateway from configuration
+func NewGateway(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	var config gateway.Config
 	if err := component.SafeUnmarshal(rawConfig, &config); err != nil {
-		return nil, errors.WrapInvalid(err, "HTTPGateway", "NewHTTPGateway", "config unmarshal")
+		return nil, errors.WrapInvalid(err, "Gateway", "NewGateway", "config unmarshal")
 	}
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, errors.WrapInvalid(err, "HTTPGateway", "NewHTTPGateway", "config validation")
+		return nil, errors.WrapInvalid(err, "Gateway", "NewGateway", "config validation")
 	}
 
 	if deps.NATSClient == nil {
-		return nil, errors.WrapFatal(errors.ErrMissingConfig, "HTTPGateway", "NewHTTPGateway",
+		return nil, errors.WrapFatal(errors.ErrMissingConfig, "Gateway", "NewGateway",
 			"NATS client is required")
 	}
 
-	return &HTTPGateway{
+	return &Gateway{
 		name:       "http-gateway",
 		config:     config,
 		routes:     config.Routes,
@@ -91,14 +91,14 @@ func NewHTTPGateway(rawConfig json.RawMessage, deps component.Dependencies) (com
 }
 
 // Initialize prepares the HTTP gateway
-func (g *HTTPGateway) Initialize() error {
+func (g *Gateway) Initialize() error {
 	return nil
 }
 
 // Start begins the HTTP gateway operation
-func (g *HTTPGateway) Start(ctx context.Context) error {
+func (g *Gateway) Start(_ context.Context) error {
 	if g.running.Load() {
-		return errors.WrapFatal(errors.ErrAlreadyStarted, "HTTPGateway", "Start",
+		return errors.WrapFatal(errors.ErrAlreadyStarted, "Gateway", "Start",
 			"gateway already running")
 	}
 
@@ -111,7 +111,7 @@ func (g *HTTPGateway) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the HTTP gateway
-func (g *HTTPGateway) Stop(timeout time.Duration) error {
+func (g *Gateway) Stop(_ time.Duration) error {
 	if !g.running.Load() {
 		return nil
 	}
@@ -124,7 +124,7 @@ func (g *HTTPGateway) Stop(timeout time.Duration) error {
 }
 
 // RegisterHTTPHandlers registers gateway routes with the HTTP mux
-func (g *HTTPGateway) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
+func (g *Gateway) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix = prefix + "/"
 	}
@@ -139,7 +139,7 @@ func (g *HTTPGateway) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 }
 
 // createRouteHandler creates an HTTP handler for a route mapping
-func (g *HTTPGateway) createRouteHandler(route gateway.RouteMapping) http.HandlerFunc {
+func (g *Gateway) createRouteHandler(route gateway.RouteMapping) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get or generate request ID for distributed tracing
 		requestID := getOrGenerateRequestID(r)
@@ -225,10 +225,10 @@ func (g *HTTPGateway) createRouteHandler(route gateway.RouteMapping) http.Handle
 }
 
 // sendNATSRequest sends a request to NATS and waits for a reply
-func (g *HTTPGateway) sendNATSRequest(ctx context.Context, subject string, data []byte) ([]byte, error) {
+func (g *Gateway) sendNATSRequest(ctx context.Context, subject string, data []byte) ([]byte, error) {
 	nc := g.natsClient.GetConnection()
 	if nc == nil {
-		return nil, errors.WrapTransient(nil, "HTTPGateway", "sendNATSRequest",
+		return nil, errors.WrapTransient(nil, "Gateway", "sendNATSRequest",
 			"NATS connection not available")
 	}
 
@@ -242,7 +242,7 @@ func (g *HTTPGateway) sendNATSRequest(ctx context.Context, subject string, data 
 	// Send request and wait for reply
 	msg, err := nc.Request(subject, data, timeout)
 	if err != nil {
-		return nil, errors.WrapTransient(err, "HTTPGateway", "sendNATSRequest",
+		return nil, errors.WrapTransient(err, "Gateway", "sendNATSRequest",
 			fmt.Sprintf("NATS request to %s failed", subject))
 	}
 
@@ -250,7 +250,7 @@ func (g *HTTPGateway) sendNATSRequest(ctx context.Context, subject string, data 
 }
 
 // applyCORS applies CORS headers to the response
-func (g *HTTPGateway) applyCORS(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) applyCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 
 	// Check if origin is allowed
@@ -275,7 +275,7 @@ func (g *HTTPGateway) applyCORS(w http.ResponseWriter, r *http.Request) {
 }
 
 // mapErrorToHTTPStatus maps SemStreams errors to HTTP status codes
-func (g *HTTPGateway) mapErrorToHTTPStatus(err error) int {
+func (g *Gateway) mapErrorToHTTPStatus(err error) int {
 	if err == nil {
 		return http.StatusInternalServerError
 	}
@@ -308,7 +308,7 @@ func (g *HTTPGateway) mapErrorToHTTPStatus(err error) int {
 
 // sanitizeError returns a safe error message for external clients
 // Internal error details are logged but not exposed to prevent information disclosure
-func (g *HTTPGateway) sanitizeError(err error) string {
+func (g *Gateway) sanitizeError(err error) string {
 	if err == nil {
 		return "internal server error"
 	}
@@ -340,7 +340,7 @@ func (g *HTTPGateway) sanitizeError(err error) string {
 }
 
 // writeError writes an error response
-func (g *HTTPGateway) writeError(w http.ResponseWriter, statusCode int, message string) {
+func (g *Gateway) writeError(w http.ResponseWriter, statusCode int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
@@ -356,7 +356,7 @@ func (g *HTTPGateway) writeError(w http.ResponseWriter, statusCode int, message 
 // Component metadata implementation
 
 // Meta returns component metadata
-func (g *HTTPGateway) Meta() component.Metadata {
+func (g *Gateway) Meta() component.Metadata {
 	return component.Metadata{
 		Name:        g.name,
 		Type:        "gateway",
@@ -366,22 +366,22 @@ func (g *HTTPGateway) Meta() component.Metadata {
 }
 
 // InputPorts returns no input ports (gateway is request-driven)
-func (g *HTTPGateway) InputPorts() []component.Port {
+func (g *Gateway) InputPorts() []component.Port {
 	return []component.Port{}
 }
 
 // OutputPorts returns no output ports (gateway uses request/reply)
-func (g *HTTPGateway) OutputPorts() []component.Port {
+func (g *Gateway) OutputPorts() []component.Port {
 	return []component.Port{}
 }
 
 // ConfigSchema returns the configuration schema
-func (g *HTTPGateway) ConfigSchema() component.ConfigSchema {
+func (g *Gateway) ConfigSchema() component.ConfigSchema {
 	return httpGatewaySchema
 }
 
 // Health returns the current health status
-func (g *HTTPGateway) Health() component.HealthStatus {
+func (g *Gateway) Health() component.HealthStatus {
 	g.mu.RLock()
 	startTime := g.startTime
 	g.mu.RUnlock()
@@ -409,7 +409,7 @@ func (g *HTTPGateway) Health() component.HealthStatus {
 }
 
 // DataFlow returns current data flow metrics
-func (g *HTTPGateway) DataFlow() component.FlowMetrics {
+func (g *Gateway) DataFlow() component.FlowMetrics {
 	g.mu.RLock()
 	startTime := g.startTime
 	lastActivity := g.lastActivity
@@ -448,7 +448,7 @@ func (g *HTTPGateway) DataFlow() component.FlowMetrics {
 func Register(registry *component.Registry) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
 		Name:        "http",
-		Factory:     NewHTTPGateway,
+		Factory:     NewGateway,
 		Schema:      httpGatewaySchema,
 		Type:        "gateway",
 		Protocol:    "http",

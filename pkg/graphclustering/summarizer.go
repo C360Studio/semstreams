@@ -241,7 +241,7 @@ func newEntityGraphProvider(entities []*gtypes.EntityState) *entityGraphProvider
 	return &entityGraphProvider{entities: entitiesMap}
 }
 
-func (p *entityGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+func (p *entityGraphProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
 	ids := make([]string, 0, len(p.entities))
 	for id := range p.entities {
 		ids = append(ids, id)
@@ -249,7 +249,7 @@ func (p *entityGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, er
 	return ids, nil
 }
 
-func (p *entityGraphProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
+func (p *entityGraphProvider) GetNeighbors(_ context.Context, entityID string, direction string) ([]string, error) {
 	entity, ok := p.entities[entityID]
 	if !ok {
 		return []string{}, nil
@@ -283,7 +283,7 @@ func (p *entityGraphProvider) GetNeighbors(ctx context.Context, entityID string,
 	return neighbors, nil
 }
 
-func (p *entityGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+func (p *entityGraphProvider) GetEdgeWeight(_ context.Context, fromID, toID string) (float64, error) {
 	entity, ok := p.entities[fromID]
 	if !ok {
 		return 0.0, nil

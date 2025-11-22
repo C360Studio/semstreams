@@ -75,46 +75,72 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 		}, nil
 	}
 
-	// Create node index for fast lookup
+	// Build graph structure
 	nodeIndex := make(map[string]int, n)
 	for i, id := range nodeIDs {
 		nodeIndex[id] = i
 	}
 
-	// Build adjacency structure (only edges within subset)
-	outLinks := make([][]int, n)   // outLinks[i] = nodes that i links to
-	inLinkCount := make([]int, n)  // inLinkCount[i] = number of nodes linking to i
-	outLinkCount := make([]int, n) // outLinkCount[i] = number of nodes i links to
+	outLinks, outLinkCount, err := buildAdjacencyLists(ctx, provider, nodeIDs, nodeIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize and run PageRank iterations
+	scores, newScores := initializeScores(n)
+	converged, iterations := runPageRankIterations(ctx, scores, newScores, outLinks, outLinkCount, n, config)
+
+	// Convert to map and rank nodes
+	scoreMap := scoresToMap(nodeIDs, scores, n)
+	rankedIDs := rankNodes(scoreMap, n, config.TopN)
+
+	return &PageRankResult{
+		Scores:     scoreMap,
+		Ranked:     rankedIDs,
+		Iterations: iterations + 1,
+		Converged:  converged,
+	}, nil
+}
+
+// buildAdjacencyLists builds the adjacency structure from the provider
+func buildAdjacencyLists(ctx context.Context, provider GraphProvider, nodeIDs []string, nodeIndex map[string]int) ([][]int, []int, error) {
+	n := len(nodeIDs)
+	outLinks := make([][]int, n)
+	outLinkCount := make([]int, n)
 
 	for i, fromID := range nodeIDs {
 		neighbors, err := provider.GetNeighbors(ctx, fromID, "outgoing")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Filter neighbors to only those in our subset
 		for _, toID := range neighbors {
 			if toIdx, ok := nodeIndex[toID]; ok {
 				outLinks[i] = append(outLinks[i], toIdx)
-				inLinkCount[toIdx]++
 				outLinkCount[i]++
 			}
 		}
 	}
 
-	// Initialize PageRank scores (uniform distribution)
+	return outLinks, outLinkCount, nil
+}
+
+// initializeScores creates score arrays with uniform distribution
+func initializeScores(n int) ([]float64, []float64) {
 	scores := make([]float64, n)
+	newScores := make([]float64, n)
 	initialScore := 1.0 / float64(n)
 	for i := range scores {
 		scores[i] = initialScore
 	}
+	return scores, newScores
+}
 
-	// Damping factor and teleport probability
+// runPageRankIterations runs the iterative PageRank computation
+func runPageRankIterations(ctx context.Context, scores, newScores []float64, outLinks [][]int, outLinkCount []int, n int, config PageRankConfig) (bool, int) {
 	d := config.DampingFactor
 	teleport := (1.0 - d) / float64(n)
-
-	// Iterative PageRank computation
-	newScores := make([]float64, n)
 	converged := false
 	iterations := 0
 
@@ -122,39 +148,16 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 		// Check context cancellation
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return false, iterations
 		default:
 		}
 
 		// Compute new scores
-		for i := range newScores {
-			sum := 0.0
-
-			// Sum contributions from all nodes linking to i
-			for j := 0; j < n; j++ {
-				if containsInt(outLinks[j], i) {
-					// Node j links to i
-					if outLinkCount[j] > 0 {
-						sum += scores[j] / float64(outLinkCount[j])
-					}
-				}
-			}
-
-			newScores[i] = teleport + d*sum
-		}
+		computePageRankScores(newScores, scores, outLinks, outLinkCount, n, d, teleport)
 
 		// Check convergence
-		maxDiff := 0.0
-		for i := range scores {
-			diff := math.Abs(newScores[i] - scores[i])
-			if diff > maxDiff {
-				maxDiff = diff
-			}
-		}
-
-		if maxDiff < config.Tolerance {
+		if hasConverged(scores, newScores, n, config.Tolerance) {
 			converged = true
-			// Copy final scores
 			copy(scores, newScores)
 			break
 		}
@@ -163,7 +166,39 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 		scores, newScores = newScores, scores
 	}
 
-	// Convert scores to map and normalize
+	return converged, iterations
+}
+
+// computePageRankScores computes one iteration of PageRank scores
+func computePageRankScores(newScores, scores []float64, outLinks [][]int, outLinkCount []int, n int, d, teleport float64) {
+	for i := range newScores {
+		sum := 0.0
+
+		// Sum contributions from all nodes linking to i
+		for j := 0; j < n; j++ {
+			if containsInt(outLinks[j], i) && outLinkCount[j] > 0 {
+				sum += scores[j] / float64(outLinkCount[j])
+			}
+		}
+
+		newScores[i] = teleport + d*sum
+	}
+}
+
+// hasConverged checks if PageRank scores have converged
+func hasConverged(scores, newScores []float64, _ int, tolerance float64) bool {
+	maxDiff := 0.0
+	for i := range scores {
+		diff := math.Abs(newScores[i] - scores[i])
+		if diff > maxDiff {
+			maxDiff = diff
+		}
+	}
+	return maxDiff < tolerance
+}
+
+// scoresToMap converts score array to map with normalization
+func scoresToMap(nodeIDs []string, scores []float64, n int) map[string]float64 {
 	scoreMap := make(map[string]float64, n)
 	sum := 0.0
 	for i, id := range nodeIDs {
@@ -178,13 +213,17 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 		}
 	}
 
-	// Sort nodes by score
+	return scoreMap
+}
+
+// rankNodes returns the top N nodes sorted by score
+func rankNodes(scoreMap map[string]float64, _ int, topN int) []string {
 	type scoredNode struct {
 		id    string
 		score float64
 	}
 
-	ranked := make([]scoredNode, 0, n)
+	ranked := make([]scoredNode, 0, len(scoreMap))
 	for id, score := range scoreMap {
 		ranked = append(ranked, scoredNode{id, score})
 	}
@@ -199,21 +238,17 @@ func computePageRankForSubset(ctx context.Context, provider GraphProvider, nodeI
 	})
 
 	// Extract ranked IDs
-	rankedIDs := make([]string, 0, n)
-	limit := n
-	if config.TopN > 0 && config.TopN < n {
-		limit = config.TopN
+	limit := len(ranked)
+	if topN > 0 && topN < limit {
+		limit = topN
 	}
+
+	rankedIDs := make([]string, 0, limit)
 	for i := 0; i < limit; i++ {
 		rankedIDs = append(rankedIDs, ranked[i].id)
 	}
 
-	return &PageRankResult{
-		Scores:     scoreMap,
-		Ranked:     rankedIDs,
-		Iterations: iterations + 1,
-		Converged:  converged,
-	}, nil
+	return rankedIDs
 }
 
 // ComputeRepresentativeEntities computes representative entities for a community using PageRank

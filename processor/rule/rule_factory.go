@@ -12,8 +12,8 @@ import (
 	rtypes "github.com/c360/semstreams/types/rule"
 )
 
-// RuleDefinition represents a JSON rule configuration
-type RuleDefinition struct {
+// Definition represents a JSON rule configuration
+type Definition struct {
 	ID          string                           `json:"id"`
 	Type        string                           `json:"type"`
 	Name        string                           `json:"name"`
@@ -32,29 +32,29 @@ type EntityConfig struct {
 	WatchBuckets []string `json:"watch_buckets"` // KV buckets to watch
 }
 
-// RuleFactory creates rules from configuration
-type RuleFactory interface {
+// Factory creates rules from configuration
+type Factory interface {
 	// Create creates a rule instance from configuration
-	Create(id string, config RuleDefinition, deps RuleDependencies) (rtypes.Rule, error)
+	Create(id string, config Definition, deps Dependencies) (rtypes.Rule, error)
 
 	// Type returns the rule type this factory creates
 	Type() string
 
 	// Schema returns the configuration schema for UI discovery
-	Schema() RuleSchema
+	Schema() Schema
 
 	// Validate validates a rule configuration
-	Validate(config RuleDefinition) error
+	Validate(config Definition) error
 }
 
-// RuleDependencies provides dependencies for rule creation
-type RuleDependencies struct {
+// Dependencies provides dependencies for rule creation
+type Dependencies struct {
 	NATSClient *natsclient.Client
 	Logger     *slog.Logger
 }
 
-// RuleSchema describes the configuration schema for a rule type
-type RuleSchema struct {
+// Schema describes the configuration schema for a rule type
+type Schema struct {
 	Type        string                              `json:"type"`
 	DisplayName string                              `json:"display_name"`
 	Description string                              `json:"description"`
@@ -62,24 +62,24 @@ type RuleSchema struct {
 	Icon        string                              `json:"icon,omitempty"`
 	Properties  map[string]component.PropertySchema `json:"properties"`
 	Required    []string                            `json:"required"`
-	Examples    []RuleExample                       `json:"examples,omitempty"`
+	Examples    []Example                           `json:"examples,omitempty"`
 }
 
-// RuleExample provides example configurations
-type RuleExample struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Config      RuleDefinition `json:"config"`
+// Example provides example configurations
+type Example struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Config      Definition `json:"config"`
 }
 
 // Global rule factory registry
 var (
-	factoryRegistry = make(map[string]RuleFactory)
+	factoryRegistry = make(map[string]Factory)
 	factoryMutex    sync.RWMutex
 )
 
 // RegisterRuleFactory registers a rule factory
-func RegisterRuleFactory(ruleType string, factory RuleFactory) error {
+func RegisterRuleFactory(ruleType string, factory Factory) error {
 	factoryMutex.Lock()
 	defer factoryMutex.Unlock()
 
@@ -106,7 +106,7 @@ func UnregisterRuleFactory(ruleType string) error {
 }
 
 // GetRuleFactory returns a registered rule factory
-func GetRuleFactory(ruleType string) (RuleFactory, bool) {
+func GetRuleFactory(ruleType string) (Factory, bool) {
 	factoryMutex.RLock()
 	defer factoryMutex.RUnlock()
 
@@ -127,11 +127,11 @@ func GetRegisteredRuleTypes() []string {
 }
 
 // GetRuleSchemas returns schemas for all registered rule types
-func GetRuleSchemas() map[string]RuleSchema {
+func GetRuleSchemas() map[string]Schema {
 	factoryMutex.RLock()
 	defer factoryMutex.RUnlock()
 
-	schemas := make(map[string]RuleSchema)
+	schemas := make(map[string]Schema)
 	for ruleType, factory := range factoryRegistry {
 		schemas[ruleType] = factory.Schema()
 	}
@@ -139,7 +139,7 @@ func GetRuleSchemas() map[string]RuleSchema {
 }
 
 // CreateRuleFromDefinition creates a rule using the appropriate factory
-func CreateRuleFromDefinition(def RuleDefinition, deps RuleDependencies) (rtypes.Rule, error) {
+func CreateRuleFromDefinition(def Definition, deps Dependencies) (rtypes.Rule, error) {
 	factory, exists := GetRuleFactory(def.Type)
 	if !exists {
 		return nil, fmt.Errorf("no factory registered for rule type: %s", def.Type)
@@ -178,7 +178,7 @@ func (f *BaseRuleFactory) Type() string {
 }
 
 // ValidateExpression validates expression configuration
-func (f *BaseRuleFactory) ValidateExpression(def RuleDefinition) error {
+func (f *BaseRuleFactory) ValidateExpression(def Definition) error {
 	if len(def.Conditions) == 0 {
 		return fmt.Errorf("rule %s must have at least one condition", def.ID)
 	}

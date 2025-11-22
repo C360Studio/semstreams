@@ -22,9 +22,9 @@ type MessageHandler interface {
 
 // Dependencies defines all dependencies needed by message manager
 type Dependencies struct {
-	DataHandler  datamanager.DataHandler
-	IndexManager IndexManager
-	Logger       Logger
+	EntityManager datamanager.EntityManager
+	IndexManager  IndexManager
+	Logger        Logger
 }
 
 // IndexManager interface for index operations

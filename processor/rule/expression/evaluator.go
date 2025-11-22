@@ -9,8 +9,8 @@ import (
 )
 
 // NewExpressionEvaluator creates a new expression evaluator with all supported operators
-func NewExpressionEvaluator() *ExpressionEvaluator {
-	evaluator := &ExpressionEvaluator{
+func NewExpressionEvaluator() *Evaluator {
+	evaluator := &Evaluator{
 		operators:    make(map[string]OperatorFunc),
 		typeDetector: &defaultTypeDetector{},
 	}
@@ -33,7 +33,7 @@ func NewExpressionEvaluator() *ExpressionEvaluator {
 }
 
 // Evaluate evaluates a logical expression against an entity state
-func (e *ExpressionEvaluator) Evaluate(entityState *gtypes.EntityState, expr LogicalExpression) (bool, error) {
+func (e *Evaluator) Evaluate(entityState *gtypes.EntityState, expr LogicalExpression) (bool, error) {
 	if len(expr.Conditions) == 0 {
 		return true, nil // Empty condition list passes
 	}
@@ -75,7 +75,7 @@ func (e *ExpressionEvaluator) Evaluate(entityState *gtypes.EntityState, expr Log
 }
 
 // evaluateCondition evaluates a single condition against entity state
-func (e *ExpressionEvaluator) evaluateCondition(entityState *gtypes.EntityState, condition ConditionExpression) (bool, error) {
+func (e *Evaluator) evaluateCondition(entityState *gtypes.EntityState, condition ConditionExpression) (bool, error) {
 	// Get field value from entity state
 	fieldValue, exists, err := e.typeDetector.GetFieldValue(entityState, condition.Field)
 	if err != nil {
@@ -94,10 +94,9 @@ func (e *ExpressionEvaluator) evaluateCondition(entityState *gtypes.EntityState,
 				Field:   condition.Field,
 				Message: "required field not found",
 			}
-		} else {
-			// Optional field missing - condition fails (conservative approach)
-			return false, nil
 		}
+		// Optional field missing - condition fails (conservative approach)
+		return false, nil
 	}
 
 	// Get operator function

@@ -221,7 +221,7 @@ type mockMetricsRecorder struct {
 	recordedOps []string
 }
 
-func (m *mockMetricsRecorder) RecordMetrics(ctx context.Context, operation string, fn func() error) error {
+func (m *mockMetricsRecorder) RecordMetrics(_ context.Context, operation string, fn func() error) error {
 	m.recordedOps = append(m.recordedOps, operation)
 	return fn()
 }
@@ -351,7 +351,7 @@ func TestGatewayLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Initialize", func(t *testing.T) {
-		err := gateway.(*GraphQLGateway).Initialize()
+		err := gateway.(*Gateway).Initialize()
 		assert.NoError(t, err)
 	})
 
@@ -527,31 +527,31 @@ func (m *mockCommunityImpl) GetParentID() *string                { return nil }
 func (m *mockCommunityImpl) GetMetadata() map[string]interface{} { return nil }
 
 // Implement required Querier interface methods (stubs)
-func (m *mockQueryManager) GetEntity(ctx context.Context, id string) (*graph.EntityState, error) {
+func (m *mockQueryManager) GetEntity(_ context.Context, _ string) (*graph.EntityState, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) GetEntities(ctx context.Context, ids []string) ([]*graph.EntityState, error) {
+func (m *mockQueryManager) GetEntities(_ context.Context, _ []string) ([]*graph.EntityState, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) GetEntityByAlias(ctx context.Context, aliasOrID string) (*graph.EntityState, error) {
+func (m *mockQueryManager) GetEntityByAlias(_ context.Context, _ string) (*graph.EntityState, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) ExecutePath(ctx context.Context, start string, pattern querymanager.PathPattern) (*querymanager.QueryResult, error) {
+func (m *mockQueryManager) ExecutePath(_ context.Context, _ string, _ querymanager.PathPattern) (*querymanager.QueryResult, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) GetGraphSnapshot(ctx context.Context, bounds querymanager.QueryBounds) (*querymanager.GraphSnapshot, error) {
+func (m *mockQueryManager) GetGraphSnapshot(_ context.Context, _ querymanager.QueryBounds) (*querymanager.GraphSnapshot, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) QueryRelationships(ctx context.Context, entityID string, direction querymanager.Direction) ([]*querymanager.Relationship, error) {
+func (m *mockQueryManager) QueryRelationships(_ context.Context, _ string, _ querymanager.Direction) ([]*querymanager.Relationship, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) LocalSearch(ctx context.Context, entityID string, query string, level int) (*querymanager.LocalSearchResult, error) {
+func (m *mockQueryManager) LocalSearch(_ context.Context, _ string, _ string, _ int) (*querymanager.LocalSearchResult, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) GlobalSearch(ctx context.Context, query string, level int, maxCommunities int) (*querymanager.GlobalSearchResult, error) {
+func (m *mockQueryManager) GlobalSearch(_ context.Context, _ string, _ int, _ int) (*querymanager.GlobalSearchResult, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) GetCommunity(ctx context.Context, communityID string) (graphinterfaces.Community, error) {
+func (m *mockQueryManager) GetCommunity(_ context.Context, communityID string) (graphinterfaces.Community, error) {
 	if m.getCommunityErr != nil {
 		return nil, m.getCommunityErr
 	}
@@ -564,7 +564,7 @@ func (m *mockQueryManager) GetCommunity(ctx context.Context, communityID string)
 	}
 	return comm, nil
 }
-func (m *mockQueryManager) GetEntityCommunity(ctx context.Context, entityID string, level int) (graphinterfaces.Community, error) {
+func (m *mockQueryManager) GetEntityCommunity(_ context.Context, entityID string, level int) (graphinterfaces.Community, error) {
 	if m.getEntityCommErr != nil {
 		return nil, m.getEntityCommErr
 	}
@@ -578,22 +578,22 @@ func (m *mockQueryManager) GetEntityCommunity(ctx context.Context, entityID stri
 	}
 	return nil, fmt.Errorf("entity community not found")
 }
-func (m *mockQueryManager) GetCommunitiesByLevel(ctx context.Context, level int) ([]graphinterfaces.Community, error) {
+func (m *mockQueryManager) GetCommunitiesByLevel(_ context.Context, _ int) ([]graphinterfaces.Community, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) QueryByPredicate(ctx context.Context, predicate string) ([]string, error) {
+func (m *mockQueryManager) QueryByPredicate(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) QuerySpatial(ctx context.Context, bounds querymanager.SpatialBounds) ([]string, error) {
+func (m *mockQueryManager) QuerySpatial(_ context.Context, _ querymanager.SpatialBounds) ([]string, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) QueryTemporal(ctx context.Context, start, end time.Time) ([]string, error) {
+func (m *mockQueryManager) QueryTemporal(_ context.Context, _ time.Time, _ time.Time) ([]string, error) {
 	return nil, nil
 }
-func (m *mockQueryManager) InvalidateEntity(entityID string) error {
+func (m *mockQueryManager) InvalidateEntity(_ string) error {
 	return nil
 }
-func (m *mockQueryManager) WarmCache(ctx context.Context, entityIDs []string) error {
+func (m *mockQueryManager) WarmCache(_ context.Context, _ []string) error {
 	return nil
 }
 func (m *mockQueryManager) GetCacheStats() querymanager.CacheStats {

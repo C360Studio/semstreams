@@ -352,7 +352,7 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 
 	// Create a consumer
 	received := make(chan bool, 5)
-	err = client.ConsumeStream(ctx, "TEST_METRICS", "test.metrics.>", func(data []byte) {
+	err = client.ConsumeStream(ctx, "TEST_METRICS", "test.metrics.>", func(_ []byte) {
 		select {
 		case received <- true:
 		default:

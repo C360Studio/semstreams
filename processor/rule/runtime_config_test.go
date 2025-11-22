@@ -286,7 +286,7 @@ func TestRuleFactoryRegistry(t *testing.T) {
 
 // TestCreateRuleFromDefinition tests rule creation from definition
 func TestCreateRuleFromDefinition(t *testing.T) {
-	def := RuleDefinition{
+	def := Definition{
 		ID:   "test_battery_001",
 		Type: "battery_monitor",
 		Name: "Test Battery Monitor",
@@ -308,7 +308,7 @@ func TestCreateRuleFromDefinition(t *testing.T) {
 		Enabled: true,
 	}
 
-	deps := RuleDependencies{
+	deps := Dependencies{
 		NATSClient: &natsclient.Client{},
 		Logger:     slog.Default(),
 	}
@@ -428,8 +428,8 @@ func TestDynamicRuleCRUD(t *testing.T) {
 }
 
 // TestExpressionEvaluation tests expression-based rule evaluation
-func createTestRuleDefinition(id string, threshold float64) RuleDefinition {
-	return RuleDefinition{
+func createTestRuleDefinition(id string, threshold float64) Definition {
+	return Definition{
 		ID:   id,
 		Type: "battery_monitor",
 		Name: "Test Rule " + id,
@@ -446,7 +446,7 @@ func createTestRuleDefinition(id string, threshold float64) RuleDefinition {
 	}
 }
 
-func marshalRuleDefinition(def RuleDefinition) json.RawMessage {
+func marshalRuleDefinition(def Definition) json.RawMessage {
 	data, _ := json.Marshal(def)
 	return data
 }

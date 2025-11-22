@@ -74,7 +74,7 @@ func TestGetOrGenerateRequestID_Uniqueness(t *testing.T) {
 }
 
 func TestMapErrorToHTTPStatus(t *testing.T) {
-	g := &HTTPGateway{}
+	g := &Gateway{}
 
 	tests := []struct {
 		name           string
@@ -129,7 +129,7 @@ func TestMapErrorToHTTPStatus(t *testing.T) {
 }
 
 func TestSanitizeError(t *testing.T) {
-	g := &HTTPGateway{}
+	g := &Gateway{}
 
 	tests := []struct {
 		name             string
@@ -139,25 +139,25 @@ func TestSanitizeError(t *testing.T) {
 	}{
 		{
 			name:             "invalid error sanitized",
-			err:              pkgerrors.WrapInvalid(pkgerrors.ErrInvalidConfig, "HTTPGateway", "sendNATSRequest", "invalid request to graph.query.semantic"),
+			err:              pkgerrors.WrapInvalid(pkgerrors.ErrInvalidConfig, "Gateway", "sendNATSRequest", "invalid request to graph.query.semantic"),
 			expectedMsg:      "invalid request",
 			shouldNotContain: []string{"graph.query", "NATS", "semantic"},
 		},
 		{
 			name:             "timeout error sanitized",
-			err:              pkgerrors.WrapTransient(pkgerrors.ErrConnectionTimeout, "HTTPGateway", "sendNATSRequest", "timeout waiting for NATS subject graph.query"),
+			err:              pkgerrors.WrapTransient(pkgerrors.ErrConnectionTimeout, "Gateway", "sendNATSRequest", "timeout waiting for NATS subject graph.query"),
 			expectedMsg:      "request timeout",
 			shouldNotContain: []string{"NATS", "graph.query", "subject"},
 		},
 		{
 			name:             "transient error sanitized",
-			err:              pkgerrors.WrapTransient(pkgerrors.ErrNoConnection, "HTTPGateway", "sendNATSRequest", "NATS connection failed"),
+			err:              pkgerrors.WrapTransient(pkgerrors.ErrNoConnection, "Gateway", "sendNATSRequest", "NATS connection failed"),
 			expectedMsg:      "service temporarily unavailable",
 			shouldNotContain: []string{"NATS", "connection"},
 		},
 		{
 			name:             "fatal error sanitized",
-			err:              pkgerrors.WrapFatal(pkgerrors.ErrDataCorrupted, "HTTPGateway", "method", "internal panic in processor component"),
+			err:              pkgerrors.WrapFatal(pkgerrors.ErrDataCorrupted, "Gateway", "method", "internal panic in processor component"),
 			expectedMsg:      "internal server error",
 			shouldNotContain: []string{"panic", "processor", "component"},
 		},
@@ -247,8 +247,8 @@ func TestApplyCORS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Need to use actual Config type from gateway package
-			// For now, create HTTPGateway with minimal config
-			g := &HTTPGateway{}
+			// For now, create Gateway with minimal config
+			g := &Gateway{}
 			g.config.EnableCORS = true
 			g.config.CORSOrigins = tt.allowedOrigins
 
@@ -284,7 +284,7 @@ func TestApplyCORS(t *testing.T) {
 }
 
 func TestWriteError(t *testing.T) {
-	g := &HTTPGateway{}
+	g := &Gateway{}
 
 	tests := []struct {
 		name       string
@@ -344,7 +344,7 @@ func TestWriteError(t *testing.T) {
 }
 
 func TestDataFlow_Calculations(t *testing.T) {
-	g := &HTTPGateway{}
+	g := &Gateway{}
 	g.startTime = time.Now().Add(-10 * time.Second) // Started 10 seconds ago
 	g.lastActivity = time.Now()
 
@@ -384,7 +384,7 @@ func TestDataFlow_Calculations(t *testing.T) {
 }
 
 func TestDataFlow_ZeroRequests(t *testing.T) {
-	g := &HTTPGateway{}
+	g := &Gateway{}
 	g.startTime = time.Now()
 	g.lastActivity = time.Now()
 

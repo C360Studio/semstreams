@@ -109,7 +109,7 @@ func (p *Processor) handleEntityCreate(msg *nats.Msg) {
 	}
 
 	// Create entity using DataManager
-	entity, err := p.dataManager.CreateEntity(ctx, req.Entity)
+	entity, err := p.entityManager.CreateEntity(ctx, req.Entity)
 
 	// Build response
 	resp := gtypes.CreateEntityResponse{
@@ -150,7 +150,7 @@ func (p *Processor) handleEntityUpdate(msg *nats.Msg) {
 	}
 
 	// Update entity using DataManager
-	entity, err := p.dataManager.UpdateEntity(ctx, req.Entity)
+	entity, err := p.entityManager.UpdateEntity(ctx, req.Entity)
 
 	// Build response
 	resp := gtypes.UpdateEntityResponse{
@@ -194,7 +194,7 @@ func (p *Processor) handleEntityDelete(msg *nats.Msg) {
 	}
 
 	// Delete entity using DataManager
-	err := p.dataManager.DeleteEntity(ctx, req.EntityID)
+	err := p.entityManager.DeleteEntity(ctx, req.EntityID)
 
 	// Build response
 	resp := gtypes.DeleteEntityResponse{
@@ -235,7 +235,7 @@ func (p *Processor) handleEntityCreateWithEdges(msg *nats.Msg) {
 	}
 
 	// Create entity with edges atomically
-	entity, err := p.dataManager.CreateEntityWithEdges(ctx, req.Entity, req.Edges)
+	entity, err := p.entityManager.CreateEntityWithEdges(ctx, req.Entity, req.Edges)
 
 	// Build response
 	resp := gtypes.CreateEntityWithEdgesResponse{
@@ -277,7 +277,7 @@ func (p *Processor) handleEntityUpdateWithEdges(msg *nats.Msg) {
 	}
 
 	// Update entity with edges atomically
-	entity, err := p.dataManager.UpdateEntityWithEdges(ctx, req.Entity, req.AddEdges, req.RemoveEdges)
+	entity, err := p.entityManager.UpdateEntityWithEdges(ctx, req.Entity, req.AddEdges, req.RemoveEdges)
 
 	// Build response
 	resp := gtypes.UpdateEntityWithEdgesResponse{
@@ -335,8 +335,8 @@ func (p *Processor) handleEdgeAdd(msg *nats.Msg) {
 		edge.Weight = 1.0
 	}
 
-	// Add edge using DataManager
-	err := p.dataManager.AddEdge(ctx, req.FromEntityID, edge)
+	// Add edge using EdgeManager
+	err := p.edgeManager.AddEdge(ctx, req.FromEntityID, edge)
 
 	// Build response
 	resp := gtypes.AddEdgeResponse{
@@ -379,8 +379,8 @@ func (p *Processor) handleEdgeRemove(msg *nats.Msg) {
 		return
 	}
 
-	// Remove edge using DataManager
-	err := p.dataManager.RemoveEdge(ctx, req.FromEntityID, req.ToEntityID, req.EdgeType)
+	// Remove edge using EdgeManager
+	err := p.edgeManager.RemoveEdge(ctx, req.FromEntityID, req.ToEntityID, req.EdgeType)
 
 	// Build response
 	resp := gtypes.RemoveEdgeResponse{

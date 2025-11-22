@@ -71,7 +71,7 @@ func TestIntegration_GraphQLWithQueryManager(t *testing.T) {
 	entity1ID := "c360.platform1.test.system1.drone.graphql1"
 	entity2ID := "c360.platform1.test.system1.battery.graphql1"
 
-	createTestEntities(t, ctx, processor, entity1ID, entity2ID)
+	createTestEntities(ctx, t, processor, entity1ID, entity2ID)
 
 	// Get QueryManager from processor
 	queryManager := processor.GetQueryManager()
@@ -166,7 +166,7 @@ func TestIntegration_GraphQLWithQueryManager(t *testing.T) {
 }
 
 // createTestEntities creates test entities with a relationship
-func createTestEntities(t *testing.T, ctx context.Context, processor *Processor, entity1ID, entity2ID string) {
+func createTestEntities(ctx context.Context, t *testing.T, processor *Processor, entity1ID, entity2ID string) {
 	t.Helper()
 
 	// Create entity 1 (drone)
@@ -224,9 +224,9 @@ func createTestEntities(t *testing.T, ctx context.Context, processor *Processor,
 	}
 
 	// Store entities via processor's data manager (internal access from same package)
-	_, err := processor.dataManager.CreateEntity(ctx, entity1)
+	_, err := processor.entityManager.CreateEntity(ctx, entity1)
 	require.NoError(t, err)
-	_, err = processor.dataManager.CreateEntity(ctx, entity2)
+	_, err = processor.entityManager.CreateEntity(ctx, entity2)
 	require.NoError(t, err)
 
 	// Wait for entities to be indexed
@@ -239,7 +239,7 @@ func createTestEntities(t *testing.T, ctx context.Context, processor *Processor,
 		Properties: map[string]any{"strength": 1.0},
 	}
 
-	err = processor.dataManager.AddEdge(ctx, entity1ID, edge)
+	err = processor.edgeManager.AddEdge(ctx, entity1ID, edge)
 	require.NoError(t, err)
 
 	// Wait longer for edge to be indexed (relationship indexing is async)
@@ -252,7 +252,7 @@ func createTestEntities(t *testing.T, ctx context.Context, processor *Processor,
 }
 
 // setupGraphQLGateway creates a GraphQL gateway with QueryManager backend
-func setupGraphQLGateway(t *testing.T, natsClient *natsclient.Client, queryManager interface{}) *graphql.GraphQLGateway {
+func setupGraphQLGateway(t *testing.T, natsClient *natsclient.Client, queryManager interface{}) *graphql.Gateway {
 	t.Helper()
 
 	// Create gateway config
@@ -276,8 +276,8 @@ func setupGraphQLGateway(t *testing.T, natsClient *natsclient.Client, queryManag
 	discoverable, err := graphql.NewGraphQLGateway(rawConfig, deps)
 	require.NoError(t, err)
 
-	gateway, ok := discoverable.(*graphql.GraphQLGateway)
-	require.True(t, ok, "Should be GraphQLGateway type")
+	gateway, ok := discoverable.(*graphql.Gateway)
+	require.True(t, ok, "Should be Gateway type")
 
 	err = gateway.Initialize()
 	require.NoError(t, err)

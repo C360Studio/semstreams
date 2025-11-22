@@ -61,8 +61,8 @@ type Manager struct {
 	embedder         Embedder                     // Embedding generator (nil if disabled)
 	vectorCache      cache.Cache[[]float32]       // TTL cache: entityID -> embedding vector (read hot-path)
 	metadataCache    cache.Cache[*EntityMetadata] // TTL cache: entityID -> metadata
-	embeddingStorage *embedding.EmbeddingStorage  // Persistent KV storage for embeddings
-	embeddingWorker  *embedding.EmbeddingWorker   // Async worker for embedding generation
+	embeddingStorage *embedding.Storage           // Persistent KV storage for embeddings
+	embeddingWorker  *embedding.Worker            // Async worker for embedding generation
 
 	// Event processing
 	eventChan chan EntityChange
@@ -1008,9 +1008,12 @@ func (m *Manager) UpdateAliasIndex(ctx context.Context, alias, entityID string) 
 		return ErrIndexDisabled
 	}
 
-	// Store alias directly in KV bucket
-	// The alias is the key, the entity ID is the value
-	_, err := m.aliasBucket.PutString(ctx, alias, entityID)
+	// Store alias in KV bucket with consistent key format
+	// Sanitize alias and add prefix (matches ResolveAlias lookup format)
+	sanitizedAlias := sanitizeNATSKey(alias)
+	key := fmt.Sprintf("alias--%s", sanitizedAlias)
+
+	_, err := m.aliasBucket.PutString(ctx, key, entityID)
 	if err != nil {
 		return errors.WrapTransient(err, "IndexManager", "updateAliases", "alias index update failed")
 	}
@@ -1111,8 +1114,12 @@ func (m *Manager) DeleteFromAliasIndex(ctx context.Context, alias string) error 
 		return ErrIndexDisabled
 	}
 
-	// Delete alias directly from KV bucket
-	err := m.aliasBucket.Delete(ctx, alias)
+	// Delete alias from KV bucket with consistent key format
+	// Sanitize alias and add prefix (matches ResolveAlias lookup format)
+	sanitizedAlias := sanitizeNATSKey(alias)
+	key := fmt.Sprintf("alias--%s", sanitizedAlias)
+
+	err := m.aliasBucket.Delete(ctx, key)
 	if err != nil && err != jetstream.ErrKeyNotFound {
 		return errors.WrapTransient(err, "IndexManager", "removeAliases", "alias index deletion failed")
 	}

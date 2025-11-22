@@ -29,7 +29,7 @@ func (m *mockGraphProvider) addEdge(from, to string) {
 	}
 }
 
-func (m *mockGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+func (m *mockGraphProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
 	ids := make([]string, 0, len(m.entities))
 	for id := range m.entities {
 		ids = append(ids, id)
@@ -37,7 +37,7 @@ func (m *mockGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, erro
 	return ids, nil
 }
 
-func (m *mockGraphProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
+func (m *mockGraphProvider) GetNeighbors(_ context.Context, entityID string, direction string) ([]string, error) {
 	if direction == "outgoing" || direction == "both" {
 		return m.entities[entityID], nil
 	}
@@ -54,7 +54,7 @@ func (m *mockGraphProvider) GetNeighbors(ctx context.Context, entityID string, d
 	return incoming, nil
 }
 
-func (m *mockGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+func (m *mockGraphProvider) GetEdgeWeight(_ context.Context, fromID, toID string) (float64, error) {
 	neighbors := m.entities[fromID]
 	for _, n := range neighbors {
 		if n == toID {

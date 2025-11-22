@@ -631,7 +631,7 @@ func (s *SemanticKitchenSinkScenario) executeTestEmbeddingFallback(ctx context.C
 }
 
 // executeValidateMetrics validates Prometheus metrics exposure
-func (s *SemanticKitchenSinkScenario) executeValidateMetrics(ctx context.Context, result *Result) error {
+func (s *SemanticKitchenSinkScenario) executeValidateMetrics(_ context.Context, result *Result) error {
 	// Query metrics endpoint (port 9090, not 8080 which is the HTTP API)
 	metricsURL := "http://localhost:9090/metrics"
 	resp, err := http.Get(metricsURL)

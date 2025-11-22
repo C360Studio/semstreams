@@ -126,7 +126,7 @@ func setupQueryManager(
 
 	queryDeps := Deps{
 		Config:       queryConfig,
-		DataHandler:  dataManager,
+		EntityReader: dataManager,
 		IndexManager: indexManager,
 		Registry:     nil,
 		Logger:       nil,

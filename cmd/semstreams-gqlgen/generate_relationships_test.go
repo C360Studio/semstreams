@@ -293,6 +293,32 @@ func TestBuildFieldResolvers(t *testing.T) {
 
 // TestGenerateResolverCode_RelationshipFields tests generated resolver code
 func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
+	// Setup schema and configuration
+	schemaInfo, config := setupRelationshipTestSchema(t)
+
+	// Build template data and generate code
+	templateData, err := buildTemplateData(config, schemaInfo)
+	if err != nil {
+		t.Fatalf("buildTemplateData failed: %v", err)
+	}
+
+	code, err := GenerateResolverCode(templateData)
+	if err != nil {
+		t.Fatalf("GenerateResolverCode failed: %v", err)
+	}
+
+	// Verify generated code structure
+	verifyResolverInterface(t, code)
+	verifyResolverImplementation(t, code)
+	verifyOutgoingRelationship(t, code)
+	verifyIncomingRelationship(t, code)
+	verifyBothDirectionRelationship(t, code)
+	verifyBatchLoadingAndConversions(t, code)
+	verifyNullSafety(t, code)
+}
+
+// setupRelationshipTestSchema creates schema and configuration for relationship testing
+func setupRelationshipTestSchema(t *testing.T) (*SchemaInfo, *Config) {
 	schema := `
 		type Spec {
 			id: ID!
@@ -358,24 +384,15 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 		},
 	}
 
-	// Build template data
-	templateData, err := buildTemplateData(config, schemaInfo)
-	if err != nil {
-		t.Fatalf("buildTemplateData failed: %v", err)
-	}
+	return schemaInfo, config
+}
 
-	// Generate resolver code
-	code, err := GenerateResolverCode(templateData)
-	if err != nil {
-		t.Fatalf("GenerateResolverCode failed: %v", err)
-	}
-
-	// Verify field resolver interface generated
+// verifyResolverInterface verifies the SpecResolver interface and its methods
+func verifyResolverInterface(t *testing.T, code string) {
 	if !strings.Contains(code, "type SpecResolver interface") {
 		t.Error("SpecResolver interface not generated")
 	}
 
-	// Verify all three relationship methods in interface
 	expectedMethods := []string{
 		"Dependencies(ctx context.Context, obj *Spec) ([]*Spec, error)",
 		"Dependents(ctx context.Context, obj *Spec) ([]*Spec, error)",
@@ -387,22 +404,26 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 			t.Errorf("Interface method not found: %s", method)
 		}
 	}
+}
 
-	// Verify resolver getter method
+// verifyResolverImplementation verifies the resolver getter and field resolver struct
+func verifyResolverImplementation(t *testing.T, code string) {
 	if !strings.Contains(code, "func (r *GeneratedResolver) Spec() SpecResolver") {
 		t.Error("Spec() resolver getter not generated")
 	}
 
-	// Verify field resolver struct
 	if !strings.Contains(code, "type specFieldResolver struct{ *GeneratedResolver }") {
 		t.Error("specFieldResolver struct not generated")
 	}
+}
 
-	// Verify outgoing direction uses ToEntityID
+// verifyOutgoingRelationship verifies the outgoing relationship (Dependencies) uses ToEntityID
+func verifyOutgoingRelationship(t *testing.T, code string) {
 	if !strings.Contains(code, `func (r *specFieldResolver) Dependencies(ctx context.Context, obj *Spec) ([]*Spec, error)`) {
 		t.Error("Dependencies method not generated")
 	}
-	// Check for RelationshipFilters struct usage (current API)
+
+	// Check for RelationshipFilters struct usage
 	if strings.Contains(code, "Dependencies") {
 		if !strings.Contains(code, `r.base.QueryRelationships(ctx, graphql.RelationshipFilters{`) {
 			t.Error("Dependencies should use QueryRelationships with RelationshipFilters struct")
@@ -417,6 +438,7 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 			t.Error("Dependencies should filter by depends_on edge type")
 		}
 	}
+
 	// Check for ToEntityID extraction in outgoing direction
 	dependenciesStart := strings.Index(code, "func (r *specFieldResolver) Dependencies")
 	if dependenciesStart != -1 {
@@ -428,11 +450,14 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// Verify incoming direction uses FromEntityID
+// verifyIncomingRelationship verifies the incoming relationship (Dependents) uses FromEntityID
+func verifyIncomingRelationship(t *testing.T, code string) {
 	if !strings.Contains(code, `func (r *specFieldResolver) Dependents(ctx context.Context, obj *Spec) ([]*Spec, error)`) {
 		t.Error("Dependents method not generated")
 	}
+
 	dependentsStart := strings.Index(code, "func (r *specFieldResolver) Dependents")
 	if dependentsStart != -1 {
 		dependentsEnd := strings.Index(code[dependentsStart:], "\n}\n")
@@ -443,11 +468,14 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// Verify both direction handles both IDs
+// verifyBothDirectionRelationship verifies bidirectional relationships handle both IDs
+func verifyBothDirectionRelationship(t *testing.T, code string) {
 	if !strings.Contains(code, `func (r *specFieldResolver) RelatedDocs(ctx context.Context, obj *Spec) ([]*Doc, error)`) {
 		t.Error("RelatedDocs method not generated")
 	}
+
 	relatedDocsStart := strings.Index(code, "func (r *specFieldResolver) RelatedDocs")
 	if relatedDocsStart != -1 {
 		relatedDocsEnd := strings.Index(code[relatedDocsStart:], "\n}\n")
@@ -464,21 +492,24 @@ func TestGenerateResolverCode_RelationshipFields(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// Verify batch loading with QueryEntitiesByIDs
+// verifyBatchLoadingAndConversions verifies batch loading and type conversion functions
+func verifyBatchLoadingAndConversions(t *testing.T, code string) {
 	if !strings.Contains(code, "r.base.QueryEntitiesByIDs(ctx, ids)") {
 		t.Error("Batch loading with QueryEntitiesByIDs not generated")
 	}
 
-	// Verify conversion functions called
 	if !strings.Contains(code, "return entitiesSpec(entities)") {
 		t.Error("entitiesSpec conversion not called for Spec relationships")
 	}
 	if !strings.Contains(code, "return entitiesDoc(entities)") {
 		t.Error("entitiesDoc conversion not called for Doc relationships")
 	}
+}
 
-	// Verify null safety
+// verifyNullSafety verifies null safety checks are present
+func verifyNullSafety(t *testing.T, code string) {
 	if !strings.Contains(code, "if obj == nil") {
 		t.Error("Null safety check for obj not generated")
 	}

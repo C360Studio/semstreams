@@ -191,7 +191,7 @@ func TestExtractComponentCounters_WithData(t *testing.T) {
 	assert.Equal(t, uint64(123), counters[metricName])
 }
 
-func TestQueryPrometheusSingle_NoData(t *testing.T) {
+func TestQueryPrometheusSingle_NoData(_ *testing.T) {
 	// This test verifies error handling when Prometheus returns no data
 	// Actual Prometheus queries are tested in integration tests
 	fs := &FlowService{
@@ -245,7 +245,7 @@ func TestSanitizeComponentName(t *testing.T) {
 		{
 			name:     "path traversal attempt",
 			input:    "../../../etc/passwd",
-			expected: "____________etc_passwd",
+			expected: "_________etc_passwd",
 		},
 		{
 			name:     "special characters",

@@ -14,13 +14,42 @@ import (
 
 // TestSchemaGeneration tests the complete schema generation pipeline
 func TestSchemaGeneration(t *testing.T) {
-	// Create temporary directory for test output
-	tempDir := t.TempDir()
-	schemasDir := filepath.Join(tempDir, "schemas")
-	specsDir := filepath.Join(tempDir, "specs")
-	openapiPath := filepath.Join(specsDir, "openapi.v3.yaml")
+	// Setup test directories
+	schemasDir, _, openapiPath := setupTestDirectories(t)
 
-	// Create directories
+	// Initialize registry
+	registry := component.NewRegistry()
+	if err := componentregistry.Register(registry); err != nil {
+		t.Fatalf("Failed to register components: %v", err)
+	}
+
+	factories := registry.ListFactories()
+	if len(factories) == 0 {
+		t.Fatal("No component factories registered")
+	}
+
+	// Extract and write schemas
+	componentSchemas := extractAndWriteSchemas(t, factories, schemasDir)
+
+	// Verify schema files
+	validateSchemaFiles(t, componentSchemas, schemasDir)
+
+	// Generate and verify OpenAPI spec
+	openapi := generateOpenAPISpec(componentSchemas, schemasDir)
+	if err := writeYAMLFile(openapiPath, openapi); err != nil {
+		t.Fatalf("Failed to write OpenAPI spec: %v", err)
+	}
+
+	verifyOpenAPISpec(t, openapiPath, openapi)
+}
+
+// setupTestDirectories creates temporary test directories
+func setupTestDirectories(t *testing.T) (schemasDir, specsDir, openapiPath string) {
+	tempDir := t.TempDir()
+	schemasDir = filepath.Join(tempDir, "schemas")
+	specsDir = filepath.Join(tempDir, "specs")
+	openapiPath = filepath.Join(specsDir, "openapi.v3.yaml")
+
 	if err := os.MkdirAll(schemasDir, 0755); err != nil {
 		t.Fatalf("Failed to create schemas directory: %v", err)
 	}
@@ -28,20 +57,17 @@ func TestSchemaGeneration(t *testing.T) {
 		t.Fatalf("Failed to create specs directory: %v", err)
 	}
 
-	// Initialize registry and register components
-	registry := component.NewRegistry()
-	if err := componentregistry.Register(registry); err != nil {
-		t.Fatalf("Failed to register components: %v", err)
-	}
+	return schemasDir, specsDir, openapiPath
+}
 
-	// Get all registered factories
-	factories := registry.ListFactories()
-	if len(factories) == 0 {
-		t.Fatal("No component factories registered")
-	}
-
-	// Extract and write schemas
+// extractAndWriteSchemas extracts schemas from factories and writes them to disk
+func extractAndWriteSchemas(
+	t *testing.T,
+	factories map[string]*component.Registration,
+	schemasDir string,
+) []ComponentSchema {
 	var componentSchemas []ComponentSchema
+
 	for name, registration := range factories {
 		schema := extractSchema(name, registration)
 
@@ -68,8 +94,12 @@ func TestSchemaGeneration(t *testing.T) {
 		}
 	}
 
-	// Verify schema files exist and are valid JSON
-	for _, schema := range componentSchemas {
+	return componentSchemas
+}
+
+// validateSchemaFiles verifies that all schema files exist and contain valid JSON
+func validateSchemaFiles(t *testing.T, schemas []ComponentSchema, schemasDir string) {
+	for _, schema := range schemas {
 		schemaFile := filepath.Join(schemasDir, schema.ID)
 
 		// Check file exists
@@ -90,18 +120,16 @@ func TestSchemaGeneration(t *testing.T) {
 			t.Errorf("Schema file %s is not valid JSON: %v", schemaFile, err)
 		}
 	}
+}
 
-	// Generate OpenAPI spec
-	openapi := generateOpenAPISpec(componentSchemas, schemasDir)
-	if err := writeYAMLFile(openapiPath, openapi); err != nil {
-		t.Fatalf("Failed to write OpenAPI spec: %v", err)
-	}
-
-	// Verify OpenAPI spec exists and is valid YAML
+// verifyOpenAPISpec verifies the OpenAPI spec file and structure
+func verifyOpenAPISpec(t *testing.T, openapiPath string, openapi OpenAPIDocument) {
+	// Verify file exists
 	if _, err := os.Stat(openapiPath); err != nil {
 		t.Fatalf("OpenAPI spec file not found: %s", openapiPath)
 	}
 
+	// Verify valid YAML
 	data, err := os.ReadFile(openapiPath)
 	if err != nil {
 		t.Fatalf("Failed to read OpenAPI spec: %v", err)

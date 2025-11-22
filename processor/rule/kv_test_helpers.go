@@ -237,7 +237,7 @@ func (h *KVTestHelper) DeleteEntity(entityID string) {
 
 // WaitForEntityProcessing waits for an entity update to be processed
 // This is useful when testing async KV watchers
-func WaitForEntityProcessing(t *testing.T, timeout time.Duration) {
+func WaitForEntityProcessing(_ *testing.T, _ time.Duration) {
 	// Give KV watchers time to process the update
 	// In production, you'd check for specific conditions
 	time.Sleep(200 * time.Millisecond)
@@ -278,7 +278,7 @@ func CreateRuleTestConfig(enabledRules []string, watchPatterns []string) Config 
 }
 
 // VerifyRuleTriggered checks if a rule has been triggered by examining metrics or events
-func VerifyRuleTriggered(t *testing.T, processor *Processor, ruleName string) bool {
+func VerifyRuleTriggered(_ *testing.T, processor *Processor, ruleName string) bool {
 	// This would check metrics or other indicators that the rule triggered
 	// Implementation depends on your metrics setup
 

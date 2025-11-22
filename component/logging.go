@@ -35,10 +35,10 @@ type LogEntry struct {
 	Stack     string   `json:"stack,omitempty"` // Stack trace for errors
 }
 
-// ComponentLogger provides structured logging for components that publishes
+// Logger provides structured logging for components that publishes
 // logs to NATS for real-time streaming via SSE. It wraps a standard slog.Logger
 // for local logging while also publishing to NATS for remote consumption.
-type ComponentLogger struct {
+type Logger struct {
 	componentName string
 	flowID        string
 	nc            *nats.Conn
@@ -46,9 +46,9 @@ type ComponentLogger struct {
 	enabled       bool // whether NATS publishing is enabled
 }
 
-// NewComponentLogger creates a new component logger that publishes to NATS
-func NewComponentLogger(componentName, flowID string, nc *nats.Conn, logger *slog.Logger) *ComponentLogger {
-	return &ComponentLogger{
+// NewLogger creates a new component logger that publishes to NATS
+func NewLogger(componentName, flowID string, nc *nats.Conn, logger *slog.Logger) *Logger {
+	return &Logger{
 		componentName: componentName,
 		flowID:        flowID,
 		nc:            nc,
@@ -58,27 +58,27 @@ func NewComponentLogger(componentName, flowID string, nc *nats.Conn, logger *slo
 }
 
 // Debug logs a debug-level message
-func (cl *ComponentLogger) Debug(msg string) {
+func (cl *Logger) Debug(msg string) {
 	cl.DebugContext(context.Background(), msg)
 }
 
 // Info logs an info-level message
-func (cl *ComponentLogger) Info(msg string) {
+func (cl *Logger) Info(msg string) {
 	cl.InfoContext(context.Background(), msg)
 }
 
 // Warn logs a warning-level message
-func (cl *ComponentLogger) Warn(msg string) {
+func (cl *Logger) Warn(msg string) {
 	cl.WarnContext(context.Background(), msg)
 }
 
 // Error logs an error-level message with optional error details
-func (cl *ComponentLogger) Error(msg string, err error) {
+func (cl *Logger) Error(msg string, err error) {
 	cl.ErrorContext(context.Background(), msg, err)
 }
 
 // DebugContext logs a debug-level message with context
-func (cl *ComponentLogger) DebugContext(ctx context.Context, msg string) {
+func (cl *Logger) DebugContext(ctx context.Context, msg string) {
 	cl.logWithContext(ctx, LogLevelDebug, msg, "")
 	if cl.logger != nil {
 		cl.logger.Debug(msg, "component", cl.componentName)
@@ -86,7 +86,7 @@ func (cl *ComponentLogger) DebugContext(ctx context.Context, msg string) {
 }
 
 // InfoContext logs an info-level message with context
-func (cl *ComponentLogger) InfoContext(ctx context.Context, msg string) {
+func (cl *Logger) InfoContext(ctx context.Context, msg string) {
 	cl.logWithContext(ctx, LogLevelInfo, msg, "")
 	if cl.logger != nil {
 		cl.logger.Info(msg, "component", cl.componentName)
@@ -94,7 +94,7 @@ func (cl *ComponentLogger) InfoContext(ctx context.Context, msg string) {
 }
 
 // WarnContext logs a warning-level message with context
-func (cl *ComponentLogger) WarnContext(ctx context.Context, msg string) {
+func (cl *Logger) WarnContext(ctx context.Context, msg string) {
 	cl.logWithContext(ctx, LogLevelWarn, msg, "")
 	if cl.logger != nil {
 		cl.logger.Warn(msg, "component", cl.componentName)
@@ -102,7 +102,7 @@ func (cl *ComponentLogger) WarnContext(ctx context.Context, msg string) {
 }
 
 // ErrorContext logs an error-level message with optional error details and context
-func (cl *ComponentLogger) ErrorContext(ctx context.Context, msg string, err error) {
+func (cl *Logger) ErrorContext(ctx context.Context, msg string, err error) {
 	stack := ""
 	if err != nil {
 		// Include error details as stack trace
@@ -115,12 +115,12 @@ func (cl *ComponentLogger) ErrorContext(ctx context.Context, msg string, err err
 }
 
 // log publishes a log entry to NATS (deprecated: use logWithContext)
-func (cl *ComponentLogger) log(level LogLevel, message, stack string) {
+func (cl *Logger) log(level LogLevel, message, stack string) {
 	cl.logWithContext(context.Background(), level, message, stack)
 }
 
 // logWithContext publishes a log entry to NATS with context cancellation support
-func (cl *ComponentLogger) logWithContext(ctx context.Context, level LogLevel, message, stack string) {
+func (cl *Logger) logWithContext(ctx context.Context, level LogLevel, message, stack string) {
 	if !cl.enabled {
 		return
 	}

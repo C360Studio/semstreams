@@ -90,7 +90,7 @@ type Processor struct {
 	entityWatchers []jetstream.KeyWatcher
 
 	// Prometheus metrics
-	metrics *RuleMetrics
+	metrics *Metrics
 
 	// Logger
 	logger *slog.Logger
@@ -348,7 +348,7 @@ func (rp *Processor) setupSubscriptions(ctx context.Context) error {
 // matchesRuleSubject, recordError) are in message_handler.go
 
 // Stop stops the processor and cleans up resources
-func (rp *Processor) Stop(timeout time.Duration) error {
+func (rp *Processor) Stop(_ time.Duration) error {
 	rp.mu.Lock()
 	if rp.shutdown == nil {
 		rp.mu.Unlock()

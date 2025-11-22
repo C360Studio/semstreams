@@ -43,15 +43,15 @@ func (m *MockGraphProvider) AddEdge(fromID, toID string, weight float64) {
 	m.weights[toID][fromID] = weight
 }
 
-func (m *MockGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+func (m *MockGraphProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
 	return m.entities, nil
 }
 
-func (m *MockGraphProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
+func (m *MockGraphProvider) GetNeighbors(_ context.Context, entityID string, _ string) ([]string, error) {
 	return m.neighbors[entityID], nil
 }
 
-func (m *MockGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+func (m *MockGraphProvider) GetEdgeWeight(_ context.Context, fromID, toID string) (float64, error) {
 	if weights, ok := m.weights[fromID]; ok {
 		if weight, ok := weights[toID]; ok {
 			return weight, nil
@@ -73,7 +73,7 @@ func NewMockCommunityStorage() *MockCommunityStorage {
 	}
 }
 
-func (m *MockCommunityStorage) SaveCommunity(ctx context.Context, community *Community) error {
+func (m *MockCommunityStorage) SaveCommunity(_ context.Context, community *Community) error {
 	m.communities[community.ID] = community
 
 	// Update entity -> community mapping
@@ -87,14 +87,14 @@ func (m *MockCommunityStorage) SaveCommunity(ctx context.Context, community *Com
 	return nil
 }
 
-func (m *MockCommunityStorage) GetCommunity(ctx context.Context, id string) (*Community, error) {
+func (m *MockCommunityStorage) GetCommunity(_ context.Context, id string) (*Community, error) {
 	if community, ok := m.communities[id]; ok {
 		return community, nil
 	}
 	return nil, nil
 }
 
-func (m *MockCommunityStorage) GetCommunitiesByLevel(ctx context.Context, level int) ([]*Community, error) {
+func (m *MockCommunityStorage) GetCommunitiesByLevel(_ context.Context, level int) ([]*Community, error) {
 	communities := make([]*Community, 0)
 	for _, community := range m.communities {
 		if community.Level == level {
@@ -113,12 +113,12 @@ func (m *MockCommunityStorage) GetEntityCommunity(ctx context.Context, entityID 
 	return nil, nil
 }
 
-func (m *MockCommunityStorage) DeleteCommunity(ctx context.Context, id string) error {
+func (m *MockCommunityStorage) DeleteCommunity(_ context.Context, id string) error {
 	delete(m.communities, id)
 	return nil
 }
 
-func (m *MockCommunityStorage) Clear(ctx context.Context) error {
+func (m *MockCommunityStorage) Clear(_ context.Context) error {
 	m.communities = make(map[string]*Community)
 	m.entityCommunity = make(map[int]map[string]string)
 	return nil

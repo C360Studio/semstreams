@@ -369,6 +369,11 @@ func (fs *FlowService) buildHealthOnlyResponse(components []componentInfo) *Runt
 func inferMetricPrefix(factoryName string) string {
 	lower := strings.ToLower(factoryName)
 
+	// Specific input types
+	if lower == "udp" || lower == "websocket" || lower == "tcp" || lower == "mqtt" {
+		return "input"
+	}
+
 	// Common patterns
 	if strings.Contains(lower, "input") || strings.Contains(lower, "source") {
 		return "input"

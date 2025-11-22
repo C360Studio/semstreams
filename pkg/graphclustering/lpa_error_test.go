@@ -15,21 +15,21 @@ type FailingMockProvider struct {
 	err    error  // Error to return
 }
 
-func (m *FailingMockProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+func (m *FailingMockProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
 	if m.failOn == "GetAllEntityIDs" {
 		return nil, m.err
 	}
 	return []string{"A", "B", "C"}, nil
 }
 
-func (m *FailingMockProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
+func (m *FailingMockProvider) GetNeighbors(_ context.Context, _ string, _ string) ([]string, error) {
 	if m.failOn == "GetNeighbors" {
 		return nil, m.err
 	}
 	return []string{}, nil
 }
 
-func (m *FailingMockProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+func (m *FailingMockProvider) GetEdgeWeight(_ context.Context, _ string, _ string) (float64, error) {
 	if m.failOn == "GetEdgeWeight" {
 		return 0, m.err
 	}
@@ -42,33 +42,33 @@ type FailingMockStorage struct {
 	err    error
 }
 
-func (m *FailingMockStorage) SaveCommunity(ctx context.Context, community *Community) error {
+func (m *FailingMockStorage) SaveCommunity(_ context.Context, _ *Community) error {
 	if m.failOn == "SaveCommunity" {
 		return m.err
 	}
 	return nil
 }
 
-func (m *FailingMockStorage) GetCommunity(ctx context.Context, id string) (*Community, error) {
+func (m *FailingMockStorage) GetCommunity(_ context.Context, _ string) (*Community, error) {
 	if m.failOn == "GetCommunity" {
 		return nil, m.err
 	}
 	return nil, nil
 }
 
-func (m *FailingMockStorage) GetCommunitiesByLevel(ctx context.Context, level int) ([]*Community, error) {
+func (m *FailingMockStorage) GetCommunitiesByLevel(_ context.Context, _ int) ([]*Community, error) {
 	return []*Community{}, nil
 }
 
-func (m *FailingMockStorage) GetEntityCommunity(ctx context.Context, entityID string, level int) (*Community, error) {
+func (m *FailingMockStorage) GetEntityCommunity(_ context.Context, _ string, _ int) (*Community, error) {
 	return nil, nil
 }
 
-func (m *FailingMockStorage) DeleteCommunity(ctx context.Context, id string) error {
+func (m *FailingMockStorage) DeleteCommunity(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *FailingMockStorage) Clear(ctx context.Context) error {
+func (m *FailingMockStorage) Clear(_ context.Context) error {
 	if m.failOn == "Clear" {
 		return m.err
 	}

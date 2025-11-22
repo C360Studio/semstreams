@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewComponentLogger(t *testing.T) {
+func TestNewLogger(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	tests := []struct {
@@ -41,7 +41,7 @@ func TestNewComponentLogger(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cl := NewComponentLogger(tt.componentName, tt.flowID, tt.nc, logger)
+			cl := NewLogger(tt.componentName, tt.flowID, tt.nc, logger)
 
 			assert.Equal(t, tt.componentName, cl.componentName)
 			assert.Equal(t, tt.flowID, cl.flowID)
@@ -51,7 +51,7 @@ func TestNewComponentLogger(t *testing.T) {
 	}
 }
 
-func TestComponentLogger_LogLevels(t *testing.T) {
+func TestLogger_LogLevels(t *testing.T) {
 	// Get shared NATS client for integration test
 	nc := getSharedNATSClient(t)
 
@@ -59,7 +59,7 @@ func TestComponentLogger_LogLevels(t *testing.T) {
 	flowID := "test-flow-123"
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	cl := NewComponentLogger(componentName, flowID, nc, logger)
+	cl := NewLogger(componentName, flowID, nc, logger)
 
 	// Subscribe to logs for verification
 	subject := fmt.Sprintf("logs.%s.%s", flowID, componentName)
@@ -158,10 +158,10 @@ func TestComponentLogger_LogLevels(t *testing.T) {
 	}
 }
 
-func TestComponentLogger_DisabledPublishing(t *testing.T) {
+func TestLogger_DisabledPublishing(t *testing.T) {
 	// Create logger without NATS connection
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	cl := NewComponentLogger("test-component", "test-flow", nil, logger)
+	cl := NewLogger("test-component", "test-flow", nil, logger)
 
 	assert.False(t, cl.enabled, "Logger should be disabled without NATS")
 
@@ -172,14 +172,14 @@ func TestComponentLogger_DisabledPublishing(t *testing.T) {
 	cl.Error("error message", fmt.Errorf("test error"))
 }
 
-func TestComponentLogger_ConcurrentLogging(t *testing.T) {
+func TestLogger_ConcurrentLogging(t *testing.T) {
 	nc := getSharedNATSClient(t)
 
 	componentName := "concurrent-component"
 	flowID := "test-flow-concurrent"
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	cl := NewComponentLogger(componentName, flowID, nc, logger)
+	cl := NewLogger(componentName, flowID, nc, logger)
 
 	// Subscribe to logs
 	subject := fmt.Sprintf("logs.%s.%s", flowID, componentName)

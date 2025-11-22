@@ -52,9 +52,12 @@ type Processor struct {
 	messageManager messagemanager.MessageHandler // Complex message→entity transformation
 
 	// Core modules (foundational data management)
-	dataManager  datamanager.DataHandler // Consolidated entity and edge management
-	indexManager indexmanager.Indexer    // KV watching, secondary indexes
-	queryManager querymanager.Querier    // Query operations with caching
+	dataManager   *datamanager.Manager      // Concrete manager instance (for tests needing full access)
+	dataLifecycle datamanager.DataLifecycle // Lifecycle management (Run, FlushPendingWrites, etc.)
+	entityManager datamanager.EntityManager // Complete entity operations (passed to sub-components)
+	edgeManager   datamanager.EdgeManager   // Graph relationship operations
+	indexManager  indexmanager.Indexer      // KV watching, secondary indexes
+	queryManager  querymanager.Querier      // Query operations with caching
 
 	// Optimization caches
 	entityCache cache.Cache[*gtypes.EntityState]
@@ -260,7 +263,7 @@ func (p *Processor) IsReady() bool {
 	defer p.mu.RUnlock()
 
 	// Check if services are initialized (protected by RLock)
-	if p.dataManager == nil {
+	if p.entityManager == nil {
 		return false
 	}
 
@@ -309,7 +312,7 @@ func (p *Processor) WaitForReady(timeout time.Duration) error {
 func (p *Processor) GetReadinessDetails() string {
 	details := []string{}
 
-	if p.dataManager != nil {
+	if p.entityManager != nil {
 		details = append(details, "DataManager: initialized")
 	} else {
 		details = append(details, "DataManager: not initialized")
@@ -518,7 +521,7 @@ func (p *Processor) startBackgroundModules(ctx context.Context) {
 
 		// Launch DataManager
 		g.Go(func() error {
-			return p.dataManager.Run(gctx)
+			return p.dataLifecycle.Run(gctx)
 		})
 
 		// Launch IndexManager
@@ -669,7 +672,8 @@ func (p *Processor) createKVBucket(ctx context.Context, name, description string
 }
 
 // initializeDataManager creates and configures the DataManager
-func (p *Processor) initializeDataManager(kvBucket jetstream.KeyValue) (datamanager.DataHandler, error) {
+// Returns the manager which implements both DataLifecycle and EntityManager interfaces
+func (p *Processor) initializeDataManager(kvBucket jetstream.KeyValue) (*datamanager.Manager, error) {
 	p.logger.Debug("Preparing DataManager configuration")
 
 	dataConfig := datamanager.DefaultConfig()
@@ -750,7 +754,7 @@ func (p *Processor) initializeIndexManager(buckets map[string]jetstream.KeyValue
 
 // initializeQueryManager creates and configures the QueryManager
 func (p *Processor) initializeQueryManager(
-	dataHandler datamanager.DataHandler,
+	entityReader datamanager.EntityReader,
 	indexer indexmanager.Indexer,
 ) (querymanager.Querier, error) {
 	p.logger.Debug("Preparing QueryManager configuration")
@@ -763,7 +767,7 @@ func (p *Processor) initializeQueryManager(
 
 	queryDeps := querymanager.Deps{
 		Config:       queryConfig,
-		DataHandler:  dataHandler,
+		EntityReader: entityReader,
 		IndexManager: indexer,
 		Registry:     p.metricsRegistry,
 		Logger:       p.logger,
@@ -782,13 +786,16 @@ func (p *Processor) initializeQueryManager(
 
 // assignManagers assigns all managers atomically with proper locking
 func (p *Processor) assignManagers(
-	dataHandler datamanager.DataHandler,
+	dataManager *datamanager.Manager,
 	indexer indexmanager.Indexer,
 	querier querymanager.Querier,
 ) {
 	p.logger.Debug("Assigning all managers atomically")
 	p.mu.Lock()
-	p.dataManager = dataHandler
+	p.dataManager = dataManager
+	p.dataLifecycle = dataManager
+	p.entityManager = dataManager
+	p.edgeManager = dataManager
 	p.indexManager = indexer
 	p.queryManager = querier
 	p.mu.Unlock()
@@ -803,9 +810,9 @@ func (p *Processor) initializeBusinessServices() error {
 	}
 
 	msgDeps := messagemanager.Dependencies{
-		DataHandler:  p.dataManager,
-		IndexManager: p.indexManager,
-		Logger:       p.logger,
+		EntityManager: p.entityManager,
+		IndexManager:  p.indexManager,
+		Logger:        p.logger,
 	}
 
 	p.messageManager = messagemanager.NewManager(msgConfig, msgDeps, p.recordError)
@@ -882,19 +889,19 @@ func (p *Processor) handleMessage(ctx context.Context, data []byte) {
 
 // GetEntity retrieves an entity by its ID.
 func (p *Processor) GetEntity(ctx context.Context, id string) (*gtypes.EntityState, error) {
-	return p.dataManager.GetEntity(ctx, id)
+	return p.entityManager.GetEntity(ctx, id)
 }
 
 // GetEntityByAlias retrieves an entity by its alias or ID.
 func (p *Processor) GetEntityByAlias(ctx context.Context, aliasOrID string) (*gtypes.EntityState, error) {
 	// Check if processor is initialized
-	if p.aliasCache == nil || p.dataManager == nil || p.indexManager == nil {
+	if p.aliasCache == nil || p.entityManager == nil || p.indexManager == nil {
 		return nil, errors.WrapTransient(nil, "Processor", "GetEntityByAlias", "processor not initialized")
 	}
 
 	// Try alias cache first
 	if entityID, ok := p.aliasCache.Get(aliasOrID); ok {
-		return p.dataManager.GetEntity(ctx, entityID)
+		return p.entityManager.GetEntity(ctx, entityID)
 	}
 
 	// Resolve via index engine
@@ -906,7 +913,7 @@ func (p *Processor) GetEntityByAlias(ctx context.Context, aliasOrID string) (*gt
 	// Cache the result
 	p.aliasCache.Set(aliasOrID, entityID)
 
-	return p.dataManager.GetEntity(ctx, entityID)
+	return p.entityManager.GetEntity(ctx, entityID)
 }
 
 // QueryByPredicate queries entities by a predicate expression.

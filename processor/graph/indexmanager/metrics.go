@@ -64,7 +64,57 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 		return nil
 	}
 
-	// Create simple metrics and register them
+	// Create and register metrics by logical domain
+	eventMetrics := createEventMetrics(component, registry)
+	timingMetrics := createTimingMetrics(component, registry)
+	indexMetrics := createIndexMetrics(component, registry)
+	queryMetrics := createQueryMetrics(component, registry)
+	embeddingMetrics := createEmbeddingMetrics(component, registry)
+
+	return &PrometheusMetrics{
+		eventsTotal:              eventMetrics.total,
+		eventsProcessed:          eventMetrics.processed,
+		eventsFailed:             eventMetrics.failed,
+		eventsDropped:            eventMetrics.dropped,
+		processLatency:           timingMetrics.processLatency,
+		duplicateEvents:          eventMetrics.duplicates,
+		deduplicationCache:       timingMetrics.deduplicationCache,
+		indexUpdatesTotal:        *indexMetrics.updatesTotal,
+		indexUpdatesFailed:       *indexMetrics.updatesFailed,
+		indexUpdateLatency:       *indexMetrics.updateLatency,
+		queriesTotal:             *queryMetrics.total,
+		queriesFailed:            *queryMetrics.failed,
+		queryLatency:             *queryMetrics.latency,
+		bufferSize:               timingMetrics.bufferSize,
+		bufferUtilization:        timingMetrics.bufferUtilization,
+		backlogSize:              timingMetrics.backlogSize,
+		healthStatus:             timingMetrics.healthStatus,
+		processingLag:            timingMetrics.processingLag,
+		errorCount:               eventMetrics.errorCount,
+		watchEventsTotal:         eventMetrics.watchTotal,
+		watchEventsFailed:        eventMetrics.watchFailed,
+		watchReconnections:       eventMetrics.watchReconnections,
+		watchersActive:           timingMetrics.watchersActive,
+		embeddingProvider:        embeddingMetrics.provider,
+		embeddingsGenerated:      embeddingMetrics.generated,
+		embeddingCacheHits:       embeddingMetrics.cacheHits,
+		embeddingCacheMisses:     embeddingMetrics.cacheMisses,
+		embeddingLatency:         embeddingMetrics.latency,
+		embeddingFallbacks:       embeddingMetrics.fallbacks,
+		embeddingsActive:         embeddingMetrics.active,
+		embeddingTextExtractions: embeddingMetrics.textExtractions,
+	}
+}
+
+// eventMetricsSet holds event-related counters
+type eventMetricsSet struct {
+	total, processed, failed, dropped           prometheus.Counter
+	duplicates, errorCount                      prometheus.Counter
+	watchTotal, watchFailed, watchReconnections prometheus.Counter
+}
+
+// createEventMetrics creates simple counters for event tracking
+func createEventMetrics(component string, registry *metric.MetricsRegistry) *eventMetricsSet {
 	eventsTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name:        "indexengine_events_total",
 		Help:        "Total number of KV change events received",
@@ -93,6 +143,64 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 	})
 	registry.RegisterCounter("indexengine", "events_dropped_total", eventsDropped)
 
+	duplicateEvents := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "indexengine_duplicate_events_total",
+		Help:        "Total number of duplicate events detected and skipped",
+		ConstLabels: prometheus.Labels{"component": component},
+	})
+	registry.RegisterCounter("indexengine", "duplicate_events_total", duplicateEvents)
+
+	errorCount := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "indexengine_errors_total",
+		Help:        "Total number of errors encountered",
+		ConstLabels: prometheus.Labels{"component": component},
+	})
+	registry.RegisterCounter("indexengine", "errors_total", errorCount)
+
+	watchEventsTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "indexengine_watch_events_total",
+		Help:        "Total number of KV watch events received",
+		ConstLabels: prometheus.Labels{"component": component},
+	})
+	registry.RegisterCounter("indexengine", "watch_events_total", watchEventsTotal)
+
+	watchEventsFailed := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "indexengine_watch_events_failed_total",
+		Help:        "Total number of KV watch events that failed",
+		ConstLabels: prometheus.Labels{"component": component},
+	})
+	registry.RegisterCounter("indexengine", "watch_events_failed_total", watchEventsFailed)
+
+	watchReconnections := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "indexengine_watch_reconnections_total",
+		Help:        "Total number of KV watch reconnections",
+		ConstLabels: prometheus.Labels{"component": component},
+	})
+	registry.RegisterCounter("indexengine", "watch_reconnections_total", watchReconnections)
+
+	return &eventMetricsSet{
+		total:              eventsTotal,
+		processed:          eventsProcessed,
+		failed:             eventsFailed,
+		dropped:            eventsDropped,
+		duplicates:         duplicateEvents,
+		errorCount:         errorCount,
+		watchTotal:         watchEventsTotal,
+		watchFailed:        watchEventsFailed,
+		watchReconnections: watchReconnections,
+	}
+}
+
+// timingMetricsSet holds histograms and gauges for timing/buffer tracking
+type timingMetricsSet struct {
+	processLatency                              prometheus.Histogram
+	deduplicationCache                          prometheus.Gauge
+	bufferSize, bufferUtilization, backlogSize  prometheus.Gauge
+	healthStatus, processingLag, watchersActive prometheus.Gauge
+}
+
+// createTimingMetrics creates histograms for latency and gauges for cache/buffer sizes
+func createTimingMetrics(component string, registry *metric.MetricsRegistry) *timingMetricsSet {
 	processLatency := prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:        "indexengine_process_latency_seconds",
 		Help:        "Latency of event processing in seconds",
@@ -101,64 +209,12 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 	})
 	registry.RegisterHistogram("indexengine", "process_latency_seconds", processLatency)
 
-	duplicateEvents := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "indexengine_duplicate_events_total",
-		Help:        "Total number of duplicate events detected and skipped",
-		ConstLabels: prometheus.Labels{"component": component},
-	})
-	registry.RegisterCounter("indexengine", "duplicate_events_total", duplicateEvents)
-
 	deduplicationCache := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name:        "indexengine_deduplication_cache_size",
 		Help:        "Current size of the deduplication cache",
 		ConstLabels: prometheus.Labels{"component": component},
 	})
 	registry.RegisterGauge("indexengine", "deduplication_cache_size", deduplicationCache)
-
-	// Create vectorized metrics and register them
-	indexUpdatesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name:        "indexengine_index_updates_total",
-		Help:        "Total number of index updates by type",
-		ConstLabels: prometheus.Labels{"component": component},
-	}, []string{"index_type", "operation"})
-	registry.RegisterCounterVec("indexengine", "index_updates_total", indexUpdatesTotal)
-
-	indexUpdatesFailed := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name:        "indexengine_index_updates_failed_total",
-		Help:        "Total number of failed index updates by type",
-		ConstLabels: prometheus.Labels{"component": component},
-	}, []string{"index_type", "operation"})
-	registry.RegisterCounterVec("indexengine", "index_updates_failed_total", indexUpdatesFailed)
-
-	indexUpdateLatency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:        "indexengine_index_update_latency_seconds",
-		Help:        "Latency of index updates in seconds by type",
-		ConstLabels: prometheus.Labels{"component": component},
-		Buckets:     []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
-	}, []string{"index_type"})
-	registry.RegisterHistogramVec("indexengine", "index_update_latency_seconds", indexUpdateLatency)
-
-	queriesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name:        "indexengine_queries_total",
-		Help:        "Total number of queries by type",
-		ConstLabels: prometheus.Labels{"component": component},
-	}, []string{"query_type"})
-	registry.RegisterCounterVec("indexengine", "queries_total", queriesTotal)
-
-	queriesFailed := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name:        "indexengine_queries_failed_total",
-		Help:        "Total number of failed queries by type",
-		ConstLabels: prometheus.Labels{"component": component},
-	}, []string{"query_type"})
-	registry.RegisterCounterVec("indexengine", "queries_failed_total", queriesFailed)
-
-	queryLatency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:        "indexengine_query_latency_seconds",
-		Help:        "Latency of queries in seconds by type",
-		ConstLabels: prometheus.Labels{"component": component},
-		Buckets:     []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
-	}, []string{"query_type"})
-	registry.RegisterHistogramVec("indexengine", "query_latency_seconds", queryLatency)
 
 	bufferSize := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name:        "indexengine_buffer_size",
@@ -195,34 +251,6 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 	})
 	registry.RegisterGauge("indexengine", "processing_lag_seconds", processingLag)
 
-	errorCount := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "indexengine_errors_total",
-		Help:        "Total number of errors encountered",
-		ConstLabels: prometheus.Labels{"component": component},
-	})
-	registry.RegisterCounter("indexengine", "errors_total", errorCount)
-
-	watchEventsTotal := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "indexengine_watch_events_total",
-		Help:        "Total number of KV watch events received",
-		ConstLabels: prometheus.Labels{"component": component},
-	})
-	registry.RegisterCounter("indexengine", "watch_events_total", watchEventsTotal)
-
-	watchEventsFailed := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "indexengine_watch_events_failed_total",
-		Help:        "Total number of KV watch events that failed",
-		ConstLabels: prometheus.Labels{"component": component},
-	})
-	registry.RegisterCounter("indexengine", "watch_events_failed_total", watchEventsFailed)
-
-	watchReconnections := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "indexengine_watch_reconnections_total",
-		Help:        "Total number of KV watch reconnections",
-		ConstLabels: prometheus.Labels{"component": component},
-	})
-	registry.RegisterCounter("indexengine", "watch_reconnections_total", watchReconnections)
-
 	watchersActive := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name:        "indexengine_watchers_active",
 		Help:        "Number of active KV watchers",
@@ -230,7 +258,102 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 	})
 	registry.RegisterGauge("indexengine", "watchers_active", watchersActive)
 
-	// Embedding metrics
+	return &timingMetricsSet{
+		processLatency:     processLatency,
+		deduplicationCache: deduplicationCache,
+		bufferSize:         bufferSize,
+		bufferUtilization:  bufferUtilization,
+		backlogSize:        backlogSize,
+		healthStatus:       healthStatus,
+		processingLag:      processingLag,
+		watchersActive:     watchersActive,
+	}
+}
+
+// indexMetricsSet holds vectorized metrics for index operations
+type indexMetricsSet struct {
+	updatesTotal, updatesFailed *prometheus.CounterVec
+	updateLatency               *prometheus.HistogramVec
+}
+
+// createIndexMetrics creates vectorized metrics for index operations
+func createIndexMetrics(component string, registry *metric.MetricsRegistry) *indexMetricsSet {
+	indexUpdatesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "indexengine_index_updates_total",
+		Help:        "Total number of index updates by type",
+		ConstLabels: prometheus.Labels{"component": component},
+	}, []string{"index_type", "operation"})
+	registry.RegisterCounterVec("indexengine", "index_updates_total", indexUpdatesTotal)
+
+	indexUpdatesFailed := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "indexengine_index_updates_failed_total",
+		Help:        "Total number of failed index updates by type",
+		ConstLabels: prometheus.Labels{"component": component},
+	}, []string{"index_type", "operation"})
+	registry.RegisterCounterVec("indexengine", "index_updates_failed_total", indexUpdatesFailed)
+
+	indexUpdateLatency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:        "indexengine_index_update_latency_seconds",
+		Help:        "Latency of index updates in seconds by type",
+		ConstLabels: prometheus.Labels{"component": component},
+		Buckets:     []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
+	}, []string{"index_type"})
+	registry.RegisterHistogramVec("indexengine", "index_update_latency_seconds", indexUpdateLatency)
+
+	return &indexMetricsSet{
+		updatesTotal:  indexUpdatesTotal,
+		updatesFailed: indexUpdatesFailed,
+		updateLatency: indexUpdateLatency,
+	}
+}
+
+// queryMetricsSet holds vectorized metrics for query operations
+type queryMetricsSet struct {
+	total, failed *prometheus.CounterVec
+	latency       *prometheus.HistogramVec
+}
+
+// createQueryMetrics creates vectorized metrics for query operations
+func createQueryMetrics(component string, registry *metric.MetricsRegistry) *queryMetricsSet {
+	queriesTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "indexengine_queries_total",
+		Help:        "Total number of queries by type",
+		ConstLabels: prometheus.Labels{"component": component},
+	}, []string{"query_type"})
+	registry.RegisterCounterVec("indexengine", "queries_total", queriesTotal)
+
+	queriesFailed := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "indexengine_queries_failed_total",
+		Help:        "Total number of failed queries by type",
+		ConstLabels: prometheus.Labels{"component": component},
+	}, []string{"query_type"})
+	registry.RegisterCounterVec("indexengine", "queries_failed_total", queriesFailed)
+
+	queryLatency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:        "indexengine_query_latency_seconds",
+		Help:        "Latency of queries in seconds by type",
+		ConstLabels: prometheus.Labels{"component": component},
+		Buckets:     []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
+	}, []string{"query_type"})
+	registry.RegisterHistogramVec("indexengine", "query_latency_seconds", queryLatency)
+
+	return &queryMetricsSet{
+		total:   queriesTotal,
+		failed:  queriesFailed,
+		latency: queryLatency,
+	}
+}
+
+// embeddingMetricsSet holds embedding-related metrics
+type embeddingMetricsSet struct {
+	provider, active                             prometheus.Gauge
+	generated, cacheHits, cacheMisses, fallbacks prometheus.Counter
+	textExtractions                              prometheus.Counter
+	latency                                      prometheus.Histogram
+}
+
+// createEmbeddingMetrics creates metrics for embedding operations
+func createEmbeddingMetrics(component string, registry *metric.MetricsRegistry) *embeddingMetricsSet {
 	embeddingProvider := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name:        "indexengine_embedding_provider",
 		Help:        "Active embedding provider (0=disabled, 1=bm25, 2=http)",
@@ -288,38 +411,15 @@ func NewPrometheusMetrics(component string, registry *metric.MetricsRegistry) *P
 	})
 	registry.RegisterCounter("indexengine", "embedding_text_extractions_total", embeddingTextExtractions)
 
-	return &PrometheusMetrics{
-		eventsTotal:              eventsTotal,
-		eventsProcessed:          eventsProcessed,
-		eventsFailed:             eventsFailed,
-		eventsDropped:            eventsDropped,
-		processLatency:           processLatency,
-		duplicateEvents:          duplicateEvents,
-		deduplicationCache:       deduplicationCache,
-		indexUpdatesTotal:        *indexUpdatesTotal,
-		indexUpdatesFailed:       *indexUpdatesFailed,
-		indexUpdateLatency:       *indexUpdateLatency,
-		queriesTotal:             *queriesTotal,
-		queriesFailed:            *queriesFailed,
-		queryLatency:             *queryLatency,
-		bufferSize:               bufferSize,
-		bufferUtilization:        bufferUtilization,
-		backlogSize:              backlogSize,
-		healthStatus:             healthStatus,
-		processingLag:            processingLag,
-		errorCount:               errorCount,
-		watchEventsTotal:         watchEventsTotal,
-		watchEventsFailed:        watchEventsFailed,
-		watchReconnections:       watchReconnections,
-		watchersActive:           watchersActive,
-		embeddingProvider:        embeddingProvider,
-		embeddingsGenerated:      embeddingsGenerated,
-		embeddingCacheHits:       embeddingCacheHits,
-		embeddingCacheMisses:     embeddingCacheMisses,
-		embeddingLatency:         embeddingLatency,
-		embeddingFallbacks:       embeddingFallbacks,
-		embeddingsActive:         embeddingsActive,
-		embeddingTextExtractions: embeddingTextExtractions,
+	return &embeddingMetricsSet{
+		provider:        embeddingProvider,
+		generated:       embeddingsGenerated,
+		cacheHits:       embeddingCacheHits,
+		cacheMisses:     embeddingCacheMisses,
+		latency:         embeddingLatency,
+		fallbacks:       embeddingFallbacks,
+		active:          embeddingsActive,
+		textExtractions: embeddingTextExtractions,
 	}
 }
 

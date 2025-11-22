@@ -24,75 +24,110 @@ var (
 )
 
 func main() {
-	// Command-line flags
-	var (
-		scenarioName = flag.String(
-			"scenario",
-			"",
-			"Run specific scenario (core-health, core-dataflow, core-federation, or 'all')",
-		)
-		verbose  = flag.Bool("verbose", false, "Enable verbose logging")
-		baseURL  = flag.String("base-url", config.DefaultEndpoints.HTTP, "StreamKit HTTP endpoint (edge)")
-		cloudURL = flag.String(
-			"cloud-url",
-			"http://localhost:8081",
-			"StreamKit cloud HTTP endpoint (federation only)",
-		)
-		udpEndpoint   = flag.String("udp-endpoint", config.DefaultEndpoints.UDP, "UDP test endpoint")
-		wsEndpoint    = flag.String("ws-endpoint", "ws://localhost:8082/stream", "WebSocket endpoint (federation only)")
-		showVersion   = flag.Bool("version", false, "Show version information")
-		listScenarios = flag.Bool("list", false, "List available scenarios")
-	)
+	// Parse command-line flags
+	flags := parseCommandLineFlags()
 
-	// Support environment variables for Docker Compose
-	if envURL := os.Getenv("STREAMKIT_BASE_URL"); envURL != "" {
-		*baseURL = envURL
+	// Handle version and list commands
+	if handleVersionCommand(flags.showVersion) {
+		return
 	}
-	if envUDP := os.Getenv("UDP_ENDPOINT"); envUDP != "" {
-		*udpEndpoint = envUDP
-	}
-
-	flag.Parse()
-
-	// Show version
-	if *showVersion {
-		fmt.Printf("StreamKit E2E Test Runner\n")
-		fmt.Printf("Version: %s\n", version)
-		fmt.Printf("Commit:  %s\n", commit)
-		fmt.Printf("Date:    %s\n", date)
-		os.Exit(0)
-	}
-
-	// List scenarios
-	if *listScenarios {
-		fmt.Println("Available scenarios:")
-		fmt.Println("\nProtocol Layer:")
-		fmt.Printf(
-			"  core-health         - Validates core component health (UDP, JSONFilter, JSONMap, File, HTTP POST, WebSocket)\n",
-		)
-		fmt.Printf("  core-dataflow       - Tests complete data pipeline: UDP → JSONFilter → JSONMap → File\n")
-		fmt.Printf(
-			"  core-federation     - Tests federation: Edge (UDP → WebSocket Out) → Cloud (WebSocket In → File)\n",
-		)
-		fmt.Println("\nSemantic Layer:")
-		fmt.Printf("  semantic-basic       - Basic semantic processing: UDP → JSONGeneric → Graph Processor\n")
-		fmt.Printf("  semantic-indexes     - Core semantic indexes (fast, no external dependencies)\n")
-		fmt.Printf(
-			"  semantic-kitchen-sink - Comprehensive semantic: Indexes + Embedding + Metrics + HTTP Gateway\n",
-		)
-		fmt.Println("\nRule Processor:")
-		fmt.Printf("  rules-graph          - Rule → Graph integration with EnableGraphIntegration flag\n")
-		fmt.Printf("  rules-performance    - Load testing (throughput, latency, stability)\n")
-		fmt.Println("\nTest Suites:")
-		fmt.Printf("  all                 - Runs all core scenarios (excludes federation and kitchen sink)\n")
-		fmt.Printf("  semantic            - Runs all semantic scenarios\n")
-		fmt.Printf("  rules               - Runs all rule processor scenarios\n")
-		os.Exit(0)
+	if handleListCommand(flags.listScenarios) {
+		return
 	}
 
 	// Setup logger
+	logger := setupLogger(flags.verbose)
+
+	// Create clients and setup context
+	edgeClient, cloudClient, ctx := setupClientsAndContext(logger, flags.baseURL, flags.cloudURL)
+
+	// Run scenarios and exit
+	exitCode := runScenarios(ctx, logger, edgeClient, cloudClient, flags)
+	os.Exit(exitCode)
+}
+
+// cliFlags holds parsed command-line flags
+type cliFlags struct {
+	scenarioName  string
+	verbose       bool
+	baseURL       string
+	cloudURL      string
+	udpEndpoint   string
+	wsEndpoint    string
+	showVersion   bool
+	listScenarios bool
+}
+
+// parseCommandLineFlags parses and returns command-line flags
+func parseCommandLineFlags() *cliFlags {
+	flags := &cliFlags{}
+
+	flag.StringVar(&flags.scenarioName, "scenario", "",
+		"Run specific scenario (core-health, core-dataflow, core-federation, or 'all')")
+	flag.BoolVar(&flags.verbose, "verbose", false, "Enable verbose logging")
+	flag.StringVar(&flags.baseURL, "base-url", config.DefaultEndpoints.HTTP, "StreamKit HTTP endpoint (edge)")
+	flag.StringVar(&flags.cloudURL, "cloud-url", "http://localhost:8081",
+		"StreamKit cloud HTTP endpoint (federation only)")
+	flag.StringVar(&flags.udpEndpoint, "udp-endpoint", config.DefaultEndpoints.UDP, "UDP test endpoint")
+	flag.StringVar(&flags.wsEndpoint, "ws-endpoint", "ws://localhost:8082/stream",
+		"WebSocket endpoint (federation only)")
+	flag.BoolVar(&flags.showVersion, "version", false, "Show version information")
+	flag.BoolVar(&flags.listScenarios, "list", false, "List available scenarios")
+
+	// Support environment variables for Docker Compose
+	if envURL := os.Getenv("STREAMKIT_BASE_URL"); envURL != "" {
+		flags.baseURL = envURL
+	}
+	if envUDP := os.Getenv("UDP_ENDPOINT"); envUDP != "" {
+		flags.udpEndpoint = envUDP
+	}
+
+	flag.Parse()
+	return flags
+}
+
+// handleVersionCommand shows version information and returns true if version flag is set
+func handleVersionCommand(showVersion bool) bool {
+	if !showVersion {
+		return false
+	}
+
+	fmt.Printf("StreamKit E2E Test Runner\n")
+	fmt.Printf("Version: %s\n", version)
+	fmt.Printf("Commit:  %s\n", commit)
+	fmt.Printf("Date:    %s\n", date)
+	return true
+}
+
+// handleListCommand shows available scenarios and returns true if list flag is set
+func handleListCommand(listScenarios bool) bool {
+	if !listScenarios {
+		return false
+	}
+
+	fmt.Println("Available scenarios:")
+	fmt.Println("\nProtocol Layer:")
+	fmt.Printf("  core-health         - Validates core component health (UDP, JSONFilter, JSONMap, File, HTTP POST, WebSocket)\n")
+	fmt.Printf("  core-dataflow       - Tests complete data pipeline: UDP → JSONFilter → JSONMap → File\n")
+	fmt.Printf("  core-federation     - Tests federation: Edge (UDP → WebSocket Out) → Cloud (WebSocket In → File)\n")
+	fmt.Println("\nSemantic Layer:")
+	fmt.Printf("  semantic-basic       - Basic semantic processing: UDP → JSONGeneric → Graph Processor\n")
+	fmt.Printf("  semantic-indexes     - Core semantic indexes (fast, no external dependencies)\n")
+	fmt.Printf("  semantic-kitchen-sink - Comprehensive semantic: Indexes + Embedding + Metrics + HTTP Gateway\n")
+	fmt.Println("\nRule Processor:")
+	fmt.Printf("  rules-graph          - Rule → Graph integration with EnableGraphIntegration flag\n")
+	fmt.Printf("  rules-performance    - Load testing (throughput, latency, stability)\n")
+	fmt.Println("\nTest Suites:")
+	fmt.Printf("  all                 - Runs all core scenarios (excludes federation and kitchen sink)\n")
+	fmt.Printf("  semantic            - Runs all semantic scenarios\n")
+	fmt.Printf("  rules               - Runs all rule processor scenarios\n")
+	return true
+}
+
+// setupLogger creates and configures the logger
+func setupLogger(verbose bool) *slog.Logger {
 	logLevel := slog.LevelInfo
-	if *verbose {
+	if verbose {
 		logLevel = slog.LevelDebug
 	}
 
@@ -102,14 +137,19 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	slog.SetDefault(logger)
+	return logger
+}
 
-	// Create observability clients
-	edgeClient := client.NewObservabilityClient(*baseURL)
-	cloudClient := client.NewObservabilityClient(*cloudURL)
+// setupClientsAndContext creates clients and sets up signal handling
+func setupClientsAndContext(logger *slog.Logger, baseURL, cloudURL string) (
+	*client.ObservabilityClient,
+	*client.ObservabilityClient,
+	context.Context,
+) {
+	edgeClient := client.NewObservabilityClient(baseURL)
+	cloudClient := client.NewObservabilityClient(cloudURL)
 
-	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -119,48 +159,50 @@ func main() {
 		cancel()
 	}()
 
-	// Connect to running StreamKit instance
+	return edgeClient, cloudClient, ctx
+}
+
+// runScenarios runs the appropriate scenarios based on flags
+func runScenarios(
+	ctx context.Context,
+	logger *slog.Logger,
+	edgeClient, cloudClient *client.ObservabilityClient,
+	flags *cliFlags,
+) int {
 	logger.Info("Connecting to StreamKit",
-		"base_url", *baseURL,
-		"udp_endpoint", *udpEndpoint,
+		"base_url", flags.baseURL,
+		"udp_endpoint", flags.udpEndpoint,
 	)
 
-	// Run scenarios
-	var exitCode int
-	if *scenarioName == "" || *scenarioName == "all" {
-		// Run all core scenarios (excludes federation and kitchen sink)
+	if flags.scenarioName == "" || flags.scenarioName == "all" {
 		logger.Info("Running all core scenarios...")
-		exitCode = runAllScenarios(ctx, logger, edgeClient, *udpEndpoint)
-	} else if *scenarioName == "semantic" {
-		// Run all semantic scenarios
+		return runAllScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
+	} else if flags.scenarioName == "semantic" {
 		logger.Info("Running all semantic scenarios...")
-		exitCode = runSemanticScenarios(ctx, logger, edgeClient, *udpEndpoint)
-	} else if *scenarioName == "rules" {
-		// Run all rule processor scenarios
+		return runSemanticScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
+	} else if flags.scenarioName == "rules" {
 		logger.Info("Running all rule processor scenarios...")
-		exitCode = runRulesScenarios(ctx, logger, edgeClient, *udpEndpoint)
-	} else {
-		// Run specific scenario
-		scenario := createScenario(*scenarioName, edgeClient, cloudClient, *udpEndpoint, *wsEndpoint)
-		if scenario == nil {
-			logger.Error("Unknown scenario", "name", *scenarioName)
-			fmt.Println("\nAvailable scenarios:")
-			fmt.Println("  core-health            - Validates core component health")
-			fmt.Println("  core-dataflow          - Tests complete data pipeline")
-			fmt.Println("  core-federation        - Tests edge-to-cloud federation")
-			fmt.Println("  semantic-basic         - Basic semantic processing")
-			fmt.Println("  semantic-indexes       - Core semantic indexes (fast)")
-			fmt.Println("  semantic-kitchen-sink  - Comprehensive semantic stack")
-			fmt.Println("  rules-graph            - Rule → Graph integration")
-			fmt.Println("  rules-performance      - Rule processor load testing")
-			exitCode = 1
-		} else {
-			logger.Info("Running scenario", "name", *scenarioName)
-			exitCode = runScenario(ctx, logger, scenario)
-		}
+		return runRulesScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
 	}
 
-	os.Exit(exitCode)
+	// Run specific scenario
+	scenario := createScenario(flags.scenarioName, edgeClient, cloudClient, flags.udpEndpoint, flags.wsEndpoint)
+	if scenario == nil {
+		logger.Error("Unknown scenario", "name", flags.scenarioName)
+		fmt.Println("\nAvailable scenarios:")
+		fmt.Println("  core-health            - Validates core component health")
+		fmt.Println("  core-dataflow          - Tests complete data pipeline")
+		fmt.Println("  core-federation        - Tests edge-to-cloud federation")
+		fmt.Println("  semantic-basic         - Basic semantic processing")
+		fmt.Println("  semantic-indexes       - Core semantic indexes (fast)")
+		fmt.Println("  semantic-kitchen-sink  - Comprehensive semantic stack")
+		fmt.Println("  rules-graph            - Rule → Graph integration")
+		fmt.Println("  rules-performance      - Rule processor load testing")
+		return 1
+	}
+
+	logger.Info("Running scenario", "name", flags.scenarioName)
+	return runScenario(ctx, logger, scenario)
 }
 
 // createScenario creates a specific scenario by name

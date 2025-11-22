@@ -23,8 +23,8 @@ import (
 // graphqlGatewaySchema defines the configuration schema
 var graphqlGatewaySchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
-// GraphQLGateway implements the Gateway interface for GraphQL protocol
-type GraphQLGateway struct {
+// Gateway implements the Gateway interface for GraphQL protocol
+type Gateway struct {
 	name       string
 	config     Config
 	natsClient *natsclient.Client
@@ -75,7 +75,7 @@ func NewGraphQLGateway(rawConfig json.RawMessage, deps component.Dependencies) (
 	natsClient := NewNATSClient(deps.NATSClient, config.NATSSubjects, config.Timeout())
 
 	// Create gateway instance
-	gateway := &GraphQLGateway{
+	gateway := &Gateway{
 		name:       "graphql-gateway",
 		config:     config,
 		natsClient: deps.NATSClient,
@@ -117,7 +117,7 @@ func NewGraphQLGateway(rawConfig json.RawMessage, deps component.Dependencies) (
 }
 
 // Initialize prepares the GraphQL gateway
-func (g *GraphQLGateway) Initialize() error {
+func (g *Gateway) Initialize() error {
 	g.logger.Info("Initializing GraphQL gateway")
 
 	// Setup HTTP server
@@ -133,7 +133,7 @@ func (g *GraphQLGateway) Initialize() error {
 }
 
 // Start begins the GraphQL gateway operation
-func (g *GraphQLGateway) Start(ctx context.Context) error {
+func (g *Gateway) Start(ctx context.Context) error {
 	// ComponentManager already serializes Start/Stop calls
 	// Check if already running (atomic read, no lock needed)
 	if g.running.Load() {
@@ -185,7 +185,7 @@ func (g *GraphQLGateway) Start(ctx context.Context) error {
 }
 
 // Stop gracefully stops the GraphQL gateway
-func (g *GraphQLGateway) Stop(timeout time.Duration) error {
+func (g *Gateway) Stop(timeout time.Duration) error {
 	if !g.running.Load() {
 		return nil // Already stopped
 	}
@@ -215,7 +215,7 @@ func (g *GraphQLGateway) Stop(timeout time.Duration) error {
 // RegisterHTTPHandlers registers gateway routes with the HTTP mux
 // Note: For Phase 1, we're running our own HTTP server
 // Phase 2 may integrate with ServiceManager's central server
-func (g *GraphQLGateway) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
+func (g *Gateway) RegisterHTTPHandlers(prefix string, _ *http.ServeMux) {
 	// Phase 1: We run our own HTTP server, so this is a no-op
 	// Phase 2: May register with central server if needed
 	g.logger.Info("RegisterHTTPHandlers called",
@@ -226,7 +226,7 @@ func (g *GraphQLGateway) RegisterHTTPHandlers(prefix string, mux *http.ServeMux)
 // Component metadata implementation
 
 // Meta returns component metadata
-func (g *GraphQLGateway) Meta() component.Metadata {
+func (g *Gateway) Meta() component.Metadata {
 	return component.Metadata{
 		Name:        g.name,
 		Type:        "gateway",
@@ -236,22 +236,22 @@ func (g *GraphQLGateway) Meta() component.Metadata {
 }
 
 // InputPorts returns no input ports (gateway is request-driven)
-func (g *GraphQLGateway) InputPorts() []component.Port {
+func (g *Gateway) InputPorts() []component.Port {
 	return []component.Port{}
 }
 
 // OutputPorts returns no output ports (gateway uses request/reply)
-func (g *GraphQLGateway) OutputPorts() []component.Port {
+func (g *Gateway) OutputPorts() []component.Port {
 	return []component.Port{}
 }
 
 // ConfigSchema returns the configuration schema
-func (g *GraphQLGateway) ConfigSchema() component.ConfigSchema {
+func (g *Gateway) ConfigSchema() component.ConfigSchema {
 	return graphqlGatewaySchema
 }
 
 // Health returns the current health status
-func (g *GraphQLGateway) Health() component.HealthStatus {
+func (g *Gateway) Health() component.HealthStatus {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -266,7 +266,7 @@ func (g *GraphQLGateway) Health() component.HealthStatus {
 }
 
 // DataFlow returns current data flow metrics
-func (g *GraphQLGateway) DataFlow() component.FlowMetrics {
+func (g *Gateway) DataFlow() component.FlowMetrics {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -287,7 +287,7 @@ func (g *GraphQLGateway) DataFlow() component.FlowMetrics {
 }
 
 // RecordMetrics wraps a GraphQL operation to record metrics
-func (g *GraphQLGateway) RecordMetrics(ctx context.Context, operation string, fn func() error) error {
+func (g *Gateway) RecordMetrics(_ context.Context, operation string, fn func() error) error {
 	start := time.Now()
 
 	g.requestsTotal.Add(1)
@@ -316,7 +316,7 @@ func (g *GraphQLGateway) RecordMetrics(ctx context.Context, operation string, fn
 }
 
 // recordRequest records request metrics
-func (g *GraphQLGateway) recordRequest(success bool) {
+func (g *Gateway) recordRequest(success bool) {
 	g.requestsTotal.Add(1)
 	if success {
 		g.requestsSuccess.Add(1)
@@ -344,12 +344,12 @@ func Register(registry *component.Registry) error {
 }
 
 // GetResolver returns the base resolver (for testing)
-func (g *GraphQLGateway) GetResolver() *BaseResolver {
+func (g *Gateway) GetResolver() *BaseResolver {
 	return g.resolver
 }
 
-// Ensure GraphQLGateway implements required interfaces
+// Ensure Gateway implements required interfaces
 var (
-	_ component.Discoverable = (*GraphQLGateway)(nil)
-	_ gateway.Gateway        = (*GraphQLGateway)(nil)
+	_ component.Discoverable = (*Gateway)(nil)
+	_ gateway.Gateway        = (*Gateway)(nil)
 )

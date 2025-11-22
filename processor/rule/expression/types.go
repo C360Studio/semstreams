@@ -21,8 +21,8 @@ type LogicalExpression struct {
 	Logic      string                `json:"logic"` // "and", "or"
 }
 
-// ExpressionEvaluator processes expressions against entity state
-type ExpressionEvaluator struct {
+// Evaluator processes expressions against entity state
+type Evaluator struct {
 	operators    map[string]OperatorFunc
 	typeDetector TypeDetector
 }
@@ -40,10 +40,15 @@ type TypeDetector interface {
 type FieldType int
 
 const (
+	// FieldTypeUnknown represents an unknown or unsupported field type
 	FieldTypeUnknown FieldType = iota
+	// FieldTypeFloat64 represents a floating point number field
 	FieldTypeFloat64
+	// FieldTypeString represents a string field
 	FieldTypeString
+	// FieldTypeBool represents a boolean field
 	FieldTypeBool
+	// FieldTypeArray represents an array field
 	FieldTypeArray
 )
 

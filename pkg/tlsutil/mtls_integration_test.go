@@ -134,7 +134,7 @@ func TestMTLSHandshake_ServerRequiresClientCert_NoClientCert(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test HTTPS server
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -208,7 +208,7 @@ func TestMTLSHandshake_CNWhitelist_Allowed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test HTTPS server
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
@@ -287,7 +287,7 @@ func TestMTLSHandshake_CNWhitelist_Rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test HTTPS server
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -511,7 +511,7 @@ func TestBackwardCompatibility_ManualTLS_WithoutMTLS(t *testing.T) {
 	assert.Equal(t, tls.NoClientCert, serverTLSConfig.ClientAuth)
 
 	// Create test HTTPS server
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
