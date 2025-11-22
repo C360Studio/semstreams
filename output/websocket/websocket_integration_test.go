@@ -16,6 +16,7 @@ import (
 	websocketinput "github.com/c360/semstreams/input/websocket"
 	"github.com/c360/semstreams/metric"
 	"github.com/c360/semstreams/natsclient"
+	"github.com/c360/semstreams/pkg/security"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,7 +70,7 @@ func TestWebSocketFederation_AckFlow(t *testing.T) {
 		},
 	}
 
-	wsInput, err := websocketinput.NewInput("test-input", natsClient.Client, inputConfig, registry)
+	wsInput, err := websocketinput.NewInput("test-input", natsClient.Client, inputConfig, registry, security.Config{})
 	require.NoError(t, err)
 
 	require.NoError(t, wsInput.Initialize())
@@ -178,7 +179,7 @@ func TestWebSocketFederation_NackFlow(t *testing.T) {
 		},
 	}
 
-	wsInput, err := websocketinput.NewInput("test-input-nack", natsClientInput.Client, inputConfig, registry)
+	wsInput, err := websocketinput.NewInput("test-input-nack", natsClientInput.Client, inputConfig, registry, security.Config{})
 	require.NoError(t, err)
 
 	require.NoError(t, wsInput.Initialize())
