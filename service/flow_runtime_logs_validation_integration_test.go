@@ -48,7 +48,7 @@ func TestHandleRuntimeLogs_InvalidFlowID(t *testing.T) {
 			fs.handleRuntimeLogs(rec, req)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code, "Should reject invalid flow ID")
-			assert.Contains(t, rec.Body.String(), "Invalid flow ID", "Error message should mention invalid flow ID")
+			assert.Contains(t, rec.Body.String(), "invalid flow ID", "Error message should mention invalid flow ID")
 		})
 	}
 }
@@ -87,7 +87,7 @@ func TestHandleRuntimeLogs_InvalidComponentName(t *testing.T) {
 			fs.handleRuntimeLogs(rec, req)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code, "Should reject invalid component name")
-			assert.Contains(t, rec.Body.String(), "Invalid component name", "Error message should mention invalid component name")
+			assert.Contains(t, rec.Body.String(), "invalid component name", "Error message should mention invalid component name")
 		})
 	}
 }

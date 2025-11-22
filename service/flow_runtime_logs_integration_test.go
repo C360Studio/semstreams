@@ -402,7 +402,7 @@ func TestHandleRuntimeLogs_InvalidLevelFilter(t *testing.T) {
 	fs.handleRuntimeLogs(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Invalid level filter")
+	assert.Contains(t, rec.Body.String(), "invalid level filter")
 }
 
 func TestHandleRuntimeLogs_FlowNotFound(t *testing.T) {
