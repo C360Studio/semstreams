@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/c360/semstreams/component"
 	"github.com/c360/semstreams/componentregistry"
@@ -80,6 +81,11 @@ func main() {
 		if err := os.MkdirAll(openapiDir, 0755); err != nil {
 			log.Fatalf("Failed to create OpenAPI directory: %v", err)
 		}
+
+		// Sort component schemas by ID for deterministic output
+		sort.Slice(componentSchemas, func(i, j int) bool {
+			return componentSchemas[i].ID < componentSchemas[j].ID
+		})
 
 		openapi := generateOpenAPISpec(componentSchemas, *outDir)
 		if err := writeYAMLFile(*openapiOut, openapi); err != nil {

@@ -111,20 +111,20 @@ components:
                 schema:
                     description: Component configuration schema
                     oneOf:
-                        - $ref: ../schemas/udp.v1.json
-                        - $ref: ../schemas/objectstore.v1.json
-                        - $ref: ../schemas/websocket.v1.json
                         - $ref: ../schemas/context-processor.v1.json
-                        - $ref: ../schemas/websocket_input.v1.json
-                        - $ref: ../schemas/json_map.v1.json
                         - $ref: ../schemas/file.v1.json
-                        - $ref: ../schemas/http.v1.json
-                        - $ref: ../schemas/graphql.v1.json
-                        - $ref: ../schemas/json_filter.v1.json
-                        - $ref: ../schemas/json_to_entity.v1.json
-                        - $ref: ../schemas/json_generic.v1.json
-                        - $ref: ../schemas/httppost.v1.json
                         - $ref: ../schemas/graph-processor.v1.json
+                        - $ref: ../schemas/graphql.v1.json
+                        - $ref: ../schemas/http.v1.json
+                        - $ref: ../schemas/httppost.v1.json
+                        - $ref: ../schemas/json_filter.v1.json
+                        - $ref: ../schemas/json_generic.v1.json
+                        - $ref: ../schemas/json_map.v1.json
+                        - $ref: ../schemas/json_to_entity.v1.json
+                        - $ref: ../schemas/objectstore.v1.json
+                        - $ref: ../schemas/udp.v1.json
+                        - $ref: ../schemas/websocket.v1.json
+                        - $ref: ../schemas/websocket_input.v1.json
                 type:
                     description: Component type (input/processor/output/storage)
                     type: string
