@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +90,11 @@ func (t *TestMockComponent) Stop(_ time.Duration) error {
 
 // TestComponentManagerConfigUpdates tests that config updates actually create/update/remove components
 func TestComponentManagerConfigUpdates(t *testing.T) {
+	// Skip if running unit tests without INTEGRATION_TESTS set
+	if os.Getenv("INTEGRATION_TESTS") == "" {
+		t.Skip("Skipping integration test - set INTEGRATION_TESTS=1 to run")
+	}
+
 	ctx := context.Background()
 
 	// Create real NATS test client with KV support
@@ -377,7 +383,14 @@ func TestComponentManagerConfigUpdates(t *testing.T) {
 			_, err = kv.Put(ctx, "components."+name, data)
 			require.NoError(t, err)
 		}
-		time.Sleep(500 * time.Millisecond)
+
+		// Wait for components to be created (replace arbitrary sleep with proper wait)
+		require.Eventually(t, func() bool {
+			components := cm.ListComponents()
+			return len(components) >= 2 && // Expect 2 enabled components
+				components["multi-comp-1"] != nil &&
+				components["multi-comp-2"] != nil
+		}, 5*time.Second, 100*time.Millisecond, "Components should be created within timeout")
 
 		// Verify only enabled components were created
 		components := cm.ListComponents()
