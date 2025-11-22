@@ -81,3 +81,9 @@ func (m *SimpleMockComponent) DataFlow() FlowMetrics {
 		BytesPerSecond:    0,
 	}
 }
+
+// intPtr returns a pointer to an int value.
+// Used for optional schema fields like Minimum and Maximum.
+func intPtr(i int) *int {
+	return &i
+}
