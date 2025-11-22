@@ -1,3 +1,5 @@
+//go:build integration
+
 package jsonfilter_test
 
 import (

@@ -1,3 +1,5 @@
+//go:build integration
+
 package httppost_test
 
 import (

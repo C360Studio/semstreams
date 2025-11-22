@@ -1,3 +1,5 @@
+//go:build integration
+
 package flowengine_test
 
 import (

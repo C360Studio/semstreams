@@ -27,10 +27,8 @@ tasks:
 
   test:integration:
     desc: Run integration tests
-    env:
-      INTEGRATION_TESTS: "1"
     cmds:
-      - go test ./...
+      - go test -tags=integration ./...
 
   # Clean tasks
   clean:bins:

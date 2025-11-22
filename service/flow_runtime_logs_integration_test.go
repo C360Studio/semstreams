@@ -228,16 +228,18 @@ func TestHandleRuntimeLogs_LevelFiltering(t *testing.T) {
 		},
 	}
 
+	natsConn := nc.GetConnection()
 	for _, logEntry := range testLogs {
 		data, err := json.Marshal(logEntry)
 		require.NoError(t, err)
 
 		subject := fmt.Sprintf("logs.%s.%s", flowID, logEntry.Component)
-		err = nc.Publish(subject, data)
+		err = natsConn.Publish(subject, data)
 		require.NoError(t, err)
 	}
 
-	nc.Flush()
+	err := natsConn.Flush()
+	require.NoError(t, err)
 
 	// Wait for error log to appear
 	require.Eventually(t, func() bool {
@@ -329,16 +331,18 @@ func TestHandleRuntimeLogs_ComponentFiltering(t *testing.T) {
 		},
 	}
 
+	natsConn := nc.GetConnection()
 	for _, logEntry := range testLogs {
 		data, err := json.Marshal(logEntry)
 		require.NoError(t, err)
 
 		subject := fmt.Sprintf("logs.%s.%s", flowID, logEntry.Component)
-		err = nc.Publish(subject, data)
+		err = natsConn.Publish(subject, data)
 		require.NoError(t, err)
 	}
 
-	nc.Flush()
+	err := natsConn.Flush()
+	require.NoError(t, err)
 
 	// Wait for component-a log to appear
 	require.Eventually(t, func() bool {

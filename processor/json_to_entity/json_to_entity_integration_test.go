@@ -1,3 +1,5 @@
+//go:build integration
+
 package jsontoentity_test
 
 import (

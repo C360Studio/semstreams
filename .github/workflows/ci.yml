@@ -61,9 +61,7 @@ jobs:
         run: go test -v -race ./...
 
       - name: Run integration tests
-        env:
-          INTEGRATION_TESTS: "1"
-        run: go test -v -race ./...
+        run: go test -tags=integration -v -race ./...
 
   build:
     name: Build
