@@ -85,20 +85,23 @@ func (r *AgentRequest) UnmarshalJSON(data []byte) error {
 
 // AgentResponse represents a response from an agentic service
 type AgentResponse struct {
-	RequestID  string      `json:"request_id"`
-	Status     string      `json:"status"`
-	Message    ChatMessage `json:"message,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	TokenUsage TokenUsage  `json:"token_usage,omitempty"`
-	RetryCount int         `json:"retry_count,omitempty"`
+	RequestID    string      `json:"request_id"`
+	Status       string      `json:"status"`
+	FinishReason string      `json:"finish_reason,omitempty"` // Raw finish_reason from provider (stop, length, tool_calls)
+	Message      ChatMessage `json:"message,omitempty"`
+	Error        string      `json:"error,omitempty"`
+	TokenUsage   TokenUsage  `json:"token_usage,omitempty"`
+	RetryCount   int         `json:"retry_count,omitempty"`
 }
 
 // Validate checks if the AgentResponse is valid
 func (r AgentResponse) Validate() error {
-	if r.Status != StatusComplete && r.Status != StatusToolCall && r.Status != StatusError {
-		return fmt.Errorf("status must be one of: %s, %s, %s", StatusComplete, StatusToolCall, StatusError)
+	switch r.Status {
+	case StatusComplete, StatusToolCall, StatusError, StatusLengthTruncated:
+		return nil
+	default:
+		return fmt.Errorf("status must be one of: %s, %s, %s, %s", StatusComplete, StatusToolCall, StatusError, StatusLengthTruncated)
 	}
-	return nil
 }
 
 // Schema implements message.Payload

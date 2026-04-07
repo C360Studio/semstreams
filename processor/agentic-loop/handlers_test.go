@@ -428,6 +428,83 @@ func TestHandleModelResponse_Error(t *testing.T) {
 	}
 }
 
+func TestHandleModelResponse_LengthTruncated(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-truncated",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "Test",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+
+	loopID := taskResult.LoopID
+
+	// Model response with finish_reason=length (truncated output)
+	response := agentic.AgentResponse{
+		RequestID:    "req-truncated",
+		Status:       agentic.StatusLengthTruncated,
+		FinishReason: agentic.FinishReasonLength,
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "This response was cut off before it cou",
+		},
+		TokenUsage: agentic.TokenUsage{
+			PromptTokens:     100,
+			CompletionTokens: 4096,
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	// Should fail the loop, not succeed
+	if result.State != agentic.LoopStateFailed {
+		t.Errorf("State = %s, want %s (truncated response should fail)", result.State, agentic.LoopStateFailed)
+	}
+
+	// Should publish agent.failed event
+	found := false
+	for _, msg := range result.PublishedMessages {
+		if containsIgnoreCase(msg.Subject, "agent.failed") {
+			found = true
+
+			// Verify the failure event contains truncation details
+			var failedEvent struct {
+				Payload struct {
+					Reason string `json:"reason"`
+					Error  string `json:"error"`
+				} `json:"payload"`
+			}
+			if jsonErr := json.Unmarshal(msg.Data, &failedEvent); jsonErr == nil {
+				if failedEvent.Payload.Reason != "length_truncated" {
+					t.Errorf("FailedEvent.Reason = %q, want %q", failedEvent.Payload.Reason, "length_truncated")
+				}
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("Should publish agent.failed message for truncated response")
+	}
+
+	// Should record trajectory step
+	if len(result.TrajectorySteps) == 0 {
+		t.Error("Should record trajectory step for truncated response")
+	}
+
+	// FailureState should be populated
+	if result.FailureState == nil {
+		t.Error("FailureState should not be nil on truncation")
+	}
+}
+
 func TestHandleToolResult_SingleTool(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 

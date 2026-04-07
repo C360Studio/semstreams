@@ -506,13 +506,20 @@ func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID s
 	choice := resp.Choices[0]
 
 	// Map finish reason to status
+	response.FinishReason = string(choice.FinishReason)
 	switch choice.FinishReason {
-	case "stop", "length":
-		response.Status = "complete"
+	case "stop":
+		response.Status = agentic.StatusComplete
+	case "length":
+		response.Status = agentic.StatusLengthTruncated
+		if c.logger != nil {
+			c.logger.Warn("model response truncated: finish_reason=length (max_tokens hit)",
+				"request_id", requestID)
+		}
 	case "tool_calls":
-		response.Status = "tool_call"
+		response.Status = agentic.StatusToolCall
 	default:
-		response.Status = "complete"
+		response.Status = agentic.StatusComplete
 	}
 
 	// Convert message

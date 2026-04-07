@@ -488,24 +488,28 @@ func TestChatCompletion_RequestMapping(t *testing.T) {
 
 func TestChatCompletion_ResponseMapping(t *testing.T) {
 	tests := []struct {
-		name           string
-		finishReason   string
-		expectedStatus string
+		name                 string
+		finishReason         string
+		expectedStatus       string
+		expectedFinishReason string
 	}{
 		{
-			name:           "stop finish reason maps to complete",
-			finishReason:   "stop",
-			expectedStatus: "complete",
+			name:                 "stop finish reason maps to complete",
+			finishReason:         "stop",
+			expectedStatus:       "complete",
+			expectedFinishReason: "stop",
 		},
 		{
-			name:           "tool_calls finish reason maps to tool_call",
-			finishReason:   "tool_calls",
-			expectedStatus: "tool_call",
+			name:                 "tool_calls finish reason maps to tool_call",
+			finishReason:         "tool_calls",
+			expectedStatus:       "tool_call",
+			expectedFinishReason: "tool_calls",
 		},
 		{
-			name:           "length finish reason maps to complete",
-			finishReason:   "length",
-			expectedStatus: "complete",
+			name:                 "length finish reason maps to length_truncated",
+			finishReason:         "length",
+			expectedStatus:       "length_truncated",
+			expectedFinishReason: "length",
 		},
 	}
 
@@ -581,6 +585,9 @@ func TestChatCompletion_ResponseMapping(t *testing.T) {
 
 			if resp.Status != tt.expectedStatus {
 				t.Errorf("Status = %s, want %s", resp.Status, tt.expectedStatus)
+			}
+			if resp.FinishReason != tt.expectedFinishReason {
+				t.Errorf("FinishReason = %s, want %s", resp.FinishReason, tt.expectedFinishReason)
 			}
 		})
 	}

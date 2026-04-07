@@ -389,13 +389,26 @@ func TestAgentResponse_Validation(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid length_truncated response",
+			response: agentic.AgentResponse{
+				RequestID:    "req-trunc",
+				Status:       "length_truncated",
+				FinishReason: "length",
+				Message: agentic.ChatMessage{
+					Role:    "assistant",
+					Content: "Partial...",
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid status",
 			response: agentic.AgentResponse{
 				RequestID: "req-123",
 				Status:    "invalid",
 			},
 			wantErr: true,
-			errMsg:  "status must be one of: complete, tool_call, error",
+			errMsg:  "status must be one of: complete, tool_call, error, length_truncated",
 		},
 		{
 			name: "empty status",
@@ -404,7 +417,7 @@ func TestAgentResponse_Validation(t *testing.T) {
 				Status:    "",
 			},
 			wantErr: true,
-			errMsg:  "status must be one of: complete, tool_call, error",
+			errMsg:  "status must be one of: complete, tool_call, error, length_truncated",
 		},
 	}
 

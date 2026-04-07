@@ -773,7 +773,7 @@ func (m *LoopManager) UpdateCompletion(loopID, outcome, result, errMsg string) e
 // isValidOutcome checks if the outcome is one of the valid constants.
 func isValidOutcome(outcome string) bool {
 	switch outcome {
-	case agentic.OutcomeSuccess, agentic.OutcomeFailed, agentic.OutcomeCancelled:
+	case agentic.OutcomeSuccess, agentic.OutcomeFailed, agentic.OutcomeCancelled, agentic.OutcomeTruncated:
 		return true
 	default:
 		return false

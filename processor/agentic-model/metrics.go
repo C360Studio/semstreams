@@ -31,6 +31,9 @@ type modelMetrics struct {
 	// Rate limiting
 	rateLimitHits    *prometheus.CounterVec
 	rateLimitRetries *prometheus.CounterVec
+
+	// Truncation
+	lengthTruncationsTotal *prometheus.CounterVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -115,6 +118,13 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 				Name:      "rate_limit_retries_total",
 				Help:      "Total retry attempts after 429 rate-limit responses by model",
 			}, []string{"model"}),
+
+			lengthTruncationsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_model",
+				Name:      "length_truncations_total",
+				Help:      "Total responses truncated due to finish_reason=length (max_tokens hit)",
+			}, []string{"model"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -129,6 +139,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = registry.RegisterHistogramVec("agentic-model", "stream_ttft_seconds", metrics.streamTTFT)
 			_ = registry.RegisterCounterVec("agentic-model", "rate_limit_hits_total", metrics.rateLimitHits)
 			_ = registry.RegisterCounterVec("agentic-model", "rate_limit_retries_total", metrics.rateLimitRetries)
+			_ = registry.RegisterCounterVec("agentic-model", "length_truncations_total", metrics.lengthTruncationsTotal)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestsTotal)
@@ -141,6 +152,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.streamTTFT)
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitHits)
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitRetries)
+			_ = prometheus.DefaultRegisterer.Register(metrics.lengthTruncationsTotal)
 		}
 	})
 	return metrics
@@ -195,4 +207,9 @@ func (m *modelMetrics) recordRateLimitHit(model string) {
 // recordRateLimitRetry increments the rate-limit retry counter for the given model.
 func (m *modelMetrics) recordRateLimitRetry(model string) {
 	m.rateLimitRetries.WithLabelValues(model).Inc()
+}
+
+// recordLengthTruncation increments the length truncation counter for the given model.
+func (m *modelMetrics) recordLengthTruncation(model string) {
+	m.lengthTruncationsTotal.WithLabelValues(model).Inc()
 }

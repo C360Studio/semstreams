@@ -856,8 +856,13 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 			slog.String("loop_id", result.LoopID),
 			slog.Int("iterations", entity.Iterations))
 	case agentic.LoopStateFailed:
-		reason := "model_error"
-		if response.Status != "error" {
+		var reason string
+		switch response.Status {
+		case agentic.StatusError:
+			reason = "model_error"
+		case agentic.StatusLengthTruncated:
+			reason = "length_truncated"
+		default:
 			reason = "unknown"
 		}
 		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)

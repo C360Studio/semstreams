@@ -561,7 +561,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	}
 
 	switch response.Status {
-	case "tool_call":
+	case agentic.StatusToolCall:
 		if err := h.handleToolCallResponse(&result, loopID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
@@ -577,28 +577,25 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			return completionResult, nil
 		}
 
-	case "complete":
+	case agentic.StatusComplete:
 		if err := h.handleCompleteResponse(&result, loopID, entity, response.Message.Content); err != nil {
 			return result, err
 		}
 
-	case "error":
-		if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
+	case agentic.StatusLengthTruncated:
+		h.logger.Warn("model response truncated (finish_reason=length), failing loop",
+			slog.String("loop_id", loopID),
+			slog.String("finish_reason", response.FinishReason),
+			slog.Int("completion_tokens", response.TokenUsage.CompletionTokens))
+
+		truncationError := "model response truncated: output hit max_tokens limit (finish_reason=length)"
+		if err := h.failLoop(&result, loopID, agentic.OutcomeTruncated, "length_truncated", truncationError); err != nil {
 			return result, err
 		}
-		result.State = agentic.LoopStateFailed
 
-		// Update entity with completion data for KV persistence (enables SSE delivery)
-		if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", response.Error); err != nil {
-			h.logger.Warn("failed to update completion for model error",
-				slog.String("loop_id", loopID),
-				slog.String("error", err.Error()))
-		}
-
-		// Publish failure events for reactive workflows to observe
-		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "model_error", response.Error); fErr == nil {
-			result.PublishedMessages = failMsgs
-			result.FailureState = failure
+	case agentic.StatusError:
+		if err := h.failLoop(&result, loopID, agentic.OutcomeFailed, "model_error", response.Error); err != nil {
+			return result, err
 		}
 	}
 
@@ -706,6 +703,27 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		Subject: subjectToolExecute + "." + tc.Name,
 		Data:    toolData,
 	})
+	return nil
+}
+
+// failLoop transitions a loop to failed state, records completion data, and builds failure events.
+func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason, errorMsg string) error {
+	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
+		return err
+	}
+	result.State = agentic.LoopStateFailed
+
+	if err := h.loopManager.UpdateCompletion(loopID, outcome, "", errorMsg); err != nil {
+		h.logger.Warn("failed to update completion",
+			slog.String("loop_id", loopID),
+			slog.String("reason", reason),
+			slog.String("error", err.Error()))
+	}
+
+	if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, reason, errorMsg); fErr == nil {
+		result.PublishedMessages = failMsgs
+		result.FailureState = failure
+	}
 	return nil
 }
 

@@ -428,6 +428,9 @@ func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentReq
 		if resp.TokenUsage.PromptTokens > 0 || resp.TokenUsage.CompletionTokens > 0 {
 			c.metrics.recordTokenUsage(req.Model, resp.TokenUsage.PromptTokens, resp.TokenUsage.CompletionTokens)
 		}
+		if resp.FinishReason == agentic.FinishReasonLength {
+			c.metrics.recordLengthTruncation(req.Model)
+		}
 	}
 
 	c.logger.Debug("Model request completed",

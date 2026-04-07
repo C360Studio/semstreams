@@ -97,6 +97,34 @@ func TestStreamAccumulator_ContentAggregation(t *testing.T) {
 	}
 }
 
+func TestStreamAccumulator_LengthTruncation(t *testing.T) {
+	chunks := []string{
+		`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial"}}]}`,
+		`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" response"},"finish_reason":"length"}]}`,
+		`{"id":"1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}}`,
+	}
+
+	server := sseServer(t, chunks)
+	defer server.Close()
+
+	client := newStreamingClient(t, server.URL)
+
+	resp, err := client.ChatCompletion(context.Background(), simpleRequest("req-trunc"))
+	if err != nil {
+		t.Fatalf("ChatCompletion() error: %v", err)
+	}
+
+	if resp.Status != "length_truncated" {
+		t.Errorf("Status = %q, want %q", resp.Status, "length_truncated")
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+	if resp.Message.Content != "Partial response" {
+		t.Errorf("Content = %q, want %q", resp.Message.Content, "Partial response")
+	}
+}
+
 func TestStreamAccumulator_ToolCallAggregation(t *testing.T) {
 	chunks := []string{
 		// First tool call starts (index 0)

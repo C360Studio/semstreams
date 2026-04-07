@@ -29,13 +29,22 @@ const (
 	OutcomeSuccess   = "success"
 	OutcomeFailed    = "failed"
 	OutcomeCancelled = "cancelled"
+	OutcomeTruncated = "truncated"
 )
 
 // Response status values from model responses.
 const (
-	StatusComplete = "complete"
-	StatusToolCall = "tool_call"
-	StatusError    = "error"
+	StatusComplete        = "complete"
+	StatusToolCall        = "tool_call"
+	StatusError           = "error"
+	StatusLengthTruncated = "length_truncated"
+)
+
+// Finish reason values from model responses (OpenAI-compatible).
+const (
+	FinishReasonStop      = "stop"
+	FinishReasonLength    = "length"
+	FinishReasonToolCalls = "tool_calls"
 )
 
 // ContextEvent type values.

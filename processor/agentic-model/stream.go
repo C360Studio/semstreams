@@ -145,11 +145,18 @@ func (a *streamAccumulator) toAgentResponse(requestID string) agentic.AgentRespo
 	}
 
 	// Map finish reason to status
+	resp.FinishReason = string(a.finishReason)
 	switch a.finishReason {
 	case "tool_calls":
-		resp.Status = "tool_call"
+		resp.Status = agentic.StatusToolCall
+	case "length":
+		resp.Status = agentic.StatusLengthTruncated
+		if a.logger != nil {
+			a.logger.Warn("streaming response truncated: finish_reason=length (max_tokens hit)",
+				"request_id", requestID)
+		}
 	default:
-		resp.Status = "complete"
+		resp.Status = agentic.StatusComplete
 	}
 
 	// Sort tool calls by index and convert to agentic types
