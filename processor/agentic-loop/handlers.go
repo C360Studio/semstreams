@@ -338,6 +338,16 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		)
 	}
 
+	// Dedup: if a non-terminal loop already exists for this task, skip.
+	// This prevents duplicate LLM work when JetStream redelivers a message
+	// (e.g. after a transient heartbeat failure).
+	if existingID, exists := h.loopManager.HasActiveLoopForTask(task.TaskID); exists {
+		h.logger.Warn("Duplicate task message — loop already active",
+			slog.String("task_id", task.TaskID),
+			slog.String("existing_loop_id", existingID))
+		return HandlerResult{LoopID: existingID}, nil
+	}
+
 	// Use provided loop_id if present, otherwise create new one
 	var loopID string
 	var err error

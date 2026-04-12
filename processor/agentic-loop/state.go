@@ -139,6 +139,20 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 	return loopID, nil
 }
 
+// HasActiveLoopForTask returns true if a non-terminal loop already exists for the
+// given task ID. This prevents duplicate loop creation on JetStream redelivery.
+func (m *LoopManager) HasActiveLoopForTask(taskID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, entity := range m.loops {
+		if entity.TaskID == taskID && !entity.State.IsTerminal() {
+			return entity.ID, true
+		}
+	}
+	return "", false
+}
+
 // GetLoop retrieves a loop entity by ID
 func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 	m.mu.RLock()

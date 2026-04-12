@@ -91,6 +91,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "parse config")
 	}
+	config.Consumer.EnsureDefaults()
 	config.Context.EnsureDefaults()
 
 	// Validate configuration
@@ -572,13 +573,13 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, subj
 
 	switch port.Name {
 	case "agent.task", "agent.response", "tool.result":
-		ackWait = 90 * time.Second
+		ackWait = c.config.Consumer.ParsedAckWait()
 		maxAckPending = 1
-		maxDeliver = 2
+		maxDeliver = c.config.Consumer.MaxDeliver
 		msgTimeout = 30 * time.Minute
 		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
 		useHeartbeat = true
-		heartbeatInterval = 60 * time.Second
+		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
 	default: // agent.signal, agent.boid — fast, advisory
 		ackWait = 30 * time.Second
 		maxAckPending = 10

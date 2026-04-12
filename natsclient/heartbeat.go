@@ -26,9 +26,16 @@ func ConsumeWithHeartbeat(
 	heartbeatInterval time.Duration,
 	work func(context.Context) error,
 ) error {
+	// Derive a cancellable context so we can stop the work goroutine
+	// if the heartbeat fails. Without this, an InProgress() failure
+	// leaves the work goroutine running while JetStream redelivers
+	// the message — causing duplicate processing.
+	workCtx, workCancel := context.WithCancel(ctx)
+	defer workCancel()
+
 	done := make(chan error, 1)
 	go func() {
-		done <- work(ctx)
+		done <- work(workCtx)
 	}()
 
 	ticker := time.NewTicker(heartbeatInterval)
@@ -41,6 +48,7 @@ func ConsumeWithHeartbeat(
 				slog.Warn("Failed to send InProgress heartbeat",
 					"error", err,
 					"subject", msg.Subject())
+				workCancel() // stop the orphaned work goroutine
 				return fmt.Errorf("failed to send InProgress: %w", err)
 			}
 

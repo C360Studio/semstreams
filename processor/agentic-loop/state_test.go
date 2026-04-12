@@ -892,3 +892,49 @@ func TestLoopManager_TrackToolStart(t *testing.T) {
 		t.Errorf("GetToolStart(unknown) = %v, want zero time", unknown)
 	}
 }
+
+func TestLoopManager_HasActiveLoopForTask(t *testing.T) {
+	manager := agenticloop.NewLoopManager()
+
+	// No loops — should not find any
+	_, exists := manager.HasActiveLoopForTask("task-001")
+	if exists {
+		t.Fatal("HasActiveLoopForTask should return false when no loops exist")
+	}
+
+	// Create an active loop
+	loopID, err := manager.CreateLoop("task-001", "general", "qwen-32b")
+	if err != nil {
+		t.Fatalf("CreateLoop() error = %v", err)
+	}
+
+	// Should find the active loop
+	foundID, exists := manager.HasActiveLoopForTask("task-001")
+	if !exists {
+		t.Fatal("HasActiveLoopForTask should return true for active loop")
+	}
+	if foundID != loopID {
+		t.Errorf("HasActiveLoopForTask returned %s, want %s", foundID, loopID)
+	}
+
+	// Different task ID should not match
+	_, exists = manager.HasActiveLoopForTask("task-999")
+	if exists {
+		t.Fatal("HasActiveLoopForTask should return false for different task ID")
+	}
+
+	// Transition to terminal state — should no longer match
+	entity, err := manager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop() error = %v", err)
+	}
+	entity.State = agentic.LoopStateComplete
+	if err := manager.UpdateLoop(entity); err != nil {
+		t.Fatalf("UpdateLoop() error = %v", err)
+	}
+
+	_, exists = manager.HasActiveLoopForTask("task-001")
+	if exists {
+		t.Fatal("HasActiveLoopForTask should return false for terminal loop")
+	}
+}

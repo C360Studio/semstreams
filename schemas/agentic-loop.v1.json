@@ -17,6 +17,33 @@
       "default": "30s",
       "category": "advanced"
     },
+    "consumer": {
+      "type": "object",
+      "description": "JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result)",
+      "category": "advanced",
+      "properties": {
+        "ack_wait": {
+          "type": "string",
+          "description": "AckWait duration for long-running consumers (e.g. 90s or 5m)",
+          "default": "90s",
+          "category": "advanced"
+        },
+        "heartbeat_interval": {
+          "type": "string",
+          "description": "InProgress heartbeat interval (e.g. 60s or 2m). Must be less than ack_wait",
+          "default": "60s",
+          "category": "advanced"
+        },
+        "max_deliver": {
+          "type": "number",
+          "description": "Maximum redelivery attempts for long-running consumers",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 10,
+          "category": "advanced"
+        }
+      }
+    },
     "consumer_name_suffix": {
       "type": "string",
       "description": "Suffix for consumer names",

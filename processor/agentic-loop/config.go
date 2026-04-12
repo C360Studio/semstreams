@@ -26,8 +26,18 @@ type Config struct {
 	TrajectoryDetail     string                `json:"trajectory_detail,omitempty" schema:"type:string,description:Trajectory detail level: summary (default) or full,default:summary,category:advanced"`
 	ContentBucket        string                `json:"content_bucket,omitempty" schema:"type:string,description:NATS ObjectStore bucket for trajectory step content (tool results and model responses),default:AGENT_CONTENT,category:advanced"`
 	TrajectoryCacheTTL   string                `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
+	Consumer             ConsumerConfig        `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context              ContextConfig         `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
 	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
+}
+
+// ConsumerConfig holds JetStream consumer tuning for long-running ports.
+// Deployments with slow LLMs (local Ollama, constrained GPUs) should increase
+// ack_wait and heartbeat_interval to prevent premature redelivery.
+type ConsumerConfig struct {
+	AckWait           string `json:"ack_wait,omitempty" schema:"type:string,description:AckWait duration for long-running consumers (e.g. 90s or 5m),default:90s,category:advanced"`
+	HeartbeatInterval string `json:"heartbeat_interval,omitempty" schema:"type:string,description:InProgress heartbeat interval (e.g. 60s or 2m). Must be less than ack_wait,default:60s,category:advanced"`
+	MaxDeliver        int    `json:"max_deliver,omitempty" schema:"type:int,description:Maximum redelivery attempts for long-running consumers,default:2,min:1,max:10,category:advanced"`
 }
 
 // ContextConfig represents configuration for context memory management.
@@ -77,6 +87,11 @@ func (c Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("trajectory_detail must be 'summary' or 'full'"), "Config", "Validate", "check trajectory_detail")
 	}
 
+	// Validate consumer config
+	if err := c.Consumer.Validate(); err != nil {
+		return err
+	}
+
 	// Validate context config
 	return c.Context.Validate()
 }
@@ -116,6 +131,68 @@ func (c *ContextConfig) EnsureDefaults() {
 	}
 }
 
+// Validate validates the consumer configuration.
+func (c ConsumerConfig) Validate() error {
+	if c.AckWait != "" {
+		d, err := time.ParseDuration(c.AckWait)
+		if err != nil {
+			return errs.WrapInvalid(err, "ConsumerConfig", "Validate", "parse ack_wait")
+		}
+		if d < 10*time.Second {
+			return errs.WrapInvalid(fmt.Errorf("ack_wait must be at least 10s"), "ConsumerConfig", "Validate", "check ack_wait")
+		}
+	}
+	if c.HeartbeatInterval != "" {
+		d, err := time.ParseDuration(c.HeartbeatInterval)
+		if err != nil {
+			return errs.WrapInvalid(err, "ConsumerConfig", "Validate", "parse heartbeat_interval")
+		}
+		if d < 5*time.Second {
+			return errs.WrapInvalid(fmt.Errorf("heartbeat_interval must be at least 5s"), "ConsumerConfig", "Validate", "check heartbeat_interval")
+		}
+	}
+	if c.MaxDeliver < 0 {
+		return errs.WrapInvalid(fmt.Errorf("max_deliver must be non-negative"), "ConsumerConfig", "Validate", "check max_deliver")
+	}
+	return nil
+}
+
+// EnsureDefaults fills zero-valued fields with defaults.
+func (c *ConsumerConfig) EnsureDefaults() {
+	defaults := DefaultConsumerConfig()
+	if c.AckWait == "" {
+		c.AckWait = defaults.AckWait
+	}
+	if c.HeartbeatInterval == "" {
+		c.HeartbeatInterval = defaults.HeartbeatInterval
+	}
+	if c.MaxDeliver == 0 {
+		c.MaxDeliver = defaults.MaxDeliver
+	}
+}
+
+// ParsedAckWait returns AckWait as a time.Duration. Caller must validate first.
+func (c ConsumerConfig) ParsedAckWait() time.Duration {
+	d, _ := time.ParseDuration(c.AckWait)
+	return d
+}
+
+// ParsedHeartbeatInterval returns HeartbeatInterval as a time.Duration. Caller must validate first.
+func (c ConsumerConfig) ParsedHeartbeatInterval() time.Duration {
+	d, _ := time.ParseDuration(c.HeartbeatInterval)
+	return d
+}
+
+// DefaultConsumerConfig returns the default consumer configuration.
+// These defaults match the original hardcoded values.
+func DefaultConsumerConfig() ConsumerConfig {
+	return ConsumerConfig{
+		AckWait:           "90s",
+		HeartbeatInterval: "60s",
+		MaxDeliver:        2,
+	}
+}
+
 // DefaultContextConfig returns the default context configuration
 func DefaultContextConfig() ContextConfig {
 	return ContextConfig{
@@ -138,6 +215,7 @@ func DefaultConfig() Config {
 		BoidSignalTTL:    "30s",
 		ContentBucket:    "AGENT_CONTENT",
 		TrajectoryDetail: "summary",
+		Consumer:         DefaultConsumerConfig(),
 		Context:          DefaultContextConfig(),
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{

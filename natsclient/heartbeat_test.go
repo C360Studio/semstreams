@@ -178,6 +178,31 @@ func TestConsumeWithHeartbeat_ReturnsErrorOnInProgressFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to send InProgress")
 }
 
+func TestConsumeWithHeartbeat_CancelsWorkOnInProgressFailure(t *testing.T) {
+	msg := &mockMsg{
+		subject:       "test.subject",
+		inProgressErr: errors.New("connection lost"),
+	}
+
+	var workCancelled atomic.Bool
+	err := ConsumeWithHeartbeat(
+		context.Background(),
+		msg,
+		10*time.Millisecond,
+		func(workCtx context.Context) error {
+			<-workCtx.Done()
+			workCancelled.Store(true)
+			return workCtx.Err()
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to send InProgress")
+	// Give the goroutine a moment to observe cancellation
+	time.Sleep(20 * time.Millisecond)
+	assert.True(t, workCancelled.Load(), "work goroutine should be cancelled on heartbeat failure")
+}
+
 func TestConsumeWithHeartbeat_FastWorkNoHeartbeat(t *testing.T) {
 	msg := &mockMsg{subject: "test.subject"}
 
