@@ -132,7 +132,9 @@ func (t Triple) IsRelationship() bool {
 
 // IsValidEntityID checks if a string conforms to the canonical 6-part EntityID format.
 // Valid format: organization.platform.domain.system.type.instance (e.g., "c360.platform1.robotics.mav1.drone.0")
-// This enables consistent entity identification across the system.
+// Each part must contain only alphanumeric characters, hyphens, or underscores.
+// This prevents false positives from strings that happen to have 5 dots (e.g., JSON
+// with file extensions like ".go", ".md") and ensures the ID is safe as a NATS KV key.
 func IsValidEntityID(s string) bool {
 	if s == "" {
 		return false
@@ -144,14 +146,26 @@ func IsValidEntityID(s string) bool {
 		return false
 	}
 
-	// Check that no part is empty (handles cases like "a..b.c" or "a.b.c.")
+	// Each part must be non-empty and contain only valid identifier characters.
+	// Valid: a-z, A-Z, 0-9, hyphen, underscore
 	for _, part := range parts {
 		if part == "" {
 			return false
 		}
+		for _, c := range part {
+			if !isEntityIDChar(c) {
+				return false
+			}
+		}
 	}
 
 	return true
+}
+
+// isEntityIDChar returns true if c is valid in an entity ID part:
+// alphanumeric, hyphen, or underscore.
+func isEntityIDChar(c rune) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
 }
 
 // IsExpired returns true if the triple has an expiration time that has passed.

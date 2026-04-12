@@ -199,6 +199,31 @@ func TestIsValidEntityID(t *testing.T) {
 			entityID: ".c360.platform1.robotics.mav1.drone.0",
 			expected: false,
 		},
+		{
+			name:     "JSON string with 5 dots (false positive from file extensions)",
+			entityID: `{"include":["main.go","auth/middleware.go","handlers/user Handlers.go","test/auth_test.go"],"exclude":["third-party libraries"],"do_not_touch":["README.md","LICENSE"]}`,
+			expected: false,
+		},
+		{
+			name:     "part contains spaces",
+			entityID: "c360.platform 1.robotics.mav1.drone.0",
+			expected: false,
+		},
+		{
+			name:     "part contains braces",
+			entityID: "c360.{platform}.robotics.mav1.drone.0",
+			expected: false,
+		},
+		{
+			name:     "part contains slash",
+			entityID: "c360.platform/1.robotics.mav1.drone.0",
+			expected: false,
+		},
+		{
+			name:     "valid with hyphens and underscores",
+			entityID: "c360.my-platform.robot_ics.mav-1.drone_type.instance-0",
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
