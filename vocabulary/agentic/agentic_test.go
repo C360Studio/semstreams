@@ -253,9 +253,10 @@ func TestPredicateCount(t *testing.T) {
 
 	// Expected predicates by category:
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
-	// Model: 8, Loop: 13
-	// Total: 63 predicates
-	expectedMin := 63
+	// Model: 8, Loop: 14 (was 13, now includes LoopHasStep)
+	// Step: 15, Identity: 6
+	// Total: 85 predicates
+	expectedMin := 85
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -318,9 +319,81 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 		{"LoopWorkflowStep", agentic.LoopWorkflowStep, "string"},
 		{"LoopEndedAt", agentic.LoopEndedAt, "time.Time"},
 		{"LoopUser", agentic.LoopUser, "string"},
+		{"LoopHasStep", agentic.LoopHasStep, "string"},
 	}
 
 	for _, tt := range loopPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+	}
+}
+
+func TestStepPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	stepPredicates := []struct {
+		name      string
+		predicate string
+		dataType  string
+	}{
+		{"StepType", agentic.StepType, "string"},
+		{"StepIndex", agentic.StepIndex, "int"},
+		{"StepLoop", agentic.StepLoop, "string"},
+		{"StepTimestamp", agentic.StepTimestamp, "time.Time"},
+		{"StepDuration", agentic.StepDuration, "int64"},
+		{"StepToolName", agentic.StepToolName, "string"},
+		{"StepModel", agentic.StepModel, "string"},
+		{"StepTokensIn", agentic.StepTokensIn, "int"},
+		{"StepTokensOut", agentic.StepTokensOut, "int"},
+		{"StepCapability", agentic.StepCapability, "string"},
+		{"StepProvider", agentic.StepProvider, "string"},
+		{"StepRetries", agentic.StepRetries, "int"},
+		{"StepTokensEvicted", agentic.StepTokensEvicted, "int"},
+		{"StepTokensSummarized", agentic.StepTokensSummarized, "int"},
+		{"StepUtilization", agentic.StepUtilization, "float64"},
+	}
+
+	for _, tt := range stepPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+	}
+}
+
+func TestIdentityPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	identityPredicates := []struct {
+		name      string
+		predicate string
+		dataType  string
+	}{
+		{"IdentityDID", agentic.IdentityDID, "string"},
+		{"IdentityCredential", agentic.IdentityCredential, "string"},
+		{"IdentityIssuer", agentic.IdentityIssuer, "string"},
+		{"IdentityVerified", agentic.IdentityVerified, "bool"},
+		{"IdentityDisplayName", agentic.IdentityDisplayName, "string"},
+		{"IdentityRole", agentic.IdentityRole, "string"},
+	}
+
+	for _, tt := range identityPredicates {
 		meta := vocabulary.GetPredicateMetadata(tt.predicate)
 		if meta == nil {
 			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)

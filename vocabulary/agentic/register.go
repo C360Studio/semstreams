@@ -27,6 +27,8 @@ func Register() {
 	registerTaskPredicates()
 	registerModelPredicates()
 	registerLoopPredicates()
+	registerStepPredicates()
+	registerIdentityPredicates()
 }
 
 // registerIntentPredicates registers predicates for agent intentions and goals.
@@ -337,5 +339,100 @@ func registerLoopPredicates() {
 
 	vocabulary.Register(LoopUser,
 		vocabulary.WithDescription("User ID who initiated this loop"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopHasStep,
+		vocabulary.WithDescription("Entity reference to a trajectory step within this loop (multi-valued)"),
+		vocabulary.WithDataType("string"))
+}
+
+// registerStepPredicates registers predicates for trajectory step entities.
+func registerStepPredicates() {
+	vocabulary.Register(StepType,
+		vocabulary.WithDescription("Category of the trajectory step (tool_call, model_call, context_compaction)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepIndex,
+		vocabulary.WithDescription("Zero-based position of this step in the trajectory"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepLoop,
+		vocabulary.WithDescription("Entity reference to the parent loop execution"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepTimestamp,
+		vocabulary.WithDescription("When this step occurred"),
+		vocabulary.WithDataType("time.Time"))
+
+	vocabulary.Register(StepDuration,
+		vocabulary.WithDescription("Execution time of this step in milliseconds"),
+		vocabulary.WithDataType("int64"))
+
+	vocabulary.Register(StepToolName,
+		vocabulary.WithDescription("Tool function name for tool_call steps"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepModel,
+		vocabulary.WithDescription("Model name for model_call steps"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepTokensIn,
+		vocabulary.WithDescription("Input tokens consumed by a model_call step"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepTokensOut,
+		vocabulary.WithDescription("Output tokens produced by a model_call step"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepCapability,
+		vocabulary.WithDescription("Role or purpose of this step (e.g., coding, planning, reviewing)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepProvider,
+		vocabulary.WithDescription("LLM provider for this step's model endpoint"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepRetries,
+		vocabulary.WithDescription("Number of retries before this step succeeded"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepTokensEvicted,
+		vocabulary.WithDescription("Tokens evicted during context compaction (context_compaction steps only)"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepTokensSummarized,
+		vocabulary.WithDescription("Tokens in the compaction summary (context_compaction steps only)"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(StepUtilization,
+		vocabulary.WithDescription("Context utilization ratio (0.0-1.0) at compaction trigger"),
+		vocabulary.WithDataType("float64"),
+		vocabulary.WithRange("0-1"))
+}
+
+// registerIdentityPredicates registers predicates for DID-based agent identity.
+func registerIdentityPredicates() {
+	vocabulary.Register(IdentityDID,
+		vocabulary.WithDescription("Decentralized identifier for an agent"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(IdentityCredential,
+		vocabulary.WithDescription("Verifiable credential held by the agent"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(IdentityIssuer,
+		vocabulary.WithDescription("DID of an entity that issued a credential"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(IdentityVerified,
+		vocabulary.WithDescription("Whether the identity has been verified"),
+		vocabulary.WithDataType("bool"))
+
+	vocabulary.Register(IdentityDisplayName,
+		vocabulary.WithDescription("Human-readable name for the agent"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(IdentityRole,
+		vocabulary.WithDescription("Agent's role in the system (e.g., architect, editor, reviewer)"),
 		vocabulary.WithDataType("string"))
 }
