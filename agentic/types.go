@@ -41,6 +41,10 @@ type AgentRequest struct {
 	Temperature float64          `json:"temperature,omitempty"`
 	Tools       []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice  *ToolChoice      `json:"tool_choice,omitempty"`
+	// Timeout caps this specific request. Go duration string (e.g. "30s").
+	// Empty means fall through to endpoint, capability, or component-level
+	// timeout. Takes precedence over all other timeout sources when set.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // Validate checks if the AgentRequest is valid

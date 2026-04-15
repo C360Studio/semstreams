@@ -279,6 +279,11 @@ type TaskMessage struct {
 
 	// Domain context propagated to all tool calls in this loop
 	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// Timeout caps LLM calls issued for this task. Go duration string
+	// (e.g. "30s"). Empty means fall through to endpoint, capability, or
+	// component-level timeout. Highest precedence when set.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // ConstructedContext is an alias for types.ConstructedContext.

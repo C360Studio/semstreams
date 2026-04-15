@@ -521,6 +521,11 @@ Long-running loops can consume resources. Timeouts apply at multiple levels:
 
 - **Loop timeout** (default 120s): Maximum total execution time
 - **Tool timeout** (default 60s): Maximum time per tool execution
+- **LLM request timeout**: Per-call budget resolved from a four-layer precedence
+  chain — task → endpoint → capability → component default. Lets operators
+  give fast classification calls a shorter leash than heavy planning calls
+  without editing every producer. See
+  [agentic-components → Timeout Resolution](../advanced/08-agentic-components.md#timeout-resolution).
 - **Context cancellation**: Propagates through all operations for clean shutdown
 
 ### Tool Allowlists

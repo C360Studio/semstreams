@@ -102,6 +102,11 @@ type EndpointConfig struct {
 	// MaxConcurrent limits concurrent in-flight requests to this endpoint.
 	// 0 means no concurrency limit.
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
+	// RequestTimeout caps a single LLM request to this endpoint.
+	// Go duration string (e.g. "45s", "5m"). Empty means no per-endpoint cap;
+	// the capability or component-level timeout applies. See agentic-model
+	// Timeout Resolution for the full precedence chain.
+	RequestTimeout string `json:"request_timeout,omitempty"`
 }
 
 // CapabilityConfig defines model preferences for a capability.
@@ -114,6 +119,12 @@ type CapabilityConfig struct {
 	Fallback []string `json:"fallback,omitempty"`
 	// RequiresTools filters the chain to only tool-capable endpoints.
 	RequiresTools bool `json:"requires_tools,omitempty"`
+	// Timeout caps a single LLM request routed via this capability.
+	// Go duration string (e.g. "45s", "5m"). Empty means no per-capability
+	// cap; the component-level timeout applies. Endpoint and task timeouts
+	// take precedence over this value. See agentic-model Timeout Resolution
+	// for the full precedence chain.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 // DefaultsConfig holds default model settings.
@@ -147,6 +158,11 @@ type RegistryReader interface {
 	// GetEndpoint returns the full endpoint configuration for an endpoint name.
 	// Returns nil if the endpoint is not configured.
 	GetEndpoint(name string) *EndpointConfig
+
+	// GetCapability returns the full capability configuration for a capability
+	// name. Returns nil if the name is not a configured capability (e.g. when
+	// the caller passed an endpoint name instead).
+	GetCapability(name string) *CapabilityConfig
 
 	// GetMaxTokens returns the context window size for an endpoint name.
 	// Returns 0 if the endpoint is not configured.
@@ -311,6 +327,16 @@ func (r *Registry) GetEndpoint(name string) *EndpointConfig {
 		return nil
 	}
 	return ep
+}
+
+// GetCapability returns the capability configuration for a name, or nil if not
+// a configured capability.
+func (r *Registry) GetCapability(name string) *CapabilityConfig {
+	capCfg, ok := r.Capabilities[name]
+	if !ok {
+		return nil
+	}
+	return capCfg
 }
 
 // GetMaxTokens returns the context window size for an endpoint name.
