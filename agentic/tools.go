@@ -64,16 +64,58 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(t))
 }
 
+// ToolErrorKind classifies the source or nature of a tool execution failure.
+// It is the structured counterpart to ToolResult.Error and feeds the
+// agent.step.error_category graph predicate for queryable failure analysis.
+type ToolErrorKind string
+
+const (
+	// ToolErrorTimeout means the tool exceeded its execution deadline
+	// (context.DeadlineExceeded observed after the executor returned).
+	ToolErrorTimeout ToolErrorKind = "timeout"
+
+	// ToolErrorNotFound means the tool was not registered, the requested
+	// resource did not exist, or the caller was not permitted to invoke it
+	// via the component allowlist.
+	ToolErrorNotFound ToolErrorKind = "not_found"
+
+	// ToolErrorInvalidArgs means tool arguments failed validation
+	// (missing required field, wrong type, schema violation).
+	ToolErrorInvalidArgs ToolErrorKind = "invalid_args"
+
+	// ToolErrorPermission means an external system refused the request
+	// due to authentication or authorization (e.g., HTTP 401/403).
+	ToolErrorPermission ToolErrorKind = "permission"
+
+	// ToolErrorNetwork means a transport-level failure occurred
+	// (dial error, connection reset, DNS failure).
+	ToolErrorNetwork ToolErrorKind = "network"
+
+	// ToolErrorExternal means an external service returned a failure
+	// that does not fall into the other categories (5xx, 429 rate limit,
+	// operation-specific failure from an upstream API).
+	ToolErrorExternal ToolErrorKind = "external"
+
+	// ToolErrorInternal means an executor-internal bug
+	// (marshal/unmarshal failure, unexpected nil, invariant violation).
+	ToolErrorInternal ToolErrorKind = "internal"
+
+	// ToolErrorUnknown means the failure was not classified. Used as the
+	// default when a ToolResult has a non-empty Error but no ErrorKind.
+	ToolErrorUnknown ToolErrorKind = "unknown"
+)
+
 // ToolResult represents the result of a tool call
 type ToolResult struct {
-	CallID   string         `json:"call_id"`
-	Name     string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
-	Content  string         `json:"content,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
-	LoopID   string         `json:"loop_id,omitempty"`
-	TraceID  string         `json:"trace_id,omitempty"`
-	StopLoop bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
+	CallID    string         `json:"call_id"`
+	Name      string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
+	Content   string         `json:"content,omitempty"`
+	Error     string         `json:"error,omitempty"`
+	ErrorKind ToolErrorKind  `json:"error_kind,omitempty"` // Structured classification of the failure
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	LoopID    string         `json:"loop_id,omitempty"`
+	TraceID   string         `json:"trace_id,omitempty"`
+	StopLoop  bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
 }
 
 // Validate checks if the ToolResult is valid

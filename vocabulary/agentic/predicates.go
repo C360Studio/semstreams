@@ -549,4 +549,22 @@ const (
 	// Example: 0.72
 	// DataType: float64
 	StepUtilization = "agent.step.utilization"
+
+	// StepToolStatus is the terminal status of a tool_call step.
+	// Example: "success", "failed"
+	// DataType: string
+	StepToolStatus = "agent.step.tool_status"
+
+	// StepErrorMessage is the raw error text for a failed tool_call step.
+	// Omitted on success.
+	// Example: "entity not found: acme.foo.bar"
+	// DataType: string
+	StepErrorMessage = "agent.step.error_message"
+
+	// StepErrorCategory is the typed error category for a failed tool_call step.
+	// Values: "timeout", "not_found", "invalid_args", "permission", "network",
+	// "external", "internal", "unknown". Derived from ToolResult.ErrorKind.
+	// Example: "invalid_args"
+	// DataType: string
+	StepErrorCategory = "agent.step.error_category"
 )

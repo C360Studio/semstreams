@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/agentic"
 )
 
 // mockGitHubClient implements GitHubClient for use in executor tests.
@@ -531,3 +537,115 @@ func TestGitHubHTTPClient_IssueAssigneeAndLabels(t *testing.T) {
 		t.Errorf("unexpected labels: %v", issue.Labels)
 	}
 }
+
+// --- classifyHTTPStatus / classifyGitHubError ---
+
+func TestClassifyHTTPStatus(t *testing.T) {
+	cases := []struct {
+		code int
+		want agentic.ToolErrorKind
+	}{
+		{http.StatusUnauthorized, agentic.ToolErrorPermission},
+		{http.StatusForbidden, agentic.ToolErrorPermission},
+		{http.StatusNotFound, agentic.ToolErrorNotFound},
+		{http.StatusGone, agentic.ToolErrorNotFound},
+		{http.StatusRequestTimeout, agentic.ToolErrorTimeout},
+		{http.StatusGatewayTimeout, agentic.ToolErrorTimeout},
+		{http.StatusTooManyRequests, agentic.ToolErrorExternal},
+		{http.StatusBadRequest, agentic.ToolErrorInvalidArgs},
+		{http.StatusConflict, agentic.ToolErrorInvalidArgs},
+		{http.StatusUnprocessableEntity, agentic.ToolErrorInvalidArgs},
+		{http.StatusInternalServerError, agentic.ToolErrorExternal},
+		{http.StatusBadGateway, agentic.ToolErrorExternal},
+		{http.StatusServiceUnavailable, agentic.ToolErrorExternal},
+		{http.StatusOK, agentic.ToolErrorUnknown}, // Shouldn't happen, but covered.
+		{0, agentic.ToolErrorUnknown},
+	}
+	for _, c := range cases {
+		if got := classifyHTTPStatus(c.code); got != c.want {
+			t.Errorf("classifyHTTPStatus(%d) = %q, want %q", c.code, got, c.want)
+		}
+	}
+}
+
+func TestClassifyGitHubError(t *testing.T) {
+	t.Run("nil returns empty", func(t *testing.T) {
+		if got := classifyGitHubError(nil); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("context deadline is timeout", func(t *testing.T) {
+		if got := classifyGitHubError(context.DeadlineExceeded); got != agentic.ToolErrorTimeout {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorTimeout)
+		}
+	})
+
+	t.Run("context canceled is timeout", func(t *testing.T) {
+		if got := classifyGitHubError(context.Canceled); got != agentic.ToolErrorTimeout {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorTimeout)
+		}
+	})
+
+	t.Run("wrapped context deadline is timeout", func(t *testing.T) {
+		wrapped := fmt.Errorf("doing the thing: %w", context.DeadlineExceeded)
+		if got := classifyGitHubError(wrapped); got != agentic.ToolErrorTimeout {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorTimeout)
+		}
+	})
+
+	t.Run("httpStatusError 403 is permission", func(t *testing.T) {
+		err := &httpStatusError{StatusCode: http.StatusForbidden, Body: "denied"}
+		if got := classifyGitHubError(err); got != agentic.ToolErrorPermission {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorPermission)
+		}
+	})
+
+	t.Run("wrapped httpStatusError 422 is invalid_args", func(t *testing.T) {
+		inner := &httpStatusError{StatusCode: http.StatusUnprocessableEntity, Body: "bad"}
+		wrapped := fmt.Errorf("github_create_branch: %w", inner)
+		if got := classifyGitHubError(wrapped); got != agentic.ToolErrorInvalidArgs {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorInvalidArgs)
+		}
+	})
+
+	t.Run("url.Error dial failure is network", func(t *testing.T) {
+		// *url.Error wraps transport errors from http.Client.Do. It
+		// implements net.Error, which the classifier catches.
+		err := &url.Error{
+			Op:  "Get",
+			URL: "https://api.github.com/repos/x/y",
+			Err: errors.New("dial tcp: lookup api.github.com: no such host"),
+		}
+		if got := classifyGitHubError(err); got != agentic.ToolErrorNetwork {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorNetwork)
+		}
+	})
+
+	t.Run("net.Error with Timeout() is timeout", func(t *testing.T) {
+		err := &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &timeoutNetErr{},
+		}
+		if got := classifyGitHubError(err); got != agentic.ToolErrorTimeout {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorTimeout)
+		}
+	})
+
+	t.Run("unclassified error falls back to external", func(t *testing.T) {
+		err := errors.New("something unexpected")
+		if got := classifyGitHubError(err); got != agentic.ToolErrorExternal {
+			t.Errorf("got %q, want %q", got, agentic.ToolErrorExternal)
+		}
+	})
+}
+
+// timeoutNetErr is a minimal net.Error whose Timeout() returns true, used
+// to exercise the timeout branch of classifyGitHubError without depending
+// on actual network I/O.
+type timeoutNetErr struct{}
+
+func (*timeoutNetErr) Error() string   { return "i/o timeout" }
+func (*timeoutNetErr) Timeout() bool   { return true }
+func (*timeoutNetErr) Temporary() bool { return true }

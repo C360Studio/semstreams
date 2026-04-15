@@ -254,9 +254,9 @@ func TestPredicateCount(t *testing.T) {
 	// Expected predicates by category:
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
 	// Model: 8, Loop: 14 (was 13, now includes LoopHasStep)
-	// Step: 15, Identity: 6
-	// Total: 85 predicates
-	expectedMin := 85
+	// Step: 18 (15 core + tool_status + error_message + error_category), Identity: 6
+	// Total: 88 predicates
+	expectedMin := 88
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}

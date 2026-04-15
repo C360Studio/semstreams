@@ -408,6 +408,18 @@ func registerStepPredicates() {
 		vocabulary.WithDescription("Context utilization ratio (0.0-1.0) at compaction trigger"),
 		vocabulary.WithDataType("float64"),
 		vocabulary.WithRange("0-1"))
+
+	vocabulary.Register(StepToolStatus,
+		vocabulary.WithDescription("Terminal status of a tool_call step (success, failed)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepErrorMessage,
+		vocabulary.WithDescription("Raw error text for a failed tool_call step"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(StepErrorCategory,
+		vocabulary.WithDescription("Typed error category (timeout, not_found, invalid_args, permission, network, external, internal, unknown)"),
+		vocabulary.WithDataType("string"))
 }
 
 // registerIdentityPredicates registers predicates for DID-based agent identity.

@@ -859,6 +859,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	}
 
 	// Record trajectory step
+	toolStatus := "success"
+	var errCategory string
+	if toolResult.Error != "" {
+		toolStatus = "failed"
+		errCategory = string(toolResult.ErrorKind)
+		if errCategory == "" {
+			errCategory = string(agentic.ToolErrorUnknown)
+		}
+	}
 	step := agentic.TrajectoryStep{
 		Timestamp:     time.Now(),
 		StepType:      "tool_call",
@@ -868,6 +877,9 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		Duration:      h.computeToolDuration(toolResult.CallID),
 		Provider:      h.resolveProvider(entity.Model),
 		Capability:    entity.Role,
+		ToolStatus:    toolStatus,
+		ErrorMessage:  toolResult.Error,
+		ErrorCategory: errCategory,
 	}
 	result.TrajectorySteps = append(result.TrajectorySteps, step)
 

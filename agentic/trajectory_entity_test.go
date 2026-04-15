@@ -19,6 +19,7 @@ func TestTrajectoryStepEntity_ToolCall(t *testing.T) {
 		ToolArguments: map[string]any{"query": "deployment errors"},
 		ToolResult:    "Found 3 results about deployment errors...",
 		Duration:      1500,
+		ToolStatus:    "success",
 	}
 
 	entity := &agentic.TrajectoryStepEntity{
@@ -62,6 +63,11 @@ func TestTrajectoryStepEntity_ToolCall(t *testing.T) {
 		assert.Equal(t, 2, objectFor(triples, agvocab.StepIndex))
 		assert.Equal(t, "web_search", objectFor(triples, agvocab.StepToolName))
 		assert.Equal(t, int64(1500), objectFor(triples, agvocab.StepDuration))
+		assert.Equal(t, "success", objectFor(triples, agvocab.StepToolStatus))
+
+		// No error predicates on success
+		assert.False(t, preds[agvocab.StepErrorMessage])
+		assert.False(t, preds[agvocab.StepErrorCategory])
 
 		// Loop reference must be a valid entity ID
 		loopRef, ok := objectFor(triples, agvocab.StepLoop).(string)
@@ -102,6 +108,45 @@ func TestTrajectoryStepEntity_ToolCall(t *testing.T) {
 		}
 		entity.SetStorageRef(ref)
 		assert.Equal(t, ref, entity.StorageRef())
+	})
+}
+
+func TestTrajectoryStepEntity_ToolCall_Failed(t *testing.T) {
+	step := agentic.TrajectoryStep{
+		Timestamp:     time.Date(2026, 3, 17, 14, 0, 0, 0, time.UTC),
+		StepType:      "tool_call",
+		ToolName:      "graph_query",
+		ToolArguments: map[string]any{"entity_id": "missing"},
+		Duration:      42,
+		ToolStatus:    "failed",
+		ErrorMessage:  "entity not found: missing",
+		ErrorCategory: string(agentic.ToolErrorNotFound),
+	}
+
+	entity := &agentic.TrajectoryStepEntity{
+		Step:      step,
+		Org:       "acme",
+		Platform:  "ops",
+		LoopID:    "loop789",
+		StepIndex: 5,
+	}
+
+	t.Run("Triples_emit_status_and_error", func(t *testing.T) {
+		triples := entity.Triples()
+
+		assert.Equal(t, "failed", objectFor(triples, agvocab.StepToolStatus))
+		assert.Equal(t, "entity not found: missing", objectFor(triples, agvocab.StepErrorMessage))
+		assert.Equal(t, "not_found", objectFor(triples, agvocab.StepErrorCategory))
+	})
+
+	t.Run("ContentFields_prefers_error_body", func(t *testing.T) {
+		fields := entity.ContentFields()
+		assert.Equal(t, "error", fields[message.ContentRoleBody])
+	})
+
+	t.Run("RawContent_includes_error", func(t *testing.T) {
+		content := entity.RawContent()
+		assert.Equal(t, "entity not found: missing", content["error"])
 	})
 }
 

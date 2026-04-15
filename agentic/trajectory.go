@@ -25,6 +25,12 @@ type TrajectoryStep struct {
 	Capability    string         `json:"capability,omitempty"`  // Role/purpose (coding, planning, reviewing, etc.)
 	RetryCount    int            `json:"retry_count,omitempty"` // Number of retries before success
 	Utilization   float64        `json:"utilization,omitempty"` // Context utilization at compaction trigger (0.0-1.0)
+	// Tool outcome fields, populated for tool_call steps. Emitted as graph
+	// triples (agent.step.tool_status / error_message / error_category) so
+	// ops agents can query failure rates by tool and category.
+	ToolStatus    string `json:"tool_status,omitempty"`    // "success" | "failed"
+	ErrorMessage  string `json:"error_message,omitempty"`  // Raw error text; omitted on success
+	ErrorCategory string `json:"error_category,omitempty"` // ToolErrorKind string form; omitted on success
 }
 
 // Validate checks if the TrajectoryStep is valid

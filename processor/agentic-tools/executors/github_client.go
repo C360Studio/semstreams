@@ -6,12 +6,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/c360studio/semstreams/agentic"
 )
 
 // GitHubClient defines the interface for GitHub API operations.
@@ -137,6 +141,68 @@ func (c *GitHubHTTPClient) doURL(ctx context.Context, method, apiURL string, bod
 	return c.httpClient.Do(req)
 }
 
+// classifyGitHubError maps an error returned by the GitHub client into a
+// ToolErrorKind suitable for the agent.step.error_category graph predicate.
+// HTTP status codes are extracted from httpStatusError; transport failures
+// are detected by type assertion; context failures take precedence.
+func classifyGitHubError(err error) agentic.ToolErrorKind {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return agentic.ToolErrorTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return agentic.ToolErrorTimeout
+	}
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
+		return classifyHTTPStatus(statusErr.StatusCode)
+	}
+	// net.Error catches both raw transport errors and *url.Error (which
+	// implements net.Error via Timeout/Temporary), covering dial, DNS,
+	// connection reset, and client-side timeouts.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return agentic.ToolErrorTimeout
+		}
+		return agentic.ToolErrorNetwork
+	}
+	return agentic.ToolErrorExternal
+}
+
+// classifyHTTPStatus maps an HTTP status code to a ToolErrorKind.
+func classifyHTTPStatus(code int) agentic.ToolErrorKind {
+	switch {
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+		return agentic.ToolErrorPermission
+	case code == http.StatusNotFound || code == http.StatusGone:
+		return agentic.ToolErrorNotFound
+	case code == http.StatusTooManyRequests:
+		return agentic.ToolErrorExternal
+	case code == http.StatusRequestTimeout || code == http.StatusGatewayTimeout:
+		return agentic.ToolErrorTimeout
+	case code >= 400 && code < 500:
+		// Validation, conflict, unprocessable entity, etc.
+		return agentic.ToolErrorInvalidArgs
+	case code >= 500:
+		return agentic.ToolErrorExternal
+	}
+	return agentic.ToolErrorUnknown
+}
+
+// httpStatusError is returned by checkStatus when a response's status code
+// is not in the accepted set. It preserves the status code for classification.
+type httpStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("unexpected status %d: %s", e.StatusCode, e.Body)
+}
+
 // checkStatus returns an error if the response status is not one of the accepted codes.
 func checkStatus(resp *http.Response, accepted ...int) error {
 	for _, code := range accepted {
@@ -145,7 +211,10 @@ func checkStatus(resp *http.Response, accepted ...int) error {
 		}
 	}
 	body, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	return &httpStatusError{
+		StatusCode: resp.StatusCode,
+		Body:       strings.TrimSpace(string(body)),
+	}
 }
 
 // GetIssue fetches a single issue by number.
