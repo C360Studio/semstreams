@@ -57,6 +57,7 @@ type LoopCompletedEvent struct {
 	Outcome      string    `json:"outcome"` // OutcomeSuccess
 	Role         string    `json:"role"`
 	Result       string    `json:"result"`
+	Prompt       string    `json:"prompt,omitempty"` // Original user task prompt; enables NL/BM25 search
 	Model        string    `json:"model"`
 	Iterations   int       `json:"iterations"`
 	TokensIn     int       `json:"tokens_in"`
@@ -108,6 +109,7 @@ type LoopFailedEvent struct {
 	Reason       string    `json:"reason"`
 	Error        string    `json:"error"`
 	Role         string    `json:"role"`
+	Prompt       string    `json:"prompt,omitempty"` // Original user task prompt; enables NL/BM25 search
 	Model        string    `json:"model"`
 	Iterations   int       `json:"iterations"`
 	TokensIn     int       `json:"tokens_in"`

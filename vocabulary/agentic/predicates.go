@@ -462,6 +462,14 @@ const (
 	// Example: entity ID of a trajectory step
 	// DataType: string (entity ID)
 	LoopHasStep = "agent.loop.has_step"
+
+	// LoopDescription is the user task prompt that initiated this loop, stored
+	// as text so BM25/NL search can find loops by topic. The `.description`
+	// suffix is already in the embedding pipeline's default text suffixes,
+	// so this triple is auto-indexed.
+	// Example: "Investigate MQTT retained-message behavior"
+	// DataType: string
+	LoopDescription = "agent.loop.description"
 )
 
 // Step Predicates

@@ -1668,6 +1668,10 @@ components:
                                 type: string
                             duration:
                                 type: integer
+                            error_category:
+                                type: string
+                            error_message:
+                                type: string
                             messages:
                                 items:
                                     properties:
@@ -1758,6 +1762,8 @@ components:
                             tool_name:
                                 type: string
                             tool_result:
+                                type: string
+                            tool_status:
                                 type: string
                             utilization:
                                 type: number
@@ -1887,6 +1893,10 @@ components:
                     type: string
                 duration:
                     type: integer
+                error_category:
+                    type: string
+                error_message:
+                    type: string
                 messages:
                     items:
                         properties:
@@ -1977,6 +1987,8 @@ components:
                 tool_name:
                     type: string
                 tool_result:
+                    type: string
+                tool_status:
                     type: string
                 utilization:
                     type: number

@@ -344,6 +344,10 @@ func registerLoopPredicates() {
 	vocabulary.Register(LoopHasStep,
 		vocabulary.WithDescription("Entity reference to a trajectory step within this loop (multi-valued)"),
 		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopDescription,
+		vocabulary.WithDescription("User task prompt that initiated this loop; indexed for NL/BM25 search"),
+		vocabulary.WithDataType("string"))
 }
 
 // registerStepPredicates registers predicates for trajectory step entities.

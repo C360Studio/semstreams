@@ -253,10 +253,10 @@ func TestPredicateCount(t *testing.T) {
 
 	// Expected predicates by category:
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
-	// Model: 8, Loop: 14 (was 13, now includes LoopHasStep)
+	// Model: 8, Loop: 15 (core + LoopHasStep + LoopDescription)
 	// Step: 18 (15 core + tool_status + error_message + error_category), Identity: 6
-	// Total: 88 predicates
-	expectedMin := 88
+	// Total: 89 predicates
+	expectedMin := 89
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -320,6 +320,7 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 		{"LoopEndedAt", agentic.LoopEndedAt, "time.Time"},
 		{"LoopUser", agentic.LoopUser, "string"},
 		{"LoopHasStep", agentic.LoopHasStep, "string"},
+		{"LoopDescription", agentic.LoopDescription, "string"},
 	}
 
 	for _, tt := range loopPredicates {
