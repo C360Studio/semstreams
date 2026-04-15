@@ -1031,10 +1031,15 @@ func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, 
 		return nil // Entity exists, nothing to do
 	}
 
-	// Entity doesn't exist - create a stub
+	// Entity doesn't exist - create a stub.
+	// Version is set to 1 to match the invariant held by every other
+	// EntityState write path (see component.go:872, messagemanager/
+	// processor.go:276, datamanager/manager.go:792). When the real entity
+	// later arrives, the merge path increments Version to 2.
 	now := time.Now()
 	stub := &graph.EntityState{
 		ID:        entityID,
+		Version:   1,
 		UpdatedAt: now,
 		Triples: []message.Triple{
 			{

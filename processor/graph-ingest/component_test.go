@@ -884,6 +884,64 @@ func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	}
 }
 
+// TestComponent_CreateEntity_ReferentialIntegrityStubHasVersion1 verifies that
+// stub entities created for referential integrity (when a relationship triple
+// references an entity that doesn't yet exist) are written with Version=1.
+//
+// Historical bug: stubs were written without Version, defaulting to 0, which
+// violated the invariant held by every other EntityState write path. Downstream
+// consumers that check Version > 0 (notably the e2e entity-structure validator)
+// would silently reject these stubs as invalid.
+func TestComponent_CreateEntity_ReferentialIntegrityStubHasVersion1(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+
+	sourceID := "c360.platform.robotics.mav1.drone.001"
+	targetID := "c360.platform.robotics.mav1.operator.alice"
+
+	// Entity with a relationship triple whose object is a valid entity ID
+	// referencing a target that does NOT yet exist in the bucket. This
+	// triggers ensureReferencedEntityExists → stub creation.
+	entity := &graph.EntityState{
+		ID: sourceID,
+		Triples: []message.Triple{
+			{
+				Subject:    sourceID,
+				Predicate:  "robotics.assignment.operator",
+				Object:     targetID,
+				Source:     "test",
+				Timestamp:  time.Now(),
+				Confidence: 1.0,
+			},
+		},
+		Version:   1,
+		UpdatedAt: time.Now(),
+	}
+
+	require.NoError(t, comp.CreateEntity(ctx, entity))
+
+	// Read the stub back from the mock bucket and verify Version == 1.
+	entry, err := comp.entityBucket.Get(ctx, targetID)
+	require.NoError(t, err, "stub for referenced target should have been created")
+
+	var stub graph.EntityState
+	require.NoError(t, json.Unmarshal(entry.Value, &stub))
+
+	assert.Equal(t, uint64(1), stub.Version,
+		"stub entity must be written with Version=1 to match the invariant held by all other write paths")
+	assert.Equal(t, targetID, stub.ID)
+
+	// Sanity: the stub triples include the referential-integrity markers.
+	foundStubMarker := false
+	for _, tr := range stub.Triples {
+		if tr.Predicate == "core.identity.stub" {
+			foundStubMarker = true
+			break
+		}
+	}
+	assert.True(t, foundStubMarker, "stub should carry core.identity.stub predicate")
+}
+
 // ====================================================================================
 // Helper Functions
 // ====================================================================================
