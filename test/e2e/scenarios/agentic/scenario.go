@@ -163,6 +163,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-oasf-generation", s.verifyOASFGeneration},
 		{"verify-directory-bridge", s.verifyDirectoryBridge},
 		{"verify-a2a-adapter", s.verifyA2AAdapter},
+		{"verify-otel-export", s.verifyOTELExport},
 	}
 
 	for _, stage := range stages {

@@ -410,7 +410,7 @@ func (c *AGNTCYMockClient) WaitForRegistration(
 	agentIDSubstring string,
 	timeout time.Duration,
 ) (*DirectoryRegistration, error) {
-	const pollInterval = 500 * time.Millisecond
+	const pollInterval = 500 * time.Millisecond //nolint:goconst
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -433,4 +433,37 @@ func (c *AGNTCYMockClient) WaitForRegistration(
 	}
 
 	return nil, nil
+}
+
+// MockServerStats contains statistics from the AGNTCY mock server.
+type MockServerStats struct {
+	RequestCount    int64 `json:"request_count"`
+	Registrations   int   `json:"registrations"`
+	TracesReceived  int64 `json:"traces_received"`
+	MetricsReceived int64 `json:"metrics_received"`
+}
+
+// GetStats retrieves mock server statistics for e2e assertions.
+func (c *AGNTCYMockClient) GetStats(ctx context.Context) (*MockServerStats, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/stats", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats request failed: %s", resp.Status)
+	}
+
+	var stats MockServerStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		return nil, fmt.Errorf("decode stats: %w", err)
+	}
+
+	return &stats, nil
 }

@@ -61,6 +61,9 @@ func (s *AGNTCYServer) setupRoutes() {
 	s.mux.HandleFunc("/v1/agents/heartbeat", s.handleHeartbeat)
 	s.mux.HandleFunc("/v1/agents", s.handleListAgents)
 
+	// Stats endpoint for e2e assertions
+	s.mux.HandleFunc("/stats", s.handleStats)
+
 	// OTEL HTTP endpoints
 	s.mux.HandleFunc("/v1/traces", s.handleOTELTraces)
 	s.mux.HandleFunc("/v1/metrics", s.handleOTELMetrics)
@@ -258,6 +261,12 @@ func (s *AGNTCYServer) handleOTELMetrics(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]any{
 		"partialSuccess": map[string]any{},
 	})
+}
+
+// handleStats exposes server statistics as JSON for e2e test assertions.
+func (s *AGNTCYServer) handleStats(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.Stats())
 }
 
 // Stats returns server statistics.

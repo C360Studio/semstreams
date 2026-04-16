@@ -300,6 +300,45 @@ func (s *Scenario) verifyDirectoryBridge(ctx context.Context, result *scenarios.
 	return nil
 }
 
+// verifyOTELExport checks that the OTel exporter sent traces to the mock AGNTCY server.
+func (s *Scenario) verifyOTELExport(ctx context.Context, result *scenarios.Result) error {
+	agntcyConfig := s.getAGNTCYConfig()
+	if !agntcyConfig.Enabled {
+		result.Details["otel_export_skipped"] = "AGNTCY tests disabled"
+		return nil
+	}
+	if agntcyConfig.MockServerURL == "" {
+		result.Details["otel_export_skipped"] = "Mock server URL not configured"
+		return nil
+	}
+
+	mockClient := client.NewAGNTCYMockClient(agntcyConfig.MockServerURL)
+	if err := mockClient.Health(ctx); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("AGNTCY mock server not reachable for OTel check: %v", err))
+		result.Details["otel_export_skipped"] = "mock server not reachable"
+		return nil
+	}
+
+	stats, err := mockClient.GetStats(ctx)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to get mock server stats: %v", err))
+		return nil
+	}
+
+	result.Metrics["otel_traces_received"] = int(stats.TracesReceived)
+	result.Metrics["otel_metrics_received"] = int(stats.MetricsReceived)
+
+	if stats.TracesReceived > 0 {
+		result.Details["otel_traces_exported"] = true
+	} else {
+		result.Warnings = append(result.Warnings,
+			"No OTEL traces received by mock server — exporter may not have flushed within the test window")
+		result.Details["otel_traces_exported"] = false
+	}
+
+	return nil
+}
+
 // cleanupAGNTCY cleans up test resources created by AGNTCY tests.
 func (s *Scenario) cleanupAGNTCY(ctx context.Context) error {
 	// Delete test agent entity

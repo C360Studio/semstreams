@@ -118,6 +118,16 @@ func (c *Component) Initialize() error {
 		c.config.ServiceVersion,
 	)
 
+	// Wire the real OTLP exporter when protocol is HTTP and an endpoint is configured.
+	if c.config.Protocol == "http" && c.config.Endpoint != "" {
+		c.exporter = NewOTLPExporter(
+			c.config.Endpoint,
+			c.config.Insecure,
+			c.config.Headers,
+			c.logger,
+		)
+	}
+
 	return nil
 }
 
@@ -166,71 +176,80 @@ func (c *Component) Start(ctx context.Context) error {
 	return nil
 }
 
-// subscribeToEvents sets up JetStream subscription for agent events.
+// subscribeToEvents sets up a JetStream consumer for each configured input port.
+// Each port gets its own durable consumer so subjects are independently tracked.
 func (c *Component) subscribeToEvents(ctx context.Context) error {
 	js, err := c.natsClient.JetStream()
 	if err != nil {
 		return err
 	}
 
-	// Find the input port configuration
-	var subject string
-	var streamName string
+	// Collect JetStream ports; fall back to a sensible default when none configured.
+	ports := make([]component.PortDefinition, 0)
 	for _, port := range c.config.Ports.Inputs {
 		if port.Type == "jetstream" {
-			subject = port.Subject
-			streamName = port.StreamName
-			break
+			ports = append(ports, port)
+		}
+	}
+	if len(ports) == 0 {
+		ports = []component.PortDefinition{
+			{
+				Name:       "agent_events",
+				Subject:    "agent.>",
+				Type:       "jetstream",
+				StreamName: "AGENT",
+			},
 		}
 	}
 
-	if streamName == "" {
-		// Use default if not configured
-		streamName = "AGENT_EVENTS"
-		subject = "agent.>"
-	}
-
-	// Create or get stream
-	_, err = js.Stream(ctx, streamName)
-	if err != nil {
-		// Stream doesn't exist - this is OK for stub implementation
-		c.logger.Debug("Agent events stream not found, will skip subscription",
-			slog.String("stream", streamName))
-		return nil
-	}
-
-	// Create consumer
-	consumerName := "otel-exporter"
+	baseConsumerName := "otel-exporter"
 	if c.config.ConsumerNameSuffix != "" {
-		consumerName += "-" + c.config.ConsumerNameSuffix
+		baseConsumerName += "-" + c.config.ConsumerNameSuffix
 	}
 
-	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
-		Name:          consumerName,
-		Durable:       consumerName,
-		FilterSubject: subject,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		DeliverPolicy: jetstream.DeliverNewPolicy,
-	})
-	if err != nil {
-		return err
-	}
-	c.consumer = consumer
+	for _, port := range ports {
+		streamName := port.StreamName
+		if streamName == "" {
+			streamName = "AGENT"
+		}
 
-	// Start consuming messages
-	c.wg.Add(1)
-	go c.consumeEvents(ctx)
+		// Verify the stream exists before creating a consumer.
+		if _, err := js.Stream(ctx, streamName); err != nil {
+			c.logger.Debug("Stream not found, skipping port subscription",
+				slog.String("stream", streamName),
+				slog.String("port", port.Name))
+			continue
+		}
+
+		// Each port gets a unique consumer name derived from the base name and port name.
+		consumerName := baseConsumerName + "-" + port.Name
+
+		consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
+			Name:          consumerName,
+			Durable:       consumerName,
+			FilterSubject: port.Subject,
+			AckPolicy:     jetstream.AckExplicitPolicy,
+			DeliverPolicy: jetstream.DeliverNewPolicy,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Track the first consumer for backward-compat access via c.consumer.
+		if c.consumer == nil {
+			c.consumer = consumer
+		}
+
+		c.wg.Add(1)
+		go c.consumeEventsFromConsumer(ctx, consumer)
+	}
 
 	return nil
 }
 
-// consumeEvents processes incoming agent events.
-func (c *Component) consumeEvents(ctx context.Context) {
+// consumeEventsFromConsumer processes incoming agent events from a specific consumer.
+func (c *Component) consumeEventsFromConsumer(ctx context.Context, consumer jetstream.Consumer) {
 	defer c.wg.Done()
-
-	if c.consumer == nil {
-		return
-	}
 
 	for {
 		select {
@@ -240,7 +259,7 @@ func (c *Component) consumeEvents(ctx context.Context) {
 		}
 
 		// Fetch messages with timeout
-		msgs, err := c.consumer.Fetch(10, jetstream.FetchMaxWait(time.Second))
+		msgs, err := consumer.Fetch(10, jetstream.FetchMaxWait(time.Second))
 		if err != nil {
 			// Timeout is expected, continue
 			continue
@@ -268,9 +287,9 @@ func (c *Component) consumeEvents(ctx context.Context) {
 
 // processEvent processes a single agent event.
 func (c *Component) processEvent(ctx context.Context, msg jetstream.Msg) error {
-	// Process event through span collector
+	// Process event through span collector using the typed BaseMessage format.
 	if c.config.ExportTraces {
-		if err := c.spanCollector.ProcessEvent(ctx, msg.Data()); err != nil {
+		if err := c.spanCollector.ProcessMessage(ctx, msg.Subject(), msg.Data()); err != nil {
 			return err
 		}
 	}
