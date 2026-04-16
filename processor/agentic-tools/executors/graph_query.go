@@ -154,8 +154,9 @@ func (e *GraphQueryExecutor) Execute(ctx context.Context, call agentic.ToolCall)
 		return e.queryByType(ctx, call)
 	default:
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("unknown tool: %s", call.Name),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("unknown tool: %s", call.Name),
+			ErrorKind: agentic.ToolErrorNotFound,
 		}, errs.WrapInvalid(fmt.Errorf("unknown tool: %s", call.Name), "GraphQueryExecutor", "Execute", "find tool")
 	}
 }
@@ -165,8 +166,9 @@ func (e *GraphQueryExecutor) queryEntity(ctx context.Context, call agentic.ToolC
 	entityID, ok := call.Arguments["entity_id"].(string)
 	if !ok || entityID == "" {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_id is required and must be a non-empty string",
+			CallID:    call.ID,
+			Error:     "entity_id is required and must be a non-empty string",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -176,13 +178,15 @@ func (e *GraphQueryExecutor) queryEntity(ctx context.Context, call agentic.ToolC
 		// Check if it's a not found error
 		if err == ErrKeyNotFound || err.Error() == "nats: key not found" {
 			return agentic.ToolResult{
-				CallID: call.ID,
-				Error:  fmt.Sprintf("entity not found: %s", entityID),
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("entity not found: %s", entityID),
+				ErrorKind: agentic.ToolErrorNotFound,
 			}, nil
 		}
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to query entity: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to query entity: %v", err),
+			ErrorKind: agentic.ToolErrorExternal,
 		}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntity", "get entity from KV")
 	}
 
@@ -214,8 +218,9 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 	entityIDsRaw, ok := call.Arguments["entity_ids"]
 	if !ok {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_ids is required",
+			CallID:    call.ID,
+			Error:     "entity_ids is required",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -232,15 +237,17 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 		entityIDs = v
 	default:
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_ids must be an array of strings",
+			CallID:    call.ID,
+			Error:     "entity_ids must be an array of strings",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
 	if len(entityIDs) == 0 {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_ids cannot be empty",
+			CallID:    call.ID,
+			Error:     "entity_ids cannot be empty",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -256,8 +263,9 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 				continue
 			}
 			return agentic.ToolResult{
-				CallID: call.ID,
-				Error:  fmt.Sprintf("failed to query entity %s: %v", entityID, err),
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("failed to query entity %s: %v", entityID, err),
+				ErrorKind: agentic.ToolErrorExternal,
 			}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntities", "get entity from KV")
 		}
 		results[entityID] = json.RawMessage(entry.Value())
@@ -275,8 +283,9 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 	content, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to marshal response: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to marshal response: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
 
@@ -295,8 +304,9 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 	entityID, ok := call.Arguments["entity_id"].(string)
 	if !ok || entityID == "" {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_id is required and must be a non-empty string",
+			CallID:    call.ID,
+			Error:     "entity_id is required and must be a non-empty string",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -315,13 +325,15 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 	if err != nil {
 		if err == ErrKeyNotFound || err.Error() == "nats: key not found" {
 			return agentic.ToolResult{
-				CallID: call.ID,
-				Error:  fmt.Sprintf("entity not found: %s", entityID),
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("entity not found: %s", entityID),
+				ErrorKind: agentic.ToolErrorNotFound,
 			}, nil
 		}
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to query entity: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to query entity: %v", err),
+			ErrorKind: agentic.ToolErrorExternal,
 		}, errs.WrapTransient(err, "GraphQueryExecutor", "queryRelationships", "get entity from KV")
 	}
 
@@ -329,8 +341,9 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 	var entityData map[string]any
 	if err := json.Unmarshal(entry.Value(), &entityData); err != nil {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to parse entity data: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to parse entity data: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
 
@@ -350,8 +363,9 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 	content, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to marshal response: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to marshal response: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
 
@@ -369,8 +383,9 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 	entityID, ok := call.Arguments["entity_id"].(string)
 	if !ok || entityID == "" {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_id is required and must be a non-empty string",
+			CallID:    call.ID,
+			Error:     "entity_id is required and must be a non-empty string",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -446,8 +461,9 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 	content, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to marshal response: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to marshal response: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
 
@@ -466,8 +482,9 @@ func (e *GraphQueryExecutor) queryByType(_ context.Context, call agentic.ToolCal
 	entityType, ok := call.Arguments["entity_type"].(string)
 	if !ok || entityType == "" {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  "entity_type is required and must be a non-empty string",
+			CallID:    call.ID,
+			Error:     "entity_type is required and must be a non-empty string",
+			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
 
@@ -490,8 +507,9 @@ func (e *GraphQueryExecutor) queryByType(_ context.Context, call agentic.ToolCal
 	content, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return agentic.ToolResult{
-			CallID: call.ID,
-			Error:  fmt.Sprintf("failed to marshal response: %v", err),
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("failed to marshal response: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
 

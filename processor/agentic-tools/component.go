@@ -5,6 +5,7 @@ package agentictools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -337,10 +338,11 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 		}
 
 		result := agentic.ToolResult{
-			CallID:  call.ID,
-			Error:   fmt.Sprintf("tool %q is not allowed", call.Name),
-			LoopID:  call.LoopID,
-			TraceID: call.TraceID,
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("tool %q is not allowed", call.Name),
+			ErrorKind: agentic.ToolErrorNotFound,
+			LoopID:    call.LoopID,
+			TraceID:   call.TraceID,
 		}
 		c.publishResult(ctx, result)
 		c.incrementErrors()
@@ -355,27 +357,41 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	if err != nil {
 		c.logger.Error("Failed to execute tool", "tool", call.Name, "error", err)
 
-		// Determine error type
-		errorType := "unknown"
-		if ctx.Err() != nil {
-			errorType = "timeout"
+		// Classify. Framework-level timeout takes precedence over any
+		// executor-set kind (a deeper cause like "network" may be masking
+		// a context deadline).
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			result.ErrorKind = agentic.ToolErrorTimeout
+			if result.Error == "" {
+				result.Error = err.Error()
+			}
 			if c.metrics != nil {
 				c.metrics.recordExecutionTimeout(call.Name, duration)
 			}
 		} else {
+			if result.ErrorKind == "" {
+				result.ErrorKind = agentic.ToolErrorUnknown
+			}
+			if result.Error == "" {
+				result.Error = err.Error()
+			}
 			if c.metrics != nil {
-				c.metrics.recordExecutionError(call.Name, errorType, duration)
+				c.metrics.recordExecutionError(call.Name, string(result.ErrorKind), duration)
 			}
 		}
 
 		c.incrementErrors()
 	} else if result.Error != "" {
-		// Tool executed but returned an error
+		// Tool executed but returned an error result
+		if result.ErrorKind == "" {
+			result.ErrorKind = agentic.ToolErrorUnknown
+		}
 		if c.metrics != nil {
-			c.metrics.recordExecutionError(call.Name, "tool_error", duration)
+			c.metrics.recordExecutionError(call.Name, string(result.ErrorKind), duration)
 		}
 		c.logger.Debug("Tool returned error",
 			slog.String("tool", call.Name),
+			slog.String("error_kind", string(result.ErrorKind)),
 			slog.String("error", result.Error))
 	} else {
 		// Successful execution
@@ -554,16 +570,26 @@ func (c *Component) Execute(ctx context.Context, call agentic.ToolCall) (agentic
 	// Check if tool is allowed
 	if !c.isToolAllowed(call.Name) {
 		result := agentic.ToolResult{
-			CallID:  call.ID,
-			Error:   fmt.Sprintf("tool %q is not allowed", call.Name),
-			LoopID:  call.LoopID,
-			TraceID: call.TraceID,
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("tool %q is not allowed", call.Name),
+			ErrorKind: agentic.ToolErrorNotFound,
+			LoopID:    call.LoopID,
+			TraceID:   call.TraceID,
 		}
 		return result, errs.WrapInvalid(fmt.Errorf("tool %q is not allowed", call.Name), "Component", "Execute", "check tool allowed")
 	}
 
-	// Execute with timeout
+	// Execute with timeout. If the (internal) deadline fired OR the
+	// outer ctx was canceled by the caller, tag the result as a timeout
+	// so downstream graph writers emit the right error_category. Timeout
+	// takes precedence over any executor-set kind.
 	result, err := c.executeWithTimeout(ctx, call)
+	if err != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil) {
+		result.ErrorKind = agentic.ToolErrorTimeout
+		if result.Error == "" {
+			result.Error = err.Error()
+		}
+	}
 	// Propagate trace correlation fields
 	result.LoopID = call.LoopID
 	result.TraceID = call.TraceID

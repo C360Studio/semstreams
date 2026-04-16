@@ -434,6 +434,9 @@ func TestExecutorRegistry_EmptyRegistry(t *testing.T) {
 	if result.Error == "" {
 		t.Error("Result.Error should not be empty when tool not found")
 	}
+	if result.ErrorKind != agentic.ToolErrorNotFound {
+		t.Errorf("Result.ErrorKind = %q, want %q on tool-not-found", result.ErrorKind, agentic.ToolErrorNotFound)
+	}
 }
 
 func TestExecutorRegistry_ConcurrentRegistration(t *testing.T) {

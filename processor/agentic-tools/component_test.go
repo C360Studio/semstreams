@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -472,6 +473,9 @@ func TestComponent_ToolExecutionWithAllowedList(t *testing.T) {
 	if result.Error == "" {
 		t.Error("Result.Error should not be empty for disallowed tool")
 	}
+	if result.ErrorKind != agentic.ToolErrorNotFound {
+		t.Errorf("Result.ErrorKind = %q, want %q for disallowed tool", result.ErrorKind, agentic.ToolErrorNotFound)
+	}
 }
 
 func TestComponent_EmptyAllowedList_AllowsAll(t *testing.T) {
@@ -528,6 +532,97 @@ func TestComponent_EmptyAllowedList_AllowsAll(t *testing.T) {
 	}
 	if result.Content != "result" {
 		t.Errorf("Result.Content = %s, want 'result'", result.Content)
+	}
+}
+
+// TestComponent_Execute_ParentCancellationClassifiedAsTimeout verifies that
+// when the caller cancels the parent context mid-flight, the tool result is
+// tagged Timeout (cancellation is treated as a timeout for classification
+// purposes — the ops agent wants to know "didn't finish in time" either way).
+func TestComponent_Execute_ParentCancellationClassifiedAsTimeout(t *testing.T) {
+	config := agentictools.DefaultConfig()
+	config.Timeout = "10s" // Long enough that the inner timeout won't fire.
+
+	rawConfig, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal config failed: %v", err)
+	}
+
+	comp, err := agentictools.NewComponent(rawConfig, component.Dependencies{NATSClient: nil})
+	if err != nil {
+		t.Fatalf("NewComponent() failed: %v", err)
+	}
+
+	registrar := comp.(interface {
+		RegisterToolExecutor(executor agentictools.ToolExecutor) error
+	})
+	executor := comp.(interface {
+		Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
+	})
+
+	slow := &mockToolExecutor{name: "slow_tool", delay: 2 * time.Second}
+	if err := registrar.RegisterToolExecutor(slow); err != nil {
+		t.Fatalf("RegisterToolExecutor() failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := executor.Execute(ctx, agentic.ToolCall{
+		ID:   "call-cancel",
+		Name: "slow_tool",
+	})
+	if err == nil {
+		t.Fatal("expected a cancellation error, got nil")
+	}
+	if result.ErrorKind != agentic.ToolErrorTimeout {
+		t.Errorf("Result.ErrorKind = %q, want %q", result.ErrorKind, agentic.ToolErrorTimeout)
+	}
+}
+
+// TestComponent_Execute_TimeoutClassifiedAsTimeout verifies that when the
+// configured per-call timeout fires, the returned ToolResult is tagged with
+// ErrorKind == ToolErrorTimeout so downstream graph writers emit the correct
+// agent.step.error_category predicate.
+func TestComponent_Execute_TimeoutClassifiedAsTimeout(t *testing.T) {
+	config := agentictools.DefaultConfig()
+	config.Timeout = "50ms"
+
+	rawConfig, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("Marshal config failed: %v", err)
+	}
+
+	comp, err := agentictools.NewComponent(rawConfig, component.Dependencies{NATSClient: nil})
+	if err != nil {
+		t.Fatalf("NewComponent() failed: %v", err)
+	}
+
+	registrar := comp.(interface {
+		RegisterToolExecutor(executor agentictools.ToolExecutor) error
+	})
+	executor := comp.(interface {
+		Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
+	})
+
+	// Mock tool that blocks longer than the configured timeout.
+	slow := &mockToolExecutor{name: "slow_tool", delay: 500 * time.Millisecond}
+	if err := registrar.RegisterToolExecutor(slow); err != nil {
+		t.Fatalf("RegisterToolExecutor() failed: %v", err)
+	}
+
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID:   "call-timeout",
+		Name: "slow_tool",
+	})
+	if err == nil {
+		t.Fatal("expected a timeout error, got nil")
+	}
+	if result.ErrorKind != agentic.ToolErrorTimeout {
+		t.Errorf("Result.ErrorKind = %q, want %q", result.ErrorKind, agentic.ToolErrorTimeout)
 	}
 }
 

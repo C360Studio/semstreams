@@ -462,6 +462,14 @@ const (
 	// Example: entity ID of a trajectory step
 	// DataType: string (entity ID)
 	LoopHasStep = "agent.loop.has_step"
+
+	// LoopDescription is the user task prompt that initiated this loop, stored
+	// as text so BM25/NL search can find loops by topic. The `.description`
+	// suffix is already in the embedding pipeline's default text suffixes,
+	// so this triple is auto-indexed.
+	// Example: "Investigate MQTT retained-message behavior"
+	// DataType: string
+	LoopDescription = "agent.loop.description"
 )
 
 // Step Predicates
@@ -549,4 +557,22 @@ const (
 	// Example: 0.72
 	// DataType: float64
 	StepUtilization = "agent.step.utilization"
+
+	// StepToolStatus is the terminal status of a tool_call step.
+	// Example: "success", "failed"
+	// DataType: string
+	StepToolStatus = "agent.step.tool_status"
+
+	// StepErrorMessage is the raw error text for a failed tool_call step.
+	// Omitted on success.
+	// Example: "entity not found: acme.foo.bar"
+	// DataType: string
+	StepErrorMessage = "agent.step.error_message"
+
+	// StepErrorCategory is the typed error category for a failed tool_call step.
+	// Values: "timeout", "not_found", "invalid_args", "permission", "network",
+	// "external", "internal", "unknown". Derived from ToolResult.ErrorKind.
+	// Example: "invalid_args"
+	// DataType: string
+	StepErrorCategory = "agent.step.error_category"
 )

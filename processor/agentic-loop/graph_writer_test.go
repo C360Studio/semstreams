@@ -2,8 +2,10 @@ package agenticloop
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
@@ -282,12 +284,106 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 		agvocab.LoopWorkflow,
 		agvocab.LoopWorkflowStep,
 		agvocab.LoopUser,
+		agvocab.LoopDescription,
 	}
 	for _, pred := range optional {
 		if predicates[pred] {
 			t.Errorf("expected predicate %s to be omitted when empty, but it was present", pred)
 		}
 	}
+}
+
+func TestBuildLoopCompletionTriples_PromptEmittedAsDescription(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopD"
+	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	prompt := "Investigate MQTT retained-message behavior in the telemetry ingress"
+
+	event := &agentic.LoopCompletedEvent{
+		LoopID:      "loopD",
+		TaskID:      "task-mqtt",
+		Outcome:     "success",
+		Role:        "researcher",
+		Prompt:      prompt,
+		Model:       "claude",
+		Iterations:  3,
+		CompletedAt: time.Now(),
+	}
+
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+
+	if got := objectFor(triples, agvocab.LoopDescription); got != prompt {
+		t.Errorf("%s: got %v, want %q", agvocab.LoopDescription, got, prompt)
+	}
+}
+
+func TestBuildLoopFailureTriples_PromptEmittedAsDescription(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopE"
+	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+	prompt := "Find deployment errors from the last 24 hours"
+
+	event := &agentic.LoopFailedEvent{
+		LoopID:     "loopE",
+		TaskID:     "task-deploy",
+		Outcome:    "failed",
+		Reason:     "timeout",
+		Error:      "context deadline exceeded",
+		Role:       "researcher",
+		Prompt:     prompt,
+		Model:      "claude",
+		Iterations: 1,
+		FailedAt:   time.Now(),
+	}
+
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+
+	if got := objectFor(triples, agvocab.LoopDescription); got != prompt {
+		t.Errorf("%s: got %v, want %q", agvocab.LoopDescription, got, prompt)
+	}
+}
+
+func TestTruncateForTriple(t *testing.T) {
+	t.Run("short string passes through", func(t *testing.T) {
+		if got := truncateForTriple("short", 100); got != "short" {
+			t.Errorf("got %q, want %q", got, "short")
+		}
+	})
+
+	t.Run("ascii long string is truncated with marker", func(t *testing.T) {
+		long := strings.Repeat("a", 10_000)
+		got := truncateForTriple(long, 8192)
+		if len(got) > 8192 {
+			t.Errorf("result length %d exceeds cap 8192", len(got))
+		}
+		if !strings.HasSuffix(got, "…[truncated]") {
+			t.Errorf("expected truncation marker suffix, got tail: %q", got[len(got)-20:])
+		}
+	})
+
+	t.Run("multi-byte runes not split at boundary", func(t *testing.T) {
+		// Each Japanese "日" is 3 bytes. Build a string whose natural byte
+		// boundary falls mid-rune, then verify the result is still valid
+		// UTF-8 and length is under the cap.
+		long := strings.Repeat("日", 3000) // 9000 bytes
+		for _, maxLen := range []int{200, 201, 202, 1000, 8192} {
+			got := truncateForTriple(long, maxLen)
+			if len(got) > maxLen {
+				t.Errorf("max=%d: len=%d exceeds cap", maxLen, len(got))
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("max=%d: result is not valid UTF-8: %q", maxLen, got)
+			}
+			if !strings.HasSuffix(got, "…[truncated]") {
+				t.Errorf("max=%d: missing marker suffix", maxLen)
+			}
+		}
+	})
+
+	t.Run("cap smaller than marker yields marker prefix", func(t *testing.T) {
+		got := truncateForTriple("some long string", 5)
+		if len(got) != 5 {
+			t.Errorf("got len %d, want 5", len(got))
+		}
+	})
 }
 
 func TestBuildLoopCompletionTriples_OptionalFieldsPresentWhenSet(t *testing.T) {

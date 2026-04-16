@@ -59,6 +59,15 @@ func (e *TrajectoryStepEntity) Triples() []message.Triple {
 		if e.Step.ToolName != "" {
 			triples = append(triples, triple(agvocab.StepToolName, e.Step.ToolName))
 		}
+		if e.Step.ToolStatus != "" {
+			triples = append(triples, triple(agvocab.StepToolStatus, e.Step.ToolStatus))
+		}
+		if e.Step.ErrorMessage != "" {
+			triples = append(triples, triple(agvocab.StepErrorMessage, e.Step.ErrorMessage))
+		}
+		if e.Step.ErrorCategory != "" {
+			triples = append(triples, triple(agvocab.StepErrorCategory, e.Step.ErrorCategory))
+		}
 	case "model_call":
 		if e.Step.Model != "" {
 			triples = append(triples, triple(agvocab.StepModel, e.Step.Model))
@@ -116,7 +125,9 @@ func (e *TrajectoryStepEntity) ContentFields() map[string]string {
 		fields := map[string]string{
 			message.ContentRoleTitle: "tool_name",
 		}
-		if e.Step.ToolResult != "" {
+		if e.Step.ErrorMessage != "" {
+			fields[message.ContentRoleBody] = "error"
+		} else if e.Step.ToolResult != "" {
 			fields[message.ContentRoleBody] = "tool_result"
 		}
 		return fields
@@ -150,6 +161,9 @@ func (e *TrajectoryStepEntity) RawContent() map[string]string {
 		}
 		if e.Step.ToolResult != "" {
 			content["tool_result"] = e.Step.ToolResult
+		}
+		if e.Step.ErrorMessage != "" {
+			content["error"] = e.Step.ErrorMessage
 		}
 		if len(e.Step.ToolArguments) > 0 {
 			argsJSON, err := json.Marshal(e.Step.ToolArguments)

@@ -58,6 +58,28 @@ func TestGitHubWriteExecutor_UnknownTool(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected ToolResult.Error for unknown tool")
 	}
+	if result.ErrorKind != agentic.ToolErrorNotFound {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, agentic.ToolErrorNotFound)
+	}
+}
+
+func TestGitHubWriteExecutor_InvalidArgs_TaggedAsInvalidArgs(t *testing.T) {
+	e := NewGitHubWriteExecutor(&mockGitHubClient{})
+	result, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:   "w-bad",
+		Name: "github_create_branch",
+		// missing owner/repo/branch/base_sha
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("did not expect Go error for validation failure: %v", err)
+	}
+	if result.Error == "" {
+		t.Fatal("expected ToolResult.Error for missing args")
+	}
+	if result.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, agentic.ToolErrorInvalidArgs)
+	}
 }
 
 // --- github_create_branch ---

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -21,7 +22,42 @@ const (
 	graphMutationSubject = "graph.mutation.triple.add"
 	graphWriterTimeout   = 5 * time.Second
 	graphWriterSource    = "agentic-loop"
+
+	// maxPromptTripleBytes caps the size of the user prompt stored as the
+	// agent.loop.description triple, including the truncation marker. Full
+	// prompts live elsewhere (loop state / ObjectStore); the triple only
+	// needs enough text for BM25/NL search to match by topic.
+	maxPromptTripleBytes = 8 * 1024
+
+	// truncationMarker is appended to a truncated prompt so consumers can
+	// tell at a glance that the triple is not the full text.
+	truncationMarker = "…[truncated]"
 )
+
+// truncateForTriple returns s capped at max bytes total (including the
+// truncation marker, if appended). It is UTF-8 safe — the cut point is
+// walked back to the nearest rune boundary to avoid producing invalid UTF-8.
+func truncateForTriple(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	// Reserve space for the marker so the final result stays within `max`.
+	budget := max - len(truncationMarker)
+	if budget <= 0 {
+		// Pathological: cap is smaller than the marker itself. Return an
+		// empty-ish truncation rather than something absurd.
+		return truncationMarker[:max]
+	}
+	cut := budget
+	// Walk backwards until `cut` indexes a rune-start byte. RuneStart
+	// returns true for ASCII bytes and UTF-8 lead bytes; false for
+	// continuation bytes. Slicing at a rune-start position keeps the
+	// prefix valid UTF-8.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + truncationMarker
+}
 
 // graphWriter emits graph triples for model endpoints and loop execution events
 // via the NATS request/response mutation API.
@@ -304,6 +340,9 @@ func buildLoopCompletionTriples(
 	if event.UserID != "" {
 		triples = append(triples, triple(agvocab.LoopUser, event.UserID))
 	}
+	if event.Prompt != "" {
+		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(event.Prompt, maxPromptTripleBytes)))
+	}
 
 	return triples
 }
@@ -352,6 +391,9 @@ func buildLoopFailureTriples(
 	}
 	if event.UserID != "" {
 		triples = append(triples, triple(agvocab.LoopUser, event.UserID))
+	}
+	if event.Prompt != "" {
+		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(event.Prompt, maxPromptTripleBytes)))
 	}
 
 	return triples

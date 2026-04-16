@@ -790,6 +790,113 @@ func TestHandleToolResult_WithError(t *testing.T) {
 	}
 }
 
+// TestHandleToolResult_ErrorCategoryFallsBackToUnknown verifies that when a
+// ToolResult carries an error message but no structured ErrorKind (e.g. from
+// an older executor that predates the classification refactor), the
+// TrajectoryStep still emits ToolStatus="failed" and ErrorCategory="unknown"
+// so graph queries can bucket unclassified failures.
+func TestHandleToolResult_ErrorCategoryFallsBackToUnknown(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-fallback",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "Test",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	// Register a tool call so HandleToolResult has a known call to resolve.
+	toolResponse := agentic.AgentResponse{
+		RequestID: "req-fallback",
+		Status:    "tool_call",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-fallback", Name: "graph_query"},
+			},
+		},
+	}
+	if _, err := handler.HandleModelResponse(ctx, loopID, toolResponse); err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	// ToolResult has Error set but NO ErrorKind — simulates an older
+	// producer path or an unclassified failure.
+	toolResult := agentic.ToolResult{
+		CallID: "call-fallback",
+		Error:  "something went wrong",
+	}
+	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
+	if err != nil {
+		t.Fatalf("HandleToolResult() error = %v", err)
+	}
+	if len(result.TrajectorySteps) == 0 {
+		t.Fatal("expected a TrajectoryStep for the tool_call")
+	}
+	step := result.TrajectorySteps[0]
+	if step.ToolStatus != "failed" {
+		t.Errorf("ToolStatus = %q, want %q", step.ToolStatus, "failed")
+	}
+	if step.ErrorMessage != "something went wrong" {
+		t.Errorf("ErrorMessage = %q, want copy of the raw error", step.ErrorMessage)
+	}
+	if step.ErrorCategory != string(agentic.ToolErrorUnknown) {
+		t.Errorf("ErrorCategory = %q, want %q (fallback)", step.ErrorCategory, agentic.ToolErrorUnknown)
+	}
+}
+
+// TestHandleToolResult_ErrorCategoryPreservesExecutorKind verifies that when
+// an executor classifies its own failure (e.g. InvalidArgs), the handler
+// preserves that kind instead of overwriting with "unknown".
+func TestHandleToolResult_ErrorCategoryPreservesExecutorKind(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-preserve",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "Test",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	toolResponse := agentic.AgentResponse{
+		RequestID: "req-preserve",
+		Status:    "tool_call",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-preserve", Name: "graph_query"},
+			},
+		},
+	}
+	if _, err := handler.HandleModelResponse(ctx, loopID, toolResponse); err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	toolResult := agentic.ToolResult{
+		CallID:    "call-preserve",
+		Error:     "entity_id is required",
+		ErrorKind: agentic.ToolErrorInvalidArgs,
+	}
+	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
+	if err != nil {
+		t.Fatalf("HandleToolResult() error = %v", err)
+	}
+	step := result.TrajectorySteps[0]
+	if step.ErrorCategory != string(agentic.ToolErrorInvalidArgs) {
+		t.Errorf("ErrorCategory = %q, want %q", step.ErrorCategory, agentic.ToolErrorInvalidArgs)
+	}
+}
+
 func TestHandleToolResult_StopLoop(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
