@@ -424,6 +424,11 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		h.loopManager.CacheMetadata(loopID, task.Metadata)
 	}
 
+	// Cache per-task request timeout so continuation iterations reuse it.
+	if task.Timeout != "" {
+		h.loopManager.CacheRequestTimeout(loopID, task.Timeout)
+	}
+
 	return h.buildTaskRequest(loopID, task, entity, messages, tools)
 }
 
@@ -438,6 +443,7 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 		Messages:   messages,
 		Tools:      tools,
 		ToolChoice: task.ToolChoice,
+		Timeout:    task.Timeout,
 	}
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
@@ -993,6 +999,7 @@ func (h *MessageHandler) handleToolsComplete(
 		Messages:   messages,
 		Tools:      tools,
 		ToolChoice: toolChoice,
+		Timeout:    h.loopManager.GetCachedRequestTimeout(loopID),
 	}
 
 	// Track request ID to loop ID mapping (cache for fast lookup)

@@ -341,7 +341,7 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 		slog.String("model", req.Model),
 		slog.String("role", req.Role))
 
-	client, err := c.getClientForRequest(req)
+	client, endpoint, capability, err := c.getClientForRequest(req)
 	if err != nil {
 		c.logger.Error("Failed to resolve endpoint", "error", err, "model", req.Model)
 		c.publishErrorResponse(ctx, req.RequestID, err.Error())
@@ -354,7 +354,7 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 		c.metrics.recordRequestStart(req.Model)
 	}
 
-	resp, err := c.executeRequest(ctx, client, req)
+	resp, err := c.executeRequest(ctx, client, req, endpoint, capability)
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil || resp.Status == "error" {
@@ -462,11 +462,19 @@ func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentReq
 //
 // This allows callers to set req.Model to either a capability name (e.g. "fast")
 // or a concrete endpoint name (e.g. "ollama-qwen32b") and get the right client.
-func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, error) {
+//
+// Returns the resolved client, the endpoint config, and the capability name (empty
+// when req.Model was a concrete endpoint name). Callers use the capability name to
+// look up per-capability timeouts.
+func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *model.EndpointConfig, string, error) {
 	var ep *model.EndpointConfig
+	var capability string
 
 	// 1. Try capability-based resolution
 	chain := c.modelRegistry.GetFallbackChain(req.Model)
+	if len(chain) > 0 {
+		capability = req.Model
+	}
 	for _, name := range chain {
 		if candidate := c.modelRegistry.GetEndpoint(name); candidate != nil {
 			ep = candidate
@@ -488,7 +496,7 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, erro
 	}
 
 	if ep == nil {
-		return nil, errs.WrapInvalid(
+		return nil, nil, "", errs.WrapInvalid(
 			fmt.Errorf("no endpoint found for model %q in registry", req.Model),
 			"Component", "getClientForRequest", "resolve endpoint",
 		)
@@ -501,12 +509,12 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, erro
 	defer c.clientMu.Unlock()
 
 	if client, ok := c.clientCache[cacheKey]; ok {
-		return client, nil
+		return client, ep, capability, nil
 	}
 
 	client, err := NewClient(ep)
 	if err != nil {
-		return nil, errs.Wrap(err, "Component", "getClientForRequest", fmt.Sprintf("create client for model %q", req.Model))
+		return nil, nil, "", errs.Wrap(err, "Component", "getClientForRequest", fmt.Sprintf("create client for model %q", req.Model))
 	}
 
 	// Wire provider adapter for request/response normalization.
@@ -530,7 +538,7 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, erro
 	}
 
 	c.clientCache[cacheKey] = client
-	return client, nil
+	return client, ep, capability, nil
 }
 
 // makeChunkHandler returns a ChunkHandler that publishes chunks to core NATS.
@@ -551,19 +559,84 @@ func (c *Component) makeChunkHandler() ChunkHandler {
 	}
 }
 
-// executeRequest executes the chat completion with timeout
-func (c *Component) executeRequest(ctx context.Context, client *Client, req agentic.AgentRequest) (agentic.AgentResponse, error) {
-	timeout := 120 * time.Second
-	if c.config.Timeout != "" {
-		if d, err := time.ParseDuration(c.config.Timeout); err == nil {
-			timeout = d
-		}
-	}
+// executeRequest executes the chat completion with a resolved timeout.
+// Timeout precedence is applied by resolveTimeout.
+func (c *Component) executeRequest(
+	ctx context.Context,
+	client *Client,
+	req agentic.AgentRequest,
+	endpoint *model.EndpointConfig,
+	capability string,
+) (agentic.AgentResponse, error) {
+	timeout := c.resolveTimeout(req, endpoint, capability)
 
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	return client.ChatCompletion(reqCtx, req)
+}
+
+// resolveTimeout picks the effective request timeout using precedence:
+//  1. req.Timeout (per-task override; propagated from TaskMessage.Timeout)
+//  2. endpoint.RequestTimeout
+//  3. capability.Timeout (looked up via registry when capability is non-empty)
+//  4. component messageTimeout (cached from config.Timeout at construction)
+//  5. hardcoded 120s safety default
+//
+// Invalid duration strings at levels 1-3 log a warning and fall through to the
+// next level, so a malformed per-message override never blocks a task. The
+// selected source is logged at debug level as timeout_source.
+func (c *Component) resolveTimeout(req agentic.AgentRequest, endpoint *model.EndpointConfig, capability string) time.Duration {
+	const fallback = 120 * time.Second
+
+	tryParse := func(value, source string) (time.Duration, bool) {
+		if value == "" {
+			return 0, false
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			c.logger.Warn("Invalid timeout value; falling through",
+				"source", source,
+				"value", value,
+				"error", err,
+				"request_id", req.RequestID)
+			return 0, false
+		}
+		return d, true
+	}
+
+	if d, ok := tryParse(req.Timeout, "task"); ok {
+		c.logger.Debug("Resolved request timeout", "timeout_source", "task", "timeout", d, "request_id", req.RequestID)
+		return d
+	}
+
+	if endpoint != nil {
+		if d, ok := tryParse(endpoint.RequestTimeout, "endpoint"); ok {
+			c.logger.Debug("Resolved request timeout", "timeout_source", "endpoint", "timeout", d, "request_id", req.RequestID)
+			return d
+		}
+	}
+
+	if capability != "" && c.modelRegistry != nil {
+		if capCfg := c.modelRegistry.GetCapability(capability); capCfg != nil {
+			if d, ok := tryParse(capCfg.Timeout, "capability"); ok {
+				c.logger.Debug("Resolved request timeout",
+					"timeout_source", "capability",
+					"capability", capability,
+					"timeout", d,
+					"request_id", req.RequestID)
+				return d
+			}
+		}
+	}
+
+	if c.messageTimeout > 0 {
+		c.logger.Debug("Resolved request timeout", "timeout_source", "component", "timeout", c.messageTimeout, "request_id", req.RequestID)
+		return c.messageTimeout
+	}
+
+	c.logger.Debug("Resolved request timeout", "timeout_source", "default", "timeout", fallback, "request_id", req.RequestID)
+	return fallback
 }
 
 // incrementErrors safely increments the error counter

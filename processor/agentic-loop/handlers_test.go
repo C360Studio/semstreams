@@ -1576,6 +1576,47 @@ func TestHandleTask_MetadataCachedAndPropagated(t *testing.T) {
 	t.Error("Should publish tool.execute with metadata")
 }
 
+func TestHandleTask_PropagatesTimeoutToAgentRequest(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	task := agenticloop.TaskMessage{
+		TaskID:  "task-timeout",
+		Role:    "general",
+		Model:   "test-model",
+		Prompt:  "Test with timeout",
+		Timeout: "30s",
+	}
+
+	ctx := context.Background()
+	result, err := handler.HandleTask(ctx, task)
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+
+	for _, msg := range result.PublishedMessages {
+		if !containsIgnoreCase(msg.Subject, "agent.request") {
+			continue
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("Failed to unmarshal envelope: %v", err)
+		}
+		payload, ok := envelope["payload"].(map[string]any)
+		if !ok {
+			t.Fatal("Expected payload in BaseMessage envelope")
+		}
+		got, ok := payload["timeout"].(string)
+		if !ok {
+			t.Fatalf("AgentRequest.timeout missing or wrong type: %T", payload["timeout"])
+		}
+		if got != "30s" {
+			t.Errorf("AgentRequest.timeout = %q, want %q", got, "30s")
+		}
+		return
+	}
+	t.Error("HandleTask() should publish agent.request message")
+}
+
 // --- ToolCallFilter tests ---
 
 // mockFilter implements agentic.ToolCallFilter for testing

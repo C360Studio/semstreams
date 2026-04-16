@@ -215,7 +215,7 @@ in the component config.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `timeout` | string | 120s | Request timeout |
+| `timeout` | string | 120s | Component-level default LLM request timeout. See [Timeout Resolution](#timeout-resolution) for the full precedence chain. |
 | `retry.max_attempts` | int | 3 | Maximum retry attempts |
 | `retry.initial_delay` | string | 1s | Initial delay before first retry |
 | `retry.max_delay` | string | 60s | Maximum delay between retries |
@@ -232,12 +232,51 @@ in the component config.
 | `api_key_env` | string | no | Environment variable containing API key |
 | `requests_per_minute` | int | no | Token bucket rate limit (0 = unlimited) |
 | `max_concurrent` | int | no | Maximum simultaneous in-flight requests (0 = unlimited) |
+| `request_timeout` | string | no | Per-endpoint LLM request timeout (e.g. `"45s"`). Overrides capability and component defaults. See [Timeout Resolution](#timeout-resolution). |
+
+**Capability Configuration** (in `model_registry.capabilities`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `preferred` | []string | yes | Endpoint names in order of preference |
+| `fallback` | []string | no | Backup endpoint names |
+| `requires_tools` | bool | no | Filter the chain to tool-capable endpoints only |
+| `timeout` | string | no | Per-capability LLM request timeout (e.g. `"30s"`). Overrides component default; overridden by endpoint and task timeouts. See [Timeout Resolution](#timeout-resolution). |
 
 **Endpoint Resolution**:
 
 1. Exact match on `model` field in request
 2. Fall back to `default` endpoint if present
 3. Return error if no match
+
+#### Timeout Resolution
+
+agentic-model wraps every LLM call in a `context.WithTimeout`. The timeout is
+resolved at the call site from four layers, highest precedence first:
+
+| Precedence | Source | Where it's set |
+|------------|--------|----------------|
+| 1 (highest) | `TaskMessage.timeout` → `AgentRequest.timeout` | Producer of the TaskMessage; persists across continuation iterations of the same loop |
+| 2 | `endpoint.request_timeout` | `model_registry.endpoints.<name>.request_timeout` |
+| 3 | `capability.timeout` | `model_registry.capabilities.<name>.timeout` |
+| 4 (lowest) | `agentic-model.timeout` | Component config (default `120s`) |
+
+The first layer with a non-empty, parseable duration wins. A malformed duration
+at any layer logs a warning and falls through to the next. The selected source
+is emitted on every request as a structured log field `timeout_source` with
+values `task`, `endpoint`, `capability`, `component`, or `default`.
+
+**Worked example**: with `TaskMessage.Timeout="30s"`, endpoint
+`request_timeout="60s"`, capability `timeout="90s"`, and component `timeout="120s"`,
+the effective request timeout is **30 seconds** (`timeout_source=task`). Omit
+`TaskMessage.Timeout` and it becomes 60 seconds (`timeout_source=endpoint`), and so on.
+
+**When to use which layer**:
+
+- **Component** — sets the baseline for any request that doesn't match a more specific rule. Keep this as the safety ceiling.
+- **Capability** — the natural place to express "fast classification calls should fail faster than heavy planning calls." Lets operators tune budgets without touching every TaskMessage producer.
+- **Endpoint** — use when a specific endpoint has known latency characteristics (e.g. a local quantized model with predictable response times).
+- **Task** — use sparingly for one-off overrides (e.g. a plan-reviewer task that should time out quickly even when routed to the default capability).
 
 **Compatible Providers**:
 
@@ -466,16 +505,36 @@ Sent from agentic-tools to agentic-loop:
 
 ### Timeout Tuning
 
-Different workloads require different timeouts:
+Different workloads require different timeouts. The agentic-model component
+resolves each LLM call's timeout from four layers (see [Timeout Resolution](#timeout-resolution)):
+task → endpoint → capability → component default. The **capability** layer is
+usually the right place to express workload-shape tuning, because capabilities
+already partition model traffic by intent (fast classification, heavy planning,
+summarization, etc.) and a single registry block covers all callers.
 
-| Workload | Loop Timeout | Model Timeout | Tool Timeout |
-|----------|--------------|---------------|--------------|
-| Simple Q&A | 30s | 30s | 10s |
-| Code review | 120s | 60s | 30s |
-| Research tasks | 300s | 120s | 60s |
-| Complex analysis | 600s | 180s | 120s |
+**Capability-level recommendations** (`model_registry.capabilities.<name>.timeout`):
 
-**Rule of thumb**: Loop timeout should be > (max_iterations × model_timeout) + tool_overhead
+| Capability | Typical Timeout | Workload |
+|------------|----------------|----------|
+| `fast` | 15–30s | Classification, routing, short answers |
+| `general` | 60s | Default Q&A, summaries, simple tool use |
+| `heavy` | 120–180s | Planning, multi-step reasoning, long context |
+| `summarization` | 180–300s | Full-context compaction across large histories |
+
+**Endpoint-level** (`model_registry.endpoints.<name>.request_timeout`): set
+when a specific endpoint has known latency quirks (e.g. a local quantized model
+with slower TTFT) independent of what capability is routing to it.
+
+**Task-level** (`TaskMessage.timeout`): reserve for one-off overrides, e.g. a
+short-lived plan-reviewer task that should time out quickly even when routed
+to a `heavy`-capability endpoint.
+
+**Component default** (`agentic-model.timeout`): keep this as the safety
+ceiling — the last-resort cap when no more specific rule applies.
+
+**Loop and tool timeouts** remain separate concerns (see agentic-loop and
+agentic-tools configs above). Rule of thumb: loop timeout should be >
+(`max_iterations` × longest expected model timeout) + tool overhead.
 
 ### Max Iterations
 
@@ -872,7 +931,10 @@ Use secret management systems in production:
 Protect against runaway loops and costs:
 
 1. **Iteration limits**: Always set `max_iterations`
-2. **Timeout guards**: Always set `timeout` at loop and tool levels
+2. **Layered timeout guards**: Set `timeout` at loop and tool levels, and tune
+   LLM call timeouts per capability or endpoint in the model registry
+   (see [Timeout Resolution](#timeout-resolution)). The component-level
+   `agentic-model.timeout` remains the safety ceiling.
 3. **Endpoint throttling**: Configure `requests_per_minute` and `max_concurrent` on each endpoint in
    the model registry. The throttle is shared across all agents targeting that endpoint, preventing
    agent teams from collectively saturating a provider's rate limit.

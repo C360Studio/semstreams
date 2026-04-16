@@ -16,24 +16,25 @@ import (
 
 // LoopManager manages loop entity lifecycle and state
 type LoopManager struct {
-	loops             map[string]*agentic.LoopEntity
-	contextManagers   map[string]*ContextManager          // loopID -> ContextManager
-	pendingTools      map[string]map[string]bool          // loopID -> map[callID]bool
-	queuedToolCalls   map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
-	cachedTools       map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
-	cachedToolChoice  map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
-	cachedMetadata    map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
-	taskPrompts       map[string]string                   // loopID -> original task prompt (for context recovery)
-	requestToLoop     map[string]string                   // requestID -> loopID
-	toolCallToLoop    map[string]string                   // callID -> loopID
-	callIDToName      map[string]string                   // callID -> function name (for Gemini tool result name field)
-	callIDToArguments map[string]map[string]any           // callID -> tool arguments (for trajectory audit)
-	requestStartTimes map[string]time.Time                // requestID -> start time (for duration measurement)
-	toolStartTimes    map[string]time.Time                // callID -> start time (for duration measurement)
-	contextConfig     ContextConfig                       // shared context config
-	modelRegistry     model.RegistryReader                // model registry for context managers
-	logger            *slog.Logger                        // logger for context managers
-	mu                sync.RWMutex
+	loops                map[string]*agentic.LoopEntity
+	contextManagers      map[string]*ContextManager          // loopID -> ContextManager
+	pendingTools         map[string]map[string]bool          // loopID -> map[callID]bool
+	queuedToolCalls      map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
+	cachedTools          map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
+	cachedToolChoice     map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
+	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
+	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
+	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
+	requestToLoop        map[string]string                   // requestID -> loopID
+	toolCallToLoop       map[string]string                   // callID -> loopID
+	callIDToName         map[string]string                   // callID -> function name (for Gemini tool result name field)
+	callIDToArguments    map[string]map[string]any           // callID -> tool arguments (for trajectory audit)
+	requestStartTimes    map[string]time.Time                // requestID -> start time (for duration measurement)
+	toolStartTimes       map[string]time.Time                // callID -> start time (for duration measurement)
+	contextConfig        ContextConfig                       // shared context config
+	modelRegistry        model.RegistryReader                // model registry for context managers
+	logger               *slog.Logger                        // logger for context managers
+	mu                   sync.RWMutex
 }
 
 // LoopManagerOption is a functional option for configuring LoopManager
@@ -56,22 +57,23 @@ func WithLoopManagerModelRegistry(reg model.RegistryReader) LoopManagerOption {
 // NewLoopManager creates a new LoopManager
 func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:             make(map[string]*agentic.LoopEntity),
-		contextManagers:   make(map[string]*ContextManager),
-		pendingTools:      make(map[string]map[string]bool),
-		queuedToolCalls:   make(map[string][]agentic.ToolCall),
-		cachedTools:       make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:  make(map[string]*agentic.ToolChoice),
-		cachedMetadata:    make(map[string]map[string]any),
-		taskPrompts:       make(map[string]string),
-		requestToLoop:     make(map[string]string),
-		toolCallToLoop:    make(map[string]string),
-		callIDToName:      make(map[string]string),
-		callIDToArguments: make(map[string]map[string]any),
-		requestStartTimes: make(map[string]time.Time),
-		toolStartTimes:    make(map[string]time.Time),
-		contextConfig:     DefaultContextConfig(),
-		logger:            slog.Default(),
+		loops:                make(map[string]*agentic.LoopEntity),
+		contextManagers:      make(map[string]*ContextManager),
+		pendingTools:         make(map[string]map[string]bool),
+		queuedToolCalls:      make(map[string][]agentic.ToolCall),
+		cachedTools:          make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:     make(map[string]*agentic.ToolChoice),
+		cachedMetadata:       make(map[string]map[string]any),
+		cachedRequestTimeout: make(map[string]string),
+		taskPrompts:          make(map[string]string),
+		requestToLoop:        make(map[string]string),
+		toolCallToLoop:       make(map[string]string),
+		callIDToName:         make(map[string]string),
+		callIDToArguments:    make(map[string]map[string]any),
+		requestStartTimes:    make(map[string]time.Time),
+		toolStartTimes:       make(map[string]time.Time),
+		contextConfig:        DefaultContextConfig(),
+		logger:               slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -82,22 +84,23 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 // NewLoopManagerWithConfig creates a new LoopManager with custom context config
 func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:             make(map[string]*agentic.LoopEntity),
-		contextManagers:   make(map[string]*ContextManager),
-		pendingTools:      make(map[string]map[string]bool),
-		queuedToolCalls:   make(map[string][]agentic.ToolCall),
-		cachedTools:       make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:  make(map[string]*agentic.ToolChoice),
-		cachedMetadata:    make(map[string]map[string]any),
-		taskPrompts:       make(map[string]string),
-		requestToLoop:     make(map[string]string),
-		toolCallToLoop:    make(map[string]string),
-		callIDToName:      make(map[string]string),
-		callIDToArguments: make(map[string]map[string]any),
-		requestStartTimes: make(map[string]time.Time),
-		toolStartTimes:    make(map[string]time.Time),
-		contextConfig:     contextConfig,
-		logger:            slog.Default(),
+		loops:                make(map[string]*agentic.LoopEntity),
+		contextManagers:      make(map[string]*ContextManager),
+		pendingTools:         make(map[string]map[string]bool),
+		queuedToolCalls:      make(map[string][]agentic.ToolCall),
+		cachedTools:          make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:     make(map[string]*agentic.ToolChoice),
+		cachedMetadata:       make(map[string]map[string]any),
+		cachedRequestTimeout: make(map[string]string),
+		taskPrompts:          make(map[string]string),
+		requestToLoop:        make(map[string]string),
+		toolCallToLoop:       make(map[string]string),
+		callIDToName:         make(map[string]string),
+		callIDToArguments:    make(map[string]map[string]any),
+		requestStartTimes:    make(map[string]time.Time),
+		toolStartTimes:       make(map[string]time.Time),
+		contextConfig:        contextConfig,
+		logger:               slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -195,6 +198,7 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedTools, loopID)
 	delete(m.cachedToolChoice, loopID)
 	delete(m.cachedMetadata, loopID)
+	delete(m.cachedRequestTimeout, loopID)
 	delete(m.taskPrompts, loopID)
 
 	// Clean up maps keyed by requestID/callID that embed the loopID prefix.
@@ -269,6 +273,23 @@ func (m *LoopManager) GetCachedMetadata(loopID string) map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cachedMetadata[loopID]
+}
+
+// CacheRequestTimeout stores the per-request timeout for a loop (from
+// TaskMessage.Timeout). Reused for all continuation iterations so the
+// task-level budget persists across LLM calls in the same loop.
+func (m *LoopManager) CacheRequestTimeout(loopID, timeout string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cachedRequestTimeout[loopID] = timeout
+}
+
+// GetCachedRequestTimeout retrieves the cached per-request timeout for a loop.
+// Returns empty string when no task-level timeout was set.
+func (m *LoopManager) GetCachedRequestTimeout(loopID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cachedRequestTimeout[loopID]
 }
 
 // CacheTaskPrompt stores the original task prompt for context recovery.

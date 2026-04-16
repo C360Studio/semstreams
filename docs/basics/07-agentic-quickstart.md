@@ -125,6 +125,11 @@ The agentic configuration (`configs/agentic.json`) defines the component pipelin
 }
 ```
 
+> Need different LLM timeouts for fast vs heavy workloads? You can set
+> `request_timeout` per endpoint and `timeout` per capability in the model
+> registry — see
+> [agentic-components → Timeout Resolution](../advanced/08-agentic-components.md#timeout-resolution).
+
 **agentic-tools** - Tool executor:
 
 ```json
