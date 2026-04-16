@@ -851,17 +851,17 @@ func TestAction_PublishAgent(t *testing.T) {
 			errMsg:   "prompt is required",
 		},
 		{
-			name: "invalid role should fail",
+			name: "custom role accepted (no closed-set validation)",
 			action: Action{
 				Type:    ActionTypePublishAgent,
 				Subject: "agent.task.test",
-				Role:    "invalid_role",
+				Role:    "ops",
 				Model:   "mock-model",
 				Prompt:  "Test prompt",
 			},
-			entityID: "entity.001",
-			wantErr:  true,
-			errMsg:   "invalid role",
+			entityID:    "entity.001",
+			wantErr:     false,
+			wantSubject: "agent.task.test",
 		},
 	}
 
@@ -1109,7 +1109,7 @@ func TestAction_PublishAgent_ExtendedRoles(t *testing.T) {
 		{name: "editor role", role: "editor", wantErr: false},
 		{name: "reviewer role", role: "reviewer", wantErr: false},
 		{name: "fixer role", role: "fixer", wantErr: false},
-		{name: "invalid role", role: "unknown", wantErr: true},
+		{name: "custom role (no closed-set validation)", role: "researcher", wantErr: false},
 	}
 
 	for _, tt := range tests {
@@ -1129,7 +1129,6 @@ func TestAction_PublishAgent_ExtendedRoles(t *testing.T) {
 
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid role")
 			} else {
 				require.NoError(t, err)
 			}

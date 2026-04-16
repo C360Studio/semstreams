@@ -55,13 +55,6 @@ func (r AgentRequest) Validate() error {
 	if len(r.Messages) == 0 {
 		return fmt.Errorf("messages cannot be empty")
 	}
-	validRoles := map[string]bool{
-		RoleArchitect: true, RoleEditor: true, RoleGeneral: true,
-		RoleQualifier: true, RoleDeveloper: true, RoleReviewer: true,
-	}
-	if !validRoles[r.Role] {
-		return fmt.Errorf("invalid role: %s", r.Role)
-	}
 	if r.ToolChoice != nil {
 		if err := r.ToolChoice.Validate(); err != nil {
 			return err

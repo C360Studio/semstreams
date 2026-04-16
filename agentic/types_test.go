@@ -200,32 +200,17 @@ func TestAgentRequest_Validation(t *testing.T) {
 			errMsg:  "messages cannot be empty",
 		},
 		{
-			name: "invalid role",
+			name: "custom role accepted (no closed-set validation)",
 			request: agentic.AgentRequest{
 				RequestID: "req-123",
 				LoopID:    "loop-abc",
-				Role:      "invalid-role",
+				Role:      "researcher",
 				Messages: []agentic.ChatMessage{
-					{Role: "user", Content: "Design API"},
+					{Role: "user", Content: "Investigate MQTT"},
 				},
 				Model: "gpt-4",
 			},
-			wantErr: true,
-			errMsg:  "invalid role: invalid-role",
-		},
-		{
-			name: "empty role",
-			request: agentic.AgentRequest{
-				RequestID: "req-123",
-				LoopID:    "loop-abc",
-				Role:      "",
-				Messages: []agentic.ChatMessage{
-					{Role: "user", Content: "Design API"},
-				},
-				Model: "gpt-4",
-			},
-			wantErr: true,
-			errMsg:  "invalid role: ",
+			wantErr: false,
 		},
 	}
 

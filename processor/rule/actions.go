@@ -497,20 +497,6 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		return errors.New("prompt is required for publish_agent action")
 	}
 
-	// Validate role
-	validRoles := map[string]bool{
-		"general":   true,
-		"architect": true,
-		"editor":    true,
-		"reviewer":  true,
-		"fixer":     true,
-		"qualifier": true,
-		"developer": true,
-	}
-	if !validRoles[action.Role] {
-		return fmt.Errorf("invalid role %q: must be one of: general, architect, editor, reviewer, fixer, qualifier, developer", action.Role)
-	}
-
 	// Substitute variables in subject and prompt
 	subject := ec.SubstituteVariables(action.Subject)
 	prompt := ec.SubstituteVariables(action.Prompt)
