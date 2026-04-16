@@ -417,8 +417,13 @@ func (s *TieredScenario) executeValidateEntityStructure(ctx context.Context, res
 	}
 
 	if len(validationErrors) > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Entity structure validation issues: %v", validationErrors))
+		// Fail loudly instead of warning. Pre-fix, this check silently
+		// logged ~3 errors per run for 6+ weeks because stub entities
+		// were written with Version=0 (see graph-ingest stub creation
+		// fix). Now that the invariant holds, any validation failure is
+		// a genuine regression and should block merge.
+		return fmt.Errorf("entity structure validation failed for %d of %d sampled entities: %v",
+			len(validationErrors), len(entities), validationErrors)
 	}
 
 	return nil
