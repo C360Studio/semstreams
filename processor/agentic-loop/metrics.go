@@ -31,6 +31,10 @@ type loopMetrics struct {
 	toolCallsDispatched *prometheus.CounterVec
 	toolResultsReceived *prometheus.CounterVec
 
+	// Token usage per LLM request
+	requestTokensIn  prometheus.Histogram
+	requestTokensOut prometheus.Histogram
+
 	// Context management
 	contextUtilization           prometheus.Gauge
 	contextCompactionsTotal      prometheus.Counter
@@ -146,6 +150,22 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total Boid position updates in KV store",
 			}),
 
+			requestTokensIn: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "request_tokens_in",
+				Help:      "Prompt tokens per LLM request",
+				Buckets:   prometheus.ExponentialBuckets(100, 2, 12), // 100 to ~400k
+			}),
+
+			requestTokensOut: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "request_tokens_out",
+				Help:      "Completion tokens per LLM request",
+				Buckets:   prometheus.ExponentialBuckets(10, 2, 12), // 10 to ~40k
+			}),
+
 			contextUtilization: prometheus.NewGauge(prometheus.GaugeOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
@@ -199,6 +219,8 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "boid_signals_received_total", metrics.boidSignalsReceived)
 			_ = registry.RegisterCounter("agentic-loop", "boid_position_updates_total", metrics.boidPositionUpdates)
 			_ = registry.RegisterCounter("agentic-loop", "boid_entities_filtered_total", metrics.boidEntitiesFiltered)
+			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_in", metrics.requestTokensIn)
+			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_out", metrics.requestTokensOut)
 			_ = registry.RegisterGauge("agentic-loop", "context_utilization", metrics.contextUtilization)
 			_ = registry.RegisterCounter("agentic-loop", "context_compactions_total", metrics.contextCompactionsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "context_compaction_tokens_saved", metrics.contextCompactionTokensSaved)
@@ -219,6 +241,8 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidSignalsReceived)
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidPositionUpdates)
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidEntitiesFiltered)
+			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensIn)
+			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensOut)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextUtilization)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionTokensSaved)
@@ -295,6 +319,16 @@ func (m *loopMetrics) recordBoidPositionUpdate() {
 // recordBoidEntitiesFiltered records entity filtering by Boid steering.
 func (m *loopMetrics) recordBoidEntitiesFiltered() {
 	m.boidEntitiesFiltered.Inc()
+}
+
+// recordRequestTokens records prompt and completion token counts for an LLM request.
+func (m *loopMetrics) recordRequestTokens(tokensIn, tokensOut int) {
+	if tokensIn > 0 {
+		m.requestTokensIn.Observe(float64(tokensIn))
+	}
+	if tokensOut > 0 {
+		m.requestTokensOut.Observe(float64(tokensOut))
+	}
 }
 
 // recordContextUtilization updates the current context utilization gauge.

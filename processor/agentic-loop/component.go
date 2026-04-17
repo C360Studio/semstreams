@@ -836,6 +836,7 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 
 	c.metrics.recordIteration()
 	c.metrics.recordTrajectoryStep("model_call")
+	c.metrics.recordRequestTokens(response.TokenUsage.PromptTokens, response.TokenUsage.CompletionTokens)
 
 	// Record dispatched tool calls
 	if response.Status == "tool_call" {
