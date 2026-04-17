@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -28,9 +29,11 @@ type Component struct {
 	config     Config
 	natsClient *natsclient.Client
 	logger     *slog.Logger
+	platform   component.PlatformMeta
 
-	hydrator  *Hydrator
-	extractor *LLMExtractor
+	hydrator      *Hydrator
+	extractor     *LLMExtractor
+	profileReader atomic.Pointer[operatingmodel.ProfileReader]
 
 	// Lifecycle management
 	running   bool
@@ -76,14 +79,17 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.Wrap(err, "Component", "NewComponent", "create extractor")
 	}
 
-	return &Component{
+	comp := &Component{
 		name:       "agentic-memory",
 		config:     config,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
+		platform:   deps.Platform,
 		hydrator:   hydrator,
 		extractor:  extractor,
-	}, nil
+	}
+	initProfileReader(&comp.profileReader)
+	return comp, nil
 }
 
 // Initialize prepares the component

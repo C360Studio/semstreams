@@ -80,6 +80,10 @@
           "type": "number",
           "description": "Minimum token headroom floor — ratio-based headroom never goes below this value"
         },
+        "inject_profile_context": {
+          "type": "boolean",
+          "description": "Inject operating model profile context into system prompt when available"
+        },
         "max_budget_tokens": {
           "type": "number",
           "description": "Hard token limit for context budget (overrides model limits when set)"

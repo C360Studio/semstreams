@@ -14,7 +14,8 @@ type Config struct {
 	Checkpoint         CheckpointConfig      `json:"checkpoint" schema:"type:object,description:Memory checkpoint configuration,category:basic"`
 	Ports              *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
 	StreamName         string                `json:"stream_name,omitempty" schema:"type:string,description:JetStream stream name,category:advanced,default:AGENT"`
-	ConsumerNameSuffix string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Consumer name suffix for uniqueness,category:advanced"`
+	ConsumerNameSuffix   string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Consumer name suffix for uniqueness,category:advanced"`
+	EnableProfileContext bool                  `json:"enable_profile_context,omitempty" schema:"type:bool,description:Assemble and publish operating model profile context on loop creation,category:advanced,default:false"`
 }
 
 // ExtractionConfig holds fact extraction configuration

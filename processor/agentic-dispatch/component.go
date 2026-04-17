@@ -41,6 +41,10 @@ type Component struct {
 
 	// Track consumers for cleanup
 	consumerInfos []consumerInfo
+
+	// sendResponseFn is a test hook; production leaves this nil. When non-nil
+	// it replaces the NATS-publishing behavior of sendResponse.
+	sendResponseFn func(agentic.UserResponse)
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -758,6 +762,10 @@ func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 
 // sendResponse publishes a response to the user's channel
 func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse) {
+	if c.sendResponseFn != nil {
+		c.sendResponseFn(resp)
+		return
+	}
 	respMsg := message.NewBaseMessage(resp.Schema(), &resp, "agentic-dispatch")
 	data, err := json.Marshal(respMsg)
 	if err != nil {
