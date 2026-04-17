@@ -1,0 +1,37 @@
+{
+  "id": "fan_out_subtopics",
+  "type": "expression",
+  "name": "Fan Out Research Subtopics",
+  "description": "When a researcher's findings contain a SUBTOPICS section, spawn additional researchers for each subtopic in parallel. The original researcher identified decomposable sub-questions; this rule creates independent research agents for each one. Each sub-researcher's results flow back through collect-evidence for fan-in.",
+  "enabled": true,
+  "entity": {
+    "pattern": "agent.complete.>"
+  },
+  "conditions": [
+    {
+      "field": "role",
+      "operator": "eq",
+      "value": "researcher"
+    },
+    {
+      "field": "outcome",
+      "operator": "eq",
+      "value": "success"
+    },
+    {
+      "field": "result",
+      "operator": "contains",
+      "value": "SUBTOPICS:"
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.$entity.task_id.subtopic",
+      "role": "researcher",
+      "model": "general",
+      "prompt": "You are a focused research agent. Investigate this specific subtopic identified from a broader research question.\n\nOriginal findings with subtopics:\n$entity.result\n\nFocus on gathering detailed evidence for the subtopics listed. Use graph_query for existing knowledge and web_search for external sources. Submit your findings when complete."
+    }
+  ]
+}

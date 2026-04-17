@@ -1,0 +1,262 @@
+{
+  "version": "1.1.0",
+  "platform": {
+    "org": "CHANGE_ME",
+    "id": "deep-research",
+    "type": "agentic",
+    "environment": "production"
+  },
+  "tier": "agentic",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "model_registry": {
+    "endpoints": {
+      "general": {
+        "provider": "openai",
+        "url": "CHANGE_ME",
+        "model": "CHANGE_ME",
+        "max_tokens": 8192,
+        "supports_tools": true,
+        "tool_format": "openai"
+      },
+      "fast": {
+        "provider": "openai",
+        "url": "CHANGE_ME",
+        "model": "CHANGE_ME",
+        "max_tokens": 4096,
+        "supports_tools": true,
+        "tool_format": "openai"
+      }
+    },
+    "defaults": {
+      "model": "general"
+    },
+    "capabilities": {
+      "general": { "endpoint": "general" },
+      "fast": { "endpoint": "fast" },
+      "summarization": { "endpoint": "fast" }
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Deep Research Flow",
+          "description": "Rules-driven research pipeline: question -> parallel researchers -> synthesizer -> answer",
+          "version": "1.0.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "components": {
+    "agentic-dispatch": {
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "general",
+        "auto_continue": false,
+        "stream_name": "USER",
+        "ports": {
+          "inputs": [
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.*", "stream_name": "USER", "required": true, "description": "User messages from any channel"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true, "description": "Agent completion events"}
+          ],
+          "outputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "description": "Task submissions to agent loop"},
+            {"name": "user.response", "type": "nats", "subject": "user.response.*", "description": "Responses back to users"}
+          ]
+        }
+      }
+    },
+    "agentic-loop": {
+      "type": "processor",
+      "name": "agentic-loop",
+      "enabled": true,
+      "config": {
+        "max_iterations": 15,
+        "timeout": "120s",
+        "stream_name": "AGENT",
+        "loops_bucket": "AGENT_LOOPS",
+        "consumer": {
+          "ack_wait": "120s",
+          "heartbeat_interval": "60s",
+          "max_deliver": 2
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "AGENT"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
+          ],
+          "kv_write": [
+            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"},
+            {"name": "trajectories", "type": "kv-write", "bucket": "AGENT_TRAJECTORIES"}
+          ]
+        }
+      }
+    },
+    "agentic-model": {
+      "type": "processor",
+      "name": "agentic-model",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "120s",
+        "retry": {
+          "max_attempts": 3,
+          "backoff": "exponential"
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "agentic-tools": {
+      "type": "processor",
+      "name": "agentic-tools",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "60s",
+        "allowed_tools": ["query_entity", "query_entities", "web_search", "http_request", "graph_query", "submit_work"],
+        "ports": {
+          "inputs": [
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "AGENT", "required": true}
+          ],
+          "kv_read": [
+            {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}
+          ]
+        }
+      }
+    },
+    "agentic-memory": {
+      "type": "processor",
+      "name": "agentic-memory",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "extraction": {
+          "llm_assisted": {
+            "enabled": true,
+            "model": "fast",
+            "trigger_iteration_interval": 5,
+            "trigger_context_threshold": 0.8
+          }
+        },
+        "hydration": {
+          "pre_task": true,
+          "post_compaction": true
+        },
+        "ports": {
+          "inputs": [
+            {"name": "compaction_events", "type": "jetstream", "subject": "agent.context.compaction.*", "stream_name": "AGENT", "required": true},
+            {"name": "hydrate_requests", "type": "jetstream", "subject": "agent.hydrate.*", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "injected_context", "type": "jetstream", "subject": "agent.context.injected.*", "stream_name": "AGENT"},
+            {"name": "graph_mutations", "type": "nats", "subject": "graph.mutation.*"}
+          ]
+        }
+      }
+    },
+    "agentic-governance": {
+      "type": "processor",
+      "name": "agentic-governance",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "filter_chain": {
+          "policy": "fail_fast",
+          "filters": [
+            {"name": "pii_redaction", "enabled": true},
+            {"name": "injection_detection", "enabled": true},
+            {"name": "rate_limiting", "enabled": true, "rate_limit_config": {"per_user": {"requests_per_minute": 30, "tokens_per_hour": 500000}, "algorithm": "token_bucket", "storage": {"type": "memory"}}}
+          ]
+        },
+        "violations": {
+          "store": "GOVERNANCE_VIOLATIONS",
+          "retention_days": 30,
+          "notify_user": true
+        },
+        "ports": {
+          "inputs": [
+            {"name": "task_validation", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "request_validation", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT", "required": true},
+            {"name": "response_validation", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.task.validated", "type": "jetstream", "subject": "agent.task.validated.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.request.validated", "type": "jetstream", "subject": "agent.request.validated.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response.validated", "type": "jetstream", "subject": "agent.response.validated.*", "stream_name": "AGENT", "required": true},
+            {"name": "violations", "type": "jetstream", "subject": "governance.violation.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "rule-processor": {
+      "type": "processor",
+      "name": "rule-processor",
+      "enabled": true,
+      "config": {
+        "rules_dir": "configs/rules/deep-research",
+        "enable_graph_integration": true,
+        "entity_watch_patterns": ["agent.complete.>", "agent.loop.>"],
+        "entity_watch_buckets": {
+          "ENTITY_STATES": ["agent.complete.>", "agent.loop.>"],
+          "RESEARCH_EVIDENCE": [">"]
+        },
+        "ports": {
+          "inputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES.>", "type": "kv-watch", "bucket": "ENTITY_STATES"},
+            {"name": "research_evidence", "subject": "RESEARCH_EVIDENCE.>", "type": "kv-watch", "bucket": "RESEARCH_EVIDENCE"}
+          ],
+          "outputs": [
+            {"name": "agent.task", "subject": "agent.task.*", "type": "jetstream", "stream_name": "AGENT", "description": "Spawn agents from rules"},
+            {"name": "graph.mutation", "subject": "graph.mutation.*", "type": "nats", "description": "Graph triple mutations"},
+            {"name": "research.evidence", "subject": "RESEARCH_EVIDENCE", "type": "kv-write", "description": "Research evidence collection"}
+          ]
+        }
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "enable_hierarchy": true,
+        "ports": {
+          "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+          ],
+          "outputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+          ]
+        }
+      }
+    }
+  }
+}

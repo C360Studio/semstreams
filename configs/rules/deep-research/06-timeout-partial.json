@@ -1,0 +1,43 @@
+{
+  "id": "timeout_partial_results",
+  "type": "expression",
+  "name": "Timeout - Synthesize Partial Results",
+  "description": "When a researcher loop approaches its iteration limit without completing, trigger synthesis with whatever evidence has been collected so far. Better to return partial findings than nothing.",
+  "enabled": true,
+  "entity": {
+    "pattern": "agent.complete.>"
+  },
+  "conditions": [
+    {
+      "field": "role",
+      "operator": "eq",
+      "value": "researcher"
+    },
+    {
+      "field": "outcome",
+      "operator": "eq",
+      "value": "failed"
+    },
+    {
+      "field": "iterations",
+      "operator": "gte",
+      "value": 10
+    }
+  ],
+  "logic": "and",
+  "cooldown": "5m",
+  "on_enter": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.$entity.task_id.partial-synthesis",
+      "role": "general",
+      "model": "general",
+      "prompt": "A research agent timed out after exhausting its iteration budget. Synthesize whatever evidence has been collected so far.\n\nTask ID: $entity.task_id\n\nQuery the graph for entities with predicate research.has_evidence linked to this task. Produce a partial report clearly marked as PARTIAL, noting which areas still need investigation."
+    },
+    {
+      "type": "add_triple",
+      "predicate": "research.status",
+      "object": "partial"
+    }
+  ]
+}
