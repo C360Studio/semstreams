@@ -13,6 +13,14 @@
       },
       "category": "advanced"
     },
+    "approval_required": {
+      "type": "array",
+      "description": "Tool names requiring human approval before execution",
+      "items": {
+        "type": "string"
+      },
+      "category": "advanced"
+    },
     "consumer_name_suffix": {
       "type": "string",
       "description": "Suffix appended to consumer names for uniqueness",
@@ -21,6 +29,12 @@
     "delete_consumer_on_stop": {
       "type": "boolean",
       "description": "Delete durable consumers on Stop (use for tests only)",
+      "default": false,
+      "category": "advanced"
+    },
+    "enable_categories": {
+      "type": "boolean",
+      "description": "Enable tool category filtering for role-based access",
       "default": false,
       "category": "advanced"
     },

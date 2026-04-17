@@ -10,11 +10,12 @@ import (
 
 // Config holds configuration for agentic-governance processor component
 type Config struct {
-	FilterChain        FilterChainConfig     `json:"filter_chain" schema:"type:object,description:Filter chain configuration,category:basic"`
-	Violations         ViolationConfig       `json:"violations" schema:"type:object,description:Violation handling configuration,category:basic"`
-	Ports              *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
-	StreamName         string                `json:"stream_name,omitempty" schema:"type:string,description:JetStream stream name,category:advanced,default:AGENT"`
-	ConsumerNameSuffix string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Consumer name suffix for uniqueness,category:advanced"`
+	FilterChain          FilterChainConfig     `json:"filter_chain" schema:"type:object,description:Filter chain configuration,category:basic"`
+	Violations           ViolationConfig       `json:"violations" schema:"type:object,description:Violation handling configuration,category:basic"`
+	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
+	StreamName           string                `json:"stream_name,omitempty" schema:"type:string,description:JetStream stream name,category:advanced,default:AGENT"`
+	ConsumerNameSuffix   string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Consumer name suffix for uniqueness,category:advanced"`
+	EnableToolGovernance bool                  `json:"enable_tool_governance,omitempty" schema:"type:bool,description:Enable pre-execution governance filtering for tool calls,category:advanced,default:false"`
 }
 
 // FilterChainConfig holds filter chain configuration

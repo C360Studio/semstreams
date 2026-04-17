@@ -10,6 +10,12 @@
       "description": "Consumer name suffix for uniqueness",
       "category": "advanced"
     },
+    "enable_tool_governance": {
+      "type": "boolean",
+      "description": "Enable pre-execution governance filtering for tool calls",
+      "default": false,
+      "category": "advanced"
+    },
     "filter_chain": {
       "type": "object",
       "description": "Filter chain configuration",
