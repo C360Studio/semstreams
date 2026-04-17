@@ -595,6 +595,14 @@
               "stream_name": "AGENT",
               "required": true,
               "description": "Agent lifecycle events for span collection"
+            },
+            {
+              "name": "tool_events",
+              "subject": "tool.result.>",
+              "type": "jetstream",
+              "stream_name": "AGENT",
+              "required": false,
+              "description": "Tool results for tool span creation"
             }
           ],
           "outputs": []

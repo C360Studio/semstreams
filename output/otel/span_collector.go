@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/c360studio/semstreams/agentic"
 )
 
 // SpanData represents collected span information.
@@ -175,6 +177,275 @@ func (sc *SpanCollector) ProcessEvent(_ context.Context, data []byte) error {
 	}
 
 	return nil
+}
+
+// ProcessMessage processes a BaseMessage envelope published by the agentic loop.
+// It dispatches on the message category to create or update spans.
+func (sc *SpanCollector) ProcessMessage(_ context.Context, _ string, data []byte) error {
+	// Light envelope unmarshal — only extract type.category and raw payload.
+	var envelope struct {
+		Type struct {
+			Category string `json:"category"`
+		} `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+
+	switch envelope.Type.Category {
+	case agentic.CategoryLoopCreated:
+		var evt agentic.LoopCreatedEvent
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.startLoopSpanFromEvent(&evt)
+
+	case agentic.CategoryLoopCompleted:
+		var evt agentic.LoopCompletedEvent
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.endLoopSpanCompleted(&evt)
+
+	case agentic.CategoryLoopFailed:
+		var evt agentic.LoopFailedEvent
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.endLoopSpanFailed(&evt)
+
+	case agentic.CategoryLoopCancelled:
+		var evt agentic.LoopCancelledEvent
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.endLoopSpanCancelled(&evt)
+
+	case agentic.CategoryToolResult:
+		var evt agentic.ToolResult
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.createToolSpanFromResult(&evt)
+
+	case agentic.CategoryContextEvent:
+		var evt agentic.ContextEvent
+		if err := json.Unmarshal(envelope.Payload, &evt); err != nil {
+			return err
+		}
+		sc.addContextEventToSpan(&evt)
+	}
+
+	return nil
+}
+
+// startLoopSpanFromEvent creates a root span from a typed LoopCreatedEvent.
+func (sc *SpanCollector) startLoopSpanFromEvent(evt *agentic.LoopCreatedEvent) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span := &SpanData{
+		TraceID:   generateTraceID(evt.LoopID),
+		SpanID:    generateSpanID(evt.LoopID),
+		Name:      "agent.loop",
+		Kind:      "server",
+		StartTime: evt.CreatedAt,
+		Status:    SpanStatus{Code: "unset"},
+		Attributes: map[string]any{
+			"agent.loop_id":   evt.LoopID,
+			"agent.task_id":   evt.TaskID,
+			"agent.role":      evt.Role,
+			"agent.model":     evt.Model,
+			"service.name":    sc.serviceName,
+			"service.version": sc.serviceVersion,
+		},
+	}
+
+	if evt.WorkflowSlug != "" {
+		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
+	}
+	if evt.WorkflowStep != "" {
+		span.Attributes["agent.workflow_step"] = evt.WorkflowStep
+	}
+
+	for k, v := range evt.Metadata {
+		span.Attributes["agent."+k] = v
+	}
+
+	sc.activeSpans[evt.LoopID] = span
+	sc.spansCreated++
+}
+
+// endLoopSpanCompleted completes a loop span from a LoopCompletedEvent.
+func (sc *SpanCollector) endLoopSpanCompleted(evt *agentic.LoopCompletedEvent) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span, ok := sc.activeSpans[evt.LoopID]
+	if !ok {
+		return
+	}
+
+	span.EndTime = evt.CompletedAt
+	span.Status = SpanStatus{Code: "ok"}
+	span.Attributes["agent.outcome"] = evt.Outcome
+	span.Attributes["agent.model"] = evt.Model
+	span.Attributes["agent.role"] = evt.Role
+	span.Attributes["agent.iterations"] = evt.Iterations
+	span.Attributes["agent.tokens_in"] = evt.TokensIn
+	span.Attributes["agent.tokens_out"] = evt.TokensOut
+	if evt.Prompt != "" {
+		span.Attributes["agent.prompt"] = evt.Prompt
+	}
+	if evt.WorkflowSlug != "" {
+		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
+	}
+	if evt.WorkflowStep != "" {
+		span.Attributes["agent.workflow_step"] = evt.WorkflowStep
+	}
+
+	delete(sc.activeSpans, evt.LoopID)
+	sc.completedSpans = append(sc.completedSpans, span)
+	sc.spansCompleted++
+}
+
+// endLoopSpanFailed completes a loop span from a LoopFailedEvent.
+func (sc *SpanCollector) endLoopSpanFailed(evt *agentic.LoopFailedEvent) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span, ok := sc.activeSpans[evt.LoopID]
+	if !ok {
+		return
+	}
+
+	span.EndTime = evt.FailedAt
+	span.Status = SpanStatus{Code: "error", Message: evt.Error}
+	span.Attributes["agent.outcome"] = evt.Outcome
+	span.Attributes["agent.model"] = evt.Model
+	span.Attributes["agent.role"] = evt.Role
+	span.Attributes["agent.iterations"] = evt.Iterations
+	span.Attributes["agent.tokens_in"] = evt.TokensIn
+	span.Attributes["agent.tokens_out"] = evt.TokensOut
+	span.Attributes["agent.error"] = evt.Error
+	span.Attributes["agent.reason"] = evt.Reason
+	if evt.Prompt != "" {
+		span.Attributes["agent.prompt"] = evt.Prompt
+	}
+
+	delete(sc.activeSpans, evt.LoopID)
+	sc.completedSpans = append(sc.completedSpans, span)
+	sc.spansCompleted++
+}
+
+// endLoopSpanCancelled completes a loop span from a LoopCancelledEvent.
+func (sc *SpanCollector) endLoopSpanCancelled(evt *agentic.LoopCancelledEvent) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span, ok := sc.activeSpans[evt.LoopID]
+	if !ok {
+		return
+	}
+
+	span.EndTime = evt.CancelledAt
+	span.Status = SpanStatus{Code: "error", Message: "cancelled"}
+	span.Attributes["agent.outcome"] = evt.Outcome
+	span.Attributes["agent.cancelled_by"] = evt.CancelledBy
+	if evt.WorkflowSlug != "" {
+		span.Attributes["agent.workflow_slug"] = evt.WorkflowSlug
+	}
+
+	delete(sc.activeSpans, evt.LoopID)
+	sc.completedSpans = append(sc.completedSpans, span)
+	sc.spansCompleted++
+}
+
+// createToolSpanFromResult creates a self-contained tool span from a ToolResult.
+// Tool results are point-in-time events; the span start and end both use current time.
+func (sc *SpanCollector) createToolSpanFromResult(evt *agentic.ToolResult) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	// Look up parent loop span to inherit trace context.
+	parentSpan := sc.activeSpans[evt.LoopID]
+
+	now := time.Now()
+	span := &SpanData{
+		Name:      "agent.tool." + evt.Name,
+		Kind:      "client",
+		StartTime: now,
+		EndTime:   now,
+		Attributes: map[string]any{
+			"tool.name":   evt.Name,
+			"tool.status": toolStatus(evt.Error),
+		},
+	}
+
+	if parentSpan != nil {
+		span.TraceID = parentSpan.TraceID
+		span.ParentSpanID = parentSpan.SpanID
+	} else {
+		span.TraceID = generateTraceID(evt.LoopID)
+	}
+	span.SpanID = generateSpanID(evt.LoopID + ":tool:" + evt.Name + ":" + evt.CallID)
+
+	if evt.ErrorKind != "" {
+		span.Attributes["tool.error_kind"] = string(evt.ErrorKind)
+	}
+	if evt.Error != "" {
+		span.Attributes["tool.error"] = evt.Error
+		span.Status = SpanStatus{Code: "error", Message: evt.Error}
+	} else {
+		span.Status = SpanStatus{Code: "ok"}
+	}
+	if evt.LoopID != "" {
+		span.Attributes["agent.loop_id"] = evt.LoopID
+	}
+
+	sc.completedSpans = append(sc.completedSpans, span)
+	sc.spansCreated++
+	sc.spansCompleted++
+}
+
+// addContextEventToSpan records a ContextEvent as a span event on the active loop span.
+func (sc *SpanCollector) addContextEventToSpan(evt *agentic.ContextEvent) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	span := sc.activeSpans[evt.LoopID]
+	if span == nil {
+		return
+	}
+
+	attrs := map[string]any{
+		"context.type":      evt.Type,
+		"context.iteration": evt.Iteration,
+	}
+	if evt.Utilization > 0 {
+		attrs["context.utilization"] = evt.Utilization
+	}
+	if evt.TokensSaved > 0 {
+		attrs["context.tokens_saved"] = evt.TokensSaved
+	}
+	if evt.Summary != "" {
+		attrs["context.summary"] = evt.Summary
+	}
+
+	span.Events = append(span.Events, SpanEvent{
+		Name:       evt.Type,
+		Timestamp:  time.Now(),
+		Attributes: attrs,
+	})
+}
+
+// toolStatus returns "success" or "error" based on whether an error string is set.
+func toolStatus(errStr string) string {
+	if errStr == "" {
+		return "success"
+	}
+	return "error"
 }
 
 // startLoopSpan creates a new root span for an agent loop.
