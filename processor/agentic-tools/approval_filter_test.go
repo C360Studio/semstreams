@@ -70,3 +70,34 @@ func TestApprovalFilter_EmptyList(t *testing.T) {
 	assert.Len(t, result.Approved, 2)
 	assert.Empty(t, result.Rejected)
 }
+
+func TestIsApprovalRequired(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		want   bool
+	}{
+		{
+			name:   "approval prefix present",
+			reason: ApprovalRequiredPrefix + "Tool 'bash' requires human approval before execution",
+			want:   true,
+		},
+		{
+			name:   "normal error reason",
+			reason: "tool execution failed: permission denied",
+			want:   false,
+		},
+		{
+			name:   "empty string",
+			reason: "",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsApprovalRequired(tt.reason)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
