@@ -1,6 +1,31 @@
 // Package component provides port configuration and management for component connections.
 package component
 
+import "strings"
+
+// ResolveSubject returns the configured subject for the named port,
+// replacing the trailing wildcard (`*` or `>`) with suffix. This lets
+// components publish/subscribe using port-configured subjects instead
+// of hardcoding subject prefixes.
+//
+// Falls back to portName + "." + suffix when no matching port is found,
+// preserving backward compatibility for configs that omit the port.
+func ResolveSubject(ports []PortDefinition, portName, suffix string) string {
+	for _, p := range ports {
+		if p.Name == portName {
+			switch {
+			case strings.HasSuffix(p.Subject, ".*"):
+				return strings.TrimSuffix(p.Subject, "*") + suffix
+			case strings.HasSuffix(p.Subject, ".>"):
+				return strings.TrimSuffix(p.Subject, ">") + suffix
+			default:
+				return p.Subject + "." + suffix
+			}
+		}
+	}
+	return portName + "." + suffix
+}
+
 // PortDefinition represents a port configuration from JSON
 type PortDefinition struct {
 	Name        string `json:"name"                  schema:"readonly,type:string,description:Port identifier"`

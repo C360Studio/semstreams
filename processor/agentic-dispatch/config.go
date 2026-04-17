@@ -67,6 +67,22 @@ func DefaultConfig() Config {
 					Required:    true,
 					Description: "Agent task completions",
 				},
+				{
+					Name:        "agent.created",
+					Type:        "jetstream",
+					Subject:     "agent.created.*",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Loop creation events",
+				},
+				{
+					Name:        "agent.failed",
+					Type:        "jetstream",
+					Subject:     "agent.failed.*",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Loop failure events",
+				},
 			},
 			Outputs: []component.PortDefinition{
 				{

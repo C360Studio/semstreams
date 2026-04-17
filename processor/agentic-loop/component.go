@@ -983,7 +983,7 @@ func (c *Component) publishContextEvent(ctx context.Context, event agentic.Conte
 		return
 	}
 
-	subject := fmt.Sprintf("agent.context.compaction.%s", event.LoopID)
+	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("Failed to publish context event", "error", err, "subject", subject)
 	}
@@ -1281,7 +1281,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		return
 	}
 
-	subject := fmt.Sprintf("agent.complete.%s", loopID)
+	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
 	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
 		c.logger.Error("Failed to publish completion",
 			slog.String("error", err.Error()),

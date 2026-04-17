@@ -93,9 +93,9 @@ func TestComponent_OutputPorts(t *testing.T) {
 	for i, p := range ports {
 		portNames[i] = p.Name
 	}
-	assert.Contains(t, portNames, "validated_tasks")
-	assert.Contains(t, portNames, "validated_requests")
-	assert.Contains(t, portNames, "validated_responses")
+	assert.Contains(t, portNames, "agent.task.validated")
+	assert.Contains(t, portNames, "agent.request.validated")
+	assert.Contains(t, portNames, "agent.response.validated")
 	assert.Contains(t, portNames, "violations")
 	assert.Contains(t, portNames, "user_errors")
 }

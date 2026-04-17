@@ -307,7 +307,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    "AGENT",
 		ConsumerName:  "agentic-dispatch-agent-created",
-		FilterSubject: "agent.created.*",
+		FilterSubject: c.inputPortSubject("agent.created", "agent.created.*"),
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -331,7 +331,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	agentFailedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    "AGENT",
 		ConsumerName:  "agentic-dispatch-agent-failed",
-		FilterSubject: "agent.failed.*",
+		FilterSubject: c.inputPortSubject("agent.failed", "agent.failed.*"),
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -568,7 +568,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		return
 	}
 
-	subject := fmt.Sprintf("agent.task.%s", taskID)
+	subject := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
 		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
 		c.sendResponse(ctx, agentic.UserResponse{
@@ -848,6 +848,28 @@ func (c *Component) CommandRegistry() *CommandRegistry {
 // LoopTracker returns the loop tracker
 func (c *Component) LoopTracker() *LoopTracker {
 	return c.loopTracker
+}
+
+// inputPortSubject returns the configured subject for the named input port,
+// falling back to the provided default when no matching port is found.
+func (c *Component) inputPortSubject(portName, fallback string) string {
+	if c.config.Ports != nil {
+		for _, p := range c.config.Ports.Inputs {
+			if p.Name == portName {
+				return p.Subject
+			}
+		}
+	}
+	return fallback
+}
+
+// outputPortDefs returns the output port definitions slice, or nil when Ports is unset.
+// This lets ResolveSubject fall back gracefully to portName + "." + suffix.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	if c.config.Ports == nil {
+		return nil
+	}
+	return c.config.Ports.Outputs
 }
 
 // loadGlobalCommands loads globally registered commands into the component
