@@ -836,6 +836,7 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 
 	c.metrics.recordIteration()
 	c.metrics.recordTrajectoryStep("model_call")
+	c.metrics.recordRequestTokens(response.TokenUsage.PromptTokens, response.TokenUsage.CompletionTokens)
 
 	// Record dispatched tool calls
 	if response.Status == "tool_call" {
@@ -928,6 +929,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	if c.metrics != nil {
 		c.metrics.recordToolResultReceived(hasError)
 		c.metrics.recordTrajectoryStep("tool_call")
+		if c.config.ToolResultMaxBytes > 0 && len(toolResult.Content) > c.config.ToolResultMaxBytes {
+			c.metrics.recordToolResultTruncated()
+		}
 	}
 
 	// Apply accumulated Boid steering signals before handler processes result

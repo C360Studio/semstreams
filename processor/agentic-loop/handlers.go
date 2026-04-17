@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
@@ -73,6 +74,21 @@ func NewMessageHandler(config Config, loopManagerOpts ...LoopManagerOption) *Mes
 		compactor:         NewCompactor(config.Context),
 		logger:            slog.Default(),
 	}
+}
+
+// truncateToolResult caps a tool result string at maxBytes, preserving UTF-8
+// validity and appending a marker showing the original size.
+func truncateToolResult(s string, maxBytes int) string {
+	marker := fmt.Sprintf("\n…[truncated: %d bytes → %d]", len(s), maxBytes)
+	budget := maxBytes - len(marker)
+	if budget <= 0 {
+		return marker
+	}
+	cut := budget
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + marker
 }
 
 // resolveProvider looks up the LLM provider for a model endpoint name.
@@ -831,6 +847,17 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 			result.FailureState = failure
 		}
 		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleToolResult", "check timeout")
+	}
+
+	// Truncate oversized tool results before they enter the context window.
+	if h.config.ToolResultMaxBytes > 0 && len(toolResult.Content) > h.config.ToolResultMaxBytes {
+		original := len(toolResult.Content)
+		toolResult.Content = truncateToolResult(toolResult.Content, h.config.ToolResultMaxBytes)
+		h.logger.Warn("tool result truncated",
+			slog.String("loop_id", loopID),
+			slog.String("tool", toolResult.Name),
+			slog.Int("original_bytes", original),
+			slog.Int("max_bytes", h.config.ToolResultMaxBytes))
 	}
 
 	entity, err := h.loopManager.GetLoop(loopID)
