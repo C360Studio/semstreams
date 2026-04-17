@@ -929,6 +929,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	if c.metrics != nil {
 		c.metrics.recordToolResultReceived(hasError)
 		c.metrics.recordTrajectoryStep("tool_call")
+		if c.config.ToolResultMaxBytes > 0 && len(toolResult.Content) > c.config.ToolResultMaxBytes {
+			c.metrics.recordToolResultTruncated()
+		}
 	}
 
 	// Apply accumulated Boid steering signals before handler processes result

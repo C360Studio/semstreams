@@ -140,6 +140,12 @@
       "default": "120s",
       "category": "basic"
     },
+    "tool_result_max_bytes": {
+      "type": "number",
+      "description": "Maximum bytes for tool result content before truncation. 0 means no limit",
+      "default": 32768,
+      "category": "advanced"
+    },
     "trajectory_cache_ttl": {
       "type": "string",
       "description": "TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries",
