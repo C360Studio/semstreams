@@ -88,6 +88,31 @@ loops are running, which have completed, their outcomes, and token usage. This g
 coordinator the feedback signal it needs to evaluate whether a spawned flow achieved its
 goal and to decide the next action.
 
+### Composition model: flows, not composite components
+
+SemStreams implements composition at the flow orchestration level, not the component
+level. There is no runtime "composite component" type — components are atomic processors
+that transform data, and composition is the job of flows.
+
+A `Flow` entity (`flowstore/flow.go`) contains `FlowNode` instances (component configs
+with canvas positions) and `FlowConnection` edges (port-to-port wiring). `FlowEngine`
+(`engine/engine.go`) translates a Flow into `ComponentConfig` records and writes them to
+the `semstreams_config` KV bucket. `ComponentManager` watches that bucket and
+instantiates components reactively. Deployment is atomic: all components in a flow deploy
+together.
+
+Connection discovery is emergent rather than explicit. Components declare input and output
+ports with NATS subject patterns. `FlowGraph` (`component/flowgraph/flowgraph.go`)
+validates connections by matching publisher subjects against subscriber patterns using
+bidirectional NATS wildcard matching. Components do not reference each other by name —
+they connect through subject overlap.
+
+This architecture means the coordinator's `manage_flow` tool operates at the correct
+abstraction level. The coordinator composes flows (groups of connected components), not
+composite components. A "deep research flow" is a Flow entity containing dispatch, loop,
+model, tools, and memory nodes with port connections between them — not a single compound
+component that hides its internals.
+
 ### Infrastructure prerequisites
 
 Two wiring tasks must be completed before `create_rule` has a working backend:

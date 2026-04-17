@@ -44,6 +44,9 @@ type Component struct {
 	lastActivity      time.Time
 	metrics           *toolsMetrics
 
+	// Approval filter (nil when approval_required is empty)
+	approvalFilter *ApprovalFilter
+
 	// Subscriptions (for cleanup)
 	toolListSub *natsclient.Subscription
 
@@ -78,14 +81,20 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
 	}
 
-	return &Component{
+	comp := &Component{
 		name:       "agentic-tools",
 		config:     config,
 		registry:   NewExecutorRegistry(),
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 		metrics:    getMetrics(deps.MetricsRegistry),
-	}, nil
+	}
+
+	if len(config.ApprovalRequired) > 0 {
+		comp.approvalFilter = NewApprovalFilter(config.ApprovalRequired)
+	}
+
+	return comp, nil
 }
 
 // Initialize prepares the component (no-op for this component)
@@ -347,6 +356,30 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 		c.publishResult(ctx, result)
 		c.incrementErrors()
 		return
+	}
+
+	// Check approval filter
+	if c.approvalFilter != nil {
+		filterResult, filterErr := c.approvalFilter.FilterToolCalls(call.LoopID, []agentic.ToolCall{call})
+		if filterErr != nil {
+			c.logger.Error("Approval filter error", "tool", call.Name, "error", filterErr)
+		} else if len(filterResult.Rejected) > 0 {
+			c.logger.Info("Tool requires approval", "tool", call.Name)
+
+			if c.metrics != nil {
+				c.metrics.recordToolFiltered(call.Name, "approval_required")
+			}
+
+			result := agentic.ToolResult{
+				CallID:    call.ID,
+				Error:     filterResult.Rejected[0].Reason,
+				ErrorKind: agentic.ToolErrorPermission,
+				LoopID:    call.LoopID,
+				TraceID:   call.TraceID,
+			}
+			c.publishResult(ctx, result)
+			return
+		}
 	}
 
 	// Execute tool with timeout

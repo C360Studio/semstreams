@@ -89,6 +89,18 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.Wrap(err, "Component", "NewComponent", "build filter chain")
 	}
 
+	if config.EnableToolGovernance {
+		var piiFilter *PIIFilter
+		for _, f := range chain.Filters {
+			if pf, ok := f.(*PIIFilter); ok {
+				piiFilter = pf
+				break
+			}
+		}
+		chain.AddFilter(NewToolCallFilter(piiFilter))
+		logger.Info("Tool call governance filter enabled")
+	}
+
 	// Create violation handler
 	violationHandler := NewViolationHandler(config.Violations, deps.NATSClient, logger, metrics)
 
