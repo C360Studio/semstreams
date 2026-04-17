@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/service"
 	"github.com/google/uuid"
@@ -335,7 +336,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}
 	}
 
-	subject := fmt.Sprintf("agent.task.%s", taskID)
+	subject := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
 		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
 		return agentic.UserResponse{

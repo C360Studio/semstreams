@@ -156,25 +156,25 @@ func (c *Component) setupInputConsumers(ctx context.Context) error {
 		}
 
 		var msgType MessageType
-		var outputSubjectPrefix string
+		var outputPortName string
 
 		// Route to appropriate handler based on port name
 		switch port.Name {
 		case "task_validation":
 			msgType = MessageTypeTask
-			outputSubjectPrefix = "agent.task.validated"
+			outputPortName = "agent.task.validated"
 		case "request_validation":
 			msgType = MessageTypeRequest
-			outputSubjectPrefix = "agent.request.validated"
+			outputPortName = "agent.request.validated"
 		case "response_validation":
 			msgType = MessageTypeResponse
-			outputSubjectPrefix = "agent.response.validated"
+			outputPortName = "agent.response.validated"
 		default:
 			c.logger.Debug("Skipping unknown input port", "port", port.Name)
 			continue
 		}
 
-		handler := c.createHandler(msgType, outputSubjectPrefix)
+		handler := c.createHandler(msgType, outputPortName)
 		if err := c.setupConsumer(ctx, port, handler); err != nil {
 			return errs.Wrap(err, "Component", "setupInputConsumers", fmt.Sprintf("setup consumer for %s", port.Name))
 		}
@@ -183,15 +183,17 @@ func (c *Component) setupInputConsumers(ctx context.Context) error {
 	return nil
 }
 
-// createHandler creates a message handler for a specific message type
-func (c *Component) createHandler(msgType MessageType, outputSubjectPrefix string) func(context.Context, []byte) {
+// createHandler creates a message handler for a specific message type.
+// outputPortName is the output port name used to resolve the publish subject via port config.
+func (c *Component) createHandler(msgType MessageType, outputPortName string) func(context.Context, []byte) {
 	return func(ctx context.Context, data []byte) {
-		c.handleMessage(ctx, data, msgType, outputSubjectPrefix)
+		c.handleMessage(ctx, data, msgType, outputPortName)
 	}
 }
 
-// handleMessage processes a message through the filter chain
-func (c *Component) handleMessage(ctx context.Context, data []byte, msgType MessageType, outputSubjectPrefix string) {
+// handleMessage processes a message through the filter chain.
+// outputPortName identifies the output port in config whose subject pattern is used to publish validated messages.
+func (c *Component) handleMessage(ctx context.Context, data []byte, msgType MessageType, outputPortName string) {
 	// Parse the incoming message
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -263,8 +265,8 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 			outputMsg = &msg
 		}
 
-		// Build output subject
-		outputSubject := fmt.Sprintf("%s.%s", outputSubjectPrefix, msg.ID)
+		// Build output subject from port config, falling back to portName + "." + msg.ID
+		outputSubject := component.ResolveSubject(c.outputPortDefs(), outputPortName, msg.ID)
 
 		outputData, err := json.Marshal(outputMsg)
 		if err != nil {
@@ -533,6 +535,15 @@ func (c *Component) DataFlow() component.FlowMetrics {
 		ErrorRate:         errorRate,
 		LastActivity:      lastActivity,
 	}
+}
+
+// outputPortDefs returns the output port definitions slice, or nil when Ports is unset.
+// This lets ResolveSubject fall back gracefully to portName + "." + suffix.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	if c.config.Ports == nil {
+		return nil
+	}
+	return c.config.Ports.Outputs
 }
 
 // ProcessMessage is a convenience method for testing filter chain processing

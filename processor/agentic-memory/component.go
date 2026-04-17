@@ -421,3 +421,12 @@ func (c *Component) DataFlow() component.FlowMetrics {
 		LastActivity:      lastActivity,
 	}
 }
+
+// outputPortDefs returns the output port definitions slice, or nil when Ports is unset.
+// This lets ResolveSubject fall back gracefully to portName + "." + suffix.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	if c.config.Ports == nil {
+		return nil
+	}
+	return c.config.Ports.Outputs
+}

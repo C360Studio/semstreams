@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -80,8 +81,8 @@ func (c *Component) publishInjectedContext(ctx context.Context, loopID, source s
 		return errs.Wrap(err, "Component", "publishInjectedContext", "marshal injected context message")
 	}
 
-	// Build subject: agent.context.injected.{loopID}
-	subject := fmt.Sprintf("agent.context.injected.%s", loopID)
+	// Build subject from output port config, falling back to default pattern
+	subject := component.ResolveSubject(c.outputPortDefs(), "injected_context", loopID)
 
 	// Publish if NATS client available
 	if c.natsClient != nil {

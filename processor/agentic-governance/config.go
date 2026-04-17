@@ -177,28 +177,28 @@ func DefaultConfig() Config {
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "validated_tasks",
+			Name:        "agent.task.validated",
 			Type:        "jetstream",
 			Subject:     "agent.task.validated.*",
 			StreamName:  "AGENT",
 			Required:    true,
-			Description: "Approved task requests (JetStream)",
+			Description: "Validated task messages",
 		},
 		{
-			Name:        "validated_requests",
+			Name:        "agent.request.validated",
 			Type:        "jetstream",
 			Subject:     "agent.request.validated.*",
 			StreamName:  "AGENT",
 			Required:    true,
-			Description: "Approved model requests (JetStream)",
+			Description: "Validated agent requests",
 		},
 		{
-			Name:        "validated_responses",
+			Name:        "agent.response.validated",
 			Type:        "jetstream",
 			Subject:     "agent.response.validated.*",
 			StreamName:  "AGENT",
 			Required:    true,
-			Description: "Approved model responses (JetStream)",
+			Description: "Validated agent responses",
 		},
 		{
 			Name:        "violations",
