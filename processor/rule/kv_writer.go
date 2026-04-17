@@ -9,6 +9,7 @@ import (
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // KVWriter performs read-modify-write operations on domain KV buckets.
@@ -54,9 +55,15 @@ func (w *natsKVWriter) getStore(ctx context.Context, bucketName string) (*natscl
 		return store, nil
 	}
 
-	bucket, err := w.natsClient.GetKeyValueBucket(ctx, bucketName)
+	// Producer creates the bucket. CreateKeyValueBucket is idempotent —
+	// returns the existing bucket if it already exists.
+	bucket, err := w.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      bucketName,
+		Description: "Created by rule engine update_kv action",
+		History:     5,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get bucket %s: %w", bucketName, err)
+		return nil, fmt.Errorf("get or create bucket %s: %w", bucketName, err)
 	}
 
 	store := w.natsClient.NewKVStore(bucket)
