@@ -1,0 +1,30 @@
+{
+  "id": "spawn_research_coordinator",
+  "type": "expression",
+  "name": "Spawn Research Coordinator on Researcher Complete",
+  "description": "When a researcher completes successfully, spawn a research-coordinator to judge what should happen next (fan_out, synthesize, retry, done). The coordinator reads the researcher's output via read_loop_result and returns a structured decision via the decide tool, which emits a coordinator.next_action triple that downstream rules (03, 04, 05) match on. max_iterations bounds the fan-out recursion. See ADR-026 + ADR-028.",
+  "enabled": true,
+  "conditions": [
+    {
+      "field": "agent.loop.role",
+      "operator": "eq",
+      "value": "researcher"
+    },
+    {
+      "field": "agent.loop.outcome",
+      "operator": "eq",
+      "value": "success"
+    }
+  ],
+  "logic": "and",
+  "max_iterations": 3,
+  "on_enter": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.research-coordinator",
+      "role": "research-coordinator",
+      "model": "general",
+      "prompt": "A researcher has completed work in loop $entity.id. Call read_loop_result with loop_id=$entity.id to inspect their findings (page through via offset/max_bytes if needed), then call the decide tool exactly once with one of action=fan_out (subtopics list), synthesize, retry (retry_hint), or done."
+    }
+  ]
+}

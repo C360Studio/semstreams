@@ -1,19 +1,19 @@
 {
   "id": "synthesize_evidence",
   "type": "expression",
-  "name": "Synthesize When Evidence Collected",
-  "description": "When a researcher loop accumulates a research.has_evidence triple (written by rule 02), spawn a synthesizer. The synthesizer receives the researcher's loop id and uses read_loop_result to page through the findings — no inline content carried by the rule. See ADR-028.",
+  "name": "Synthesize When Coordinator Decides",
+  "description": "Fires when the research-coordinator decides synthesize. The synthesizer queries the graph for all research.has_evidence entries (written by rule 02 on researcher completions) and produces the final structured answer. Synthesis is no longer reflexive on every researcher completion — it's gated on the coordinator's judgment. See ADR-026 + ADR-028.",
   "enabled": true,
   "conditions": [
     {
       "field": "agent.loop.role",
       "operator": "eq",
-      "value": "researcher"
+      "value": "research-coordinator"
     },
     {
-      "field": "research.has_evidence",
-      "operator": "ne",
-      "value": ""
+      "field": "coordinator.next_action",
+      "operator": "eq",
+      "value": "synthesize"
     }
   ],
   "logic": "and",
@@ -24,7 +24,7 @@
       "subject": "agent.task.synthesis",
       "role": "general",
       "model": "general",
-      "prompt": "You are a research synthesizer. A researcher has finished in loop $entity.id. Call read_loop_result with loop_id=$entity.id to fetch the findings (page through with the offset metadata if the result is long). Then produce a structured synthesis with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution if the researcher cited any)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)\n\nAdditional context: query the graph for entities with predicate research.has_evidence to discover other related findings from parallel researchers on the same topic."
+      "prompt": "You are a research synthesizer. The research-coordinator (loop $entity.id) has judged that enough evidence exists. Query the graph for entities with predicate research.has_evidence to discover all collected findings, then call read_loop_result on each to pull the researcher outputs. Produce a structured synthesis with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution if the researchers cited any)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)"
     }
   ]
 }

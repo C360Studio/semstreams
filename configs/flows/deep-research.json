@@ -139,7 +139,7 @@
       "config": {
         "stream_name": "AGENT",
         "timeout": "60s",
-        "allowed_tools": ["query_entity", "query_entities", "web_search", "http_request", "graph_query", "read_loop_result", "submit_work"],
+        "allowed_tools": ["query_entity", "query_entities", "web_search", "http_request", "graph_query", "read_loop_result", "decide", "submit_work"],
         "ports": {
           "inputs": [
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "AGENT", "required": true}
@@ -228,7 +228,8 @@
           "/app/configs/rules/deep-research/03-fan-out-subtopics.json",
           "/app/configs/rules/deep-research/04-synthesize-evidence.json",
           "/app/configs/rules/deep-research/05-retry-insufficient.json",
-          "/app/configs/rules/deep-research/06-timeout-partial.json"
+          "/app/configs/rules/deep-research/06-timeout-partial.json",
+          "/app/configs/rules/deep-research/07-spawn-coordinator.json"
         ],
         "enable_graph_integration": true,
         "entity_watch_buckets": {

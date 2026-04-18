@@ -1,16 +1,29 @@
 {
   "id": "fan_out_subtopics",
   "type": "expression",
-  "name": "Fan Out Research Subtopics (DISABLED — see ADR-028)",
-  "description": "DISABLED. Fan-out requires deciding whether the researcher's output contains decomposable subtopics — a judgment call rules can't make deterministically from metadata. In the rule-skeleton + coordinator architecture (ADR-028), this decision belongs to the research coordinator agent. Re-enable when the coordinator lands; at that point the coordinator's terminal decide() tool will emit a triple like coordinator.next_action=fan_out and this rule can trigger off that structured signal.",
-  "enabled": false,
+  "name": "Fan Out Research Subtopics",
+  "description": "Fires when the research-coordinator decides fan_out. Spawns a sub-researcher that fetches the coordinator's subtopic list via read_loop_result and investigates one. True parallel fan-out (N agents at once) is out of scope for this milestone — that needs the coordinator's flow-composition tools (ADR-026 milestone 2). See ADR-026 + ADR-028.",
+  "enabled": true,
   "conditions": [
     {
       "field": "agent.loop.role",
       "operator": "eq",
-      "value": "researcher"
+      "value": "research-coordinator"
+    },
+    {
+      "field": "coordinator.next_action",
+      "operator": "eq",
+      "value": "fan_out"
     }
   ],
   "logic": "and",
-  "on_enter": []
+  "on_enter": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.subtopic",
+      "role": "researcher",
+      "model": "general",
+      "prompt": "A research coordinator has identified subtopics worth separate investigation. Call read_loop_result with loop_id=$entity.id to fetch the coordinator's decision payload (the subtopics list lives there). Pick one subtopic and produce focused findings for it."
+    }
+  ]
 }
