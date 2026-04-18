@@ -1,4 +1,4 @@
-package executors
+package ruletools
 
 import (
 	"context"

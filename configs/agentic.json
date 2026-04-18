@@ -220,6 +220,7 @@
                 "subject": "agent.task.temp_anomaly",
                 "role": "general",
                 "model": "mock",
+                "tools": ["query_entity"],
                 "prompt": "Temperature anomaly detected. Sensor: {{.EntityID}}, Reading: {{.Properties.sensor.measurement.fahrenheit}}F. Use query_entity tool to get full sensor details, then provide assessment and recommendations."
               },
               {
@@ -339,7 +340,7 @@
               "name": "tool.result",
               "type": "jetstream",
               "subject": "tool.result.>",
-              "stream_name": "AGENT",
+              "stream_name": "TOOL",
               "required": true,
               "description": "Tool execution results"
             }
@@ -356,7 +357,7 @@
               "name": "tool.execute",
               "type": "jetstream",
               "subject": "tool.execute.*",
-              "stream_name": "AGENT",
+              "stream_name": "TOOL",
               "description": "Tool execution requests"
             },
             {
@@ -430,7 +431,7 @@
       "name": "agentic-tools",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
+        "stream_name": "TOOL",
         "timeout": "10s",
         "allowed_tools": ["query_entity"],
         "ports": {
@@ -439,7 +440,7 @@
               "name": "tool.execute",
               "type": "jetstream",
               "subject": "tool.execute.>",
-              "stream_name": "AGENT",
+              "stream_name": "TOOL",
               "required": true,
               "description": "Tool execution requests"
             }
@@ -449,7 +450,7 @@
               "name": "tool.result",
               "type": "jetstream",
               "subject": "tool.result.*",
-              "stream_name": "AGENT",
+              "stream_name": "TOOL",
               "required": true,
               "description": "Tool execution results"
             }

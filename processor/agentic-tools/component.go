@@ -182,60 +182,11 @@ func (c *Component) Start(ctx context.Context) error {
 func (c *Component) registerStatefulTools(ctx context.Context) {
 	c.registerReadLoopResult(ctx)
 	c.registerDecide()
-}
-
-// registerReadLoopResult opens the AGENT_LOOPS KV bucket and registers the
-// read_loop_result tool. Failure logs a warning and returns — the rest of
-// the component's tools stay available.
-//
-// Registration is GLOBAL (via agentictools.RegisterTool) rather than
-// component-local because agentic-loop's discoverTools() pulls from the
-// global registry when advertising tools to the LLM. A purely local
-// registration makes the tool invocable but invisible to the model —
-// which manifests as the LLM producing completion text instead of a tool
-// call. Fixed this the hard way in deep-research's coordinator run; the
-// note stays so future stateful tools don't repeat the pattern.
-func (c *Component) registerReadLoopResult(ctx context.Context) {
-	loopsBucketName := c.config.LoopsBucket
-	if loopsBucketName == "" {
-		loopsBucketName = "AGENT_LOOPS"
-	}
-
-	bucket, err := c.natsClient.GetKeyValueBucket(ctx, loopsBucketName)
-	if err != nil {
-		c.logger.Warn("read_loop_result tool disabled: could not open loops bucket",
-			slog.String("bucket", loopsBucketName),
-			slog.Any("error", err))
-		return
-	}
-
-	store := c.natsClient.NewKVStore(bucket)
-	executor := NewReadLoopResultExecutor(store)
-	if err := registerGlobalTool(loopResultToolName, executor); err != nil {
-		c.logger.Warn("Failed to register read_loop_result tool",
-			slog.Any("error", err))
-		return
-	}
-	c.logger.Info("Registered read_loop_result tool (global)",
-		slog.String("bucket", loopsBucketName))
-}
-
-// registerDecide wires the coordinator's decide terminal tool. The tool
-// publishes triples via the graph.mutation.triple.add NATS surface (same
-// path rule actions use) so no extra infrastructure is needed beyond the
-// natsClient already held by the component. Registered globally for the
-// same LLM-advertisement reason described on registerReadLoopResult.
-func (c *Component) registerDecide() {
-	publisher := NewNATSTriplePublisher(c.natsClient)
-	executor := NewDecideExecutor(publisher, c.platform)
-	if err := registerGlobalTool(decideToolName, executor); err != nil {
-		c.logger.Warn("Failed to register decide tool",
-			slog.Any("error", err))
-		return
-	}
-	c.logger.Info("Registered decide tool (global)",
-		slog.String("org", c.platform.Org),
-		slog.String("platform", c.platform.Platform))
+	c.registerGraphQuery(ctx)
+	c.registerBashTool()
+	c.registerWebSearchTool()
+	c.registerHTTPRequestTool()
+	c.registerGitHubTools()
 }
 
 // registerGlobalTool wraps agentictools.RegisterTool with idempotent
