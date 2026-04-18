@@ -41,7 +41,8 @@ type ToolDependencies struct {
 	NATSClient  *natsclient.Client
 	Platform    component.PlatformMeta
 	Logger      *slog.Logger
-	RuleManager RuleManager // Pattern-B step 1; future steps add FlowManager, PersonaManager, etc.
+	RuleManager RuleManager // Pattern-B step 1
+	FlowManager FlowManager // Pattern-B step 2; future steps add PersonaManager, FlowTemplateManager
 }
 
 // RegisterAll wires every tool this package owns into the agentic-tools
@@ -71,6 +72,7 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	// manager as a skip so callers can ship partial configs without
 	// exploding.
 	registerRules(deps.RuleManager, logger)
+	registerFlows(deps.FlowManager, logger)
 }
 
 // registerGlobal is the shared RegisterTool wrapper with idempotent

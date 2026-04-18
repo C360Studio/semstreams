@@ -20,7 +20,7 @@ import (
 // Engine translates Flow entities into ComponentConfigs and manages deployment lifecycle
 type Engine struct {
 	configMgr         *config.Manager
-	flowStore         *flowstore.Store
+	flowStore         *flowstore.Manager
 	componentRegistry *component.Registry
 	natsClient        *natsclient.Client
 	logger            *slog.Logger
@@ -30,7 +30,7 @@ type Engine struct {
 // NewEngine creates a new flow engine
 func NewEngine(
 	configMgr *config.Manager,
-	flowStore *flowstore.Store,
+	flowStore *flowstore.Manager,
 	componentRegistry *component.Registry,
 	natsClient *natsclient.Client,
 	logger *slog.Logger,

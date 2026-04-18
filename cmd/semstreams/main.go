@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/examples/processors/document"
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
+	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
@@ -138,6 +139,7 @@ func run() error {
 		Platform:    platform,
 		Logger:      logger,
 		RuleManager: buildRuleManager(ctx, natsClient, configManager, logger),
+		FlowManager: buildFlowManager(natsClient, logger),
 	})
 
 	// 11. Run application with signal handling
@@ -490,6 +492,19 @@ func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, config
 	}
 	_ = ctx // reserved for future use if KV init needs a context
 	return rcm
+}
+
+// buildFlowManager constructs a flowstore.Manager (KV-backed flow CRUD).
+// Nil returned on init failure so registerFlows skips tool registration
+// — consistent with the nil-RuleManager path. Matches ADR-029 Pattern B.
+func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowManager {
+	mgr, err := flowstore.NewManager(natsClient)
+	if err != nil {
+		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
+			slog.Any("error", err))
+		return nil
+	}
+	return mgr
 }
 
 // loadConfig loads configuration from the specified file path

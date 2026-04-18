@@ -11,16 +11,22 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Store provides persistence for Flow entities using NATS KV
-type Store struct {
+// Manager provides persistence for Flow entities using NATS KV.
+// Pattern-B CRUD surface per ADR-029. Named Manager (not Store) so the
+// name matches the other Pattern-B types (rule.ConfigManager,
+// persona.Manager, flowtemplate.Manager). Methods preserve the
+// optimistic-concurrency split (Create + Update + Version) that flow
+// definitions need; the ADR's canonical "Save" collapses into the
+// existing Create/Update pair here.
+type Manager struct {
 	bucket  jetstream.KeyValue  // Raw bucket for operations like Keys()
 	kvStore *natsclient.KVStore // KVStore wrapper for CAS operations
 }
 
-// NewStore creates a new flow store
-func NewStore(natsClient *natsclient.Client) (*Store, error) {
+// NewManager creates a new flow store
+func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	if natsClient == nil {
-		return nil, errs.WrapInvalid(nil, "flowstore", "NewStore", "nats client cannot be nil")
+		return nil, errs.WrapInvalid(nil, "flowstore", "NewManager", "nats client cannot be nil")
 	}
 
 	ctx := context.Background()
@@ -30,17 +36,17 @@ func NewStore(natsClient *natsclient.Client) (*Store, error) {
 		History:     10, // Keep last 10 versions for history/recovery
 	})
 	if err != nil {
-		return nil, errs.WrapTransient(err, "flowstore", "NewStore", "create KV bucket")
+		return nil, errs.WrapTransient(err, "flowstore", "NewManager", "create KV bucket")
 	}
 
-	return &Store{
+	return &Manager{
 		bucket:  bucket,
 		kvStore: natsClient.NewKVStore(bucket),
 	}, nil
 }
 
 // Create creates a new flow
-func (s *Store) Create(ctx context.Context, flow *Flow) error {
+func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 	if flow == nil {
 		return errs.WrapInvalid(nil, "flowstore", "Create", "flow cannot be nil")
 	}
@@ -83,7 +89,7 @@ func (s *Store) Create(ctx context.Context, flow *Flow) error {
 }
 
 // Get retrieves a flow by ID
-func (s *Store) Get(ctx context.Context, id string) (*Flow, error) {
+func (s *Manager) Get(ctx context.Context, id string) (*Flow, error) {
 	if id == "" {
 		return nil, errs.WrapInvalid(nil, "flowstore", "Get", "flow ID cannot be empty")
 	}
@@ -102,7 +108,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Flow, error) {
 }
 
 // Update updates an existing flow with optimistic concurrency control
-func (s *Store) Update(ctx context.Context, flow *Flow) error {
+func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	if flow == nil {
 		return errs.WrapInvalid(nil, "flowstore", "Update", "flow cannot be nil")
 	}
@@ -147,7 +153,7 @@ func (s *Store) Update(ctx context.Context, flow *Flow) error {
 }
 
 // Delete removes a flow by ID
-func (s *Store) Delete(ctx context.Context, id string) error {
+func (s *Manager) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errs.WrapInvalid(nil, "flowstore", "Delete", "flow ID cannot be empty")
 	}
@@ -160,7 +166,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // List retrieves all flows
-func (s *Store) List(ctx context.Context) ([]*Flow, error) {
+func (s *Manager) List(ctx context.Context) ([]*Flow, error) {
 	keys, err := s.bucket.Keys(ctx)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "flowstore", "List", "list KV keys")
@@ -182,6 +188,6 @@ func (s *Store) List(ctx context.Context) ([]*Flow, error) {
 // Watch watches for changes to flows matching the pattern.
 // Pattern supports wildcards: "*" matches any single token, ">" matches remaining tokens.
 // Returns a KeyWatcher that emits updates on its Updates() channel.
-func (s *Store) Watch(ctx context.Context, pattern string) (jetstream.KeyWatcher, error) {
+func (s *Manager) Watch(ctx context.Context, pattern string) (jetstream.KeyWatcher, error) {
 	return s.kvStore.Watch(ctx, pattern)
 }

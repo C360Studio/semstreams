@@ -41,7 +41,7 @@ type FlowServiceConfig struct {
 type FlowService struct {
 	*BaseService
 
-	flowStore  *flowstore.Store
+	flowStore  *flowstore.Manager
 	flowEngine *flowengine.Engine
 	configMgr  *config.Manager
 	serviceMgr *Manager // Access to other services (for health API, message-logger)
@@ -76,7 +76,7 @@ func NewFlowServiceFromConfig(rawConfig json.RawMessage, deps *Dependencies) (Se
 	}
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(deps.NATSClient)
+	flowStore, err := flowstore.NewManager(deps.NATSClient)
 	if err != nil {
 		return nil, fmt.Errorf("create flow store: %w", err)
 	}

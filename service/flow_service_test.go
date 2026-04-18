@@ -25,7 +25,7 @@ import (
 )
 
 // createTestFlowService creates a FlowService instance for testing with HTTP server
-func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Store, *natsclient.Client) {
+func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *natsclient.Client) {
 	t.Helper()
 
 	// Build tag ensures this only runs with -tags=integration
@@ -50,7 +50,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Store, *nat
 	require.NoError(t, configMgr.Start(context.Background()))
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// Create dependencies

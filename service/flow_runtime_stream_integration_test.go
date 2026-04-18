@@ -29,7 +29,7 @@ func TestWebSocketStatusStream_ReceivesMetrics(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -88,7 +88,7 @@ func TestWebSocketStatusStream_ReceivesLogs(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -154,7 +154,7 @@ func TestWebSocketStatusStream_ReceivesFlowStatus(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// Create test flow in initial state
@@ -212,7 +212,7 @@ func TestWebSocketStatusStream_ReceivesComponentHealth(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -279,7 +279,7 @@ func TestWebSocketStatusStream_LogsNotReceivedWhenLogForwarderDisabled(t *testin
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -326,7 +326,7 @@ func TestWebSocketStatusStream_ExcludeSourcesFiltering(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store and test flow
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	flowID := createTestFlowForStream(t, ctx, flowStore)
@@ -394,7 +394,7 @@ func TestWebSocketStatusStream_ExcludeSourcesFiltering(t *testing.T) {
 // --- Test Helpers ---
 
 // createTestFlowForStream creates a test flow in the flow store
-func createTestFlowForStream(t *testing.T, ctx context.Context, store *flowstore.Store) string {
+func createTestFlowForStream(t *testing.T, ctx context.Context, store *flowstore.Manager) string {
 	t.Helper()
 
 	flowID := "test-flow-" + time.Now().Format("20060102150405")
@@ -414,7 +414,7 @@ func createTestFlowForStream(t *testing.T, ctx context.Context, store *flowstore
 }
 
 // createTestFlowServiceForStream creates a FlowService for integration tests
-func createTestFlowServiceForStream(t *testing.T, natsClient *natsclient.Client, flowStore *flowstore.Store) *FlowService {
+func createTestFlowServiceForStream(t *testing.T, natsClient *natsclient.Client, flowStore *flowstore.Manager) *FlowService {
 	t.Helper()
 
 	baseService := NewBaseServiceWithOptions(

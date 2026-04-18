@@ -24,7 +24,7 @@ import (
 )
 
 // createTestFlowService creates a test flow service with NATS client
-func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Store, *natsclient.Client) {
+func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Manager, *natsclient.Client) {
 	t.Helper()
 
 	// Create NATS client using shared test helper
@@ -34,7 +34,7 @@ func createTestFlowService(t *testing.T) (*http.ServeMux, *flowstore.Store, *nat
 	natsClient := testClient.Client
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	return http.NewServeMux(), flowStore, natsClient
@@ -463,7 +463,7 @@ func parseSSEEvents(t *testing.T, body string) []sseEvent {
 }
 
 // createTestFlowInStore creates a test flow in the flow store and returns its ID
-func createTestFlowInStore(t *testing.T, ctx context.Context, store *flowstore.Store) string {
+func createTestFlowInStore(t *testing.T, ctx context.Context, store *flowstore.Manager) string {
 	t.Helper()
 
 	flowID := uuid.New().String()

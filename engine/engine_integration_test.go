@@ -25,7 +25,7 @@ type EngineIntegrationSuite struct {
 	testClient        *natsclient.TestClient
 	natsClient        *natsclient.Client
 	configMgr         *config.Manager
-	flowStore         *flowstore.Store
+	flowStore         *flowstore.Manager
 	componentRegistry *component.Registry
 	engine            *flowengine.Engine
 	ctx               context.Context
@@ -71,7 +71,7 @@ func (s *EngineIntegrationSuite) SetupTest() {
 	s.Require().NoError(err)
 
 	// Create flow store
-	s.flowStore, err = flowstore.NewStore(s.natsClient)
+	s.flowStore, err = flowstore.NewManager(s.natsClient)
 	s.Require().NoError(err)
 
 	// Create engine (without metrics for testing)
