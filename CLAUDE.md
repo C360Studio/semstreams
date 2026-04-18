@@ -166,6 +166,14 @@ Two layers: **Reactive Engine** (conditions + actions + workflows) and **Compone
 
 Use `/orchestration-check` for the full decision framework. See [Orchestration Layers](docs/concepts/14-orchestration-layers.md).
 
+### Rules don't carry payloads
+
+Rules orchestrate by passing **references** (loop IDs, entity IDs, storage refs), never content. Bulky output from an agent lives in its durable stores — `COMPLETE_{loopID}` in AGENT_LOOPS KV, the `agent.complete.*` JetStream stream, ObjectStore via `ContentStorable`. Downstream agents retrieve on demand via tools like `read_loop_result(loop_id, max_bytes, offset)`.
+
+This matters for two reasons: (1) stuffing content into rule payloads silently truncates or explodes small-model context windows, and (2) rules can't make quality judgments over unstructured text — that's coordinator work. If a rule condition needs to branch on the semantic content of an agent's output, trigger a coordinator; the coordinator's terminal tool emits a structured triple that a subsequent rule can match on deterministically.
+
+See [ADR-028](docs/adr/028-orchestration-architecture.md) for the full rule-skeleton + coordinator + ops architecture.
+
 ## Payload Registry
 
 Polymorphic JSON deserialization via type-discriminated envelopes. Every new message type needs:
