@@ -28,7 +28,7 @@ type Manager struct {
 // flowstore.NewManager behaves.
 func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	if natsClient == nil {
-		return nil, errs.WrapInvalid(nil, "persona", "NewManager", "nats client cannot be nil")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "NewManager", "nats client cannot be nil")
 	}
 	bucket, err := natsClient.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
 		Bucket:      bucketName,
@@ -46,7 +46,7 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 // gives Pattern-B CRUD its optimistic-create semantics.
 func (m *Manager) Create(ctx context.Context, p *Persona) error {
 	if p == nil {
-		return errs.WrapInvalid(nil, "persona", "Create", "persona cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "Create", "persona cannot be nil")
 	}
 	if err := p.Validate(); err != nil {
 		return errs.WrapInvalid(err, "persona", "Create", "validate")
@@ -71,7 +71,7 @@ func (m *Manager) Create(ctx context.Context, p *Persona) error {
 // Persona and a CAS check.
 func (m *Manager) Update(ctx context.Context, p *Persona) error {
 	if p == nil {
-		return errs.WrapInvalid(nil, "persona", "Update", "persona cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "Update", "persona cannot be nil")
 	}
 	if err := p.Validate(); err != nil {
 		return errs.WrapInvalid(err, "persona", "Update", "validate")
@@ -95,7 +95,7 @@ func (m *Manager) Update(ctx context.Context, p *Persona) error {
 // failure" if they care.
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errs.WrapInvalid(nil, "persona", "Delete", "id cannot be empty")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "Delete", "id cannot be empty")
 	}
 	if err := m.kvStore.Delete(ctx, id); err != nil {
 		return errs.WrapTransient(err, "persona", "Delete", "delete from KV")
@@ -106,7 +106,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 // Get retrieves a persona by ID.
 func (m *Manager) Get(ctx context.Context, id string) (*Persona, error) {
 	if id == "" {
-		return nil, errs.WrapInvalid(nil, "persona", "Get", "id cannot be empty")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "persona", "Get", "id cannot be empty")
 	}
 	entry, err := m.kvStore.Get(ctx, id)
 	if err != nil {

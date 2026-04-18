@@ -246,3 +246,71 @@ func TestFlowExecutor_UnknownToolFails(t *testing.T) {
 		t.Errorf("expected 'unknown tool', got: %s", result.Error)
 	}
 }
+
+// TestFlowExecutor_TransportErrorsSurfaceAsToolErrors — when the
+// underlying Manager returns an error (e.g. NATS disconnected), the
+// executor must convert it into a ToolResult.Error string rather than
+// blowing up. Covers every CRUD path plus the "missing required arg"
+// shortcut that shouldn't even hit the manager.
+func TestFlowExecutor_TransportErrorsSurfaceAsToolErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr := newMockFlowManager()
+	boom := errors.New("simulated transport failure")
+	mgr.createErr = boom
+	mgr.updateErr = boom
+	mgr.deleteErr = boom
+	mgr.getErr = boom
+	mgr.listErr = boom
+	// Seed a flow so update/delete/get have something to "miss".
+	mgr.flows["existing"] = &flowstore.Flow{ID: "existing", Name: "x", Version: 1}
+	e := NewFlowExecutor(mgr)
+
+	cases := []struct {
+		name string
+		call agentic.ToolCall
+	}{
+		{"create", agentic.ToolCall{ID: "c", Name: "create_flow", Arguments: map[string]any{"flow": map[string]any{"id": "x"}}}},
+		{"update", agentic.ToolCall{ID: "u", Name: "update_flow", Arguments: map[string]any{"flow": map[string]any{"id": "existing", "version": 1}}}},
+		{"delete", agentic.ToolCall{ID: "d", Name: "delete_flow", Arguments: map[string]any{"flow_id": "existing"}}},
+		{"get", agentic.ToolCall{ID: "g", Name: "get_flow", Arguments: map[string]any{"flow_id": "existing"}}},
+		{"list", agentic.ToolCall{ID: "l", Name: "list_flows"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _ := e.Execute(ctx, tc.call)
+			if result.Error == "" {
+				t.Fatalf("expected Error on %s path, got none (content=%q)", tc.name, result.Content)
+			}
+			if !strings.Contains(result.Error, "simulated transport failure") &&
+				!strings.Contains(result.Error, "failed") {
+				t.Errorf("expected simulated error to surface, got: %s", result.Error)
+			}
+		})
+	}
+}
+
+// TestFlowExecutor_MalformedFlowArgRejectedBeforeManagerCalled — if the
+// LLM sends a non-object `flow` argument, we fail fast in the executor
+// and never call Manager. Guards against manager-side confusion if
+// raw JSON sneaks through.
+func TestFlowExecutor_MalformedFlowArgRejectedBeforeManagerCalled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mgr := newMockFlowManager()
+	mgr.createErr = errors.New("should-not-reach")
+	e := NewFlowExecutor(mgr)
+
+	// Pass `flow` as a string rather than a map. json.Marshal/Unmarshal
+	// loop-back still produces a Flow with zero values (JSON strings
+	// unmarshal into most struct fields as zero) but the resulting
+	// flow has no ID — Create will reject it before hitting our
+	// error-configured Manager.
+	result, _ := e.Execute(ctx, agentic.ToolCall{
+		ID: "bad", Name: "create_flow",
+		Arguments: map[string]any{"flow": "this is not an object"},
+	})
+	if result.Error == "" {
+		t.Fatalf("expected error for malformed flow arg")
+	}
+}

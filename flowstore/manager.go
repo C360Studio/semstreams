@@ -26,7 +26,7 @@ type Manager struct {
 // NewManager creates a new flow store
 func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	if natsClient == nil {
-		return nil, errs.WrapInvalid(nil, "flowstore", "NewManager", "nats client cannot be nil")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "NewManager", "nats client cannot be nil")
 	}
 
 	ctx := context.Background()
@@ -48,10 +48,10 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 // Create creates a new flow
 func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 	if flow == nil {
-		return errs.WrapInvalid(nil, "flowstore", "Create", "flow cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Create", "flow cannot be nil")
 	}
 	if flow.ID == "" {
-		return errs.WrapInvalid(nil, "flowstore", "Create", "flow ID cannot be empty")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Create", "flow ID cannot be empty")
 	}
 
 	// Set defaults before validation
@@ -91,7 +91,7 @@ func (s *Manager) Create(ctx context.Context, flow *Flow) error {
 // Get retrieves a flow by ID
 func (s *Manager) Get(ctx context.Context, id string) (*Flow, error) {
 	if id == "" {
-		return nil, errs.WrapInvalid(nil, "flowstore", "Get", "flow ID cannot be empty")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Get", "flow ID cannot be empty")
 	}
 
 	entry, err := s.kvStore.Get(ctx, id)
@@ -110,10 +110,10 @@ func (s *Manager) Get(ctx context.Context, id string) (*Flow, error) {
 // Update updates an existing flow with optimistic concurrency control
 func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 	if flow == nil {
-		return errs.WrapInvalid(nil, "flowstore", "Update", "flow cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Update", "flow cannot be nil")
 	}
 	if flow.ID == "" {
-		return errs.WrapInvalid(nil, "flowstore", "Update", "flow ID cannot be empty")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Update", "flow ID cannot be empty")
 	}
 
 	// Validate flow structure before saving
@@ -155,7 +155,7 @@ func (s *Manager) Update(ctx context.Context, flow *Flow) error {
 // Delete removes a flow by ID
 func (s *Manager) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errs.WrapInvalid(nil, "flowstore", "Delete", "flow ID cannot be empty")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowstore", "Delete", "flow ID cannot be empty")
 	}
 
 	if err := s.kvStore.Delete(ctx, id); err != nil {

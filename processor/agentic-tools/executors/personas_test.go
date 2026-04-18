@@ -209,3 +209,56 @@ func TestPersonaExecutor_UnknownToolFails(t *testing.T) {
 		t.Errorf("expected unknown-tool error, got err=%v error=%s", err, result.Error)
 	}
 }
+
+// errorPersonaManager returns the supplied error from every method. Used
+// to exercise transport-error paths on the executor without KV.
+type errorPersonaManager struct {
+	err error
+}
+
+func (m *errorPersonaManager) Create(_ context.Context, _ *persona.Persona) error { return m.err }
+func (m *errorPersonaManager) Update(_ context.Context, _ *persona.Persona) error { return m.err }
+func (m *errorPersonaManager) Delete(_ context.Context, _ string) error           { return m.err }
+func (m *errorPersonaManager) Get(_ context.Context, _ string) (*persona.Persona, error) {
+	return nil, m.err
+}
+func (m *errorPersonaManager) List(_ context.Context) (map[string]*persona.Persona, error) {
+	return nil, m.err
+}
+
+// TestPersonaExecutor_TransportErrorsSurfaceAsToolErrors — Manager errors
+// land in ToolResult.Error rather than panicking or returning a Go error
+// from Execute. LLMs see a clean message and can retry.
+func TestPersonaExecutor_TransportErrorsSurfaceAsToolErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	boom := errors.New("simulated persona transport failure")
+	e := NewPersonaExecutor(&errorPersonaManager{err: boom})
+
+	cases := []struct {
+		name string
+		call agentic.ToolCall
+	}{
+		{"create", agentic.ToolCall{ID: "c", Name: "create_persona",
+			Arguments: map[string]any{"persona": map[string]any{"id": "x", "content": "y"}}}},
+		{"update", agentic.ToolCall{ID: "u", Name: "update_persona",
+			Arguments: map[string]any{"persona": map[string]any{"id": "x", "content": "y"}}}},
+		{"delete", agentic.ToolCall{ID: "d", Name: "delete_persona",
+			Arguments: map[string]any{"persona_id": "x"}}},
+		{"get", agentic.ToolCall{ID: "g", Name: "get_persona",
+			Arguments: map[string]any{"persona_id": "x"}}},
+		{"list", agentic.ToolCall{ID: "l", Name: "list_personas"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _ := e.Execute(ctx, tc.call)
+			if result.Error == "" {
+				t.Fatalf("expected Error on %s path, got content=%q", tc.name, result.Content)
+			}
+			if !strings.Contains(result.Error, "simulated persona transport failure") &&
+				!strings.Contains(result.Error, "failed") {
+				t.Errorf("expected simulated error to surface on %s, got: %s", tc.name, result.Error)
+			}
+		})
+	}
+}

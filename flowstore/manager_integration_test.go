@@ -13,38 +13,38 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
-type StoreIntegrationSuite struct {
+type ManagerIntegrationSuite struct {
 	suite.Suite
 	testClient *natsclient.TestClient
 	natsClient *natsclient.Client
-	store      *Store
+	store      *Manager
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
-func (s *StoreIntegrationSuite) SetupSuite() {
+func (s *ManagerIntegrationSuite) SetupSuite() {
 	s.testClient = natsclient.NewTestClient(s.T(),
 		natsclient.WithJetStream(),
 		natsclient.WithKV())
 	s.natsClient = s.testClient.Client
 }
 
-func (s *StoreIntegrationSuite) SetupTest() {
+func (s *ManagerIntegrationSuite) SetupTest() {
 	// Create store
 	var err error
-	s.store, err = NewStore(s.natsClient)
+	s.store, err = NewManager(s.natsClient)
 	s.Require().NoError(err)
 
 	// Create context for test
 	s.ctx, s.cancel = context.WithTimeout(context.Background(), 30*time.Second)
 }
 
-func (s *StoreIntegrationSuite) TearDownTest() {
+func (s *ManagerIntegrationSuite) TearDownTest() {
 	s.cancel()
 }
 
 // TestCreateAndGet tests basic CRUD: create a flow, then retrieve it
-func (s *StoreIntegrationSuite) TestCreateAndGet() {
+func (s *ManagerIntegrationSuite) TestCreateAndGet() {
 	flow := &Flow{
 		ID:           "test-flow-1",
 		Name:         "Test Flow",
@@ -90,7 +90,7 @@ func (s *StoreIntegrationSuite) TestCreateAndGet() {
 }
 
 // TestCreateDuplicate tests that creating a duplicate flow returns an error
-func (s *StoreIntegrationSuite) TestCreateDuplicate() {
+func (s *ManagerIntegrationSuite) TestCreateDuplicate() {
 	flow := &Flow{
 		ID:           "duplicate-flow",
 		Name:         "Duplicate",
@@ -117,7 +117,7 @@ func (s *StoreIntegrationSuite) TestCreateDuplicate() {
 }
 
 // TestUpdate tests updating an existing flow
-func (s *StoreIntegrationSuite) TestUpdate() {
+func (s *ManagerIntegrationSuite) TestUpdate() {
 	// Create initial flow
 	flow := &Flow{
 		ID:           "update-flow",
@@ -151,7 +151,7 @@ func (s *StoreIntegrationSuite) TestUpdate() {
 }
 
 // TestOptimisticConcurrency tests version-based concurrency control
-func (s *StoreIntegrationSuite) TestOptimisticConcurrency() {
+func (s *ManagerIntegrationSuite) TestOptimisticConcurrency() {
 	// Create initial flow
 	flow := &Flow{
 		ID:           "concurrent-flow",
@@ -187,7 +187,7 @@ func (s *StoreIntegrationSuite) TestOptimisticConcurrency() {
 }
 
 // TestDelete tests deleting a flow
-func (s *StoreIntegrationSuite) TestDelete() {
+func (s *ManagerIntegrationSuite) TestDelete() {
 	// Create flow
 	flow := &Flow{
 		ID:           "delete-flow",
@@ -215,7 +215,7 @@ func (s *StoreIntegrationSuite) TestDelete() {
 }
 
 // TestList tests listing all flows
-func (s *StoreIntegrationSuite) TestList() {
+func (s *ManagerIntegrationSuite) TestList() {
 	// Create multiple flows
 	flows := []*Flow{
 		{
@@ -263,7 +263,7 @@ func (s *StoreIntegrationSuite) TestList() {
 }
 
 // TestComplexFlow tests creating and retrieving a flow with connections
-func (s *StoreIntegrationSuite) TestComplexFlow() {
+func (s *ManagerIntegrationSuite) TestComplexFlow() {
 	flow := &Flow{
 		ID:           "complex-flow",
 		Name:         "Complex Flow with Connections",
@@ -339,9 +339,9 @@ func (s *StoreIntegrationSuite) TestComplexFlow() {
 	s.Equal("node-3", retrieved.Connections[1].TargetNodeID)
 }
 
-func TestStoreIntegrationSuite(t *testing.T) {
+func TestManagerIntegrationSuite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests in short mode")
 	}
-	suite.Run(t, new(StoreIntegrationSuite))
+	suite.Run(t, new(ManagerIntegrationSuite))
 }

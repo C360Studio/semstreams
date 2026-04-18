@@ -528,28 +528,33 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	return nil
 }
 
-// setupConsumer sets up a JetStream consumer for an input port.
+// resolveStreamName picks the JetStream stream a consumer should bind to
+// for the given input port. Extracted as a pure function so the resolution
+// rules can be unit-tested without spinning up NATS.
 //
-// Stream resolution order:
+// Resolution order:
 //  1. JetStreamPort.StreamName on the port (flow config's per-port override).
-//  2. Config.StreamName (component-wide default).
+//  2. componentStreamName (component-wide default, typically c.config.StreamName).
 //  3. Hardcoded "AGENT" fallback.
 //
 // Per-port stream_name lets a single component consume from multiple streams
 // — e.g. agentic-loop watching agent.task on AGENT and tool.result on TOOL.
 // Without this the component-wide default wins and the per-port flow-config
 // field is silently ignored.
-func (c *Component) setupConsumer(ctx context.Context, port component.Port, subject string, handler func(context.Context, []byte)) error {
-	streamName := ""
+func resolveStreamName(port component.Port, componentStreamName string) string {
 	if jsPort, ok := port.Config.(component.JetStreamPort); ok && jsPort.StreamName != "" {
-		streamName = jsPort.StreamName
+		return jsPort.StreamName
 	}
-	if streamName == "" {
-		streamName = c.config.StreamName
+	if componentStreamName != "" {
+		return componentStreamName
 	}
-	if streamName == "" {
-		streamName = "AGENT"
-	}
+	return "AGENT"
+}
+
+// setupConsumer sets up a JetStream consumer for an input port. The
+// stream to bind to is resolved by resolveStreamName above.
+func (c *Component) setupConsumer(ctx context.Context, port component.Port, subject string, handler func(context.Context, []byte)) error {
+	streamName := resolveStreamName(port, c.config.StreamName)
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {

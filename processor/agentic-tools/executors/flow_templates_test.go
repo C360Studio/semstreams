@@ -215,3 +215,62 @@ func TestFlowTemplateExecutor_UnknownToolFails(t *testing.T) {
 		t.Errorf("expected unknown-tool error, got err=%v error=%s", err, result.Error)
 	}
 }
+
+// errorFlowTemplateManager returns a supplied error from every method.
+type errorFlowTemplateManager struct {
+	err error
+}
+
+func (m *errorFlowTemplateManager) Create(_ context.Context, _ *flowtemplate.Template) error {
+	return m.err
+}
+func (m *errorFlowTemplateManager) Update(_ context.Context, _ *flowtemplate.Template) error {
+	return m.err
+}
+func (m *errorFlowTemplateManager) Delete(_ context.Context, _ string) error { return m.err }
+func (m *errorFlowTemplateManager) Get(_ context.Context, _ string) (*flowtemplate.Template, error) {
+	return nil, m.err
+}
+func (m *errorFlowTemplateManager) List(_ context.Context) (map[string]*flowtemplate.Template, error) {
+	return nil, m.err
+}
+
+// TestFlowTemplateExecutor_TransportErrorsSurfaceAsToolErrors — Manager
+// errors on each CRUD + Instantiate path land as ToolResult.Error strings.
+func TestFlowTemplateExecutor_TransportErrorsSurfaceAsToolErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	boom := errors.New("simulated flow-template transport failure")
+	e := NewFlowTemplateExecutor(&errorFlowTemplateManager{err: boom})
+
+	validTemplate := map[string]any{
+		"id":   "t1",
+		"name": "T",
+		"body": `{"id": "x", "name": "x", "nodes": [], "connections": []}`,
+	}
+
+	cases := []struct {
+		name string
+		call agentic.ToolCall
+	}{
+		{"create", agentic.ToolCall{ID: "c", Name: "create_flow_template",
+			Arguments: map[string]any{"template": validTemplate}}},
+		{"update", agentic.ToolCall{ID: "u", Name: "update_flow_template",
+			Arguments: map[string]any{"template": validTemplate}}},
+		{"delete", agentic.ToolCall{ID: "d", Name: "delete_flow_template",
+			Arguments: map[string]any{"template_id": "t1"}}},
+		{"get", agentic.ToolCall{ID: "g", Name: "get_flow_template",
+			Arguments: map[string]any{"template_id": "t1"}}},
+		{"list", agentic.ToolCall{ID: "l", Name: "list_flow_templates"}},
+		{"instantiate", agentic.ToolCall{ID: "i", Name: "instantiate_flow_template",
+			Arguments: map[string]any{"template_id": "t1"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, _ := e.Execute(ctx, tc.call)
+			if result.Error == "" {
+				t.Fatalf("expected Error on %s, got content=%q", tc.name, result.Content)
+			}
+		})
+	}
+}

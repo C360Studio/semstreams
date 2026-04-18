@@ -23,7 +23,7 @@ type Manager struct {
 // NewManager opens (or creates) the FLOW_TEMPLATES bucket.
 func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 	if natsClient == nil {
-		return nil, errs.WrapInvalid(nil, "flowtemplate", "NewManager", "nats client cannot be nil")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowtemplate", "NewManager", "nats client cannot be nil")
 	}
 	bucket, err := natsClient.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
 		Bucket:      bucketName,
@@ -39,7 +39,7 @@ func NewManager(natsClient *natsclient.Client) (*Manager, error) {
 // Create stores a new template. Fails if ID exists.
 func (m *Manager) Create(ctx context.Context, t *Template) error {
 	if t == nil {
-		return errs.WrapInvalid(nil, "flowtemplate", "Create", "template cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowtemplate", "Create", "template cannot be nil")
 	}
 	if err := t.Validate(); err != nil {
 		return errs.WrapInvalid(err, "flowtemplate", "Create", "validate")
@@ -61,7 +61,7 @@ func (m *Manager) Create(ctx context.Context, t *Template) error {
 // persona.Manager.Update for the same rationale.
 func (m *Manager) Update(ctx context.Context, t *Template) error {
 	if t == nil {
-		return errs.WrapInvalid(nil, "flowtemplate", "Update", "template cannot be nil")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowtemplate", "Update", "template cannot be nil")
 	}
 	if err := t.Validate(); err != nil {
 		return errs.WrapInvalid(err, "flowtemplate", "Update", "validate")
@@ -82,7 +82,7 @@ func (m *Manager) Update(ctx context.Context, t *Template) error {
 // Delete removes a template by ID.
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errs.WrapInvalid(nil, "flowtemplate", "Delete", "id cannot be empty")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "flowtemplate", "Delete", "id cannot be empty")
 	}
 	if err := m.kvStore.Delete(ctx, id); err != nil {
 		return errs.WrapTransient(err, "flowtemplate", "Delete", "delete from KV")
@@ -93,7 +93,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 // Get retrieves a template by ID.
 func (m *Manager) Get(ctx context.Context, id string) (*Template, error) {
 	if id == "" {
-		return nil, errs.WrapInvalid(nil, "flowtemplate", "Get", "id cannot be empty")
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "flowtemplate", "Get", "id cannot be empty")
 	}
 	entry, err := m.kvStore.Get(ctx, id)
 	if err != nil {
