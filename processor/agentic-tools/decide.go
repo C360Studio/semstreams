@@ -15,9 +15,9 @@ import (
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
-// decideToolName is the name agents use to invoke the coordinator's
+// DecideToolName is the name agents use to invoke the coordinator's
 // terminal decision tool.
-const decideToolName = "decide"
+const DecideToolName = "decide"
 
 // decideMutationSubject is the NATS request/reply subject the graph-ingest
 // component handles to add triples. Kept consistent with rule and graph
@@ -66,7 +66,7 @@ func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta) *
 func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
-			Name:        decideToolName,
+			Name:        DecideToolName,
 			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your flow's coordinator persona enumerates (e.g. fan_out, synthesize, retry, done). Emits a coordinator.next_action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data (subtopics, retry_hint).",
 			Parameters: map[string]any{
 				"type": "object",
@@ -106,7 +106,7 @@ type decideArgs struct {
 // Execute routes the tool call to decide; any other tool name is treated
 // as a routing bug.
 func (e *DecideExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	if call.Name != decideToolName {
+	if call.Name != DecideToolName {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("unknown tool: %s", call.Name),

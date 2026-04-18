@@ -38,8 +38,8 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
-	if tools[0].Name != decideToolName {
-		t.Errorf("expected tool name %q, got %q", decideToolName, tools[0].Name)
+	if tools[0].Name != DecideToolName {
+		t.Errorf("expected tool name %q, got %q", DecideToolName, tools[0].Name)
 	}
 	required, _ := tools[0].Parameters["required"].([]string)
 	want := map[string]bool{"action": true, "reason": true}
@@ -64,7 +64,7 @@ func TestDecideExecutor_HappyPath(t *testing.T) {
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"action":    "fan_out",
@@ -136,7 +136,7 @@ func TestDecideExecutor_MissingAction(t *testing.T) {
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"reason": "forgot to include action",
@@ -163,7 +163,7 @@ func TestDecideExecutor_MissingReason(t *testing.T) {
 
 	res, _ := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"action": "done",
@@ -182,7 +182,7 @@ func TestDecideExecutor_SubtopicsWrongType(t *testing.T) {
 
 	res, _ := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"action":    "fan_out",
@@ -204,7 +204,7 @@ func TestDecideExecutor_MissingLoopID(t *testing.T) {
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
-		Name: decideToolName,
+		Name: DecideToolName,
 		Arguments: map[string]any{
 			"action": "done",
 			"reason": "ok",
@@ -231,7 +231,7 @@ func TestDecideExecutor_PublisherFailure(t *testing.T) {
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"action": "done",
@@ -275,7 +275,7 @@ func TestDecideExecutor_OptionalFieldsOmitted(t *testing.T) {
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "loop-abc",
 		Arguments: map[string]any{
 			"action": "done",
@@ -306,7 +306,7 @@ func TestDecideExecutor_LoopEntityIDFormat(t *testing.T) {
 
 	_, _ = e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",
-		Name:   decideToolName,
+		Name:   DecideToolName,
 		LoopID: "xyz",
 		Arguments: map[string]any{
 			"action": "done",

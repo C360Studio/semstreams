@@ -24,6 +24,7 @@ import (
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 )
@@ -110,6 +111,14 @@ func run() error {
 		return err
 	}
 	defer configManager.Stop(5 * time.Second)
+
+	// 7.5 Register the global agentic tool executors. Happens here (not
+	// inside agentic-tools.Component.Start) so registration is explicit
+	// in the boot sequence and the component stays a pure tool-execution
+	// endpoint. Must run after streams/buckets are up (step 5) and
+	// platform is known (step 7) because stateful tools (read_loop_result,
+	// decide, query_entity) need both.
+	executors.RegisterAll(ctx, natsClient, platform, logger)
 
 	// 8. Setup registries and manager
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)

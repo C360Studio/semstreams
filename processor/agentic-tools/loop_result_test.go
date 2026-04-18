@@ -51,8 +51,8 @@ func TestReadLoopResultExecutor_ListTools(t *testing.T) {
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
-	if tools[0].Name != loopResultToolName {
-		t.Errorf("expected tool name %q, got %q", loopResultToolName, tools[0].Name)
+	if tools[0].Name != ReadLoopResultToolName {
+		t.Errorf("expected tool name %q, got %q", ReadLoopResultToolName, tools[0].Name)
 	}
 	if tools[0].Description == "" {
 		t.Errorf("description must be non-empty")
@@ -79,7 +79,7 @@ func TestReadLoopResultExecutor_HappyPath(t *testing.T) {
 	e := NewReadLoopResultExecutor(kv)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id": "loop-42",
 		},
@@ -123,7 +123,7 @@ func TestReadLoopResultExecutor_Paging(t *testing.T) {
 	// First page: default max_bytes (4KB) from offset 0.
 	first, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id": "loop-big",
 		},
@@ -145,7 +145,7 @@ func TestReadLoopResultExecutor_Paging(t *testing.T) {
 	// Explicit max_bytes on the second call.
 	second, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c2",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id":   "loop-big",
 			"offset":    float64(nextOffset), // simulate JSON decode
@@ -162,7 +162,7 @@ func TestReadLoopResultExecutor_Paging(t *testing.T) {
 	// Final call beyond the end: empty slice, has_more=false.
 	tail, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c3",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id":   "loop-big",
 			"offset":    float64(len(body)),
@@ -186,7 +186,7 @@ func TestReadLoopResultExecutor_NotFound(t *testing.T) {
 	e := NewReadLoopResultExecutor(newMockLoopsKV())
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id": "never-existed",
 		},
@@ -220,7 +220,7 @@ func TestReadLoopResultExecutor_InvalidArgs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := e.Execute(context.Background(), agentic.ToolCall{
 				ID:        "c1",
-				Name:      loopResultToolName,
+				Name:      ReadLoopResultToolName,
 				Arguments: tc.args,
 			})
 			if err != nil {
@@ -243,7 +243,7 @@ func TestReadLoopResultExecutor_MalformedRecord(t *testing.T) {
 	e := NewReadLoopResultExecutor(kv)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
-		Name: loopResultToolName,
+		Name: ReadLoopResultToolName,
 		Arguments: map[string]any{
 			"loop_id": "loop-bad",
 		},

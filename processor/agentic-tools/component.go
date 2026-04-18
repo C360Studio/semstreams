@@ -163,45 +163,15 @@ func (c *Component) Start(ctx context.Context) error {
 		c.logger.Info("Subscribed to tool.list", "subject", toolListSubject)
 	}
 
-	// Stateful tools that depend on the NATS connection get wired up here.
-	// read_loop_result reads from the AGENT_LOOPS KV bucket so downstream
-	// agents can pull another loop's completion output on demand instead of
-	// having the content injected into their prompt.
-	c.registerStatefulTools(ctx)
+	// Tool registration happens in main.go via executors.RegisterAll before
+	// this component starts, so the global registry is already populated
+	// by the time agent loops dispatch. Keeping registration out of the
+	// component lets agentic-tools stay a pure tool-execution endpoint
+	// (it reads from the global registry, never writes).
 
 	c.running = true
 	c.startTime = time.Now()
 
-	return nil
-}
-
-// registerStatefulTools wires up tool executors that require the component's
-// NATS connection to operate. Failures are logged but non-fatal: the
-// component still serves other tools. Called from Start after the NATS
-// client has been validated.
-func (c *Component) registerStatefulTools(ctx context.Context) {
-	c.registerReadLoopResult(ctx)
-	c.registerDecide()
-	c.registerGraphQuery(ctx)
-	c.registerBashTool()
-	c.registerWebSearchTool()
-	c.registerHTTPRequestTool()
-	c.registerGitHubTools()
-}
-
-// registerGlobalTool wraps agentictools.RegisterTool with idempotent
-// behaviour for the "already registered" case. The global registry isn't
-// reset across component restarts, so a simple component.Stop/Start cycle
-// would otherwise fail registration on the second call. Treat the dup as
-// a no-op: the existing executor from the first Start is still valid,
-// points at the same natsClient/platform, and serves calls identically.
-func registerGlobalTool(name string, executor ToolExecutor) error {
-	if err := RegisterTool(name, executor); err != nil {
-		if strings.Contains(err.Error(), "already registered") {
-			return nil
-		}
-		return err
-	}
 	return nil
 }
 

@@ -1,13 +1,4 @@
-// Package ruletools exposes the rule-engine CRUD tools as agentic-tools
-// executors. Living alongside the rule processor (not under
-// processor/agentic-tools/executors) keeps the package graph acyclic:
-// agentic-tools can depend on rule, but rule can't depend back on
-// agentic-tools without breaking.
-//
-// Registration happens from whichever binary wires its agent loop (main
-// packages own runtime wiring); see processor/rule.Processor.RegisterTools
-// for the production entry point.
-package ruletools
+package executors
 
 import (
 	"context"

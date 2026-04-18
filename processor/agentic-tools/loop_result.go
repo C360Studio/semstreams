@@ -11,8 +11,8 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// loopResultToolName is the name agents use to invoke the read_loop_result tool.
-const loopResultToolName = "read_loop_result"
+// ReadLoopResultToolName is the name agents use to invoke the read_loop_result tool.
+const ReadLoopResultToolName = "read_loop_result"
 
 // completeKeyPrefix is the key prefix for completion events written by the
 // agentic-loop component to the AGENT_LOOPS KV bucket (see
@@ -53,7 +53,7 @@ func NewReadLoopResultExecutor(kv LoopsKVReader) *ReadLoopResultExecutor {
 func (e *ReadLoopResultExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
-			Name:        loopResultToolName,
+			Name:        ReadLoopResultToolName,
 			Description: "Fetch the final Result text a previously completed agent loop produced, so this agent can react to or build on it without having the full content injected into its prompt. Returns a text slice plus role/outcome/completed_at metadata and total_bytes so the caller can page through long results by calling again with a different offset.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -79,7 +79,7 @@ func (e *ReadLoopResultExecutor) ListTools() []agentic.ToolDefinition {
 
 // Execute routes the tool call to the handler.
 func (e *ReadLoopResultExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	if call.Name != loopResultToolName {
+	if call.Name != ReadLoopResultToolName {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("unknown tool: %s", call.Name),
