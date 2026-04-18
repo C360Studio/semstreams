@@ -2,7 +2,7 @@
   "id": "retry_insufficient_evidence",
   "type": "expression",
   "name": "Retry on Insufficient Evidence",
-  "description": "When a researcher loop fails, retry with a broader search strategy. Bounded by max_iterations + a when guard to prevent unbounded loops.",
+  "description": "When a researcher loop fails, retry with a broader search strategy. The retry agent receives the failed loop id as a reference — it uses read_loop_result to inspect what the previous attempt produced before choosing a different approach. Bounded by max_iterations + a when guard. See ADR-028.",
   "enabled": true,
   "conditions": [
     {
@@ -24,7 +24,7 @@
       "subject": "agent.task.retry",
       "role": "researcher",
       "model": "general",
-      "prompt": "A previous research attempt found insufficient evidence. Try again with a broader approach:\n\n1. Use different search queries (synonyms, related terms)\n2. Try web_search if graph_query returned nothing\n3. Check related entities in the knowledge graph\n4. If still insufficient after thorough search, submit what you found with a note about gaps.\n\nOriginal task: $entity.triple.agent.loop.description",
+      "prompt": "A previous research attempt was insufficient. Call read_loop_result with loop id $entity.id to inspect the prior attempt's output, then retry with a broader approach — different search queries, synonyms, adjacent topics. If still thin after a thorough second pass, submit what you found with a note on the gaps.",
       "when": [
         {
           "field": "$state.iteration",

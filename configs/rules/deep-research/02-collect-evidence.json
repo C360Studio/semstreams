@@ -2,7 +2,7 @@
   "id": "collect_research_evidence",
   "type": "expression",
   "name": "Collect Research Evidence",
-  "description": "When a researcher completes successfully, store findings in the RESEARCH_EVIDENCE KV bucket and write a graph triple linking the finding to the research task. Downstream rule 04 watches RESEARCH_EVIDENCE and fires synthesis once evidence is collected.",
+  "description": "When a researcher completes successfully, record a reference entry in RESEARCH_EVIDENCE and add a research.has_evidence triple. The entry carries only identifiers (loop_id, task_id, role). Downstream consumers fetch findings via read_loop_result on the loop id. Rules carry references, not payloads — see ADR-028.",
   "enabled": true,
   "conditions": [
     {
@@ -26,7 +26,6 @@
         "task_id": "$entity.triple.agent.loop.task",
         "loop_id": "$entity.id",
         "role": "researcher",
-        "findings": "$entity.triple.agent.loop.result",
         "collected_at": "$now"
       },
       "merge": false
@@ -34,7 +33,7 @@
     {
       "type": "add_triple",
       "predicate": "research.has_evidence",
-      "object": "evidence.$entity.triple.agent.loop.task"
+      "object": "$entity.id"
     }
   ]
 }

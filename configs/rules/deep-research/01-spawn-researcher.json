@@ -2,7 +2,7 @@
   "id": "spawn_researcher",
   "type": "expression",
   "name": "Spawn Researcher on New Task",
-  "description": "When the initial general agent completes successfully, spawn a researcher to investigate. The researcher gathers evidence using graph queries and web search, then submits findings. Uses fully-qualified loop predicates so conditions match the triples graph-writer emits on completion.",
+  "description": "When the initial general agent completes successfully, spawn a researcher. The researcher receives the parent loop id as a reference and uses read_loop_result to fetch the original question body on demand. Rules carry references, not payloads — see ADR-028.",
   "enabled": true,
   "conditions": [
     {
@@ -23,7 +23,7 @@
       "subject": "agent.task.research",
       "role": "researcher",
       "model": "general",
-      "prompt": "Research the following question thoroughly. Use graph_query to check existing knowledge and web_search for external sources.\n\nQuestion: $entity.triple.agent.loop.result\n\nIf the question has clearly separable subtopics, include a SUBTOPICS section at the end of your findings listing each subtopic on its own line prefixed with '- '. Otherwise, provide your complete findings."
+      "prompt": "Research a question that was submitted to the parent agent loop $entity.id. Call read_loop_result with that loop id to fetch the question body, then investigate using graph_query and web_search. When you have a complete answer, submit plain-text findings."
     }
   ]
 }

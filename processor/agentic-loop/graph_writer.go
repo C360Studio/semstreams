@@ -29,12 +29,6 @@ const (
 	// needs enough text for BM25/NL search to match by topic.
 	maxPromptTripleBytes = 8 * 1024
 
-	// maxResultTripleBytes caps the size of the loop's completion output
-	// stored as the agent.loop.result triple. Rules use this value to pass
-	// agent output downstream via $entity.triple.agent.loop.result. Larger
-	// than the prompt cap because results often carry structured findings.
-	maxResultTripleBytes = 16 * 1024
-
 	// truncationMarker is appended to a truncated prompt so consumers can
 	// tell at a glance that the triple is not the full text.
 	truncationMarker = "…[truncated]"
@@ -348,9 +342,6 @@ func buildLoopCompletionTriples(
 	}
 	if event.Prompt != "" {
 		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(event.Prompt, maxPromptTripleBytes)))
-	}
-	if event.Result != "" {
-		triples = append(triples, triple(agvocab.LoopResult, truncateForTriple(event.Result, maxResultTripleBytes)))
 	}
 
 	return triples

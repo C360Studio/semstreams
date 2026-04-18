@@ -1,34 +1,16 @@
 {
   "id": "fan_out_subtopics",
   "type": "expression",
-  "name": "Fan Out Research Subtopics",
-  "description": "When a researcher's findings contain a SUBTOPICS section, spawn additional researchers for each subtopic in parallel. Each sub-researcher's results flow back through collect-evidence for fan-in.",
-  "enabled": true,
+  "name": "Fan Out Research Subtopics (DISABLED — see ADR-028)",
+  "description": "DISABLED. Fan-out requires deciding whether the researcher's output contains decomposable subtopics — a judgment call rules can't make deterministically from metadata. In the rule-skeleton + coordinator architecture (ADR-028), this decision belongs to the research coordinator agent. Re-enable when the coordinator lands; at that point the coordinator's terminal decide() tool will emit a triple like coordinator.next_action=fan_out and this rule can trigger off that structured signal.",
+  "enabled": false,
   "conditions": [
     {
       "field": "agent.loop.role",
       "operator": "eq",
       "value": "researcher"
-    },
-    {
-      "field": "agent.loop.outcome",
-      "operator": "eq",
-      "value": "success"
-    },
-    {
-      "field": "agent.loop.result",
-      "operator": "contains",
-      "value": "SUBTOPICS:"
     }
   ],
   "logic": "and",
-  "on_enter": [
-    {
-      "type": "publish_agent",
-      "subject": "agent.task.subtopic",
-      "role": "researcher",
-      "model": "general",
-      "prompt": "You are a focused research agent. Investigate a specific subtopic identified from a broader research question.\n\nOriginal findings with subtopics:\n$entity.triple.agent.loop.result\n\nFocus on gathering detailed evidence for the subtopics listed. Use graph_query for existing knowledge and web_search for external sources."
-    }
-  ]
+  "on_enter": []
 }
