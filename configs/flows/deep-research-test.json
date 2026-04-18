@@ -12,6 +12,13 @@
   "nats": {
     "urls": ["nats://localhost:4222"]
   },
+  "streams": {
+    "USER": {
+      "subjects": ["user.>"],
+      "storage": "file",
+      "max_age": "1h"
+    }
+  },
   "model_registry": {
     "endpoints": {
       "general": {
@@ -82,7 +89,7 @@
         "stream_name": "USER",
         "ports": {
           "inputs": [
-            {"name": "user.message", "type": "jetstream", "subject": "user.message.*", "stream_name": "USER", "required": true, "description": "User messages from any channel"},
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true, "description": "User messages from any channel (channel.id multi-segment)"},
             {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true, "description": "Agent completion events"}
           ],
           "outputs": [

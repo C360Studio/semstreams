@@ -15,7 +15,7 @@ tasks:
       - docker compose -f docker/compose/deep-research.yml up -d --wait --build
       - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
       - echo "[DEEP-RESEARCH] Running scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario deep-research --output-dir ./test/e2e/results --metrics-url http://localhost:59090
+      - cmd: cd cmd/e2e && ./e2e --scenario deep-research --output-dir ./test/e2e/results --base-url http://localhost:58080 --metrics-url http://localhost:59090
         ignore_error: true
       - docker compose -f docker/compose/deep-research.yml down -v --timeout 15
 
@@ -42,7 +42,7 @@ tasks:
     deps: [":build:e2e"]
     cmds:
       - echo "[DEEP-RESEARCH] Running scenario..."
-      - cd cmd/e2e && ./e2e --scenario deep-research --output-dir ./test/e2e/results --metrics-url http://localhost:59090
+      - cd cmd/e2e && ./e2e --scenario deep-research --output-dir ./test/e2e/results --base-url http://localhost:58080 --metrics-url http://localhost:59090
 
   down:
     desc: Stop deep-research tier services

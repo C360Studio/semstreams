@@ -66,12 +66,23 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponent", "deps.ModelRegistry is required")
 	}
 
-	// Apply defaults for empty values
+	// Apply defaults for empty values. Permissions get the same treatment
+	// because JSON unmarshal of a config without a "permissions" block
+	// leaves a zero-value PermissionConfig where every allow-list is nil —
+	// silently denying all requests, including submit_task. Without this
+	// fill-in, a minimal dispatch config (no "permissions" key) would
+	// receive user messages and then log nothing because the permission
+	// check fails before any task is published.
 	if config.DefaultRole == "" {
 		config.DefaultRole = DefaultConfig().DefaultRole
 	}
 	if config.StreamName == "" {
 		config.StreamName = DefaultConfig().StreamName
+	}
+	if config.Permissions.View == nil && config.Permissions.SubmitTask == nil &&
+		config.Permissions.CancelAny == nil && config.Permissions.Approve == nil &&
+		!config.Permissions.CancelOwn {
+		config.Permissions = DefaultConfig().Permissions
 	}
 
 	// Validate configuration

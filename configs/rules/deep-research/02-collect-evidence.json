@@ -21,9 +21,8 @@
     {
       "type": "update_kv",
       "bucket": "RESEARCH_EVIDENCE",
-      "key": "evidence.$entity.triple.agent.loop.task",
+      "key": "evidence.$entity.id",
       "payload": {
-        "task_id": "$entity.triple.agent.loop.task",
         "loop_id": "$entity.id",
         "role": "researcher",
         "collected_at": "$now"
