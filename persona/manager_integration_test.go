@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 )
 
 type ManagerIntegrationSuite struct {
@@ -157,6 +158,84 @@ func (s *ManagerIntegrationSuite) TestListPopulated() {
 	s.Equal("aa", personas["a"].Content)
 	s.ElementsMatch([]string{"r1"}, personas["b"].Roles)
 	s.Equal("cc", personas["c"].Content)
+}
+
+// TestFragmentsEmpty — fresh bucket yields nil, not an empty slice. The
+// assembler's UpsertAll treats both identically, but the nil contract is
+// documented on Manager.Fragments so callers that log counts don't print
+// "loaded 0 personas" spuriously.
+func (s *ManagerIntegrationSuite) TestFragmentsEmpty() {
+	fragments, err := s.manager.Fragments(s.ctx)
+	s.Require().NoError(err)
+	s.Nil(fragments)
+}
+
+// TestFragmentsRoundTrip — every stored persona materialises as a
+// prompt.Fragment with the static fields preserved and the runtime-only
+// hooks nil. This is the contract ADR-029 step 3b relies on when a
+// caller Upserts these fragments onto a registry seeded with
+// DefaultFragments.
+func (s *ManagerIntegrationSuite) TestFragmentsRoundTrip() {
+	s.Require().NoError(s.manager.Create(s.ctx, &Persona{
+		ID:       "role-researcher",
+		Category: 100,
+		Priority: 5,
+		Content:  "Custom researcher persona",
+		Roles:    []string{"researcher"},
+	}))
+	s.Require().NoError(s.manager.Create(s.ctx, &Persona{
+		ID:       "domain-finance",
+		Category: 300,
+		Content:  "Finance domain context",
+	}))
+
+	fragments, err := s.manager.Fragments(s.ctx)
+	s.Require().NoError(err)
+	s.Len(fragments, 2)
+
+	byID := map[string]prompt.Fragment{}
+	for _, f := range fragments {
+		byID[f.ID] = f
+		s.Nil(f.ContentFunc, "stored personas must not carry runtime-only hooks")
+		s.Nil(f.Condition, "stored personas must not carry runtime-only hooks")
+	}
+
+	researcher, ok := byID["role-researcher"]
+	s.Require().True(ok)
+	s.Equal(prompt.CategoryRole, researcher.Category)
+	s.Equal(5, researcher.Priority)
+	s.Equal("Custom researcher persona", researcher.Content)
+	s.ElementsMatch([]string{"researcher"}, researcher.Roles)
+
+	finance, ok := byID["domain-finance"]
+	s.Require().True(ok)
+	s.Equal(prompt.CategoryDomain, finance.Category)
+}
+
+// TestFragmentsOverrideDefaults exercises the ADR-029 step 3b headline
+// scenario end-to-end: a stored persona shares an ID with a
+// DefaultFragment, and UpsertAll on the registry replaces the in-code
+// entry. Assemble then emits the override's content for the matching
+// role. Regression guard for the override semantic — if Upsert ever
+// reverts to append-only, this test fails loudly.
+func (s *ManagerIntegrationSuite) TestFragmentsOverrideDefaults() {
+	s.Require().NoError(s.manager.Create(s.ctx, &Persona{
+		ID:       "role-researcher",
+		Category: 100,
+		Content:  "CUSTOM researcher persona from KV",
+		Roles:    []string{"researcher"},
+	}))
+
+	registry := prompt.NewRegistry()
+	registry.AddAll(prompt.DefaultFragments())
+
+	fragments, err := s.manager.Fragments(s.ctx)
+	s.Require().NoError(err)
+	registry.UpsertAll(fragments)
+
+	result := prompt.Assemble(registry, &prompt.AssemblyContext{Role: "researcher"})
+	s.Contains(result.SystemMessage, "CUSTOM researcher persona from KV")
+	s.NotContains(result.SystemMessage, "Research methodology:", "default researcher fragment must be replaced")
 }
 
 func TestManagerIntegrationSuite(t *testing.T) {
