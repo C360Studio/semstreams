@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
-// mockLoopsKV is an in-memory LoopsKVGetter for unit tests. Keys use the
+// mockLoopsKV is an in-memory LoopsKVReader for unit tests. Keys use the
 // same COMPLETE_{loopID} shape the agentic-loop component writes to in
 // production so seeding matches the real contract.
 type mockLoopsKV struct {
@@ -25,17 +26,13 @@ func (m *mockLoopsKV) Put(key string, value []byte) {
 	m.data[key] = value
 }
 
-func (m *mockLoopsKV) Get(_ context.Context, key string) (LoopsKVEntry, error) {
+func (m *mockLoopsKV) Get(_ context.Context, key string) (*natsclient.KVEntry, error) {
 	value, ok := m.data[key]
 	if !ok {
-		return nil, ErrLoopNotFound
+		return nil, natsclient.ErrKVKeyNotFound
 	}
-	return mockLoopsEntry(value), nil
+	return &natsclient.KVEntry{Key: key, Value: value, Revision: 1}, nil
 }
-
-type mockLoopsEntry []byte
-
-func (e mockLoopsEntry) Value() []byte { return []byte(e) }
 
 // seedCompletion puts a LoopCompletedEvent into the mock KV under the
 // COMPLETE_{loopID} key the agentic-loop component writes to in production.

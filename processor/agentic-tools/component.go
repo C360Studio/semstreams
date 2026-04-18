@@ -191,7 +191,11 @@ func (c *Component) registerStatefulTools(ctx context.Context) {
 		return
 	}
 
-	executor := NewReadLoopResultExecutor(NewLoopsKVAdapter(bucket))
+	// natsclient.KVStore wraps the jetstream.KeyValue bucket with the
+	// typed Get() shape the executor consumes, so we avoid re-adapting
+	// jetstream types here.
+	store := c.natsClient.NewKVStore(bucket)
+	executor := NewReadLoopResultExecutor(store)
 	if err := c.RegisterToolExecutor(executor); err != nil {
 		c.logger.Warn("Failed to register read_loop_result tool",
 			slog.Any("error", err))

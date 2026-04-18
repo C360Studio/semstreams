@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -24,22 +25,14 @@ const completeKeyPrefix = "COMPLETE_"
 // returning enough content for most summaries in one shot.
 const defaultReadLoopResultChunk = 4 * 1024
 
-// LoopsKVGetter is the minimal KV surface read_loop_result needs. The
-// agentic-tools component satisfies this with a thin adapter over a
-// jetstream.KeyValue bucket; tests satisfy it with an in-memory map.
-type LoopsKVGetter interface {
-	Get(ctx context.Context, key string) (LoopsKVEntry, error)
+// LoopsKVReader is the minimal surface this executor consumes. It matches
+// natsclient.KVStore.Get exactly, so production callers pass a *KVStore
+// directly and tests supply an in-memory fake. Keeping the interface tiny
+// and typed on natsclient.KVEntry avoids re-adapting jetstream types here —
+// natsclient already owns that translation (see natsclient/kv.go).
+type LoopsKVReader interface {
+	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
 }
-
-// LoopsKVEntry is the subset of jetstream.KeyValueEntry we consume.
-type LoopsKVEntry interface {
-	Value() []byte
-}
-
-// ErrLoopNotFound is returned by LoopsKVGetter.Get when the completion
-// record for a loop is not present. Callers (this executor) map it to a
-// structured ToolErrorNotFound.
-var ErrLoopNotFound = errors.New("loop completion record not found")
 
 // ReadLoopResultExecutor fetches a completed loop's full Result from the
 // AGENT_LOOPS KV bucket so downstream agents can read another loop's output
@@ -47,13 +40,12 @@ var ErrLoopNotFound = errors.New("loop completion record not found")
 // offset) so small-context-window agents can consume large outputs a slice
 // at a time.
 type ReadLoopResultExecutor struct {
-	kv LoopsKVGetter
+	kv LoopsKVReader
 }
 
-// NewReadLoopResultExecutor constructs the executor with a getter scoped to
-// the AGENT_LOOPS bucket (or whatever bucket the agentic-loop component
-// persists completion events into).
-func NewReadLoopResultExecutor(kv LoopsKVGetter) *ReadLoopResultExecutor {
+// NewReadLoopResultExecutor constructs the executor against a KV reader
+// scoped to the loops bucket (AGENT_LOOPS by default).
+func NewReadLoopResultExecutor(kv LoopsKVReader) *ReadLoopResultExecutor {
 	return &ReadLoopResultExecutor{kv: kv}
 }
 
@@ -112,7 +104,7 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 
 	entry, err := e.kv.Get(ctx, completeKeyPrefix+loopID)
 	if err != nil {
-		if errors.Is(err, ErrLoopNotFound) || err.Error() == "nats: key not found" {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			return agentic.ToolResult{
 				CallID:    call.ID,
 				Error:     fmt.Sprintf("no completion record for loop %s (loop may still be running or never existed)", loopID),
@@ -127,7 +119,7 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 	}
 
 	var event agentic.LoopCompletedEvent
-	if err := json.Unmarshal(entry.Value(), &event); err != nil {
+	if err := json.Unmarshal(entry.Value, &event); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("completion record for loop %s is malformed: %v", loopID, err),
@@ -184,50 +176,3 @@ func parsePositiveInt(raw any, fallback int) int {
 		return fallback
 	}
 }
-
-// loopsKVAdapter wraps a jetstream.KeyValue (accessed via the natsclient)
-// with the minimal surface this package consumes. It lives here rather than
-// in the jetstream-facing code so the import stays one-way.
-type loopsKVAdapter struct {
-	kv interface {
-		Get(ctx context.Context, key string) (interface {
-			Value() []byte
-			Revision() uint64
-		}, error)
-	}
-}
-
-// NewLoopsKVAdapter returns a LoopsKVGetter that reads from a KV bucket
-// returned by natsclient.Client.GetKeyValueBucket. Anything that matches
-// the jetstream.KeyValue Get signature will satisfy the unexported
-// interface.
-func NewLoopsKVAdapter(kv any) LoopsKVGetter {
-	return &loopsKVAdapter{
-		kv: kv.(interface {
-			Get(ctx context.Context, key string) (interface {
-				Value() []byte
-				Revision() uint64
-			}, error)
-		}),
-	}
-}
-
-func (a *loopsKVAdapter) Get(ctx context.Context, key string) (LoopsKVEntry, error) {
-	entry, err := a.kv.Get(ctx, key)
-	if err != nil {
-		if err.Error() == "nats: key not found" {
-			return nil, ErrLoopNotFound
-		}
-		return nil, err
-	}
-	return loopsKVEntryAdapter{entry: entry}, nil
-}
-
-type loopsKVEntryAdapter struct {
-	entry interface {
-		Value() []byte
-		Revision() uint64
-	}
-}
-
-func (e loopsKVEntryAdapter) Value() []byte { return e.entry.Value() }

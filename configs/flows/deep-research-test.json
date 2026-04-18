@@ -37,9 +37,9 @@
       "model": "general"
     },
     "capabilities": {
-      "general": { "endpoint": "general" },
-      "fast": { "endpoint": "fast" },
-      "summarization": { "endpoint": "fast" }
+      "general": { "preferred": ["general"] },
+      "fast": { "preferred": ["fast"] },
+      "summarization": { "preferred": ["fast"] }
     }
   },
   "services": {
