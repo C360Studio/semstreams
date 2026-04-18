@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -517,7 +518,12 @@ func (c *Component) isToolAllowed(toolName string) bool {
 }
 
 // executeWithTimeout executes a tool call with the configured timeout.
-// It first checks the component's local registry, then falls back to the global registry.
+// It first checks the component's local registry, then falls back to the
+// global registry. When the tool has an entry in config.ToolRetries the
+// call is retried up to MaxAttempts on transient tool-level errors
+// (default: timeout + external) with exponential backoff. Per-attempt
+// timeout is applied to each try so a slow first call does not consume
+// the whole budget.
 func (c *Component) executeWithTimeout(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	timeout := 60 * time.Second
 	if c.config.Timeout != "" {
@@ -526,16 +532,104 @@ func (c *Component) executeWithTimeout(ctx context.Context, call agentic.ToolCal
 		}
 	}
 
+	policy := effectiveRetryPolicy(c.config.ToolRetries, call.Name)
+
+	var (
+		result agentic.ToolResult
+		err    error
+	)
+	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
+		result, err = c.executeOnce(ctx, call, timeout)
+		if !shouldRetry(err, result, policy) || attempt == policy.MaxAttempts {
+			break
+		}
+
+		// Record the retry before backing off so dashboards see it even if
+		// the next attempt hangs.
+		if c.metrics != nil {
+			c.metrics.recordToolRetry(call.Name, string(result.ErrorKind))
+		}
+
+		wait := backoffFor(attempt, policy)
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+
+	// Surface exhaustion so ops can tune the policy.
+	if c.metrics != nil && policy.MaxAttempts > 1 && shouldRetry(err, result, policy) {
+		c.metrics.recordToolRetryExhausted(call.Name)
+	}
+
+	return result, err
+}
+
+// executeOnce performs a single attempt: per-attempt timeout, local
+// registry with fallback to the global registry when the local one reports
+// "not found".
+func (c *Component) executeOnce(ctx context.Context, call agentic.ToolCall, timeout time.Duration) (agentic.ToolResult, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Try local registry first
 	result, err := c.registry.Execute(callCtx, call)
 	if err != nil && strings.Contains(err.Error(), "not found") {
-		// Fallback to global registry
 		return GetGlobalRegistry().Execute(callCtx, call)
 	}
 	return result, err
+}
+
+// effectiveRetryPolicy returns the policy to apply for the named tool,
+// filling in defaults for unset fields. Tools without an entry in the
+// policies map get a no-retry default (MaxAttempts=1).
+func effectiveRetryPolicy(policies map[string]RetryPolicy, toolName string) RetryPolicy {
+	raw, ok := policies[toolName]
+	if !ok {
+		return RetryPolicy{MaxAttempts: 1}
+	}
+	p := raw
+	if p.MaxAttempts < 1 {
+		p.MaxAttempts = 1
+	}
+	if p.BackoffInitialMs <= 0 {
+		p.BackoffInitialMs = 100
+	}
+	if p.BackoffMaxMs <= 0 {
+		p.BackoffMaxMs = 2000
+	}
+	if p.RetryOnKinds == nil {
+		// nil means "use defaults"; an explicit empty slice is respected.
+		p.RetryOnKinds = []string{string(agentic.ToolErrorTimeout), string(agentic.ToolErrorExternal)}
+	}
+	return p
+}
+
+// shouldRetry reports whether the outcome warrants another attempt under
+// the given policy. Retries are confined to tool-level errors whose kind
+// is listed in the policy. Raw executor errors (err != nil with no
+// structured ErrorKind) are treated as framework faults and not retried
+// here — those belong on the caller's side of the boundary.
+func shouldRetry(err error, result agentic.ToolResult, policy RetryPolicy) bool {
+	if policy.MaxAttempts <= 1 {
+		return false
+	}
+	kind := string(result.ErrorKind)
+	if kind == "" {
+		// Tool executor returned err without classification. Not our retry.
+		_ = err
+		return false
+	}
+	return slices.Contains(policy.RetryOnKinds, kind)
+}
+
+// backoffFor returns the wait before the (attempt+1)th try, capped by
+// policy.BackoffMaxMs. Attempt is 1-based.
+func backoffFor(attempt int, policy RetryPolicy) time.Duration {
+	// 2^(attempt-1) * initial, clamped to max.
+	mult := 1 << (attempt - 1)
+	ms := min(policy.BackoffInitialMs*mult, policy.BackoffMaxMs)
+	return time.Duration(ms) * time.Millisecond
 }
 
 // publishResult publishes a tool result to JetStream

@@ -60,6 +60,11 @@
       "description": "Tool execution timeout",
       "default": "60s",
       "category": "advanced"
+    },
+    "tool_retries": {
+      "type": "object",
+      "description": "Per-tool retry policy keyed by tool name (opt-in; tools without an entry do not retry)",
+      "category": "advanced"
     }
   },
   "required": [],

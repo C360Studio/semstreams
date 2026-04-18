@@ -21,6 +21,10 @@ type toolsMetrics struct {
 	// Filtering
 	filteredTotal *prometheus.CounterVec
 
+	// Retries (opt-in via Config.ToolRetries policies)
+	retriesTotal     *prometheus.CounterVec
+	retriesExhausted *prometheus.CounterVec
+
 	// Registry
 	toolsRegistered prometheus.Gauge
 }
@@ -71,6 +75,20 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 				Help:      "Total tool calls filtered by reason",
 			}, []string{"tool_name", "reason"}),
 
+			retriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_tools",
+				Name:      "retries_total",
+				Help:      "Total tool-call retries triggered by a retry policy, labelled by tool and the error kind that triggered the retry",
+			}, []string{"tool_name", "error_kind"}),
+
+			retriesExhausted: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_tools",
+				Name:      "retries_exhausted_total",
+				Help:      "Total tool calls whose retry budget was exhausted without success",
+			}, []string{"tool_name"}),
+
 			toolsRegistered: prometheus.NewGauge(prometheus.GaugeOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_tools",
@@ -86,6 +104,8 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = registry.RegisterCounterVec("agentic-tools", "errors_total", metrics.errorsTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "timeout_total", metrics.timeoutTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "filtered_total", metrics.filteredTotal)
+			_ = registry.RegisterCounterVec("agentic-tools", "retries_total", metrics.retriesTotal)
+			_ = registry.RegisterCounterVec("agentic-tools", "retries_exhausted_total", metrics.retriesExhausted)
 			_ = registry.RegisterGauge("agentic-tools", "registered", metrics.toolsRegistered)
 		} else {
 			// Fallback to default prometheus registry for testing
@@ -94,6 +114,8 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.errorsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.timeoutTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.filteredTotal)
+			_ = prometheus.DefaultRegisterer.Register(metrics.retriesTotal)
+			_ = prometheus.DefaultRegisterer.Register(metrics.retriesExhausted)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolsRegistered)
 		}
 	})
@@ -142,4 +164,16 @@ func (m *toolsMetrics) recordExecutionTimeout(toolName string, durationSeconds f
 // recordToolFiltered records a filtered tool call.
 func (m *toolsMetrics) recordToolFiltered(toolName, reason string) {
 	m.filteredTotal.WithLabelValues(toolName, reason).Inc()
+}
+
+// recordToolRetry records that a retry was triggered for a tool by a
+// specific error kind (the kind of the preceding failed attempt).
+func (m *toolsMetrics) recordToolRetry(toolName, errorKind string) {
+	m.retriesTotal.WithLabelValues(toolName, errorKind).Inc()
+}
+
+// recordToolRetryExhausted records that a tool's retry budget was exhausted
+// without the call succeeding.
+func (m *toolsMetrics) recordToolRetryExhausted(toolName string) {
+	m.retriesExhausted.WithLabelValues(toolName).Inc()
 }
