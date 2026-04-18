@@ -38,6 +38,13 @@ func TestAssemble_RoleFiltering(t *testing.T) {
 		{"editor", "editor agent", "architect agent"},
 		{"reviewer", "reviewer agent", "editor agent"},
 		{"explorer", "explore agent", "general-purpose"},
+		// research-coordinator is the judgment role — it must mention
+		// decide + read_loop_result to match ADR-026's milestone M1
+		// framing (rule-spawned, reads researcher output, returns one
+		// structured decision). Excludes "research agent" so we don't
+		// accidentally collapse the researcher and coordinator personas
+		// into one fragment if the role-matching logic regresses.
+		{"research-coordinator", "research coordinator", "research agent"},
 	}
 
 	for _, tt := range tests {

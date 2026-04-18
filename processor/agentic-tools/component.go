@@ -33,6 +33,7 @@ type Component struct {
 	registry   *ExecutorRegistry
 	natsClient *natsclient.Client
 	logger     *slog.Logger
+	platform   component.PlatformMeta
 
 	// Lifecycle management
 	running   bool
@@ -88,6 +89,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		registry:   NewExecutorRegistry(),
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
+		platform:   deps.Platform,
 		metrics:    getMetrics(deps.MetricsRegistry),
 	}
 
@@ -178,6 +180,14 @@ func (c *Component) Start(ctx context.Context) error {
 // component still serves other tools. Called from Start after the NATS
 // client has been validated.
 func (c *Component) registerStatefulTools(ctx context.Context) {
+	c.registerReadLoopResult(ctx)
+	c.registerDecide()
+}
+
+// registerReadLoopResult opens the AGENT_LOOPS KV bucket and registers the
+// read_loop_result tool. Failure logs a warning and returns — the rest of
+// the component's tools stay available.
+func (c *Component) registerReadLoopResult(ctx context.Context) {
 	loopsBucketName := c.config.LoopsBucket
 	if loopsBucketName == "" {
 		loopsBucketName = "AGENT_LOOPS"
@@ -195,14 +205,29 @@ func (c *Component) registerStatefulTools(ctx context.Context) {
 	// typed Get() shape the executor consumes, so we avoid re-adapting
 	// jetstream types here.
 	store := c.natsClient.NewKVStore(bucket)
-	executor := NewReadLoopResultExecutor(store)
-	if err := c.RegisterToolExecutor(executor); err != nil {
+	if err := c.RegisterToolExecutor(NewReadLoopResultExecutor(store)); err != nil {
 		c.logger.Warn("Failed to register read_loop_result tool",
 			slog.Any("error", err))
 		return
 	}
 	c.logger.Info("Registered read_loop_result tool",
 		slog.String("bucket", loopsBucketName))
+}
+
+// registerDecide wires the coordinator's decide terminal tool. The tool
+// publishes triples via the graph.mutation.triple.add NATS surface (same
+// path rule actions use) so no extra infrastructure is needed beyond the
+// natsClient already held by the component.
+func (c *Component) registerDecide() {
+	publisher := NewNATSTriplePublisher(c.natsClient)
+	if err := c.RegisterToolExecutor(NewDecideExecutor(publisher, c.platform)); err != nil {
+		c.logger.Warn("Failed to register decide tool",
+			slog.Any("error", err))
+		return
+	}
+	c.logger.Info("Registered decide tool",
+		slog.String("org", c.platform.Org),
+		slog.String("platform", c.platform.Platform))
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
