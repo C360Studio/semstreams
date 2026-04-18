@@ -19,6 +19,15 @@ type Config struct {
 	Ports                      *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
 	EnableIntentClassification bool                  `json:"enable_intent_classification,omitempty" schema:"type:bool,description:Enable LLM-assisted intent classification for ambiguous messages,category:advanced,default:false"`
 	EnableOnboarding           bool                  `json:"enable_onboarding,omitempty" schema:"type:bool,description:Enable /onboard command for operating model interview,category:advanced,default:false"`
+	// DefaultTools is the tool allowlist for initial-user-message tasks
+	// (the first loop in a chain, before any rule has fired). Names are
+	// resolved against the agentictools global registry at dispatch time;
+	// unknown names are logged and dropped. Empty/nil leaves
+	// TaskMessage.Tools unset so the spawned loop falls back to global
+	// discovery — matching existing behaviour. Downstream agents get their
+	// tool allowlist from the rule that spawns them (publish_agent.tools),
+	// keeping role→tools decisions in the workflow config.
+	DefaultTools []string `json:"default_tools,omitempty" schema:"type:array,description:Tool names granted to initial user-message tasks (resolved at dispatch; nil/empty falls back to global discovery),category:advanced"`
 }
 
 // PermissionConfig defines permission rules for the router

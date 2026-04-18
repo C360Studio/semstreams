@@ -24,7 +24,8 @@
       "subject": "agent.task.synthesis",
       "role": "general",
       "model": "general",
-      "prompt": "You are a research synthesizer. The research-coordinator (loop $entity.id) has judged that enough evidence exists. Query the graph for entities with predicate research.has_evidence to discover all collected findings, then call read_loop_result on each to pull the researcher outputs. Produce a structured synthesis with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution if the researchers cited any)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)"
+      "tools": ["read_loop_result"],
+      "prompt": "You are a research synthesizer. The research-coordinator (loop $entity.id) has judged that enough evidence exists. Call read_loop_result on the coordinator loop to pull researcher outputs referenced in its decision payload. Produce a structured synthesis with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution if the researchers cited any)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)"
     }
   ]
 }

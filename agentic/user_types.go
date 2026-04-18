@@ -270,8 +270,15 @@ type TaskMessage struct {
 	// Context assembly reference (links to assembled context)
 	ContextRequestID string `json:"context_request_id,omitempty"`
 
-	// Per-task tool override (optional, skips global discovery if present)
-	Tools []ToolDefinition `json:"tools,omitempty"`
+	// Tools is a per-task tool override. The spawner sets this to scope
+	// which tools the agent may call; the loop consumes the field with
+	// nil-vs-empty semantics:
+	//  - nil       → no override, loop falls back to global discovery.
+	//  - non-nil   → explicit allowlist. Empty slice means "no tools".
+	// `omitempty` is deliberately omitted so an explicit empty slice
+	// round-trips as `"tools": []` and the receiver can distinguish it
+	// from an absent field.
+	Tools []ToolDefinition `json:"tools"`
 
 	// ToolChoice controls how the model selects tools for this task.
 	// Nil means "auto" (model decides). Cached for all iterations in the loop.

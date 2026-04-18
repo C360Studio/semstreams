@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -925,6 +926,94 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	assert.Equal(t, "general", task.Role)
 	assert.Equal(t, "mock-model", task.Model)
 	assert.Equal(t, "Analyze entity sensor.temp.001 in location warehouse.zone.A", task.Prompt)
+}
+
+// T050b: Test PublishAgent resolves action.Tools → TaskMessage.Tools via the
+// agentictools global registry. Unknown names are dropped rather than
+// failing the spawn.
+func TestAction_PublishAgent_ToolsResolved(t *testing.T) {
+	// Can't run in parallel — uses package-global agentictools registry.
+	ctx := context.Background()
+
+	// Register a fake tool with a unique name. Any collision with a
+	// previously-registered tool returns an error, so using a test-unique
+	// name keeps this test isolated from suite-wide state.
+	toolName := "test_action_publish_agent_resolver"
+	if err := agentictools.RegisterTool(toolName, &stubToolExecutor{name: toolName}); err != nil {
+		// Tolerate dupes when the test runs twice in the same process
+		// (rare, but keeps `go test -count=N` from failing spuriously).
+		if !strings.Contains(err.Error(), "already registered") {
+			t.Fatalf("register test tool: %v", err)
+		}
+	}
+
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "researcher",
+		Model:   "mock-model",
+		Prompt:  "p",
+		Tools:   []string{toolName, "tool_that_does_not_exist"},
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"})
+	require.NoError(t, err)
+	require.Len(t, mock.published, 1)
+
+	var baseMsg message.BaseMessage
+	require.NoError(t, json.Unmarshal(mock.published[0].data, &baseMsg))
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	// Known name resolved; unknown name silently dropped.
+	require.Len(t, task.Tools, 1, "only the known tool should survive resolution")
+	assert.Equal(t, toolName, task.Tools[0].Name)
+}
+
+// T050c: Test PublishAgent with empty action.Tools leaves TaskMessage.Tools
+// unset — preserves the pre-existing fall-through to global discovery inside
+// agentic-loop.
+func TestAction_PublishAgent_EmptyToolsLeavesUnset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// Tools omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	var baseMsg message.BaseMessage
+	require.NoError(t, json.Unmarshal(mock.published[0].data, &baseMsg))
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+	assert.Empty(t, task.Tools, "empty action.Tools should leave TaskMessage.Tools unset")
+}
+
+// stubToolExecutor is a minimal ToolExecutor for the global-registry test.
+// It does no work; resolveToolNames only reads the ToolDefinition it exposes.
+type stubToolExecutor struct{ name string }
+
+func (s *stubToolExecutor) ListTools() []agentic.ToolDefinition {
+	return []agentic.ToolDefinition{{
+		Name:        s.name,
+		Description: "stub for rule action test",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	}}
+}
+
+func (s *stubToolExecutor) Execute(_ context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	return agentic.ToolResult{CallID: call.ID, Content: "stub"}, nil
 }
 
 // T051: Test PublishAgent without publisher (no-op)

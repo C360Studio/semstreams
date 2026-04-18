@@ -605,26 +605,39 @@ func TestTaskMessage_Tools_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, "ops", decoded.Metadata["org"])
 }
 
-func TestTaskMessage_Tools_OmitEmpty(t *testing.T) {
-	original := TaskMessage{
-		TaskID: "task-no-tools",
-		Role:   "general",
-		Model:  "fast",
-		Prompt: "do the thing",
-	}
-
-	data, err := json.Marshal(original)
+// TestTaskMessage_Tools_NilVsEmptyPreserved verifies that Tools serialises
+// faithfully for both nil and explicit empty slices. The distinction is
+// load-bearing: the spawner uses nil to mean "no override, discover tools"
+// and empty to mean "no tools for this role". If either value round-trips
+// identically we break product-layer role scoping.
+func TestTaskMessage_Tools_NilVsEmptyPreserved(t *testing.T) {
+	// Nil → `"tools": null` (field present, value null). Unmarshals back
+	// to nil so the loop falls through to discovery.
+	nilCase := TaskMessage{TaskID: "t1", Role: "general", Model: "fast", Prompt: "p"}
+	data, err := json.Marshal(nilCase)
 	require.NoError(t, err)
-
 	var raw map[string]any
-	err = json.Unmarshal(data, &raw)
+	require.NoError(t, json.Unmarshal(data, &raw))
+	val, hasTools := raw["tools"]
+	assert.True(t, hasTools, "tools field should be present (omitempty removed)")
+	assert.Nil(t, val, "nil Tools should serialise as JSON null")
+
+	// Empty non-nil → `"tools": []`. Unmarshals back to empty non-nil
+	// which the loop respects as "no tools for this role".
+	emptyCase := TaskMessage{TaskID: "t2", Role: "general", Model: "fast", Prompt: "p", Tools: []ToolDefinition{}}
+	data, err = json.Marshal(emptyCase)
 	require.NoError(t, err)
+	var decoded TaskMessage
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.NotNil(t, decoded.Tools, "empty Tools must round-trip as non-nil")
+	assert.Len(t, decoded.Tools, 0)
 
-	_, hasTools := raw["tools"]
-	assert.False(t, hasTools, "tools should be omitted when empty")
-
+	// Metadata retains its own omitempty — assert that, to guard against
+	// an accidental flip.
+	raw = map[string]any{}
+	require.NoError(t, json.Unmarshal(data, &raw))
 	_, hasMeta := raw["metadata"]
-	assert.False(t, hasMeta, "metadata should be omitted when empty")
+	assert.False(t, hasMeta, "metadata should still be omitted when empty")
 }
 
 func TestTaskMessage_BackwardCompat_OldJSON(t *testing.T) {

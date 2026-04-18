@@ -188,6 +188,13 @@
                   "type": "string",
                   "description": "subject"
                 },
+                "tools": {
+                  "type": "array",
+                  "description": "tools",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "ttl": {
                   "type": "string",
                   "description": "ttl"
@@ -302,6 +309,13 @@
                   "type": "string",
                   "description": "subject"
                 },
+                "tools": {
+                  "type": "array",
+                  "description": "tools",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "ttl": {
                   "type": "string",
                   "description": "ttl"
@@ -415,6 +429,13 @@
                 "subject": {
                   "type": "string",
                   "description": "subject"
+                },
+                "tools": {
+                  "type": "array",
+                  "description": "tools",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "ttl": {
                   "type": "string",
@@ -544,6 +565,13 @@
                 "subject": {
                   "type": "string",
                   "description": "subject"
+                },
+                "tools": {
+                  "type": "array",
+                  "description": "tools",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "ttl": {
                   "type": "string",

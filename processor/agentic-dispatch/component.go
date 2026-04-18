@@ -15,9 +15,38 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// resolveDefaultTools looks up the named tools in the agentictools global
+// registry, logging and dropping any name not found. Mirror of the
+// resolver in processor/rule/actions.go — kept separate to avoid pulling
+// one processor into the other, since both resolvers are short.
+func resolveDefaultTools(names []string, logger *slog.Logger) []agentic.ToolDefinition {
+	if len(names) == 0 {
+		return nil
+	}
+	all := agentictools.ListRegisteredTools()
+	byName := make(map[string]agentic.ToolDefinition, len(all))
+	for _, t := range all {
+		byName[t.Name] = t
+	}
+
+	resolved := make([]agentic.ToolDefinition, 0, len(names))
+	for _, name := range names {
+		if def, ok := byName[name]; ok {
+			resolved = append(resolved, def)
+			continue
+		}
+		if logger != nil {
+			logger.Warn("default_tools name not found in registry; dropped",
+				slog.String("tool_name", name))
+		}
+	}
+	return resolved
+}
 
 // Component implements the router processor
 type Component struct {
@@ -557,6 +586,20 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Model:            c.resolveModel(),
 		Prompt:           msg.Content,
 		ContextRequestID: msg.ContextRequestID,
+	}
+
+	// Scope the initial agent's tools to DefaultTools when configured.
+	// Nil DefaultTools leaves task.Tools unset so the spawned loop falls
+	// back to global discovery (pre-existing behaviour). An explicit empty
+	// slice (`"default_tools": []` in flow config) produces a non-nil empty
+	// task.Tools, which the loop respects as "no tools for this role".
+	// Names not in the agentictools registry are logged and dropped.
+	if c.config.DefaultTools != nil {
+		resolved := resolveDefaultTools(c.config.DefaultTools, c.logger)
+		if resolved == nil {
+			resolved = []agentic.ToolDefinition{}
+		}
+		task.Tools = resolved
 	}
 
 	// Track the loop

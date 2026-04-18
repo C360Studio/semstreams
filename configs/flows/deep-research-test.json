@@ -85,6 +85,7 @@
       "enabled": true,
       "config": {
         "default_role": "general",
+        "default_tools": [],
         "auto_continue": false,
         "stream_name": "USER",
         "ports": {
@@ -117,11 +118,11 @@
           "inputs": [
             {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
             {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
-            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "AGENT", "required": true}
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
             {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
-            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
             {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
           ],
           "kv_write": [
@@ -157,15 +158,15 @@
       "name": "agentic-tools",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
+        "stream_name": "TOOL",
         "timeout": "10s",
         "allowed_tools": ["query_entity", "query_entities", "graph_query", "read_loop_result", "decide", "submit_work"],
         "ports": {
           "inputs": [
-            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "AGENT", "required": true}
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
-            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "AGENT", "required": true}
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
           ],
           "kv_read": [
             {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}

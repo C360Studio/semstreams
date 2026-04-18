@@ -680,3 +680,128 @@ func TestOpenAIServer_SubmitAfter_NoSubmitToolFallsThrough(t *testing.T) {
 		t.Errorf("expected finish_reason=stop, got %q", resp.Choices[0].FinishReason)
 	}
 }
+
+// TestOpenAIServer_RoleToolCallSequence verifies the coordinator-style
+// deterministic tool-call injection: marker-matching requests return the
+// scripted tool call with the exact args the test asks for, and the cursor
+// advances so "first coordinator call → fan_out, second → synthesize"
+// works without more machinery.
+func TestOpenAIServer_RoleToolCallSequence(t *testing.T) {
+	server := NewOpenAIServer().WithRoleToolCallSequence([]RoleToolCall{
+		{
+			Marker:   "research coordinator",
+			ToolName: "decide",
+			Args:     map[string]any{"action": "fan_out", "reason": "split topics", "subtopics": []string{"A", "B"}},
+		},
+		{
+			Marker:   "research coordinator",
+			ToolName: "decide",
+			Args:     map[string]any{"action": "synthesize", "reason": "enough evidence"},
+		},
+	})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	tools := []Tool{{Type: "function", Function: FunctionDef{Name: "decide"}}}
+	coordReq := ChatCompletionRequest{
+		Model:    "mock",
+		Tools:    tools,
+		Messages: []ChatMessage{{Role: "system", Content: "You are a research coordinator. decide wisely."}},
+	}
+
+	// Call 1: fan_out decision.
+	resp1 := makeRequest(t, server.URL()+"/v1/chat/completions", coordReq)
+	if len(resp1.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("call 1: expected one tool call, got %d", len(resp1.Choices[0].Message.ToolCalls))
+	}
+	call1 := resp1.Choices[0].Message.ToolCalls[0]
+	if call1.Function.Name != "decide" {
+		t.Errorf("call 1: tool name = %q, want decide", call1.Function.Name)
+	}
+	if !strings.Contains(call1.Function.Arguments, `"action":"fan_out"`) {
+		t.Errorf("call 1: expected fan_out in args, got %q", call1.Function.Arguments)
+	}
+	if !strings.Contains(call1.Function.Arguments, `"subtopics"`) {
+		t.Errorf("call 1: expected subtopics in args, got %q", call1.Function.Arguments)
+	}
+
+	// Call 2: synthesize decision.
+	resp2 := makeRequest(t, server.URL()+"/v1/chat/completions", coordReq)
+	call2 := resp2.Choices[0].Message.ToolCalls[0]
+	if !strings.Contains(call2.Function.Arguments, `"action":"synthesize"`) {
+		t.Errorf("call 2: expected synthesize in args, got %q", call2.Function.Arguments)
+	}
+
+	// Call 3+: sequence exhausted, sticky on last entry.
+	resp3 := makeRequest(t, server.URL()+"/v1/chat/completions", coordReq)
+	call3 := resp3.Choices[0].Message.ToolCalls[0]
+	if !strings.Contains(call3.Function.Arguments, `"action":"synthesize"`) {
+		t.Errorf("call 3: expected sticky synthesize, got %q", call3.Function.Arguments)
+	}
+}
+
+// TestOpenAIServer_RoleToolCall_NoMarkerFallsThrough verifies that a
+// request not matching any marker uses the normal (tool-call or completion)
+// routing, and the cursor doesn't burn on non-matching requests.
+func TestOpenAIServer_RoleToolCall_NoMarkerFallsThrough(t *testing.T) {
+	server := NewOpenAIServer().
+		WithCompletionContent("regular completion").
+		WithRoleToolCallSequence([]RoleToolCall{
+			{Marker: "ONLY_COORDINATOR", ToolName: "decide", Args: map[string]any{"action": "done", "reason": "x"}},
+		})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "hello, no coordinator marker here"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "whatever"}}}},
+			{Role: "tool", ToolCallID: "c1", Content: "result"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	if resp.Choices[0].Message.Content != "regular completion" {
+		t.Errorf("expected regular completion fallthrough, got %q", resp.Choices[0].Message.Content)
+	}
+}
+
+// TestOpenAIServer_RoleToolCall_ToolNotAdvertisedFallsThrough verifies
+// that a marker match without the named tool in the request's Tools list
+// falls through to normal routing rather than injecting an unadvertised
+// tool call (which would cause the agentic-tools component to reject the
+// call and mask the scenario bug).
+func TestOpenAIServer_RoleToolCall_ToolNotAdvertisedFallsThrough(t *testing.T) {
+	server := NewOpenAIServer().
+		WithCompletionContent("fallback").
+		WithRoleToolCallSequence([]RoleToolCall{
+			{Marker: "coordinator_marker", ToolName: "decide", Args: map[string]any{"action": "done", "reason": "x"}},
+		})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	// Tool list does NOT include "decide". Request should fall through
+	// even though the marker matches.
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Tools: []Tool{{Type: "function", Function: FunctionDef{Name: "some_other_tool"}}},
+		Messages: []ChatMessage{
+			{Role: "user", Content: "something something coordinator_marker something"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "some_other_tool"}}}},
+			{Role: "tool", ToolCallID: "c1", Content: "result"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	if resp.Choices[0].Message.Content != "fallback" {
+		t.Errorf("expected fallback content, got %q", resp.Choices[0].Message.Content)
+	}
+	if len(resp.Choices[0].Message.ToolCalls) != 0 {
+		t.Errorf("unexpected tool calls injected: %+v", resp.Choices[0].Message.ToolCalls)
+	}
+}

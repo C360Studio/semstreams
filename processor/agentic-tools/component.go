@@ -187,6 +187,14 @@ func (c *Component) registerStatefulTools(ctx context.Context) {
 // registerReadLoopResult opens the AGENT_LOOPS KV bucket and registers the
 // read_loop_result tool. Failure logs a warning and returns — the rest of
 // the component's tools stay available.
+//
+// Registration is GLOBAL (via agentictools.RegisterTool) rather than
+// component-local because agentic-loop's discoverTools() pulls from the
+// global registry when advertising tools to the LLM. A purely local
+// registration makes the tool invocable but invisible to the model —
+// which manifests as the LLM producing completion text instead of a tool
+// call. Fixed this the hard way in deep-research's coordinator run; the
+// note stays so future stateful tools don't repeat the pattern.
 func (c *Component) registerReadLoopResult(ctx context.Context) {
 	loopsBucketName := c.config.LoopsBucket
 	if loopsBucketName == "" {
@@ -201,33 +209,49 @@ func (c *Component) registerReadLoopResult(ctx context.Context) {
 		return
 	}
 
-	// natsclient.KVStore wraps the jetstream.KeyValue bucket with the
-	// typed Get() shape the executor consumes, so we avoid re-adapting
-	// jetstream types here.
 	store := c.natsClient.NewKVStore(bucket)
-	if err := c.RegisterToolExecutor(NewReadLoopResultExecutor(store)); err != nil {
+	executor := NewReadLoopResultExecutor(store)
+	if err := registerGlobalTool(loopResultToolName, executor); err != nil {
 		c.logger.Warn("Failed to register read_loop_result tool",
 			slog.Any("error", err))
 		return
 	}
-	c.logger.Info("Registered read_loop_result tool",
+	c.logger.Info("Registered read_loop_result tool (global)",
 		slog.String("bucket", loopsBucketName))
 }
 
 // registerDecide wires the coordinator's decide terminal tool. The tool
 // publishes triples via the graph.mutation.triple.add NATS surface (same
 // path rule actions use) so no extra infrastructure is needed beyond the
-// natsClient already held by the component.
+// natsClient already held by the component. Registered globally for the
+// same LLM-advertisement reason described on registerReadLoopResult.
 func (c *Component) registerDecide() {
 	publisher := NewNATSTriplePublisher(c.natsClient)
-	if err := c.RegisterToolExecutor(NewDecideExecutor(publisher, c.platform)); err != nil {
+	executor := NewDecideExecutor(publisher, c.platform)
+	if err := registerGlobalTool(decideToolName, executor); err != nil {
 		c.logger.Warn("Failed to register decide tool",
 			slog.Any("error", err))
 		return
 	}
-	c.logger.Info("Registered decide tool",
+	c.logger.Info("Registered decide tool (global)",
 		slog.String("org", c.platform.Org),
 		slog.String("platform", c.platform.Platform))
+}
+
+// registerGlobalTool wraps agentictools.RegisterTool with idempotent
+// behaviour for the "already registered" case. The global registry isn't
+// reset across component restarts, so a simple component.Stop/Start cycle
+// would otherwise fail registration on the second call. Treat the dup as
+// a no-op: the existing executor from the first Start is still valid,
+// points at the same natsClient/platform, and serves calls identically.
+func registerGlobalTool(name string, executor ToolExecutor) error {
+	if err := RegisterTool(name, executor); err != nil {
+		if strings.Contains(err.Error(), "already registered") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
@@ -309,7 +333,7 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 	retryInterval := 100 * time.Millisecond
 	maxInterval := 2 * time.Second
 
-	for i := 0; i < maxRetries; i++ {
+	for i := range maxRetries {
 		_, err := js.Stream(ctx, streamName)
 		if err == nil {
 			return nil
@@ -536,14 +560,7 @@ func (c *Component) isToolAllowed(toolName string) bool {
 	if len(c.config.AllowedTools) == 0 {
 		return true
 	}
-
-	for _, allowed := range c.config.AllowedTools {
-		if allowed == toolName {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(c.config.AllowedTools, toolName)
 }
 
 // executeWithTimeout executes a tool call with the configured timeout.

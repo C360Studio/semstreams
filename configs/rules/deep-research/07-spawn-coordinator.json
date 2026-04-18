@@ -24,6 +24,7 @@
       "subject": "agent.task.research-coordinator",
       "role": "research-coordinator",
       "model": "general",
+      "tools": ["read_loop_result", "decide"],
       "prompt": "A researcher has completed work in loop $entity.id. Call read_loop_result with loop_id=$entity.id to inspect their findings (page through via offset/max_bytes if needed), then call the decide tool exactly once with one of action=fan_out (subtopics list), synthesize, retry (retry_hint), or done."
     }
   ]

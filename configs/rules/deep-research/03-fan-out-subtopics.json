@@ -23,6 +23,7 @@
       "subject": "agent.task.subtopic",
       "role": "researcher",
       "model": "general",
+      "tools": ["read_loop_result", "web_search", "http_request"],
       "prompt": "A research coordinator has identified subtopics worth separate investigation. Call read_loop_result with loop_id=$entity.id to fetch the coordinator's decision payload (the subtopics list lives there). Pick one subtopic and produce focused findings for it."
     }
   ]

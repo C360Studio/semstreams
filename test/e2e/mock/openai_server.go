@@ -129,6 +129,28 @@ type RoleResponse struct {
 	Content string
 }
 
+// RoleToolCall pairs a prompt-content marker with a tool call the mock
+// should emit instead of completion content. Matching runs against
+// concatenated system and user message content in the incoming request.
+// Use this to force a coordinator-style structured output (e.g. a specific
+// decide() call) when the scenario needs determinism at the tool-call
+// layer, not just completion-text layer.
+//
+// Sequence semantics: WithRoleToolCallSequence advances a cursor each time
+// a marker match fires, so callers can script "first coordinator call →
+// fan_out; second coordinator call → synthesize" as a single slice. When
+// the cursor exceeds the slice length, subsequent matches return the last
+// entry (sticky behaviour, same as WithResponseSequence).
+type RoleToolCall struct {
+	// Marker is a substring searched for in system+user message content.
+	Marker string
+	// ToolName is the function name to call.
+	ToolName string
+	// Args is serialised to JSON and placed on ToolCall.Function.Arguments.
+	// Must be non-nil for JSON marshal to produce "{}" at minimum.
+	Args map[string]any
+}
+
 // OpenAIServer is a mock OpenAI-compatible server for testing.
 type OpenAIServer struct {
 	srv      *http.Server
@@ -147,6 +169,14 @@ type OpenAIServer struct {
 
 	// Role-based routing for multi-agent scenarios
 	roleResponses []RoleResponse
+
+	// Role-based tool-call routing. When a request's messages match one
+	// of these entries and the request advertises the named tool, the
+	// mock emits the configured tool call INSTEAD of normal completion
+	// or first-tool behaviour. Cursor advances each time a match fires;
+	// once exhausted, the last entry sticks.
+	roleToolCalls     []RoleToolCall
+	roleToolCallIndex int
 
 	// submit_work cadence: after this many completed tool rounds, if the
 	// request's tool list contains submit_work the mock emits it as the
@@ -227,6 +257,22 @@ func (s *OpenAIServer) WithSubmitAfter(n int) *OpenAIServer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.submitAfter = n
+	return s
+}
+
+// WithRoleToolCallSequence scripts a sequence of tool calls to return when
+// specific role markers match incoming requests. Each scenario sees matches
+// in declaration order — the cursor advances on each fire, and after the
+// sequence is exhausted the final entry sticks. When a request matches an
+// entry but does not advertise the named tool (e.g. coordinator prompt
+// matches but the request's tools list has no "decide"), the mock falls
+// through to its normal completion/tool-call behaviour so the scenario
+// author gets a deterministic failure rather than a surprise tool call.
+func (s *OpenAIServer) WithRoleToolCallSequence(calls []RoleToolCall) *OpenAIServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roleToolCalls = calls
+	s.roleToolCallIndex = 0
 	return s
 }
 
@@ -486,8 +532,18 @@ func (s *OpenAIServer) writeSSEChunk(w http.ResponseWriter, flusher http.Flusher
 }
 
 // selectResponse decides which response shape to return for the given request.
-// The order is: submit_work cadence → tool-call vs completion heuristic.
+// Priority:
+//  1. Role tool-call match (scripted determinism for coordinator-style flows).
+//     Consumes from the configured sequence and overrides normal behaviour
+//     when a marker matches AND the request advertises the named tool.
+//  2. submit_work cadence — emits submit_work after N tool rounds.
+//  3. Tool-call heuristic — first tool if tools present and no prior tool
+//     results, completion otherwise.
 func (s *OpenAIServer) selectResponse(req ChatCompletionRequest) ChatCompletionResponse {
+	if resp, ok := s.tryRoleToolCall(req); ok {
+		return resp
+	}
+
 	s.mu.RLock()
 	submitAfter := s.submitAfter
 	s.mu.RUnlock()
@@ -507,6 +563,87 @@ func (s *OpenAIServer) selectResponse(req ChatCompletionRequest) ChatCompletionR
 		return s.buildToolCallResponse(req.Tools[0], req.Model)
 	}
 	return s.buildCompletionResponse(req)
+}
+
+// tryRoleToolCall checks whether a configured RoleToolCall entry matches
+// the request's messages. On match it builds a ToolCall response with the
+// entry's Args and advances the cursor. Returns (resp, true) on match,
+// (_, false) otherwise — the caller proceeds with normal routing.
+//
+// Matching only fires when (a) a marker substring appears in system/user
+// content and (b) the request advertises the named tool. Mismatch on (b)
+// skips the entry without advancing the cursor, so a scenario that
+// accidentally mis-scopes a tool name gets deterministic fall-through
+// failure rather than silent wrong-tool injection.
+func (s *OpenAIServer) tryRoleToolCall(req ChatCompletionRequest) (ChatCompletionResponse, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.roleToolCalls) == 0 {
+		return ChatCompletionResponse{}, false
+	}
+
+	idx := s.roleToolCallIndex
+	if idx >= len(s.roleToolCalls) {
+		idx = len(s.roleToolCalls) - 1 // sticky after exhaustion
+	}
+	entry := s.roleToolCalls[idx]
+	if entry.Marker == "" {
+		return ChatCompletionResponse{}, false
+	}
+
+	matched := false
+	for _, msg := range req.Messages {
+		if msg.Role != "system" && msg.Role != "user" {
+			continue
+		}
+		if strings.Contains(msg.Content, entry.Marker) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return ChatCompletionResponse{}, false
+	}
+
+	if findToolByName(req.Tools, entry.ToolName) == nil {
+		// Tool not in the request's advertised list; don't inject it.
+		return ChatCompletionResponse{}, false
+	}
+
+	argsJSON, err := json.Marshal(entry.Args)
+	if err != nil {
+		argsJSON = []byte("{}")
+	}
+	// Advance only when we're actually about to return this entry —
+	// otherwise repeated failed matches would burn the cursor.
+	if s.roleToolCallIndex < len(s.roleToolCalls) {
+		s.roleToolCallIndex++
+	}
+
+	callID := "call_" + uuid.New().String()[:8]
+	return ChatCompletionResponse{
+		ID:      "chatcmpl-mock-" + uuid.New().String()[:8],
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   req.Model,
+		Choices: []Choice{{
+			Index: 0,
+			Message: ChatMessage{
+				Role: "assistant",
+				ToolCalls: []ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: FunctionCall{
+						Name:      entry.ToolName,
+						Arguments: string(argsJSON),
+					},
+				}},
+			},
+			FinishReason: "tool_calls",
+		}},
+		Usage: Usage{PromptTokens: 120, CompletionTokens: 40, TotalTokens: 160},
+	}, true
 }
 
 // countToolResults returns the number of tool-result messages in the history,

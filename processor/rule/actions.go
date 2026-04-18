@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
@@ -66,6 +67,18 @@ type Action struct {
 	// Prompt is the task prompt template for publish_agent actions
 	// Supports variable substitution: $entity.id, $related.id
 	Prompt string `json:"prompt,omitempty"`
+
+	// Tools is the per-spawned-agent tool allowlist for publish_agent actions.
+	// Tool names are resolved to agentic.ToolDefinition against the global
+	// tool registry at dispatch time; unknown names are logged and dropped.
+	// Empty/nil leaves TaskMessage.Tools unset, which makes the spawned loop
+	// fall back to global tool discovery (existing behaviour).
+	//
+	// This is the product-layer hook for scoping which tools a given role
+	// can see. Putting it on the rule — not in agentic-tools Config — keeps
+	// role→tools decisions in the workflow config that already owns the
+	// role name, model, and prompt for the spawned agent.
+	Tools []string `json:"tools,omitempty"`
 
 	// WorkflowID is the workflow identifier for trigger_workflow actions
 	WorkflowID string `json:"workflow_id,omitempty"`
@@ -482,6 +495,38 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 	return nil
 }
 
+// resolveToolNames looks up the given tool names in the agentictools
+// global registry and returns the matching ToolDefinition list. Names not
+// found in the registry are logged at Warn and dropped — a missing tool
+// shouldn't fail the spawn, just narrow the advertised set.
+//
+// Called by executePublishAgent when action.Tools is non-empty. Centralised
+// here so the executePublishAgent path stays readable and the same resolver
+// can be reused by other action types in the future.
+func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefinition {
+	if len(names) == 0 {
+		return nil
+	}
+	all := agentictools.ListRegisteredTools()
+	byName := make(map[string]agentic.ToolDefinition, len(all))
+	for _, t := range all {
+		byName[t.Name] = t
+	}
+
+	resolved := make([]agentic.ToolDefinition, 0, len(names))
+	for _, name := range names {
+		if def, ok := byName[name]; ok {
+			resolved = append(resolved, def)
+			continue
+		}
+		if e.logger != nil {
+			e.logger.Warn("publish_agent tool name not found in registry; dropped",
+				"tool_name", name)
+		}
+	}
+	return resolved
+}
+
 // executePublishAgent executes a publish_agent action, triggering an agentic loop.
 // It publishes a TaskMessage to the specified NATS subject.
 func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action, ec *ExecutionContext) error {
@@ -515,6 +560,19 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		Prompt:       prompt,
 		WorkflowSlug: ec.SubstituteVariables(action.WorkflowSlug),
 		WorkflowStep: ec.SubstituteVariables(action.WorkflowStep),
+	}
+
+	// Resolve per-agent tool allowlist from the global registry. Nil
+	// action.Tools leaves task.Tools unset (loop falls back to global
+	// discovery). An explicit empty slice produces non-nil empty
+	// task.Tools so the loop respects "no tools for this role" instead
+	// of falling back. Unknown names are logged and dropped.
+	if action.Tools != nil {
+		resolved := e.resolveToolNames(action.Tools)
+		if resolved == nil {
+			resolved = []agentic.ToolDefinition{}
+		}
+		task.Tools = resolved
 	}
 
 	if e.logger != nil {

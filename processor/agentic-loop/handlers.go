@@ -421,9 +421,13 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	budgetMsg := BuildIterationBudgetMessage(1, entity.MaxIterations)
 	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
 
-	// Use per-task tools if provided, otherwise discover from global registry
+	// Per-task tools: if the spawner set task.Tools (including an explicit
+	// empty slice from e.g. `"default_tools": []`), respect it. Only fall
+	// back to global discovery when the field is truly unset (nil). This is
+	// the gate that lets a flow say "this role gets no tools at all" —
+	// critical for role scoping done at the product layer.
 	var tools []agentic.ToolDefinition
-	if len(task.Tools) > 0 {
+	if task.Tools != nil {
 		tools = task.Tools
 	} else {
 		tools = h.discoverTools()
@@ -689,11 +693,18 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 		approved = filterResult.Approved
 	}
 
-	// Propagate domain metadata to approved tool calls
+	// Propagate domain metadata and loop correlation onto each approved
+	// call. LoopID is required by stateful tools like `decide` that need
+	// to resolve the originating loop entity; without it the tool returns
+	// an invalid-args error at execute time. Metadata is flow-specific
+	// context the dispatcher attached to the task.
 	metadata := h.loopManager.GetCachedMetadata(loopID)
 	for i := range approved {
 		if len(metadata) > 0 && len(approved[i].Metadata) == 0 {
 			approved[i].Metadata = metadata
+		}
+		if approved[i].LoopID == "" {
+			approved[i].LoopID = loopID
 		}
 	}
 

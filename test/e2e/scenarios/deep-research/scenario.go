@@ -27,7 +27,7 @@ type Config struct {
 	MetricsURL         string        `json:"metrics_url"`
 	LLMEndpointURL     string        `json:"llm_endpoint_url"`
 	CompleteTimeout    time.Duration `json:"complete_timeout"`
-	MinAgentLoops      int           `json:"min_agent_loops"`      // at least general + researcher + synthesizer = 3
+	MinAgentLoops      int           `json:"min_agent_loops"`      // general + researcher + coordinator + (subtopic) + synthesizer
 	MinEvidenceEntries int           `json:"min_evidence_entries"` // ≥ 1 evidence record collected
 }
 
@@ -37,13 +37,20 @@ type Config struct {
 //
 // Ports are in the 5xxxx range so this scenario's stack can run alongside
 // the agentic scenario (3xxxx range) without port collisions.
+//
+// MinAgentLoops is 4 because the chain now routes through a research
+// coordinator at the judgment point: user question → general → researcher
+// → coordinator (decides fan_out) → subtopic researcher → coordinator
+// (decides synthesize) → synthesizer. That's six loops in the happy path;
+// we assert ≥4 to keep the check tolerant of mock LLM reordering without
+// losing the signal that the coordinator path actually fires.
 func DefaultConfig() *Config {
 	return &Config{
 		NATSURL:            "nats://localhost:54222",
 		MetricsURL:         "http://localhost:59090",
 		LLMEndpointURL:     "",
 		CompleteTimeout:    10 * time.Second,
-		MinAgentLoops:      3,
+		MinAgentLoops:      4,
 		MinEvidenceEntries: 1,
 	}
 }
@@ -119,6 +126,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"inject-user-question", s.injectUserQuestion},
 		{"wait-for-chain-completion", s.waitForChainCompletion},
 		{"verify-evidence-collected", s.verifyEvidenceCollected},
+		{"verify-coordinator-fired", s.verifyCoordinatorFired},
 		{"validate-results", s.validateResults},
 	}
 
@@ -269,6 +277,62 @@ func (s *Scenario) verifyEvidenceCollected(ctx context.Context, result *scenario
 	keys, err := s.nats.GetBucketKeysSample(ctx, bucket, 5)
 	if err == nil {
 		result.Details["evidence_keys_sample"] = keys
+	}
+	return nil
+}
+
+// verifyCoordinatorFired scans ENTITY_STATES for a research-coordinator
+// loop whose decide() call landed a coordinator.next_action=fan_out
+// triple. This is the canary for the judgment layer: if absent, either
+// rule 07 (spawn-coordinator) didn't fire, the mock didn't trigger the
+// decide tool, or the decide tool's triple publication failed. Any of
+// those means the coordinator path is broken and synthesis would stall.
+func (s *Scenario) verifyCoordinatorFired(ctx context.Context, result *scenarios.Result) error {
+	ids, err := s.nats.GetAllEntityIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list entity ids: %w", err)
+	}
+
+	var coordinatorIDs []string
+	var fanOutIDs []string
+	for _, id := range ids {
+		entity, err := s.nats.GetEntity(ctx, id)
+		if err != nil {
+			continue
+		}
+		role := ""
+		nextAction := ""
+		for _, t := range entity.Triples {
+			switch t.Predicate {
+			case "agent.loop.role":
+				if s, ok := t.Object.(string); ok {
+					role = s
+				}
+			case "coordinator.next_action":
+				if s, ok := t.Object.(string); ok {
+					nextAction = s
+				}
+			}
+		}
+		if role == "research-coordinator" {
+			coordinatorIDs = append(coordinatorIDs, id)
+			if nextAction == "fan_out" {
+				fanOutIDs = append(fanOutIDs, id)
+			}
+		}
+	}
+
+	result.Metrics["coordinator_loops"] = len(coordinatorIDs)
+	result.Metrics["coordinator_fan_out_decisions"] = len(fanOutIDs)
+	if len(coordinatorIDs) > 0 {
+		result.Details["coordinator_sample"] = coordinatorIDs[0]
+	}
+
+	if len(coordinatorIDs) == 0 {
+		return fmt.Errorf("no research-coordinator loop found in ENTITY_STATES — rule 07 (spawn-coordinator) did not fire or the coordinator loop never completed")
+	}
+	if len(fanOutIDs) == 0 {
+		return fmt.Errorf("research-coordinator completed but no coordinator.next_action=fan_out triple appeared — decide tool likely did not publish (check mock LLM WithRoleToolCallSequence or agentic-tools decide registration)")
 	}
 	return nil
 }

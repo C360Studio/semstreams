@@ -20,7 +20,7 @@ func (t ToolDefinition) Validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("tool name required")
 	}
-	if t.Parameters == nil || len(t.Parameters) == 0 {
+	if len(t.Parameters) == 0 {
 		return fmt.Errorf("tool parameters required")
 	}
 	return nil

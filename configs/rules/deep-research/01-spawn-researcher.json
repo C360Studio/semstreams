@@ -23,7 +23,8 @@
       "subject": "agent.task.research",
       "role": "researcher",
       "model": "general",
-      "prompt": "Research a question that was submitted to the parent agent loop $entity.id. Call read_loop_result with that loop id to fetch the question body, then investigate using graph_query and web_search. When you have a complete answer, submit plain-text findings."
+      "tools": ["read_loop_result", "web_search", "http_request"],
+      "prompt": "Research a question that was submitted to the parent agent loop $entity.id. Call read_loop_result with that loop id to fetch the question body, then investigate using web_search. When you have a complete answer, submit plain-text findings."
     }
   ]
 }
