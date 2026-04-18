@@ -4,6 +4,8 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -1310,6 +1312,84 @@ func TestExecutionContext_SubstituteVariables(t *testing.T) {
 			assert.Equal(t, tt.want, result)
 		})
 	}
+}
+
+// TestExecutionContext_SubstituteVariables_WarnsOnUnresolved verifies that
+// any $entity/$related/$state token that survives substitution triggers a
+// warning log. This is the regression guard for the deep-research e2e
+// silent-pass bug where $entity.triple.agent.loop.task reached NATS KV as
+// a literal and caused "invalid key" errors hours down the debug path.
+func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
+	// Capture slog output. Not t.Parallel() — slog.SetDefault mutates
+	// package-level state.
+	prev := slog.Default()
+	var buf strings.Builder
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	tests := []struct {
+		name          string
+		ec            *ExecutionContext
+		template      string
+		wantLeftovers []string // substrings expected in the warning
+	}{
+		{
+			name:          "triple predicate missing from entity",
+			ec:            &ExecutionContext{EntityID: "entity.001", Entity: &gtypes.EntityState{ID: "entity.001"}},
+			template:      "key.$entity.triple.agent.loop.task",
+			wantLeftovers: []string{"$entity.triple.agent.loop.task"},
+		},
+		{
+			name:          "state substitution without state struct",
+			ec:            &ExecutionContext{EntityID: "entity.001"},
+			template:      "iter=$state.iteration",
+			wantLeftovers: []string{"$state.iteration"},
+		},
+		{
+			name:          "multiple unresolved tokens collected",
+			ec:            &ExecutionContext{EntityID: "entity.001"},
+			template:      "a=$entity.triple.missing.one b=$related.id c=$state.iteration",
+			wantLeftovers: []string{"$entity.triple.missing.one", "$state.iteration"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			_ = tc.ec.SubstituteVariables(tc.template)
+			logged := buf.String()
+			assert.Contains(t, logged, "Unresolved template variables", "expected warning in log output:\n%s", logged)
+			for _, want := range tc.wantLeftovers {
+				assert.Contains(t, logged, want, "expected token %q in warning", want)
+			}
+		})
+	}
+}
+
+// TestExecutionContext_SubstituteVariables_NoWarnOnClean verifies that a
+// template whose tokens all resolve cleanly does NOT emit the warning — so
+// successful substitutions stay silent in the log.
+func TestExecutionContext_SubstituteVariables_NoWarnOnClean(t *testing.T) {
+	prev := slog.Default()
+	var buf strings.Builder
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	ec := &ExecutionContext{
+		EntityID:  "entity.001",
+		RelatedID: "zone.A",
+		State:     &MatchState{Iteration: 2, MaxIterations: 5},
+		Entity: &gtypes.EntityState{
+			ID: "entity.001",
+			Triples: []message.Triple{
+				{Subject: "entity.001", Predicate: "agent.role", Object: "architect"},
+			},
+		},
+	}
+
+	got := ec.SubstituteVariables("$entity.id|$related.id|$state.iteration|$entity.triple.agent.role")
+	assert.Equal(t, "entity.001|zone.A|2|architect", got)
+	assert.Empty(t, buf.String(), "clean substitution should not log")
 }
 
 // T057: Test ActionTypeTriggerWorkflow constant
