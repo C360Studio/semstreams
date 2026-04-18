@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
+	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 )
@@ -103,11 +104,6 @@ func run() error {
 	}
 	defer configManager.Stop(5 * time.Second)
 
-	// Register the global agentic tool executors. Mirrors
-	// cmd/semstreams/main.go — explicit boot-time wiring so the
-	// agentic-tools component stays a pure tool-execution endpoint.
-	executors.RegisterAll(ctx, natsClient, platform, logger)
-
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)
 	if err != nil {
 		return err
@@ -119,7 +115,32 @@ func run() error {
 		return err
 	}
 
+	// Register the global agentic tool executors after services are
+	// configured. Mirrors cmd/semstreams/main.go — see ADR-029 for the
+	// pattern. Post-configure timing lets Pattern-B managers resolve
+	// against already-initialised infrastructure.
+	executors.RegisterAll(ctx, executors.ToolDependencies{
+		NATSClient:  natsClient,
+		Platform:    platform,
+		Logger:      logger,
+		RuleManager: buildRuleManager(ctx, natsClient, configManager, logger),
+	})
+
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
+}
+
+// buildRuleManager constructs a rule.ConfigManager for CRUD against the
+// rules KV namespace. Mirrors cmd/semstreams/main.go — same rationale (nil
+// processor reference, kvStore-backed CRUD only, hot-reload deferred).
+func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, configMgr *config.Manager, logger *slog.Logger) executors.RuleManager {
+	rcm := rulepkg.NewConfigManager(nil, configMgr, logger)
+	if err := rcm.InitializeKVStore(natsClient); err != nil {
+		logger.Warn("rule CRUD tools disabled: could not initialise rules KV store",
+			slog.Any("error", err))
+		return nil
+	}
+	_ = ctx
+	return rcm
 }
 
 // --- CLI and Config Functions (copied from semstreams main.go) ---

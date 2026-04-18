@@ -231,13 +231,51 @@ func (rcm *ConfigManager) getRuleViaConfigManager(_ context.Context, ruleID stri
 	return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "ConfigManager", "getRuleViaConfigManager", fmt.Sprintf("rule not found: %s", ruleID))
 }
 
-// ListRules returns all rule configurations
-func (rcm *ConfigManager) ListRules(_ context.Context) (map[string]Definition, error) {
+// ListRules returns all rule configurations.
+//
+// Prefers direct KV reads when a kvStore is wired (consistent with
+// SaveRule/GetRule/DeleteRule). Falls back to the processor's runtime
+// config for deployments that haven't called InitializeKVStore — kept so
+// the existing runtime-config-only path still works. Callers that need
+// full Definition data should ensure kvStore is initialised; the
+// fallback returns a stub Definition carrying only ID/Type/Name/Enabled.
+func (rcm *ConfigManager) ListRules(ctx context.Context) (map[string]Definition, error) {
 	rules := make(map[string]Definition)
 
-	// Get current config from processor
-	currentConfig := rcm.processor.GetRuntimeConfig()
+	if rcm.kvStore != nil {
+		keys, err := rcm.kvStore.Keys(ctx)
+		if err != nil {
+			return nil, errs.WrapTransient(err, "ConfigManager", "ListRules", "list keys from KV")
+		}
+		for _, key := range keys {
+			// Filter to the rules.* namespace — the bucket may hold other
+			// config keys.
+			if !strings.HasPrefix(key, "rules.") {
+				continue
+			}
+			ruleID := strings.TrimPrefix(key, "rules.")
+			entry, err := rcm.kvStore.Get(ctx, key)
+			if err != nil {
+				rcm.logger.Warn("Failed to load rule during ListRules; skipping",
+					"rule_id", ruleID, "error", err)
+				continue
+			}
+			var def Definition
+			if err := json.Unmarshal(entry.Value, &def); err != nil {
+				rcm.logger.Warn("Failed to unmarshal rule during ListRules; skipping",
+					"rule_id", ruleID, "error", err)
+				continue
+			}
+			rules[ruleID] = def
+		}
+		return rules, nil
+	}
 
+	// Fallback: runtime-config-only path (no KV). Returns stub Definitions.
+	if rcm.processor == nil {
+		return rules, nil
+	}
+	currentConfig := rcm.processor.GetRuntimeConfig()
 	if rulesMap, ok := currentConfig["rules"].(map[string]any); ok {
 		for ruleID, ruleConfig := range rulesMap {
 			if configMap, ok := ruleConfig.(map[string]any); ok {
@@ -250,7 +288,6 @@ func (rcm *ConfigManager) ListRules(_ context.Context) (map[string]Definition, e
 			}
 		}
 	}
-
 	return rules, nil
 }
 

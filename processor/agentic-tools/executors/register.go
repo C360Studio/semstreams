@@ -23,11 +23,33 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
+// ToolDependencies carries the runtime inputs the tool-registration
+// functions need. Using a struct rather than a growing positional arg list
+// follows the project convention (memory: feedback_go_signatures — "4+
+// args → request struct"). Adding a new Pattern-B manager in the future
+// means adding a field here, not shifting every call site.
+//
+// Zero values are legal on optional fields:
+//   - Logger nil → slog.Default()
+//   - NATSClient nil → stateful tools (read_loop_result, decide,
+//     query_entity) are skipped
+//   - RuleManager nil → rule CRUD tools are skipped
+//
+// Platform is a value type (not pointer) because PlatformMeta is a small
+// POD; the empty value is still safe for the decide tool to use.
+type ToolDependencies struct {
+	NATSClient  *natsclient.Client
+	Platform    component.PlatformMeta
+	Logger      *slog.Logger
+	RuleManager RuleManager // Pattern-B step 1; future steps add FlowManager, PersonaManager, etc.
+}
+
 // RegisterAll wires every tool this package owns into the agentic-tools
 // global registry. Failures are logged; stateful-tool wiring that can't
 // reach its bucket skips silently and lets the rest proceed — same
 // philosophy as the pre-refactor init() pattern.
-func RegisterAll(ctx context.Context, natsClient *natsclient.Client, platform component.PlatformMeta, logger *slog.Logger) {
+func RegisterAll(ctx context.Context, deps ToolDependencies) {
+	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -37,14 +59,18 @@ func RegisterAll(ctx context.Context, natsClient *natsclient.Client, platform co
 	registerHTTPRequest(logger)
 	registerGitHub(logger)
 
-	if natsClient == nil {
+	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, query_entity)")
-		return
+	} else {
+		registerReadLoopResult(ctx, deps.NATSClient, logger)
+		registerDecide(deps.NATSClient, deps.Platform, logger)
+		registerGraphQuery(ctx, deps.NATSClient, logger)
 	}
 
-	registerReadLoopResult(ctx, natsClient, logger)
-	registerDecide(natsClient, platform, logger)
-	registerGraphQuery(ctx, natsClient, logger)
+	// Pattern-B registry-backed tools. Each wire function handles a nil
+	// manager as a skip so callers can ship partial configs without
+	// exploding.
+	registerRules(deps.RuleManager, logger)
 }
 
 // registerGlobal is the shared RegisterTool wrapper with idempotent

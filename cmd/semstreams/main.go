@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
+	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 )
@@ -112,14 +113,6 @@ func run() error {
 	}
 	defer configManager.Stop(5 * time.Second)
 
-	// 7.5 Register the global agentic tool executors. Happens here (not
-	// inside agentic-tools.Component.Start) so registration is explicit
-	// in the boot sequence and the component stays a pure tool-execution
-	// endpoint. Must run after streams/buckets are up (step 5) and
-	// platform is known (step 7) because stateful tools (read_loop_result,
-	// decide, query_entity) need both.
-	executors.RegisterAll(ctx, natsClient, platform, logger)
-
 	// 8. Setup registries and manager
 	componentRegistry, manager, err := setupRegistriesAndManager(cfg)
 	if err != nil {
@@ -133,6 +126,19 @@ func run() error {
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
 	}
+
+	// 11. Register the global agentic tool executors after components have
+	// been wired. Scheduling this post-configure lets Pattern-B managers
+	// (rule.ConfigManager today; flow/persona/template managers later per
+	// ADR-029) resolve against already-initialised infrastructure. Stateful
+	// tools (read_loop_result, decide, query_entity) need natsClient +
+	// platform which are available from step 7.
+	executors.RegisterAll(ctx, executors.ToolDependencies{
+		NATSClient:  natsClient,
+		Platform:    platform,
+		Logger:      logger,
+		RuleManager: buildRuleManager(ctx, natsClient, configManager, logger),
+	})
 
 	// 11. Run application with signal handling
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
@@ -460,6 +466,30 @@ func shutdown(ctx context.Context, manager *service.Manager, timeout time.Durati
 // printHelp prints help information
 func printHelp() {
 	printDetailedHelp()
+}
+
+// buildRuleManager constructs a rule.ConfigManager dedicated to CRUD against
+// the rules KV namespace. We intentionally pass nil for the rule.Processor
+// reference: this manager is used only by the Pattern-B tool executors
+// (create_rule/update_rule/delete_rule/list_rules/get_rule), not for
+// runtime hot-reload into a live processor. All CRUD methods prefer the
+// kvStore path when available (SaveRule/GetRule/DeleteRule always;
+// ListRules as of ADR-029 step 1), so nil processor is safe.
+//
+// Hot-reload of saved rules into the running processor is a later step —
+// when that lands, the rule.Processor reference gets threaded in alongside.
+// Returning nil on init failure is intentional: registerRules treats a
+// nil RuleManager as "skip registration", keeping boot resilient to KV
+// unavailability.
+func buildRuleManager(ctx context.Context, natsClient *natsclient.Client, configMgr *config.Manager, logger *slog.Logger) executors.RuleManager {
+	rcm := rulepkg.NewConfigManager(nil, configMgr, logger)
+	if err := rcm.InitializeKVStore(natsClient); err != nil {
+		logger.Warn("rule CRUD tools disabled: could not initialise rules KV store",
+			slog.Any("error", err))
+		return nil
+	}
+	_ = ctx // reserved for future use if KV init needs a context
+	return rcm
 }
 
 // loadConfig loads configuration from the specified file path
