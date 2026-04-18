@@ -333,7 +333,7 @@ func TestHTTPResolveAndValidate_SSRFBlocking_ViaExecute(t *testing.T) {
 // TestHTTPBuildPinnedClientFromIP_PinsConnection verifies the pinned client
 // dials the provided IP regardless of the hostname in the URL.
 func TestHTTPBuildPinnedClientFromIP_PinsConnection(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("pinned-ok"))
 	}))
@@ -392,7 +392,7 @@ func TestHTTPRequestExecutor_Execute_StatusCodeBranching(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.statusCode)
 				if tc.body != "" {
 					_, _ = w.Write([]byte(tc.body))

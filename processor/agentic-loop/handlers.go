@@ -887,28 +887,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	}
 
 	// Record trajectory step
-	toolStatus := "success"
-	var errCategory string
-	if toolResult.Error != "" {
-		toolStatus = "failed"
-		errCategory = string(toolResult.ErrorKind)
-		if errCategory == "" {
-			errCategory = string(agentic.ToolErrorUnknown)
-		}
-	}
-	step := agentic.TrajectoryStep{
-		Timestamp:     time.Now(),
-		StepType:      "tool_call",
-		ToolName:      h.loopManager.GetToolName(toolResult.CallID),
-		ToolArguments: h.loopManager.GetToolArguments(toolResult.CallID),
-		ToolResult:    toolResult.Content,
-		Duration:      h.computeToolDuration(toolResult.CallID),
-		Provider:      h.resolveProvider(entity.Model),
-		Capability:    entity.Role,
-		ToolStatus:    toolStatus,
-		ErrorMessage:  toolResult.Error,
-		ErrorCategory: errCategory,
-	}
+	step := h.buildToolTrajectoryStep(toolResult, entity)
 	result.TrajectorySteps = append(result.TrajectorySteps, step)
 
 	// Eagerly add step to trajectory manager so the tool_call is available
@@ -955,6 +934,35 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	}
 
 	return result, nil
+}
+
+// buildToolTrajectoryStep constructs the tool_call trajectory step for a
+// completed tool result. ErrorKind is normalised to ToolErrorUnknown when
+// the executor returned an error without classifying it, so downstream
+// analytics always see a non-empty category.
+func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, entity agentic.LoopEntity) agentic.TrajectoryStep {
+	toolStatus := "success"
+	var errCategory string
+	if toolResult.Error != "" {
+		toolStatus = "failed"
+		errCategory = string(toolResult.ErrorKind)
+		if errCategory == "" {
+			errCategory = string(agentic.ToolErrorUnknown)
+		}
+	}
+	return agentic.TrajectoryStep{
+		Timestamp:     time.Now(),
+		StepType:      "tool_call",
+		ToolName:      h.loopManager.GetToolName(toolResult.CallID),
+		ToolArguments: h.loopManager.GetToolArguments(toolResult.CallID),
+		ToolResult:    toolResult.Content,
+		Duration:      h.computeToolDuration(toolResult.CallID),
+		Provider:      h.resolveProvider(entity.Model),
+		Capability:    entity.Role,
+		ToolStatus:    toolStatus,
+		ErrorMessage:  toolResult.Error,
+		ErrorCategory: errCategory,
+	}
 }
 
 // handleToolsComplete handles the case when all pending tools have completed

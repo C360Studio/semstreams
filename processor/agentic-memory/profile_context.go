@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/message"
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/message"
 )
 
 // profileContextSubject returns the NATS subject used to publish an assembled

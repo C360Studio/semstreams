@@ -387,13 +387,40 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	result, err := c.executeWithTimeout(ctx, call)
 	duration := time.Since(startTime).Seconds()
 
+	c.classifyToolOutcome(ctx, call, &result, err, duration)
+
+	// Propagate trace correlation fields from call to result
+	result.LoopID = call.LoopID
+	result.TraceID = call.TraceID
+
+	// Publish result
+	if err := c.publishResult(ctx, result); err != nil {
+		c.logger.Error("Failed to publish result", "error", err)
+		c.incrementErrors()
+		return
+	}
+
+	c.mu.Lock()
+	c.requestsProcessed++
+	c.mu.Unlock()
+}
+
+// classifyToolOutcome records metrics and updates the result's ErrorKind based
+// on the execution outcome. Framework-level timeout takes precedence over any
+// executor-set kind (a deeper cause like "network" may be masking a context
+// deadline). Mutates result in place.
+func (c *Component) classifyToolOutcome(
+	ctx context.Context,
+	call agentic.ToolCall,
+	result *agentic.ToolResult,
+	err error,
+	duration float64,
+) {
 	if err != nil {
 		c.logger.Error("Failed to execute tool", "tool", call.Name, "error", err)
-
-		// Classify. Framework-level timeout takes precedence over any
-		// executor-set kind (a deeper cause like "network" may be masking
-		// a context deadline).
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		isTimeout := errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, context.Canceled) || ctx.Err() != nil
+		if isTimeout {
 			result.ErrorKind = agentic.ToolErrorTimeout
 			if result.Error == "" {
 				result.Error = err.Error()
@@ -412,10 +439,12 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 				c.metrics.recordExecutionError(call.Name, string(result.ErrorKind), duration)
 			}
 		}
-
 		c.incrementErrors()
-	} else if result.Error != "" {
-		// Tool executed but returned an error result
+		return
+	}
+
+	if result.Error != "" {
+		// Tool executed but returned an error result.
 		if result.ErrorKind == "" {
 			result.ErrorKind = agentic.ToolErrorUnknown
 		}
@@ -426,37 +455,22 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 			slog.String("tool", call.Name),
 			slog.String("error_kind", string(result.ErrorKind)),
 			slog.String("error", result.Error))
-	} else {
-		// Successful execution
-		if c.metrics != nil {
-			c.metrics.recordExecutionSuccess(call.Name, duration)
-		}
-		c.logger.Debug("Tool executed successfully",
-			slog.String("tool", call.Name),
-			slog.Float64("duration_seconds", duration))
-	}
-
-	// Propagate trace correlation fields from call to result
-	result.LoopID = call.LoopID
-	result.TraceID = call.TraceID
-
-	// Publish result
-	if err := c.publishResult(ctx, result); err != nil {
-		c.logger.Error("Failed to publish result", "error", err)
-		c.incrementErrors()
 		return
 	}
 
-	c.mu.Lock()
-	c.requestsProcessed++
-	c.mu.Unlock()
+	if c.metrics != nil {
+		c.metrics.recordExecutionSuccess(call.Name, duration)
+	}
+	c.logger.Debug("Tool executed successfully",
+		slog.String("tool", call.Name),
+		slog.Float64("duration_seconds", duration))
 }
 
-// isToolAllowed checks if a tool is in the allowed list
-// Returns true if AllowedTools is nil/empty (allow all) or if tool is in the list
+// isToolAllowed checks if a tool is in the allowed list.
+// Returns true if AllowedTools is empty (allow all) or if tool is in the list.
 func (c *Component) isToolAllowed(toolName string) bool {
-	if c.config.AllowedTools == nil || len(c.config.AllowedTools) == 0 {
-		return true // Allow all tools
+	if len(c.config.AllowedTools) == 0 {
+		return true
 	}
 
 	for _, allowed := range c.config.AllowedTools {

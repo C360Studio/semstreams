@@ -10,15 +10,15 @@ import (
 // Config represents the configuration for the router processor.
 // Model selection is resolved from the unified model registry (component.Dependencies.ModelRegistry).
 type Config struct {
-	DefaultRole          string                `json:"default_role" schema:"type:string,description:Default role for new tasks,default:general,category:basic,required"`
-	AutoContinue         bool                  `json:"auto_continue" schema:"type:bool,description:Automatically continue last active loop,default:true,category:basic"` // Continue last loop if exists
-	Permissions          PermissionConfig      `json:"permissions" schema:"type:object,description:Permission configuration,category:advanced"`
-	StreamName           string                `json:"stream_name" schema:"type:string,description:NATS stream name for user messages,default:USER,category:advanced"`
-	ConsumerNameSuffix   string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
-	DeleteConsumerOnStop bool                  `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
-	Ports                    *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
-	EnableIntentClassification bool                `json:"enable_intent_classification,omitempty" schema:"type:bool,description:Enable LLM-assisted intent classification for ambiguous messages,category:advanced,default:false"`
-	EnableOnboarding           bool                `json:"enable_onboarding,omitempty" schema:"type:bool,description:Enable /onboard command for operating model interview,category:advanced,default:false"`
+	DefaultRole                string                `json:"default_role" schema:"type:string,description:Default role for new tasks,default:general,category:basic,required"`
+	AutoContinue               bool                  `json:"auto_continue" schema:"type:bool,description:Automatically continue last active loop,default:true,category:basic"` // Continue last loop if exists
+	Permissions                PermissionConfig      `json:"permissions" schema:"type:object,description:Permission configuration,category:advanced"`
+	StreamName                 string                `json:"stream_name" schema:"type:string,description:NATS stream name for user messages,default:USER,category:advanced"`
+	ConsumerNameSuffix         string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
+	DeleteConsumerOnStop       bool                  `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
+	Ports                      *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
+	EnableIntentClassification bool                  `json:"enable_intent_classification,omitempty" schema:"type:bool,description:Enable LLM-assisted intent classification for ambiguous messages,category:advanced,default:false"`
+	EnableOnboarding           bool                  `json:"enable_onboarding,omitempty" schema:"type:bool,description:Enable /onboard command for operating model interview,category:advanced,default:false"`
 }
 
 // PermissionConfig defines permission rules for the router

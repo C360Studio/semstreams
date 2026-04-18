@@ -65,7 +65,7 @@ func TestReadOnlyCategories(t *testing.T) {
 	assert.False(t, hasMeta, "CategoryMeta should not be in read-only set")
 }
 
-func TestCategoryRegistry_Concurrent(t *testing.T) {
+func TestCategoryRegistry_Concurrent(_ *testing.T) {
 	const workers = 20
 	const opsPerWorker = 50
 

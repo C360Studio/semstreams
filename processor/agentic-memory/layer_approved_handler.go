@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/c360studio/semstreams/message"
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/message"
 )
 
 // handleLayerApproved processes operating-model layer-approved events published by

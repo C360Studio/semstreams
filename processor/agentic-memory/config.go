@@ -9,11 +9,11 @@ import (
 
 // Config holds configuration for agentic-memory processor component
 type Config struct {
-	Extraction         ExtractionConfig      `json:"extraction" schema:"type:object,description:Fact extraction configuration,category:basic"`
-	Hydration          HydrationConfig       `json:"hydration" schema:"type:object,description:Context hydration configuration,category:basic"`
-	Checkpoint         CheckpointConfig      `json:"checkpoint" schema:"type:object,description:Memory checkpoint configuration,category:basic"`
-	Ports              *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
-	StreamName         string                `json:"stream_name,omitempty" schema:"type:string,description:JetStream stream name,category:advanced,default:AGENT"`
+	Extraction           ExtractionConfig      `json:"extraction" schema:"type:object,description:Fact extraction configuration,category:basic"`
+	Hydration            HydrationConfig       `json:"hydration" schema:"type:object,description:Context hydration configuration,category:basic"`
+	Checkpoint           CheckpointConfig      `json:"checkpoint" schema:"type:object,description:Memory checkpoint configuration,category:basic"`
+	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration,category:basic"`
+	StreamName           string                `json:"stream_name,omitempty" schema:"type:string,description:JetStream stream name,category:advanced,default:AGENT"`
 	ConsumerNameSuffix   string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Consumer name suffix for uniqueness,category:advanced"`
 	EnableProfileContext bool                  `json:"enable_profile_context,omitempty" schema:"type:bool,description:Assemble and publish operating model profile context on loop creation,category:advanced,default:false"`
 }

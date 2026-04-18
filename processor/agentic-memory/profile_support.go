@@ -3,8 +3,8 @@ package agenticmemory
 import (
 	"sync/atomic"
 
-	"github.com/c360studio/semstreams/component"
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/component"
 )
 
 // outputSubject returns the resolved NATS subject for a named output port,

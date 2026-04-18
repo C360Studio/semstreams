@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
-	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 )
 
 // newHandlerTestComponent builds a teams-memory Component suitable for driving
