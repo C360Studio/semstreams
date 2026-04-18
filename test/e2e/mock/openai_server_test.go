@@ -528,3 +528,155 @@ func makeRequest(t *testing.T, url string, req ChatCompletionRequest) ChatComple
 
 	return result
 }
+
+// TestOpenAIServer_RoleResponses verifies that WithRoleResponses routes the
+// completion body based on prompt content, picking the first marker match in
+// declaration order. This is how multi-agent scenarios (researcher vs
+// synthesizer vs partial-synthesizer) get deterministic per-role outputs.
+func TestOpenAIServer_RoleResponses(t *testing.T) {
+	server := NewOpenAIServer().WithRoleResponses([]RoleResponse{
+		{Marker: "Research the following", Content: "findings with SUBTOPICS:\n- subtopic A\n- subtopic B"},
+		{Marker: "focused research agent", Content: "focused sub-findings"},
+		{Marker: "research synthesizer", Content: "synthesis report"},
+	})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	tests := []struct {
+		name       string
+		systemMsg  string
+		wantSubstr string
+	}{
+		{"researcher routing", "You are a researcher. Research the following question thoroughly.", "SUBTOPICS:"},
+		{"sub-researcher routing", "You are a focused research agent", "focused sub-findings"},
+		{"synthesizer routing", "You are a research synthesizer", "synthesis report"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := ChatCompletionRequest{
+				Model: "mock",
+				Messages: []ChatMessage{
+					{Role: "system", Content: tc.systemMsg},
+					{Role: "user", Content: "go"},
+				},
+			}
+			resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+			if len(resp.Choices) == 0 {
+				t.Fatal("expected at least one choice")
+			}
+			got := resp.Choices[0].Message.Content
+			if !strings.Contains(got, tc.wantSubstr) {
+				t.Errorf("expected content to contain %q, got %q", tc.wantSubstr, got)
+			}
+		})
+	}
+}
+
+// TestOpenAIServer_RoleResponses_NoMatchFallsBack verifies that when no
+// marker matches the mock falls back to the default completion content, so
+// callers can mix role-routed markers with default behaviour.
+func TestOpenAIServer_RoleResponses_NoMatchFallsBack(t *testing.T) {
+	server := NewOpenAIServer().
+		WithCompletionContent("default fallback").
+		WithRoleResponses([]RoleResponse{
+			{Marker: "never-matches", Content: "should not be returned"},
+		})
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	req := ChatCompletionRequest{
+		Model:    "mock",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	if resp.Choices[0].Message.Content != "default fallback" {
+		t.Errorf("expected default fallback, got %q", resp.Choices[0].Message.Content)
+	}
+}
+
+// TestOpenAIServer_SubmitAfter verifies that WithSubmitAfter(n) causes the
+// mock to emit a submit_work tool call after n completed tool rounds,
+// provided submit_work is advertised in the request. Without submit_work in
+// the tools list the mock proceeds with normal behaviour.
+func TestOpenAIServer_SubmitAfter(t *testing.T) {
+	server := NewOpenAIServer().WithSubmitAfter(1)
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	tools := []Tool{
+		{Type: "function", Function: FunctionDef{Name: "graph_query"}},
+		{Type: "function", Function: FunctionDef{Name: "submit_work"}},
+	}
+
+	// Turn 1: no tool results yet → normal tool-call (first tool = graph_query).
+	req1 := ChatCompletionRequest{
+		Model:    "mock",
+		Tools:    tools,
+		Messages: []ChatMessage{{Role: "user", Content: "go"}},
+	}
+	resp1 := makeRequest(t, server.URL()+"/v1/chat/completions", req1)
+	if len(resp1.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("turn 1: expected one tool call, got %d", len(resp1.Choices[0].Message.ToolCalls))
+	}
+	if resp1.Choices[0].Message.ToolCalls[0].Function.Name != "graph_query" {
+		t.Errorf("turn 1: expected graph_query call, got %q", resp1.Choices[0].Message.ToolCalls[0].Function.Name)
+	}
+
+	// Turn 2: one tool result now in history → submitAfter threshold met → submit_work.
+	req2 := ChatCompletionRequest{
+		Model: "mock",
+		Tools: tools,
+		Messages: []ChatMessage{
+			{Role: "user", Content: "go"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "graph_query"}}}},
+			{Role: "tool", ToolCallID: "c1", Content: "results"},
+		},
+	}
+	resp2 := makeRequest(t, server.URL()+"/v1/chat/completions", req2)
+	if len(resp2.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("turn 2: expected submit_work call, got %d tool calls", len(resp2.Choices[0].Message.ToolCalls))
+	}
+	if resp2.Choices[0].Message.ToolCalls[0].Function.Name != "submit_work" {
+		t.Errorf("turn 2: expected submit_work, got %q", resp2.Choices[0].Message.ToolCalls[0].Function.Name)
+	}
+}
+
+// TestOpenAIServer_SubmitAfter_NoSubmitToolFallsThrough verifies that if
+// submit_work isn't advertised by the request the cadence is ignored and the
+// mock falls through to normal completion behaviour. Prevents the mock from
+// emitting a tool call the caller can't handle.
+func TestOpenAIServer_SubmitAfter_NoSubmitToolFallsThrough(t *testing.T) {
+	server := NewOpenAIServer().WithSubmitAfter(1)
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	// Tools list without submit_work.
+	tools := []Tool{{Type: "function", Function: FunctionDef{Name: "graph_query"}}}
+
+	req := ChatCompletionRequest{
+		Model: "mock",
+		Tools: tools,
+		Messages: []ChatMessage{
+			{Role: "user", Content: "go"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "graph_query"}}}},
+			{Role: "tool", ToolCallID: "c1", Content: "results"},
+		},
+	}
+	resp := makeRequest(t, server.URL()+"/v1/chat/completions", req)
+	// One tool round already completed and submit_work unavailable → completion.
+	if len(resp.Choices[0].Message.ToolCalls) != 0 {
+		t.Errorf("expected no tool calls, got %d", len(resp.Choices[0].Message.ToolCalls))
+	}
+	if resp.Choices[0].FinishReason != "stop" {
+		t.Errorf("expected finish_reason=stop, got %q", resp.Choices[0].FinishReason)
+	}
+}

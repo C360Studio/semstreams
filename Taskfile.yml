@@ -33,6 +33,8 @@ includes:
     taskfile: ./taskfiles/e2e/semantic.yml
   e2e:agentic:
     taskfile: ./taskfiles/e2e/agentic.yml
+  e2e:deep-research:
+    taskfile: ./taskfiles/e2e/deep-research.yml
   e2e:throughput:
     taskfile: ./taskfiles/e2e/throughput.yml
 

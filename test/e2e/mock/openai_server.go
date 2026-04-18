@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,21 @@ type streamToolCall struct {
 	Function FunctionCall `json:"function"`
 }
 
+// RoleResponse pairs a prompt-content marker with the completion body the
+// mock should return when that marker is present. Matching runs against
+// concatenated system and user message content in the incoming request, in
+// declaration order — first marker to match wins. Use this to give different
+// agent roles (researcher, synthesizer, etc.) distinct deterministic outputs
+// without coupling the mock to the full prompt.
+type RoleResponse struct {
+	// Marker is a substring searched for in system+user message content.
+	// Match is case-sensitive; keep markers specific enough to avoid overlap
+	// between roles.
+	Marker string
+	// Content is the completion body returned when Marker matches.
+	Content string
+}
+
 // OpenAIServer is a mock OpenAI-compatible server for testing.
 type OpenAIServer struct {
 	srv      *http.Server
@@ -128,6 +144,14 @@ type OpenAIServer struct {
 	// Response sequencing for multi-turn scenarios
 	responseSequence []string // sequence of completion contents
 	sequenceIndex    int      // current position in sequence
+
+	// Role-based routing for multi-agent scenarios
+	roleResponses []RoleResponse
+
+	// submit_work cadence: after this many completed tool rounds, if the
+	// request's tool list contains submit_work the mock emits it as the
+	// next tool call. Zero means "never auto-submit" (default).
+	submitAfter int
 
 	// Tracking for assertions
 	requestCount int
@@ -177,6 +201,32 @@ func (s *OpenAIServer) WithResponseSequence(responses []string) *OpenAIServer {
 	defer s.mu.Unlock()
 	s.responseSequence = responses
 	s.sequenceIndex = 0
+	return s
+}
+
+// WithRoleResponses configures prompt-content-based routing for the completion
+// body. The mock scans the system+user messages in the incoming request for
+// each marker in order; the first match wins. When no marker matches (or when
+// roleResponses is empty) the server falls back to the response sequence, then
+// to the default completion content. The tool-call turn is unaffected.
+func (s *OpenAIServer) WithRoleResponses(resps []RoleResponse) *OpenAIServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roleResponses = resps
+	return s
+}
+
+// WithSubmitAfter configures the mock to emit a submit_work tool call after n
+// tool rounds have completed, provided submit_work is advertised in the
+// request's tool list. n=0 disables the behaviour (default). n=1 submits after
+// the first tool round; use a higher value to exercise multi-tool flows before
+// completion. Requires a registered submit_work executor on the agentic-tools
+// side to actually terminate the loop — without one the call surfaces as a
+// "tool not found" error.
+func (s *OpenAIServer) WithSubmitAfter(n int) *OpenAIServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.submitAfter = n
 	return s
 }
 
@@ -291,16 +341,12 @@ func (s *OpenAIServer) handleChatCompletion(w http.ResponseWriter, r *http.Reque
 		time.Sleep(delay)
 	}
 
-	// Determine response based on conversation state
-	var resp ChatCompletionResponse
-
-	if s.hasToolResults(req.Messages) {
-		resp = s.buildCompletionResponse(req.Model)
-	} else if len(req.Tools) > 0 {
-		resp = s.buildToolCallResponse(req.Tools[0], req.Model)
-	} else {
-		resp = s.buildCompletionResponse(req.Model)
-	}
+	// Determine response based on conversation state. Priority:
+	//   1. If submit_work is configured and the tool-round count meets the
+	//      threshold, emit a submit_work call (if advertised by the request).
+	//   2. Otherwise, tool-call turn vs completion turn follows the
+	//      hasToolResults/len(Tools) heuristic.
+	resp := s.selectResponse(req)
 
 	if req.Stream {
 		s.writeStreamingResponse(w, resp)
@@ -439,13 +485,51 @@ func (s *OpenAIServer) writeSSEChunk(w http.ResponseWriter, flusher http.Flusher
 	flusher.Flush()
 }
 
-func (s *OpenAIServer) hasToolResults(messages []ChatMessage) bool {
-	for _, msg := range messages {
-		if msg.Role == "tool" {
-			return true
+// selectResponse decides which response shape to return for the given request.
+// The order is: submit_work cadence → tool-call vs completion heuristic.
+func (s *OpenAIServer) selectResponse(req ChatCompletionRequest) ChatCompletionResponse {
+	s.mu.RLock()
+	submitAfter := s.submitAfter
+	s.mu.RUnlock()
+
+	toolRounds := countToolResults(req.Messages)
+
+	if submitAfter > 0 && toolRounds >= submitAfter {
+		if submit := findToolByName(req.Tools, "submit_work"); submit != nil {
+			return s.buildToolCallResponse(*submit, req.Model)
 		}
 	}
-	return false
+
+	if toolRounds > 0 {
+		return s.buildCompletionResponse(req)
+	}
+	if len(req.Tools) > 0 {
+		return s.buildToolCallResponse(req.Tools[0], req.Model)
+	}
+	return s.buildCompletionResponse(req)
+}
+
+// countToolResults returns the number of tool-result messages in the history,
+// which equals the number of completed tool rounds.
+func countToolResults(messages []ChatMessage) int {
+	n := 0
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			n++
+		}
+	}
+	return n
+}
+
+// findToolByName returns a pointer to the matching Tool in the request, or
+// nil if absent.
+func findToolByName(tools []Tool, name string) *Tool {
+	for i := range tools {
+		if tools[i].Function.Name == name {
+			return &tools[i]
+		}
+	}
+	return nil
 }
 
 func (s *OpenAIServer) buildToolCallResponse(tool Tool, model string) ChatCompletionResponse {
@@ -486,16 +570,26 @@ func (s *OpenAIServer) buildToolCallResponse(tool Tool, model string) ChatComple
 	}
 }
 
-func (s *OpenAIServer) buildCompletionResponse(model string) ChatCompletionResponse {
+// buildCompletionResponse returns a completion-turn response. Priority for
+// the content body:
+//
+//  1. First RoleResponse whose Marker is a substring of any system/user
+//     message in the request.
+//  2. Next entry in the configured response sequence (advances the cursor).
+//  3. The default completionContent.
+//
+// Taking the full request lets us inspect conversation content for role
+// routing without the caller pre-extracting a marker.
+func (s *OpenAIServer) buildCompletionResponse(req ChatCompletionRequest) ChatCompletionResponse {
 	s.mu.Lock()
 	content := s.completionContent
-	// Use response sequence if configured
-	if len(s.responseSequence) > 0 {
+	if matched, ok := firstRoleMatch(s.roleResponses, req.Messages); ok {
+		content = matched
+	} else if len(s.responseSequence) > 0 {
 		if s.sequenceIndex < len(s.responseSequence) {
 			content = s.responseSequence[s.sequenceIndex]
 			s.sequenceIndex++
 		} else {
-			// After sequence exhausted, return last response
 			content = s.responseSequence[len(s.responseSequence)-1]
 		}
 	}
@@ -505,7 +599,7 @@ func (s *OpenAIServer) buildCompletionResponse(model string) ChatCompletionRespo
 		ID:      "chatcmpl-mock-" + uuid.New().String()[:8],
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:   model,
+		Model:   req.Model,
 		Choices: []Choice{{
 			Index: 0,
 			Message: ChatMessage{
@@ -520,4 +614,27 @@ func (s *OpenAIServer) buildCompletionResponse(model string) ChatCompletionRespo
 			TotalTokens:      225,
 		},
 	}
+}
+
+// firstRoleMatch scans system+user message content for each role-response
+// marker in declaration order and returns the matching content on the first
+// hit. Markers are case-sensitive substring matches.
+func firstRoleMatch(resps []RoleResponse, messages []ChatMessage) (string, bool) {
+	if len(resps) == 0 {
+		return "", false
+	}
+	for _, r := range resps {
+		if r.Marker == "" {
+			continue
+		}
+		for _, msg := range messages {
+			if msg.Role != "system" && msg.Role != "user" {
+				continue
+			}
+			if strings.Contains(msg.Content, r.Marker) {
+				return r.Content, true
+			}
+		}
+	}
+	return "", false
 }

@@ -1,0 +1,102 @@
+# Deep-Research E2E Test Environment for SemStreams
+#
+# Tests the rules-driven deep-research flow end to end with a mock LLM that
+# routes its completion body by prompt content (researcher vs synthesizer).
+#
+# Usage:
+#   task e2e:deep-research                                  # built-in mock
+#
+# This compose file starts:
+#   - NATS with JetStream (ports isolated from agentic.yml via 5xxxx range)
+#   - Mock OpenAI server with role-based response routing
+#   - SemStreams loaded with deep-research-test.json + rules dir
+#
+# Port allocation is separate from agentic.yml so both can run side by side.
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: semstreams-deep-research-nats
+    ports:
+      - "54222:4222"
+      - "58222:8222"
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-deep-research-nats"]
+    volumes:
+      - nats-deep-research-data:/data
+    networks:
+      - semstreams-deep-research-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mock-llm:
+    build:
+      context: ../..
+      dockerfile: test/e2e/mock/Dockerfile
+    container_name: semstreams-deep-research-mock-llm
+    ports:
+      - "58180:8080"
+    networks:
+      - semstreams-deep-research-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  semstreams:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: semstreams-deep-research-app
+    command: ["--config", "/app/configs/flows/deep-research-test.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+    volumes:
+      - ../../configs:/app/configs:ro
+    ports:
+      - "58080:8080"
+      - "59090:9090"
+    networks:
+      - semstreams-deep-research-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/readyz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-deep-research-net:
+    driver: bridge
+
+volumes:
+  nats-deep-research-data:
+    driver: local

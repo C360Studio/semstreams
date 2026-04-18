@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/results"
 	scenarios "github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
+	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/throughput"
 )
 
@@ -232,6 +233,8 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    agentic         - Agent loop, model, and tools E2E test")
 	fmt.Println("                      Uses mock LLM by default (CI-friendly)")
 	fmt.Println("                      Override with AGENTIC_LLM_URL for real LLM")
+	fmt.Println("    deep-research   - Rules-driven multi-agent research flow")
+	fmt.Println("                      Requires rule-processor with deep-research rules")
 	fmt.Println("")
 	fmt.Println("  Throughput (for profiling):")
 	fmt.Println("    throughput       - High-volume stress test (10,000+ messages)")
@@ -377,6 +380,12 @@ func createScenario(
 		cfg := agentic.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
 		return agentic.NewScenario(edgeClient, cfg)
+
+	// Deep-research scenario (rules-driven multi-agent research flow)
+	case "deep-research":
+		cfg := deepresearch.DefaultConfig()
+		cfg.MetricsURL = flags.metricsURL
+		return deepresearch.NewScenario(edgeClient, cfg)
 
 	// Throughput scenario (high-volume stress test with profiling + query load)
 	case "throughput":
