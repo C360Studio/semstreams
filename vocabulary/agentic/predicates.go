@@ -576,3 +576,35 @@ const (
 	// DataType: string
 	StepErrorCategory = "agent.step.error_category"
 )
+
+// Coordinator Predicates
+//
+// Emitted by the coordinator's decide terminal tool (see
+// processor/agentic-tools/decide.go) onto the coordinator's own loop entity
+// so downstream rules can branch deterministically on the coordinator's
+// decision without having to parse the loop's result JSON.
+//
+// The coordinator role is the judgment layer of the three-layer
+// orchestration architecture (ADR-028). Its decide() call is structured;
+// the decision's lower-bandwidth payload (the action + a short reason)
+// lands in triples here; any larger supporting data (subtopics list,
+// retry_hint prose) stays in LoopCompletedEvent.Result and is fetched
+// on demand via read_loop_result.
+const (
+	// CoordinatorNextAction is the action the coordinator decided on,
+	// constrained by whatever enumeration the specific flow's coordinator
+	// persona documents. Stock research-coordinator values:
+	// "fan_out", "synthesize", "retry", "done".
+	// Example: "fan_out"
+	// DataType: string
+	CoordinatorNextAction = "coordinator.next_action"
+
+	// CoordinatorDecisionReason is a short natural-language justification
+	// the coordinator supplied alongside its action choice. Small enough
+	// to inline as a triple — rule-author-friendly for debugging but not
+	// meant to carry full reasoning traces.
+	// Example: "researcher produced three distinct subtopics worth
+	// separate investigation"
+	// DataType: string
+	CoordinatorDecisionReason = "coordinator.decision_reason"
+)
