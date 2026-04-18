@@ -160,10 +160,44 @@ func (c *Component) Start(ctx context.Context) error {
 		c.logger.Info("Subscribed to tool.list", "subject", toolListSubject)
 	}
 
+	// Stateful tools that depend on the NATS connection get wired up here.
+	// read_loop_result reads from the AGENT_LOOPS KV bucket so downstream
+	// agents can pull another loop's completion output on demand instead of
+	// having the content injected into their prompt.
+	c.registerStatefulTools(ctx)
+
 	c.running = true
 	c.startTime = time.Now()
 
 	return nil
+}
+
+// registerStatefulTools wires up tool executors that require the component's
+// NATS connection to operate. Failures are logged but non-fatal: the
+// component still serves other tools. Called from Start after the NATS
+// client has been validated.
+func (c *Component) registerStatefulTools(ctx context.Context) {
+	loopsBucketName := c.config.LoopsBucket
+	if loopsBucketName == "" {
+		loopsBucketName = "AGENT_LOOPS"
+	}
+
+	bucket, err := c.natsClient.GetKeyValueBucket(ctx, loopsBucketName)
+	if err != nil {
+		c.logger.Warn("read_loop_result tool disabled: could not open loops bucket",
+			slog.String("bucket", loopsBucketName),
+			slog.Any("error", err))
+		return
+	}
+
+	executor := NewReadLoopResultExecutor(NewLoopsKVAdapter(bucket))
+	if err := c.RegisterToolExecutor(executor); err != nil {
+		c.logger.Warn("Failed to register read_loop_result tool",
+			slog.Any("error", err))
+		return
+	}
+	c.logger.Info("Registered read_loop_result tool",
+		slog.String("bucket", loopsBucketName))
 }
 
 // setupConsumer sets up a JetStream consumer for an input port

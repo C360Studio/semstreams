@@ -2,7 +2,7 @@
   "id": "synthesize_evidence",
   "type": "expression",
   "name": "Synthesize When Evidence Collected",
-  "description": "When a researcher's entity has accumulated a research.has_evidence triple (written by rule 02), spawn a synthesizer to aggregate findings into a final answer. Fires against ENTITY_STATES rather than RESEARCH_EVIDENCE so we can leverage the loop entity's existing predicates for templating.",
+  "description": "When a researcher loop accumulates a research.has_evidence triple (written by rule 02), spawn a synthesizer. The synthesizer receives the researcher's loop id and uses read_loop_result to page through the findings — no inline content carried by the rule. See ADR-028.",
   "enabled": true,
   "conditions": [
     {
@@ -24,7 +24,7 @@
       "subject": "agent.task.synthesis",
       "role": "general",
       "model": "general",
-      "prompt": "You are a research synthesizer. Evidence has been gathered on a topic. Produce a structured synthesis report with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)\n\nQuery the graph for entities with predicate research.has_evidence to find collected findings. Original research task: $entity.triple.agent.loop.task"
+      "prompt": "You are a research synthesizer. A researcher has finished in loop $entity.id. Call read_loop_result with loop_id=$entity.id to fetch the findings (page through with the offset metadata if the result is long). Then produce a structured synthesis with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution if the researcher cited any)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)\n\nAdditional context: query the graph for entities with predicate research.has_evidence to discover other related findings from parallel researchers on the same topic."
     }
   ]
 }

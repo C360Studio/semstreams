@@ -152,7 +152,7 @@
       "config": {
         "stream_name": "AGENT",
         "timeout": "10s",
-        "allowed_tools": ["query_entity", "query_entities", "graph_query", "submit_work"],
+        "allowed_tools": ["query_entity", "query_entities", "graph_query", "read_loop_result", "submit_work"],
         "ports": {
           "inputs": [
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "AGENT", "required": true}

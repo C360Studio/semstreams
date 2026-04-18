@@ -18,6 +18,7 @@ type Config struct {
 	AllowedTools         []string              `json:"allowed_tools"        schema:"type:array,description:List of allowed tools (nil/empty allows all),category:advanced"`
 	ApprovalRequired     []string              `json:"approval_required,omitempty" schema:"type:array,description:Tool names requiring human approval before execution,category:advanced"`
 	EnableCategories     bool                  `json:"enable_categories,omitempty" schema:"type:bool,description:Enable tool category filtering for role-based access,category:advanced,default:false"`
+	LoopsBucket          string                `json:"loops_bucket,omitempty" schema:"type:string,description:NATS KV bucket name holding agent loop state (for read_loop_result),default:AGENT_LOOPS,category:advanced"`
 }
 
 // Validate checks the configuration for errors
@@ -76,5 +77,6 @@ func DefaultConfig() Config {
 		StreamName:   "AGENT",
 		Timeout:      "60s",
 		AllowedTools: nil, // nil means allow all tools
+		LoopsBucket:  "AGENT_LOOPS",
 	}
 }

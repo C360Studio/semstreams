@@ -38,6 +38,12 @@
       "default": false,
       "category": "advanced"
     },
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket name holding agent loop state (for read_loop_result)",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",
