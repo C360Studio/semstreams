@@ -1,8 +1,30 @@
-# ADR-026: Coordinator Agent — Dynamic Flow Composition
+# ADR-026: Coordinator Agent — Judgment, Orchestration, and Dynamic Flow Composition
 
 ## Status
 
-Proposed
+Proposed — **refreshed 2026-04-18** with ADR-028 framing. The original "dynamic flow composition" framing stands for the tool set, but the coordinator's primary purpose is broader: it is the **judgment role** in the three-layer orchestration architecture (ADR-028). Dynamic flow composition is one of its capabilities, not its definition.
+
+## Role within the three-layer orchestration architecture
+
+Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). The coordinator is **Layer 3 — Judgment**. Its purpose:
+
+- **Invoked by rules**, not continuously running. Rules fire at decision points where metadata isn't enough to choose the next action (e.g. "did the researcher produce fan-out-worthy subtopics, or is it done?"). Those rules spawn the coordinator as a normal agent loop with the coordinator role persona.
+- **Reads agent output on demand** via `read_loop_result(loop_id)`. The upstream agent's prose is never injected into the coordinator's prompt — the coordinator fetches only what fits its context.
+- **Returns a structured terminal decision** via a `decide()` tool whose schema enumerates the valid next actions (e.g. `fan_out`, `synthesize`, `retry`, `done`). Rules downstream match on `coordinator.next_action` triples and route accordingly.
+- **Contains schema discipline to one role.** Researcher, coder, synthesizer, reviewer agents produce free text. Only the coordinator needs structured output — which means ADR-028's per-tool retry policy gets invoked at the coordinator's `decide` tool, not at every role's submit boundary.
+- **Can manipulate flows and rules at runtime** via the six tool executors defined below. That's how the coordinator adapts the pipeline when its judgment reveals a gap.
+
+The six dynamic-flow-composition tools originally proposed by this ADR remain correct and necessary — they're the coordinator's mechanism for shaping flows when static configuration doesn't cover the case. But the coordinator is not primarily a flow composer; it's the judgment layer that *happens to be able to* compose flows when it needs to.
+
+## Why one judgment role, not per-agent schema
+
+The operational learning that prompted the ADR-028 refresh: requiring every agent (researcher, coder, etc.) to submit via a schema-enforced terminal tool breaks on small models. Schema adherence fails; retries eat iteration budget; flows stall. Semspec lived this.
+
+Concentrating the schema-adherence burden on the coordinator means:
+
+- Researcher/coder/synthesizer/reviewer agents can run on small models, produce prose, call `read_loop_result` on each other's outputs, and not need structured returns.
+- The coordinator is naturally the role you'd run on a stronger model (its decisions matter most), which makes structured output tractable.
+- Per-tool retry policy (`agentic-tools.tool_retries`) gets declared on the coordinator's `decide` tool specifically. Retries + exponential backoff + validation-error kind gives the small-model-shaped failure mode a place to land.
 
 ## Context
 
@@ -37,11 +59,43 @@ referenced in the safety model below.
 
 ## Decision
 
-Introduce six new tool executors that give agents the ability to create, modify, and
-monitor flows and rules at runtime. The coordinator agent is not a new component type — it
-is an `agentic-loop` instance configured with the coordinator role persona, these six
-tools in its allowlist, and a system prompt that describes the component catalog. Its stock
-flow config lives at `configs/flows/coordinator.json`.
+The coordinator is an `agentic-loop` instance configured with the coordinator role persona, its terminal `decide` tool, the six flow-composition tools, and a system prompt that describes the component catalog and the available decision actions. Its stock flow config lives at `configs/flows/coordinator.json`.
+
+Seven tool executors in total: one terminal `decide` tool that is the coordinator's return-statement, and six flow/rule composition tools that are its reach.
+
+### Terminal decision tool
+
+**`decide`** is the coordinator's structured return value. Its schema enumerates a small, flow-specific set of next actions the coordinator can choose from — typically four to six options. For the deep-research flow's research coordinator:
+
+```json
+{
+  "action": "fan_out" | "synthesize" | "retry" | "done",
+  "reason": "short natural-language justification",
+  "subtopics": ["..."],          // required when action=fan_out
+  "retry_hint": "..."             // optional when action=retry
+}
+```
+
+On successful decide, the tool emits a triple on the coordinator's loop entity:
+`coordinator.next_action = <action>`. The rule engine matches downstream rules on that triple and routes mechanically. The reason + action-specific fields land in the loop's result text so they're inspectable via `read_loop_result` without any tool parsing.
+
+Because `decide` is where schema discipline is concentrated, it's also the first real consumer of the opt-in `tool_retries` policy (ADR-028 Layer 1). Stock coordinator configs declare:
+
+```json
+"tool_retries": {
+  "decide": {
+    "max_attempts": 3,
+    "backoff_initial_ms": 100,
+    "retry_on_kinds": ["validation", "invalid_args", "timeout"]
+  }
+}
+```
+
+Per-flow coordinators can tighten or relax the retry envelope in their config.
+
+### Flow-composition tool executors
+
+The original six executors remain the coordinator's toolkit for shaping pipelines when static configuration doesn't cover the case. They're still required; the framing around them just shifts from "coordinator's purpose" to "coordinator's reach."
 
 ### Tool executors
 
@@ -219,3 +273,24 @@ an operation that is in-process by design. MCP exposure remains appropriate as a
 access pattern for external tooling (e.g., the flow builder UI's existing
 `POST /api/ai/generate-flow` endpoint), but the coordinator should not depend on an
 external network call to manage its own infrastructure.
+
+## Related decisions
+
+- [ADR-028](028-orchestration-architecture.md) — names the coordinator as Layer 3 of the three-layer architecture and explains why schema discipline is contained here.
+- [ADR-027](027-ops-agent-meta-harness.md) — the ops agent is Layer 4, consumes coordinator trajectories to propose improvements, and reuses the same runtime composition tools defined here.
+- [ADR-025](025-semteams-consolidation.md) — provides the framework primitives (prompt assembler, approval filter, governance filter) the coordinator depends on.
+- [ADR-024](024-layered-llm-timeouts.md) — the timeout model the coordinator's `decide` tool inherits.
+
+## Implementation sequencing
+
+Before a first coordinator ships, in order:
+
+1. `decide` terminal tool — simplest, most important. Defined per flow, emits the `coordinator.next_action` triple. No flow-composition capability yet; just judgment.
+2. `read_loop_result` is already built (ADR-028 Layer 1).
+3. Opt-in retry policy is already built (ADR-028 Layer 1) — the coordinator's stock config opts in for `decide`.
+4. Stock research coordinator persona + `configs/flows/coordinator-research.json`.
+5. Re-enable rule 03 (subtopic fan-out) in the deep-research flow, this time matching on `coordinator.next_action = fan_out`.
+6. End-to-end coordinator exercise on the deep-research flow.
+7. Six flow-composition executors — after the judgment-only coordinator is proved out.
+
+The two infrastructure prerequisites (`saveViaConfigManager()` completion and ConfigManager wiring) gate step 7, not steps 1–6.

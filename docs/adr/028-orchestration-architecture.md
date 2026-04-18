@@ -3,11 +3,10 @@
 ## Status
 
 Proposed. Layer 1 (data-flow substrate + retry plumbing) is built. Layers 3
-and 4 (coordinator agent, ops agent) are named here and deferred to refreshed
-ADR-026 and ADR-027 respectively. This ADR supersedes the implicit assumption
-in earlier rule-engine work that pure-rule orchestration is sufficient for
-real-world agentic flows; it does not yet supersede ADR-026 or ADR-027, but
-flags both as needing a refresh with the clarifications below.
+and 4 (coordinator agent, ops agent) are named here and detailed in ADR-026
+and ADR-027 respectively — both refreshed 2026-04-18 with the framing below.
+This ADR supersedes the implicit assumption in earlier rule-engine work that
+pure-rule orchestration is sufficient for real-world agentic flows.
 
 ## Context
 
@@ -73,35 +72,34 @@ Commit to a three-layer agentic orchestration architecture:
   (per-rule feedback, bootstrap recovery, `SourceRevision` dedup, TTL
   sweep, spawned-task triples) are the foundation for this layer.
 
-### Layer 3 — Coordinator agent (deferred; refreshes ADR-026)
+### Layer 3 — Coordinator agent (design in ADR-026)
 
 - A dedicated agent role invoked by rules at judgment points.
 - Reads upstream agent output via `read_loop_result` (Layer 1), reasons
   over it, and emits a **structured terminal decision** via a small
-  schema-backed tool.
+  schema-backed `decide` tool.
 - Contains the schema-discipline problem to **one role** — the coordinator
   — instead of requiring every agent to hit a schema. The coordinator is
   naturally the role you'd run on a stronger model, which makes structured
-  output tractable.
+  output tractable. The `decide` tool is the first real consumer of
+  Layer 1's `tool_retries` policy.
 - Can manipulate rules and flows at runtime via tool executors (flow
   compose/update), making the coordinator the primary control surface for
   dynamic behaviour — not rules.
-- ADR-026 needs a refresh to frame this precisely: the coordinator is not
-  merely a "dynamic flow composer"; it is the judgment layer of the
-  orchestration architecture and the home of schema adherence.
+- Full implementation sequencing in ADR-026 (refreshed 2026-04-18).
 
-### Layer 4 — Ops agent (deferred; refreshes ADR-027)
+### Layer 4 — Ops agent (design in ADR-027)
 
 - Watches completed loops, trajectories, and rule-fire telemetry for
   failure patterns: recurring tool errors, iteration-budget overruns,
   rules that consistently fire-then-reverse, coordinator decisions that
   correlate with downstream failures.
 - Proposes prompt, rule, schema, and retry-policy refinements via the
-  same runtime tooling the coordinator uses.
+  **same runtime composition tools the coordinator uses** (one tool set,
+  one safety surface, one audit trail).
 - Closes the improvement loop: rules are plumbing, the coordinator is
   judgment, ops is learning.
-- ADR-027 needs a refresh to frame this as a telemetry-consumer + flow
-  editor, not a separate orchestration primitive.
+- Full three-phase delivery in ADR-027 (refreshed 2026-04-18).
 
 ## Implications for rule authors
 

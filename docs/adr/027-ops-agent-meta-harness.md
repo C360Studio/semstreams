@@ -2,7 +2,27 @@
 
 ## Status
 
-Proposed
+Proposed — **refreshed 2026-04-18** with ADR-028 framing. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
+
+## Role within the three-layer orchestration architecture
+
+Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). The ops agent is **Layer 4 — Learning**. Its purpose:
+
+- **Reads telemetry, not individual decisions.** Where the coordinator (Layer 3) makes per-invocation judgments, the ops agent looks at patterns across many completed loops and coordinator decisions. Its observation substrate is the graph — the same ~113 predicates Phase 0 laid down.
+- **Proposes refinements to any harness axis.** System prompts, rules, flow topology, model selection, coordinator `decide` schemas, retry policies, tool allowlists. Anything that affects agent behaviour at scale is fair game.
+- **Reuses the coordinator's runtime composition tools.** `create_rule`, `manage_flow`, `list_components`, `list_personas`, `list_flow_templates`, `monitor_flow` — all defined in ADR-026 — are the ops agent's deployment surface. Schema validation + governance + sandbox + approval gates (ADR-026 safety model) apply uniformly. There is no separate ops-only deployment path, and no privileged bypass.
+- **Closes the improvement loop.** Coordinator makes decisions; ops agent observes whether those decisions correlate with good outcomes; ops agent proposes changes to how decisions are made (the coordinator's `decide` schema, its stock prompt, its retry policy). Rules are skeleton, coordinator is judgment, ops is learning.
+
+## Why reuse coordinator tools
+
+The operational learning from ADR-028: containing schema discipline to one role (the coordinator) works because the surface area is small. The same reasoning applies to deployment tooling — having one set of runtime composition tools, used by both coordinator and ops, means:
+
+- Governance rules reviewed once apply to both.
+- Approval gates configured once cover both.
+- The audit trail (who changed what, when, why) lands on the same graph entities.
+- Adding a new composition capability (e.g. "adjust a retry policy") ships to both in one change.
+
+A parallel ops-only toolset would double the safety surface and invite drift between "what the coordinator can do at runtime" and "what the ops agent can do at runtime." The ADR-028 commitment to one runtime composition surface explicitly rejects that split.
 
 ## Context
 
@@ -191,3 +211,23 @@ Deploy two configurations simultaneously and route traffic between them for dire
 comparison. Considered for Phase 3+ as a complement to Pareto tracking, not a replacement.
 A/B testing requires traffic splitting, which adds flow topology complexity. Pareto tracking
 with sequential evaluation is simpler and sufficient for the initial implementation.
+
+## Related decisions
+
+- [ADR-028](028-orchestration-architecture.md) — names the ops agent as Layer 4 of the three-layer architecture and explains why it reuses the coordinator's runtime composition tooling.
+- [ADR-026](026-coordinator-agent-dynamic-flow-composition.md) — defines the runtime composition tools this ADR reuses (`create_rule`, `manage_flow`, etc.) and the safety model they route through.
+- [ADR-025](025-semteams-consolidation.md) — upstreamed the Phase 0a query-readiness tests from semteams that prove the graph can answer the nine operational queries the ops agent depends on.
+
+## Implementation sequencing
+
+Gated by ADR-026 step 7 (six flow-composition executors complete). Before then, ops Phase 1 (read-only) can ship with just `graph_query` and `rules_query` — those tools exist today.
+
+1. Stock ops persona + `configs/flows/ops-agent.json` — Phase 1 read-only.
+2. Add `ops.diagnosis.*` predicate constants to the agentic vocabulary so findings are queryable.
+3. Ship ops Phase 1 — graph-backed analysis + manual human review of findings. Validates that the predicates Phase 0 laid down are sufficient for causal reasoning before wiring any automation.
+4. ADR-026 coordinator + `decide` tool + flow-composition executors ship.
+5. Ops Phase 2 — grant ops agent the flow-composition tools. High-risk changes gate on human approval; low-risk changes (threshold adjustments, prompt reweighting) auto-approve through the same filter chain coordinator uses.
+6. `ops.config.*` predicate constants + Pareto entity schema.
+7. Ops Phase 3 — continuous tuning loop, single flow at a time, minimum 1-hour interval between deployments. Cross-flow optimization deferred further.
+
+Phase 1 is valuable on its own and does not require ADR-026 coordinator work to ship. Phases 2–3 build on coordinator infrastructure.
