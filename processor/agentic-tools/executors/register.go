@@ -38,11 +38,12 @@ import (
 // Platform is a value type (not pointer) because PlatformMeta is a small
 // POD; the empty value is still safe for the decide tool to use.
 type ToolDependencies struct {
-	NATSClient  *natsclient.Client
-	Platform    component.PlatformMeta
-	Logger      *slog.Logger
-	RuleManager RuleManager // Pattern-B step 1
-	FlowManager FlowManager // Pattern-B step 2; future steps add PersonaManager, FlowTemplateManager
+	NATSClient     *natsclient.Client
+	Platform       component.PlatformMeta
+	Logger         *slog.Logger
+	RuleManager    RuleManager    // Pattern-B step 1
+	FlowManager    FlowManager    // Pattern-B step 2
+	PersonaManager PersonaManager // Pattern-B step 3; future step adds FlowTemplateManager
 }
 
 // RegisterAll wires every tool this package owns into the agentic-tools
@@ -73,6 +74,7 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	// exploding.
 	registerRules(deps.RuleManager, logger)
 	registerFlows(deps.FlowManager, logger)
+	registerPersonas(deps.PersonaManager, logger)
 }
 
 // registerGlobal is the shared RegisterTool wrapper with idempotent

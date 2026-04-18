@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
@@ -121,11 +122,12 @@ func run() error {
 	// pattern. Post-configure timing lets Pattern-B managers resolve
 	// against already-initialised infrastructure.
 	executors.RegisterAll(ctx, executors.ToolDependencies{
-		NATSClient:  natsClient,
-		Platform:    platform,
-		Logger:      logger,
-		RuleManager: buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager: buildFlowManager(natsClient, logger),
+		NATSClient:     natsClient,
+		Platform:       platform,
+		Logger:         logger,
+		RuleManager:    buildRuleManager(ctx, natsClient, configManager, logger),
+		FlowManager:    buildFlowManager(natsClient, logger),
+		PersonaManager: buildPersonaManager(natsClient, logger),
 	})
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
@@ -152,6 +154,17 @@ func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) execut
 	mgr, err := flowstore.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("flow CRUD tools disabled: could not initialise flow store",
+			slog.Any("error", err))
+		return nil
+	}
+	return mgr
+}
+
+// buildPersonaManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B.
+func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) executors.PersonaManager {
+	mgr, err := persona.NewManager(natsClient)
+	if err != nil {
+		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
 			slog.Any("error", err))
 		return nil
 	}
