@@ -105,8 +105,13 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 			// Extract entity ID from message payload for state tracking
 			entityID := extractEntityID(msg)
 
-			// Perform stateful evaluation
-			transition, err := rp.statefulEvaluator.EvaluateWithState(ctx, ruleDef, entityID, "", triggered, nil, nil)
+			// Perform stateful evaluation. Message-path rules have no KV
+			// revision and no bootstrap phase, so those fields stay zero.
+			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
+				Rule:              ruleDef,
+				EntityID:          entityID,
+				CurrentlyMatching: triggered,
+			})
 			if err != nil {
 				rp.logger.Warn("Stateful evaluation failed", "rule_name", ruleName, "error", err)
 			} else if transition != TransitionNone {
@@ -149,42 +154,58 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 	}
 }
 
-// evaluateRulesForEntityState performs rule evaluation directly against EntityState triples.
-// This bypasses the message transformation layer for more efficient and direct evaluation.
-func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey, action string, entityState *gtypes.EntityState) {
+// evaluateRulesForEntityState performs rule evaluation directly against
+// EntityState triples, bypassing the message transformation layer.
+//
+// snap carries the entity state, the CRUD action label, and the KV revision
+// that triggered this evaluation. bootstrap is true while the watcher is
+// replaying initial state on startup — stateful rules use this to re-fire
+// OnEnter/OnRecovery for entities that were matching before a restart.
+//
+// When snap.Revision is non-zero, each rule is individually checked against
+// the per-rule feedback tracker: a rule's own write is skipped only by that
+// rule, so sibling rules watching the same bucket still fire.
+func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey string, snap entitySnapshot, bootstrap bool) {
 	// Skip evaluation for deleted entities
-	if entityState == nil {
+	if snap.State == nil {
 		rp.logger.Debug("Skipping rule evaluation for deleted entity", "entity_key", entityKey)
 		return
 	}
 
-	// Increment evaluation counter
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
-	// Process through each rule
 	for ruleName, ruleInstance := range rp.rules {
-		// Evaluate rule with metrics timing
+		// Per-rule feedback loop prevention: if this rule generated the
+		// revision that the watcher just delivered, skip the rule (the
+		// revision is consumed one-time so subsequent non-self writes still
+		// fire it). Other rules continue to evaluate.
+		if snap.Revision > 0 && rp.shouldSkipRule(ruleName, snap.State.ID, snap.Revision) {
+			rp.logger.Debug("Skipping self-generated update for rule",
+				"rule_name", ruleName,
+				"entity_id", snap.State.ID,
+				"revision", snap.Revision)
+			continue
+		}
+
 		rp.logger.Debug("Evaluating rule against EntityState",
 			"rule_name", ruleName,
-			"entity_id", entityState.ID,
-			"action", action)
+			"entity_id", snap.State.ID,
+			"action", snap.Action,
+			"bootstrap", bootstrap)
 
 		start := time.Now()
 		var triggered bool
 
-		// Try direct EntityState evaluation first (preferred path)
-		if entityEval, ok := ruleInstance.(EntityStateEvaluator); ok {
-			triggered = entityEval.EvaluateEntityState(entityState)
-		} else {
-			// Fallback to message-based evaluation for rules that don't support EntityState
+		entityEval, ok := ruleInstance.(EntityStateEvaluator)
+		if !ok {
 			rp.logger.Debug("Rule doesn't support EntityState evaluation, skipping",
 				"rule_name", ruleName)
 			continue
 		}
+		triggered = entityEval.EvaluateEntityState(snap.State)
 
 		evaluationDuration := time.Since(start)
 
-		// Update metrics
 		if rp.metrics != nil {
 			rp.metrics.evaluationDuration.WithLabelValues(ruleName).Observe(evaluationDuration.Seconds())
 			if triggered {
@@ -195,17 +216,23 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey,
 			}
 		}
 
-		// Get rule definition for stateful evaluation
 		ruleDef, hasDefinition := rp.ruleDefinitions[ruleName]
 		hasStatefulActions := hasDefinition && (len(ruleDef.OnEnter) > 0 || len(ruleDef.OnExit) > 0 || len(ruleDef.WhileTrue) > 0)
 
-		// Handle stateful evaluation if rule has OnEnter/OnExit/WhileTrue actions
 		if hasStatefulActions && rp.statefulEvaluator != nil {
-			// Use EntityState ID directly for state tracking
-			entityID := entityState.ID
+			entityID := snap.State.ID
 
-			// Perform stateful evaluation — pass entityState for When clause evaluation
-			transition, err := rp.statefulEvaluator.EvaluateWithState(ctx, ruleDef, entityID, "", triggered, entityState, nil)
+			// entityState is passed for When-clause access; revision/bootstrap
+			// propagate the KV-watch context so SourceRevision persists and
+			// OnRecovery can fire on restart.
+			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
+				Rule:              ruleDef,
+				EntityID:          entityID,
+				CurrentlyMatching: triggered,
+				Entity:            snap.State,
+				Revision:          snap.Revision,
+				Bootstrap:         bootstrap,
+			})
 			if err != nil {
 				rp.logger.Warn("Stateful evaluation failed", "rule_name", ruleName, "error", err)
 			} else if transition != TransitionNone {
@@ -224,11 +251,11 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey,
 		if triggered {
 			rp.logger.Debug("Rule triggered from EntityState",
 				"rule_name", ruleName,
-				"entity_id", entityState.ID)
+				"entity_id", snap.State.ID)
 
-			// For EntityState-based rules, we create a minimal message wrapper for event execution
-			// This maintains compatibility with the existing ExecuteEvents interface
-			msg := rp.entityStateToMinimalMessage(entityState)
+			// Wrap the entity state in a minimal message so ExecuteEvents can
+			// run through the same path as subject-delivered messages.
+			msg := rp.entityStateToMinimalMessage(snap.State)
 			messages := []message.Message{msg}
 
 			// Execute rule events

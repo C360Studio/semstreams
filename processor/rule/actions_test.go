@@ -557,23 +557,26 @@ func TestAction_Publish_ErrorHandling(t *testing.T) {
 // mockTripleMutator implements TripleMutator interface for testing
 type mockTripleMutator struct {
 	addedTriples   []message.Triple
+	addedRuleIDs   []string
 	removedTriples []struct {
 		subject   string
 		predicate string
 	}
-	addErr    error
-	removeErr error
+	removedRuleIDs []string
+	addErr         error
+	removeErr      error
 }
 
-func (m *mockTripleMutator) AddTriple(_ context.Context, triple message.Triple) (uint64, error) {
+func (m *mockTripleMutator) AddTriple(_ context.Context, ruleID string, triple message.Triple) (uint64, error) {
 	if m.addErr != nil {
 		return 0, m.addErr
 	}
 	m.addedTriples = append(m.addedTriples, triple)
+	m.addedRuleIDs = append(m.addedRuleIDs, ruleID)
 	return uint64(len(m.addedTriples)), nil
 }
 
-func (m *mockTripleMutator) RemoveTriple(_ context.Context, subject, predicate string) (uint64, error) {
+func (m *mockTripleMutator) RemoveTriple(_ context.Context, ruleID, subject, predicate string) (uint64, error) {
 	if m.removeErr != nil {
 		return 0, m.removeErr
 	}
@@ -581,6 +584,7 @@ func (m *mockTripleMutator) RemoveTriple(_ context.Context, subject, predicate s
 		subject   string
 		predicate string
 	}{subject, predicate})
+	m.removedRuleIDs = append(m.removedRuleIDs, ruleID)
 	return 1, nil
 }
 
@@ -1134,6 +1138,104 @@ func TestAction_PublishAgent_ExtendedRoles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAction_PublishAgent_WritesSpawnedTaskTriple verifies that publish_agent
+// writes the generated taskID back to the entity as a rule.spawned_task triple
+// so downstream rules can reference it via $entity.triple.rule.spawned_task.
+// This closes Gap 3: without it, the taskID exists only in the published
+// TaskMessage and is invisible to the rest of the rule engine.
+func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mockPub := &mockPublisher{}
+	mockMut := &mockTripleMutator{}
+	executor := NewActionExecutorFull(nil, mockMut, mockPub)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "researcher",
+		Model:   "mock-model",
+		Prompt:  "investigate",
+	}
+
+	entityID := "org.platform.domain.system.type.001"
+	ec := &ExecutionContext{
+		EntityID: entityID,
+		State:    &MatchState{RuleID: "research-rule"},
+	}
+
+	err := executor.Execute(ctx, action, ec)
+	require.NoError(t, err)
+
+	// Task was published with a generated taskID.
+	require.Len(t, mockPub.published, 1)
+	var env message.BaseMessage
+	require.NoError(t, json.Unmarshal(mockPub.published[0].data, &env))
+	task, ok := env.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+	require.NotEmpty(t, task.TaskID)
+
+	// The same taskID must have been persisted as a triple against the entity.
+	require.Len(t, mockMut.addedTriples, 1,
+		"publish_agent should add a rule.spawned_task triple")
+	assert.Equal(t, entityID, mockMut.addedTriples[0].Subject)
+	assert.Equal(t, "rule.spawned_task", mockMut.addedTriples[0].Predicate)
+	assert.Equal(t, task.TaskID, mockMut.addedTriples[0].Object)
+
+	// The triple write is tracked against the originating rule so the
+	// rule will not re-trigger on its own write.
+	require.Len(t, mockMut.addedRuleIDs, 1)
+	assert.Equal(t, "research-rule", mockMut.addedRuleIDs[0])
+}
+
+// TestAction_PublishAgent_NoMutatorSkipsTriple verifies that publish_agent
+// still succeeds if no triple mutator is configured (e.g. graph integration
+// disabled). The spawned_task triple is simply skipped.
+func TestAction_PublishAgent_NoMutatorSkipsTriple(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mockPub := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mockPub)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "researcher",
+		Model:   "mock-model",
+		Prompt:  "go",
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	require.NoError(t, err)
+	require.Len(t, mockPub.published, 1)
+}
+
+// TestAction_PublishAgent_NoPublisherSkipsTriple verifies that when there is
+// no publisher, the spawned_task triple is also not written. Writing the
+// triple when the task was never published would leave stale tracking state.
+func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mockMut := &mockTripleMutator{}
+	executor := NewActionExecutorFull(nil, mockMut, nil)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "researcher",
+		Model:   "mock-model",
+		Prompt:  "go",
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	require.NoError(t, err)
+	assert.Empty(t, mockMut.addedTriples,
+		"no triple should be written when publish was skipped")
 }
 
 // T055: Test ExecutionContext.SubstituteVariables covers entity IDs, state fields, and entity triples

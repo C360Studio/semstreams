@@ -21,16 +21,16 @@ const (
 
 // tripleMutator implements TripleMutator using NATS request/response.
 // It calls the graph processor's mutation handlers and tracks KV revisions
-// to prevent feedback loops in rule evaluation.
+// against the originating ruleID to prevent per-rule feedback loops.
 type tripleMutator struct {
 	natsClient      *natsclient.Client
 	revisionTracker revisionTracker
 }
 
 // revisionTracker is the interface for tracking KV revisions we generate.
-// This is implemented by the Processor to break feedback loops.
+// This is implemented by the Processor to break per-rule feedback loops.
 type revisionTracker interface {
-	trackOwnRevision(entityID string, revision uint64)
+	trackRuleRevision(ruleID, entityID string, revision uint64)
 }
 
 // newTripleMutator creates a new TripleMutator that uses NATS request/response.
@@ -42,8 +42,10 @@ func newTripleMutator(natsClient *natsclient.Client, tracker revisionTracker) Tr
 }
 
 // AddTriple adds a triple via NATS request/response and returns the KV revision.
-// It tracks the revision to prevent re-evaluation of our own writes.
-func (m *tripleMutator) AddTriple(ctx context.Context, triple message.Triple) (uint64, error) {
+// The ruleID identifies the originating rule so the revision can be tracked
+// against that rule for per-rule feedback loop prevention. Pass an empty
+// ruleID for ad-hoc mutations that should not be tracked.
+func (m *tripleMutator) AddTriple(ctx context.Context, ruleID string, triple message.Triple) (uint64, error) {
 	if m.natsClient == nil {
 		return 0, fmt.Errorf("NATS client not available")
 	}
@@ -73,17 +75,17 @@ func (m *tripleMutator) AddTriple(ctx context.Context, triple message.Triple) (u
 		return 0, fmt.Errorf("mutation failed: %s", resp.Error)
 	}
 
-	// Track the revision to prevent feedback loop
-	if m.revisionTracker != nil && resp.KVRevision > 0 {
-		m.revisionTracker.trackOwnRevision(triple.Subject, resp.KVRevision)
+	// Track the revision to prevent this rule from re-triggering on its own write.
+	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
+		m.revisionTracker.trackRuleRevision(ruleID, triple.Subject, resp.KVRevision)
 	}
 
 	return resp.KVRevision, nil
 }
 
 // RemoveTriple removes a triple via NATS request/response and returns the KV revision.
-// It tracks the revision to prevent re-evaluation of our own writes.
-func (m *tripleMutator) RemoveTriple(ctx context.Context, subject, predicate string) (uint64, error) {
+// See AddTriple for the meaning of ruleID.
+func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predicate string) (uint64, error) {
 	if m.natsClient == nil {
 		return 0, fmt.Errorf("NATS client not available")
 	}
@@ -114,9 +116,8 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, subject, predicate str
 		return 0, fmt.Errorf("mutation failed: %s", resp.Error)
 	}
 
-	// Track the revision to prevent feedback loop
-	if m.revisionTracker != nil && resp.KVRevision > 0 {
-		m.revisionTracker.trackOwnRevision(subject, resp.KVRevision)
+	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
+		m.revisionTracker.trackRuleRevision(ruleID, subject, resp.KVRevision)
 	}
 
 	return resp.KVRevision, nil

@@ -26,7 +26,14 @@ type Definition struct {
 	OnEnter         []Action                         `json:"on_enter,omitempty"`         // Fires on false→true transition
 	OnExit          []Action                         `json:"on_exit,omitempty"`          // Fires on true→false transition
 	WhileTrue       []Action                         `json:"while_true,omitempty"`       // Fires on every update while true
+	OnRecovery      []Action                         `json:"on_recovery,omitempty"`      // Fires once on restart if still matching; falls back to OnEnter
 	RelatedPatterns []string                         `json:"related_patterns,omitempty"` // For pair rules
+
+	// RerunOnRecovery opts rules with only OnEnter/WhileTrue defined into the
+	// bootstrap recovery path. When false (default), such rules must declare
+	// OnRecovery explicitly to re-fire on restart. Rules that already declare
+	// OnRecovery always participate regardless of this flag.
+	RerunOnRecovery bool `json:"rerun_on_recovery,omitempty"`
 
 	// MaxIterations limits how many times a rule can enter the matching state for an entity.
 	// 0 means no limit. Use $state.iteration and $state.max_iterations in When clauses
@@ -207,6 +214,13 @@ func (f *BaseRuleFactory) ValidateExpression(def Definition) error {
 	// Validate logic operator
 	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" {
 		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and' or 'or')", def.ID, def.Logic)
+	}
+
+	// Bootstrap recovery opt-ins must have actions to re-fire. RerunOnRecovery
+	// replays OnEnter on restart, so OnEnter must be non-empty; otherwise the
+	// flag is silently inert.
+	if def.RerunOnRecovery && len(def.OnEnter) == 0 && len(def.OnRecovery) == 0 {
+		return fmt.Errorf("rule %s has rerun_on_recovery=true but neither on_enter nor on_recovery actions are defined", def.ID)
 	}
 
 	return nil

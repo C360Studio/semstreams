@@ -12,8 +12,8 @@ import (
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
-// TestStatefulEvaluator_EvaluateWithState tests state-based action firing
-func TestStatefulEvaluator_EvaluateWithState(t *testing.T) {
+// TestStatefulEvaluator_Evaluate tests state-based action firing
+func TestStatefulEvaluator_Evaluate(t *testing.T) {
 	tests := []struct {
 		name               string
 		previousMatching   bool
@@ -93,15 +93,17 @@ func TestStatefulEvaluator_EvaluateWithState(t *testing.T) {
 				}
 			}
 
-			transition, err := evaluator.EvaluateWithState(
-				ctx, ruleDef, entityID, "", tt.currentlyMatching, nil, nil,
-			)
+			transition, err := evaluator.Evaluate(ctx, Evaluation{
+				Rule:              ruleDef,
+				EntityID:          entityID,
+				CurrentlyMatching: tt.currentlyMatching,
+			})
 
 			if err != nil {
-				t.Errorf("EvaluateWithState() error = %v, want nil", err)
+				t.Errorf("Evaluate() error = %v, want nil", err)
 			}
 			if transition != tt.wantTransition {
-				t.Errorf("EvaluateWithState() transition = %v, want %v", transition, tt.wantTransition)
+				t.Errorf("Evaluate() transition = %v, want %v", transition, tt.wantTransition)
 			}
 			if actionExecutor.onEnterCalls != tt.wantOnEnterCalls {
 				t.Errorf("OnEnter actions called %d times, want %d", actionExecutor.onEnterCalls, tt.wantOnEnterCalls)
@@ -145,7 +147,11 @@ func TestStatefulEvaluator_NoInitialState(t *testing.T) {
 		},
 	}
 
-	transition, err := evaluator.EvaluateWithState(ctx, ruleDef, "entity-new", "", true, nil, nil)
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-new",
+		CurrentlyMatching: true,
+	})
 	if err != nil {
 		t.Fatalf("EvaluateWithState() error = %v", err)
 	}
@@ -178,7 +184,12 @@ func TestStatefulEvaluator_PairRule(t *testing.T) {
 	entity1 := "entity-a"
 	entity2 := "entity-b"
 
-	transition1, err := evaluator.EvaluateWithState(ctx, ruleDef, entity1, entity2, true, nil, nil)
+	transition1, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entity1,
+		RelatedID:         entity2,
+		CurrentlyMatching: true,
+	})
 	if err != nil {
 		t.Fatalf("First evaluation error: %v", err)
 	}
@@ -219,7 +230,11 @@ func TestStatefulEvaluator_MultipleActions(t *testing.T) {
 		},
 	}
 
-	transition, err := evaluator.EvaluateWithState(ctx, ruleDef, "entity-multi", "", true, nil, nil)
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-multi",
+		CurrentlyMatching: true,
+	})
 	if err != nil {
 		t.Fatalf("EvaluateWithState() error = %v", err)
 	}
@@ -253,7 +268,7 @@ func TestStatefulEvaluator_Iteration(t *testing.T) {
 	entityID := "entity-iter"
 
 	// First entry: iteration should be 1
-	_, err := evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, nil, nil)
+	_, err := evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
 	if err != nil {
 		t.Fatalf("First entry error: %v", err)
 	}
@@ -266,7 +281,7 @@ func TestStatefulEvaluator_Iteration(t *testing.T) {
 	}
 
 	// Exit: iteration preserved
-	_, err = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", false, nil, nil)
+	_, err = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: false})
 	if err != nil {
 		t.Fatalf("Exit error: %v", err)
 	}
@@ -276,7 +291,7 @@ func TestStatefulEvaluator_Iteration(t *testing.T) {
 	}
 
 	// Second entry: iteration should be 2
-	_, err = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, nil, nil)
+	_, err = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
 	if err != nil {
 		t.Fatalf("Second entry error: %v", err)
 	}
@@ -286,8 +301,8 @@ func TestStatefulEvaluator_Iteration(t *testing.T) {
 	}
 
 	// Third entry: iteration should be 3
-	_, _ = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", false, nil, nil)
-	_, err = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, nil, nil)
+	_, _ = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: false})
+	_, err = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
 	if err != nil {
 		t.Fatalf("Third entry error: %v", err)
 	}
@@ -341,9 +356,14 @@ func TestStatefulEvaluator_WhenClause(t *testing.T) {
 		},
 	}
 
-	_, err := evaluator.EvaluateWithState(ctx, ruleDef, entity.ID, "", true, entity, nil)
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entity.ID,
+		CurrentlyMatching: true,
+		Entity:            entity,
+	})
 	if err != nil {
-		t.Fatalf("EvaluateWithState() error = %v", err)
+		t.Fatalf("Evaluate() error = %v", err)
 	}
 
 	// Should execute: test.approved (matches) and test.always (no When)
@@ -392,9 +412,9 @@ func TestStatefulEvaluator_WhenWithStateFields(t *testing.T) {
 		actionExecutor.executeCallCount = 0
 		// Exit then enter to trigger TransitionEntered each time
 		if i > 0 {
-			_, _ = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", false, nil, nil)
+			_, _ = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: false})
 		}
-		_, err := evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, nil, nil)
+		_, err := evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
 		if err != nil {
 			t.Fatalf("Entry %d error: %v", i+1, err)
 		}
@@ -404,9 +424,9 @@ func TestStatefulEvaluator_WhenWithStateFields(t *testing.T) {
 	}
 
 	// Fourth entry: escalate action fires, retry doesn't
-	_, _ = evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", false, nil, nil)
+	_, _ = evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: false})
 	actionExecutor.executeCallCount = 0
-	_, err := evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, nil, nil)
+	_, err := evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
 	if err != nil {
 		t.Fatalf("Fourth entry error: %v", err)
 	}
@@ -448,7 +468,11 @@ func TestStatefulEvaluator_WhenNilEntity(t *testing.T) {
 		},
 	}
 
-	_, err := evaluator.EvaluateWithState(ctx, ruleDef, "entity-nil", "", true, nil, nil)
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-nil",
+		CurrentlyMatching: true,
+	})
 	if err != nil {
 		t.Fatalf("EvaluateWithState() error = %v", err)
 	}
@@ -537,7 +561,12 @@ func TestStatefulEvaluator_TransitionFieldTracking(t *testing.T) {
 	// First evaluation: entity has status "created"
 	// The transition condition checks "is status transitioning to drafting?" — no, it's "created"
 	// This should NOT match, but it should capture "created" in FieldValues
-	transition1, err := evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", false, entityCreated, nil)
+	transition1, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: false,
+		Entity:            entityCreated,
+	})
 	if err != nil {
 		t.Fatalf("First evaluation error: %v", err)
 	}
@@ -560,7 +589,12 @@ func TestStatefulEvaluator_TransitionFieldTracking(t *testing.T) {
 	// Second evaluation: entity now has status "drafting"
 	// The transition condition checks: current = "drafting" (matches Value),
 	// previous = "created" (in From set) → MATCH
-	transition2, err := evaluator.EvaluateWithState(ctx, ruleDef, entityID, "", true, entityDrafting, nil)
+	transition2, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Entity:            entityDrafting,
+	})
 	if err != nil {
 		t.Fatalf("Second evaluation error: %v", err)
 	}
@@ -616,7 +650,11 @@ func TestStatefulEvaluator_FieldValuesBackwardCompat(t *testing.T) {
 	}
 
 	// Evaluate with existing state — should work fine with nil FieldValues
-	transition, err := evaluator.EvaluateWithState(ctx, ruleDef, "entity-old", "", true, nil, nil)
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-old",
+		CurrentlyMatching: true,
+	})
 	if err != nil {
 		t.Fatalf("Evaluation with old state error: %v", err)
 	}
@@ -625,5 +663,397 @@ func TestStatefulEvaluator_FieldValuesBackwardCompat(t *testing.T) {
 	}
 	if actionExecutor.whileTrueCalls != 1 {
 		t.Errorf("Expected 1 WhileTrue call, got %d", actionExecutor.whileTrueCalls)
+	}
+}
+
+// TestStatefulEvaluator_BootstrapRecovery_OnRecovery verifies that a rule with
+// OnRecovery actions re-fires them during bootstrap when its persisted state
+// says it was matching and the entity still matches.
+func TestStatefulEvaluator_BootstrapRecovery_OnRecovery(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-recovery"
+
+	// Persist state that says the rule was matching before the crash.
+	prev := MatchState{
+		RuleID:         "recovery-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-5 * time.Minute),
+		LastChecked:    time.Now().Add(-5 * time.Minute),
+		Iteration:      1,
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:   "recovery-rule",
+		Type: "expression",
+		Name: "Recovery Rule",
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "test.entered"},
+		},
+		OnRecovery: []Action{
+			{Type: ActionTypePublish, Subject: "test.recovered"},
+		},
+	}
+
+	// Bootstrap replay: condition still matches.
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Bootstrap:         true,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap evaluation error: %v", err)
+	}
+	if transition != TransitionEntered {
+		t.Errorf("Expected synthetic TransitionEntered on recovery, got %v", transition)
+	}
+	// OnEnter should NOT fire when OnRecovery is defined — they're separate lists.
+	if actionExecutor.onEnterCalls != 0 {
+		t.Errorf("Expected 0 OnEnter calls (OnRecovery preferred), got %d", actionExecutor.onEnterCalls)
+	}
+	// OnRecovery actions run through the same mock handler via executeCallCount.
+	if actionExecutor.executeCallCount != 1 {
+		t.Errorf("Expected 1 OnRecovery execution, got %d", actionExecutor.executeCallCount)
+	}
+
+	// Second evaluation (non-bootstrap) with same state must NOT re-fire recovery.
+	transition2, err := evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
+	if err != nil {
+		t.Fatalf("Post-bootstrap evaluation error: %v", err)
+	}
+	if transition2 != TransitionNone {
+		t.Errorf("Expected TransitionNone after bootstrap, got %v", transition2)
+	}
+}
+
+// TestStatefulEvaluator_BootstrapRecovery_RerunOnRecoveryFlag verifies that a
+// rule with only OnEnter and RerunOnRecovery=true re-fires OnEnter on restart.
+func TestStatefulEvaluator_BootstrapRecovery_RerunOnRecoveryFlag(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-rerun"
+
+	prev := MatchState{
+		RuleID:         "rerun-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-1 * time.Minute),
+		LastChecked:    time.Now().Add(-1 * time.Minute),
+		Iteration:      2,
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:              "rerun-rule",
+		Type:            "expression",
+		Name:            "Rerun Rule",
+		RerunOnRecovery: true,
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "test.entered"},
+		},
+	}
+
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Bootstrap:         true,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap evaluation error: %v", err)
+	}
+	if transition != TransitionEntered {
+		t.Errorf("Expected synthetic TransitionEntered on recovery, got %v", transition)
+	}
+	if actionExecutor.onEnterCalls != 1 {
+		t.Errorf("Expected OnEnter to fire once on recovery, got %d", actionExecutor.onEnterCalls)
+	}
+
+	newState, err := stateTracker.Get(ctx, ruleDef.ID, entityID)
+	if err != nil {
+		t.Fatalf("Failed to read new state: %v", err)
+	}
+	if newState.Iteration != 3 {
+		t.Errorf("Expected iteration to increment to 3 on recovery, got %d", newState.Iteration)
+	}
+}
+
+// TestStatefulEvaluator_BootstrapNoRecoveryWithoutOptIn verifies that rules
+// without OnRecovery or RerunOnRecovery do not re-fire on bootstrap (safe
+// default: side effects like alert publishing must not repeat on restart).
+func TestStatefulEvaluator_BootstrapNoRecoveryWithoutOptIn(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-no-optin"
+	prev := MatchState{
+		RuleID:         "no-optin-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-1 * time.Minute),
+		LastChecked:    time.Now().Add(-1 * time.Minute),
+		Iteration:      1,
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:   "no-optin-rule",
+		Type: "expression",
+		Name: "No OptIn Rule",
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "test.entered"},
+		},
+		WhileTrue: []Action{
+			{Type: ActionTypePublish, Subject: "test.while-true"},
+		},
+	}
+
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Bootstrap:         true,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap evaluation error: %v", err)
+	}
+	if transition != TransitionNone {
+		t.Errorf("Expected TransitionNone for non-opted-in rule, got %v", transition)
+	}
+	if actionExecutor.onEnterCalls != 0 {
+		t.Errorf("Expected 0 OnEnter calls without opt-in, got %d", actionExecutor.onEnterCalls)
+	}
+	// WhileTrue still fires because the rule still matches — that's expected.
+	if actionExecutor.whileTrueCalls != 1 {
+		t.Errorf("Expected WhileTrue to still fire, got %d", actionExecutor.whileTrueCalls)
+	}
+}
+
+// TestStatefulEvaluator_StaleRevisionShortCircuits verifies that a rule
+// evaluation skips without firing or persisting when the incoming revision is
+// not newer than the last recorded SourceRevision. This is the durable defense
+// against NATS watcher redelivery after a reconnect, once the in-memory
+// ownRevisions map has been cleared by a process restart.
+func TestStatefulEvaluator_StaleRevisionShortCircuits(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-stale"
+
+	// Seed persisted state that already recorded revision 100.
+	prev := MatchState{
+		RuleID:         "stale-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-1 * time.Minute),
+		LastChecked:    time.Now().Add(-1 * time.Minute),
+		Iteration:      1,
+		SourceRevision: 100,
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:   "stale-rule",
+		Type: "expression",
+		Name: "Stale Rule",
+		WhileTrue: []Action{
+			{Type: ActionTypePublish, Subject: "test.while-true"},
+		},
+	}
+
+	// Redelivery of the same revision must short-circuit with no action fired.
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Revision:          100,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error on redelivery: %v", err)
+	}
+	if transition != TransitionNone {
+		t.Errorf("Expected TransitionNone on stale revision, got %v", transition)
+	}
+	if actionExecutor.executeCallCount != 0 {
+		t.Errorf("Expected no actions fired on stale revision, got %d", actionExecutor.executeCallCount)
+	}
+
+	// Also: an even older revision (out-of-order delivery) must short-circuit.
+	transition, err = evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Revision:          50,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error on out-of-order: %v", err)
+	}
+	if transition != TransitionNone {
+		t.Errorf("Expected TransitionNone on out-of-order revision, got %v", transition)
+	}
+	if actionExecutor.executeCallCount != 0 {
+		t.Errorf("Expected no actions fired on out-of-order revision, got %d", actionExecutor.executeCallCount)
+	}
+}
+
+// TestStatefulEvaluator_NewerRevisionFires verifies that a revision strictly
+// greater than the recorded SourceRevision proceeds with normal evaluation and
+// updates the persisted SourceRevision so subsequent equal/older deliveries
+// are short-circuited.
+func TestStatefulEvaluator_NewerRevisionFires(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-newer"
+
+	prev := MatchState{
+		RuleID:         "newer-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-1 * time.Minute),
+		LastChecked:    time.Now().Add(-1 * time.Minute),
+		Iteration:      1,
+		SourceRevision: 100,
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:   "newer-rule",
+		Type: "expression",
+		Name: "Newer Rule",
+		WhileTrue: []Action{
+			{Type: ActionTypePublish, Subject: "test.while-true"},
+		},
+	}
+
+	// Revision 200 > 100 → evaluation proceeds; WhileTrue fires once.
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Revision:          200,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error: %v", err)
+	}
+	if actionExecutor.whileTrueCalls != 1 {
+		t.Errorf("Expected WhileTrue to fire once on newer revision, got %d", actionExecutor.whileTrueCalls)
+	}
+
+	// Persisted SourceRevision must have advanced to 200 so a redelivery of
+	// 200 is now a stale replay.
+	newState, err := stateTracker.Get(ctx, ruleDef.ID, entityID)
+	if err != nil {
+		t.Fatalf("Failed to get state: %v", err)
+	}
+	if newState.SourceRevision != 200 {
+		t.Errorf("Expected SourceRevision=200 after evaluation, got %d", newState.SourceRevision)
+	}
+
+	// Redelivery of 200 is now stale → no additional WhileTrue fires.
+	_, err = evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Revision:          200,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error on redelivery: %v", err)
+	}
+	if actionExecutor.whileTrueCalls != 1 {
+		t.Errorf("Expected WhileTrue to stay at 1 after redelivery, got %d", actionExecutor.whileTrueCalls)
+	}
+}
+
+// TestStatefulEvaluator_ZeroRevisionSkipsGuard verifies that Revision=0 (the
+// message-path case with no KV revision) bypasses the stale-replay guard
+// entirely. Also covers backward compat: old persisted state with
+// SourceRevision=0 must not block new evaluations whose Revision is also 0.
+func TestStatefulEvaluator_ZeroRevisionSkipsGuard(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := "entity-zero"
+
+	prev := MatchState{
+		RuleID:         "zero-rule",
+		EntityKey:      entityID,
+		IsMatching:     true,
+		LastTransition: string(TransitionEntered),
+		TransitionAt:   time.Now().Add(-1 * time.Minute),
+		LastChecked:    time.Now().Add(-1 * time.Minute),
+		Iteration:      1,
+		SourceRevision: 100, // persisted state knows about revision 100
+	}
+	if err := stateTracker.Set(ctx, prev); err != nil {
+		t.Fatalf("Failed to seed previous state: %v", err)
+	}
+
+	ruleDef := Definition{
+		ID:   "zero-rule",
+		Type: "expression",
+		Name: "Zero Rule",
+		WhileTrue: []Action{
+			{Type: ActionTypePublish, Subject: "test.while-true"},
+		},
+	}
+
+	// Message-path evaluation: Revision=0 must NOT be compared against the
+	// persisted SourceRevision=100. Evaluation proceeds normally.
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		// Revision omitted → 0
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error: %v", err)
+	}
+	if actionExecutor.whileTrueCalls != 1 {
+		t.Errorf("Expected WhileTrue to fire on message-path eval, got %d", actionExecutor.whileTrueCalls)
 	}
 }

@@ -46,172 +46,136 @@ func NewStatefulEvaluator(stateTracker *StateTracker, actionExecutor ActionExecu
 	}
 }
 
-// EvaluateWithState evaluates a rule and fires appropriate actions based on state transitions.
-// It:
-//  1. Retrieves previous state from StateTracker (treats missing state as false)
-//  2. Detects transition (entered/exited/none) by comparing previous and current match state
-//  3. Fires appropriate actions based on transition:
-//     - TransitionEntered: Execute all OnEnter actions (increments iteration)
-//     - TransitionExited: Execute all OnExit actions (preserves iteration)
-//     - TransitionNone + currentlyMatching: Execute all WhileTrue actions
-//  4. Evaluates When clauses on each action before execution
-//  5. Persists new state to StateTracker
-//
-// The entity and related parameters provide typed entity state for When clause evaluation
-// and are passed through to actions via ExecutionContext. Pass nil for message-path rules.
-//
-// Returns the transition that occurred and any error encountered.
-func (e *StatefulEvaluator) EvaluateWithState(
-	ctx context.Context,
-	ruleDef Definition,
-	entityID string,
-	relatedID string, // empty for single-entity rules
-	currentlyMatching bool,
-	entity *gtypes.EntityState, // nil for message-path rules
-	related *gtypes.EntityState, // nil for single-entity or message-path rules
-) (Transition, error) {
-	// Build entity key (single entity or canonical pair)
-	var entityKey string
-	if relatedID == "" {
-		entityKey = entityID
-	} else {
-		entityKey = buildPairKey(entityID, relatedID)
+// Evaluation groups the inputs to a single stateful rule evaluation.
+// Zero values are meaningful: Revision=0 means "no KV revision available"
+// (message-path rules), Bootstrap=false means live traffic (not startup replay),
+// Entity/Related=nil means message-path rule.
+type Evaluation struct {
+	Rule              Definition
+	EntityID          string
+	RelatedID         string // "" for single-entity rules
+	CurrentlyMatching bool
+	Entity            *gtypes.EntityState // nil for message-path rules
+	Related           *gtypes.EntityState // nil for single-entity or message-path
+	Revision          uint64              // KV revision that triggered this evaluation; 0 if unknown
+	Bootstrap         bool                // true during watcher initial-state replay
+}
+
+// entityKey returns the state-tracker key (single entity or canonical pair).
+func (ev Evaluation) entityKey() string {
+	if ev.RelatedID == "" {
+		return ev.EntityID
 	}
+	return buildPairKey(ev.EntityID, ev.RelatedID)
+}
 
-	// Get previous state
-	prevState, err := e.stateTracker.Get(ctx, ruleDef.ID, entityKey)
+// Evaluate runs a stateful rule evaluation and fires the appropriate actions
+// for the detected transition:
+//
+//   - TransitionEntered   → OnEnter (increments iteration)
+//   - TransitionExited    → OnExit (preserves iteration)
+//   - TransitionNone+match → WhileTrue
+//
+// Action-level When clauses are evaluated before each action runs. New state
+// is persisted to the StateTracker on the way out.
+//
+// When Evaluation.Bootstrap is true, the watcher is replaying state after a
+// restart. A persisted IsMatching=true state that still matches would
+// otherwise produce TransitionNone — we promote it to a synthetic Entered
+// (fires OnRecovery, or OnEnter under RerunOnRecovery) so state machines
+// resume instead of hanging on restart.
+func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transition, error) {
+	entityKey := ev.entityKey()
+
+	prevState, err := e.stateTracker.Get(ctx, ev.Rule.ID, entityKey)
 	wasMatching := false
-
+	hadPrevState := false
 	if err != nil {
-		if errors.Is(err, ErrStateNotFound) {
-			wasMatching = false
-		} else {
+		if !errors.Is(err, ErrStateNotFound) {
 			return TransitionNone, err
 		}
 	} else {
 		wasMatching = prevState.IsMatching
+		hadPrevState = true
 	}
 
-	// Re-evaluate conditions when rule has transition operators.
-	// EvaluateEntityState runs without $prev.* state fields, so transition conditions
-	// always return false there. We re-evaluate the full condition set here where
-	// previous field values are available from the state tracker.
-	currentlyMatching = e.reEvaluateTransitions(ruleDef, entityID, entity, prevState, currentlyMatching)
+	// Durable stale-replay guard: if we've already recorded a transition at or
+	// after this revision, the watcher is redelivering (NATS reconnect, consumer
+	// resume) or delivering out of order. Skip without firing actions or
+	// touching persisted state — the ephemeral ownRevisions map defends the
+	// normal self-write path, this field defends across process restarts.
+	// Revision==0 (message-path rules) and prev.SourceRevision==0 (old
+	// persisted state with no recorded revision) both bypass the check.
+	if ev.Revision > 0 && hadPrevState && prevState.SourceRevision >= ev.Revision {
+		e.logger.Debug("Skipping stale revision replay",
+			"rule_id", ev.Rule.ID,
+			"entity_key", entityKey,
+			"revision", ev.Revision,
+			"prev_source_revision", prevState.SourceRevision)
+		return TransitionNone, nil
+	}
 
-	// Detect transition
+	// Re-evaluate conditions when the rule has transition operators. The initial
+	// match evaluation runs without $prev.* state fields, so transition-operator
+	// conditions always return false there; we re-check here with the previous
+	// field values available.
+	currentlyMatching := e.reEvaluateTransitions(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.CurrentlyMatching)
+
 	transition := DetectTransition(wasMatching, currentlyMatching)
 
-	// Build iteration count for new state
+	// Bootstrap recovery: a persisted matching state that still matches would
+	// produce TransitionNone. For rules that opt in, promote to a synthetic
+	// Entered so OnRecovery (or OnEnter under RerunOnRecovery) re-fires and the
+	// state machine resumes instead of hanging.
+	recovering := false
+	if ev.Bootstrap && hadPrevState && transition == TransitionNone && currentlyMatching &&
+		shouldFireOnRecovery(ev.Rule) {
+		transition = TransitionEntered
+		recovering = true
+	}
+
 	iteration := prevState.Iteration
 	if transition == TransitionEntered {
 		iteration++
 	}
 
-	// Build match state for ExecutionContext (before persisting so actions see current state)
 	matchState := &MatchState{
-		RuleID:         ruleDef.ID,
+		RuleID:         ev.Rule.ID,
 		EntityKey:      entityKey,
 		IsMatching:     currentlyMatching,
 		LastTransition: string(transition),
 		TransitionAt:   time.Now(),
 		LastChecked:    time.Now(),
 		Iteration:      iteration,
-		MaxIterations:  ruleDef.MaxIterations,
+		MaxIterations:  ev.Rule.MaxIterations,
+		SourceRevision: ev.Revision,
 	}
 
-	// Build execution context for actions
 	ec := &ExecutionContext{
-		EntityID:  entityID,
-		RelatedID: relatedID,
-		Entity:    entity,
-		Related:   related,
+		EntityID:  ev.EntityID,
+		RelatedID: ev.RelatedID,
+		Entity:    ev.Entity,
+		Related:   ev.Related,
 		State:     matchState,
 	}
 
-	// Build state fields for $state.* pseudo-field evaluation in When clauses
 	stateFields := expression.StateFields{
 		"$state.iteration":       iteration,
-		"$state.max_iterations":  ruleDef.MaxIterations,
+		"$state.max_iterations":  ev.Rule.MaxIterations,
 		"$state.last_transition": string(transition),
 	}
-
-	// Inject previous field values for transition operator ($prev.* namespace)
 	for field, prevValue := range prevState.FieldValues {
 		stateFields["$prev."+field] = prevValue
 	}
 
-	// Execute actions based on transition
-	var actionsToExecute []Action
+	actions := e.selectActions(ev.Rule, transition, currentlyMatching, recovering, ev.EntityID, ev.RelatedID, iteration)
+	e.runActions(ctx, ev.Rule, ec, actions, ev.Entity, stateFields, ev.EntityID, ev.RelatedID)
 
-	switch transition {
-	case TransitionEntered:
-		actionsToExecute = ruleDef.OnEnter
-		e.logger.Debug("Rule entered",
-			"rule_id", ruleDef.ID,
-			"entity_id", entityID,
-			"related_id", relatedID,
-			"iteration", iteration,
-			"action_count", len(actionsToExecute))
+	matchState.FieldValues = captureTransitionFields(ev.Rule, ev.Entity)
 
-	case TransitionExited:
-		actionsToExecute = ruleDef.OnExit
-		e.logger.Debug("Rule exited",
-			"rule_id", ruleDef.ID,
-			"entity_id", entityID,
-			"related_id", relatedID,
-			"action_count", len(actionsToExecute))
-
-	case TransitionNone:
-		if currentlyMatching {
-			actionsToExecute = ruleDef.WhileTrue
-			e.logger.Debug("Rule while true",
-				"rule_id", ruleDef.ID,
-				"entity_id", entityID,
-				"related_id", relatedID,
-				"action_count", len(actionsToExecute))
-		}
-	}
-
-	// Execute all actions for this transition, evaluating When clauses
-	for _, action := range actionsToExecute {
-		// Evaluate When clause if present
-		if len(action.When) > 0 {
-			match, whenErr := e.evaluateWhen(action.When, entity, stateFields)
-			if whenErr != nil {
-				e.logger.Warn("When clause evaluation failed, skipping action",
-					"rule_id", ruleDef.ID,
-					"entity_id", entityID,
-					"action_type", action.Type,
-					"error", whenErr)
-				continue
-			}
-			if !match {
-				e.logger.Debug("Action skipped by When clause",
-					"rule_id", ruleDef.ID,
-					"entity_id", entityID,
-					"action_type", action.Type)
-				continue
-			}
-		}
-
-		if err := e.actionExecutor.Execute(ctx, action, ec); err != nil {
-			e.logger.Error("Failed to execute action",
-				"rule_id", ruleDef.ID,
-				"entity_id", entityID,
-				"related_id", relatedID,
-				"action_type", action.Type,
-				"error", err)
-			// Continue executing remaining actions despite error
-		}
-	}
-
-	// Capture current field values for fields used in transition conditions
-	matchState.FieldValues = captureTransitionFields(ruleDef, entity)
-
-	// Persist new state
 	if err := e.stateTracker.Set(ctx, *matchState); err != nil {
 		e.logger.Warn("Failed to persist rule state",
-			"rule_id", ruleDef.ID,
+			"rule_id", ev.Rule.ID,
 			"entity_key", entityKey,
 			"error", err)
 		return transition, err
@@ -256,6 +220,114 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 		return currentlyMatching
 	}
 	return match
+}
+
+// selectActions picks the action list to run for a transition and logs the
+// decision. It also handles the bootstrap-recovery fork: when recovering is
+// true, OnRecovery wins if defined, otherwise OnEnter runs under a recovery
+// log message so operators can tell restart replays apart from live entries.
+func (e *StatefulEvaluator) selectActions(
+	ruleDef Definition,
+	transition Transition,
+	currentlyMatching bool,
+	recovering bool,
+	entityID, relatedID string,
+	iteration int,
+) []Action {
+	var actions []Action
+	switch transition {
+	case TransitionEntered:
+		msg := "Rule entered"
+		if recovering && len(ruleDef.OnRecovery) > 0 {
+			actions = ruleDef.OnRecovery
+			msg = "Rule recovered (on_recovery)"
+		} else {
+			actions = ruleDef.OnEnter
+			if recovering {
+				msg = "Rule recovered (on_enter)"
+			}
+		}
+		e.logger.Debug(msg,
+			"rule_id", ruleDef.ID,
+			"entity_id", entityID,
+			"related_id", relatedID,
+			"iteration", iteration,
+			"action_count", len(actions))
+	case TransitionExited:
+		actions = ruleDef.OnExit
+		e.logger.Debug("Rule exited",
+			"rule_id", ruleDef.ID,
+			"entity_id", entityID,
+			"related_id", relatedID,
+			"action_count", len(actions))
+	case TransitionNone:
+		if currentlyMatching {
+			actions = ruleDef.WhileTrue
+			e.logger.Debug("Rule while true",
+				"rule_id", ruleDef.ID,
+				"entity_id", entityID,
+				"related_id", relatedID,
+				"action_count", len(actions))
+		}
+	}
+	return actions
+}
+
+// runActions executes each action in the list, skipping those whose When
+// clause does not match. Action errors are logged and do not stop subsequent
+// actions — the rule engine prefers best-effort execution so one failing
+// side effect does not block the rest of a transition.
+func (e *StatefulEvaluator) runActions(
+	ctx context.Context,
+	ruleDef Definition,
+	ec *ExecutionContext,
+	actions []Action,
+	entity *gtypes.EntityState,
+	stateFields expression.StateFields,
+	entityID, relatedID string,
+) {
+	for _, action := range actions {
+		if len(action.When) > 0 {
+			match, whenErr := e.evaluateWhen(action.When, entity, stateFields)
+			if whenErr != nil {
+				e.logger.Warn("When clause evaluation failed, skipping action",
+					"rule_id", ruleDef.ID,
+					"entity_id", entityID,
+					"action_type", action.Type,
+					"error", whenErr)
+				continue
+			}
+			if !match {
+				e.logger.Debug("Action skipped by When clause",
+					"rule_id", ruleDef.ID,
+					"entity_id", entityID,
+					"action_type", action.Type)
+				continue
+			}
+		}
+
+		if err := e.actionExecutor.Execute(ctx, action, ec); err != nil {
+			e.logger.Error("Failed to execute action",
+				"rule_id", ruleDef.ID,
+				"entity_id", entityID,
+				"related_id", relatedID,
+				"action_type", action.Type,
+				"error", err)
+		}
+	}
+}
+
+// shouldFireOnRecovery reports whether a rule should re-fire its entry actions
+// during bootstrap replay when the rule was previously matching.
+//
+// A rule opts in by either declaring OnRecovery actions or setting
+// RerunOnRecovery=true. Rules without either are assumed to have side effects
+// that must not re-run on restart (e.g. publishing an alert).
+func shouldFireOnRecovery(ruleDef Definition) bool {
+	if len(ruleDef.OnRecovery) > 0 {
+		return true
+	}
+	return ruleDef.RerunOnRecovery && len(ruleDef.OnEnter) > 0
 }
 
 // hasTransitionConditions returns true if any condition in the rule uses the transition operator.

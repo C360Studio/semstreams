@@ -129,12 +129,15 @@ func (a Action) ParseTTL() (time.Duration, error) {
 }
 
 // TripleMutator handles triple mutations via NATS request/response.
-// The returned uint64 is the KV revision after the write, used for feedback loop prevention.
+// The returned uint64 is the KV revision after the write, used for per-rule
+// feedback loop prevention. The ruleID identifies the originating rule so
+// the revision can be scoped to that rule only — pass an empty ruleID for
+// ad-hoc mutations that should not be tracked.
 type TripleMutator interface {
-	// AddTriple adds a triple via NATS request/response and returns the KV revision
-	AddTriple(ctx context.Context, triple message.Triple) (uint64, error)
-	// RemoveTriple removes a triple via NATS request/response and returns the KV revision
-	RemoveTriple(ctx context.Context, subject, predicate string) (uint64, error)
+	// AddTriple adds a triple via NATS request/response and returns the KV revision.
+	AddTriple(ctx context.Context, ruleID string, triple message.Triple) (uint64, error)
+	// RemoveTriple removes a triple via NATS request/response and returns the KV revision.
+	RemoveTriple(ctx context.Context, ruleID, subject, predicate string) (uint64, error)
 }
 
 // Publisher handles publishing messages to NATS subjects.
@@ -281,7 +284,7 @@ func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec
 
 	// Persist triple via NATS request/response if mutator is configured
 	if e.tripleMutator != nil {
-		revision, err := e.tripleMutator.AddTriple(ctx, triple)
+		revision, err := e.tripleMutator.AddTriple(ctx, ec.RuleID(), triple)
 		if err != nil {
 			return message.Triple{}, fmt.Errorf("persist triple: %w", err)
 		}
@@ -322,7 +325,7 @@ func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action,
 
 	// Remove triple via NATS request/response if mutator is configured
 	if e.tripleMutator != nil {
-		revision, err := e.tripleMutator.RemoveTriple(ctx, entityID, predicate)
+		revision, err := e.tripleMutator.RemoveTriple(ctx, ec.RuleID(), entityID, predicate)
 		if err != nil {
 			return fmt.Errorf("remove triple: %w", err)
 		}
@@ -423,7 +426,7 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 
 	// Step 1: Remove existing triple with this predicate
 	if e.tripleMutator != nil {
-		_, err := e.tripleMutator.RemoveTriple(ctx, entityID, predicate)
+		_, err := e.tripleMutator.RemoveTriple(ctx, ec.RuleID(), entityID, predicate)
 		if err != nil {
 			// Log but continue - triple may not exist, which is fine for update
 			if e.logger != nil {
@@ -459,7 +462,7 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 	}
 
 	if e.tripleMutator != nil {
-		revision, err := e.tripleMutator.AddTriple(ctx, triple)
+		revision, err := e.tripleMutator.AddTriple(ctx, ec.RuleID(), triple)
 		if err != nil {
 			return fmt.Errorf("add updated triple: %w", err)
 		}
@@ -524,6 +527,7 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 	}
 
 	// Publish via NATS if publisher is configured
+	published := false
 	if e.publisher != nil {
 		// Wrap task in BaseMessage envelope (required by agentic-loop)
 		baseMsg := message.NewBaseMessage(task.Schema(), &task, "rule-engine")
@@ -535,6 +539,7 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		if err := e.publisher.Publish(ctx, subject, data); err != nil {
 			return fmt.Errorf("publish agent task to %s: %w", subject, err)
 		}
+		published = true
 
 		if e.logger != nil {
 			e.logger.Debug("Agent task published",
@@ -546,6 +551,37 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		e.logger.Debug("Agent task not published (no publisher configured)",
 			"subject", subject,
 			"task_id", taskID)
+	}
+
+	// Record the spawned task ID back onto the entity so downstream rules can
+	// reference it via $entity.triple.rule.spawned_task. Without this, the
+	// generated taskID exists only inside the published TaskMessage and is
+	// invisible to the rest of the rule engine. The write is tracked against
+	// the originating rule so it does not re-trigger the same rule; sibling
+	// rules watching ENTITY_STATES still see the new triple and fire.
+	if published && e.tripleMutator != nil {
+		spawnedTriple := message.Triple{
+			Subject:    entityID,
+			Predicate:  "rule.spawned_task",
+			Object:     taskID,
+			Source:     "rule_engine",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+		}
+		if _, err := e.tripleMutator.AddTriple(ctx, ec.RuleID(), spawnedTriple); err != nil {
+			// The agent task already published; returning an error would cause
+			// the rule engine to retry and double-publish. Log at Error so
+			// operators see silent breakage of the downstream contract
+			// ($entity.triple.rule.spawned_task) — any rule chained off that
+			// predicate will not fire for this task.
+			if e.logger != nil {
+				e.logger.Error("Failed to record spawned task triple",
+					"entity_id", entityID,
+					"task_id", taskID,
+					"rule_id", ec.RuleID(),
+					"error", err)
+			}
+		}
 	}
 
 	return nil

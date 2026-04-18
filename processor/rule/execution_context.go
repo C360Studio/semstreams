@@ -30,6 +30,17 @@ type ExecutionContext struct {
 	State *MatchState
 }
 
+// RuleID returns the originating rule's identifier, or an empty string if the
+// execution context has no associated match state (e.g. message-path actions
+// invoked outside a stateful evaluator). Callers use this to scope feedback
+// loop prevention to the rule that caused the write.
+func (ec *ExecutionContext) RuleID() string {
+	if ec == nil || ec.State == nil {
+		return ""
+	}
+	return ec.State.RuleID
+}
+
 // SubstituteVariables replaces template variables with values from the execution context.
 // Supported variables:
 //   - $entity.id: The primary entity ID

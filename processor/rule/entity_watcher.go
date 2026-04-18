@@ -305,7 +305,12 @@ func (rp *Processor) updateWatchBucketsLocked(newBuckets map[string][]string) er
 	return nil
 }
 
-// handleEntityUpdates processes updates from a NATS KV watcher
+// handleEntityUpdates processes updates from a NATS KV watcher.
+//
+// The watcher delivers current values on startup (bootstrap phase) followed by
+// a nil sentinel, then live updates. We track the bootstrap boundary so rules
+// can re-fire OnEnter actions on restart when their persisted match state
+// indicates they were matching before the crash (see Gap 2 / on_recovery).
 func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.KeyWatcher) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -315,6 +320,8 @@ func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.
 	// NOTE: watcher.Stop() is called explicitly before each return, not via defer.
 	// This avoids a race condition in nats.go where Stop() can race with the
 	// internal message handler goroutine when using defer or calling from another goroutine.
+
+	bootstrap := true
 
 	for {
 		select {
@@ -331,22 +338,14 @@ func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.
 				return
 			}
 			if entry == nil {
-				// Nil entry indicates initial state complete, continue watching
+				// Nil entry indicates initial state replay is complete.
+				// All subsequent entries are live updates.
+				bootstrap = false
 				continue
 			}
 
 			entityKey := entry.Key()
 			revision := entry.Revision()
-
-			// Check if we generated this revision (feedback loop prevention)
-			// If this update came from our own rule action, skip re-evaluation
-			if rp.shouldSkipEvaluation(entityKey, revision) {
-				rp.clearOwnRevision(entityKey) // One-time skip, clear after use
-				rp.logger.Debug("Skipping self-generated update",
-					"entity", entityKey,
-					"revision", revision)
-				continue
-			}
 
 			// Determine action based on operation and revision
 			action := "UPDATED"
@@ -361,22 +360,26 @@ func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.
 				if rp.entityCoalescer != nil {
 					rp.entityCoalescer.Remove(entityKey)
 				}
-				// Still evaluate rules for deletion event
-				rp.evaluateRulesForEntityState(ctx, entityKey, action, nil)
+				rp.evaluateRulesForEntityState(ctx, entityKey,
+					entitySnapshot{Action: action, Revision: revision}, bootstrap)
 				continue
 			}
 
-			// If debounce is disabled (coalescer is nil), evaluate immediately
-			// Otherwise, collect entity ID for batched evaluation
-			if rp.entityCoalescer == nil {
-				// Bypass: unmarshal state and evaluate immediately without batching
+			// During bootstrap, bypass the coalescer so OnEnter recovery fires
+			// deterministically for each replayed entity. The coalescer can delay
+			// evaluation past the bootstrap boundary, which would lose the flag.
+			// Because the gate is evaluated before any Add, no pre-sentinel entry
+			// ever enters the coalescer from this watcher — so there is no
+			// queued-entity race when bootstrap flips to false.
+			if rp.entityCoalescer == nil || bootstrap {
 				var state gtypes.EntityState
 				if err := json.Unmarshal(entry.Value(), &state); err != nil {
 					rp.logger.Warn("Failed to unmarshal entity state for immediate evaluation",
 						"entity", entityKey, "error", err)
 					continue
 				}
-				rp.evaluateRulesForEntityState(ctx, entityKey, action, &state)
+				rp.evaluateRulesForEntityState(ctx, entityKey,
+					entitySnapshot{State: &state, Action: action, Revision: revision}, bootstrap)
 			} else {
 				// Batched: the coalescer will fetch current state at evaluation time
 				rp.entityCoalescer.Add(entityKey)
@@ -400,40 +403,50 @@ func (rp *Processor) evaluateEntitiesInBatch(ctx context.Context, entityIDs []st
 	rp.logger.Debug("Evaluating batched entities", "count", len(entityIDs))
 
 	for _, entityID := range entityIDs {
-		// Fetch current state from KV
-		entityState, action, err := rp.fetchCurrentEntityState(ctx, entityID)
+		snap, err := rp.fetchCurrentEntityState(ctx, entityID)
 		if err != nil {
 			rp.logger.Warn("Failed to fetch entity state for rule evaluation",
 				"entityID", entityID, "error", err)
 			continue
 		}
 
-		// Evaluate rules against current state
-		rp.evaluateRulesForEntityState(ctx, entityID, action, entityState)
+		// Evaluate rules against current state. Coalesced paths only run after
+		// bootstrap completes, so bootstrap=false here.
+		rp.evaluateRulesForEntityState(ctx, entityID, snap, false)
 	}
 }
 
-// fetchCurrentEntityState retrieves the current state of an entity from KV.
-// Returns the state, action type (CREATED/UPDATED/DELETED), and any error.
-func (rp *Processor) fetchCurrentEntityState(ctx context.Context, entityID string) (*gtypes.EntityState, string, error) {
-	// Get ENTITY_STATES bucket (should already be available from watchEntityStates)
+// entitySnapshot bundles the outputs of a single KV fetch so callers don't
+// thread four values through each evaluation path.
+type entitySnapshot struct {
+	// State is the parsed entity state. Nil for a DELETED entity.
+	State *gtypes.EntityState
+	// Action is the CRUD label: CREATED (revision 1), UPDATED, or DELETED.
+	Action string
+	// Revision is the KV revision observed. 0 when the entity has been deleted.
+	Revision uint64
+}
+
+// fetchCurrentEntityState retrieves the current state of an entity from the
+// ENTITY_STATES KV bucket. A missing entity returns a DELETED snapshot with
+// nil State rather than an error.
+func (rp *Processor) fetchCurrentEntityState(ctx context.Context, entityID string) (entitySnapshot, error) {
 	entityBucket, err := rp.natsClient.GetKeyValueBucket(ctx, "ENTITY_STATES")
 	if err != nil {
-		return nil, "", errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get ENTITY_STATES bucket")
+		return entitySnapshot{}, errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get ENTITY_STATES bucket")
 	}
 
 	entry, err := entityBucket.Get(ctx, entityID)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			// Entity was deleted between add and evaluation
-			return nil, "DELETED", nil
+			return entitySnapshot{Action: "DELETED"}, nil
 		}
-		return nil, "", errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get entity state")
+		return entitySnapshot{}, errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get entity state")
 	}
 
 	var state gtypes.EntityState
 	if err := json.Unmarshal(entry.Value(), &state); err != nil {
-		return nil, "", errs.WrapInvalid(err, "Processor", "fetchCurrentEntityState", "unmarshal entity state")
+		return entitySnapshot{}, errs.WrapInvalid(err, "Processor", "fetchCurrentEntityState", "unmarshal entity state")
 	}
 
 	action := "UPDATED"
@@ -441,5 +454,5 @@ func (rp *Processor) fetchCurrentEntityState(ctx context.Context, entityID strin
 		action = "CREATED"
 	}
 
-	return &state, action, nil
+	return entitySnapshot{State: &state, Action: action, Revision: entry.Revision()}, nil
 }
