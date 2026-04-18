@@ -2,19 +2,16 @@
   "id": "collect_research_evidence",
   "type": "expression",
   "name": "Collect Research Evidence",
-  "description": "When a researcher completes successfully, store findings in the RESEARCH_EVIDENCE KV bucket and write a graph triple linking the finding to the research task. This enables fan-in: multiple researchers write to the same bucket, and a downstream rule synthesizes when enough evidence is collected.",
+  "description": "When a researcher completes successfully, store findings in the RESEARCH_EVIDENCE KV bucket and write a graph triple linking the finding to the research task. Downstream rule 04 watches RESEARCH_EVIDENCE and fires synthesis once evidence is collected.",
   "enabled": true,
-  "entity": {
-    "pattern": "agent.complete.>"
-  },
   "conditions": [
     {
-      "field": "role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "researcher"
     },
     {
-      "field": "outcome",
+      "field": "agent.loop.outcome",
       "operator": "eq",
       "value": "success"
     }
@@ -23,23 +20,21 @@
   "on_enter": [
     {
       "type": "update_kv",
-      "config": {
-        "bucket": "RESEARCH_EVIDENCE",
-        "key": "evidence.$entity.task_id",
-        "payload": {
-          "task_id": "$entity.task_id",
-          "loop_id": "$entity.id",
-          "role": "researcher",
-          "findings": "$entity.result",
-          "collected_at": "$now"
-        },
-        "merge": false
-      }
+      "bucket": "RESEARCH_EVIDENCE",
+      "key": "evidence.$entity.triple.agent.loop.task",
+      "payload": {
+        "task_id": "$entity.triple.agent.loop.task",
+        "loop_id": "$entity.id",
+        "role": "researcher",
+        "findings": "$entity.triple.agent.loop.result",
+        "collected_at": "$now"
+      },
+      "merge": false
     },
     {
       "type": "add_triple",
       "predicate": "research.has_evidence",
-      "object": "evidence.$entity.task_id"
+      "object": "evidence.$entity.triple.agent.loop.task"
     }
   ]
 }

@@ -470,6 +470,15 @@ const (
 	// Example: "Investigate MQTT retained-message behavior"
 	// DataType: string
 	LoopDescription = "agent.loop.description"
+
+	// LoopResult is the text content the loop produced at completion
+	// (LoopCompletedEvent.Result), truncated to fit within triple-size
+	// limits. Rules fan out on this predicate to pass an agent's output to
+	// downstream agents via $entity.triple.agent.loop.result. Long results
+	// are truncated; the full result remains available on the event.
+	// Example: "Findings: ... SUBTOPICS:\n- foo\n- bar"
+	// DataType: string
+	LoopResult = "agent.loop.result"
 )
 
 // Step Predicates

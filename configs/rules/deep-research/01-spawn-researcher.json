@@ -2,19 +2,16 @@
   "id": "spawn_researcher",
   "type": "expression",
   "name": "Spawn Researcher on New Task",
-  "description": "When dispatch submits a task with role=general, spawn a researcher to investigate. The researcher gathers evidence using graph queries and web search, then submits findings.",
+  "description": "When the initial general agent completes successfully, spawn a researcher to investigate. The researcher gathers evidence using graph queries and web search, then submits findings. Uses fully-qualified loop predicates so conditions match the triples graph-writer emits on completion.",
   "enabled": true,
-  "entity": {
-    "pattern": "agent.complete.>"
-  },
   "conditions": [
     {
-      "field": "role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "general"
     },
     {
-      "field": "outcome",
+      "field": "agent.loop.outcome",
       "operator": "eq",
       "value": "success"
     }
@@ -23,10 +20,10 @@
   "on_enter": [
     {
       "type": "publish_agent",
-      "subject": "agent.task.$entity.task_id.research",
+      "subject": "agent.task.research",
       "role": "researcher",
       "model": "general",
-      "prompt": "Research the following question thoroughly. Use graph_query to check existing knowledge, web_search for external sources, and http_request to fetch specific URLs.\n\nQuestion: $entity.result\n\nIf the question has clearly separable subtopics, include a SUBTOPICS section at the end of your findings listing each subtopic on its own line prefixed with '- '. Otherwise, provide your complete findings.\n\nSubmit your work when research is complete."
+      "prompt": "Research the following question thoroughly. Use graph_query to check existing knowledge and web_search for external sources.\n\nQuestion: $entity.triple.agent.loop.result\n\nIf the question has clearly separable subtopics, include a SUBTOPICS section at the end of your findings listing each subtopic on its own line prefixed with '- '. Otherwise, provide your complete findings."
     }
   ]
 }

@@ -2,27 +2,29 @@
   "id": "synthesize_evidence",
   "type": "expression",
   "name": "Synthesize When Evidence Collected",
-  "description": "Watches the RESEARCH_EVIDENCE KV bucket. When new evidence arrives, spawns a synthesizer agent to aggregate all collected findings into a coherent answer. Uses while_true with a when guard to prevent re-synthesis until new evidence arrives (cooldown handles debounce).",
+  "description": "When a researcher's entity has accumulated a research.has_evidence triple (written by rule 02), spawn a synthesizer to aggregate findings into a final answer. Fires against ENTITY_STATES rather than RESEARCH_EVIDENCE so we can leverage the loop entity's existing predicates for templating.",
   "enabled": true,
-  "entity": {
-    "pattern": "evidence.>",
-    "watch_buckets": ["RESEARCH_EVIDENCE"]
-  },
   "conditions": [
     {
-      "field": "findings",
+      "field": "agent.loop.role",
+      "operator": "eq",
+      "value": "researcher"
+    },
+    {
+      "field": "research.has_evidence",
       "operator": "ne",
       "value": ""
     }
   ],
+  "logic": "and",
   "cooldown": "30s",
   "on_enter": [
     {
       "type": "publish_agent",
-      "subject": "agent.task.$entity.task_id.synthesis",
+      "subject": "agent.task.synthesis",
       "role": "general",
       "model": "general",
-      "prompt": "You are a research synthesizer. Multiple researchers have gathered evidence on a topic. Your job is to:\n\n1. Read all evidence from the knowledge graph using graph_query\n2. Identify key themes, agreements, and contradictions across sources\n3. Produce a structured synthesis report with:\n   - Summary (2-3 sentences)\n   - Key Findings (numbered, with source attribution)\n   - Confidence Assessment (what is well-supported vs. uncertain)\n   - Gaps (what we still don't know)\n\nEvidence task ID: $entity.task_id\n\nQuery the graph for all entities with predicate research.has_evidence to find the collected findings."
+      "prompt": "You are a research synthesizer. Evidence has been gathered on a topic. Produce a structured synthesis report with:\n\n1. Summary (2-3 sentences)\n2. Key Findings (numbered, with source attribution)\n3. Confidence Assessment (well-supported vs. uncertain)\n4. Gaps (what is still unknown)\n\nQuery the graph for entities with predicate research.has_evidence to find collected findings. Original research task: $entity.triple.agent.loop.task"
     }
   ]
 }

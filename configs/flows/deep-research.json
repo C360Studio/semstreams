@@ -222,12 +222,17 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
-        "rules_dir": "configs/rules/deep-research",
+        "rules_files": [
+          "/app/configs/rules/deep-research/01-spawn-researcher.json",
+          "/app/configs/rules/deep-research/02-collect-evidence.json",
+          "/app/configs/rules/deep-research/03-fan-out-subtopics.json",
+          "/app/configs/rules/deep-research/04-synthesize-evidence.json",
+          "/app/configs/rules/deep-research/05-retry-insufficient.json",
+          "/app/configs/rules/deep-research/06-timeout-partial.json"
+        ],
         "enable_graph_integration": true,
-        "entity_watch_patterns": ["agent.complete.>", "agent.loop.>"],
         "entity_watch_buckets": {
-          "ENTITY_STATES": ["agent.complete.>", "agent.loop.>"],
-          "RESEARCH_EVIDENCE": [">"]
+          "ENTITY_STATES": [">"]
         },
         "ports": {
           "inputs": [

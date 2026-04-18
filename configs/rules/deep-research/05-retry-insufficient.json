@@ -2,19 +2,16 @@
   "id": "retry_insufficient_evidence",
   "type": "expression",
   "name": "Retry on Insufficient Evidence",
-  "description": "When a researcher fails or reports insufficient evidence, retry with a broader search strategy. Limited to 2 retries via when guard to prevent unbounded loops.",
+  "description": "When a researcher loop fails, retry with a broader search strategy. Bounded by max_iterations + a when guard to prevent unbounded loops.",
   "enabled": true,
-  "entity": {
-    "pattern": "agent.complete.>"
-  },
   "conditions": [
     {
-      "field": "role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "researcher"
     },
     {
-      "field": "outcome",
+      "field": "agent.loop.outcome",
       "operator": "in",
       "value": ["failed", "insufficient"]
     }
@@ -24,10 +21,10 @@
   "on_enter": [
     {
       "type": "publish_agent",
-      "subject": "agent.task.$entity.task_id.retry",
+      "subject": "agent.task.retry",
       "role": "researcher",
       "model": "general",
-      "prompt": "A previous research attempt found insufficient evidence. Try again with a broader approach:\n\n1. Use different search queries (synonyms, related terms)\n2. Try web_search if graph_query returned nothing\n3. Check related entities in the knowledge graph\n4. If still insufficient after thorough search, submit what you found with a note about gaps.\n\nOriginal task: $entity.result",
+      "prompt": "A previous research attempt found insufficient evidence. Try again with a broader approach:\n\n1. Use different search queries (synonyms, related terms)\n2. Try web_search if graph_query returned nothing\n3. Check related entities in the knowledge graph\n4. If still insufficient after thorough search, submit what you found with a note about gaps.\n\nOriginal task: $entity.triple.agent.loop.description",
       "when": [
         {
           "field": "$state.iteration",
