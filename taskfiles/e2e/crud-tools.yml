@@ -1,0 +1,68 @@
+version: "3"
+
+# Crud-tools tier: verifies ADR-029 Pattern-B CRUD tools end to end.
+# Mock LLM scripts a single create_rule call; scenario validates the
+# rule appears in the semstreams_config KV bucket with expected content.
+# Runs on ports 6xxxx alongside agentic (3xxxx) and deep-research (5xxxx).
+
+tasks:
+  default:
+    desc: "Crud-tools tier: Pattern-B CRUD round-trip (~15s)"
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[CRUD-TOOLS] Starting crud-tools tier E2E test..."
+      - docker compose -f docker/compose/crud-tools.yml up -d --wait --build
+      - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
+      - echo "[CRUD-TOOLS] Running scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario crud-tools --output-dir ./test/e2e/results --base-url http://localhost:65080 --metrics-url http://localhost:65190
+        ignore_error: true
+      - docker compose -f docker/compose/crud-tools.yml down -v --timeout 15
+
+  up:
+    desc: Start crud-tools tier services without running tests
+    silent: false
+    cmds:
+      - echo "[CRUD-TOOLS] Starting services..."
+      - docker compose -f docker/compose/crud-tools.yml up -d --wait --build
+      - echo "[OK] Services are healthy"
+      - 'echo ""'
+      - 'echo "Services:"'
+      - 'echo "  NATS:       nats://localhost:64222"'
+      - 'echo "  Mock LLM:   http://localhost:65180"'
+      - 'echo "  SemStreams: http://localhost:65080"'
+      - 'echo "  Metrics:    http://localhost:65190/metrics"'
+      - 'echo ""'
+      - 'echo "To run tests: task e2e:crud-tools:test"'
+      - 'echo "To stop:      task e2e:crud-tools:down"'
+
+  test:
+    desc: Run crud-tools scenario against already-running services
+    silent: false
+    deps: [":build:e2e"]
+    cmds:
+      - echo "[CRUD-TOOLS] Running scenario..."
+      - cd cmd/e2e && ./e2e --scenario crud-tools --output-dir ./test/e2e/results --base-url http://localhost:65080 --metrics-url http://localhost:65190
+
+  down:
+    desc: Stop crud-tools tier services
+    silent: false
+    cmds:
+      - echo "[CRUD-TOOLS] Stopping services..."
+      - docker compose -f docker/compose/crud-tools.yml down -v --timeout 15
+      - echo "[OK] Services stopped"
+
+  logs:
+    desc: Tail logs from crud-tools services
+    silent: false
+    cmds:
+      - docker compose -f docker/compose/crud-tools.yml logs -f
+
+  clean:
+    desc: Clean crud-tools tier environment
+    silent: false
+    cmds:
+      - echo "[CRUD-TOOLS] Cleaning environment..."
+      - docker compose -f docker/compose/crud-tools.yml down -v --timeout 15 2>/dev/null || true
+      - docker volume ls -q --filter name=crud-tools | xargs -r docker volume rm 2>/dev/null || true
+      - echo "[OK] Crud-tools environment cleaned"

@@ -96,6 +96,36 @@ func (c *NATSValidationClient) Close(ctx context.Context) error {
 
 // PutKV writes a key-value entry to a KV bucket.
 // Used for test setup (e.g., registering workflow definitions).
+// GetKV reads a single KV entry's value from the named bucket. Returns
+// the raw bytes so callers can unmarshal into their own type. Used by
+// scenarios that verify an agent's CRUD tool write landed in KV with
+// the expected content. A nats.ErrKeyNotFound is surfaced distinctly
+// so callers can tell "no write" from "transport failure".
+func (c *NATSValidationClient) GetKV(ctx context.Context, bucket, key string) ([]byte, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	c.mu.Unlock()
+
+	js, err := c.client.JetStream()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get JetStream: %w", err)
+	}
+
+	kv, err := js.KeyValue(ctx, bucket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open bucket %s: %w", bucket, err)
+	}
+
+	entry, err := kv.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read key %s/%s: %w", bucket, key, err)
+	}
+	return entry.Value(), nil
+}
+
 func (c *NATSValidationClient) PutKV(ctx context.Context, bucket, key string, value []byte) error {
 	c.mu.Lock()
 	if c.closed {

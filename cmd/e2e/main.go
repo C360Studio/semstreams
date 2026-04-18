@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/results"
 	scenarios "github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
+	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/throughput"
 )
@@ -386,6 +387,12 @@ func createScenario(
 		cfg := deepresearch.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
 		return deepresearch.NewScenario(edgeClient, cfg)
+
+	// CRUD-tools scenario (ADR-029 Pattern-B CRUD round-trip)
+	case "crud-tools":
+		cfg := crudtools.DefaultConfig()
+		cfg.MetricsURL = flags.metricsURL
+		return crudtools.NewScenario(edgeClient, cfg)
 
 	// Throughput scenario (high-volume stress test with profiling + query load)
 	case "throughput":

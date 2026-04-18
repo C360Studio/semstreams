@@ -1,0 +1,103 @@
+# Crud-Tools E2E Test Environment for SemStreams
+#
+# Exercises the ADR-029 Pattern-B CRUD tools (create_rule etc.) end to
+# end. Mock LLM scripts one create_rule call; scenario verifies the
+# resulting rule lands in the semstreams_config KV bucket.
+#
+# Usage:
+#   task e2e:crud-tools
+#
+# Ports are in the 6xxxx range so this stack can run alongside agentic
+# (3xxxx) and deep-research (5xxxx).
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: semstreams-crud-tools-nats
+    ports:
+      - "64222:4222"
+      - "65222:8222"
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-crud-tools-nats"]
+    volumes:
+      - nats-crud-tools-data:/data
+    networks:
+      - semstreams-crud-tools-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mock-llm:
+    build:
+      context: ../..
+      dockerfile: test/e2e/mock/Dockerfile
+    container_name: semstreams-crud-tools-mock-llm
+    # --scenario crud-tools selects the applyCRUDToolsPreset config in
+    # test/e2e/mock/cmd/main.go. Different scenarios share this binary
+    # and pick their preset via this flag.
+    command: ["--port", "8080", "--scenario", "crud-tools"]
+    ports:
+      - "65180:8080"
+    networks:
+      - semstreams-crud-tools-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  semstreams:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: semstreams-crud-tools-app
+    command: ["--config", "/app/configs/flows/crud-tools-test.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+    volumes:
+      - ../../configs:/app/configs:ro
+    ports:
+      - "65080:8080"
+      - "65190:9090"
+    networks:
+      - semstreams-crud-tools-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/readyz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-crud-tools-net:
+    driver: bridge
+
+volumes:
+  nats-crud-tools-data:
+    driver: local
