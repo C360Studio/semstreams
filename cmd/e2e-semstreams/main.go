@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/examples/processors/document"
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
 	"github.com/c360studio/semstreams/flowstore"
+	"github.com/c360studio/semstreams/flowtemplate"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
@@ -122,12 +123,13 @@ func run() error {
 	// pattern. Post-configure timing lets Pattern-B managers resolve
 	// against already-initialised infrastructure.
 	executors.RegisterAll(ctx, executors.ToolDependencies{
-		NATSClient:     natsClient,
-		Platform:       platform,
-		Logger:         logger,
-		RuleManager:    buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:    buildFlowManager(natsClient, logger),
-		PersonaManager: buildPersonaManager(natsClient, logger),
+		NATSClient:          natsClient,
+		Platform:            platform,
+		Logger:              logger,
+		RuleManager:         buildRuleManager(ctx, natsClient, configManager, logger),
+		FlowManager:         buildFlowManager(natsClient, logger),
+		PersonaManager:      buildPersonaManager(natsClient, logger),
+		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
 	})
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
@@ -165,6 +167,17 @@ func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) exe
 	mgr, err := persona.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
+			slog.Any("error", err))
+		return nil
+	}
+	return mgr
+}
+
+// buildFlowTemplateManager mirrors cmd/semstreams/main.go; ADR-029 Pattern B.
+func buildFlowTemplateManager(natsClient *natsclient.Client, logger *slog.Logger) executors.FlowTemplateManager {
+	mgr, err := flowtemplate.NewManager(natsClient)
+	if err != nil {
+		logger.Warn("flow-template tools disabled: could not initialise flow-template store",
 			slog.Any("error", err))
 		return nil
 	}
