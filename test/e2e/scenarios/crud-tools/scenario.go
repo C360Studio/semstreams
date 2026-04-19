@@ -22,10 +22,33 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 )
+
+// PersonaMarker is the unique substring planted in the e2e persona
+// override this scenario seeds. test/e2e/mock/cmd/main.go uses the
+// same constant as its tool-call marker, so the create_rule call only
+// fires when the persona content reaches the LLM via the ADR-029
+// step-3b assembler wiring. Exported so the mock preset and the
+// scenario stay aligned on a single string.
+const PersonaMarker = "E2E-CRUD-PERSONA-MARKER-v1"
+
+// personaOverrideID is the ID of the DefaultFragments entry this
+// scenario overrides. role-general is the role the agentic-loop runs
+// under by default, so Upsert on this ID guarantees the override
+// reaches the request's system message for this task's role.
+const personaOverrideID = "role-general"
+
+// personasBucket is the PERSONAS KV bucket name — matches the constant
+// inside the persona.Manager. Duplicated here so the scenario can
+// seed directly via NATSValidationClient without importing the
+// Manager (which opens its own KV handle and would race with the
+// running semstreams process).
+const personasBucket = "PERSONAS"
 
 // Config holds configuration for the crud-tools scenario.
 type Config struct {
@@ -125,10 +148,12 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		fn   func(context.Context, *scenarios.Result) error
 	}{
 		{"verify-components", s.verifyComponents},
+		{"seed-persona-override", s.seedPersonaOverride},
 		{"inject-user-message", s.injectUserMessage},
 		{"wait-for-tool-execution", s.waitForToolExecution},
 		{"verify-rule-in-kv", s.verifyRuleInKV},
 		{"validate-rule-content", s.validateRuleContent},
+		{"cleanup-persona-override", s.cleanupPersonaOverride},
 	}
 
 	for _, stage := range stages {
@@ -188,9 +213,69 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	return nil
 }
 
+// seedPersonaOverride plants a persona record in the PERSONAS KV
+// bucket that overrides the role-general DefaultFragment. The
+// override's content contains PersonaMarker — the mock's tool-call
+// matcher looks for that exact substring. If the ADR-029 step-3b
+// wiring works (component loads PERSONAS at Start, UpsertAlls into
+// the registry, Assemble prepends the override content as a system
+// message), the marker reaches the LLM, the mock fires create_rule,
+// and the scenario passes. If the wiring regresses, the persona
+// never reaches the LLM, the marker misses, and the scenario fails
+// loud at wait-for-tool-execution.
+//
+// The agentic-loop component only loads the PERSONAS bucket once at
+// Start(). This stage therefore assumes semstreams is already
+// running and reads from a bucket it opened during startup — the
+// effect of writing here depends on whether the Component treats
+// PERSONAS as live-refreshed or start-snapshot. Today it's
+// start-snapshot, so for this scenario to work the seeding MUST
+// happen before the first user message triggers a loop. It does
+// (seed-persona runs before inject-user-message).
+func (s *Scenario) seedPersonaOverride(ctx context.Context, result *scenarios.Result) error {
+	p := &persona.Persona{
+		ID:       personaOverrideID,
+		Category: int(prompt.CategoryRole),
+		Priority: 0,
+		Content: fmt.Sprintf(
+			"You are the general-purpose e2e test agent. %s Focus on authoring a test rule when asked.",
+			PersonaMarker,
+		),
+		Roles:       []string{"general"},
+		Description: "e2e fixture — replaces role-general with a marker-bearing body the mock can match on.",
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal persona fixture: %w", err)
+	}
+	if err := s.nats.PutKV(ctx, personasBucket, personaOverrideID, data); err != nil {
+		return fmt.Errorf("seed persona %s into %s: %w", personaOverrideID, personasBucket, err)
+	}
+	result.Details["persona_override_id"] = personaOverrideID
+	result.Details["persona_marker"] = PersonaMarker
+	return nil
+}
+
+// cleanupPersonaOverride removes the seeded persona so a second run
+// of the scenario against the same NATS deployment starts from a
+// clean PERSONAS bucket. Skipping cleanup on an assertion failure
+// would leave the seed in place — acceptable since the bucket is
+// wiped between e2e runs by the docker-compose teardown, but we try
+// to be tidy when we can.
+func (s *Scenario) cleanupPersonaOverride(ctx context.Context, _ *scenarios.Result) error {
+	if err := s.nats.DeleteKV(ctx, personasBucket, personaOverrideID); err != nil {
+		// Not fatal — the scenario's primary assertions already ran.
+		return fmt.Errorf("delete seeded persona %s: %w", personaOverrideID, err)
+	}
+	return nil
+}
+
 // injectUserMessage publishes a user.message the mock LLM routes to a
-// create_rule tool call. Phrase "author a test rule" matches the Marker
-// configured in test/e2e/mock/cmd/main.go applyCRUDToolsPreset.
+// create_rule tool call. The mock's marker is the PersonaMarker
+// constant — not a user-message substring — so the user content only
+// needs to be plausible enough to justify a create_rule call
+// semantically. The actual triggering happens via the persona
+// override seeded in seed-persona-override.
 func (s *Scenario) injectUserMessage(ctx context.Context, result *scenarios.Result) error {
 	msg := agentic.UserMessage{
 		MessageID:   fmt.Sprintf("e2e-crud-%d", time.Now().UnixNano()),

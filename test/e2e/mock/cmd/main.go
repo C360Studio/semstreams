@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/c360studio/semstreams/test/e2e/mock"
+	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 )
 
 func main() {
@@ -84,9 +85,12 @@ func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 
 func applyDeepResearchPreset(server *mock.OpenAIServer) {
 	// Per-role completion text + scripted coordinator decisions. Markers
-	// match substrings of the actual rule prompts (not persona fragments
-	// from agentic-loop/prompt/assembler.go — those aren't wired into the
-	// task dispatcher, so only the rule-supplied prompt reaches the LLM).
+	// match substrings of the actual rule prompts. As of ADR-029 step 3b
+	// the assembler also runs per task, so persona fragments from
+	// DefaultFragments (and any KV-backed overrides) arrive on the
+	// request as a leading system message. Rule prompts still drive the
+	// role-specific responses below — the system message is ambient
+	// context that all role responses share.
 	server.
 		WithRoleResponses([]mock.RoleResponse{
 			{
@@ -131,12 +135,20 @@ func applyDeepResearchPreset(server *mock.OpenAIServer) {
 // Only one tool call is scripted: the agent's single Create action.
 // After it completes, the mock returns completion text (via the
 // default completionContent) and the loop terminates naturally.
+//
+// Marker is crudtools.PersonaMarker — a unique substring that only
+// appears in the e2e persona override that the scenario seeds in the
+// PERSONAS KV bucket. This forces the mock to rely on the ADR-029
+// step-3b assembler plumbing reaching the LLM with the override
+// content. If the step-3b wiring regresses (persona doesn't get
+// merged into the registry, or the system message never reaches the
+// chat completion request), the marker misses, the create_rule call
+// is not injected, and the scenario fails loud at
+// wait-for-tool-execution rather than silently passing.
 func applyCRUDToolsPreset(server *mock.OpenAIServer) {
 	server.WithRoleToolCallSequence([]mock.RoleToolCall{
 		{
-			// Marker is a unique substring of the user message injected
-			// by test/e2e/scenarios/crud-tools/scenario.go.
-			Marker:   "author a test rule",
+			Marker:   crudtools.PersonaMarker,
 			ToolName: "create_rule",
 			Args: map[string]any{
 				"rule_id": "e2e-crud-rule",
