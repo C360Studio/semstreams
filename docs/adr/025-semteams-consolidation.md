@@ -2,24 +2,7 @@
 
 ## Status
 
-Proposed — Phase 2 amended by [ADR-030](030-personalization-moves-to-product.md).
-
-> **Amendment (2026-04-18).** Phase 2 (personalization layer —
-> operating model, onboarding command, intent classifier, profile
-> context injection) is walked back. Those artifacts move to the
-> product layer (semteams) per ADR-030. Phase 1 (framework primitives
-> — prompt assembler infrastructure, tool categories,
-> `ToolCallFilter`, `ApprovalFilter`, tool call governance filter,
-> built-in executors) stands as written.
->
-> The boundary question that prompted the amendment surfaced while
-> wiring ADR-029 step 3b (persona-assembler integration) on
-> 2026-04-18. Keeping the operating-model schema and `/onboard`
-> interview in framework code conflicted with
-> `memory/feedback_framework_boundary.md` and would have forced a
-> fourth system-message injection channel into the agent loop.
-> ADR-030 documents the extraction plan and the coordination sequence
-> with the semteams team.
+Proposed
 
 ## Context
 
