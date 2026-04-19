@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -62,6 +63,13 @@ type MessageHandler struct {
 	toolCallFilter    agentic.ToolCallFilter
 	modelRegistry     model.RegistryReader
 	logger            *slog.Logger
+
+	// promptRegistry composes the system message prepended to each task's
+	// initial message list. Nil means no assembler step — buildInitialMessages
+	// emits only the existing task.Context.Content + user-prompt pair.
+	// Populated by Component.Start from prompt.DefaultFragments plus any
+	// KV-backed personas returned by persona.Manager.Fragments.
+	promptRegistry *prompt.Registry
 }
 
 // NewMessageHandler creates a new MessageHandler
@@ -108,6 +116,16 @@ func (h *MessageHandler) resolveProvider(endpointName string) string {
 // modelName is the resolved endpoint name reported in CompactionResult.
 func (h *MessageHandler) SetSummarizer(s Summarizer, modelName string) {
 	h.compactor = NewCompactor(h.config.Context, WithSummarizer(s), WithModelName(modelName), WithCompactorLogger(h.logger))
+}
+
+// SetPromptRegistry installs the fragment registry that composes the
+// per-task system prompt. Passing nil clears the registry — callers get
+// the legacy behaviour where buildInitialMessages emits only
+// task.Context.Content + user prompt. The registry is expected to be
+// preloaded with prompt.DefaultFragments plus any product-supplied
+// overrides (typically persona.Manager.Fragments via Registry.UpsertAll).
+func (h *MessageHandler) SetPromptRegistry(r *prompt.Registry) {
+	h.promptRegistry = r
 }
 
 // maybeCompact checks if context compaction is needed and performs it,
@@ -300,8 +318,21 @@ func (h *MessageHandler) buildLoopCreatedData(loopID string, task TaskMessage, e
 }
 
 // buildInitialMessages constructs the initial message list for an agent request.
+//
+// Order: assembled system prompt (if any) → task.Context.Content (if any) →
+// user prompt. The assembler consults h.promptRegistry so KV-backed personas
+// layered on prompt.DefaultFragments produce a role-appropriate system
+// message per task. When the registry is nil or yields empty content, the
+// legacy "context + prompt" pair is emitted unchanged.
 func (h *MessageHandler) buildInitialMessages(task TaskMessage) []agentic.ChatMessage {
 	var messages []agentic.ChatMessage
+
+	if assembled := h.assembleSystemPrompt(task); assembled != "" {
+		messages = append(messages, agentic.ChatMessage{
+			Role:    "system",
+			Content: assembled,
+		})
+	}
 
 	// If embedded context exists, include it as system message first
 	if task.Context != nil && task.Context.Content != "" {
@@ -318,6 +349,45 @@ func (h *MessageHandler) buildInitialMessages(task TaskMessage) []agentic.ChatMe
 	})
 
 	return messages
+}
+
+// assembleSystemPrompt returns the composed system prompt for a task, or
+// "" when the registry is unset or produces no content. Kept as its own
+// method so the handler test can exercise the translation from
+// TaskMessage to prompt.AssemblyContext without building a full loop.
+func (h *MessageHandler) assembleSystemPrompt(task TaskMessage) string {
+	if h.promptRegistry == nil {
+		return ""
+	}
+	ctx := &prompt.AssemblyContext{
+		Role:          task.Role,
+		LoopID:        task.LoopID,
+		Depth:         task.Depth,
+		MaxDepth:      task.MaxDepth,
+		Prompt:        task.Prompt,
+		WorkflowSlug:  task.WorkflowSlug,
+		WorkflowStep:  task.WorkflowStep,
+		Tools:         toolNames(task.Tools),
+		Iteration:     0,
+		MaxIterations: h.config.MaxIterations,
+		ParentLoopID:  task.ParentLoopID,
+		Provider:      h.resolveProvider(task.Model),
+	}
+	return prompt.Assemble(h.promptRegistry, ctx).SystemMessage
+}
+
+// toolNames projects ToolDefinition.Name out of a task's tool allowlist so
+// prompt fragments that branch on available tools (none today, but
+// ContentFunc can reference ctx.Tools) see a plain []string.
+func toolNames(defs []agentic.ToolDefinition) []string {
+	if len(defs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		names = append(names, d.Name)
+	}
+	return names
 }
 
 // BuildIterationBudgetMessage creates a system message informing the model of its

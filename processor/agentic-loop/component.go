@@ -17,9 +17,11 @@ import (
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/workflow"
+	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/processor/rule/boid"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/nats-io/nats.go/jetstream"
@@ -305,12 +307,48 @@ func (c *Component) Start(ctx context.Context) error {
 	c.started = true
 	c.startTime = time.Now()
 
+	// Build the prompt-assembly registry: framework-universal + role
+	// defaults from prompt.DefaultFragments, overridden by any product-
+	// supplied personas in the PERSONAS KV bucket. See ADR-029 step 3b.
+	// Best-effort — failure to open the bucket logs and proceeds with
+	// defaults only. Nil NATSClient paths (pure unit tests) skip persona
+	// loading silently.
+	c.initPromptRegistry(ctx)
+
 	// Emit model endpoint entities to graph (non-fatal)
 	if c.graphWriter != nil {
 		c.graphWriter.WriteModelEndpoints(ctx)
 	}
 
 	return nil
+}
+
+// initPromptRegistry builds the handler's prompt.Registry from
+// DefaultFragments plus KV-backed persona overrides. Isolated so Start
+// stays readable and so tests can inspect the resulting registry state.
+func (c *Component) initPromptRegistry(ctx context.Context) {
+	reg := prompt.NewRegistry()
+	reg.AddAll(prompt.DefaultFragments())
+
+	if c.natsClient != nil {
+		mgr, err := persona.NewManager(c.natsClient)
+		if err != nil {
+			c.logger.Debug("persona overrides disabled; using DefaultFragments only",
+				slog.Any("error", err))
+		} else {
+			fragments, fragErr := mgr.Fragments(ctx)
+			if fragErr != nil {
+				c.logger.Warn("failed to load persona overrides; using DefaultFragments only",
+					slog.Any("error", fragErr))
+			} else if len(fragments) > 0 {
+				reg.UpsertAll(fragments)
+				c.logger.Info("persona overrides loaded",
+					slog.Int("count", len(fragments)))
+			}
+		}
+	}
+
+	c.handler.SetPromptRegistry(reg)
 }
 
 // Stop stops the component within the given timeout.
