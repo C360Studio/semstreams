@@ -95,8 +95,8 @@
 //
 // # Example Usage
 //
-//	// Create store
-//	store, err := flowstore.NewStore(natsClient)
+//	// Create manager
+//	store, err := flowstore.NewManager(natsClient)
 //
 //	// Create flow
 //	flow := &flowstore.Flow{

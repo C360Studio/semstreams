@@ -30,7 +30,7 @@ func TestRuntimeHealthIntegration(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// For this integration test, we'll test the handler without ComponentManager

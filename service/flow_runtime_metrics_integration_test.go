@@ -29,7 +29,7 @@ func TestRuntimeMetricsIntegration(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// Create a test flow with components
@@ -235,7 +235,7 @@ func TestRuntimeMetrics_WithMockPrometheus(t *testing.T) {
 	}()
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// Create test flow

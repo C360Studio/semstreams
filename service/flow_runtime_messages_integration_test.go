@@ -23,7 +23,7 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	// Create test context
@@ -354,7 +354,7 @@ func TestRuntimeMessagesLoggerUnavailable(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -439,7 +439,7 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
 	// Create flow store
-	flowStore, err := flowstore.NewStore(natsClient)
+	flowStore, err := flowstore.NewManager(natsClient)
 	require.NoError(t, err)
 
 	ctx := context.Background()
