@@ -36,6 +36,15 @@ func (f *fakeLoopKV) putEvent(key string, evt agentic.LoopCompletedEvent) error 
 	return nil
 }
 
+func (f *fakeLoopKV) putRaw(key string, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	f.entries[key] = data
+	return nil
+}
+
 func (f *fakeLoopKV) Keys(_ context.Context) ([]string, error) {
 	if f.keysErr != nil {
 		return nil, f.keysErr
@@ -166,7 +175,7 @@ func TestFlowMonitorExecutor_AggregationAndFiltering(t *testing.T) {
 		LoopID:       "loop-1",
 		TaskID:       "t1",
 		WorkflowSlug: "my-flow",
-		Outcome:      "success",
+		Outcome:      agentic.OutcomeSuccess,
 		Role:         "researcher",
 		Iterations:   3,
 		TokensIn:     100,
@@ -177,24 +186,27 @@ func TestFlowMonitorExecutor_AggregationAndFiltering(t *testing.T) {
 		LoopID:       "loop-2",
 		TaskID:       "t2",
 		WorkflowSlug: "my-flow",
-		Outcome:      "success",
+		Outcome:      agentic.OutcomeSuccess,
 		Role:         "synthesizer",
 		Iterations:   2,
 		TokensIn:     200,
 		TokensOut:    80,
 		CompletedAt:  now.Add(-1 * time.Minute),
 	})
-	seedCompletedLoop(t, kv, agentic.LoopCompletedEvent{
+	// loop-3 is a genuine LoopFailedEvent — uses FailedAt, not CompletedAt.
+	if err := kv.putRaw(completeKeyPrefix+"loop-3", agentic.LoopFailedEvent{
 		LoopID:       "loop-3",
 		TaskID:       "t3",
 		WorkflowSlug: "my-flow",
-		Outcome:      "failure",
+		Outcome:      agentic.OutcomeFailed,
 		Role:         "researcher",
 		Iterations:   5,
 		TokensIn:     300,
 		TokensOut:    0,
-		CompletedAt:  now.Add(-2 * time.Minute),
-	})
+		FailedAt:     now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("seed loop-3: %v", err)
+	}
 	// 1 loop for a different flow — must be excluded.
 	seedCompletedLoop(t, kv, agentic.LoopCompletedEvent{
 		LoopID:       "loop-other",
@@ -235,8 +247,8 @@ func TestFlowMonitorExecutor_AggregationAndFiltering(t *testing.T) {
 	if r.ByOutcome["success"] != 2 {
 		t.Errorf("by_outcome.success: want 2, got %d", r.ByOutcome["success"])
 	}
-	if r.ByOutcome["failure"] != 1 {
-		t.Errorf("by_outcome.failure: want 1, got %d", r.ByOutcome["failure"])
+	if r.ByOutcome[agentic.OutcomeFailed] != 1 {
+		t.Errorf("by_outcome.failed: want 1, got %d", r.ByOutcome[agentic.OutcomeFailed])
 	}
 	if r.ByRole["researcher"] != 2 {
 		t.Errorf("by_role.researcher: want 2, got %d", r.ByRole["researcher"])
@@ -367,7 +379,136 @@ func TestFlowMonitorExecutor_KVScanError_ReturnsToolError(t *testing.T) {
 		Arguments: map[string]any{"flow_id": "any-flow"},
 	})
 	// KV scan errors propagate as both ToolResult.Error and a returned error.
-	if result.Error == "" && err == nil {
-		t.Fatal("expected an error when KV scan fails")
+	if result.Error == "" {
+		t.Fatal("expected ToolResult.Error when KV scan fails")
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error when KV scan fails")
+	}
+	if result.ErrorKind != agentic.ToolErrorNetwork {
+		t.Errorf("ErrorKind: want %q, got %q", agentic.ToolErrorNetwork, result.ErrorKind)
+	}
+}
+
+// TestFlowMonitorExecutor_PolymorphicEventShapes verifies that COMPLETE_* keys
+// holding LoopCompletedEvent, LoopFailedEvent, and LoopCancelledEvent are all
+// decoded correctly. The three shapes share the same bucket but differ in which
+// timestamp field is present; the executor must sort by the correct terminal
+// timestamp for each shape and must not accumulate an empty by_role key for
+// events that carry no role.
+func TestFlowMonitorExecutor_PolymorphicEventShapes(t *testing.T) {
+	t.Parallel()
+
+	kv := newFakeLoopKV()
+	flows := newFakeFlowStateReader()
+	flows.states["poly-flow"] = FlowState{RuntimeState: "idle"}
+
+	// T1 < T2 < T3 — cancelled is most recent, success is oldest.
+	t1 := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(5 * time.Minute)
+	t3 := t2.Add(5 * time.Minute)
+
+	// Seed success (oldest).
+	if err := kv.putRaw(completeKeyPrefix+"poly-success", agentic.LoopCompletedEvent{
+		LoopID:       "poly-success",
+		TaskID:       "ts1",
+		WorkflowSlug: "poly-flow",
+		Outcome:      agentic.OutcomeSuccess,
+		Role:         "researcher",
+		Iterations:   4,
+		TokensIn:     200,
+		TokensOut:    80,
+		CompletedAt:  t1,
+	}); err != nil {
+		t.Fatalf("seed success: %v", err)
+	}
+
+	// Seed failure (middle).
+	if err := kv.putRaw(completeKeyPrefix+"poly-failed", agentic.LoopFailedEvent{
+		LoopID:       "poly-failed",
+		TaskID:       "ts2",
+		WorkflowSlug: "poly-flow",
+		Outcome:      agentic.OutcomeFailed,
+		Role:         "researcher",
+		Reason:       "max_iterations",
+		FailedAt:     t2,
+	}); err != nil {
+		t.Fatalf("seed failure: %v", err)
+	}
+
+	// Seed cancellation (most recent, no role).
+	if err := kv.putRaw(completeKeyPrefix+"poly-cancelled", agentic.LoopCancelledEvent{
+		LoopID:       "poly-cancelled",
+		TaskID:       "ts3",
+		WorkflowSlug: "poly-flow",
+		Outcome:      agentic.OutcomeCancelled,
+		CancelledBy:  "user",
+		CancelledAt:  t3,
+	}); err != nil {
+		t.Fatalf("seed cancellation: %v", err)
+	}
+
+	e := makeMonitorExecutor(kv, flows)
+	result, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:   "poly-call",
+		Name: FlowMonitorToolName,
+		Arguments: map[string]any{
+			"flow_id":      "poly-flow",
+			"recent_limit": 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("Execute tool error: %s", result.Error)
+	}
+
+	r := parseMonitorResult(t, result.Content)
+
+	// Total count.
+	if r.TotalLoops != 3 {
+		t.Errorf("total_loops: want 3, got %d", r.TotalLoops)
+	}
+
+	// by_outcome — one of each.
+	if r.ByOutcome[agentic.OutcomeSuccess] != 1 {
+		t.Errorf("by_outcome.success: want 1, got %d", r.ByOutcome[agentic.OutcomeSuccess])
+	}
+	if r.ByOutcome[agentic.OutcomeFailed] != 1 {
+		t.Errorf("by_outcome.failed: want 1, got %d", r.ByOutcome[agentic.OutcomeFailed])
+	}
+	if r.ByOutcome[agentic.OutcomeCancelled] != 1 {
+		t.Errorf("by_outcome.cancelled: want 1, got %d", r.ByOutcome[agentic.OutcomeCancelled])
+	}
+
+	// by_role — only the success loop carries a role; failed has role field but
+	// LoopCancelledEvent has no role. by_role must have exactly 1 key.
+	// (LoopFailedEvent does carry Role="researcher" in this seed, so by_role
+	//  researcher=2, but the empty-key guard is what matters: no "" key.)
+	if _, hasEmptyKey := r.ByRole[""]; hasEmptyKey {
+		t.Error("by_role must not contain an empty-string key (failed/cancelled with no role)")
+	}
+
+	// Token sums — only from the success entry (failed/cancelled carry zero).
+	if r.TotalTokensIn != 200 {
+		t.Errorf("total_tokens_in: want 200 (success only), got %d", r.TotalTokensIn)
+	}
+	if r.TotalTokensOut != 80 {
+		t.Errorf("total_tokens_out: want 80 (success only), got %d", r.TotalTokensOut)
+	}
+
+	// recent sorted newest-first: cancelled(T3) > failed(T2) > success(T1).
+	if len(r.Recent) != 3 {
+		t.Fatalf("recent: want 3 entries, got %d", len(r.Recent))
+	}
+	if r.Recent[0].LoopID != "poly-cancelled" {
+		t.Errorf("recent[0]: want poly-cancelled (most recent), got %q", r.Recent[0].LoopID)
+	}
+	if r.Recent[1].LoopID != "poly-failed" {
+		t.Errorf("recent[1]: want poly-failed, got %q", r.Recent[1].LoopID)
+	}
+	if r.Recent[2].LoopID != "poly-success" {
+		t.Errorf("recent[2]: want poly-success (oldest), got %q", r.Recent[2].LoopID)
 	}
 }

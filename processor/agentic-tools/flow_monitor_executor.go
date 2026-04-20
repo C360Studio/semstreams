@@ -99,11 +99,94 @@ func (e *FlowMonitorExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	return e.monitorFlow(ctx, call)
 }
 
+// eventDiscriminator is used as a first-pass unmarshal to identify which
+// event shape (LoopCompletedEvent, LoopFailedEvent, LoopCancelledEvent) is
+// stored under a COMPLETE_* key, without having to try each type blindly.
+type eventDiscriminator struct {
+	Outcome string `json:"outcome"`
+	LoopID  string `json:"loop_id"`
+}
+
+// terminalEvent is the normalised in-memory representation of any COMPLETE_*
+// KV entry, regardless of which concrete event shape was stored. It carries
+// only the fields that the aggregation and sort code needs.
+type terminalEvent struct {
+	loopID     string
+	role       string
+	outcome    string
+	terminalAt string // ISO-8601 UTC; derived from completed_at/failed_at/cancelled_at
+	iterations int
+	tokensIn   int
+	tokensOut  int
+}
+
+// decodeTerminalEvent unmarshals raw JSON from a COMPLETE_* KV entry into a
+// terminalEvent. It dispatches on the "outcome" discriminator field so each
+// concrete event type contributes the correct timestamp and fields.
+// Returns (zero, false) for unknown outcomes — callers should skip those.
+func decodeTerminalEvent(data []byte) (terminalEvent, bool) {
+	const timeFormat = "2006-01-02T15:04:05Z"
+
+	var disc eventDiscriminator
+	if err := json.Unmarshal(data, &disc); err != nil {
+		return terminalEvent{}, false
+	}
+
+	switch disc.Outcome {
+	case agentic.OutcomeSuccess:
+		var ev agentic.LoopCompletedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return terminalEvent{}, false
+		}
+		return terminalEvent{
+			loopID:     ev.LoopID,
+			role:       ev.Role,
+			outcome:    ev.Outcome,
+			terminalAt: ev.CompletedAt.UTC().Format(timeFormat),
+			iterations: ev.Iterations,
+			tokensIn:   ev.TokensIn,
+			tokensOut:  ev.TokensOut,
+		}, true
+
+	case agentic.OutcomeFailed:
+		var ev agentic.LoopFailedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return terminalEvent{}, false
+		}
+		return terminalEvent{
+			loopID:     ev.LoopID,
+			role:       ev.Role,
+			outcome:    ev.Outcome,
+			terminalAt: ev.FailedAt.UTC().Format(timeFormat),
+			iterations: ev.Iterations,
+			tokensIn:   ev.TokensIn,
+			tokensOut:  ev.TokensOut,
+		}, true
+
+	case agentic.OutcomeCancelled:
+		var ev agentic.LoopCancelledEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return terminalEvent{}, false
+		}
+		// LoopCancelledEvent has no Role field; role stays empty.
+		return terminalEvent{
+			loopID:     ev.LoopID,
+			outcome:    ev.Outcome,
+			terminalAt: ev.CancelledAt.UTC().Format(timeFormat),
+		}, true
+
+	default:
+		return terminalEvent{}, false
+	}
+}
+
 // loopRecentEntry is one entry in the recent list.
 type loopRecentEntry struct {
-	LoopID      string `json:"loop_id"`
-	Role        string `json:"role"`
-	Outcome     string `json:"outcome"`
+	LoopID  string `json:"loop_id"`
+	Role    string `json:"role"`
+	Outcome string `json:"outcome"`
+	// completed_at carries completed_at, failed_at, or cancelled_at depending
+	// on the outcome — it is always the terminal timestamp for this loop.
 	CompletedAt string `json:"completed_at"`
 	Iterations  int    `json:"iterations"`
 	TokensIn    int    `json:"tokens_in"`
@@ -153,7 +236,7 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to list loops bucket: %v", err),
-			ErrorKind: agentic.ToolErrorExternal,
+			ErrorKind: agentic.ToolErrorNetwork,
 		}, errs.WrapTransient(err, "FlowMonitorExecutor", "monitorFlow", "list keys")
 	}
 
@@ -177,36 +260,46 @@ func (e *FlowMonitorExecutor) monitorFlow(ctx context.Context, call agentic.Tool
 			continue
 		}
 
-		var event agentic.LoopCompletedEvent
-		if err := json.Unmarshal(entry.Value, &event); err != nil {
-			e.logger.Warn("monitor_flow: skipping malformed completion record",
-				slog.String("key", key), slog.Any("error", err))
+		// Peek at workflow_slug before doing the full polymorphic decode so
+		// we skip foreign-flow entries cheaply.
+		var slug struct {
+			WorkflowSlug string `json:"workflow_slug"`
+		}
+		if err := json.Unmarshal(entry.Value, &slug); err != nil || slug.WorkflowSlug != flowID {
 			continue
 		}
 
-		if event.WorkflowSlug != flowID {
+		ev, ok := decodeTerminalEvent(entry.Value)
+		if !ok {
+			e.logger.Debug("monitor_flow: skipping entry with unknown outcome",
+				slog.String("key", key))
 			continue
 		}
 
 		// 3. Accumulate aggregates.
 		result.TotalLoops++
-		result.ByOutcome[event.Outcome]++
-		result.ByRole[event.Role]++
-		result.TotalTokensIn += event.TokensIn
-		result.TotalTokensOut += event.TokensOut
+		result.ByOutcome[ev.outcome]++
+		// Only credit by_role when a role is present. Failed/cancelled events
+		// without a role field must not pollute by_role with an empty key.
+		if ev.role != "" {
+			result.ByRole[ev.role]++
+		}
+		result.TotalTokensIn += ev.tokensIn
+		result.TotalTokensOut += ev.tokensOut
 
 		result.Recent = append(result.Recent, loopRecentEntry{
-			LoopID:      event.LoopID,
-			Role:        event.Role,
-			Outcome:     event.Outcome,
-			CompletedAt: event.CompletedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			Iterations:  event.Iterations,
-			TokensIn:    event.TokensIn,
-			TokensOut:   event.TokensOut,
+			LoopID:      ev.loopID,
+			Role:        ev.role,
+			Outcome:     ev.outcome,
+			CompletedAt: ev.terminalAt,
+			Iterations:  ev.iterations,
+			TokensIn:    ev.tokensIn,
+			TokensOut:   ev.tokensOut,
 		})
 	}
 
-	// 4. Sort recent descending by completed_at, then cap.
+	// 4. Sort recent descending by terminal timestamp (completed_at field carries
+	// completed_at/failed_at/cancelled_at depending on outcome), then cap.
 	sort.Slice(result.Recent, func(i, j int) bool {
 		return result.Recent[i].CompletedAt > result.Recent[j].CompletedAt
 	})

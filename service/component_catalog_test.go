@@ -119,10 +119,10 @@ func TestBuildComponentTypeCatalog_EmptyRegistry(t *testing.T) {
 	}
 }
 
-// TestHandleComponentTypes_DelegatestoBuilder confirms the HTTP handler
+// TestHandleComponentTypes_DelegatesToBuilder confirms the HTTP handler
 // encodes the same data that BuildComponentTypeCatalog returns. Guards against
 // the handler growing its own copy of the shape.
-func TestHandleComponentTypes_DelegatestoBuilder(t *testing.T) {
+func TestHandleComponentTypes_DelegatesToBuilder(t *testing.T) {
 	t.Parallel()
 
 	reg := setupCatalogRegistry(t)
