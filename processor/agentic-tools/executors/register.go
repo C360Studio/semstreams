@@ -34,6 +34,7 @@ import (
 //   - NATSClient nil → stateful tools (read_loop_result, decide,
 //     query_entity) are skipped
 //   - RuleManager nil → rule CRUD tools are skipped
+//   - ComponentRegistry nil → list_components skipped (Pattern-B step 5)
 //
 // Platform is a value type (not pointer) because PlatformMeta is a small
 // POD; the empty value is still safe for the decide tool to use.
@@ -45,6 +46,7 @@ type ToolDependencies struct {
 	FlowManager         FlowManager         // Pattern-B step 2
 	PersonaManager      PersonaManager      // Pattern-B step 3
 	FlowTemplateManager FlowTemplateManager // Pattern-B step 4
+	ComponentRegistry   *component.Registry // Pattern-B step 5; nil → list_components skipped
 }
 
 // RegisterAll wires every tool this package owns into the agentic-tools
@@ -77,6 +79,8 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	registerFlows(deps.FlowManager, logger)
 	registerPersonas(deps.PersonaManager, logger)
 	registerFlowTemplates(deps.FlowTemplateManager, logger)
+	registerComponentCatalog(deps.ComponentRegistry, logger)
+	registerFlowMonitor(deps.NATSClient, deps.FlowManager, logger)
 }
 
 // registerGlobal is the shared RegisterTool wrapper with idempotent

@@ -144,6 +144,7 @@ func run() error {
 		FlowManager:         buildFlowManager(natsClient, logger),
 		PersonaManager:      buildPersonaManager(natsClient, logger),
 		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
+		ComponentRegistry:   componentRegistry,
 	})
 
 	// 11. Run application with signal handling

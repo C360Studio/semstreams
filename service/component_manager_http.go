@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -358,15 +359,12 @@ func (cm *ComponentManager) handleComponentsList(w http.ResponseWriter, r *http.
 	}
 }
 
-// handleComponentTypes returns available component types from the registry
-func (cm *ComponentManager) handleComponentTypes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// BuildComponentTypeCatalog returns the list of registered component factory
+// types with their schemas. Both the GET /components/types HTTP handler and
+// the list_components agent tool call this — keep the shape in one place.
+func BuildComponentTypeCatalog(registry *component.Registry, logger *slog.Logger) []map[string]any {
 	// Get all registered factories from the component registry
-	factories := cm.registry.ListFactories()
+	factories := registry.ListFactories()
 
 	// Map of component IDs to human-readable display names
 	displayNames := map[string]string{
@@ -389,10 +387,10 @@ func (cm *ComponentManager) handleComponentTypes(w http.ResponseWriter, r *http.
 		}
 
 		// Get component schema from registry
-		schema, err := cm.registry.GetComponentSchema(id)
+		schema, err := registry.GetComponentSchema(id)
 		if err != nil {
 			// Log warning but continue - component may not have schema
-			cm.logger.Warn("Failed to get schema for component type", "component_type", id, "error", err)
+			logger.Warn("Failed to get schema for component type", "component_type", id, "error", err)
 		}
 
 		componentTypes = append(componentTypes, map[string]any{
@@ -407,6 +405,18 @@ func (cm *ComponentManager) handleComponentTypes(w http.ResponseWriter, r *http.
 			"schema":      schema,            // Component configuration schema
 		})
 	}
+
+	return componentTypes
+}
+
+// handleComponentTypes returns available component types from the registry
+func (cm *ComponentManager) handleComponentTypes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	componentTypes := BuildComponentTypeCatalog(cm.registry, cm.logger)
 
 	// Return flat array (matches OpenAPI contract in specs/008-fix-ui-code/contracts/component-types-api.yaml)
 	w.Header().Set("Content-Type", "application/json")
