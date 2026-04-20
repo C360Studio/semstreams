@@ -54,6 +54,7 @@ const personasBucket = "PERSONAS"
 type Config struct {
 	NATSURL         string
 	MetricsURL      string
+	BaseURL         string // HTTP base URL for service-manager endpoints (e.g. /components/types)
 	CompleteTimeout time.Duration
 
 	// ExpectedRuleID must match the id the mock LLM's scripted
@@ -75,6 +76,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		NATSURL:         "nats://localhost:64222",
 		MetricsURL:      "http://localhost:65190",
+		BaseURL:         "http://localhost:65080",
 		CompleteTimeout: 15 * time.Second,
 		ExpectedRuleID:  "e2e-crud-rule",
 		RulesBucket:     "semstreams_config",
@@ -91,6 +93,13 @@ type Scenario struct {
 
 	nats    *client.NATSValidationClient
 	metrics *client.MetricsClient
+
+	// baselineActiveRules captures semstreams_rule_active_rules at the end of
+	// verifyComponents so verify-hotreload-pickup can assert the gauge
+	// increased by exactly one after the mock's create_rule call landed. A
+	// value of -1 means the metrics endpoint was unreachable and the
+	// hot-reload stage should be skipped rather than failed.
+	baselineActiveRules float64
 }
 
 // NewScenario constructs a crud-tools scenario.
@@ -153,6 +162,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"wait-for-tool-execution", s.waitForToolExecution},
 		{"verify-rule-in-kv", s.verifyRuleInKV},
 		{"validate-rule-content", s.validateRuleContent},
+		{"verify-hotreload-pickup", s.verifyHotreloadPickup},
 		{"cleanup-persona-override", s.cleanupPersonaOverride},
 	}
 
@@ -210,6 +220,20 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	if len(unhealthy) > 0 {
 		return fmt.Errorf("unhealthy components: %v", unhealthy)
 	}
+
+	// Capture baseline active-rules gauge so verify-hotreload-pickup can
+	// assert the rule written by the mock's create_rule call incremented it.
+	// Failure to reach the metrics endpoint is non-fatal here — the
+	// hot-reload stage will skip gracefully when baselineActiveRules == -1.
+	baseline, err := s.metrics.GetMetricValue(ctx, "semstreams_rule_active_rules")
+	if err != nil {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("hot-reload baseline: could not scrape semstreams_rule_active_rules (%v); verify-hotreload-pickup will be skipped", err))
+		s.baselineActiveRules = -1
+	} else {
+		s.baselineActiveRules = baseline
+		result.Details["baseline_active_rules"] = baseline
+	}
 	return nil
 }
 
@@ -254,6 +278,61 @@ func (s *Scenario) seedPersonaOverride(ctx context.Context, result *scenarios.Re
 	result.Details["persona_override_id"] = personaOverrideID
 	result.Details["persona_marker"] = PersonaMarker
 	return nil
+}
+
+// verifyHotreloadPickup polls the Prometheus metrics endpoint until the
+// semstreams_rule_active_rules gauge increments by at least one above the
+// baseline captured in verifyComponents. This confirms the running
+// rule-processor picked up the rule written by the mock's create_rule tool
+// call without a restart — proving the hot-reload / debounce path works.
+//
+// The rule-processor's debounce window is 250ms; after the apply step the
+// metric update is synchronous. Two seconds of polling window is generous
+// for CI variance.
+//
+// If the metrics endpoint was unreachable at baseline time
+// (s.baselineActiveRules == -1) the stage is skipped with a Warning entry
+// rather than failed, keeping the scenario resilient on minimal flows
+// without a metrics service.
+func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.Result) error {
+	if s.baselineActiveRules < 0 {
+		result.Warnings = append(result.Warnings,
+			"verify-hotreload-pickup: metrics unreachable at baseline; stage skipped")
+		return nil
+	}
+
+	stageStart := time.Now()
+	expected := s.baselineActiveRules + 1
+	deadline := time.Now().Add(2 * time.Second)
+	var lastSeen float64
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		v, err := s.metrics.GetMetricValue(ctx, "semstreams_rule_active_rules")
+		if err != nil {
+			// Metric may briefly disappear between scrapes; keep polling.
+			continue
+		}
+		lastSeen = v
+		if v >= expected {
+			result.Metrics["hotreload_pickup_latency_ms"] = time.Since(stageStart).Milliseconds()
+			result.Details["active_rules_after_reload"] = v
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"hot-reload pickup: semstreams_rule_active_rules did not reach %.0f within 2s "+
+			"(baseline=%.0f, last observed=%.0f) — "+
+			"rule-processor debounce is 250ms; check that the rule-processor is watching semstreams_config KV "+
+			"and that the metric name semstreams_rule_active_rules matches processor/rule/metrics.go",
+		expected, s.baselineActiveRules, lastSeen,
+	)
 }
 
 // cleanupPersonaOverride removes the seeded persona so a second run
