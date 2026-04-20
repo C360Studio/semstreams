@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/config"
@@ -48,6 +49,11 @@ type ConfigManager struct {
 	wg        sync.WaitGroup
 	logger    *slog.Logger
 	mu        sync.RWMutex
+
+	// reconcileCount is incremented each time reconcileFromKV completes. It is
+	// only meaningful in test scenarios; production code should not depend on it.
+	// For tests only.
+	reconcileCount int64
 }
 
 // NewConfigManager creates a new rule configuration manager
@@ -216,7 +222,15 @@ func (rcm *ConfigManager) reconcileFromKV(ctx context.Context) error {
 	}
 
 	rcm.logger.Info("Hot-reload: applied rule configuration from KV", "rule_count", len(rulesMap))
+	atomic.AddInt64(&rcm.reconcileCount, 1)
 	return nil
+}
+
+// ReconcileCount returns the total number of times reconcileFromKV has completed
+// successfully. Intended for integration tests that verify debounce coalescing.
+// For tests only.
+func (rcm *ConfigManager) ReconcileCount() int {
+	return int(atomic.LoadInt64(&rcm.reconcileCount))
 }
 
 // SeedFromRuntime writes file-loaded rules from the running processor into KV
