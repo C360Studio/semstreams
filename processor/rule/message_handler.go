@@ -67,8 +67,19 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		rp.messageCache.Set(cacheKey, msg)
 	}
 
+	// Snapshot the rules map under a read lock so that concurrent hot-reload
+	// reconciles (which write rp.rules under rp.mu.Lock) don't race with
+	// our iteration. We copy references, not the rules themselves, so the
+	// snapshot is cheap.
+	rp.mu.RLock()
+	rules := make(map[string]Rule, len(rp.rules))
+	for k, v := range rp.rules {
+		rules[k] = v
+	}
+	rp.mu.RUnlock()
+
 	// Process through each rule
-	for ruleName, ruleInstance := range rp.rules {
+	for ruleName, ruleInstance := range rules {
 		// Check if rule is interested in this subject
 		if !rp.matchesRuleSubject(ruleInstance, subject) {
 			continue
@@ -174,7 +185,16 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
-	for ruleName, ruleInstance := range rp.rules {
+	// Snapshot rules under a read lock to avoid racing with hot-reload
+	// reconciles that write rp.rules under rp.mu.Lock.
+	rp.mu.RLock()
+	rules := make(map[string]Rule, len(rp.rules))
+	for k, v := range rp.rules {
+		rules[k] = v
+	}
+	rp.mu.RUnlock()
+
+	for ruleName, ruleInstance := range rules {
 		// Per-rule feedback loop prevention: if this rule generated the
 		// revision that the watcher just delivered, skip the rule (the
 		// revision is consumed one-time so subsequent non-self writes still

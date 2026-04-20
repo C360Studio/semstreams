@@ -4,10 +4,12 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/natsclient"
@@ -15,16 +17,37 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// ConfigManager manages rules through NATS KV configuration
+// hotReloadDebounce is the window used to coalesce rapid KV writes into a
+// single reconcile call. Successive watcher events within this window are
+// collapsed so a burst of tool-driven writes (e.g., create + update) produces
+// exactly one processor apply.
+const hotReloadDebounce = 250 * time.Millisecond
+
+// ConfigManager manages rules through NATS KV configuration.
+//
+// Two instances of ConfigManager coexist in a running binary:
+//  1. The Pattern-B CRUD manager constructed in cmd/semstreams/main.go
+//     (buildRuleManager) with processor=nil. It handles agent tool writes
+//     (create_rule, update_rule, delete_rule) and has no watcher.
+//  2. The component-internal manager constructed inside Processor.Start
+//     with processor non-nil. It owns the KV watcher and applies hot-reload
+//     updates to the running processor.
+//
+// Both read/write semstreams_config:rules.*. The component watcher picks up
+// writes from the CRUD manager via normal KV semantics.
 type ConfigManager struct {
-	processor  *Processor
-	kvStore    *natsclient.KVStore
-	configMgr  *config.Manager
-	updateChan <-chan config.Update // Channel received from ConfigManager
-	ctx        context.Context
-	cancel     context.CancelFunc
-	logger     *slog.Logger
-	mu         sync.RWMutex
+	// processor is nil for the Pattern-B CRUD-only path. When non-nil, the
+	// ConfigManager drives hot-reload via SeedFromRuntime + reconcileFromKV.
+	processor *Processor
+	kvStore   *natsclient.KVStore
+	// configMgr is retained for callers that pass it; no longer used for the
+	// watch subscription (rules.* is not in config.Manager's watch list).
+	configMgr *config.Manager
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	logger    *slog.Logger
+	mu        sync.RWMutex
 }
 
 // NewConfigManager creates a new rule configuration manager
@@ -44,194 +67,255 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 	}
 }
 
-// Start begins watching for rule configuration updates
+// Start begins watching for rule configuration updates.
+//
+// When processor is nil (Pattern-B CRUD path), Start is a no-op so that
+// cmd/semstreams/main.go can safely call it without wiring a watcher.
+//
+// When processor is non-nil (component-internal path), Start:
+//  1. Seeds file-loaded rules into KV idempotently via SeedFromRuntime.
+//  2. Opens a KV watcher on "rules.*".
+//  3. Spawns a goroutine that debounces watcher events and calls
+//     reconcileFromKV on each coalesced burst.
 func (rcm *ConfigManager) Start(_ context.Context) error {
-	// Subscribe to rules.* pattern for configuration updates
-	rcm.updateChan = rcm.configMgr.OnChange("rules.*")
+	// Guard: CRUD-only manager (processor nil) — no watcher needed.
+	if rcm.processor == nil || rcm.kvStore == nil {
+		rcm.logger.Debug("Rule config manager started in CRUD-only mode (no hot-reload watcher)")
+		return nil
+	}
 
-	// Start processing updates
-	go rcm.processConfigUpdates()
+	// Seed any file-loaded rules idempotently before opening the watcher.
+	if err := rcm.SeedFromRuntime(rcm.ctx); err != nil {
+		// Non-fatal: component runs with whatever is already in KV.
+		rcm.logger.Warn("SeedFromRuntime completed with errors; some file rules may not be in KV",
+			"error", err)
+	}
 
-	rcm.logger.Info("Rule configuration manager started", "pattern", "rules.*")
+	watcher, err := rcm.kvStore.Watch(rcm.ctx, "rules.*")
+	if err != nil {
+		// Hot-reload silently disabled; processor still runs with file rules.
+		rcm.logger.Warn("Failed to open KV watcher for rules.*, hot-reload disabled", "error", err)
+		return nil
+	}
+
+	rcm.wg.Add(1)
+	go rcm.processKVUpdates(watcher)
+
+	rcm.logger.Info("Rule configuration hot-reload watcher started", "pattern", "rules.*")
 	return nil
 }
 
-// Stop stops the configuration manager
+// Stop stops the configuration manager and waits for the watcher goroutine
+// to exit cleanly.
 func (rcm *ConfigManager) Stop() error {
 	rcm.cancel()
-
-	// The channel from ConfigManager will be closed when ConfigManager stops
-	// We don't close it here since we don't own it
-
+	rcm.wg.Wait()
 	rcm.logger.Info("Rule configuration manager stopped")
 	return nil
 }
 
-// processConfigUpdates handles configuration change notifications
-func (rcm *ConfigManager) processConfigUpdates() {
+// processKVUpdates is the watcher goroutine. It applies a 250 ms debounce:
+// successive events within the window are collapsed into a single
+// reconcileFromKV call. All reconcile work runs inside this goroutine so
+// the WaitGroup correctly gates Stop().
+func (rcm *ConfigManager) processKVUpdates(watcher jetstream.KeyWatcher) {
+	defer rcm.wg.Done()
+	defer func() {
+		if err := watcher.Stop(); err != nil && !errors.Is(err, context.Canceled) {
+			rcm.logger.Debug("KV watcher stop error (expected on shutdown)", "error", err)
+		}
+	}()
+
+	// pendingReconcile is a timer channel; nil means no pending reconcile.
+	var timerCh <-chan time.Time
+	var timer *time.Timer
+
+	resetTimer := func() {
+		if timer != nil {
+			if !timer.Stop() {
+				// Drain the channel if Stop returned false (timer already fired).
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+		timer = time.NewTimer(hotReloadDebounce)
+		timerCh = timer.C
+	}
+
 	for {
 		select {
 		case <-rcm.ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
 			return
-		case update := <-rcm.updateChan:
-			rcm.handleConfigUpdate(update)
+
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				// Channel closed; watcher stopped externally.
+				return
+			}
+			// nil is the initial-snapshot delimiter — trigger a reconcile to
+			// pick up whatever is already in KV, then keep watching for live
+			// updates.
+			resetTimer()
+			_ = entry // Whether nil (snapshot done) or a real entry, debounce fires.
+
+		case <-timerCh:
+			timerCh = nil
+			timer = nil
+			if err := rcm.reconcileFromKV(rcm.ctx); err != nil {
+				rcm.logger.Error("Rule hot-reload reconcile failed", "error", err)
+			}
 		}
 	}
 }
 
-// handleConfigUpdate processes a single configuration update
-func (rcm *ConfigManager) handleConfigUpdate(update config.Update) {
-	rcm.logger.Debug("Received configuration update", "path", update.Path)
-
-	// Parse the path to determine the operation
-	// Expected patterns:
-	// - rules.battery_monitor_001 → single rule update
-	// - rules.* → batch update (handled by iterating)
-
-	parts := strings.Split(update.Path, ".")
-	if len(parts) < 2 || parts[0] != "rules" {
-		rcm.logger.Warn("Invalid rule configuration path", "path", update.Path)
-		return
+// reconcileFromKV reads the full rules.* set from KV and applies it to the
+// processor via ValidateConfigUpdate + ApplyConfigUpdate.
+//
+// Full-replace semantics are intentional: applyRuleChanges removes any rule
+// absent from the update map, so we always pass the complete ruleset.
+func (rcm *ConfigManager) reconcileFromKV(ctx context.Context) error {
+	defs, err := rcm.ListRules(ctx)
+	if err != nil {
+		return fmt.Errorf("list rules from KV: %w", err)
 	}
 
-	// Get all rule configurations from the updated config
-	rulesConfig := rcm.extractRulesConfig(update.Config)
-	if rulesConfig == nil {
-		rcm.logger.Debug("No rules configuration in update")
-		return
+	// Convert map[string]Definition → map[string]any for the processor API.
+	// Round-trip via JSON to get the same shape that ValidateConfigUpdate expects.
+	rulesMap := make(map[string]any, len(defs))
+	for id, def := range defs {
+		b, err := json.Marshal(def)
+		if err != nil {
+			rcm.logger.Warn("Failed to marshal rule definition during reconcile; skipping",
+				"rule_id", id, "error", err)
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			rcm.logger.Warn("Failed to unmarshal rule definition during reconcile; skipping",
+				"rule_id", id, "error", err)
+			continue
+		}
+		rulesMap[id] = m
 	}
 
-	// Convert to change map for processor
-	changes := map[string]any{
-		"rules": rulesConfig,
-	}
+	changes := map[string]any{"rules": rulesMap}
 
-	// Validate changes directly with processor
 	if err := rcm.processor.ValidateConfigUpdate(changes); err != nil {
-		rcm.logger.Error("Rule configuration validation failed",
-			"path", update.Path,
-			"error", err)
-		return
+		rcm.logger.Error("Rule configuration validation failed during hot-reload", "error", err)
+		return fmt.Errorf("validate config update: %w", err)
 	}
 
-	// Apply changes directly to processor
 	if err := rcm.processor.ApplyConfigUpdate(changes); err != nil {
-		rcm.logger.Error("Failed to apply rule configuration",
-			"path", update.Path,
-			"error", err)
-		return
+		rcm.logger.Error("Failed to apply rule configuration during hot-reload", "error", err)
+		return fmt.Errorf("apply config update: %w", err)
 	}
 
-	rcm.logger.Info("Applied rule configuration update",
-		"path", update.Path,
-		"rule_count", len(rulesConfig))
+	rcm.logger.Info("Hot-reload: applied rule configuration from KV", "rule_count", len(rulesMap))
+	return nil
 }
 
-// extractRulesConfig extracts rule configurations from the full config
-func (rcm *ConfigManager) extractRulesConfig(cfg *config.SafeConfig) map[string]any {
-	if cfg == nil {
+// SeedFromRuntime writes file-loaded rules from the running processor into KV
+// idempotently. Uses Create (not Put) so operator edits already in KV are
+// never overwritten — a key-already-exists error is treated as a no-op.
+//
+// Reads from rp.ruleDefinitions (populated by loadRules/Initialize) since
+// rp.ruleConfigs (from GetRuntimeConfig) is only populated by ApplyConfigUpdate,
+// not by the initial file/inline load path.
+//
+// Partial failures are logged but do not abort seeding. The method returns nil
+// even when individual writes fail so that hot-reload startup is not blocked.
+func (rcm *ConfigManager) SeedFromRuntime(ctx context.Context) error {
+	if rcm.processor == nil || rcm.kvStore == nil {
 		return nil
 	}
 
-	// Get the config - returns *config.Config
-	_ = cfg.Get()
+	// Read definitions under the processor's read lock.
+	rcm.processor.mu.RLock()
+	defs := make(map[string]Definition, len(rcm.processor.ruleDefinitions))
+	for id, def := range rcm.processor.ruleDefinitions {
+		defs[id] = def
+	}
+	rcm.processor.mu.RUnlock()
 
-	// Check if rules exist in Components map
-	// Rules would be stored as components in the config
-	// This might need adjustment based on how rules are stored
-	// For now, return empty map - will be populated via KV updates
-	return make(map[string]any)
+	if len(defs) == 0 {
+		return nil
+	}
+
+	for ruleID, def := range defs {
+		data, err := json.Marshal(def)
+		if err != nil {
+			rcm.logger.Warn("SeedFromRuntime: failed to marshal rule; skipping",
+				"rule_id", ruleID, "error", err)
+			continue
+		}
+		key := fmt.Sprintf("rules.%s", ruleID)
+		if _, err := rcm.kvStore.Create(ctx, key, data); err != nil {
+			if errors.Is(err, natsclient.ErrKVKeyExists) {
+				// Operator edit in KV — preserve it.
+				rcm.logger.Debug("SeedFromRuntime: rule already in KV, preserving operator edit",
+					"rule_id", ruleID)
+				continue
+			}
+			rcm.logger.Warn("SeedFromRuntime: failed to seed rule into KV; skipping",
+				"rule_id", ruleID, "error", err)
+		} else {
+			rcm.logger.Debug("SeedFromRuntime: seeded rule into KV", "rule_id", ruleID)
+		}
+	}
+
+	return nil
 }
 
-// SaveRule saves a rule configuration to NATS KV
+// SaveRule saves a rule configuration to NATS KV.
 func (rcm *ConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef Definition) error {
+	if rcm.kvStore == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "SaveRule", "kvStore not initialised")
+	}
 	key := fmt.Sprintf("rules.%s", ruleID)
-
-	// Convert to JSON
 	data, err := json.Marshal(ruleDef)
 	if err != nil {
 		return errs.WrapInvalid(err, "ConfigManager", "SaveRule", "marshal rule definition")
 	}
-
-	// Use KVStore for safe CAS operations if available
-	if rcm.kvStore != nil {
-		_, err = rcm.kvStore.Put(ctx, key, data)
-		return err
-	}
-
-	// Fallback to ConfigManager's internal KV
-	return rcm.saveViaConfigManager(ctx, key, ruleDef)
+	_, err = rcm.kvStore.Put(ctx, key, data)
+	return err
 }
 
-// saveViaConfigManager saves through the ConfigManager's KV bucket
-func (rcm *ConfigManager) saveViaConfigManager(_ context.Context, _ string, _ Definition) error {
-	// This would typically be exposed by ConfigManager
-	// For now, we'll return an error indicating this needs implementation
-	return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "saveViaConfigManager", "direct KV save not implemented")
-}
-
-// DeleteRule removes a rule configuration from NATS KV
+// DeleteRule removes a rule configuration from NATS KV.
 func (rcm *ConfigManager) DeleteRule(ctx context.Context, ruleID string) error {
-	key := fmt.Sprintf("rules.%s", ruleID)
-
-	if rcm.kvStore != nil {
-		return rcm.kvStore.Delete(ctx, key)
+	if rcm.kvStore == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "DeleteRule", "kvStore not initialised")
 	}
-
-	return rcm.deleteViaConfigManager(ctx, key)
+	key := fmt.Sprintf("rules.%s", ruleID)
+	return rcm.kvStore.Delete(ctx, key)
 }
 
-// deleteViaConfigManager deletes through the ConfigManager's KV bucket
-func (rcm *ConfigManager) deleteViaConfigManager(_ context.Context, _ string) error {
-	return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "deleteViaConfigManager", "direct KV delete not implemented")
-}
-
-// GetRule retrieves a rule configuration from NATS KV
+// GetRule retrieves a rule configuration from NATS KV.
 func (rcm *ConfigManager) GetRule(ctx context.Context, ruleID string) (*Definition, error) {
+	if rcm.kvStore == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "GetRule", "kvStore not initialised")
+	}
 	key := fmt.Sprintf("rules.%s", ruleID)
-
-	if rcm.kvStore != nil {
-		entry, err := rcm.kvStore.Get(ctx, key)
-		if err != nil {
-			if err == jetstream.ErrKeyNotFound {
-				return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "ConfigManager", "GetRule", fmt.Sprintf("rule not found: %s", ruleID))
-			}
-			return nil, errs.WrapTransient(err, "ConfigManager", "GetRule", "get rule from KV")
+	entry, err := rcm.kvStore.Get(ctx, key)
+	if err != nil {
+		if err == jetstream.ErrKeyNotFound {
+			return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "ConfigManager", "GetRule", fmt.Sprintf("rule not found: %s", ruleID))
 		}
-
-		var ruleDef Definition
-		if err := json.Unmarshal(entry.Value, &ruleDef); err != nil {
-			return nil, errs.WrapInvalid(err, "ConfigManager", "GetRule", "unmarshal rule definition")
-		}
-
-		return &ruleDef, nil
+		return nil, errs.WrapTransient(err, "ConfigManager", "GetRule", "get rule from KV")
 	}
 
-	return rcm.getRuleViaConfigManager(ctx, ruleID)
-}
-
-// getRuleViaConfigManager retrieves through the ConfigManager
-func (rcm *ConfigManager) getRuleViaConfigManager(_ context.Context, ruleID string) (*Definition, error) {
-	// Get current config from processor
-	currentConfig := rcm.processor.GetRuntimeConfig()
-
-	if rulesMap, ok := currentConfig["rules"].(map[string]any); ok {
-		if ruleConfig, ok := rulesMap[ruleID].(map[string]any); ok {
-			// Convert map to Definition
-			def := Definition{
-				ID:      ruleID,
-				Type:    getStringWithDefault(ruleConfig, "type", ""),
-				Name:    getStringWithDefault(ruleConfig, "name", ruleID),
-				Enabled: getBoolWithDefault(ruleConfig, "enabled", true),
-			}
-			return &def, nil
-		}
+	var ruleDef Definition
+	if err := json.Unmarshal(entry.Value, &ruleDef); err != nil {
+		return nil, errs.WrapInvalid(err, "ConfigManager", "GetRule", "unmarshal rule definition")
 	}
-
-	return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "ConfigManager", "getRuleViaConfigManager", fmt.Sprintf("rule not found: %s", ruleID))
+	return &ruleDef, nil
 }
 
-// ListRules returns all rule configurations.
+// ListRules returns all rule configurations from the KV store.
 //
 // Prefers direct KV reads when a kvStore is wired (consistent with
 // SaveRule/GetRule/DeleteRule). Falls back to the processor's runtime

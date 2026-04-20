@@ -131,6 +131,13 @@ type Processor struct {
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
+
+	// kvConfigManager is the component-internal hot-reload manager. It owns a
+	// KV watcher on semstreams_config:rules.* and calls ApplyConfigUpdate when
+	// the watcher fires. Constructed in Start; nil when NATS is unavailable.
+	// See also: cmd/semstreams/main.go buildRuleManager — a second ConfigManager
+	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
+	kvConfigManager *ConfigManager
 }
 
 // NewProcessor creates a new rule processor
@@ -489,6 +496,18 @@ func (rp *Processor) Start(ctx context.Context) error {
 
 	rp.isSubscribed = true
 
+	// Wire hot-reload: component-internal ConfigManager owns a KV watcher on
+	// semstreams_config:rules.* and applies changes without restart. This is
+	// distinct from the Pattern-B CRUD manager in cmd/semstreams/main.go
+	// (buildRuleManager, processor=nil) which handles agent tool writes.
+	//
+	// Launched as a goroutine so that InitializeKVStore and Watch run after
+	// Start() returns and releases rp.mu. reconcileFromKV (debounced 250ms)
+	// will only fire after the lock is free.
+	if rp.natsClient != nil {
+		go rp.startHotReloadManager(ctx)
+	}
+
 	// Count subjects for logging
 	subjectCount := 0
 	for _, port := range rp.config.Ports.Inputs {
@@ -506,6 +525,40 @@ func (rp *Processor) Start(ctx context.Context) error {
 
 	rp.logger.Info("Rule processor started", "subject_count", subjectCount)
 	return nil
+}
+
+// startHotReloadManager constructs and starts the component-internal KV
+// hot-reload manager. It is called as a goroutine from Start() so that
+// InitializeKVStore, SeedFromRuntime, and Watch run after rp.mu is released
+// (all three ultimately call rp.mu.RLock or rp.mu.Lock). reconcileFromKV
+// fires after a 250ms debounce, well past the point where Start() returns.
+//
+// If Stop() races with this goroutine and the processor is no longer running
+// by the time we store the manager, we immediately stop the manager so it
+// does not outlive the processor.
+func (rp *Processor) startHotReloadManager(ctx context.Context) {
+	rcm := NewConfigManager(rp, nil, rp.logger)
+	if err := rcm.InitializeKVStore(rp.natsClient); err != nil {
+		rp.logger.Warn("Failed to initialize KV store for rule hot-reload; running with file rules only",
+			slog.Any("error", err))
+		return
+	}
+	if err := rcm.Start(ctx); err != nil {
+		rp.logger.Warn("Failed to start rule hot-reload watcher; running with file rules only",
+			slog.Any("error", err))
+		return
+	}
+	rp.mu.Lock()
+	if rp.running {
+		rp.kvConfigManager = rcm
+		rp.mu.Unlock()
+	} else {
+		// Processor already stopped — clean up the manager we just started.
+		rp.mu.Unlock()
+		if err := rcm.Stop(); err != nil {
+			rp.logger.Debug("Hot-reload manager stop after race with Stop() (ignored)", slog.Any("error", err))
+		}
+	}
 }
 
 // setupSubscriptions creates subscriptions for input subjects based on port type
@@ -674,6 +727,24 @@ func (rp *Processor) Stop(_ time.Duration) error {
 		rp.logger.Warn("Rule processor shutdown timeout after 5 seconds")
 	}
 
+	// Mark as stopping and extract the hot-reload manager under one lock
+	// acquisition. Setting rp.running=false here (before the final cleanup
+	// lock) ensures startHotReloadManager sees the stopped state and cleans
+	// up its own manager if it races. The hot-reload manager is then stopped
+	// outside the lock to avoid a deadlock with reconcileFromKV, which also
+	// tries to acquire rp.mu.
+	rp.mu.Lock()
+	rp.running = false // Set early so startHotReloadManager's race check works.
+	hotReloadMgr := rp.kvConfigManager
+	rp.kvConfigManager = nil
+	rp.mu.Unlock()
+
+	if hotReloadMgr != nil {
+		if err := hotReloadMgr.Stop(); err != nil {
+			rp.logger.Debug("Rule hot-reload manager stop error (ignored)", slog.Any("error", err))
+		}
+	}
+
 	// Clean up resources
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
@@ -725,9 +796,8 @@ func (rp *Processor) Stop(_ time.Duration) error {
 		}
 	}
 
-	// Mark as stopped - don't nil the channels, goroutines may still reference them
-	// A closed channel is sufficient for signaling; setting to nil causes races
-	rp.running = false
+	// rp.running was already set to false before stopping the hot-reload manager
+	// to ensure clean races; set health to false here under the cleanup lock.
 	rp.health.Healthy = false
 
 	rp.logger.Info("Rule processor stopped")
