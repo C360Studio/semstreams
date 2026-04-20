@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -163,6 +165,8 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-rule-in-kv", s.verifyRuleInKV},
 		{"validate-rule-content", s.validateRuleContent},
 		{"verify-hotreload-pickup", s.verifyHotreloadPickup},
+		{"verify-list-components", s.verifyListComponents},
+		{"verify-monitor-flow", s.verifyMonitorFlow},
 		{"cleanup-persona-override", s.cleanupPersonaOverride},
 	}
 
@@ -333,6 +337,151 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 			"and that the metric name semstreams_rule_active_rules matches processor/rule/metrics.go",
 		expected, s.baselineActiveRules, lastSeen,
 	)
+}
+
+// verifyListComponents exercises the list_components feature by calling the
+// service-manager's GET /components/types endpoint, which shares
+// BuildComponentTypeCatalog with the list_components agent tool. This proves
+// the component factory registry is populated and the catalog builder works
+// end to end.
+//
+// Approach rationale: the list_components tool is not in agentic-tools'
+// allowed_tools list for this flow (only rule-CRUD tools are scoped). Adding
+// it would require both a flow-config change and scripting a second mock tool
+// call after the existing create_rule sequence. The HTTP endpoint shares the
+// same builder (service/component_manager_http.go:BuildComponentTypeCatalog)
+// and is a simpler, equally valid proof. The tool's dispatch path is covered
+// by unit tests in processor/agentic-tools.
+//
+// Assertions: at least 3 of the well-known framework factory names registered
+// in this flow are present. Count is not asserted — the catalog grows over time.
+func (s *Scenario) verifyListComponents(ctx context.Context, result *scenarios.Result) error {
+	url := s.config.BaseURL + "/components/types"
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build /components/types request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("GET /components/types: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("/components/types returned HTTP %d — service-manager may not be running or the endpoint is not registered", resp.StatusCode)
+	}
+
+	var catalog []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		return fmt.Errorf("decode /components/types response: %w", err)
+	}
+
+	ids := make(map[string]bool, len(catalog))
+	for _, entry := range catalog {
+		if id, _ := entry["id"].(string); id != "" {
+			ids[id] = true
+		}
+	}
+
+	// Well-known factory names wired by this flow. These are framework-stable
+	// names that won't churn — avoid asserting count since the catalog grows.
+	wellKnown := []string{
+		"agentic-loop",
+		"agentic-dispatch",
+		"agentic-model",
+		"agentic-tools",
+		"rule-processor",
+	}
+	var found []string
+	for _, name := range wellKnown {
+		if ids[name] {
+			found = append(found, name)
+		}
+	}
+	if len(found) < 3 {
+		return fmt.Errorf(
+			"list_components catalog missing expected factory types: "+
+				"found %v of well-known set %v (total catalog entries: %d)",
+			found, wellKnown, len(catalog),
+		)
+	}
+	result.Details["component_catalog_found"] = found
+	result.Details["component_catalog_total"] = len(catalog)
+	return nil
+}
+
+// verifyMonitorFlow validates the data path that the monitor_flow tool reads:
+// the AGENT_LOOPS KV bucket must contain at least one COMPLETE_* entry after
+// the mock's create_rule loop terminated, and that entry must carry a valid
+// outcome field and non-negative token counts.
+//
+// Approach rationale: monitor_flow is not in agentic-tools' allowed_tools list
+// for this flow. Scripting it via the mock would require both a flow-config
+// change (adding monitor_flow to allowed_tools) and a second mock tool-call
+// sequence after create_rule. Instead, we assert directly on the AGENT_LOOPS
+// KV data the tool reads — this proves the same guarantees:
+//   - total_loops >= 1 (bucket has COMPLETE_* keys)
+//   - by_outcome populated (outcome field present in the record)
+//   - total_tokens_in >= 0 (tokens_in non-negative)
+func (s *Scenario) verifyMonitorFlow(ctx context.Context, result *scenarios.Result) error {
+	const loopsBucket = "AGENT_LOOPS"
+
+	keys, err := s.nats.GetBucketKeysSample(ctx, loopsBucket, 100)
+	if err != nil {
+		return fmt.Errorf("list %s keys: %w", loopsBucket, err)
+	}
+
+	var completeKeys []string
+	for _, k := range keys {
+		if strings.HasPrefix(k, "COMPLETE_") {
+			completeKeys = append(completeKeys, k)
+		}
+	}
+	if len(completeKeys) == 0 {
+		return fmt.Errorf(
+			"monitor_flow data path: no COMPLETE_* keys in %s after loop termination "+
+				"(total_loops=0) — agentic-loop may not have written a completion record",
+			loopsBucket,
+		)
+	}
+
+	// Read the first completion record and assert the fields monitor_flow
+	// aggregates are present and sane.
+	data, err := s.nats.GetKV(ctx, loopsBucket, completeKeys[0])
+	if err != nil {
+		return fmt.Errorf("read completion record %s: %w", completeKeys[0], err)
+	}
+
+	// Minimal struct matching eventDiscriminator + token fields from
+	// FlowMonitorExecutor. No need to import agentic package types here.
+	var entry struct {
+		Outcome  string `json:"outcome"`
+		TokensIn int    `json:"tokens_in"`
+	}
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return fmt.Errorf("unmarshal completion record %s: %w", completeKeys[0], err)
+	}
+	if entry.Outcome == "" {
+		return fmt.Errorf(
+			"monitor_flow data path: completion record %s missing outcome field "+
+				"(by_outcome would be empty)",
+			completeKeys[0],
+		)
+	}
+	if entry.TokensIn < 0 {
+		return fmt.Errorf(
+			"monitor_flow data path: total_tokens_in < 0 (%d) in record %s",
+			entry.TokensIn, completeKeys[0],
+		)
+	}
+
+	result.Details["monitor_flow_total_loops"] = len(completeKeys)
+	result.Details["monitor_flow_first_outcome"] = entry.Outcome
+	result.Details["monitor_flow_tokens_in"] = entry.TokensIn
+	return nil
 }
 
 // cleanupPersonaOverride removes the seeded persona so a second run
