@@ -483,8 +483,14 @@ func printHelp() {
 // kvStore path when available (SaveRule/GetRule/DeleteRule always;
 // ListRules as of ADR-029 step 1), so nil processor is safe.
 //
-// Hot-reload of saved rules into the running processor is a later step —
-// when that lands, the rule.Processor reference gets threaded in alongside.
+// Hot-reload lives on the rule component itself — a second ConfigManager
+// is constructed in processor/rule/processor.go startHotReloadManager
+// with the live processor reference and watches rules.* KV directly.
+// Two ConfigManager instances coexist against the same semstreams_config
+// bucket by design: this one is write-only CRUD, the component-internal
+// one is read+apply. NATS KV serialises per-key writes, so the split is
+// safe.
+//
 // Returning nil on init failure is intentional: registerRules treats a
 // nil RuleManager as "skip registration", keeping boot resilient to KV
 // unavailability.
