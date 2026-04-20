@@ -94,8 +94,6 @@ func (c *NATSValidationClient) Close(ctx context.Context) error {
 	return nil
 }
 
-// PutKV writes a key-value entry to a KV bucket.
-// Used for test setup (e.g., registering workflow definitions).
 // GetKV reads a single KV entry's value from the named bucket. Returns
 // the raw bytes so callers can unmarshal into their own type. Used by
 // scenarios that verify an agent's CRUD tool write landed in KV with
@@ -126,6 +124,9 @@ func (c *NATSValidationClient) GetKV(ctx context.Context, bucket, key string) ([
 	return entry.Value(), nil
 }
 
+// PutKV writes a key-value entry to the named bucket, creating the
+// bucket on first use. Used by e2e scenarios to seed fixtures (persona
+// overrides, workflow definitions) before the scenario's assertions run.
 func (c *NATSValidationClient) PutKV(ctx context.Context, bucket, key string, value []byte) error {
 	c.mu.Lock()
 	if c.closed {
