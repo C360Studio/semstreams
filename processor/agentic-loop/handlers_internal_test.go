@@ -1,6 +1,8 @@
 package agenticloop
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,6 +13,22 @@ import (
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 )
 
+// stubPersonaSource lets a handler test inject persona overrides without
+// hitting NATS. Err is returned from Fragments when non-nil.
+type stubPersonaSource struct {
+	fragments []prompt.Fragment
+	err       error
+	calls     int
+}
+
+func (s *stubPersonaSource) Fragments(_ context.Context) ([]prompt.Fragment, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.fragments, nil
+}
+
 // TestBuildInitialMessages_NoRegistry confirms the pre-ADR-029-step-3b
 // behaviour survives when the registry is unset: no assembled system
 // message, just the optional Context.Content and the user prompt. This
@@ -18,7 +36,7 @@ import (
 func TestBuildInitialMessages_NoRegistry(t *testing.T) {
 	h := NewMessageHandler(DefaultConfig())
 
-	messages := h.buildInitialMessages(TaskMessage{
+	messages := h.buildInitialMessages(context.Background(), TaskMessage{
 		Role:   "general",
 		Prompt: "hello",
 	})
@@ -39,7 +57,7 @@ func TestBuildInitialMessages_AssembledSystemPrompt(t *testing.T) {
 	reg.AddAll(prompt.DefaultFragments())
 	h.SetPromptRegistry(reg)
 
-	messages := h.buildInitialMessages(TaskMessage{
+	messages := h.buildInitialMessages(context.Background(), TaskMessage{
 		Role:   "general",
 		Prompt: "do the thing",
 	})
@@ -68,7 +86,7 @@ func TestBuildInitialMessages_SystemBeforeContext(t *testing.T) {
 	})
 	h.SetPromptRegistry(reg)
 
-	messages := h.buildInitialMessages(TaskMessage{
+	messages := h.buildInitialMessages(context.Background(), TaskMessage{
 		Prompt: "user text",
 		Context: &agentic.ConstructedContext{
 			Content: "embedded-context-body",
@@ -102,7 +120,7 @@ func TestBuildInitialMessages_PersonaOverride(t *testing.T) {
 	})
 	h.SetPromptRegistry(reg)
 
-	messages := h.buildInitialMessages(TaskMessage{
+	messages := h.buildInitialMessages(context.Background(), TaskMessage{
 		Role:   "researcher",
 		Prompt: "investigate",
 	})
@@ -128,11 +146,11 @@ func TestAssembleSystemPrompt_RespectsContextFields(t *testing.T) {
 	h.SetPromptRegistry(reg)
 
 	// Without a parent, the child-agent constraint is suppressed.
-	out := h.assembleSystemPrompt(TaskMessage{Role: "general", Prompt: "x"})
+	out := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
 	assert.NotContains(t, out, "child agent")
 
 	// With parent, it appears and names the parent loop.
-	out = h.assembleSystemPrompt(TaskMessage{
+	out = h.assembleSystemPrompt(context.Background(), TaskMessage{
 		Role:         "general",
 		Prompt:       "x",
 		ParentLoopID: "loop_parent_999",
@@ -148,8 +166,66 @@ func TestAssembleSystemPrompt_RespectsContextFields(t *testing.T) {
 // and must not emit a stray system message.
 func TestAssembleSystemPrompt_NilRegistryReturnsEmpty(t *testing.T) {
 	h := NewMessageHandler(DefaultConfig())
-	got := h.assembleSystemPrompt(TaskMessage{Role: "general", Prompt: "x"})
+	got := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
 	assert.Equal(t, "", got)
+}
+
+// TestAssembleSystemPrompt_RefreshesFromPersonaSource confirms that a
+// runtime persona edit lands on the next prompt build. Exercises the
+// SetPersonaFragments path — the handler calls source.Fragments on every
+// assemble and UpsertAlls the result onto the registry. If the refresh
+// loop ever reverts to "snapshot at start", this test catches it:
+// updating the stub's fragments between two assemble calls must
+// propagate to the second prompt.
+func TestAssembleSystemPrompt_RefreshesFromPersonaSource(t *testing.T) {
+	h := NewMessageHandler(DefaultConfig())
+	reg := prompt.NewRegistry()
+	reg.AddAll(prompt.DefaultFragments())
+	h.SetPromptRegistry(reg)
+
+	src := &stubPersonaSource{
+		fragments: []prompt.Fragment{{
+			ID:       "role-researcher",
+			Category: prompt.CategoryRole,
+			Content:  "FIRST researcher override",
+			Roles:    []string{"researcher"},
+		}},
+	}
+	h.SetPersonaFragments(src)
+
+	first := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "researcher", Prompt: "x"})
+	assert.Contains(t, first, "FIRST researcher override")
+	assert.Equal(t, 1, src.calls, "persona source must be called on assemble")
+
+	src.fragments = []prompt.Fragment{{
+		ID:       "role-researcher",
+		Category: prompt.CategoryRole,
+		Content:  "SECOND researcher override",
+		Roles:    []string{"researcher"},
+	}}
+
+	second := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "researcher", Prompt: "x"})
+	assert.Contains(t, second, "SECOND researcher override")
+	assert.NotContains(t, second, "FIRST researcher override")
+	assert.Equal(t, 2, src.calls, "persona source must be called on every assemble, not cached")
+}
+
+// TestAssembleSystemPrompt_PersonaSourceErrorFallsBack locks in the
+// "surface warning, keep going" contract: a source that errors shouldn't
+// block the loop. The registry's already-merged state (or defaults) is
+// the fallback. Important when NATS flaps — a transient KV failure
+// must not freeze the agent.
+func TestAssembleSystemPrompt_PersonaSourceErrorFallsBack(t *testing.T) {
+	h := NewMessageHandler(DefaultConfig())
+	reg := prompt.NewRegistry()
+	reg.AddAll(prompt.DefaultFragments())
+	h.SetPromptRegistry(reg)
+
+	h.SetPersonaFragments(&stubPersonaSource{err: errors.New("kv unavailable")})
+
+	// Should not panic or return empty; default role-general content wins.
+	out := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	assert.Contains(t, out, "general-purpose agent")
 }
 
 // TestToolNames covers the simple ToolDefinition → []string projection

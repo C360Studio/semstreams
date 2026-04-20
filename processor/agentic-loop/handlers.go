@@ -64,12 +64,28 @@ type MessageHandler struct {
 	modelRegistry     model.RegistryReader
 	logger            *slog.Logger
 
-	// promptRegistry composes the system message prepended to each task's
-	// initial message list. Nil means no assembler step — buildInitialMessages
-	// emits only the existing task.Context.Content + user-prompt pair.
-	// Populated by Component.Start from prompt.DefaultFragments plus any
-	// KV-backed personas returned by persona.Manager.Fragments.
+	// promptRegistry is the static fragment registry seeded with
+	// prompt.DefaultFragments at Component.Start. Nil means no assembler
+	// step — buildInitialMessages emits only the existing
+	// task.Context.Content + user-prompt pair.
 	promptRegistry *prompt.Registry
+
+	// personaFragments loads KV-backed persona overrides on demand.
+	// Nil means no overrides (unit tests, or deployments without a
+	// PersonaManager). When non-nil, the handler refreshes the merged
+	// registry on every task so runtime persona edits (create / update
+	// via the CRUD tools) take effect immediately on the next loop
+	// without a component restart.
+	personaFragments PersonaFragmentSource
+}
+
+// PersonaFragmentSource is the minimum surface the handler needs to pull
+// KV-backed persona overrides at prompt-assembly time. persona.Manager
+// satisfies it via its Fragments method; tests can stub with a trivial
+// in-memory implementation. Kept as an interface here so the handler
+// package doesn't carry a compile-time dependency on persona.
+type PersonaFragmentSource interface {
+	Fragments(ctx context.Context) ([]prompt.Fragment, error)
 }
 
 // NewMessageHandler creates a new MessageHandler
@@ -118,14 +134,24 @@ func (h *MessageHandler) SetSummarizer(s Summarizer, modelName string) {
 	h.compactor = NewCompactor(h.config.Context, WithSummarizer(s), WithModelName(modelName), WithCompactorLogger(h.logger))
 }
 
-// SetPromptRegistry installs the fragment registry that composes the
+// SetPromptRegistry installs the base fragment registry that composes the
 // per-task system prompt. Passing nil clears the registry — callers get
 // the legacy behaviour where buildInitialMessages emits only
 // task.Context.Content + user prompt. The registry is expected to be
-// preloaded with prompt.DefaultFragments plus any product-supplied
-// overrides (typically persona.Manager.Fragments via Registry.UpsertAll).
+// preloaded with prompt.DefaultFragments. Product-supplied overrides
+// (KV-backed personas) are merged at assembly time via the source passed
+// to SetPersonaFragments.
 func (h *MessageHandler) SetPromptRegistry(r *prompt.Registry) {
 	h.promptRegistry = r
+}
+
+// SetPersonaFragments installs a source for KV-backed persona overrides.
+// On each task the handler calls src.Fragments(ctx) and UpsertAll's the
+// result onto the registry before assembly — this is what makes runtime
+// persona edits take effect on the next loop without a restart. Passing
+// nil disables the per-task refresh; the registry is used as-is.
+func (h *MessageHandler) SetPersonaFragments(src PersonaFragmentSource) {
+	h.personaFragments = src
 }
 
 // maybeCompact checks if context compaction is needed and performs it,
@@ -320,14 +346,15 @@ func (h *MessageHandler) buildLoopCreatedData(loopID string, task TaskMessage, e
 // buildInitialMessages constructs the initial message list for an agent request.
 //
 // Order: assembled system prompt (if any) → task.Context.Content (if any) →
-// user prompt. The assembler consults h.promptRegistry so KV-backed personas
-// layered on prompt.DefaultFragments produce a role-appropriate system
-// message per task. When the registry is nil or yields empty content, the
-// legacy "context + prompt" pair is emitted unchanged.
-func (h *MessageHandler) buildInitialMessages(task TaskMessage) []agentic.ChatMessage {
+// user prompt. The assembler consults h.promptRegistry and any live
+// KV-backed overrides from h.personaFragments so runtime persona edits
+// take effect on the next loop. When the registry is nil or assembly
+// yields empty content, the legacy "context + prompt" pair is emitted
+// unchanged.
+func (h *MessageHandler) buildInitialMessages(ctx context.Context, task TaskMessage) []agentic.ChatMessage {
 	var messages []agentic.ChatMessage
 
-	if assembled := h.assembleSystemPrompt(task); assembled != "" {
+	if assembled := h.assembleSystemPrompt(ctx, task); assembled != "" {
 		messages = append(messages, agentic.ChatMessage{
 			Role:    "system",
 			Content: assembled,
@@ -355,11 +382,27 @@ func (h *MessageHandler) buildInitialMessages(task TaskMessage) []agentic.ChatMe
 // "" when the registry is unset or produces no content. Kept as its own
 // method so the handler test can exercise the translation from
 // TaskMessage to prompt.AssemblyContext without building a full loop.
-func (h *MessageHandler) assembleSystemPrompt(task TaskMessage) string {
+//
+// KV-backed personas are merged on every call via h.personaFragments —
+// the additional KV list is negligible next to the LLM round-trip and
+// it guarantees that `create_persona` tool calls affect the very next
+// loop. Deletions take effect on registry rebuild (component restart);
+// add-then-update is the common runtime edit and works in-place.
+func (h *MessageHandler) assembleSystemPrompt(ctx context.Context, task TaskMessage) string {
 	if h.promptRegistry == nil {
 		return ""
 	}
-	ctx := &prompt.AssemblyContext{
+	if h.personaFragments != nil {
+		fragments, err := h.personaFragments.Fragments(ctx)
+		if err != nil {
+			h.logger.Warn("failed to refresh persona overrides; falling back to registry state",
+				slog.Any("error", err),
+				slog.String("task_id", task.TaskID))
+		} else if len(fragments) > 0 {
+			h.promptRegistry.UpsertAll(fragments)
+		}
+	}
+	actx := &prompt.AssemblyContext{
 		Role:          task.Role,
 		LoopID:        task.LoopID,
 		Depth:         task.Depth,
@@ -373,7 +416,7 @@ func (h *MessageHandler) assembleSystemPrompt(task TaskMessage) string {
 		ParentLoopID:  task.ParentLoopID,
 		Provider:      h.resolveProvider(task.Model),
 	}
-	return prompt.Assemble(h.promptRegistry, ctx).SystemMessage
+	return prompt.Assemble(h.promptRegistry, actx).SystemMessage
 }
 
 // toolNames projects ToolDefinition.Name out of a task's tool allowlist so
@@ -487,7 +530,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	}
 
 	// Build messages for initial request with iteration budget
-	messages := h.buildInitialMessages(task)
+	messages := h.buildInitialMessages(ctx, task)
 	budgetMsg := BuildIterationBudgetMessage(1, entity.MaxIterations)
 	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
 

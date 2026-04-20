@@ -323,32 +323,41 @@ func (c *Component) Start(ctx context.Context) error {
 	return nil
 }
 
-// initPromptRegistry builds the handler's prompt.Registry from
-// DefaultFragments plus KV-backed persona overrides. Isolated so Start
-// stays readable and so tests can inspect the resulting registry state.
+// initPromptRegistry seeds the handler's prompt.Registry with
+// DefaultFragments and wires a persona.Manager as the live KV-backed
+// override source. The handler refreshes from the source on every
+// prompt build so runtime edits (CRUD tool calls that Create/Update a
+// persona) take effect on the next loop without a component restart.
+// Failures to open the PERSONAS bucket downgrade cleanly to defaults-
+// only with a log; nil NATSClient paths (pure unit tests) skip persona
+// wiring silently.
 func (c *Component) initPromptRegistry(ctx context.Context) {
 	reg := prompt.NewRegistry()
 	reg.AddAll(prompt.DefaultFragments())
+	c.handler.SetPromptRegistry(reg)
 
-	if c.natsClient != nil {
-		mgr, err := persona.NewManager(c.natsClient)
-		if err != nil {
-			c.logger.Debug("persona overrides disabled; using DefaultFragments only",
-				slog.Any("error", err))
-		} else {
-			fragments, fragErr := mgr.Fragments(ctx)
-			if fragErr != nil {
-				c.logger.Warn("failed to load persona overrides; using DefaultFragments only",
-					slog.Any("error", fragErr))
-			} else if len(fragments) > 0 {
-				reg.UpsertAll(fragments)
-				c.logger.Info("persona overrides loaded",
-					slog.Int("count", len(fragments)))
-			}
-		}
+	if c.natsClient == nil {
+		return
+	}
+	mgr, err := persona.NewManager(c.natsClient)
+	if err != nil {
+		c.logger.Debug("persona overrides disabled; using DefaultFragments only",
+			slog.Any("error", err))
+		return
 	}
 
-	c.handler.SetPromptRegistry(reg)
+	// Seed once so the first loop sees whatever's already in the bucket
+	// at boot (pre-populated fixtures, prior-run state after restart).
+	// Subsequent loops pick up edits via the refresh path in the handler.
+	if fragments, fragErr := mgr.Fragments(ctx); fragErr != nil {
+		c.logger.Warn("failed to seed persona overrides; live refresh still active",
+			slog.Any("error", fragErr))
+	} else if len(fragments) > 0 {
+		reg.UpsertAll(fragments)
+		c.logger.Info("persona overrides seeded", slog.Int("count", len(fragments)))
+	}
+
+	c.handler.SetPersonaFragments(mgr)
 }
 
 // Stop stops the component within the given timeout.
