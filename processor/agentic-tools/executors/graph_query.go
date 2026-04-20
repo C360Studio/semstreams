@@ -186,7 +186,7 @@ func (e *GraphQueryExecutor) queryEntity(ctx context.Context, call agentic.ToolC
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to query entity: %v", err),
-			ErrorKind: agentic.ToolErrorExternal,
+			ErrorKind: agentic.ToolErrorNetwork,
 		}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntity", "get entity from KV")
 	}
 
@@ -265,7 +265,7 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 			return agentic.ToolResult{
 				CallID:    call.ID,
 				Error:     fmt.Sprintf("failed to query entity %s: %v", entityID, err),
-				ErrorKind: agentic.ToolErrorExternal,
+				ErrorKind: agentic.ToolErrorNetwork,
 			}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntities", "get entity from KV")
 		}
 		results[entityID] = json.RawMessage(entry.Value())
@@ -333,7 +333,7 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to query entity: %v", err),
-			ErrorKind: agentic.ToolErrorExternal,
+			ErrorKind: agentic.ToolErrorNetwork,
 		}, errs.WrapTransient(err, "GraphQueryExecutor", "queryRelationships", "get entity from KV")
 	}
 
