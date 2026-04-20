@@ -222,9 +222,9 @@ func TestDecideExecutor_MissingLoopID(t *testing.T) {
 }
 
 // TestDecideExecutor_PublisherFailure verifies that a failure during
-// triple publication surfaces ToolErrorExternal so the retry policy can
-// react, and the loop is NOT terminated (StopLoop stays false) so the
-// model sees the failure in the next iteration.
+// triple publication surfaces ToolErrorNetwork (NATS is a transport-level
+// failure) so the retry policy can react, and the loop is NOT terminated
+// (StopLoop stays false) so the model sees the failure in the next iteration.
 func TestDecideExecutor_PublisherFailure(t *testing.T) {
 	pub := &recordingPublisher{err: errors.New("nats broken")}
 	e := newDecideExecutor(pub)
@@ -241,8 +241,8 @@ func TestDecideExecutor_PublisherFailure(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected wrapped err for publish failure")
 	}
-	if res.ErrorKind != agentic.ToolErrorExternal {
-		t.Errorf("ErrorKind = %v, want ToolErrorExternal", res.ErrorKind)
+	if res.ErrorKind != agentic.ToolErrorNetwork {
+		t.Errorf("ErrorKind = %v, want ToolErrorNetwork", res.ErrorKind)
 	}
 	if res.StopLoop {
 		t.Errorf("StopLoop should stay false when the decision didn't actually land")

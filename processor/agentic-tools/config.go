@@ -47,10 +47,10 @@ type RetryPolicy struct {
 	BackoffMaxMs int `json:"backoff_max_ms,omitempty" schema:"type:int,description:Maximum backoff between retries in milliseconds,default:2000"`
 
 	// RetryOnKinds names the ToolErrorKind values that should trigger
-	// retry. Defaults to ["timeout", "external"] when unset. Pass an
+	// retry. Defaults to ["timeout", "external", "network"] when unset. Pass an
 	// explicit empty list to retry only on raw executor errors (no
 	// tool-level error kind considered).
-	RetryOnKinds []string `json:"retry_on_kinds,omitempty" schema:"type:array,description:ToolErrorKind values that trigger retry (defaults to timeout+external),category:advanced"`
+	RetryOnKinds []string `json:"retry_on_kinds,omitempty" schema:"type:array,description:ToolErrorKind values that trigger retry (defaults to timeout+external+network),category:advanced"`
 }
 
 // Validate checks the configuration for errors

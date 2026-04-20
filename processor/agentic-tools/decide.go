@@ -161,7 +161,7 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 			return agentic.ToolResult{
 				CallID:    call.ID,
 				Error:     fmt.Sprintf("publish %s triple: %v", triple.Predicate, err),
-				ErrorKind: agentic.ToolErrorExternal,
+				ErrorKind: agentic.ToolErrorNetwork,
 			}, errs.WrapTransient(err, "DecideExecutor", "decide", "publish triple")
 		}
 	}

@@ -488,7 +488,7 @@ func (c *Component) isToolAllowed(toolName string) bool {
 // It first checks the component's local registry, then falls back to the
 // global registry. When the tool has an entry in config.ToolRetries the
 // call is retried up to MaxAttempts on transient tool-level errors
-// (default: timeout + external) with exponential backoff. Per-attempt
+// (default: timeout + external + network) with exponential backoff. Per-attempt
 // timeout is applied to each try so a slow first call does not consume
 // the whole budget.
 func (c *Component) executeWithTimeout(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
@@ -567,7 +567,7 @@ func effectiveRetryPolicy(policies map[string]RetryPolicy, toolName string) Retr
 	}
 	if p.RetryOnKinds == nil {
 		// nil means "use defaults"; an explicit empty slice is respected.
-		p.RetryOnKinds = []string{string(agentic.ToolErrorTimeout), string(agentic.ToolErrorExternal)}
+		p.RetryOnKinds = []string{string(agentic.ToolErrorTimeout), string(agentic.ToolErrorExternal), string(agentic.ToolErrorNetwork)}
 	}
 	return p
 }

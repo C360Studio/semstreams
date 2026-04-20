@@ -114,7 +114,7 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to read completion record: %v", err),
-			ErrorKind: agentic.ToolErrorExternal,
+			ErrorKind: agentic.ToolErrorNetwork,
 		}, errs.WrapTransient(err, "ReadLoopResultExecutor", "readLoopResult", "get completion entry")
 	}
 

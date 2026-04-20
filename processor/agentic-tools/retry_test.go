@@ -257,9 +257,10 @@ func TestEffectiveRetryPolicy_Defaults(t *testing.T) {
 	wantKinds := map[string]bool{
 		string(agentic.ToolErrorTimeout):  true,
 		string(agentic.ToolErrorExternal): true,
+		string(agentic.ToolErrorNetwork):  true,
 	}
 	if len(p.RetryOnKinds) != len(wantKinds) {
-		t.Fatalf("RetryOnKinds = %v, want 2 defaults", p.RetryOnKinds)
+		t.Fatalf("RetryOnKinds = %v, want 3 defaults", p.RetryOnKinds)
 	}
 	for _, k := range p.RetryOnKinds {
 		if !wantKinds[k] {

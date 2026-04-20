@@ -3,6 +3,7 @@ package agentictools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -254,6 +255,37 @@ func TestReadLoopResultExecutor_MalformedRecord(t *testing.T) {
 	if res.ErrorKind != agentic.ToolErrorInternal {
 		t.Errorf("error kind = %v, want ToolErrorInternal", res.ErrorKind)
 	}
+}
+
+// TestReadLoopResultExecutor_NATSTransportError verifies that a NATS transport
+// failure (connection dropped, server unavailable) is classified as
+// ToolErrorNetwork — not ToolErrorExternal — so the default retry policy
+// applies and the agent can recover on the next attempt.
+func TestReadLoopResultExecutor_NATSTransportError(t *testing.T) {
+	kv := &errKV{err: errors.New("nats: connection closed")}
+
+	e := NewReadLoopResultExecutor(kv)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:   "c1",
+		Name: ReadLoopResultToolName,
+		Arguments: map[string]any{
+			"loop_id": "loop-42",
+		},
+	})
+	if err == nil {
+		t.Errorf("expected a wrapped transient error from NATS failure")
+	}
+	if res.ErrorKind != agentic.ToolErrorNetwork {
+		t.Errorf("ErrorKind = %v, want ToolErrorNetwork (NATS is a transport error)", res.ErrorKind)
+	}
+}
+
+// errKV is a LoopsKVReader that always returns a transport-level error,
+// simulating a dropped NATS connection.
+type errKV struct{ err error }
+
+func (e *errKV) Get(_ context.Context, _ string) (*natsclient.KVEntry, error) {
+	return nil, e.err
 }
 
 // TestReadLoopResultExecutor_UnknownTool verifies the executor rejects calls
