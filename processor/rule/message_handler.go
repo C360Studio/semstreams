@@ -13,6 +13,23 @@ import (
 	"github.com/c360studio/semstreams/message"
 )
 
+// snapshotRules copies both rp.rules and rp.ruleDefinitions under a single
+// RLock and returns the two snapshots. Callers iterate the snapshots without
+// holding the lock, so hot-reload writes to either map do not race.
+func (rp *Processor) snapshotRules() (map[string]Rule, map[string]Definition) {
+	rp.mu.RLock()
+	rules := make(map[string]Rule, len(rp.rules))
+	for k, v := range rp.rules {
+		rules[k] = v
+	}
+	defs := make(map[string]Definition, len(rp.ruleDefinitions))
+	for k, v := range rp.ruleDefinitions {
+		defs[k] = v
+	}
+	rp.mu.RUnlock()
+	return rules, defs
+}
+
 // reportEvaluating reports the evaluating stage (throttled to avoid KV spam)
 func (rp *Processor) reportEvaluating(ctx context.Context) {
 	if rp.lifecycleReporter != nil {
@@ -67,16 +84,8 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		rp.messageCache.Set(cacheKey, msg)
 	}
 
-	// Snapshot the rules map under a read lock so that concurrent hot-reload
-	// reconciles (which write rp.rules under rp.mu.Lock) don't race with
-	// our iteration. We copy references, not the rules themselves, so the
-	// snapshot is cheap.
-	rp.mu.RLock()
-	rules := make(map[string]Rule, len(rp.rules))
-	for k, v := range rp.rules {
-		rules[k] = v
-	}
-	rp.mu.RUnlock()
+	// Snapshot both maps so hot-reload writes don't race with iteration.
+	rules, ruleDefs := rp.snapshotRules()
 
 	// Process through each rule
 	for ruleName, ruleInstance := range rules {
@@ -107,8 +116,8 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 			}
 		}
 
-		// Get rule definition for stateful evaluation
-		ruleDef, hasDefinition := rp.ruleDefinitions[ruleName]
+		// Get rule definition for stateful evaluation from the local snapshot.
+		ruleDef, hasDefinition := ruleDefs[ruleName]
 		hasStatefulActions := hasDefinition && (len(ruleDef.OnEnter) > 0 || len(ruleDef.OnExit) > 0 || len(ruleDef.WhileTrue) > 0)
 
 		// Handle stateful evaluation if rule has OnEnter/OnExit/WhileTrue actions
@@ -185,14 +194,8 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
-	// Snapshot rules under a read lock to avoid racing with hot-reload
-	// reconciles that write rp.rules under rp.mu.Lock.
-	rp.mu.RLock()
-	rules := make(map[string]Rule, len(rp.rules))
-	for k, v := range rp.rules {
-		rules[k] = v
-	}
-	rp.mu.RUnlock()
+	// Snapshot both maps so hot-reload writes don't race with iteration.
+	rules, ruleDefs := rp.snapshotRules()
 
 	for ruleName, ruleInstance := range rules {
 		// Per-rule feedback loop prevention: if this rule generated the
@@ -236,7 +239,7 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 			}
 		}
 
-		ruleDef, hasDefinition := rp.ruleDefinitions[ruleName]
+		ruleDef, hasDefinition := ruleDefs[ruleName]
 		hasStatefulActions := hasDefinition && (len(ruleDef.OnEnter) > 0 || len(ruleDef.OnExit) > 0 || len(ruleDef.WhileTrue) > 0)
 
 		if hasStatefulActions && rp.statefulEvaluator != nil {

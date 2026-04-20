@@ -55,9 +55,15 @@ type Processor struct {
 	flowMetrics component.FlowMetrics
 
 	// Rule processing resources
-	natsClient      *natsclient.Client
-	rules           map[string]Rule           // Self-loaded rules
-	ruleDefinitions map[string]Definition     // Rule definitions for stateful evaluation
+	natsClient *natsclient.Client
+	rules      map[string]Rule // Self-loaded rules; written by applyRuleChanges under mu.Lock, read under mu.RLock.
+	// ruleDefinitions holds the parsed Definition for each rule. Writers:
+	// loadRules (called only from Initialize, before any goroutines start).
+	// applyRuleChanges (hot-reload) does NOT write ruleDefinitions — it only
+	// writes rp.rules and rp.ruleConfigs. Reads in message_handler.go are
+	// snapshotted under mu.RLock alongside the rp.rules snapshot so that any
+	// future hot-reload path that does update definitions is safe by default.
+	ruleDefinitions map[string]Definition
 	ruleConfigs     map[string]map[string]any // Original rule configurations for GetRuntimeConfig
 
 	// Message cache
@@ -106,7 +112,9 @@ type Processor struct {
 	// Prometheus metrics
 	metrics *Metrics
 
-	// Stateful rule support
+	// Stateful rule support. Both fields are set once in Initialize (before any
+	// goroutines start) and never reassigned at runtime, so they may be read
+	// without holding mu.
 	stateTracker      *StateTracker
 	statefulEvaluator *StatefulEvaluator
 
