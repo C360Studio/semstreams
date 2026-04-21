@@ -100,6 +100,9 @@ Commit to a three-layer agentic orchestration architecture:
 - Closes the improvement loop: rules are plumbing, the coordinator is
   judgment, ops is learning.
 - Full three-phase delivery in ADR-027 (refreshed 2026-04-18).
+- **Phase 1 shipped 2026-04-20** — read-only observation + structured diagnosis triples
+  via `emit_diagnosis`; flow composition tools deferred to Phase 2 via config-only
+  enablement (add tools to `allowed_tools` + `approval_required`; no new code required).
 
 ## Implications for rule authors
 

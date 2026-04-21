@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed — **refreshed 2026-04-18** with ADR-028 framing. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
+**Accepted (Phase 1)** — refreshed 2026-04-18 with ADR-028 framing; Phase 1 shipped 2026-04-20. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
+
+Phase 1 (read-only diagnosis) is complete: the ops agent observes completed loops and graph telemetry, emits structured findings as `ops.diagnosis.*` triples via the `emit_diagnosis` tool, and is e2e-verified via `task e2e:ops`. Phase 2 and Phase 3 remain proposed.
 
 ## Role within the three-layer orchestration architecture
 
@@ -102,11 +104,20 @@ written back to the graph as entities with predicates `ops.diagnosis.finding`,
 Human operators review and apply changes manually. Phase 1 delivers immediate diagnostic
 value before any automated changes are enabled.
 
+> **Implementation note:** `rules_query` does not exist in the shipped implementation.
+> The actual read tools for rule and configuration state are `list_rules` + `get_rule`,
+> with equivalent `list_*` / `get_*` read tools for flows, personas, and flow-templates.
+
 **Phase 2 — proposed changes.** The ops agent gains ADR-026 tools (`create_rule`,
 `manage_flow`). It proposes harness modifications as draft flows and rules. High-risk
 changes (model switches, tool removals, topology changes) route through the ADR-026
 `ToolCallFilter` and `ApprovalFilter` for human sign-off. Low-risk changes (threshold
 adjustments, prompt fragment reweighting) can auto-approve subject to governance review.
+
+Phase 2 requires **no new code**. Operators enable it by adding the proposal tools
+(`create_rule`, `update_rule`, etc.) to `configs/flows/ops-agent.json` `allowed_tools`
+and mirroring the same list into `agentic-tools.config.approval_required`. The existing
+`ApprovalFilter` mechanism handles block-until-approved transitions automatically.
 
 **Phase 3 — automated tuning loop.** The ops agent runs continuously, observing execution
 patterns after its own modifications take effect. It maintains a Pareto frontier of
