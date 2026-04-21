@@ -1187,6 +1187,9 @@ func (m *Manager) registerSystemEndpoints() {
 	// Service discovery endpoints
 	m.httpMux.HandleFunc("/services", m.handleServiceList)
 	m.httpMux.HandleFunc("/services/health", m.handleServicesHealth)
+
+	// Graph query endpoints (operator-facing, read-only)
+	m.httpMux.HandleFunc("/graph/triples", m.handleGraphTriples)
 }
 
 // Removed buildServiceHealthMap and writeHealthResponse - using health.Status directly now
