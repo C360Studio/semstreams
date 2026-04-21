@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 )
@@ -171,6 +173,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-rule-in-kv", s.verifyRuleInKV},
 		{"validate-rule-content", s.validateRuleContent},
 		{"verify-hotreload-pickup", s.verifyHotreloadPickup},
+		{"verify-fire-every-n-events", s.verifyFireEveryNEvents},
 		{"cleanup-persona-override", s.cleanupPersonaOverride},
 	}
 
@@ -389,6 +392,249 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 
 	result.Details["registered_m2_tools"] = []string{"list_components", "monitor_flow"}
 	return nil
+}
+
+// fireEveryNConstants groups magic numbers for the sampling-gate stage so
+// they appear in one place and are easy to scan.
+const (
+	fireEveryNRuleID     = "e2e-fire-every-n-test"
+	fireEveryNEntityType = "e2e-fire-probe"
+	fireEveryNWindowN    = 3
+	fireEveryNProbeCount = 9
+	fireEveryNExpected   = fireEveryNProbeCount / fireEveryNWindowN // 3
+	fireEveryNKVBucket   = "ENTITY_STATES"
+	fireEveryNRuleKey    = "rules." + fireEveryNRuleID
+	fireEveryNMetricName = "semstreams_rule_events_published_total"
+	fireEveryNMetricET   = "triggered"
+	fireEveryNMetricSubj = "events.rule.triggered"
+)
+
+// verifyFireEveryNEvents exercises the fire_every_n_events sampling gate
+// (PR2 of ADR-027 Phase 1, commit 34bc655) end to end through a live
+// rule-processor. The gate was previously covered only by unit and
+// integration tests; this stage proves it works in a running system.
+//
+// Assertion path: metrics (not graph triples). The crud-tools flow config
+// disables graph integration (enable_graph_integration: false), so
+// add_triple actions do not persist. Instead, the stage measures how many
+// times publishRuleEvent fires inside fireRuleActions — that function is
+// entered only after the gate passes, making the metric delta a direct,
+// honest measurement of the gate's behaviour.
+//
+// Metric: semstreams_rule_events_published_total{event_type="triggered",
+// subject="events.rule.triggered"} — delta of exactly 3 expected after
+// 9 matching events with N=3.
+func (s *Scenario) verifyFireEveryNEvents(ctx context.Context, result *scenarios.Result) error {
+	defer s.cleanupFireEveryNRule()
+
+	if err := s.seedFireEveryNRule(ctx, result); err != nil {
+		return err
+	}
+	if err := s.waitForFireEveryNRuleHotReload(ctx, result); err != nil {
+		return err
+	}
+
+	baselinePublished := s.captureFireEveryNBaseline(ctx)
+	result.Details["fire_every_n_baseline_published"] = baselinePublished
+
+	injectedKeys, err := s.injectProbeEntities(ctx, result)
+	if err != nil {
+		return err
+	}
+	defer s.cleanupProbeEntities(injectedKeys)
+
+	return s.assertFireEveryNGate(ctx, result, baselinePublished)
+}
+
+// seedFireEveryNRule writes the sampling-gate rule directly to KV,
+// exercising the rule-processor's hot-reload watcher.
+// No on_enter/while_true actions: the stateful evaluator runs those
+// directly and bypasses the gate. An empty action list makes publishRuleEvent
+// (inside fireRuleActions, after the gate) the sole observable side effect.
+func (s *Scenario) seedFireEveryNRule(ctx context.Context, result *scenarios.Result) error {
+	ruleDef := rule.Definition{
+		ID:               fireEveryNRuleID,
+		Type:             "expression",
+		Name:             "Fire Every N Test",
+		Description:      "e2e sampling-gate test: fires only on every 3rd matching event",
+		Enabled:          true,
+		FireEveryNEvents: fireEveryNWindowN,
+		Conditions: []expression.ConditionExpression{
+			{Field: "entity.type", Operator: "eq", Value: fireEveryNEntityType},
+		},
+		Logic: "and",
+	}
+	ruleJSON, err := json.Marshal(ruleDef)
+	if err != nil {
+		return fmt.Errorf("marshal sampling-gate rule: %w", err)
+	}
+	if err := s.nats.PutKV(ctx, s.config.RulesBucket, fireEveryNRuleKey, ruleJSON); err != nil {
+		return fmt.Errorf("seed sampling-gate rule into %s: %w", s.config.RulesBucket, err)
+	}
+	result.Details["fire_every_n_rule_id"] = fireEveryNRuleID
+	return nil
+}
+
+// waitForFireEveryNRuleHotReload polls until the rule-processor's active_rules
+// gauge reaches baseline+2 (e2e-crud-rule plus the new gate rule). Falls back
+// to a fixed 400ms delay when metrics are unavailable.
+func (s *Scenario) waitForFireEveryNRuleHotReload(ctx context.Context, result *scenarios.Result) error {
+	if s.baselineActiveRules < 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(400 * time.Millisecond):
+		}
+		return nil
+	}
+
+	// e2e-crud-rule (loaded by verify-hotreload-pickup) + e2e-fire-every-n-test
+	expected := s.baselineActiveRules + 2
+	deadline := time.Now().Add(2 * time.Second)
+	var lastSeen float64
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		v, err := s.metrics.GetMetricValue(ctx, "semstreams_rule_active_rules")
+		if err != nil {
+			continue
+		}
+		lastSeen = v
+		if v >= expected {
+			result.Details["active_rules_after_fire_every_n_rule"] = v
+			return nil
+		}
+	}
+	result.Warnings = append(result.Warnings,
+		fmt.Sprintf("fire-every-n hot-reload: active_rules did not reach %.0f within 2s (last=%.0f); proceeding",
+			expected, lastSeen))
+	return nil
+}
+
+// captureFireEveryNBaseline reads the current value of the events-published
+// metric so the assertion can compute a delta rather than an absolute count.
+func (s *Scenario) captureFireEveryNBaseline(ctx context.Context) float64 {
+	if s.baselineActiveRules < 0 {
+		return 0
+	}
+	metrics, err := s.metrics.GetMetricByLabels(ctx, fireEveryNMetricName,
+		map[string]string{"event_type": fireEveryNMetricET, "subject": fireEveryNMetricSubj})
+	if err != nil || len(metrics) == 0 {
+		return 0
+	}
+	return metrics[0].Value
+}
+
+// injectProbeEntities writes 9 EntityState records to ENTITY_STATES KV.
+// Each entity has a triple with predicate "entity.type" = fireEveryNEntityType
+// so the sampling-gate rule's condition matches. Returns the injected keys for
+// cleanup.
+func (s *Scenario) injectProbeEntities(ctx context.Context, result *scenarios.Result) ([]string, error) {
+	keys := make([]string, 0, fireEveryNProbeCount)
+	for i := 1; i <= fireEveryNProbeCount; i++ {
+		entityID := fmt.Sprintf("org.platform.test.probe.e2e.%03d", i)
+		entityState := graph.EntityState{
+			ID: entityID,
+			Triples: []message.Triple{
+				{
+					Subject:   entityID,
+					Predicate: "entity.type",
+					Object:    fireEveryNEntityType,
+					Source:    "e2e-fire-every-n-seed",
+					Timestamp: time.Now(),
+				},
+			},
+			MessageType: message.Type{Domain: "e2e", Category: "probe", Version: "v1"},
+			Version:     1,
+			UpdatedAt:   time.Now(),
+		}
+		entityJSON, err := json.Marshal(entityState)
+		if err != nil {
+			return keys, fmt.Errorf("marshal probe entity %d: %w", i, err)
+		}
+		if err := s.nats.PutKV(ctx, fireEveryNKVBucket, entityID, entityJSON); err != nil {
+			return keys, fmt.Errorf("seed probe entity %d (%s): %w", i, entityID, err)
+		}
+		keys = append(keys, entityID)
+	}
+	result.Details["fire_every_n_injected_count"] = fireEveryNProbeCount
+	return keys, nil
+}
+
+// assertFireEveryNGate polls the events-published metric until the delta from
+// baseline reaches exactly fireEveryNExpected (3), confirming the gate fired 3
+// times for 9 matching events with N=3.
+func (s *Scenario) assertFireEveryNGate(ctx context.Context, result *scenarios.Result, baselinePublished float64) error {
+	if s.baselineActiveRules < 0 {
+		result.Warnings = append(result.Warnings,
+			"verify-fire-every-n-events: metrics unreachable; gate assertion skipped")
+		return nil
+	}
+
+	target := baselinePublished + float64(fireEveryNExpected)
+	deadline := time.Now().Add(2 * time.Second)
+	var lastSeen float64
+	stageStart := time.Now()
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		metrics, err := s.metrics.GetMetricByLabels(ctx, fireEveryNMetricName,
+			map[string]string{"event_type": fireEveryNMetricET, "subject": fireEveryNMetricSubj})
+		if err != nil || len(metrics) == 0 {
+			continue
+		}
+		lastSeen = metrics[0].Value
+		if lastSeen < target {
+			continue
+		}
+		result.Metrics["fire_every_n_gate_latency_ms"] = time.Since(stageStart).Milliseconds()
+		result.Details["fire_every_n_published_after"] = lastSeen
+		delta := lastSeen - baselinePublished
+		result.Details["fire_every_n_published_delta"] = delta
+		// Strict equality: more fires mean the gate counter is not working.
+		if delta != float64(fireEveryNExpected) {
+			return fmt.Errorf(
+				"fire_every_n_events gate: expected exactly %d fires for %d events with N=%d, "+
+					"got %.0f (baseline=%.0f, current=%.0f)",
+				fireEveryNExpected, fireEveryNProbeCount, fireEveryNWindowN,
+				delta, baselinePublished, lastSeen)
+		}
+		return nil
+	}
+
+	return fmt.Errorf(
+		"fire_every_n_events gate: %s did not reach %.0f within 2s "+
+			"(baseline=%.0f, last=%.0f, expected_delta=%d) — "+
+			"check entity_watch_buckets config and rule %q in KV",
+		fireEveryNMetricName, target, baselinePublished, lastSeen,
+		fireEveryNExpected, fireEveryNRuleID)
+}
+
+// cleanupFireEveryNRule deletes the test rule so a second scenario run starts
+// with a fresh counter and an unbiased active_rules gauge. Uses a fresh
+// Background context because the parent context may already be cancelled
+// by the time the deferred cleanup runs.
+func (s *Scenario) cleanupFireEveryNRule() {
+	dctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = s.nats.DeleteKV(dctx, s.config.RulesBucket, fireEveryNRuleKey)
+}
+
+// cleanupProbeEntities deletes the injected ENTITY_STATES entries so the
+// bucket is tidy for subsequent scenario runs.
+func (s *Scenario) cleanupProbeEntities(keys []string) {
+	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, key := range keys {
+		_ = s.nats.DeleteKV(dctx, fireEveryNKVBucket, key)
+	}
 }
 
 // cleanupPersonaOverride removes the seeded persona so a second run
