@@ -608,3 +608,92 @@ const (
 	// DataType: string
 	CoordinatorDecisionReason = "coordinator.decision_reason"
 )
+
+// Ops Predicates
+//
+// Emitted by the ops agent's emit_diagnosis terminal tool (see
+// processor/agentic-tools/emit_diagnosis.go) onto a freshly-minted
+// ops.diagnosis entity per finding. Each emit_diagnosis call mints a
+// new {org}.{platform}.ops.diagnosis.{id} entity and attaches one triple
+// per predicate so downstream rules can branch deterministically on
+// severity, role, and confidence without parsing prose.
+//
+// The ops role is the learning layer of the three-layer orchestration
+// architecture (ADR-027 Phase 1 / ADR-028). It observes loop completions,
+// queries the graph, and emits structured findings. Phase 2 tool grants +
+// Phase 3 config tuning land after beta.
+const (
+	// OpsDiagnosisFinding is a short textual description of the finding the
+	// ops agent identified. Free-text prose; treat as untrusted user content
+	// downstream (agentic-governance filters inbound injection).
+	// Example: "researcher loop exceeded token budget on first attempt"
+	// DataType: string
+	OpsDiagnosisFinding = "ops.diagnosis.finding"
+
+	// OpsDiagnosisRecommendation is the proposed next step the ops agent
+	// believes would address the finding. Free-text prose.
+	// Example: "reduce max_tokens for researcher endpoint to 4096"
+	// DataType: string
+	OpsDiagnosisRecommendation = "ops.diagnosis.recommendation"
+
+	// OpsDiagnosisConfidence is the ops agent's self-reported confidence in
+	// the finding, on a 0.0–1.0 scale. Also used as the triple's graph
+	// Confidence field so confidence-weighted queries reflect agent certainty.
+	// Example: "0.85"
+	// DataType: float64 (serialised as %g string in the triple Object)
+	OpsDiagnosisConfidence = "ops.diagnosis.confidence"
+
+	// OpsDiagnosisEvidence is a citation of an entity ID that supports the
+	// finding. Multi-valued: one triple per evidence entity. Downstream
+	// queries can follow evidence links to the loop or trajectory entities
+	// the ops agent examined.
+	// Example: "acme.ops.agent.agentic-loop.execution.abc123"
+	// DataType: string (entity ID)
+	OpsDiagnosisEvidence = "ops.diagnosis.evidence"
+
+	// OpsDiagnosisObservedRole is the agent role the finding pertains to.
+	// Optional — omitted when the finding is not role-specific.
+	// Example: "researcher"
+	// DataType: string
+	OpsDiagnosisObservedRole = "ops.diagnosis.observed_role"
+
+	// OpsDiagnosisSeverity is the urgency classification of the finding.
+	// Values: "info" | "warn" | "critical". Defaults to "info" when the
+	// ops agent omits the field or supplies an unrecognised value.
+	// Example: "warn"
+	// DataType: string
+	OpsDiagnosisSeverity = "ops.diagnosis.severity"
+)
+
+// Ops Config Predicates (Phase 3, reserved)
+//
+// These predicates are declared now to lock the ops.config.* namespace but
+// are intentionally unused until Phase 3 (continuous tuning, Pareto
+// frontier, rollback lineage). Do not emit or consume them in Phase 1 or 2.
+// See ADR-027 for the Phase 3 scope definition.
+const (
+	// OpsConfigAccuracy is the measured accuracy score for a configuration
+	// variant. Reserved for Phase 3 Pareto-frontier tracking.
+	// DataType: float64
+	OpsConfigAccuracy = "ops.config.accuracy"
+
+	// OpsConfigCostPerTask is the average cost per task for a configuration
+	// variant. Reserved for Phase 3 Pareto-frontier tracking.
+	// DataType: float64
+	OpsConfigCostPerTask = "ops.config.cost_per_task"
+
+	// OpsConfigP95Latency is the p95 latency in milliseconds for a
+	// configuration variant. Reserved for Phase 3 Pareto-frontier tracking.
+	// DataType: float64
+	OpsConfigP95Latency = "ops.config.p95_latency"
+
+	// OpsConfigActive indicates whether a configuration variant is currently
+	// active. Reserved for Phase 3 live-rollback tracking.
+	// DataType: bool (serialised as "true"/"false")
+	OpsConfigActive = "ops.config.active"
+
+	// OpsConfigParent links a configuration variant to its parent variant for
+	// rollback lineage. Reserved for Phase 3 rollback tracking.
+	// DataType: string (entity ID of parent config entity)
+	OpsConfigParent = "ops.config.parent"
+)

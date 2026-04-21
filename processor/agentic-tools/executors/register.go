@@ -65,10 +65,11 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	registerGitHub(logger)
 
 	if deps.NATSClient == nil {
-		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, query_entity)")
+		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity)")
 	} else {
 		registerReadLoopResult(ctx, deps.NATSClient, logger)
 		registerDecide(deps.NATSClient, deps.Platform, logger)
+		registerEmitDiagnosis(deps.NATSClient, deps.Platform, logger)
 		registerGraphQuery(ctx, deps.NATSClient, logger)
 	}
 
