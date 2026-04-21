@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
+	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/throughput"
 )
 
@@ -393,6 +394,13 @@ func createScenario(
 		cfg := crudtools.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
 		return crudtools.NewScenario(edgeClient, cfg)
+
+	// Ops scenario (ADR-027 Phase 1 ops agent observable)
+	case "ops":
+		cfg := opsscenario.DefaultConfig()
+		cfg.MetricsURL = flags.metricsURL
+		cfg.BaseURL = flags.baseURL
+		return opsscenario.NewScenario(edgeClient, cfg)
 
 	// Throughput scenario (high-volume stress test with profiling + query load)
 	case "throughput":

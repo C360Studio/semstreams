@@ -1,0 +1,68 @@
+version: "3"
+
+# Ops-agent tier: verifies ADR-027 Phase 1 ops agent end to end.
+# Mock LLM scripts three emit_diagnosis calls + submit_work; scenario validates
+# the diagnosis triples appear in the graph via GET /graph/triples.
+# Runs on ports 67xxx alongside agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx).
+
+tasks:
+  default:
+    desc: "Ops-agent tier: ADR-027 Phase 1 ops agent observable (~30s)"
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[OPS] Starting ops-agent tier E2E test..."
+      - docker compose -f docker/compose/ops.yml up -d --wait --build
+      - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
+      - echo "[OPS] Running scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:67080 --metrics-url http://localhost:67190
+        ignore_error: true
+      - docker compose -f docker/compose/ops.yml down -v --timeout 15
+
+  up:
+    desc: Start ops-agent tier services without running tests
+    silent: false
+    cmds:
+      - echo "[OPS] Starting services..."
+      - docker compose -f docker/compose/ops.yml up -d --wait --build
+      - echo "[OK] Services are healthy"
+      - 'echo ""'
+      - 'echo "Services:"'
+      - 'echo "  NATS:       nats://localhost:67222"'
+      - 'echo "  Mock LLM:   http://localhost:67180"'
+      - 'echo "  SemStreams: http://localhost:67080"'
+      - 'echo "  Metrics:    http://localhost:67190/metrics"'
+      - 'echo ""'
+      - 'echo "To run tests: task e2e:ops:test"'
+      - 'echo "To stop:      task e2e:ops:down"'
+
+  test:
+    desc: Run ops scenario against already-running services
+    silent: false
+    deps: [":build:e2e"]
+    cmds:
+      - echo "[OPS] Running scenario..."
+      - cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:67080 --metrics-url http://localhost:67190
+
+  down:
+    desc: Stop ops-agent tier services
+    silent: false
+    cmds:
+      - echo "[OPS] Stopping services..."
+      - docker compose -f docker/compose/ops.yml down -v --timeout 15
+      - echo "[OK] Services stopped"
+
+  logs:
+    desc: Tail logs from ops-agent services
+    silent: false
+    cmds:
+      - docker compose -f docker/compose/ops.yml logs -f
+
+  clean:
+    desc: Clean ops-agent tier environment
+    silent: false
+    cmds:
+      - echo "[OPS] Cleaning environment..."
+      - docker compose -f docker/compose/ops.yml down -v --timeout 15 2>/dev/null || true
+      - docker volume ls -q --filter name=ops | xargs -r docker volume rm 2>/dev/null || true
+      - echo "[OK] Ops-agent environment cleaned"

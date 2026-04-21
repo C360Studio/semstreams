@@ -37,6 +37,8 @@ includes:
     taskfile: ./taskfiles/e2e/deep-research.yml
   e2e:crud-tools:
     taskfile: ./taskfiles/e2e/crud-tools.yml
+  e2e:ops:
+    taskfile: ./taskfiles/e2e/ops.yml
   e2e:throughput:
     taskfile: ./taskfiles/e2e/throughput.yml
 

@@ -1,0 +1,109 @@
+# Ops Agent E2E Test Environment for SemStreams
+#
+# Exercises the ADR-027 Phase 1 ops agent end to end. Mock LLM scripts three
+# emit_diagnosis tool calls followed by submit_work; scenario verifies the
+# resulting diagnosis triples appear via the GET /graph/triples HTTP endpoint.
+#
+# Usage:
+#   task e2e:ops
+#
+# Ports are in the 67xxx range so this stack can run alongside agentic (3xxxx),
+# deep-research (5xxxx), and crud-tools (6xxxx).
+# Port map:
+#   NATS client:       67222
+#   NATS monitoring:   68222
+#   Mock LLM:          67180
+#   SemStreams HTTP:   67080
+#   SemStreams metrics: 67190
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: semstreams-ops-nats
+    ports:
+      - "67222:4222"
+      - "68222:8222"
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-ops-nats"]
+    volumes:
+      - nats-ops-data:/data
+    networks:
+      - semstreams-ops-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mock-llm:
+    build:
+      context: ../..
+      dockerfile: test/e2e/mock/Dockerfile
+    container_name: semstreams-ops-mock-llm
+    # --scenario ops selects the applyOpsPreset config in
+    # test/e2e/mock/cmd/main.go. Different scenarios share this binary
+    # and pick their preset via this flag.
+    command: ["--port", "8080", "--scenario", "ops"]
+    ports:
+      - "67180:8080"
+    networks:
+      - semstreams-ops-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  semstreams:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: semstreams-ops-app
+    command: ["--config", "/app/configs/flows/ops-agent-test.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+    volumes:
+      - ../../configs:/app/configs:ro
+    ports:
+      - "67080:8080"
+      - "67190:9090"
+    networks:
+      - semstreams-ops-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/readyz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-ops-net:
+    driver: bridge
+
+volumes:
+  nats-ops-data:
+    driver: local
