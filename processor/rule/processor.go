@@ -66,6 +66,13 @@ type Processor struct {
 	ruleDefinitions map[string]Definition
 	ruleConfigs     map[string]map[string]any // Original rule configurations for GetRuntimeConfig
 
+	// matchCounters tracks per-rule match counts for FireEveryNEvents gating.
+	// Keyed by ruleID. Each counter is an atomic.Int64 so increments and reads
+	// are safe without holding mu. The map itself is only written under mu.Lock
+	// (in loadRules and applyRuleChanges), so map reads may occur under mu.RLock
+	// once the processor is running.
+	matchCounters map[string]*atomic.Int64
+
 	// Message cache
 	messageCache cache.Cache[message.Message]
 
@@ -179,6 +186,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		rules:            make(map[string]Rule),
 		ruleDefinitions:  make(map[string]Definition),
 		ruleConfigs:      make(map[string]map[string]any),
+		matchCounters:    make(map[string]*atomic.Int64),
 		messageCache:     msgCache,
 		config:           config,
 		metricsRegistry:  metricsRegistry,

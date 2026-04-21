@@ -2,6 +2,7 @@ package rule
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -53,6 +54,11 @@ func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
 
 // applyRuleChanges applies dynamic rule configuration changes
 func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
+	// Ensure matchCounters is initialized (struct-literal callers may omit it).
+	if rp.matchCounters == nil {
+		rp.matchCounters = make(map[string]*atomic.Int64)
+	}
+
 	// Track rules to remove (existing rules not in new config)
 	currentRuleIDs := make(map[string]bool)
 	for ruleID := range rp.rules {
@@ -71,11 +77,16 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 			return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
 		}
 
-		// Install new rule (replacing any existing rule)
+		// Install new rule (replacing any existing rule).
 		rp.rules[ruleID] = newRule
 
 		// Store rule configuration for GetRuntimeConfig
 		rp.ruleConfigs[ruleID] = ruleMap
+
+		// Reset (or create) the match counter for this rule. A policy change
+		// implies a fresh rhythm: the caller's intent on update is "apply this
+		// new definition from here on," not "preserve the previous counter state."
+		rp.matchCounters[ruleID] = &atomic.Int64{}
 
 		rp.logger.Info("Applied rule configuration", "rule_id", ruleID, "rule_type", ruleMap["type"])
 	}
@@ -84,6 +95,7 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 	for ruleID := range currentRuleIDs {
 		delete(rp.rules, ruleID)
 		delete(rp.ruleConfigs, ruleID)
+		delete(rp.matchCounters, ruleID)
 		rp.logger.Info("Removed rule", "rule_id", ruleID)
 	}
 

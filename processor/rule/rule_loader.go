@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,6 +94,14 @@ func (rp *Processor) loadRules() error {
 
 		rp.rules[def.ID] = rule
 		rp.ruleDefinitions[def.ID] = def // Store definition for stateful evaluation
+
+		// Initialize match counter for FireEveryNEvents gating. The counter
+		// starts at zero regardless of FireEveryNEvents value; the first Nth
+		// match (not the zeroth) will fire. Allocation is cheap; all rules get
+		// a counter even when FireEveryNEvents is 0/1 (shouldFireAction fast-paths
+		// those cases without touching the counter).
+		rp.matchCounters[def.ID] = &atomic.Int64{}
+
 		rp.logger.Info("Loaded rule from definition",
 			"rule_id", def.ID,
 			"rule_type", def.Type,

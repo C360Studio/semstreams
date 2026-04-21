@@ -13,10 +13,10 @@ import (
 	"github.com/c360studio/semstreams/message"
 )
 
-// snapshotRules copies both rp.rules and rp.ruleDefinitions under a single
-// RLock and returns the two snapshots. Callers iterate the snapshots without
-// holding the lock, so hot-reload writes to either map do not race.
-func (rp *Processor) snapshotRules() (map[string]Rule, map[string]Definition) {
+// snapshotRules copies rp.rules, rp.ruleDefinitions, and rp.matchCounters
+// under a single RLock and returns the three snapshots. Callers iterate the
+// snapshots without holding the lock, so hot-reload writes do not race.
+func (rp *Processor) snapshotRules() (map[string]Rule, map[string]Definition, map[string]*atomic.Int64) {
 	rp.mu.RLock()
 	rules := make(map[string]Rule, len(rp.rules))
 	for k, v := range rp.rules {
@@ -26,8 +26,24 @@ func (rp *Processor) snapshotRules() (map[string]Rule, map[string]Definition) {
 	for k, v := range rp.ruleDefinitions {
 		defs[k] = v
 	}
+	counters := make(map[string]*atomic.Int64, len(rp.matchCounters))
+	for k, v := range rp.matchCounters { // safe: range over nil map is a no-op
+		counters[k] = v
+	}
 	rp.mu.RUnlock()
-	return rules, defs
+	return rules, defs, counters
+}
+
+// shouldFireAction returns true when the rule's FireEveryNEvents gate allows
+// an action to fire for this match. It increments the match counter atomically
+// and evaluates the modulo. N=0 and N=1 always return true (fire every match).
+// The counter pointer must not be nil; callers guarantee this via snapshotRules.
+func shouldFireAction(n int, counter *atomic.Int64) bool {
+	if n <= 1 {
+		return true
+	}
+	count := counter.Add(1)
+	return count%int64(n) == 0
 }
 
 // reportEvaluating reports the evaluating stage (throttled to avoid KV spam)
@@ -84,8 +100,8 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		rp.messageCache.Set(cacheKey, msg)
 	}
 
-	// Snapshot both maps so hot-reload writes don't race with iteration.
-	rules, ruleDefs := rp.snapshotRules()
+	// Snapshot all three maps so hot-reload writes don't race with iteration.
+	rules, ruleDefs, counters := rp.snapshotRules()
 
 	// Process through each rule
 	for ruleName, ruleInstance := range rules {
@@ -148,29 +164,56 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		}
 
 		if triggered {
-			rp.logger.Debug("Rule triggered", "rule_name", ruleName)
-
-			// Execute rule events
-			events, err := ruleInstance.ExecuteEvents(messages)
-			if err != nil {
-				rp.recordError(fmt.Sprintf("rule %s execution failed: %v", ruleName, err))
-				continue
-			}
-
-			// Publish rule event notification
-			if err := rp.publishRuleEvent(ctx, ruleName, "triggered"); err != nil {
-				rp.logger.Warn("Failed to publish rule event", "error", err)
-			}
-
-			// Publish graph events
-			if err := rp.publishGraphEvents(ctx, events); err != nil {
-				rp.recordError(fmt.Sprintf("failed to publish events from rule %s: %v", ruleName, err))
-			} else {
-				atomic.AddInt64(&rp.rulesTriggered, 1)
-			}
+			rp.fireRuleActions(ctx, ruleName, hasDefinition, ruleDef, counters, ruleInstance, messages)
 		} else {
 			rp.logger.Debug("Rule did not trigger", "rule_name", ruleName)
 		}
+	}
+}
+
+// fireRuleActions applies the FireEveryNEvents gate and, if the gate passes,
+// executes events and publishes them. It is the shared "action" leg for both
+// NATS-message and entity-state evaluation paths.
+func (rp *Processor) fireRuleActions(
+	ctx context.Context,
+	ruleName string,
+	hasDefinition bool,
+	ruleDef Definition,
+	counters map[string]*atomic.Int64,
+	ruleInstance Rule,
+	messages []message.Message,
+) {
+	// Apply FireEveryNEvents gate: match counted; action fires only on Nth match.
+	counter := counters[ruleName]
+	n := 0
+	if hasDefinition {
+		n = ruleDef.FireEveryNEvents
+	}
+	if counter == nil || !shouldFireAction(n, counter) {
+		rp.logger.Debug("Rule matched but action gated by fire_every_n_events",
+			"rule_name", ruleName, "fire_every_n_events", n)
+		return
+	}
+
+	rp.logger.Debug("Rule triggered", "rule_name", ruleName)
+
+	// Execute rule events
+	events, err := ruleInstance.ExecuteEvents(messages)
+	if err != nil {
+		rp.recordError(fmt.Sprintf("rule %s execution failed: %v", ruleName, err))
+		return
+	}
+
+	// Publish rule event notification
+	if err := rp.publishRuleEvent(ctx, ruleName, "triggered"); err != nil {
+		rp.logger.Warn("Failed to publish rule event", "error", err)
+	}
+
+	// Publish graph events
+	if err := rp.publishGraphEvents(ctx, events); err != nil {
+		rp.recordError(fmt.Sprintf("failed to publish events from rule %s: %v", ruleName, err))
+	} else {
+		atomic.AddInt64(&rp.rulesTriggered, 1)
 	}
 }
 
@@ -194,8 +237,8 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
-	// Snapshot both maps so hot-reload writes don't race with iteration.
-	rules, ruleDefs := rp.snapshotRules()
+	// Snapshot all three maps so hot-reload writes don't race with iteration.
+	rules, ruleDefs, counters := rp.snapshotRules()
 
 	for ruleName, ruleInstance := range rules {
 		// Per-rule feedback loop prevention: if this rule generated the
@@ -272,33 +315,11 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 		}
 
 		if triggered {
-			rp.logger.Debug("Rule triggered from EntityState",
-				"rule_name", ruleName,
-				"entity_id", snap.State.ID)
-
 			// Wrap the entity state in a minimal message so ExecuteEvents can
 			// run through the same path as subject-delivered messages.
 			msg := rp.entityStateToMinimalMessage(snap.State)
 			messages := []message.Message{msg}
-
-			// Execute rule events
-			events, err := ruleInstance.ExecuteEvents(messages)
-			if err != nil {
-				rp.recordError(fmt.Sprintf("rule %s execution failed: %v", ruleName, err))
-				continue
-			}
-
-			// Publish rule event notification
-			if err := rp.publishRuleEvent(ctx, ruleName, "triggered"); err != nil {
-				rp.logger.Warn("Failed to publish rule event", "error", err)
-			}
-
-			// Publish graph events
-			if err := rp.publishGraphEvents(ctx, events); err != nil {
-				rp.recordError(fmt.Sprintf("failed to publish events from rule %s: %v", ruleName, err))
-			} else {
-				atomic.AddInt64(&rp.rulesTriggered, 1)
-			}
+			rp.fireRuleActions(ctx, ruleName, hasDefinition, ruleDef, counters, ruleInstance, messages)
 		} else {
 			rp.logger.Debug("Rule did not trigger", "rule_name", ruleName)
 		}

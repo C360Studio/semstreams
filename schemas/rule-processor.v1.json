@@ -106,6 +106,10 @@
               }
             }
           },
+          "fire_every_n_events": {
+            "type": "number",
+            "description": "fire_every_n_events"
+          },
           "id": {
             "type": "string",
             "description": "id"

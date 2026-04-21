@@ -39,6 +39,20 @@ type Definition struct {
 	// 0 means no limit. Use $state.iteration and $state.max_iterations in When clauses
 	// for retry budgets (e.g., retry up to 3 times then escalate).
 	MaxIterations int `json:"max_iterations,omitempty"`
+
+	// FireEveryNEvents makes the rule fire its action only every Nth matching
+	// event. N=0 and N=1 both mean "fire on every match" (backward-compatible
+	// default). N=2 fires on the 2nd, 4th, 6th matching events; N=10 fires on
+	// the 10th, 20th, 30th, etc.
+	//
+	// The MATCH check still runs on every event — only the action is gated.
+	// Counter state is per-rule (not per-entity) and resets when the rule
+	// definition is replaced via applyRuleChanges, so a policy change begins
+	// with a fresh rhythm.
+	//
+	// This is a parallel dimension to time-based AlertCooldownPeriod; neither
+	// replaces the other.
+	FireEveryNEvents int `json:"fire_every_n_events,omitempty"`
 }
 
 // EntityConfig defines entity-specific configuration

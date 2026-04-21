@@ -180,6 +180,18 @@ func (rp *Processor) isValidOperator(operator string) bool {
 	return isValidOperator(operator)
 }
 
+// ValidateDefinition validates a rule Definition for fields that are
+// processor-level concerns (not delegated to individual rule factories).
+// Call this before passing a Definition to CreateRuleFromDefinition.
+func ValidateDefinition(def Definition) error {
+	if def.FireEveryNEvents < 0 {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s fire_every_n_events must be >= 0, got %d", def.ID, def.FireEveryNEvents),
+			"RuleProcessor", "ValidateDefinition", "validate fire_every_n_events")
+	}
+	return nil
+}
+
 // createRuleFromConfig creates a rule instance from configuration
 func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any) (Rule, error) {
 	// Convert map to Definition
@@ -226,6 +238,23 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 				}
 			}
 		}
+	}
+
+	// Parse fire_every_n_events if present
+	if n, ok := ruleMap["fire_every_n_events"]; ok {
+		switch v := n.(type) {
+		case float64:
+			def.FireEveryNEvents = int(v)
+		case int:
+			def.FireEveryNEvents = v
+		case int64:
+			def.FireEveryNEvents = int(v)
+		}
+	}
+
+	// Validate processor-level fields before handing off to factory
+	if err := ValidateDefinition(def); err != nil {
+		return nil, err
 	}
 
 	// Create dependencies
