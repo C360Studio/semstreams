@@ -158,17 +158,17 @@ func TestTripleMatchesQuery_SubjectMatchPredicateNoMatch(t *testing.T) {
 // ---- serveGraphTriples HTTP handler ----
 
 // stubQuerier builds a querier function that returns a fixed result or error.
-func stubQuerier(results []TripleResponse, err error) func(context.Context, tripleQueryParams) ([]TripleResponse, error) {
-	return func(_ context.Context, _ tripleQueryParams) ([]TripleResponse, error) {
+func stubQuerier(results []message.Triple, err error) func(context.Context, tripleQueryParams) ([]message.Triple, error) {
+	return func(_ context.Context, _ tripleQueryParams) ([]message.Triple, error) {
 		return results, err
 	}
 }
 
 // captureQuerier builds a querier that captures the params it was called with
 // and returns the provided results.
-func captureQuerier(results []TripleResponse) (func(context.Context, tripleQueryParams) ([]TripleResponse, error), *tripleQueryParams) {
+func captureQuerier(results []message.Triple) (func(context.Context, tripleQueryParams) ([]message.Triple, error), *tripleQueryParams) {
 	var captured tripleQueryParams
-	fn := func(_ context.Context, p tripleQueryParams) ([]TripleResponse, error) {
+	fn := func(_ context.Context, p tripleQueryParams) ([]message.Triple, error) {
 		captured = p
 		return results, nil
 	}
@@ -210,13 +210,13 @@ func TestServeGraphTriples_EmptyResultIsArray(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/graph/triples", nil)
 	w := httptest.NewRecorder()
 
-	serveGraphTriples(w, r, stubQuerier([]TripleResponse{}, nil), nil)
+	serveGraphTriples(w, r, stubQuerier([]message.Triple{}, nil), nil)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
 	// Must decode as a JSON array, never null.
-	var decoded []TripleResponse
+	var decoded []message.Triple
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
 	assert.NotNil(t, decoded, "empty result must be [] not null")
 	assert.Len(t, decoded, 0)
@@ -224,7 +224,7 @@ func TestServeGraphTriples_EmptyResultIsArray(t *testing.T) {
 
 func TestServeGraphTriples_NonEmptyResult(t *testing.T) {
 	ts := fixedTime
-	triples := []TripleResponse{
+	triples := []message.Triple{
 		{
 			Subject:    "acme.ops.demo.sys.entity.001",
 			Predicate:  "ops.diagnosis.finding",
@@ -250,7 +250,7 @@ func TestServeGraphTriples_NonEmptyResult(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var decoded []TripleResponse
+	var decoded []message.Triple
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
 	require.Len(t, decoded, 2)
 	assert.Equal(t, "ops.diagnosis.finding", decoded[0].Predicate)
@@ -273,7 +273,7 @@ func TestServeGraphTriples_BackendError(t *testing.T) {
 }
 
 func TestServeGraphTriples_ParamsForwardedToQuerier(t *testing.T) {
-	querier, captured := captureQuerier([]TripleResponse{})
+	querier, captured := captureQuerier([]message.Triple{})
 
 	r := httptest.NewRequest(http.MethodGet, "/graph/triples?subject=sub&predicate=pred&object=obj&limit=42", nil)
 	w := httptest.NewRecorder()
@@ -288,7 +288,7 @@ func TestServeGraphTriples_ParamsForwardedToQuerier(t *testing.T) {
 }
 
 func TestServeGraphTriples_LimitClamped(t *testing.T) {
-	querier, captured := captureQuerier([]TripleResponse{})
+	querier, captured := captureQuerier([]message.Triple{})
 
 	r := httptest.NewRequest(http.MethodGet, "/graph/triples?limit=50000", nil)
 	w := httptest.NewRecorder()
@@ -303,38 +303,69 @@ func TestServeGraphTriples_ContentTypeJSON(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/graph/triples", nil)
 	w := httptest.NewRecorder()
 
-	serveGraphTriples(w, r, stubQuerier([]TripleResponse{}, nil), nil)
+	serveGraphTriples(w, r, stubQuerier([]message.Triple{}, nil), nil)
 
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 }
 
-// ---- tripleFromMessage shape consistency ----
+// ---- message.Triple wire-shape round-trip ----
 
-func TestTripleFromMessage_FieldMapping(t *testing.T) {
+// TestServeGraphTriples_ContextAndDatatypeRoundTrip verifies that Context and
+// Datatype — fields that TripleResponse formerly dropped — now survive the full
+// HTTP encode/decode cycle.
+func TestServeGraphTriples_ContextAndDatatypeRoundTrip(t *testing.T) {
 	ts := fixedTime
-	src := makeTriple("s", "p", "o", "src", 0.75)
-	src.Timestamp = ts
+	triple := message.Triple{
+		Subject:    "acme.ops.demo.sys.entity.001",
+		Predicate:  "ops.diagnosis.finding",
+		Object:     "high error rate",
+		Source:     "ops-emit-diagnosis",
+		Confidence: 0.9,
+		Timestamp:  ts,
+		Context:    "batch-abc-123",
+		Datatype:   "xsd:string",
+	}
 
-	resp := tripleFromMessage(src)
+	r := httptest.NewRequest(http.MethodGet, "/graph/triples", nil)
+	w := httptest.NewRecorder()
 
-	assert.Equal(t, "s", resp.Subject)
-	assert.Equal(t, "p", resp.Predicate)
-	assert.Equal(t, "o", resp.Object)
-	assert.Equal(t, "src", resp.Source)
-	assert.Equal(t, 0.75, resp.Confidence)
-	assert.Equal(t, ts, resp.Timestamp)
+	serveGraphTriples(w, r, stubQuerier([]message.Triple{triple}, nil), nil)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var decoded []message.Triple
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
+	require.Len(t, decoded, 1)
+	assert.Equal(t, "batch-abc-123", decoded[0].Context, "Context field must round-trip")
+	assert.Equal(t, "xsd:string", decoded[0].Datatype, "Datatype field must round-trip")
 }
 
-func TestTripleFromMessage_EmptySourceOmitted(t *testing.T) {
-	tr := makeTriple("s", "p", "o", "", 1.0)
-	resp := tripleFromMessage(tr)
+// TestServeGraphTriples_SourcePreservedWhenEmpty verifies that an empty Source is
+// preserved in JSON (message.Triple uses source without omitempty), not silently
+// dropped. The wire JSON must contain "source":"" for consumers relying on
+// the authoritative shape.
+func TestServeGraphTriples_SourcePreservedWhenEmpty(t *testing.T) {
+	triple := message.Triple{
+		Subject:    "acme.ops.demo.sys.entity.001",
+		Predicate:  "ops.test.predicate",
+		Object:     "value",
+		Source:     "", // explicitly empty
+		Confidence: 1.0,
+		Timestamp:  fixedTime,
+	}
 
-	// Source is omitempty — marshal should omit it when empty.
-	data, err := json.Marshal(resp)
-	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodGet, "/graph/triples", nil)
+	w := httptest.NewRecorder()
 
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(data, &m))
-	_, hasSource := m["source"]
-	assert.False(t, hasSource, "empty source should be omitted from JSON")
+	serveGraphTriples(w, r, stubQuerier([]message.Triple{triple}, nil), nil)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Inspect raw JSON map to confirm "source" key is present with empty value.
+	var raw []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	require.Len(t, raw, 1)
+	val, hasSource := raw[0]["source"]
+	assert.True(t, hasSource, "source key must be present even when empty (no omitempty on message.Triple.Source)")
+	assert.Equal(t, "", val, "source value must be empty string, not omitted")
 }

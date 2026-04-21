@@ -32,33 +32,15 @@ const (
 	// graphEntityStatesBucket is the KV bucket graph-ingest writes to.
 	// Same name the query_entity agent tool reads from — single source of truth.
 	graphEntityStatesBucket = "ENTITY_STATES"
+
+	// graphTriplesQueryTimeout is the per-request deadline for the NATS scan in
+	// queryGraphTriples. Low-throughput operator endpoint — 10 s is generous.
+	graphTriplesQueryTimeout = 10 * time.Second
 )
 
-// TripleResponse is the wire shape returned by GET /graph/triples.
-// Field names mirror message.Triple JSON tags so downstream tests and
-// dashboards see the same layout as the graph_query agent tool.
-type TripleResponse struct {
-	Subject    string    `json:"subject"`
-	Predicate  string    `json:"predicate"`
-	Object     any       `json:"object"`
-	Source     string    `json:"source,omitempty"`
-	Confidence float64   `json:"confidence"`
-	Timestamp  time.Time `json:"timestamp"`
-}
-
-// tripleFromMessage converts a message.Triple to the HTTP wire shape.
-func tripleFromMessage(t message.Triple) TripleResponse {
-	return TripleResponse{
-		Subject:    t.Subject,
-		Predicate:  t.Predicate,
-		Object:     t.Object,
-		Source:     t.Source,
-		Confidence: t.Confidence,
-		Timestamp:  t.Timestamp,
-	}
-}
-
 // tripleQueryParams holds parsed and validated query parameters.
+// An empty string for subject, predicate, or object means "don't filter this
+// field" — it acts as a wildcard and matches any value.
 type tripleQueryParams struct {
 	subject   string // empty = match any
 	predicate string // empty = match any
@@ -68,6 +50,11 @@ type tripleQueryParams struct {
 
 // parseTripleQueryParams parses and validates GET /graph/triples query parameters.
 // Returns (params, errMsg) where errMsg is non-empty on bad input.
+//
+// limit semantics:
+//   - omitted or 0 → default 100
+//   - negative      → 400 Bad Request
+//   - > 1000        → clamped to 1000
 func parseTripleQueryParams(r *http.Request) (tripleQueryParams, string) {
 	q := r.URL.Query()
 
@@ -119,16 +106,17 @@ func tripleMatchesQuery(t message.Triple, p tripleQueryParams) bool {
 
 // handleGraphTriples returns matching triples as JSON.
 //
-// Query params (all optional):
+// Query params (all optional); an empty or omitted param means "don't filter
+// this field" — it matches any value, not the literal empty string:
 //
-//	subject    - exact match on subject field
-//	predicate  - exact match on predicate field
-//	object     - string representation match on object field
+//	subject    - exact match on triple subject field
+//	predicate  - exact match on triple predicate field
+//	object     - string representation match on triple object field
 //	limit      - max results (default 100, clamped to 1000; 0 uses default)
 //
 // Returns:
 //
-//	200 + JSON array of triple objects (empty array on no matches, never null)
+//	200 + JSON array of message.Triple objects (empty array on no matches, never null)
 //	400 + text error on malformed query params
 //	405 + text error on non-GET methods
 //	500 + text error on backend failure
@@ -143,7 +131,7 @@ func (m *Manager) handleGraphTriples(w http.ResponseWriter, r *http.Request) {
 func serveGraphTriples(
 	w http.ResponseWriter,
 	r *http.Request,
-	querier func(ctx context.Context, params tripleQueryParams) ([]TripleResponse, error),
+	querier func(ctx context.Context, params tripleQueryParams) ([]message.Triple, error),
 	logger *slog.Logger,
 ) {
 	if r.Method != http.MethodGet {
@@ -157,7 +145,7 @@ func serveGraphTriples(
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), graphTriplesQueryTimeout)
 	defer cancel()
 
 	results, err := querier(ctx, params)
@@ -184,11 +172,11 @@ func serveGraphTriples(
 // Scanning all entities for a predicate filter is acceptable for low-throughput
 // operator use (e2e tests, dashboards). For high-volume use, a predicate index
 // would be required — outside current scope.
-func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParams) ([]TripleResponse, error) {
+func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParams) ([]message.Triple, error) {
 	if m.natsClient == nil {
 		// NATS not configured — return empty result, not an error.
 		// This happens in unit tests and in startup flows that skip NATS.
-		return []TripleResponse{}, nil
+		return []message.Triple{}, nil
 	}
 
 	bucket, err := m.natsClient.GetKeyValueBucket(ctx, graphEntityStatesBucket)
@@ -204,7 +192,7 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 		return nil, fmt.Errorf("list entity keys: %w", err)
 	}
 
-	results := make([]TripleResponse, 0)
+	results := make([]message.Triple, 0)
 
 	for _, key := range keys {
 		if len(results) >= params.limit {
@@ -231,7 +219,7 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 				break
 			}
 			if tripleMatchesQuery(t, params) {
-				results = append(results, tripleFromMessage(t))
+				results = append(results, t)
 			}
 		}
 	}
