@@ -71,7 +71,7 @@ type Config struct {
 }
 
 // DefaultConfig returns defaults for the ops mock-LLM path.
-// Ports are in the 67xxx range so this scenario can run alongside
+// Ports are in the 61xxx/62xxx range so this scenario can run alongside
 // agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx).
 func DefaultConfig() *Config {
 	return &Config{

@@ -3,7 +3,7 @@ version: "3"
 # Ops-agent tier: verifies ADR-027 Phase 1 ops agent end to end.
 # Mock LLM scripts three emit_diagnosis calls + submit_work; scenario validates
 # the diagnosis triples appear in the graph via GET /graph/triples.
-# Runs on ports 67xxx alongside agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx).
+# Runs on ports 61xxx/62xxx alongside agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx).
 
 tasks:
   default:
