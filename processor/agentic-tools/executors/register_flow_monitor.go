@@ -42,9 +42,12 @@ func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, log
 	}
 
 	// We reuse the same AGENT_LOOPS bucket as read_loop_result; open a fresh
-	// handle here so the two tools are lifecycle-independent.
+	// handle here so the two tools are lifecycle-independent. Use the shared
+	// loopResultBucketConfig so whichever register fn (or the agentic-loop
+	// component) lands first creates the bucket with the agreed-upon
+	// History/TTL; the others get the existing handle idempotently.
 	ctx := context.Background()
-	bucket, err := natsClient.GetKeyValueBucket(ctx, loopMonitorBucket)
+	bucket, err := natsClient.CreateKeyValueBucket(ctx, loopResultBucketConfig)
 	if err != nil {
 		logger.Warn("monitor_flow tool disabled: could not open loops bucket",
 			slog.String("bucket", loopMonitorBucket),

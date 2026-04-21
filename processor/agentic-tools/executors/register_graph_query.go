@@ -3,6 +3,9 @@ package executors
 import (
 	"context"
 	"log/slog"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -12,6 +15,17 @@ import (
 // safe as long as that contract holds.
 const entityStatesBucket = "ENTITY_STATES"
 
+// entityStatesBucketConfig mirrors graph/query/client.go defaults
+// (History=3, TTL=24h). Tool registration races with the graph component's
+// ensureBuckets — CreateKeyValueBucket is idempotent Create-or-Get, so
+// whichever side lands first creates with these values and the other gets
+// the existing handle. Config must match the graph component's intent.
+var entityStatesBucketConfig = jetstream.KeyValueConfig{
+	Bucket:  entityStatesBucket,
+	History: 3,
+	TTL:     24 * time.Hour,
+}
+
 // registerGraphQuery wires the query_entity tool against ENTITY_STATES.
 // Failure is non-fatal: if the bucket is unavailable (e.g. the flow
 // didn't declare it), we log a warning and skip. The rest of the
@@ -19,7 +33,7 @@ const entityStatesBucket = "ENTITY_STATES"
 func registerGraphQuery(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger) {
 	const toolName = "query_entity"
 
-	bucket, err := natsClient.GetKeyValueBucket(ctx, entityStatesBucket)
+	bucket, err := natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
 	if err != nil {
 		logger.Warn("query_entity tool disabled: could not open entity-states bucket",
 			slog.String("bucket", entityStatesBucket),

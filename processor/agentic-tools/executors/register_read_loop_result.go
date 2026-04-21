@@ -3,6 +3,9 @@ package executors
 import (
 	"context"
 	"log/slog"
+	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -15,9 +18,21 @@ import (
 // bucket name would need a separate wire call — not a concern today.
 const loopResultBucket = "AGENT_LOOPS"
 
-// registerReadLoopResult opens the AGENT_LOOPS KV bucket and registers the
-// read_loop_result tool. Failure logs a warning and returns — the rest of
-// the caller's tools stay available.
+// loopResultBucketConfig mirrors agentic-loop/component.go initializeKVBuckets
+// (History=10, TTL=24h). Tool registration races with component Start — whichever
+// side gets here first creates the bucket; the other side gets the existing
+// handle via CreateKeyValueBucket's idempotent Create-or-Get. Config must match
+// so the bucket's actual config matches the component's intent regardless of
+// which side created it.
+var loopResultBucketConfig = jetstream.KeyValueConfig{
+	Bucket:  loopResultBucket,
+	History: 10,
+	TTL:     24 * time.Hour,
+}
+
+// registerReadLoopResult opens (or creates) the AGENT_LOOPS KV bucket and
+// registers the read_loop_result tool. Failure logs a warning and returns —
+// the rest of the caller's tools stay available.
 //
 // Registration is GLOBAL because agentic-loop's discoverTools() pulls
 // from the global registry when advertising tools to the LLM. A purely
@@ -27,7 +42,7 @@ const loopResultBucket = "AGENT_LOOPS"
 // coordinator run; the note stays so future stateful tools don't repeat
 // the pattern.
 func registerReadLoopResult(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger) {
-	bucket, err := natsClient.GetKeyValueBucket(ctx, loopResultBucket)
+	bucket, err := natsClient.CreateKeyValueBucket(ctx, loopResultBucketConfig)
 	if err != nil {
 		logger.Warn("read_loop_result tool disabled: could not open loops bucket",
 			slog.String("bucket", loopResultBucket),
