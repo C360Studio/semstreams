@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -54,7 +56,6 @@ const personasBucket = "PERSONAS"
 type Config struct {
 	NATSURL         string
 	MetricsURL      string
-	BaseURL         string // HTTP base URL for service-manager endpoints (e.g. /components/types)
 	CompleteTimeout time.Duration
 
 	// ExpectedRuleID must match the id the mock LLM's scripted
@@ -67,6 +68,12 @@ type Config struct {
 	// Matches the bucket constant inside kv_config_integration.go
 	// InitializeKVStore.
 	RulesBucket string
+
+	// AppContainer is the docker container name for the running
+	// semstreams binary; verifyRegisteredTools greps its startup logs
+	// to confirm ADR-026 M2 tool registrations fired. Matches
+	// docker/compose/crud-tools.yml.
+	AppContainer string
 }
 
 // DefaultConfig returns defaults for the mock-LLM path. Ports are in
@@ -76,10 +83,10 @@ func DefaultConfig() *Config {
 	return &Config{
 		NATSURL:         "nats://localhost:64222",
 		MetricsURL:      "http://localhost:65190",
-		BaseURL:         "http://localhost:65080",
 		CompleteTimeout: 15 * time.Second,
 		ExpectedRuleID:  "e2e-crud-rule",
 		RulesBucket:     "semstreams_config",
+		AppContainer:    "semstreams-crud-tools-app",
 	}
 }
 
@@ -157,6 +164,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		fn   func(context.Context, *scenarios.Result) error
 	}{
 		{"verify-components", s.verifyComponents},
+		{"verify-registered-tools", s.verifyRegisteredTools},
 		{"seed-persona-override", s.seedPersonaOverride},
 		{"inject-user-message", s.injectUserMessage},
 		{"wait-for-tool-execution", s.waitForToolExecution},
@@ -333,6 +341,54 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 			"and that the metric name semstreams_rule_active_rules matches processor/rule/metrics.go",
 		expected, s.baselineActiveRules, lastSeen,
 	)
+}
+
+// verifyRegisteredTools confirms the ADR-026 M2 tools (list_components,
+// monitor_flow) actually registered into the global tool registry at
+// binary startup. This catches wiring regressions that unit tests
+// can't see — e.g. cmd/semstreams/main.go dropping
+// ComponentRegistry from ToolDependencies, or executors.RegisterAll
+// dropping the registerComponentCatalog call. Each register fn emits
+// a distinct slog.Info "Registered <tool> tool (global)" line on
+// success and a slog.Warn "<tool> disabled: ..." on nil-skip; we grep
+// container logs for the success lines and fail on absence.
+//
+// This is a lightweight substitute for a full tool-invocation e2e.
+// Exercising the tools through the LLM → dispatcher → executor chain
+// would require adding list_components/monitor_flow to the flow's
+// allowed_tools and scripting multi-tool mock sequences, which dilutes
+// what the crud-tools scenario exists to test. A proper invocation
+// test belongs in a coordinator-flavored scenario (follow-up).
+func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.Result) error {
+	required := map[string]string{
+		"list_components": "Registered list_components tool (global)",
+		"monitor_flow":    "Registered monitor_flow tool (global)",
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "logs", s.config.AppContainer)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker logs %s: %w", s.config.AppContainer, err)
+	}
+	logs := string(out)
+
+	missing := []string{}
+	for tool, marker := range required {
+		if !strings.Contains(logs, marker) {
+			missing = append(missing, tool)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"ADR-026 M2 tools not registered at startup: %v — "+
+				"check cmd/semstreams/main.go ToolDependencies and "+
+				"executors.RegisterAll wiring",
+			missing)
+	}
+
+	result.Details["registered_m2_tools"] = []string{"list_components", "monitor_flow"}
+	return nil
 }
 
 // cleanupPersonaOverride removes the seeded persona so a second run
