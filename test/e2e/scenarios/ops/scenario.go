@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,9 +75,9 @@ type Config struct {
 // agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx).
 func DefaultConfig() *Config {
 	return &Config{
-		NATSURL:         "nats://localhost:67222",
-		BaseURL:         "http://localhost:67080",
-		MetricsURL:      "http://localhost:67190",
+		NATSURL:         "nats://localhost:61222",
+		BaseURL:         "http://localhost:61080",
+		MetricsURL:      "http://localhost:61190",
 		CompleteTimeout: 30 * time.Second,
 		AppContainer:    "semstreams-ops-app",
 	}
@@ -602,12 +603,20 @@ func (s *Scenario) assertConfidenceTriples(
 
 // extractConfidence parses a triple Object value as a float64 confidence score.
 // JSON numbers arrive as float64; json.Number is also handled for decoder variants.
+// String values are accepted because emit_diagnosis stores confidence via
+// fmt.Sprintf("%g", ...) which round-trips through JSON as a quoted string.
 func extractConfidence(obj any) (float64, error) {
 	switch v := obj.(type) {
 	case float64:
 		return v, nil
 	case json.Number:
 		return v.Float64()
+	case string:
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("confidence string %q is not a valid float: %w", v, err)
+		}
+		return f, nil
 	default:
 		return 0, fmt.Errorf("unexpected type %T (value %v)", obj, obj)
 	}

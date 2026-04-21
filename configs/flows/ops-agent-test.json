@@ -75,7 +75,6 @@
       "enabled": true,
       "config": {
         "default_role": "ops",
-        "default_tools": [],
         "auto_continue": false,
         "stream_name": "USER",
         "ports": {

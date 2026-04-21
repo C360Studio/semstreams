@@ -7,22 +7,23 @@
 # Usage:
 #   task e2e:ops
 #
-# Ports are in the 67xxx range so this stack can run alongside agentic (3xxxx),
-# deep-research (5xxxx), and crud-tools (6xxxx).
+# Ports are in the 61xxx / 62xxx range so this stack can run alongside
+# agentic (3xxxx), deep-research (5xxxx), and crud-tools (6xxxx mostly
+# 64xxx-65xxx). All values stay under Docker's 65535 host-port cap.
 # Port map:
-#   NATS client:       67222
-#   NATS monitoring:   68222
-#   Mock LLM:          67180
-#   SemStreams HTTP:   67080
-#   SemStreams metrics: 67190
+#   NATS client:       61222
+#   NATS monitoring:   62222
+#   Mock LLM:          61180
+#   SemStreams HTTP:   61080
+#   SemStreams metrics: 61190
 
 services:
   nats:
     image: nats:2.10-alpine
     container_name: semstreams-ops-nats
     ports:
-      - "67222:4222"
-      - "68222:8222"
+      - "61222:4222"
+      - "62222:8222"
     command:
       ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-ops-nats"]
     volumes:
@@ -53,7 +54,7 @@ services:
     # and pick their preset via this flag.
     command: ["--port", "8080", "--scenario", "ops"]
     ports:
-      - "67180:8080"
+      - "61180:8080"
     networks:
       - semstreams-ops-net
     healthcheck:
@@ -82,8 +83,8 @@ services:
     volumes:
       - ../../configs:/app/configs:ro
     ports:
-      - "67080:8080"
-      - "67190:9090"
+      - "61080:8080"
+      - "61190:9090"
     networks:
       - semstreams-ops-net
     healthcheck:

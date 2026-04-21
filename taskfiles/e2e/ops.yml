@@ -15,7 +15,7 @@ tasks:
       - docker compose -f docker/compose/ops.yml up -d --wait --build
       - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
       - echo "[OPS] Running scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:67080 --metrics-url http://localhost:67190
+      - cmd: cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:61080 --metrics-url http://localhost:61190
         ignore_error: true
       - docker compose -f docker/compose/ops.yml down -v --timeout 15
 
@@ -28,10 +28,10 @@ tasks:
       - echo "[OK] Services are healthy"
       - 'echo ""'
       - 'echo "Services:"'
-      - 'echo "  NATS:       nats://localhost:67222"'
-      - 'echo "  Mock LLM:   http://localhost:67180"'
-      - 'echo "  SemStreams: http://localhost:67080"'
-      - 'echo "  Metrics:    http://localhost:67190/metrics"'
+      - 'echo "  NATS:       nats://localhost:61222"'
+      - 'echo "  Mock LLM:   http://localhost:61180"'
+      - 'echo "  SemStreams: http://localhost:61080"'
+      - 'echo "  Metrics:    http://localhost:61190/metrics"'
       - 'echo ""'
       - 'echo "To run tests: task e2e:ops:test"'
       - 'echo "To stop:      task e2e:ops:down"'
@@ -42,7 +42,7 @@ tasks:
     deps: [":build:e2e"]
     cmds:
       - echo "[OPS] Running scenario..."
-      - cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:67080 --metrics-url http://localhost:67190
+      - cd cmd/e2e && ./e2e --scenario ops --output-dir ./test/e2e/results --base-url http://localhost:61080 --metrics-url http://localhost:61190
 
   down:
     desc: Stop ops-agent tier services
