@@ -454,11 +454,18 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 	return schema
 }
 
+// mapTypeToJSONSchema must stay in sync with cmd/openapi-generator/main.go's
+// function of the same name. Both map component propType strings to JSON
+// Schema types. int → "integer" (precision signal for validators); float →
+// "number". Duplication is intentional: test/contract is a leaf package and
+// can't import cmd/*.
 func mapTypeToJSONSchema(goType string) string {
 	switch goType {
 	case "string":
 		return "string"
-	case "int", "int64", "float", "float64":
+	case "int", "int64":
+		return "integer"
+	case "float", "float64":
 		return "number"
 	case "bool":
 		return "boolean"

@@ -231,10 +231,16 @@ func convertPropertySchemaPtr(src *component.PropertySchema) *PropertySchema {
 	return result
 }
 
-// mapTypeToJSONSchema maps component property types to JSON Schema types
+// mapTypeToJSONSchema maps component property types to JSON Schema types.
+// JSON Schema treats "integer" as a subtype of "number" — emitting
+// "integer" for Go int fields gives downstream consumers (UI form
+// builders, validators) the precision signal they need to reject
+// fractional values like "2.5" for fire_every_n_events.
 func mapTypeToJSONSchema(propType string) string {
 	switch propType {
-	case "int", "float":
+	case "int":
+		return "integer"
+	case "float":
 		return "number"
 	case "bool":
 		return "boolean"

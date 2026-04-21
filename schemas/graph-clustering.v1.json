@@ -23,11 +23,11 @@
               "description": "hub_isolation_threshold"
             },
             "min_core_for_hub_analysis": {
-              "type": "number",
+              "type": "integer",
               "description": "min_core_for_hub_analysis"
             },
             "min_demotion_delta": {
-              "type": "number",
+              "type": "integer",
               "description": "min_demotion_delta"
             },
             "track_core_demotions": {
@@ -37,7 +37,7 @@
           }
         },
         "detection_timeout": {
-          "type": "number",
+          "type": "integer",
           "description": "detection_timeout"
         },
         "enabled": {
@@ -45,7 +45,7 @@
           "description": "enabled"
         },
         "max_anomalies_per_run": {
-          "type": "number",
+          "type": "integer",
           "description": "max_anomalies_per_run"
         },
         "review": {
@@ -61,7 +61,7 @@
               "description": "auto_reject_threshold"
             },
             "batch_size": {
-              "type": "number",
+              "type": "integer",
               "description": "batch_size"
             },
             "enabled": {
@@ -89,7 +89,7 @@
                   "description": "domain"
                 },
                 "max_retries": {
-                  "type": "number",
+                  "type": "integer",
                   "description": "max_retries"
                 },
                 "model": {
@@ -105,17 +105,17 @@
                   "description": "provider"
                 },
                 "timeout_seconds": {
-                  "type": "number",
+                  "type": "integer",
                   "description": "timeout_seconds"
                 }
               }
             },
             "review_timeout": {
-              "type": "number",
+              "type": "integer",
               "description": "review_timeout"
             },
             "workers": {
-              "type": "number",
+              "type": "integer",
               "description": "workers"
             }
           }
@@ -133,11 +133,11 @@
               "description": "enabled"
             },
             "max_candidates_per_entity": {
-              "type": "number",
+              "type": "integer",
               "description": "max_candidates_per_entity"
             },
             "max_gaps_per_entity": {
-              "type": "number",
+              "type": "integer",
               "description": "max_gaps_per_entity"
             },
             "min_semantic_similarity": {
@@ -145,7 +145,7 @@
               "description": "min_semantic_similarity"
             },
             "min_structural_distance": {
-              "type": "number",
+              "type": "integer",
               "description": "min_structural_distance"
             }
           }
@@ -159,11 +159,11 @@
               "description": "bucket_name"
             },
             "cleanup_interval": {
-              "type": "number",
+              "type": "integer",
               "description": "cleanup_interval"
             },
             "retention_days": {
-              "type": "number",
+              "type": "integer",
               "description": "retention_days"
             }
           }
@@ -177,11 +177,11 @@
               "description": "enabled"
             },
             "max_intermediate_hops": {
-              "type": "number",
+              "type": "integer",
               "description": "max_intermediate_hops"
             },
             "min_expected_transitivity": {
-              "type": "number",
+              "type": "integer",
               "description": "min_expected_transitivity"
             },
             "transitive_predicates": {
@@ -242,7 +242,7 @@
       }
     },
     "batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Event count threshold for triggering detection",
       "category": "basic"
     },
@@ -267,27 +267,27 @@
       "category": "advanced"
     },
     "enhancement_workers": {
-      "type": "number",
+      "type": "integer",
       "description": "Number of parallel workers for LLM enhancement (default 5)",
       "category": "advanced"
     },
     "max_hop_distance": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum BFS traversal depth (default 10)",
       "category": "advanced"
     },
     "max_iterations": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum iterations for LPA algorithm",
       "category": "advanced"
     },
     "min_community_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Minimum number of entities to form a community",
       "category": "advanced"
     },
     "pivot_count": {
-      "type": "number",
+      "type": "integer",
       "description": "Number of pivot nodes for distance indexing (default 16)",
       "category": "advanced"
     },
@@ -297,12 +297,12 @@
       "category": "basic"
     },
     "startup_attempts": {
-      "type": "number",
+      "type": "integer",
       "description": "Max attempts to wait for dependencies at startup",
       "category": "advanced"
     },
     "startup_interval_ms": {
-      "type": "number",
+      "type": "integer",
       "description": "Interval between startup attempts in milliseconds",
       "category": "advanced"
     }

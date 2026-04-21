@@ -6,12 +6,12 @@
   "description": "Graph spatial indexing processor for geospatial queries",
   "properties": {
     "batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Event batch size",
       "category": "basic"
     },
     "geohash_precision": {
-      "type": "number",
+      "type": "integer",
       "description": "Geohash precision (1-12)",
       "category": "basic"
     },
@@ -21,17 +21,17 @@
       "category": "basic"
     },
     "startup_attempts": {
-      "type": "number",
+      "type": "integer",
       "description": "Max attempts to wait for dependencies at startup",
       "category": "advanced"
     },
     "startup_interval_ms": {
-      "type": "number",
+      "type": "integer",
       "description": "Interval between startup attempts in milliseconds",
       "category": "advanced"
     },
     "workers": {
-      "type": "number",
+      "type": "integer",
       "description": "Number of worker goroutines",
       "category": "basic"
     }

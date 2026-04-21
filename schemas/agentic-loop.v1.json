@@ -35,7 +35,7 @@
           "category": "advanced"
         },
         "max_deliver": {
-          "type": "number",
+          "type": "integer",
           "description": "Maximum redelivery attempts for long-running consumers",
           "default": 2,
           "minimum": 1,
@@ -69,7 +69,7 @@
           "description": "Deprecated: context management is always enabled (required for Gemini compatibility)"
         },
         "entity_priority": {
-          "type": "number",
+          "type": "integer",
           "description": "Priority for entity context vs conversation (1-10, higher = more entity context)"
         },
         "headroom_ratio": {
@@ -77,7 +77,7 @@
           "description": "Fraction of model context to reserve for responses (0.0-0.5). Takes precedence over headroom_tokens when the computed value is larger"
         },
         "headroom_tokens": {
-          "type": "number",
+          "type": "integer",
           "description": "Minimum token headroom floor — ratio-based headroom never goes below this value"
         },
         "inject_profile_context": {
@@ -85,7 +85,7 @@
           "description": "Inject operating model profile context into system prompt when available"
         },
         "max_budget_tokens": {
-          "type": "number",
+          "type": "integer",
           "description": "Hard token limit for context budget (overrides model limits when set)"
         },
         "preserve_entities": {
@@ -114,7 +114,7 @@
       "category": "advanced"
     },
     "max_iterations": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum number of iterations before loop terminates",
       "default": 20,
       "minimum": 1,
@@ -145,7 +145,7 @@
       "category": "basic"
     },
     "tool_result_max_bytes": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum bytes for tool result content before truncation. 0 means no limit",
       "default": 32768,
       "category": "advanced"

@@ -11,7 +11,7 @@
       "category": "advanced"
     },
     "buffer_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Buffer size",
       "category": "advanced"
     },

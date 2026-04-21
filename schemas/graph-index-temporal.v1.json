@@ -6,7 +6,7 @@
   "description": "Graph temporal indexing processor",
   "properties": {
     "batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Batch size for processing",
       "category": "advanced"
     },
@@ -16,12 +16,12 @@
       "category": "basic"
     },
     "startup_attempts": {
-      "type": "number",
+      "type": "integer",
       "description": "Max attempts to wait for dependencies at startup",
       "category": "advanced"
     },
     "startup_interval_ms": {
-      "type": "number",
+      "type": "integer",
       "description": "Interval between startup attempts in milliseconds",
       "category": "advanced"
     },
@@ -31,7 +31,7 @@
       "category": "basic"
     },
     "workers": {
-      "type": "number",
+      "type": "integer",
       "description": "Number of worker goroutines",
       "category": "advanced"
     }

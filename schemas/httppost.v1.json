@@ -21,12 +21,12 @@
       "category": "basic"
     },
     "retry_count": {
-      "type": "number",
+      "type": "integer",
       "description": "Retry count",
       "category": "advanced"
     },
     "timeout": {
-      "type": "number",
+      "type": "integer",
       "description": "Timeout (sec)",
       "category": "advanced"
     },

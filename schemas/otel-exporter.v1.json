@@ -58,13 +58,13 @@
       "category": "advanced"
     },
     "max_batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum batch size",
       "default": 512,
       "category": "advanced"
     },
     "max_export_batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Max export batch size",
       "default": 512,
       "category": "advanced"

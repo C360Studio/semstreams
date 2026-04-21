@@ -263,13 +263,13 @@
                     "category": "basic",
                     "properties": {
                       "requests_per_minute": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum requests per minute",
                         "default": 60,
                         "category": "basic"
                       },
                       "tokens_per_hour": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum tokens per hour",
                         "default": 100000,
                         "category": "basic"
@@ -282,13 +282,13 @@
                     "category": "basic",
                     "properties": {
                       "requests_per_minute": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum requests per minute",
                         "default": 60,
                         "category": "basic"
                       },
                       "tokens_per_hour": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum tokens per hour",
                         "default": 100000,
                         "category": "basic"
@@ -301,13 +301,13 @@
                     "category": "basic",
                     "properties": {
                       "requests_per_minute": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum requests per minute",
                         "default": 60,
                         "category": "basic"
                       },
                       "tokens_per_hour": {
-                        "type": "number",
+                        "type": "integer",
                         "description": "Maximum tokens per hour",
                         "default": 100000,
                         "category": "basic"
@@ -383,7 +383,7 @@
           "category": "basic"
         },
         "retention_days": {
-          "type": "number",
+          "type": "integer",
           "description": "Violation retention in days",
           "default": 90,
           "category": "basic"

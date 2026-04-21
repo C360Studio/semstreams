@@ -6,7 +6,7 @@
   "description": "Graph entity embedding generation processor",
   "properties": {
     "batch_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Batch size for embedding generation",
       "category": "advanced"
     },
@@ -16,7 +16,7 @@
       "category": "advanced"
     },
     "coalesce_ms": {
-      "type": "number",
+      "type": "integer",
       "description": "Debounce window for entity updates in ms. 0=immediate processing",
       "category": "advanced"
     },
@@ -31,12 +31,12 @@
       "category": "basic"
     },
     "startup_attempts": {
-      "type": "number",
+      "type": "integer",
       "description": "Max attempts to wait for dependencies at startup",
       "category": "advanced"
     },
     "startup_interval_ms": {
-      "type": "number",
+      "type": "integer",
       "description": "Interval between startup attempts in milliseconds",
       "category": "advanced"
     },

@@ -283,7 +283,7 @@ func TestMapTypeToJSONSchema(t *testing.T) {
 		expected string
 	}{
 		{"string", "string"},
-		{"int", "number"},
+		{"int", "integer"},
 		{"float", "number"},
 		{"bool", "boolean"},
 		{"array", "array"},

@@ -43,7 +43,7 @@
           "category": "advanced"
         },
         "max_attempts": {
-          "type": "number",
+          "type": "integer",
           "description": "Maximum retry attempts for transient errors (5xx/network)",
           "default": 3,
           "category": "advanced"
@@ -55,7 +55,7 @@
           "category": "advanced"
         },
         "max_rate_limit_retries": {
-          "type": "number",
+          "type": "integer",
           "description": "Maximum retry attempts for 429 rate-limit responses (separate from generic retries)",
           "default": 5,
           "category": "advanced"

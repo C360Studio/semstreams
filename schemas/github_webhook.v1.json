@@ -14,7 +14,7 @@
       "category": "basic"
     },
     "http_port": {
-      "type": "number",
+      "type": "integer",
       "description": "HTTP port for webhook receiver",
       "default": 8090,
       "category": "basic"

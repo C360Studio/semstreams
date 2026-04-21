@@ -19,7 +19,7 @@
       "category": "advanced"
     },
     "max_request_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Max request size (bytes)",
       "category": "advanced"
     },

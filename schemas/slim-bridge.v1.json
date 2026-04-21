@@ -37,13 +37,13 @@
       "category": "advanced"
     },
     "max_reconnect_attempts": {
-      "type": "number",
+      "type": "integer",
       "description": "Maximum reconnection attempts",
       "default": 10,
       "category": "advanced"
     },
     "message_buffer_size": {
-      "type": "number",
+      "type": "integer",
       "description": "Message buffer size",
       "default": 1000,
       "category": "advanced"

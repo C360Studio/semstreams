@@ -51,7 +51,7 @@
       "category": "basic"
     },
     "retry_count": {
-      "type": "number",
+      "type": "integer",
       "description": "Number of registration retries",
       "default": 3,
       "category": "advanced"
