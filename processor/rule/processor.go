@@ -58,11 +58,10 @@ type Processor struct {
 	natsClient *natsclient.Client
 	rules      map[string]Rule // Self-loaded rules; written by applyRuleChanges under mu.Lock, read under mu.RLock.
 	// ruleDefinitions holds the parsed Definition for each rule. Writers:
-	// loadRules (called only from Initialize, before any goroutines start).
-	// applyRuleChanges (hot-reload) does NOT write ruleDefinitions — it only
-	// writes rp.rules and rp.ruleConfigs. Reads in message_handler.go are
-	// snapshotted under mu.RLock alongside the rp.rules snapshot so that any
-	// future hot-reload path that does update definitions is safe by default.
+	// loadRules (called only from Initialize, before any goroutines start) and
+	// applyRuleChanges (hot-reload path). Both write under mu.Lock. Reads in
+	// message_handler.go are snapshotted under mu.RLock alongside rp.rules so
+	// that Definition and Rule are always in sync.
 	ruleDefinitions map[string]Definition
 	ruleConfigs     map[string]map[string]any // Original rule configurations for GetRuntimeConfig
 

@@ -213,10 +213,13 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 	proc.mu.RLock()
 	_, hasGamma := proc.rules["rule_gamma"]
 	rulesCount := len(proc.rules)
+	gammaDef, hasGammaDef := proc.ruleDefinitions["rule_gamma"]
 	proc.mu.RUnlock()
 
 	assert.True(t, hasGamma, "rule_gamma must be in processor.rules after reconcile")
 	assert.Equal(t, 3, rulesCount, "processor must have 3 rules after reconcile")
+	assert.True(t, hasGammaDef, "rule_gamma must be in processor.ruleDefinitions after hot-reload reconcile")
+	assert.Equal(t, "Gamma", gammaDef.Name, "hot-reloaded Definition must carry the rule name")
 }
 
 // TestHotReload_WatcherPicksUpNewRule is the primary end-to-end hot-reload

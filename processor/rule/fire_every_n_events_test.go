@@ -213,6 +213,74 @@ func TestFireEveryNEvents_CounterResetOnRuleUpdate(t *testing.T) {
 	assert.Equal(t, 1, fires, "exactly 1 fire after reset (on the 5th fresh match)")
 }
 
+// TestApplyRuleChanges_SyncsRuleDefinitions verifies that applyRuleChanges
+// writes the full Definition into rp.ruleDefinitions so that FireEveryNEvents
+// gating and stateful actions are available for hot-reloaded rules — the bug
+// fixed in dcdab06's production-code companion commit.
+//
+// Three assertions:
+//  1. After apply, ruleDefinitions[ruleID].FireEveryNEvents equals the configured value.
+//  2. OnEnter/OnExit/WhileTrue action lists survive the round-trip.
+//  3. A subsequent delete via applyRuleChanges removes the entry from ruleDefinitions.
+func TestApplyRuleChanges_SyncsRuleDefinitions(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	rp := &Processor{
+		natsClient:      nil,
+		logger:          slog.Default(),
+		rules:           make(map[string]Rule),
+		ruleDefinitions: make(map[string]Definition),
+		ruleConfigs:     make(map[string]map[string]any),
+		matchCounters:   make(map[string]*atomic.Int64),
+		config:          &cfg,
+	}
+
+	const ruleID = "hot-reload-rule"
+
+	ruleMap := map[string]any{
+		"type":                "test_rule",
+		"name":                "Hot Reload Rule",
+		"enabled":             true,
+		"fire_every_n_events": float64(3), // JSON numbers arrive as float64
+		"on_enter": []any{
+			map[string]any{"type": "log", "message": "entered"},
+		},
+		"on_exit": []any{
+			map[string]any{"type": "log", "message": "exited"},
+		},
+		"while_true": []any{
+			map[string]any{"type": "log", "message": "while true"},
+		},
+	}
+
+	rp.mu.Lock()
+	err := rp.applyRuleChanges(map[string]any{ruleID: ruleMap})
+	rp.mu.Unlock()
+	require.NoError(t, err, "applyRuleChanges must succeed")
+
+	rp.mu.RLock()
+	def, ok := rp.ruleDefinitions[ruleID]
+	rp.mu.RUnlock()
+
+	require.True(t, ok, "ruleDefinitions must contain the hot-reloaded rule")
+	assert.Equal(t, 3, def.FireEveryNEvents, "FireEveryNEvents must survive the hot-reload round-trip")
+	assert.Len(t, def.OnEnter, 1, "OnEnter actions must survive the hot-reload round-trip")
+	assert.Len(t, def.OnExit, 1, "OnExit actions must survive the hot-reload round-trip")
+	assert.Len(t, def.WhileTrue, 1, "WhileTrue actions must survive the hot-reload round-trip")
+
+	// Delete: apply an empty rules map — the rule is no longer configured.
+	rp.mu.Lock()
+	err = rp.applyRuleChanges(map[string]any{})
+	rp.mu.Unlock()
+	require.NoError(t, err, "delete via empty applyRuleChanges must succeed")
+
+	rp.mu.RLock()
+	_, stillPresent := rp.ruleDefinitions[ruleID]
+	rp.mu.RUnlock()
+	assert.False(t, stillPresent, "ruleDefinitions must not contain the rule after delete")
+}
+
 // alwaysMatchTestRule is a minimal Rule that always reports a match but
 // returns no events, used in unit tests that exercise Processor internals
 // without NATS.

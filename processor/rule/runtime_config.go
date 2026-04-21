@@ -54,9 +54,12 @@ func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
 
 // applyRuleChanges applies dynamic rule configuration changes
 func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
-	// Ensure matchCounters is initialized (struct-literal callers may omit it).
+	// Ensure matchCounters and ruleDefinitions are initialized (struct-literal callers may omit them).
 	if rp.matchCounters == nil {
 		rp.matchCounters = make(map[string]*atomic.Int64)
+	}
+	if rp.ruleDefinitions == nil {
+		rp.ruleDefinitions = make(map[string]Definition)
 	}
 
 	// Track rules to remove (existing rules not in new config)
@@ -72,13 +75,19 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 		ruleMap := ruleConfig.(map[string]any) // Validated in ValidateConfigUpdate
 
 		// Create or update rule
-		newRule, err := rp.createRuleFromConfig(ruleID, ruleMap)
+		newRule, def, err := rp.createRuleFromConfig(ruleID, ruleMap)
 		if err != nil {
 			return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
 		}
 
 		// Install new rule (replacing any existing rule).
 		rp.rules[ruleID] = newRule
+
+		// Store the full Definition so FireEveryNEvents gating and stateful actions
+		// (OnEnter/OnExit/WhileTrue) are honoured for hot-reloaded rules. Without
+		// this, hasDefinition==false in message_handler.go and both the sampling
+		// gate and stateful-action branches are bypassed.
+		rp.ruleDefinitions[ruleID] = def
 
 		// Store rule configuration for GetRuntimeConfig
 		rp.ruleConfigs[ruleID] = ruleMap
@@ -94,6 +103,7 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 	// Remove rules that are no longer configured
 	for ruleID := range currentRuleIDs {
 		delete(rp.rules, ruleID)
+		delete(rp.ruleDefinitions, ruleID)
 		delete(rp.ruleConfigs, ruleID)
 		delete(rp.matchCounters, ruleID)
 		rp.logger.Info("Removed rule", "rule_id", ruleID)

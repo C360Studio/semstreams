@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -192,9 +193,11 @@ func ValidateDefinition(def Definition) error {
 	return nil
 }
 
-// createRuleFromConfig creates a rule instance from configuration
-func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any) (Rule, error) {
-	// Convert map to Definition
+// definitionFromMap converts a ruleMap (the hot-reload wire format) into a
+// Definition struct for a given ruleID. It mirrors the field extraction that
+// loadRules performs when reading from JSON files so that hot-reloaded rules
+// carry the same gate and stateful-action metadata as file-loaded rules.
+func definitionFromMap(ruleID string, ruleMap map[string]any) (Definition, error) {
 	def := Definition{
 		ID:      ruleID,
 		Type:    ruleMap["type"].(string),
@@ -252,9 +255,48 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 		}
 	}
 
-	// Validate processor-level fields before handing off to factory
+	// Parse stateful action lists (OnEnter, OnExit, WhileTrue, OnRecovery).
+	// These are stored as []Action in the Definition and used by the stateful
+	// evaluator. Without this round-trip, hot-reloaded rules have empty slices
+	// and hasStatefulActions evaluates false in message_handler.go.
+	parseActions := func(key string) []Action {
+		val, ok := ruleMap[key]
+		if !ok {
+			return nil
+		}
+		// Re-marshal and unmarshal via JSON to reuse Action's existing JSON tags.
+		raw, err := json.Marshal(val)
+		if err != nil {
+			return nil
+		}
+		var actions []Action
+		if err := json.Unmarshal(raw, &actions); err != nil {
+			return nil
+		}
+		return actions
+	}
+	def.OnEnter = parseActions("on_enter")
+	def.OnExit = parseActions("on_exit")
+	def.WhileTrue = parseActions("while_true")
+	def.OnRecovery = parseActions("on_recovery")
+
+	// Parse RerunOnRecovery flag if present
+	def.RerunOnRecovery = getBoolWithDefault(ruleMap, "rerun_on_recovery", false)
+
+	// Validate processor-level fields before returning
 	if err := ValidateDefinition(def); err != nil {
-		return nil, err
+		return Definition{}, err
+	}
+
+	return def, nil
+}
+
+// createRuleFromConfig creates a rule instance from configuration.
+// It builds a Definition via definitionFromMap and delegates to the factory.
+func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any) (Rule, Definition, error) {
+	def, err := definitionFromMap(ruleID, ruleMap)
+	if err != nil {
+		return nil, Definition{}, err
 	}
 
 	// Create dependencies
@@ -264,7 +306,11 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 	}
 
 	// Use factory to create rule
-	return CreateRuleFromDefinition(def, deps)
+	r, err := CreateRuleFromDefinition(def, deps)
+	if err != nil {
+		return nil, Definition{}, err
+	}
+	return r, def, nil
 }
 
 // getStringWithDefault safely gets a string value with default
