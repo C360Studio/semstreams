@@ -1,0 +1,193 @@
+{
+  "_phase2_note": "Phase 2 enablement is config-only. To grant proposal tools: add create_rule, update_rule, delete_rule, create_flow, update_flow, delete_flow, create_persona, update_persona, delete_persona, create_flow_template, update_flow_template, delete_flow_template to allowed_tools AND mirror the same list into agentic-tools.config.approval_required. Existing ApprovalFilter transitions the loop to LoopStateAwaitingApproval pending human review. No code changes needed.",
+  "_collision_note": "Ops and deep-research cannot run in the same process due to default_role collision — deploy ops in its own binary invocation.",
+  "version": "1.1.0",
+  "platform": {
+    "org": "CHANGE_ME",
+    "id": "ops-agent",
+    "type": "agentic",
+    "environment": "production"
+  },
+  "tier": "agentic",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "model_registry": {
+    "endpoints": {
+      "general": {
+        "provider": "openai",
+        "url": "CHANGE_ME",
+        "model": "CHANGE_ME",
+        "max_tokens": 8192,
+        "supports_tools": true,
+        "tool_format": "openai"
+      },
+      "fast": {
+        "provider": "openai",
+        "url": "CHANGE_ME",
+        "model": "CHANGE_ME",
+        "max_tokens": 4096,
+        "supports_tools": true,
+        "tool_format": "openai"
+      }
+    },
+    "defaults": {
+      "model": "general"
+    },
+    "capabilities": {
+      "general": { "preferred": ["general"] },
+      "fast": { "preferred": ["fast"] },
+      "summarization": { "preferred": ["fast"] }
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Ops Agent — observability diagnosis",
+          "description": "Phase 1 ops agent: observes completed agent loops, emits ops.diagnosis.* triples for human review. Phase 2 (proposal tools + approval gate) is config-only — see _phase2_note.",
+          "version": "1.0.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "components": {
+    "agentic-dispatch": {
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "ops",
+        "default_tools": [],
+        "auto_continue": false,
+        "stream_name": "USER",
+        "ports": {
+          "inputs": [
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true, "description": "User messages from any channel (channel.id multi-segment)"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true, "description": "Agent completion events"}
+          ],
+          "outputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "description": "Task submissions to agent loop"},
+            {"name": "user.response", "type": "nats", "subject": "user.response.*", "description": "Responses back to users"}
+          ]
+        }
+      }
+    },
+    "agentic-loop": {
+      "type": "processor",
+      "name": "agentic-loop",
+      "enabled": true,
+      "config": {
+        "max_iterations": 15,
+        "timeout": "120s",
+        "stream_name": "AGENT",
+        "loops_bucket": "AGENT_LOOPS",
+        "consumer": {
+          "ack_wait": "120s",
+          "heartbeat_interval": "60s",
+          "max_deliver": 2
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
+          ],
+          "kv_write": [
+            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"},
+            {"name": "trajectories", "type": "kv-write", "bucket": "AGENT_TRAJECTORIES"}
+          ]
+        }
+      }
+    },
+    "agentic-model": {
+      "type": "processor",
+      "name": "agentic-model",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "120s",
+        "retry": {
+          "max_attempts": 3,
+          "backoff": "exponential"
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "agentic-tools": {
+      "type": "processor",
+      "name": "agentic-tools",
+      "enabled": true,
+      "config": {
+        "stream_name": "TOOL",
+        "timeout": "60s",
+        "allowed_tools": [
+          "query_entity",
+          "query_entities",
+          "query_relationships",
+          "read_loop_result",
+          "monitor_flow",
+          "list_rules",
+          "get_rule",
+          "list_flows",
+          "get_flow",
+          "list_personas",
+          "get_persona",
+          "list_flow_templates",
+          "get_flow_template",
+          "list_components",
+          "emit_diagnosis",
+          "submit_work"
+        ],
+        "ports": {
+          "inputs": [
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
+          ],
+          "kv_read": [
+            {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}
+          ]
+        }
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "enable_hierarchy": true,
+        "ports": {
+          "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+          ],
+          "outputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+          ]
+        }
+      }
+    }
+  }
+}

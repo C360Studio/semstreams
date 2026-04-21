@@ -1,0 +1,198 @@
+{
+  "_collision_note": "Ops and deep-research cannot run in the same process due to default_role collision — deploy ops in its own binary invocation.",
+  "version": "1.1.0",
+  "platform": {
+    "org": "c360",
+    "id": "ops-agent",
+    "type": "agentic-e2e",
+    "region": "local",
+    "instance_id": "ops-agent-001",
+    "environment": "test"
+  },
+  "tier": "agentic",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "streams": {
+    "USER": {
+      "subjects": ["user.>"],
+      "storage": "file",
+      "max_age": "1h"
+    }
+  },
+  "model_registry": {
+    "endpoints": {
+      "general": {
+        "provider": "openai",
+        "url": "http://mock-llm:8080/v1",
+        "model": "mock-model",
+        "max_tokens": 4096,
+        "supports_tools": true,
+        "tool_format": "openai",
+        "stream": true
+      }
+    },
+    "defaults": {
+      "model": "general"
+    },
+    "capabilities": {
+      "general": { "preferred": ["general"] }
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Ops Agent E2E",
+          "description": "Exercises ADR-027 Phase 1 ops agent: observe loops, emit diagnosis triples, assert via /graph/triples.",
+          "version": "1.0.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    }
+  },
+  "components": {
+    "agentic-dispatch": {
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "ops",
+        "default_tools": [],
+        "auto_continue": false,
+        "stream_name": "USER",
+        "ports": {
+          "inputs": [
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT"},
+            {"name": "user.response", "type": "nats", "subject": "user.response.*"}
+          ]
+        }
+      }
+    },
+    "agentic-loop": {
+      "type": "processor",
+      "name": "agentic-loop",
+      "enabled": true,
+      "config": {
+        "max_iterations": 8,
+        "timeout": "30s",
+        "stream_name": "AGENT",
+        "loops_bucket": "AGENT_LOOPS",
+        "consumer": {
+          "ack_wait": "30s",
+          "heartbeat_interval": "15s",
+          "max_deliver": 2
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
+          ],
+          "kv_write": [
+            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"},
+            {"name": "trajectories", "type": "kv-write", "bucket": "AGENT_TRAJECTORIES"}
+          ]
+        }
+      }
+    },
+    "agentic-model": {
+      "type": "processor",
+      "name": "agentic-model",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "30s",
+        "retry": {
+          "max_attempts": 2,
+          "backoff": "exponential"
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "agentic-tools": {
+      "type": "processor",
+      "name": "agentic-tools",
+      "enabled": true,
+      "config": {
+        "stream_name": "TOOL",
+        "timeout": "10s",
+        "allowed_tools": [
+          "query_entity",
+          "query_entities",
+          "query_relationships",
+          "read_loop_result",
+          "monitor_flow",
+          "list_rules",
+          "get_rule",
+          "list_flows",
+          "get_flow",
+          "list_personas",
+          "get_persona",
+          "list_flow_templates",
+          "get_flow_template",
+          "list_components",
+          "emit_diagnosis",
+          "submit_work"
+        ],
+        "ports": {
+          "inputs": [
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
+          ]
+        }
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "enable_hierarchy": true,
+        "ports": {
+          "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+          ],
+          "outputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+          ]
+        }
+      }
+    }
+  }
+}
