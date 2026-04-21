@@ -351,10 +351,23 @@ func (h *MessageHandler) buildLoopCreatedData(loopID string, task TaskMessage, e
 // take effect on the next loop. When the registry is nil or assembly
 // yields empty content, the legacy "context + prompt" pair is emitted
 // unchanged.
+//
+// Callers that have already assembled the system prompt should use
+// buildInitialMessagesWithPrompt to avoid a redundant assembly call.
 func (h *MessageHandler) buildInitialMessages(ctx context.Context, task TaskMessage) []agentic.ChatMessage {
+	return h.buildInitialMessagesWithPrompt(task, h.assembleSystemPrompt(ctx, task))
+}
+
+// buildInitialMessagesWithPrompt constructs the initial message list using a
+// pre-assembled system prompt string. Passing an empty string skips the system
+// message entirely (equivalent to a nil registry or an assembly that yields no
+// content). Split from buildInitialMessages so HandleTask can assemble once,
+// store in RegionSystemPrompt, and pass the same result here without a second
+// assembly call.
+func (h *MessageHandler) buildInitialMessagesWithPrompt(task TaskMessage, assembled string) []agentic.ChatMessage {
 	var messages []agentic.ChatMessage
 
-	if assembled := h.assembleSystemPrompt(ctx, task); assembled != "" {
+	if assembled != "" {
 		messages = append(messages, agentic.ChatMessage{
 			Role:    "system",
 			Content: assembled,
@@ -508,9 +521,23 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		return HandlerResult{}, err
 	}
 
+	// Assemble the system prompt once. It is stored in RegionSystemPrompt so
+	// cm.GetContext() includes it on every continuation iteration (iteration 2+).
+	// Without this, the assembled persona is absent from the context manager and
+	// omitted from all continuation requests — real LLMs lose their instructions
+	// and the mock's marker-based preset doesn't fire after the first tool round.
+	assembled := h.assembleSystemPrompt(ctx, task)
+
 	// Add user prompt to context manager and cache for recovery.
 	// If GC/repair later empties the context, we re-inject this prompt.
 	cm := h.loopManager.GetContextManager(loopID)
+	if assembled != "" {
+		_ = cm.AddMessage(RegionSystemPrompt, agentic.ChatMessage{
+			Role:    "system",
+			Content: assembled,
+		})
+	}
+
 	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
 		Role:    "user",
 		Content: task.Prompt,
@@ -529,8 +556,9 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 			slog.Int("entity_count", len(task.Context.Entities)))
 	}
 
-	// Build messages for initial request with iteration budget
-	messages := h.buildInitialMessages(ctx, task)
+	// Build messages for initial request with iteration budget. Pass the
+	// already-assembled system prompt so we avoid assembling a second time.
+	messages := h.buildInitialMessagesWithPrompt(task, assembled)
 	budgetMsg := BuildIterationBudgetMessage(1, entity.MaxIterations)
 	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
 
