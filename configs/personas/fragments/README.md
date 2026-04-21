@@ -25,17 +25,36 @@ Example: `configs/personas/fragments/ops/00-identity.md` loads as:
 {"id": "00-identity", "roles": ["ops"], "content": "<file body>"}
 ```
 
-## Precedence
+## Precedence and source-of-truth model
 
-Fragment sources are applied in this order (later wins):
+Fragment sources apply in this order at **startup** (later wins):
 
 1. `DefaultFragments()` — code-defined baseline baked into the binary.
-2. **This directory** — startup file overrides checked into source control.
-3. `PERSONAS` KV bucket — runtime overrides written by CRUD tools or agents.
+2. **This directory** — overrides checked into source control. Any KV entry
+   whose fragment ID matches a file in this directory is **overwritten** by
+   the file on every restart.
 
-`persona.LoadFromDirectory` is called at startup, after building the manager,
-before the KV watch starts. KV entries written at runtime (or loaded via the
-`PERSONAS` bucket on restart) win over these files.
+At **runtime**, tool writes (e.g. `update_persona`) persist in the `PERSONAS`
+KV bucket — but only until the next restart, at which point the file on disk
+wins again.
+
+**Operator contract: files in git are the source of truth.**
+Runtime edits via `update_persona` or similar CRUD tools are **ephemeral** —
+they are reset to file state on every process restart. Do not rely on runtime
+tool edits for long-lived configuration. If you want a change to survive
+restarts, edit the `.md` file and redeploy.
+
+This means the effective runtime precedence is:
+
+```
+DefaultFragments (code) < files on disk (startup) < tool writes (current process lifetime)
+```
+
+And on every restart the sequence resets:
+
+```
+DefaultFragments → files override any stale KV entries → fresh tool writes override files
+```
 
 ## Startup-only (Phase 1)
 

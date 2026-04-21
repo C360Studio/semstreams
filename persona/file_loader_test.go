@@ -46,104 +46,6 @@ func (f *fakeManager) count() int { return len(f.data) }
 // get returns the persona for id or nil.
 func (f *fakeManager) get(id string) *Persona { return f.data[id] }
 
-// loadFromDirectoryFake is a thin wrapper so tests can pass *fakeManager
-// without converting to *Manager (which is NATS-backed). The loader
-// signature requires *Manager but we expose the Upsert path through an
-// interface for testing — keep the loader's real signature and adapt here
-// by using the inner func.
-//
-// We test via the exported package-level function with a real *Manager
-// only for integration; for unit tests we inline the loader logic via
-// the fakeUpsertLoader helper below.
-
-// fakeUpsertLoader replicates LoadFromDirectory but accepts a generic
-// upsert func so we can inject fakeManager. This keeps test coverage on
-// the actual file-walking and fragment-ID logic without NATS.
-func fakeUpsertLoader(ctx context.Context, root string, upsert func(context.Context, *Persona) error, logger *slog.Logger) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		logger.Warn("persona file loader: could not resolve root path",
-			slog.String("root", root), slog.Any("error", err))
-		return nil
-	}
-	if _, err := os.Stat(absRoot); os.IsNotExist(err) {
-		logger.Warn("persona file loader: directory does not exist, skipping",
-			slog.String("root", absRoot))
-		return nil
-	}
-
-	var firstUpsertErr error
-	seenDirs := make(map[string]bool)
-	var loaded, dirs int
-
-	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, walkErrIn error) error {
-		if walkErrIn != nil {
-			logger.Warn("persona file loader: walk error", slog.String("path", path), slog.Any("error", walkErrIn))
-			return nil
-		}
-		if path == absRoot {
-			return nil
-		}
-		rel, err := filepath.Rel(absRoot, path)
-		if err != nil {
-			return nil
-		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		depth := len(parts)
-
-		if d.IsDir() {
-			if depth == 1 {
-				return nil
-			}
-			return filepath.SkipDir
-		}
-
-		if depth != 2 {
-			return nil
-		}
-		fileName := d.Name()
-		if strings.HasPrefix(fileName, ".") {
-			return nil
-		}
-		if !strings.HasSuffix(fileName, ".md") {
-			return nil
-		}
-
-		role := parts[0]
-		fragID := strings.TrimSuffix(fileName, ".md")
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			logger.Warn("persona file loader: could not read file, skipping",
-				slog.String("path", path), slog.Any("error", err))
-			return nil
-		}
-
-		p := &Persona{ID: fragID, Content: string(data), Roles: []string{role}}
-		if upsertErr := upsert(ctx, p); upsertErr != nil {
-			logger.Warn("persona file loader: upsert failed, skipping",
-				slog.String("path", path), slog.Any("error", upsertErr))
-			if firstUpsertErr == nil {
-				firstUpsertErr = upsertErr
-			}
-			return nil
-		}
-		if !seenDirs[role] {
-			seenDirs[role] = true
-			dirs++
-		}
-		loaded++
-		return nil
-	})
-	if err != nil {
-		logger.Warn("persona file loader: walk failed", slog.String("root", absRoot), slog.Any("error", err))
-	}
-
-	logger.Info("persona file loader: load complete",
-		slog.Int("fragments", loaded), slog.Int("role_dirs", dirs), slog.String("root", absRoot))
-	return firstUpsertErr
-}
-
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 }
@@ -171,7 +73,7 @@ func TestFileLoader_HappyPath(t *testing.T) {
 
 	mgr := newFakeManager()
 	ctx := context.Background()
-	if err := fakeUpsertLoader(ctx, root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(ctx, root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -199,7 +101,7 @@ func TestFileLoader_HappyPath(t *testing.T) {
 func TestFileLoader_EmptyDirectory(t *testing.T) {
 	root := t.TempDir()
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := mgr.count(); got != 0 {
@@ -210,7 +112,7 @@ func TestFileLoader_EmptyDirectory(t *testing.T) {
 func TestFileLoader_MissingDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "does-not-exist")
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("missing root must not return error; got: %v", err)
 	}
 	if got := mgr.count(); got != 0 {
@@ -237,7 +139,7 @@ func TestFileLoader_NonMarkdownFilesSkipped(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := mgr.count(); got != 1 {
@@ -262,7 +164,7 @@ func TestFileLoader_HiddenFilesSkipped(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := mgr.count(); got != 1 {
@@ -289,7 +191,7 @@ func TestFileLoader_NestedDirectoriesSkipped(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := mgr.count(); got != 1 {
@@ -312,7 +214,7 @@ func TestFileLoader_UnicodeContent(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := mgr.get("unicode")
@@ -347,7 +249,7 @@ func TestFileLoader_FragmentIDDerivation(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, tc := range tests {
@@ -368,7 +270,7 @@ func TestFileLoader_RoleDerivation(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := mgr.get("frag")
@@ -393,7 +295,7 @@ func TestFileLoader_LargeFile(t *testing.T) {
 	}
 
 	mgr := newFakeManager()
-	if err := fakeUpsertLoader(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	p := mgr.get("big")
@@ -426,7 +328,7 @@ func TestFileLoader_UpsertErrorContinuesAndReturns(t *testing.T) {
 		return boom
 	}
 
-	err := fakeUpsertLoader(context.Background(), root, upsertFn, discardLogger())
+	err := walkFragments(context.Background(), root, upsertFn, discardLogger())
 	if err == nil {
 		t.Fatal("expected first upsert error to be returned")
 	}
@@ -439,6 +341,26 @@ func TestFileLoader_UpsertErrorContinuesAndReturns(t *testing.T) {
 	}
 }
 
+// TestFileLoader_SymlinkEscapeSkipped verifies the symlink-escape guard using
+// the real walkFragments helper. On most Unix systems, filepath.WalkDir
+// presents symlinked regular files as regular files (ModeSymlink not set in
+// DirEntry.Type()), so the in-walk guard only fires when the OS surfaces the
+// symlink bit. The test instead relies on the documented OS behaviour:
+// os.ReadFile follows the symlink and reads the target. The guard prevents
+// loading the *content* of the escaped file by checking the resolved path
+// before ReadFile — but only when d.Type()&fs.ModeSymlink != 0.
+//
+// On platforms where WalkDir does not surface ModeSymlink for file entries
+// (Linux, macOS via default lstat(2) behaviour), the primary protection is
+// depth-2 enforcement and the absence of a recursive walk. This test asserts
+// the properties we can verify without platform-specific stat tricks:
+//   - Only legitimate non-symlink files are loaded.
+//   - The symlinked file, when its content would be "FORBIDDEN", is either
+//     not loaded (guard fires) or its content does not appear in loaded data
+//     (the file inside root has different content).
+//
+// If the platform surfaces ModeSymlink on the DirEntry, the guard fires and
+// the escape file is skipped with a warning; the test asserts the count.
 func TestFileLoader_SymlinkEscapeSkipped(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("symlink escape test skipped when running as root")
@@ -447,54 +369,93 @@ func TestFileLoader_SymlinkEscapeSkipped(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 
-	// Create a file outside root.
+	// Sensitive file outside root.
 	outsideFile := filepath.Join(outside, "secret.md")
-	if err := os.WriteFile(outsideFile, []byte("secret content"), 0o644); err != nil {
+	const forbiddenContent = "FORBIDDEN"
+	if err := os.WriteFile(outsideFile, []byte(forbiddenContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create role dir inside root with a symlink pointing outside root.
 	roleDir := filepath.Join(root, "ops")
 	if err := os.MkdirAll(roleDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
+	// Symlink inside root that points outside.
 	symlinkPath := filepath.Join(roleDir, "escape.md")
 	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
 		t.Skip("symlink creation not supported on this platform")
 	}
 
-	// Also create a legitimate file.
-	if err := os.WriteFile(filepath.Join(roleDir, "legit.md"), []byte("legit"), 0o644); err != nil {
+	// Legitimate file that must be loaded.
+	const legitContent = "legit persona content"
+	if err := os.WriteFile(filepath.Join(roleDir, "legit.md"), []byte(legitContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Use the real LoadFromDirectory (not fakeUpsertLoader) because it has
-	// the symlink-detection logic.
-	// We can't pass fakeManager to LoadFromDirectory directly (type mismatch)
-	// so we verify behaviour via the file system only: the symlinked file
-	// should not load "secret content".
-	//
-	// To avoid needing NATS here, we test via fakeUpsertLoader which
-	// replicates the same symlink check.
 	loaded := make(map[string]string)
 	upsertFn := func(_ context.Context, p *Persona) error {
 		loaded[p.ID] = p.Content
 		return nil
 	}
 
-	if err := fakeUpsertLoader(context.Background(), root, upsertFn, discardLogger()); err != nil {
+	if err := walkFragments(context.Background(), root, upsertFn, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// "legit" should be loaded; "escape" must not carry "secret content".
-	if content, ok := loaded["legit"]; !ok || content != "legit" {
-		t.Error("legit fragment should be loaded")
+	// The legitimate file must always be loaded.
+	if content, ok := loaded["legit"]; !ok || content != legitContent {
+		t.Errorf("legit fragment not loaded correctly; got loaded=%v", loaded)
 	}
-	// On most Unix systems, WalkDir presents symlinked regular files as
-	// regular files (ModeSymlink not set). The depth-2 enforcement prevents
-	// subdirectory escapes; file symlinks are followed by os.ReadFile.
-	// The symlink-escape guard in LoadFromDirectory only fires when
-	// d.Type()&fs.ModeSymlink != 0, which requires the OS to surface it.
-	// Document that this is best-effort on the current platform.
-	t.Logf("symlink test: loaded = %v (platform-dependent symlink detection)", loaded)
+
+	// The forbidden content must not appear anywhere in loaded data.
+	for id, content := range loaded {
+		if content == forbiddenContent {
+			t.Errorf("fragment %q contains forbidden content — symlink escape was not blocked", id)
+		}
+	}
+
+	// When the OS surfaces ModeSymlink on the DirEntry (the guard fires),
+	// "escape" must not be in the loaded set at all.
+	// When it does not (guard can't fire), the symlink is followed by ReadFile
+	// but the forbidden-content check above already guards correctness.
+	// Either way: at most 1 fragment should be loaded (the legit one).
+	if len(loaded) > 1 {
+		t.Errorf("expected at most 1 loaded fragment (legit only), got %d: %v", len(loaded), loaded)
+	}
+}
+
+// TestFileLoader_ContextCancellation verifies that a cancelled context stops
+// the walk before processing all files.
+func TestFileLoader_ContextCancellation(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "ops")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Create enough files that cancellation mid-walk is observable.
+	for i := range 10 {
+		name := fmt.Sprintf("frag%02d.md", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	upsertFn := func(_ context.Context, _ *Persona) error {
+		calls++
+		if calls == 3 {
+			cancel() // cancel after the third fragment
+		}
+		return nil
+	}
+
+	// walkFragments returns nil (walk stopped by context, walkErr is context.Canceled
+	// which is suppressed by the !errors.Is(walkErr, fs.ErrNotExist) check).
+	// What matters is that not all 10 fragments were processed.
+	_ = walkFragments(ctx, root, upsertFn, discardLogger())
+	if calls >= 10 {
+		t.Errorf("expected fewer than 10 upsert calls after cancellation, got %d", calls)
+	}
 }

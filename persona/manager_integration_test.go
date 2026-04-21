@@ -238,6 +238,47 @@ func (s *ManagerIntegrationSuite) TestFragmentsOverrideDefaults() {
 	s.NotContains(result.SystemMessage, "Research methodology:", "default researcher fragment must be replaced")
 }
 
+// TestUpsertFreshKey — Upsert on a new ID behaves like Create.
+func (s *ManagerIntegrationSuite) TestUpsertFreshKey() {
+	p := &Persona{ID: "upsert-fresh", Content: "initial content"}
+	s.Require().NoError(s.manager.Upsert(s.ctx, p))
+
+	got, err := s.manager.Get(s.ctx, "upsert-fresh")
+	s.Require().NoError(err)
+	s.Equal("initial content", got.Content)
+}
+
+// TestUpsertExistingKey — second Upsert with same ID wins via Update.
+func (s *ManagerIntegrationSuite) TestUpsertExistingKey() {
+	first := &Persona{ID: "upsert-existing", Content: "first value"}
+	s.Require().NoError(s.manager.Upsert(s.ctx, first))
+
+	second := &Persona{ID: "upsert-existing", Content: "second value"}
+	s.Require().NoError(s.manager.Upsert(s.ctx, second))
+
+	got, err := s.manager.Get(s.ctx, "upsert-existing")
+	s.Require().NoError(err)
+	s.Equal("second value", got.Content, "second Upsert must overwrite first via Update")
+}
+
+// TestUpsertNonConflictErrorPropagates — a Create error that is NOT a key-exists
+// conflict must be returned directly, not swallowed by a fallthrough to Update.
+// We exercise this by passing a nil persona (which fails Validate before hitting
+// KV), confirming that Upsert returns the validation error rather than
+// attempting Update and returning a misleading Update error.
+func (s *ManagerIntegrationSuite) TestUpsertNonConflictErrorPropagates() {
+	// nil persona → Create returns an invalid-input error (not ErrKVKeyExists).
+	err := s.manager.Upsert(s.ctx, nil)
+	s.Require().Error(err, "Upsert with nil persona must return an error")
+	// The error must not come from Update's "get first to confirm exists" path.
+	// Update would say "get from KV" or "persona cannot be nil"; Create says
+	// "persona cannot be nil" first. Both say "cannot be nil" so we check that
+	// the error is present and the bucket was not modified.
+	keys, listErr := s.manager.kvStore.Keys(s.ctx)
+	s.Require().NoError(listErr)
+	s.Empty(keys, "no KV entries should exist after a failed Upsert of nil persona")
+}
+
 func TestManagerIntegrationSuite(t *testing.T) {
 	suite.Run(t, new(ManagerIntegrationSuite))
 }

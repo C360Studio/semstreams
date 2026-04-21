@@ -3,6 +3,7 @@ package persona
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -15,9 +16,12 @@ import (
 // from the filename stem (e.g. "00-identity.md" -> "00-identity");
 // role is derived from the immediate parent directory name.
 //
-// Precedence: file loading is a middle layer — after DefaultFragments
-// (code) and before PERSONAS KV (runtime). Call LoadFromDirectory at
-// startup, after building the manager, before starting the KV watch.
+// Source-of-truth semantics: files in this directory are the durable
+// source of truth. Every call overwrites any KV entry whose fragment ID
+// matches a file here — including entries written at runtime by tools
+// such as update_persona. Runtime tool edits are ephemeral and reset to
+// file state on the next restart. Call LoadFromDirectory at startup,
+// after building the manager, before starting the KV watch.
 //
 // Missing directories and read errors are logged as warnings but do
 // not fail boot. Startup-only; no watch — edits require restart.
@@ -25,7 +29,14 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 	if mgr == nil {
 		return nil
 	}
+	return walkFragments(ctx, root, mgr.Upsert, logger)
+}
 
+// walkFragments is the testable core of LoadFromDirectory. It accepts a
+// generic upsert func so unit tests can inject a fake without requiring NATS.
+// The public API (LoadFromDirectory) delegates here; the internal helper is
+// not exported to preserve the package's surface area.
+func walkFragments(ctx context.Context, root string, upsert func(context.Context, *Persona) error, logger *slog.Logger) error {
 	// Resolve root to an absolute clean path for symlink safety checks.
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -53,6 +64,11 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 	// path-traversal protection. For completeness, depth-2 enforcement
 	// (root → role → *.md) also bounds scope.
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, walkErrIn error) error {
+		// Honour context cancellation before doing any I/O.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+
 		if walkErrIn != nil {
 			// Report individual walk errors as warnings but continue.
 			logger.Warn("persona file loader: walk error",
@@ -68,7 +84,10 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 
 		rel, err := filepath.Rel(absRoot, path)
 		if err != nil {
-			return nil
+			// filepath.Rel between two absolute paths rooted at absRoot
+			// should never fail in practice; treat as a programming error
+			// rather than silently skipping the entry.
+			return fmt.Errorf("filepath.Rel: %w", err)
 		}
 
 		parts := strings.Split(rel, string(filepath.Separator))
@@ -102,8 +121,8 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 
 		// Symlink safety: verify the real path is inside absRoot.
 		// WalkDir itself doesn't follow symlinks but a regular file entry
-		// could be a symlink if the OS presents it differently; belt-and-
-		// suspenders check.
+		// could be a symlink if the OS surfaces it with ModeSymlink set;
+		// belt-and-suspenders check.
 		if d.Type()&fs.ModeSymlink != 0 {
 			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil {
@@ -136,7 +155,7 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 			Content: string(data),
 			Roles:   []string{role},
 		}
-		if upsertErr := mgr.Upsert(ctx, p); upsertErr != nil {
+		if upsertErr := upsert(ctx, p); upsertErr != nil {
 			logger.Warn("persona file loader: upsert failed, skipping",
 				slog.String("path", path),
 				slog.String("role", role),
@@ -167,7 +186,11 @@ func LoadFromDirectory(ctx context.Context, root string, mgr *Manager, logger *s
 			slog.Any("error", walkErr))
 	}
 
-	logger.Info("persona file loader: load complete",
+	logFn := logger.Info
+	if loaded == 0 {
+		logFn = logger.Debug
+	}
+	logFn("persona file loader: load complete",
 		slog.Int("fragments", loaded),
 		slog.Int("role_dirs", dirs),
 		slog.String("root", absRoot))

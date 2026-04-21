@@ -3,6 +3,7 @@ package persona
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -119,20 +120,23 @@ func (m *Manager) Get(ctx context.Context, id string) (*Persona, error) {
 	return &p, nil
 }
 
-// Upsert creates or updates a persona. It attempts Create first; if the
-// record already exists it falls through to Update. This is the correct
-// semantic for the file loader and any caller that wants idempotent
-// writes without caring whether the record is new — identical to the
-// "later wins" guarantee the plan documents for the precedence chain.
+// Upsert creates or updates a persona. It attempts Create first; if and
+// only if Create fails because the key already exists (ErrKVKeyExists),
+// it falls through to Update. Any other Create error — transient NATS
+// failure, invalid input, etc. — is returned directly so callers see
+// the real cause rather than a misleading Update error.
 //
 // Update failure after a conflict-detected Create is unlikely (would
 // require a concurrent Delete between the two calls) but propagated as
 // a transient error if it occurs.
 func (m *Manager) Upsert(ctx context.Context, p *Persona) error {
-	if err := m.Create(ctx, p); err == nil {
-		return nil
+	if err := m.Create(ctx, p); err != nil {
+		if !errors.Is(err, natsclient.ErrKVKeyExists) {
+			return err
+		}
+		return m.Update(ctx, p)
 	}
-	return m.Update(ctx, p)
+	return nil
 }
 
 // List returns every persona in the bucket. Small registries expected
