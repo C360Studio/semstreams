@@ -119,6 +119,22 @@ func (m *Manager) Get(ctx context.Context, id string) (*Persona, error) {
 	return &p, nil
 }
 
+// Upsert creates or updates a persona. It attempts Create first; if the
+// record already exists it falls through to Update. This is the correct
+// semantic for the file loader and any caller that wants idempotent
+// writes without caring whether the record is new — identical to the
+// "later wins" guarantee the plan documents for the precedence chain.
+//
+// Update failure after a conflict-detected Create is unlikely (would
+// require a concurrent Delete between the two calls) but propagated as
+// a transient error if it occurs.
+func (m *Manager) Upsert(ctx context.Context, p *Persona) error {
+	if err := m.Create(ctx, p); err == nil {
+		return nil
+	}
+	return m.Update(ctx, p)
+}
+
 // List returns every persona in the bucket. Small registries expected
 // (dozens, not thousands); no pagination added. If a product's registry
 // grows large, pagination lands alongside the use case.

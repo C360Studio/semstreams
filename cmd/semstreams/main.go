@@ -136,13 +136,19 @@ func run() error {
 	// ADR-029) resolve against already-initialised infrastructure. Stateful
 	// tools (read_loop_result, decide, query_entity) need natsClient +
 	// platform which are available from step 7.
+	personaMgr := buildPersonaManagerConcrete(natsClient, logger)
+	if personaMgr != nil {
+		if err := persona.LoadFromDirectory(ctx, "configs/personas/fragments", personaMgr, logger); err != nil {
+			logger.Warn("persona file loader encountered errors", slog.Any("error", err))
+		}
+	}
 	executors.RegisterAll(ctx, executors.ToolDependencies{
 		NATSClient:          natsClient,
 		Platform:            platform,
 		Logger:              logger,
 		RuleManager:         buildRuleManager(ctx, natsClient, configManager, logger),
 		FlowManager:         buildFlowManager(natsClient, logger),
-		PersonaManager:      buildPersonaManager(natsClient, logger),
+		PersonaManager:      personaMgr,
 		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:   componentRegistry,
 	})
@@ -518,12 +524,14 @@ func buildFlowManager(natsClient *natsclient.Client, logger *slog.Logger) execut
 	return mgr
 }
 
-// buildPersonaManager constructs a persona.Manager (KV-backed persona
-// CRUD). Mirrors buildRuleManager / buildFlowManager shape. Assembler
-// integration — where saved personas override code-defined
-// DefaultFragments — is a separate step (ADR-029 step 3b); for now the
-// tool surface just reads/writes the PERSONAS bucket.
-func buildPersonaManager(natsClient *natsclient.Client, logger *slog.Logger) executors.PersonaManager {
+// buildPersonaManagerConcrete constructs a *persona.Manager (KV-backed
+// persona CRUD) and returns the concrete type so callers like the file
+// loader can call Upsert directly. Nil is returned on init failure;
+// callers must nil-check before use.
+//
+// The concrete *persona.Manager satisfies executors.PersonaManager, so
+// it can be passed directly to executors.RegisterAll without a cast.
+func buildPersonaManagerConcrete(natsClient *natsclient.Client, logger *slog.Logger) *persona.Manager {
 	mgr, err := persona.NewManager(natsClient)
 	if err != nil {
 		logger.Warn("persona CRUD tools disabled: could not initialise persona store",
