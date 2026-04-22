@@ -60,6 +60,18 @@ type EndpointConfig struct {
 	// Model is the model identifier sent to the provider.
 	Model string `json:"model"`
 	// MaxTokens is the context window size in tokens.
+	//
+	// For provider="ollama", this value is NOT forwarded to the server —
+	// Ollama's /v1/chat/completions layer rejects per-request num_ctx by
+	// design. Pre-build a Modelfile with PARAMETER num_ctx <N> and point
+	// endpoint.model at the derived name. See
+	// docs/operations/04-ollama-setup.md. On first request to an Ollama
+	// endpoint, agentic-model probes /api/show and WARNs once if the
+	// model's num_ctx is below this value.
+	//
+	// For all other providers this value is used only for summarization
+	// routing (picking the largest-context endpoint) and context-budget
+	// math in agentic-loop — the provider determines the actual window.
 	MaxTokens int `json:"max_tokens"`
 	// SupportsTools indicates whether this endpoint supports function/tool calling.
 	SupportsTools bool `json:"supports_tools,omitempty"`

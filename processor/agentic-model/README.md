@@ -86,6 +86,10 @@ endpoint now supports rate limiting controls:
 | `requests_per_minute` | int | no | Token bucket rate limit (0 = unlimited) |
 | `max_concurrent` | int | no | Maximum simultaneous in-flight requests (0 = unlimited) |
 
+### Provider-Specific Notes
+
+**Ollama.** The `/v1/chat/completions` layer can't set context size per-request — long prompts silently truncate on the server unless the model is pre-built with a Modelfile. On first request to an Ollama endpoint, agentic-model probes `/api/show` and emits one WARN if the model's `num_ctx` is below `endpoint.max_tokens`. See [docs/operations/04-ollama-setup.md](../../docs/operations/04-ollama-setup.md) for the Modelfile recipe.
+
 ### Model Aliases
 
 Model aliases provide semantic names for endpoints, allowing other components to reference models by purpose rather than specific endpoint:

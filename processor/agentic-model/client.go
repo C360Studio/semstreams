@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -27,6 +28,11 @@ type Client struct {
 	throttle     *EndpointThrottle
 	retryCfg     RetryConfig
 	adapter      ProviderAdapter
+	// ollamaProbeOnce guards a lazy /api/show probe that warns when the
+	// model is running with a num_ctx smaller than endpoint.MaxTokens —
+	// Ollama's /v1/ compat layer can't override it at request time, so the
+	// trap is silent prompt truncation. See processor/agentic-model/ollama_probe.go.
+	ollamaProbeOnce sync.Once
 }
 
 // defaultClientRetryConfig is the retry configuration used when the component
@@ -235,6 +241,7 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 //
 // Both curves cap at MaxDelay and respect ctx cancellation at every wait point.
 func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (agentic.AgentResponse, error) {
+	c.runProviderStartupProbes(ctx)
 	chatReq := c.buildChatRequest(req)
 
 	// Log full request payload at debug level for wire-level diagnostics
@@ -266,8 +273,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (
 	rlDelay := c.retryCfg.rateLimitDelayDuration(15 * time.Second)
 	maxDelay := c.retryCfg.maxDelayDuration(60 * time.Second)
 
-	genericAttempt := 0
-	rlAttempt := 0
+	genericAttempt, rlAttempt := 0, 0
 
 	for {
 		// Check context before each attempt
