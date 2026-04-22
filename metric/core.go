@@ -17,6 +17,11 @@ type Metrics struct {
 	ErrorsTotal        *prometheus.CounterVec
 	HealthCheckStatus  *prometheus.GaugeVec
 
+	// LogEntriesTotal counts slog records at WARN level and above, keyed by
+	// the component attribute. Downstream products compute windowed rates
+	// via PromQL (rate/increase) rather than in-process windowing.
+	LogEntriesTotal *prometheus.CounterVec
+
 	// NATS metrics
 	NATSConnected      prometheus.Gauge
 	NATSRTT            prometheus.Gauge
@@ -97,6 +102,16 @@ func NewMetrics() *Metrics {
 				Help:      "Health check status (0=unhealthy, 1=healthy)",
 			},
 			[]string{"service"},
+		),
+
+		LogEntriesTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "log",
+				Name:      "entries_total",
+				Help:      "Total slog records emitted at WARN+ by component and level. Use rate() or increase() for windowed views.",
+			},
+			[]string{"component", "level"},
 		),
 
 		// NATS metrics

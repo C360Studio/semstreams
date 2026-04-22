@@ -86,6 +86,69 @@ Index types: `predicate`, `incoming`, `outgoing`, `alias`, `spatial`, `temporal`
 | `semstreams_rule_triggers_total{rule="..."}` | Triggers per rule |
 | `semstreams_rule_state_transitions_total` | State machine transitions |
 
+### Process & Runtime (per-container)
+
+These come for free from the Prometheus Go client — no semstreams-specific configuration needed. They describe the process emitting the metrics (one series per scrape target).
+
+| Metric | Description | Useful query |
+|--------|-------------|--------------|
+| `process_cpu_seconds_total` | Cumulative CPU time | `rate(process_cpu_seconds_total[1m]) * 100` → CPU% |
+| `process_resident_memory_bytes` | RSS | Plot directly |
+| `process_virtual_memory_bytes` | VSZ | Plot directly |
+| `process_start_time_seconds` | Unix time of process start | `time() - process_start_time_seconds` → uptime |
+| `process_open_fds` / `process_max_fds` | File descriptor usage | Ratio triggers "near limit" alerts |
+| `go_goroutines` | Live goroutines | Leak detector — flat line is healthy |
+| `go_gc_duration_seconds` | GC pause durations | `histogram_quantile(0.99, ...)` for tail latency |
+| `go_threads` | OS threads | Correlates with goroutines under load |
+
+### Log Severity Counters
+
+Every slog record at WARN or above increments a counter keyed by component and level. The counter is pure — no message bodies, no payloads — so it's safe to expose on an unauthenticated metrics endpoint. Drill-downs go through the existing message-logger UI, not the counter.
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `semstreams_log_entries_total` | `component`, `level` | Cumulative count of WARN+ slog records |
+
+Components self-label by calling `slog.With("component", "...")` — common values include `agentic-loop`, `agentic-model`, `graph-processor`, `udp-input`, `rule`. Records without a `component` attr land under `component="unknown"`.
+
+`level` is `warn` or `error`. Debug and Info records skip the counter path entirely.
+
+Example queries:
+
+```promql
+# Warnings per minute, last 1m window
+rate(semstreams_log_entries_total{level="warn"}[1m]) * 60
+
+# Errors in the last 5 minutes, grouped by component
+increase(semstreams_log_entries_total{level="error"}[5m])
+
+# All components currently logging errors
+semstreams_log_entries_total{level="error"} > 0
+```
+
+Use `rate()` for "right now" trending (1m window smooths transient spikes) and `increase()` for "how bad was it" counts over longer windows.
+
+### Multi-Container Deployments
+
+When multiple containers each run a semstreams process (e.g., a product deploying several roles), the metrics above are per-process — each emits its own numbers. Container identity lives in the Prometheus scrape job config, not in the metric label set:
+
+```yaml
+scrape_configs:
+  - job_name: 'semspec'
+    static_configs:
+      - targets: ['semspec:9090']
+        labels:
+          container: 'semspec'
+
+  - job_name: 'semsource'
+    static_configs:
+      - targets: ['semsource:9090']
+        labels:
+          container: 'semsource'
+```
+
+Prometheus adds `job`, `instance`, and any static `labels` to every scraped sample. Downstream dashboards filter on `container="semspec"` without semstreams needing to know its own container name. This also means NATS (which runs its own [Prometheus exporter](https://github.com/nats-io/prometheus-nats-exporter)) and non-semstreams containers can be scraped the same way and appear alongside semstreams metrics under different `job` labels.
+
 ## Running with E2E Tests
 
 Start observability before running e2e tests to watch metrics in real-time:

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/logging"
 )
@@ -29,8 +30,11 @@ func parseLogLevel(level string) slog.Level {
 
 // setupLogger creates the logger with MultiHandler.
 // The NATSLogHandler is created with a fully initialized publisher.
+// The CounterHandler increments semstreams_log_entries_total on every WARN+
+// record by (component, level) — it is pass-through, so the stdout and
+// NATS handlers still observe every record.
 // This should only be called AFTER NATS is connected and streams are created.
-func setupLogger(level, format string, natsClient *natsclient.Client, cfg *config.Config) *slog.Logger {
+func setupLogger(level, format string, natsClient *natsclient.Client, cfg *config.Config, metricsRegistry *metric.MetricsRegistry) *slog.Logger {
 	logLevel := parseLogLevel(level)
 
 	opts := &slog.HandlerOptions{
@@ -58,8 +62,10 @@ func setupLogger(level, format string, natsClient *natsclient.Client, cfg *confi
 		ExcludeSources: excludeSources,
 	})
 
+	counterHandler := logging.NewCounterHandler(metricsRegistry.CoreMetrics().LogEntriesTotal)
+
 	// Compose handlers using MultiHandler
-	multiHandler := logging.NewMultiHandler(stdoutHandler, natsHandler)
+	multiHandler := logging.NewMultiHandler(stdoutHandler, natsHandler, counterHandler)
 
 	return slog.New(multiHandler).With(
 		"service", "semstreams",

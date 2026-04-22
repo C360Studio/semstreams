@@ -267,6 +267,7 @@ func (r *MetricsRegistry) registerMetrics() {
 		r.Metrics.ProcessingDuration,
 		r.Metrics.ErrorsTotal,
 		r.Metrics.HealthCheckStatus,
+		r.Metrics.LogEntriesTotal,
 		r.Metrics.NATSConnected,
 		r.Metrics.NATSRTT,
 		r.Metrics.NATSReconnects,

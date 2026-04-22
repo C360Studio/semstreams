@@ -101,16 +101,20 @@ func run() error {
 		return err
 	}
 
-	// 6. NOW create the full logger with NATS publisher (no nil, no mutation)
-	logger := setupLogger(cliCfg.LogLevel, cliCfg.LogFormat, natsClient, cfg)
+	// 6. Create the metrics registry up front so the logger chain can
+	// increment semstreams_log_entries_total for every WARN+ record.
+	metricsRegistry := metric.NewMetricsRegistry()
+
+	// 7. NOW create the full logger with NATS publisher (no nil, no mutation)
+	logger := setupLogger(cliCfg.LogLevel, cliCfg.LogFormat, natsClient, cfg, metricsRegistry)
 	slog.SetDefault(logger)
 
 	slog.Info("SemStreams ready",
 		"version", Version,
 		"build_time", BuildTime)
 
-	// 7. Create remaining infrastructure
-	metricsRegistry, platform, configManager, err := setupRemainingInfrastructure(ctx, cfg, natsClient, logger)
+	// 8. Create remaining infrastructure
+	platform, configManager, err := setupRemainingInfrastructure(ctx, cfg, natsClient, logger)
 	if err != nil {
 		return err
 	}
@@ -224,16 +228,15 @@ func ensureStreamsWithSpinner(ctx context.Context, cfg *config.Config, natsClien
 	return nil
 }
 
-// setupRemainingInfrastructure creates metrics, platform, and config manager.
+// setupRemainingInfrastructure builds platform metadata and the config
+// manager. The metrics registry is created earlier so setupLogger can wire
+// the log-counter handler into the chain before any records are emitted.
 func setupRemainingInfrastructure(
 	ctx context.Context,
 	cfg *config.Config,
 	natsClient *natsclient.Client,
 	logger *slog.Logger,
-) (*metric.MetricsRegistry, types.PlatformMeta, *config.Manager, error) {
-	// Create metrics registry
-	metricsRegistry := metric.NewMetricsRegistry()
-
+) (types.PlatformMeta, *config.Manager, error) {
 	// Extract platform identity
 	platform := extractPlatformMeta(cfg)
 
@@ -245,14 +248,14 @@ func setupRemainingInfrastructure(
 	// Create and start config manager
 	configManager, err := config.NewConfigManager(cfg, natsClient, logger)
 	if err != nil {
-		return nil, types.PlatformMeta{}, nil, fmt.Errorf("create config manager: %w", err)
+		return types.PlatformMeta{}, nil, fmt.Errorf("create config manager: %w", err)
 	}
 
 	if err := configManager.Start(ctx); err != nil {
-		return nil, types.PlatformMeta{}, nil, fmt.Errorf("start config manager: %w", err)
+		return types.PlatformMeta{}, nil, fmt.Errorf("start config manager: %w", err)
 	}
 
-	return metricsRegistry, platform, configManager, nil
+	return platform, configManager, nil
 }
 
 // createNATSClient creates a NATS client from config.
