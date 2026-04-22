@@ -95,6 +95,47 @@ When enabled, serves an interactive GraphQL IDE for:
 - Schema exploration
 - Response visualization
 
+## Prefix Scoping Best Practices
+
+`entitiesByPrefix(prefix: String!, limit: Int)` returns up to `limit` entities whose IDs start with the given prefix. There is **no cursor or offset** — if matches exceed the limit, the excess is silently dropped. Design queries around this constraint.
+
+### Avoid empty-prefix queries in production UIs
+
+```graphql
+# Don't do this — enumerates every entity in the graph, then truncates to limit
+{ entitiesByPrefix(prefix: "", limit: 1000) { id } }
+```
+
+Empty prefix forces a full KV scan (`KeysByPrefix("")` walks every key in `ENTITY_STATES`) before applying the limit. At ~10K entities this is fine; at 100K it becomes the dominant cost of the request. UIs that paint a tree should start at a narrower prefix matching a known level of the 6-part entity ID and drill down on user interaction:
+
+```graphql
+# First paint — scoped to a known platform/domain root
+{ entitiesByPrefix(prefix: "acme.ops.robotics", limit: 200) { id } }
+
+# User expands a node — scope tightens further
+{ entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone", limit: 200) { id } }
+```
+
+### Choose `limit` deliberately
+
+Default is 1000 when `limit` is 0 or omitted. Keep it at the smallest value your UI actually needs to render. A 5K-entity response wastes bandwidth and JSON decode time for no gain if the user sees 200 rows.
+
+### Exhaustive enumeration has no API
+
+If you need every entity under a prefix, there is no "next page" token today. The options are:
+
+1. Query a narrower prefix that fits under the limit.
+2. Query multiple narrower prefixes (e.g., enumerate level-5 types under a level-4 system and query each).
+3. Raise the limit to cover your expected maximum — acceptable for admin tooling, not for user-facing UI.
+
+Cursor-based pagination is a tracked follow-up. It is not planned for the beta line; request it explicitly if your use case pushes past these workarounds.
+
+### Prefix matching rules
+
+- The backend appends a trailing `.` to non-empty prefixes (so `acme.ops` matches `acme.ops.robotics.*` but not `acme.ops-extended.*`).
+- Exact full-ID queries (all six parts) fall back to a direct `Get` when the prefix scan returns empty — so `entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone.001", limit: 1)` works for single-entity lookup even though the trailing-dot rule would otherwise miss.
+- Empty-string prefix is the only case where no trailing `.` is added — which is exactly why it walks the whole bucket.
+
 ## KV Bucket Access
 
 The gateway reads from multiple KV buckets via QueryManager:
