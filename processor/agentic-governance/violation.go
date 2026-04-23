@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -63,21 +64,28 @@ const (
 	ViolationActionLogged   ViolationAction = "logged"
 )
 
-// ViolationHandler processes detected violations
+// ViolationHandler processes detected violations. It holds a copy of the
+// component's output port definitions so publish subjects can honor port
+// overrides — mirroring what every other agentic component does for its
+// outputs.
 type ViolationHandler struct {
 	config     ViolationConfig
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	metrics    *governanceMetrics
+	outputs    []component.PortDefinition
 }
 
-// NewViolationHandler creates a new violation handler
-func NewViolationHandler(config ViolationConfig, nc *natsclient.Client, logger *slog.Logger, metrics *governanceMetrics) *ViolationHandler {
+// NewViolationHandler creates a new violation handler. outputs must be the
+// component's output port slice so the violations and user_errors publish
+// subjects resolve via port config rather than hardcoded fmt.Sprintf.
+func NewViolationHandler(config ViolationConfig, nc *natsclient.Client, logger *slog.Logger, metrics *governanceMetrics, outputs []component.PortDefinition) *ViolationHandler {
 	return &ViolationHandler{
 		config:     config,
 		natsClient: nc,
 		logger:     logger,
 		metrics:    metrics,
+		outputs:    outputs,
 	}
 }
 
@@ -124,8 +132,9 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 		}
 	}
 
-	// Publish violation event
-	subject := fmt.Sprintf("governance.violation.%s.%s", violation.FilterName, violation.UserID)
+	// Publish violation event via output port (defaults to
+	// governance.violation.{filter}.{user} when no port override is set).
+	subject := component.ResolveSubject(h.outputs, "violations", violation.FilterName+"."+violation.UserID)
 	violationJSON, err := json.Marshal(violation)
 	if err != nil {
 		return errs.Wrap(err, "ViolationHandler", "Handle", "marshal violation")
@@ -173,7 +182,9 @@ func (h *ViolationHandler) notifyUser(ctx context.Context, violation *Violation)
 		return errs.Wrap(err, "ViolationHandler", "notifyUser", "marshal notification")
 	}
 
-	subject := fmt.Sprintf("user.response.%s.%s", violation.ChannelID, violation.UserID)
+	// User-notification subject resolved via output port; defaults to
+	// user.response.{channel}.{user} when no port override is set.
+	subject := component.ResolveSubject(h.outputs, "user_errors", violation.ChannelID+"."+violation.UserID)
 	return errs.WrapTransient(h.natsClient.Publish(ctx, subject, notificationJSON), "ViolationHandler", "notifyUser", "publish notification")
 }
 

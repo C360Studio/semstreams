@@ -101,8 +101,14 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		logger.Info("Tool call governance filter enabled")
 	}
 
-	// Create violation handler
-	violationHandler := NewViolationHandler(config.Violations, deps.NATSClient, logger, metrics)
+	// Create violation handler. Pass the component's output port defs so
+	// the handler can resolve publish subjects via component.ResolveSubject
+	// (honors any per-deployment port overrides on violations/user_errors).
+	var outputs []component.PortDefinition
+	if config.Ports != nil {
+		outputs = config.Ports.Outputs
+	}
+	violationHandler := NewViolationHandler(config.Violations, deps.NATSClient, logger, metrics, outputs)
 
 	return &Component{
 		name:       "agentic-governance",
