@@ -98,6 +98,86 @@ func TestListFactories_PreservesSchemaAndName(t *testing.T) {
 	}
 }
 
+// TestRegisterWithConfig_DependenciesRoundTrip verifies that Dependencies
+// declared via RegistrationConfig flow through to the stored Registration
+// and are queryable via InstanceDependencies once an instance is tracked.
+// This is the load-bearing guarantee behind ComponentManager's ability to
+// route model_registry updates to the components that opted in.
+func TestRegisterWithConfig_DependenciesRoundTrip(t *testing.T) {
+	registry := NewRegistry()
+
+	mockFactory := func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
+		return nil, nil
+	}
+
+	err := registry.RegisterWithConfig(RegistrationConfig{
+		Name:         "reg-with-deps",
+		Factory:      mockFactory,
+		Type:         "processor",
+		Protocol:     "test",
+		Domain:       "test",
+		Description:  "Test component with a declared dep",
+		Version:      "1.0.0",
+		Dependencies: []string{DepModelRegistry},
+	})
+	if err != nil {
+		t.Fatalf("RegisterWithConfig: %v", err)
+	}
+
+	// Registration metadata reflects the declared dependency.
+	factories := registry.ListFactories()
+	reg, ok := factories["reg-with-deps"]
+	if !ok {
+		t.Fatal("factory not found in ListFactories")
+	}
+	if len(reg.Dependencies) != 1 || reg.Dependencies[0] != DepModelRegistry {
+		t.Errorf("Registration.Dependencies: got %v, want [%q]", reg.Dependencies, DepModelRegistry)
+	}
+
+	// Simulate an instance being tracked by the registry (mirrors what
+	// CreateComponent does internally via instanceFactories).
+	registry.mu.Lock()
+	registry.instanceFactories["my-instance"] = "reg-with-deps"
+	registry.mu.Unlock()
+
+	deps := registry.InstanceDependencies("my-instance")
+	if len(deps) != 1 || deps[0] != DepModelRegistry {
+		t.Errorf("InstanceDependencies: got %v, want [%q]", deps, DepModelRegistry)
+	}
+
+	// Untracked instances return nil (not an empty slice — matches the
+	// "no registration found" contract).
+	if got := registry.InstanceDependencies("unknown-instance"); got != nil {
+		t.Errorf("InstanceDependencies for unknown instance: got %v, want nil", got)
+	}
+}
+
+// TestRegisterWithConfig_NoDependencies confirms the default (zero-value)
+// case. A component that doesn't declare any deps must not receive
+// spurious entries — ComponentManager would mis-route updates otherwise.
+func TestRegisterWithConfig_NoDependencies(t *testing.T) {
+	registry := NewRegistry()
+
+	mockFactory := func(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
+		return nil, nil
+	}
+
+	err := registry.RegisterWithConfig(RegistrationConfig{
+		Name:    "reg-no-deps",
+		Factory: mockFactory,
+		Type:    "processor",
+	})
+	if err != nil {
+		t.Fatalf("RegisterWithConfig: %v", err)
+	}
+
+	factories := registry.ListFactories()
+	reg := factories["reg-no-deps"]
+	if len(reg.Dependencies) != 0 {
+		t.Errorf("Registration.Dependencies for no-deps component: got %v, want empty", reg.Dependencies)
+	}
+}
+
 // TestNewRegistry_WithLogger verifies that the logger can be customized.
 func TestNewRegistry_WithLogger(t *testing.T) {
 	// Create a buffer to capture log output

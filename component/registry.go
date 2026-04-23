@@ -34,6 +34,20 @@ type Info struct {
 // This pattern matches service constructors: func(rawConfig json.RawMessage, deps Dependencies) (Service, error)
 type Factory func(rawConfig json.RawMessage, deps Dependencies) (Discoverable, error)
 
+// Dependency identifiers used by Registration.Dependencies. Components
+// declare these at registration to opt into framework-driven behavior
+// (e.g., restart when a named runtime dependency changes). Kept as
+// typed constants so refactors are compiler-checked.
+const (
+	// DepModelRegistry signals that a component consumes
+	// Dependencies.ModelRegistry at construction or run time. Components
+	// that declare this are restarted by ComponentManager when the
+	// model_registry KV key changes, so they rebuild any registry-
+	// derived state (LLM clients, embedder clients, summarizers) against
+	// the new config.
+	DepModelRegistry = "model-registry"
+)
+
 // Registration holds factory and metadata for a component type
 type Registration struct {
 	Name         string       `json:"name"`         // Factory name (e.g., "udp-input")
@@ -44,21 +58,22 @@ type Registration struct {
 	Version      string       `json:"version"`      // Component version
 	Schema       ConfigSchema `json:"schema"`       // Schema as static metadata (Feature 011)
 	Factory      Factory      `json:"-"`            // Factory function (not serializable)
-	Dependencies []string     `json:"dependencies"` // Optional: other required components
+	Dependencies []string     `json:"dependencies"` // Runtime dependencies (e.g., DepModelRegistry) — used by ComponentManager for restart routing
 }
 
 // RegistrationConfig provides a clean API for component registration.
 // This config struct replaces the previous 7-8 parameter function signatures.
 // It maps 1:1 to Registration struct fields for simplicity.
 type RegistrationConfig struct {
-	Name        string       // Component name (e.g., "udp", "websocket", "graph-processor")
-	Factory     Factory      // Factory function to create component instances
-	Schema      ConfigSchema // Configuration schema for validation and discovery
-	Type        string       // Component type: "input", "processor", "output", "storage"
-	Protocol    string       // Technical protocol (udp, tcp, websocket, file, etc.)
-	Domain      string       // Business domain (network, storage, processing, robotics, semantic)
-	Description string       // Human-readable description of the component
-	Version     string       // Component version (semver recommended)
+	Name         string       // Component name (e.g., "udp", "websocket", "graph-processor")
+	Factory      Factory      // Factory function to create component instances
+	Schema       ConfigSchema // Configuration schema for validation and discovery
+	Type         string       // Component type: "input", "processor", "output", "storage"
+	Protocol     string       // Technical protocol (udp, tcp, websocket, file, etc.)
+	Domain       string       // Business domain (network, storage, processing, robotics, semantic)
+	Description  string       // Human-readable description of the component
+	Version      string       // Component version (semver recommended)
+	Dependencies []string     // Runtime deps declared via constants like DepModelRegistry
 }
 
 // CapabilityAnnouncement is published to NATS when components register.
@@ -441,17 +456,33 @@ func (r *Registry) GetFactory(name string) (Factory, bool) {
 //	})
 func (r *Registry) RegisterWithConfig(config RegistrationConfig) error {
 	registration := &Registration{
-		Name:        config.Name,
-		Factory:     config.Factory,
-		Schema:      config.Schema,
-		Type:        config.Type,
-		Protocol:    config.Protocol,
-		Domain:      config.Domain,
-		Description: config.Description,
-		Version:     config.Version,
+		Name:         config.Name,
+		Factory:      config.Factory,
+		Schema:       config.Schema,
+		Type:         config.Type,
+		Protocol:     config.Protocol,
+		Domain:       config.Domain,
+		Description:  config.Description,
+		Version:      config.Version,
+		Dependencies: config.Dependencies,
 	}
 
 	return r.RegisterFactory(config.Name, registration)
+}
+
+// InstanceDependencies returns the declared runtime dependencies for a
+// running component instance (e.g., []string{DepModelRegistry}). Returns
+// nil if the instance is not tracked or its factory didn't declare any
+// dependencies.
+//
+// Used by ComponentManager to route config-change events (e.g., a
+// model_registry KV update) to the components that opted in.
+func (r *Registry) InstanceDependencies(instanceName string) []string {
+	reg := r.getRegistrationForInstance(instanceName)
+	if reg == nil {
+		return nil
+	}
+	return reg.Dependencies
 }
 
 // ListAvailable returns information about all available component types
