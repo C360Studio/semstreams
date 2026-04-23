@@ -44,9 +44,10 @@ type ComponentManager struct {
 	resources        map[string][]string                    // resourceID → component names
 
 	// Config management
-	natsClient    *natsclient.Client
-	configManager *config.Manager
-	configUpdates <-chan config.Update // Channel for config updates
+	natsClient           *natsclient.Client
+	configManager        *config.Manager
+	configUpdates        <-chan config.Update // Channel for components.* updates
+	modelRegistryUpdates <-chan config.Update // Channel for model_registry KV key updates
 
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
@@ -96,6 +97,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	// Get initial component configs from Manager if available
 	var componentsConfig config.ComponentConfigs
 	var configUpdates <-chan config.Update
+	var modelRegistryUpdates <-chan config.Update
 	var configManager *config.Manager
 
 	if deps != nil && deps.Manager != nil {
@@ -104,9 +106,15 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		if fullConfig != nil {
 			componentsConfig = fullConfig.Get().Components
 		}
-		// Subscribe to component config changes if watching is enabled
+		// Subscribe to config changes if watching is enabled. Two subjects:
+		//   components.*    — individual component adds/removes/config edits
+		//   model_registry  — shared registry that dependent components
+		//                     (declared via Registration.Dependencies) must
+		//                     be restarted for to pick up, since some cache
+		//                     derived clients at Start time.
 		if cfg.WatchConfig {
 			configUpdates = configManager.OnChange("components.*")
+			modelRegistryUpdates = configManager.OnChange("model_registry")
 		}
 	}
 
@@ -141,16 +149,17 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	}
 
 	cm := &ComponentManager{
-		BaseService:      baseService,
-		config:           cfg, // Store config as field
-		registry:         registry,
-		componentConfigs: componentsConfig,
-		platform:         platform,
-		components:       make(map[string]*component.ManagedComponent),
-		startOrder:       make([]string, 0),
-		resources:        make(map[string][]string),
-		configManager:    configManager,
-		configUpdates:    configUpdates,
+		BaseService:          baseService,
+		config:               cfg, // Store config as field
+		registry:             registry,
+		componentConfigs:     componentsConfig,
+		platform:             platform,
+		components:           make(map[string]*component.ManagedComponent),
+		startOrder:           make([]string, 0),
+		resources:            make(map[string][]string),
+		configManager:        configManager,
+		configUpdates:        configUpdates,
+		modelRegistryUpdates: modelRegistryUpdates,
 	}
 
 	// Store NATS client if available
@@ -921,6 +930,16 @@ func (cm *ComponentManager) RegisterHealthChangeHook(
 // handleComponentConfigChange handles dynamic component configuration changes
 // watchConfigUpdates monitors for configuration changes from Manager
 func (cm *ComponentManager) watchConfigUpdates(ctx context.Context) {
+	// First update on both channels is the initial config snapshot emitted
+	// by OnChange — we don't want a boot-time restart storm, so drain once
+	// per channel before the main loop.
+	if cm.modelRegistryUpdates != nil {
+		select {
+		case <-cm.modelRegistryUpdates:
+		default:
+		}
+	}
+
 	for {
 		select {
 		case <-cm.shutdown:
@@ -965,10 +984,92 @@ func (cm *ComponentManager) watchConfigUpdates(ctx context.Context) {
 				}
 			}
 
+		case update, ok := <-cm.modelRegistryUpdates:
+			if !ok {
+				// Channel closed
+				return
+			}
+			cm.logger.Debug("model_registry changed, routing to declared dependents",
+				"path", update.Path)
+			cm.restartDependentsOf(ctx, component.DepModelRegistry, update.Config)
+
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// restartDependentsOf restarts every currently-managed component whose
+// factory registered with the given runtime dependency. Used to propagate
+// top-level KV key changes (currently just model_registry) to components
+// that cache derived state at Start time and need a full reconstruction to
+// see the new config. Non-dependent components are untouched.
+//
+// safeConfig provides the latest ComponentConfigs so each restart uses
+// the current on-disk component config alongside the refreshed
+// ModelRegistry that deps.buildComponentDependencies will pull in.
+func (cm *ComponentManager) restartDependentsOf(ctx context.Context, dep string, safeConfig *config.SafeConfig) {
+	if safeConfig == nil {
+		return
+	}
+	fullConfig := safeConfig.Get()
+
+	// Snapshot component names under the read lock so we don't hold it
+	// during the actual restarts (which take the write lock internally).
+	cm.mu.RLock()
+	targets := make([]string, 0)
+	for name := range cm.components {
+		deps := cm.registry.InstanceDependencies(name)
+		if slicesContains(deps, dep) {
+			targets = append(targets, name)
+		}
+	}
+	cm.mu.RUnlock()
+
+	if len(targets) == 0 {
+		cm.logger.Debug("no components declared dependency; nothing to restart",
+			"dep", dep)
+		return
+	}
+
+	cm.logger.Info("restarting components after dep change",
+		"dep", dep,
+		"components", targets)
+
+	for _, name := range targets {
+		compConfig, exists := fullConfig.Components[name]
+		if !exists {
+			cm.logger.Warn("dependent component has no current config; skipping restart",
+				"component", name, "dep", dep)
+			continue
+		}
+
+		cm.mu.RLock()
+		existing := cm.components[name]
+		cm.mu.RUnlock()
+		if existing == nil {
+			// Raced with a concurrent remove — nothing to do.
+			continue
+		}
+
+		if err := cm.restartComponentWithNewConfig(ctx, name, compConfig, existing); err != nil {
+			cm.logger.Error("failed to restart dependent component on dep change",
+				"component", name, "dep", dep, "error", err,
+				"action", "component_continues_with_old_config")
+			// Others still get their shot — no early return.
+		}
+	}
+}
+
+// slicesContains is a tiny local helper to avoid a dep on the slices
+// package here; every call site knows the slice is small.
+func slicesContains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // handleComponentConfigUpdate handles configuration updates for a specific component
