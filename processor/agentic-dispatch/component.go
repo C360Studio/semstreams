@@ -302,8 +302,8 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// Use "last" policy to catch messages sent just before consumer starts
 	userMsgCfg := natsclient.StreamConsumerConfig{
 		StreamName:    c.config.StreamName,
-		ConsumerName:  "agentic-dispatch-user-message",
-		FilterSubject: "user.message.>",
+		ConsumerName:  c.consumerName("agentic-dispatch-user-message"),
+		FilterSubject: c.inputPortSubject("user.message", "user.message.>"),
 		DeliverPolicy: "last",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -325,9 +325,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to agent completions via JetStream
 	agentCompleteCfg := natsclient.StreamConsumerConfig{
-		StreamName:    "AGENT",
-		ConsumerName:  "agentic-dispatch-agent-complete",
-		FilterSubject: "agent.complete.*",
+		StreamName:    c.inputPortStream("agent.complete", "AGENT"),
+		ConsumerName:  c.consumerName("agentic-dispatch-agent-complete"),
+		FilterSubject: c.inputPortSubject("agent.complete", "agent.complete.*"),
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -349,8 +349,8 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop created events for workflow context sync
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    "AGENT",
-		ConsumerName:  "agentic-dispatch-agent-created",
+		StreamName:    c.inputPortStream("agent.created", "AGENT"),
+		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
 		FilterSubject: c.inputPortSubject("agent.created", "agent.created.*"),
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
@@ -373,8 +373,8 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    "AGENT",
-		ConsumerName:  "agentic-dispatch-agent-failed",
+		StreamName:    c.inputPortStream("agent.failed", "AGENT"),
+		ConsumerName:  c.consumerName("agentic-dispatch-agent-failed"),
 		FilterSubject: c.inputPortSubject("agent.failed", "agent.failed.*"),
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
@@ -606,6 +606,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           loopID,
 		TaskID:           taskID,
+		Role:             task.Role,
 		UserID:           msg.UserID,
 		ChannelType:      msg.ChannelType,
 		ChannelID:        msg.ChannelID,
@@ -755,6 +756,7 @@ func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           created.LoopID,
 		TaskID:           created.TaskID,
+		Role:             created.Role,
 		State:            "executing",
 		MaxIterations:    created.MaxIterations,
 		WorkflowSlug:     created.WorkflowSlug,
@@ -827,7 +829,7 @@ func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse)
 		return
 	}
 
-	subject := fmt.Sprintf("user.response.%s.%s", resp.ChannelType, resp.ChannelID)
+	subject := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("Failed to publish response", slog.String("error", err.Error()))
 	}
@@ -923,6 +925,31 @@ func (c *Component) inputPortSubject(portName, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// inputPortStream returns the configured stream name for the named input port,
+// falling back to the provided default when no matching port is found or the
+// port declares no stream. Mirrors inputPortSubject so subscriptions can pull
+// both subject and stream from the same port definition.
+func (c *Component) inputPortStream(portName, fallback string) string {
+	if c.config.Ports != nil {
+		for _, p := range c.config.Ports.Inputs {
+			if p.Name == portName && p.StreamName != "" {
+				return p.StreamName
+			}
+		}
+	}
+	return fallback
+}
+
+// consumerName appends ConsumerNameSuffix to the base name when set, allowing
+// multiple dispatch instances to coexist in one process without colliding on
+// JetStream consumer names. Empty suffix preserves today's hardcoded names.
+func (c *Component) consumerName(base string) string {
+	if c.config.ConsumerNameSuffix == "" {
+		return base
+	}
+	return base + "-" + c.config.ConsumerNameSuffix
 }
 
 // outputPortDefs returns the output port definitions slice, or nil when Ports is unset.

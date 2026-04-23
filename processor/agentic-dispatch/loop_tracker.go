@@ -16,8 +16,13 @@ import (
 
 // LoopInfo contains information about an active loop
 type LoopInfo struct {
-	LoopID        string    `json:"loop_id"`
-	TaskID        string    `json:"task_id"`
+	LoopID string `json:"loop_id"`
+	TaskID string `json:"task_id"`
+	// Role is the agent role assigned to the loop (e.g., "coordinator",
+	// "ops", "research"). Propagated from TaskMessage.Role at creation so
+	// operators, UIs, and test harnesses inspecting /loops can filter by
+	// role without needing a graph query back to the loop entity.
+	Role          string    `json:"role,omitempty"`
 	UserID        string    `json:"user_id"`
 	ChannelType   string    `json:"channel_type"`
 	ChannelID     string    `json:"channel_id"`
@@ -92,6 +97,7 @@ func (t *LoopTracker) Track(info *LoopInfo) {
 		t.logger.Debug("loop tracked",
 			slog.String("loop_id", info.LoopID),
 			slog.String("task_id", info.TaskID),
+			slog.String("role", info.Role),
 			slog.String("user_id", info.UserID),
 			slog.String("channel_id", info.ChannelID),
 			slog.String("state", info.State),

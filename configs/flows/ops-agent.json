@@ -1,6 +1,6 @@
 {
   "_phase2_note": "Phase 2 enablement is config-only. To grant proposal tools: add create_rule, update_rule, delete_rule, create_flow, update_flow, delete_flow, create_persona, update_persona, delete_persona, create_flow_template, update_flow_template, delete_flow_template to allowed_tools AND mirror the same list into agentic-tools.config.approval_required. Existing ApprovalFilter transitions the loop to LoopStateAwaitingApproval pending human review. No code changes needed.",
-  "_collision_note": "Ops and deep-research cannot run in the same process due to default_role collision — deploy ops in its own binary invocation.",
+  "_collision_note": "This flow's dispatch is pinned to default_role: ops. For multi-role in one process (e.g., a coordinator that delegates to ops), use the coordinator pattern: see docs/advanced/12-coordinator-pattern.md. If you really do need two dispatches in one process, set distinct consumer_name_suffix values on each and override per-dispatch user.message port subjects so they don't both consume every user message.",
   "version": "1.1.0",
   "platform": {
     "org": "CHANGE_ME",

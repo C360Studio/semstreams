@@ -101,6 +101,7 @@ func (c *Component) handleOnboardCommand(ctx context.Context, msg agentic.UserMe
 
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:        newLoopID,
+		Role:          c.config.DefaultRole,
 		UserID:        msg.UserID,
 		ChannelType:   msg.ChannelType,
 		ChannelID:     msg.ChannelID,
