@@ -392,10 +392,14 @@ func (cm *ComponentManager) Stop(timeout time.Duration) error {
 
 	// Config watching is now handled by Manager, no need to stop it here
 
-	// Stop all components in reverse order
-	cm.mu.Lock()
+	// Stop all components in reverse order.
+	//
+	// Do NOT hold cm.mu across stopAllComponents: it spawns parallel
+	// shutdown goroutines that call updateComponentState / markComponent
+	// Stopped, both of which acquire cm.mu. Holding the lock here would
+	// deadlock on the first lifecycle component. stopAllComponents
+	// snapshots the startOrder under its own brief lock acquisition.
 	errors := cm.stopAllComponents(ctx)
-	cm.mu.Unlock()
 
 	// Wait for all goroutines to finish with timeout
 	doneChan := make(chan struct{})
@@ -426,46 +430,50 @@ func (cm *ComponentManager) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// stopAllComponents stops all components in parallel and returns any errors
-// REQUIRES: cm.mu must be held by caller
+// stopAllComponents stops all components in parallel and returns any errors.
+//
+// Acquires cm.mu briefly to snapshot startOrder + managed components,
+// then releases it before spawning parallel shutdown goroutines. The
+// goroutines need to re-acquire the lock (via updateComponentState) to
+// mark state transitions, so holding it across them would deadlock.
 func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
-	// Make a copy of startOrder to avoid race conditions
-	stopOrder := make([]string, len(cm.startOrder))
-	copy(stopOrder, cm.startOrder)
-
-	// Channel to collect errors from parallel shutdowns
-	errorChan := make(chan error, len(stopOrder))
-	var wg sync.WaitGroup
-
-	// Cancel all component contexts first to signal shutdown intent
-	for i := len(stopOrder) - 1; i >= 0; i-- {
-		name := stopOrder[i]
-		mc, exists := cm.components[name]
-		if !exists {
-			continue
+	// Snapshot state under the lock so the parallel goroutines below can
+	// operate against an immutable view while re-acquiring the lock for
+	// per-component state updates.
+	cm.mu.RLock()
+	type target struct {
+		name string
+		mc   *component.ManagedComponent
+	}
+	targets := make([]target, 0, len(cm.startOrder))
+	for i := len(cm.startOrder) - 1; i >= 0; i-- {
+		name := cm.startOrder[i]
+		if mc, exists := cm.components[name]; exists {
+			targets = append(targets, target{name: name, mc: mc})
 		}
-		cm.cancelComponentContext(mc)
+	}
+	cm.mu.RUnlock()
+
+	// Cancel all component contexts first to signal shutdown intent. This
+	// walks the snapshot; concurrent state changes are irrelevant because
+	// cancel is idempotent and mc pointers stay valid until removal.
+	for _, t := range targets {
+		cm.cancelComponentContext(t.mc)
 	}
 
-	// Stop all components in parallel - no need for sequential shutdown in Go
-	for i := len(stopOrder) - 1; i >= 0; i-- {
-		name := stopOrder[i]
-		mc, exists := cm.components[name]
-		if !exists {
-			continue
-		}
+	errorChan := make(chan error, len(targets))
+	var wg sync.WaitGroup
 
-		// Stop component in parallel goroutine
+	for _, t := range targets {
 		wg.Add(1)
 		go func(componentName string, managedComp *component.ManagedComponent) {
 			defer wg.Done()
 			if err := cm.stopSingleComponent(ctx, componentName, managedComp); err != nil {
 				errorChan <- err
 			}
-		}(name, mc)
+		}(t.name, t.mc)
 	}
 
-	// Wait for all components to stop
 	wg.Wait()
 	close(errorChan)
 
@@ -1272,16 +1280,24 @@ func (cm *ComponentManager) removeFromStartOrder(name string) {
 	}
 }
 
-// startSingleComponent starts a single component (assumes it's already created)
+// startSingleComponent starts a single component (assumes it's already created).
+//
+// Concurrency: cm.components + cm.startOrder reads/writes are guarded by
+// cm.mu. The actual component.Start runs in a detached goroutine launched
+// without the lock so retry loops and slow Start methods don't serialize
+// the whole manager.
 func (cm *ComponentManager) startSingleComponent(ctx context.Context, name string) error {
+	cm.mu.Lock()
 	mc, exists := cm.components[name]
 	if !exists {
+		cm.mu.Unlock()
 		return fmt.Errorf("component %s not found", name)
 	}
 
 	lifecycle, ok := component.AsLifecycleComponent(mc.Component)
 	if !ok {
 		// Component doesn't have lifecycle - nothing to start
+		cm.mu.Unlock()
 		return nil
 	}
 
@@ -1289,6 +1305,13 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 	childCtx, cancel := context.WithCancel(ctx)
 	mc.Context = childCtx
 	mc.Cancel = cancel
+
+	// Update tracking state under lock so a concurrent stopAllComponents
+	// sees a consistent startOrder + per-mc StartOrder. The goroutine
+	// spawn below runs without the lock.
+	mc.StartOrder = len(cm.startOrder)
+	cm.startOrder = append(cm.startOrder, name)
+	cm.mu.Unlock()
 
 	// Start the component in a goroutine for non-blocking operation
 	cm.wg.Add(1)
@@ -1334,10 +1357,6 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		cm.logger.Debug("Component started successfully",
 			"component", name)
 	}()
-
-	// Add to start order for proper shutdown sequence
-	mc.StartOrder = len(cm.startOrder)
-	cm.startOrder = append(cm.startOrder, name)
 
 	return nil
 }
