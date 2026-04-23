@@ -77,28 +77,38 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	ports := comp.OutputPorts()
 
-	if len(ports) != 1 {
-		t.Fatalf("OutputPorts() count = %d, want 1", len(ports))
+	// agent.response carries AgentResponse payloads; agent.stream carries
+	// streaming delta chunks on fire-and-forget core NATS. Two distinct
+	// outputs so downstream products can route them independently.
+	if len(ports) != 2 {
+		t.Fatalf("OutputPorts() count = %d, want 2", len(ports))
 	}
 
-	port := ports[0]
-	if port.Name != "agent.response" {
-		t.Errorf("OutputPort name = %s, want agent.response", port.Name)
-	}
-	if port.Direction != component.DirectionOutput {
-		t.Errorf("OutputPort direction = %v, want DirectionOutput", port.Direction)
+	byName := map[string]component.Port{}
+	for _, p := range ports {
+		byName[p.Name] = p
 	}
 
-	// Verify JetStream config (component uses JetStream for durable messaging)
-	jsConfig, ok := port.Config.(component.JetStreamPort)
+	resp, ok := byName["agent.response"]
 	if !ok {
-		t.Fatalf("OutputPort config should be JetStreamPort, got %T", port.Config)
+		t.Fatalf("expected output port agent.response, got %v", byName)
+	}
+	if resp.Direction != component.DirectionOutput {
+		t.Errorf("agent.response direction = %v, want DirectionOutput", resp.Direction)
+	}
+	jsConfig, ok := resp.Config.(component.JetStreamPort)
+	if !ok {
+		t.Fatalf("agent.response config should be JetStreamPort, got %T", resp.Config)
 	}
 	if len(jsConfig.Subjects) != 1 || jsConfig.Subjects[0] != "agent.response.*" {
-		t.Errorf("OutputPort subjects = %v, want [agent.response.*]", jsConfig.Subjects)
+		t.Errorf("agent.response subjects = %v, want [agent.response.*]", jsConfig.Subjects)
 	}
 	if jsConfig.StreamName != "AGENT" {
-		t.Errorf("OutputPort stream = %s, want AGENT", jsConfig.StreamName)
+		t.Errorf("agent.response stream = %s, want AGENT", jsConfig.StreamName)
+	}
+
+	if _, ok := byName["agent.stream"]; !ok {
+		t.Errorf("expected output port agent.stream for streaming deltas, got %v", byName)
 	}
 }
 

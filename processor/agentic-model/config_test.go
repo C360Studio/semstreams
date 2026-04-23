@@ -163,14 +163,22 @@ func TestDefaultConfig(t *testing.T) {
 		if len(cfg.Ports.Inputs) != 1 {
 			t.Errorf("DefaultConfig() input ports count = %d, want 1", len(cfg.Ports.Inputs))
 		}
-		if len(cfg.Ports.Outputs) != 1 {
-			t.Errorf("DefaultConfig() output ports count = %d, want 1", len(cfg.Ports.Outputs))
+		// agent.response (durable) + agent.stream (ephemeral chunks).
+		if len(cfg.Ports.Outputs) != 2 {
+			t.Errorf("DefaultConfig() output ports count = %d, want 2", len(cfg.Ports.Outputs))
 		}
 		if cfg.Ports.Inputs[0].Subject != "agent.request.>" {
 			t.Errorf("DefaultConfig() input subject = %s, want agent.request.>", cfg.Ports.Inputs[0].Subject)
 		}
-		if cfg.Ports.Outputs[0].Subject != "agent.response.*" {
-			t.Errorf("DefaultConfig() output subject = %s, want agent.response.*", cfg.Ports.Outputs[0].Subject)
+		outs := map[string]string{}
+		for _, p := range cfg.Ports.Outputs {
+			outs[p.Name] = p.Subject
+		}
+		if outs["agent.response"] != "agent.response.*" {
+			t.Errorf("agent.response output subject = %q, want agent.response.*", outs["agent.response"])
+		}
+		if outs["agent.stream"] != "agent.stream.*" {
+			t.Errorf("agent.stream output subject = %q, want agent.stream.*", outs["agent.stream"])
 		}
 	}
 }

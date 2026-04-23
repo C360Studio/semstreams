@@ -552,7 +552,7 @@ func (c *Component) makeChunkHandler() ChunkHandler {
 			return
 		}
 
-		subject := "agent.stream." + chunk.RequestID
+		subject := component.ResolveSubject(c.outputPortDefs(), "agent.stream", chunk.RequestID)
 		if err := c.natsClient.Publish(context.Background(), subject, data); err != nil {
 			c.logger.Debug("Failed to publish stream chunk", "subject", subject, "error", err)
 		}
@@ -646,7 +646,12 @@ func (c *Component) incrementErrors() {
 	c.mu.Unlock()
 }
 
-// publishResponse publishes an agent response to JetStream
+// publishResponse publishes an agent response to JetStream via the
+// agent.response output port. Earlier versions iterated every output port
+// and re-published the same payload — an unintentional fanout that
+// misbehaves once the component declares a second output (agent.stream).
+// Responses belong on agent.response; streaming deltas belong on
+// agent.stream; each output carries its own payload type.
 func (c *Component) publishResponse(ctx context.Context, resp agentic.AgentResponse) error {
 	respMsg := message.NewBaseMessage(resp.Schema(), &resp, "agentic-model")
 	data, err := json.Marshal(respMsg)
@@ -654,25 +659,22 @@ func (c *Component) publishResponse(ctx context.Context, resp agentic.AgentRespo
 		return errs.WrapInvalid(err, "Component", "publishResponse", "marshal response")
 	}
 
-	// Publish to output subjects
-	for _, port := range c.config.Ports.Outputs {
-		if port.Subject == "" {
-			continue
-		}
-
-		// Replace wildcard with request ID for specific routing
-		subject := port.Subject
-		if len(subject) > 0 && subject[len(subject)-1] == '*' {
-			subject = subject[:len(subject)-1] + resp.RequestID
-		}
-
-		// Use JetStream for publishing to ensure delivery
-		if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
-			return errs.WrapTransient(err, "Component", "publishResponse", fmt.Sprintf("publish to %s", subject))
-		}
+	subject := component.ResolveSubject(c.outputPortDefs(), "agent.response", resp.RequestID)
+	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
+		return errs.WrapTransient(err, "Component", "publishResponse", fmt.Sprintf("publish to %s", subject))
 	}
 
 	return nil
+}
+
+// outputPortDefs returns the configured output port definitions slice, or
+// nil when Ports is unset. Lets ResolveSubject fall back gracefully to
+// portName + "." + suffix for test configs without port wiring.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	if c.config.Ports == nil {
+		return nil
+	}
+	return c.config.Ports.Outputs
 }
 
 // publishErrorResponse publishes an error response with zero token usage.

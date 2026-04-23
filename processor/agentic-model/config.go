@@ -145,6 +145,12 @@ func DefaultConfig() Config {
 			Required:    true,
 			Description: "Agent response output (JetStream)",
 		},
+		{
+			Name:        "agent.stream",
+			Type:        "nats",
+			Subject:     "agent.stream.*",
+			Description: "Streaming delta chunks (core NATS, fire-and-forget)",
+		},
 	}
 
 	return Config{
