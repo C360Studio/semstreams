@@ -694,14 +694,15 @@ func (c *Component) recordError(err error) {
 // Register registers the graph-query component factory with the registry
 func Register(registry *component.Registry) error {
 	return registry.RegisterFactory("graph-query", &component.Registration{
-		Name:        "graph-query",
-		Type:        "processor",
-		Protocol:    "nats",
-		Domain:      "graph",
-		Description: "Query coordinator for graph subsystem",
-		Version:     "1.0.0",
-		Factory:     CreateGraphQuery,
-		Schema:      DefaultConfig().Schema(),
+		Name:         "graph-query",
+		Type:         "processor",
+		Protocol:     "nats",
+		Domain:       "graph",
+		Description:  "Query coordinator for graph subsystem",
+		Version:      "1.0.0",
+		Factory:      CreateGraphQuery,
+		Schema:       DefaultConfig().Schema(),
+		Dependencies: []string{component.DepModelRegistry},
 	})
 }
 

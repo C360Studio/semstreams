@@ -277,14 +277,15 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 // Register registers the graph-embedding factory with the component registry
 func Register(registry *component.Registry) error {
 	return registry.RegisterFactory("graph-embedding", &component.Registration{
-		Name:        "graph-embedding",
-		Type:        "processor",
-		Protocol:    "nats",
-		Domain:      "graph",
-		Description: "Graph entity embedding generation processor",
-		Version:     "1.0.0",
-		Schema:      schema,
-		Factory:     CreateGraphEmbedding,
+		Name:         "graph-embedding",
+		Type:         "processor",
+		Protocol:     "nats",
+		Domain:       "graph",
+		Description:  "Graph entity embedding generation processor",
+		Version:      "1.0.0",
+		Schema:       schema,
+		Factory:      CreateGraphEmbedding,
+		Dependencies: []string{component.DepModelRegistry},
 	})
 }
 

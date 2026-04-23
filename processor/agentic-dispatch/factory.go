@@ -16,14 +16,15 @@ func Register(registry *component.Registry) error {
 	}
 
 	registration := &component.Registration{
-		Name:        "agentic-dispatch",
-		Type:        "processor",
-		Protocol:    "jetstream",
-		Domain:      "agentic",
-		Description: "Routes user messages to agentic loops with command parsing and permissions",
-		Version:     "1.0.0",
-		Schema:      schema,
-		Factory:     NewComponent,
+		Name:         "agentic-dispatch",
+		Type:         "processor",
+		Protocol:     "jetstream",
+		Domain:       "agentic",
+		Description:  "Routes user messages to agentic loops with command parsing and permissions",
+		Version:      "1.0.0",
+		Schema:       schema,
+		Factory:      NewComponent,
+		Dependencies: []string{component.DepModelRegistry},
 	}
 
 	return registry.RegisterFactory("agentic-dispatch", registration)

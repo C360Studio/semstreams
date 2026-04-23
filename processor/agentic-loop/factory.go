@@ -11,14 +11,15 @@ func Register(registry *component.Registry) error {
 	}
 
 	registration := &component.Registration{
-		Name:        "agentic-loop",
-		Type:        "processor",
-		Protocol:    "nats",
-		Domain:      "agentic",
-		Description: "Orchestrates agentic loops with tool calls, state management, and trajectory tracking",
-		Version:     "1.0.0",
-		Schema:      schema,
-		Factory:     NewComponent,
+		Name:         "agentic-loop",
+		Type:         "processor",
+		Protocol:     "nats",
+		Domain:       "agentic",
+		Description:  "Orchestrates agentic loops with tool calls, state management, and trajectory tracking",
+		Version:      "1.0.0",
+		Schema:       schema,
+		Factory:      NewComponent,
+		Dependencies: []string{component.DepModelRegistry},
 	}
 
 	return registry.RegisterFactory("agentic-loop", registration)

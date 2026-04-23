@@ -12,13 +12,14 @@ type RegistryInterface interface {
 // Register registers the agentic-model processor component with the given registry
 func Register(registry RegistryInterface) error {
 	return registry.RegisterWithConfig(component.RegistrationConfig{
-		Name:        "agentic-model",
-		Factory:     NewComponent,
-		Schema:      agenticModelSchema,
-		Type:        "processor",
-		Protocol:    "openai",
-		Domain:      "semantic",
-		Description: "OpenAI-compatible agentic model processor with tool calling support",
-		Version:     "0.1.0",
+		Name:         "agentic-model",
+		Factory:      NewComponent,
+		Schema:       agenticModelSchema,
+		Type:         "processor",
+		Protocol:     "openai",
+		Domain:       "semantic",
+		Description:  "OpenAI-compatible agentic model processor with tool calling support",
+		Version:      "0.1.0",
+		Dependencies: []string{component.DepModelRegistry},
 	})
 }
