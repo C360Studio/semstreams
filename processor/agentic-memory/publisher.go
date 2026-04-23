@@ -129,8 +129,9 @@ func (c *Component) publishGraphMutations(ctx context.Context, loopID, operation
 		return errs.Wrap(err, "Component", "publishGraphMutations", "marshal graph mutation message")
 	}
 
-	// Build subject: graph.mutation.{loopID}
-	subject := fmt.Sprintf("graph.mutation.%s", loopID)
+	// Subject resolved via output port — defaults to graph.mutation.{loopID}
+	// when no port override is configured.
+	subject := component.ResolveSubject(c.outputPortDefs(), "graph_mutations", loopID)
 
 	// Publish if NATS client available
 	if c.natsClient != nil {
@@ -186,8 +187,9 @@ func (c *Component) publishCheckpointEvent(ctx context.Context, loopID, checkpoi
 		return errs.Wrap(err, "Component", "publishCheckpointEvent", "marshal checkpoint event message")
 	}
 
-	// Build subject: memory.checkpoint.created.{loopID}
-	subject := fmt.Sprintf("memory.checkpoint.created.%s", loopID)
+	// Subject resolved via output port — defaults to memory.checkpoint.created.{loopID}
+	// when no port override is configured.
+	subject := component.ResolveSubject(c.outputPortDefs(), "checkpoint_events", loopID)
 
 	// Publish if NATS client available
 	if c.natsClient != nil {
