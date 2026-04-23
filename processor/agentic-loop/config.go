@@ -286,6 +286,20 @@ func DefaultConfig() Config {
 					Description: "Agent task completions (JetStream)",
 				},
 				{
+					Name:        "agent.created",
+					Type:        "jetstream",
+					Subject:     "agent.created.*",
+					StreamName:  "AGENT",
+					Description: "Loop-created lifecycle events (JetStream)",
+				},
+				{
+					Name:        "agent.failed",
+					Type:        "jetstream",
+					Subject:     "agent.failed.*",
+					StreamName:  "AGENT",
+					Description: "Loop-failed lifecycle events (JetStream)",
+				},
+				{
 					Name:        "agent.context.compaction",
 					Type:        "jetstream",
 					Subject:     "agent.context.compaction.*",

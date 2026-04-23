@@ -9,20 +9,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
-)
-
-// Subject patterns for NATS publishing (concrete subjects, no wildcards).
-const (
-	subjectAgentRequest  = "agent.request"
-	subjectAgentCreated  = "agent.created"
-	subjectAgentFailed   = "agent.failed"
-	subjectToolExecute   = "tool.execute"
-	subjectAgentComplete = "agent.complete"
 )
 
 // TaskMessage is an alias for agentic.TaskMessage for backward compatibility.
@@ -628,11 +620,11 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 		State:  entity.State,
 		PublishedMessages: []PublishedMessage{
 			{
-				Subject: subjectAgentRequest + "." + loopID,
+				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
 				Data:    requestData,
 			},
 			{
-				Subject: subjectAgentCreated + "." + loopID,
+				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID),
 				Data:    createdData,
 			},
 		},
@@ -884,7 +876,7 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		return err
 	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: subjectToolExecute + "." + tc.Name,
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name),
 		Data:    toolData,
 	})
 	return nil
@@ -963,7 +955,7 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 		return err
 	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: subjectAgentComplete + "." + loopID,
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID),
 		Data:    completionData,
 	})
 
@@ -1213,7 +1205,7 @@ func (h *MessageHandler) handleToolsComplete(
 	}
 
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: subjectAgentRequest + "." + loopID,
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
 		Data:    requestData,
 	})
 
@@ -1344,7 +1336,7 @@ func (h *MessageHandler) BuildFailureMessages(loopID, reason, errorMsg string) (
 	}
 
 	return failure, []PublishedMessage{{
-		Subject: subjectAgentFailed + "." + loopID,
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID),
 		Data:    data,
 	}}, nil
 }
