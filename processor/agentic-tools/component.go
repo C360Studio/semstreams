@@ -141,14 +141,14 @@ func (c *Component) Start(ctx context.Context) error {
 		}
 	}
 
-	// tool.list for request/reply discovery
-	// Use subject from port config if available, otherwise default to "tool.list"
-	// Note: If your JetStream stream subjects include "tool.>" or similar patterns,
-	// you must configure a different subject (e.g., "discovery.tool.list") to avoid
-	// JetStream capturing the request/reply message before the handler responds.
+	// tool.list for request/reply discovery.
+	// Port name is "tool.list" in DefaultConfig; override the subject if your
+	// JetStream stream subjects include "tool.>" or similar patterns that
+	// would capture the request/reply before the core NATS handler responds
+	// (e.g., override to "discovery.tool.list").
 	toolListSubject := "tool.list"
 	for _, port := range c.config.Ports.Inputs {
-		if port.Name == "tool_list_request" {
+		if port.Name == "tool.list" {
 			if port.Subject != "" {
 				toolListSubject = port.Subject
 			}

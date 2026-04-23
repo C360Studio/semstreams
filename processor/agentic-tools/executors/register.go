@@ -47,6 +47,11 @@ type ToolDependencies struct {
 	PersonaManager      PersonaManager      // Pattern-B step 3
 	FlowTemplateManager FlowTemplateManager // Pattern-B step 4
 	ComponentRegistry   *component.Registry // Pattern-B step 5; nil → list_components skipped
+	// LoopsBucket is the NATS KV bucket name holding agent-loop state.
+	// read_loop_result + flow_monitor both read from it. Empty falls back
+	// to "AGENT_LOOPS". One bucket per process — wiring is boot-time so
+	// the name is frozen at RegisterAll for the lifetime of the process.
+	LoopsBucket string
 }
 
 // RegisterAll wires every tool this package owns into the agentic-tools
@@ -64,10 +69,15 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	registerHTTPRequest(logger)
 	registerGitHub(logger)
 
+	loopsBucket := deps.LoopsBucket
+	if loopsBucket == "" {
+		loopsBucket = "AGENT_LOOPS"
+	}
+
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity)")
 	} else {
-		registerReadLoopResult(ctx, deps.NATSClient, logger)
+		registerReadLoopResult(ctx, deps.NATSClient, logger, loopsBucket)
 		registerDecide(deps.NATSClient, deps.Platform, logger)
 		registerEmitDiagnosis(deps.NATSClient, deps.Platform, logger)
 		registerGraphQuery(ctx, deps.NATSClient, logger)
@@ -81,7 +91,7 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	registerPersonas(deps.PersonaManager, logger)
 	registerFlowTemplates(deps.FlowTemplateManager, logger)
 	registerComponentCatalog(deps.ComponentRegistry, logger)
-	registerFlowMonitor(deps.NATSClient, deps.FlowManager, logger)
+	registerFlowMonitor(deps.NATSClient, deps.FlowManager, logger, loopsBucket)
 }
 
 // registerGlobal is the shared RegisterTool wrapper with idempotent

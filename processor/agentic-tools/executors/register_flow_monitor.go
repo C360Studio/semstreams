@@ -8,11 +8,6 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
-// loopMonitorBucket is the KV bucket that holds COMPLETE_* loop records.
-// Matches the constant used by registerReadLoopResult — same physical bucket,
-// different access pattern (scan vs point-get).
-const loopMonitorBucket = loopResultBucket
-
 // flowStateAdapter bridges FlowManager (executors package) to the
 // agentictools.FlowStateReader interface so the monitor executor stays free
 // of a direct flowstore import.
@@ -28,10 +23,13 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 	return agentictools.FlowState{RuntimeState: string(flow.RuntimeState)}, nil
 }
 
-// registerFlowMonitor opens the AGENT_LOOPS KV bucket and wires the
-// monitor_flow tool globally. Nil natsClient or flowMgr → skip with warn
-// (the tool requires both to be useful).
-func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger) {
+// registerFlowMonitor opens the loops KV bucket and wires the monitor_flow
+// tool globally. Nil natsClient or flowMgr → skip with warn (the tool
+// requires both to be useful). The bucketName must match the one
+// registerReadLoopResult used — they're the same physical bucket, different
+// access pattern (scan vs point-get). ToolDependencies.LoopsBucket is the
+// single source of truth for both.
+func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) {
 	if natsClient == nil {
 		logger.Warn("monitor_flow tool disabled: no NATS client provided")
 		return
@@ -41,16 +39,15 @@ func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, log
 		return
 	}
 
-	// We reuse the same AGENT_LOOPS bucket as read_loop_result; open a fresh
-	// handle here so the two tools are lifecycle-independent. Use the shared
-	// loopResultBucketConfig so whichever register fn (or the agentic-loop
+	// Open a fresh handle to the same KV bucket read_loop_result opened.
+	// Shared KV config means whichever register fn (or the agentic-loop
 	// component) lands first creates the bucket with the agreed-upon
 	// History/TTL; the others get the existing handle idempotently.
 	ctx := context.Background()
-	bucket, err := natsClient.CreateKeyValueBucket(ctx, loopResultBucketConfig)
+	bucket, err := natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
 	if err != nil {
 		logger.Warn("monitor_flow tool disabled: could not open loops bucket",
-			slog.String("bucket", loopMonitorBucket),
+			slog.String("bucket", bucketName),
 			slog.Any("error", err))
 		return
 	}
@@ -64,5 +61,5 @@ func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, log
 		return
 	}
 	logger.Info("Registered monitor_flow tool (global)",
-		slog.String("bucket", loopMonitorBucket))
+		slog.String("bucket", bucketName))
 }

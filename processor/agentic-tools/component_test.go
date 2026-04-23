@@ -39,31 +39,40 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	ports := comp.InputPorts()
 
-	if len(ports) != 1 {
-		t.Fatalf("InputPorts() count = %d, want 1", len(ports))
+	// tool.execute is the JetStream input for tool invocations;
+	// tool.list is the core NATS request/reply discovery endpoint.
+	if len(ports) != 2 {
+		t.Fatalf("InputPorts() count = %d, want 2", len(ports))
 	}
 
-	port := ports[0]
-	if port.Name != "tool.execute" {
-		t.Errorf("InputPort name = %s, want tool.execute", port.Name)
-	}
-	if port.Direction != component.DirectionInput {
-		t.Errorf("InputPort direction = %v, want DirectionInput", port.Direction)
-	}
-	if !port.Required {
-		t.Error("InputPort should be required")
+	byName := map[string]component.Port{}
+	for _, p := range ports {
+		byName[p.Name] = p
 	}
 
-	// Verify JetStream config (component uses JetStream for durable messaging)
-	jsConfig, ok := port.Config.(component.JetStreamPort)
+	exec, ok := byName["tool.execute"]
 	if !ok {
-		t.Fatalf("InputPort config should be JetStreamPort, got %T", port.Config)
+		t.Fatalf("expected input port tool.execute, got %v", byName)
+	}
+	if exec.Direction != component.DirectionInput {
+		t.Errorf("tool.execute direction = %v, want DirectionInput", exec.Direction)
+	}
+	if !exec.Required {
+		t.Error("tool.execute should be required")
+	}
+	jsConfig, ok := exec.Config.(component.JetStreamPort)
+	if !ok {
+		t.Fatalf("tool.execute config should be JetStreamPort, got %T", exec.Config)
 	}
 	if len(jsConfig.Subjects) != 1 || jsConfig.Subjects[0] != "tool.execute.>" {
-		t.Errorf("InputPort subjects = %v, want [tool.execute.>]", jsConfig.Subjects)
+		t.Errorf("tool.execute subjects = %v, want [tool.execute.>]", jsConfig.Subjects)
 	}
 	if jsConfig.StreamName != "AGENT" {
-		t.Errorf("InputPort stream = %s, want AGENT", jsConfig.StreamName)
+		t.Errorf("tool.execute stream = %s, want AGENT", jsConfig.StreamName)
+	}
+
+	if _, ok := byName["tool.list"]; !ok {
+		t.Errorf("expected input port tool.list for discovery request/reply, got %v", byName)
 	}
 }
 

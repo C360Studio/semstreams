@@ -155,6 +155,7 @@ func run() error {
 		PersonaManager:      personaMgr,
 		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:   componentRegistry,
+		LoopsBucket:         extractLoopsBucket(cfg),
 	})
 
 	// 11. Run application with signal handling
@@ -270,6 +271,26 @@ func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
 	}
 
 	return natsclient.NewClient(natsURLs)
+}
+
+// extractLoopsBucket pulls the agentic-tools loops_bucket config value so
+// executors.RegisterAll can thread it into the stateful-tool registrations
+// (read_loop_result, monitor_flow). Empty return falls back to AGENT_LOOPS
+// inside RegisterAll. Tool registration is boot-time, so the bucket name is
+// frozen for the lifetime of the process — one bucket per process.
+func extractLoopsBucket(cfg *config.Config) string {
+	for _, cc := range cfg.Components {
+		if cc.Name != "agentic-tools" || !cc.Enabled {
+			continue
+		}
+		var tcfg struct {
+			LoopsBucket string `json:"loops_bucket"`
+		}
+		if err := json.Unmarshal(cc.Config, &tcfg); err == nil && tcfg.LoopsBucket != "" {
+			return tcfg.LoopsBucket
+		}
+	}
+	return ""
 }
 
 // extractPlatformMeta extracts platform identity from config.

@@ -88,6 +88,12 @@ func DefaultConfig() Config {
 			Required:    true,
 			Description: "Tool execution requests (JetStream)",
 		},
+		{
+			Name:        "tool.list",
+			Type:        "nats",
+			Subject:     "tool.list",
+			Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
+		},
 	}
 
 	outputDefs := []component.PortDefinition{

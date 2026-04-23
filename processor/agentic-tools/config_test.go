@@ -179,16 +179,23 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() ports should not be nil")
 	}
 
-	if len(cfg.Ports.Inputs) != 1 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 1", len(cfg.Ports.Inputs))
+	// tool.execute (JetStream) + tool.list (core NATS request/reply).
+	if len(cfg.Ports.Inputs) != 2 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 2", len(cfg.Ports.Inputs))
 	}
 	if len(cfg.Ports.Outputs) != 1 {
 		t.Errorf("DefaultConfig() output ports count = %d, want 1", len(cfg.Ports.Outputs))
 	}
 
-	// Verify input subject
-	if cfg.Ports.Inputs[0].Subject != "tool.execute.>" {
-		t.Errorf("DefaultConfig() input subject = %s, want tool.execute.>", cfg.Ports.Inputs[0].Subject)
+	ins := map[string]string{}
+	for _, p := range cfg.Ports.Inputs {
+		ins[p.Name] = p.Subject
+	}
+	if ins["tool.execute"] != "tool.execute.>" {
+		t.Errorf("tool.execute input subject = %q, want tool.execute.>", ins["tool.execute"])
+	}
+	if ins["tool.list"] != "tool.list" {
+		t.Errorf("tool.list input subject = %q, want tool.list", ins["tool.list"])
 	}
 
 	// Verify output subject
