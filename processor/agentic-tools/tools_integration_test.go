@@ -595,7 +595,7 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 					Required:   true,
 				},
 				{
-					Name:     "tool_list_request",
+					Name:     "tool.list",
 					Type:     "nats",
 					Subject:  toolListSubject,
 					Required: false,
