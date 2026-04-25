@@ -687,8 +687,24 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 		return
 	}
 
-	// Update loop state
-	c.loopTracker.UpdateState(completion.LoopID, completion.Outcome)
+	// Update loop state via UpdateCompletion so Outcome → State mapping
+	// goes through outcomeToState (e.g., outcome="success" → state="complete").
+	// UpdateState would have written the raw outcome string into State,
+	// breaking isTerminalState() for the success path. Result/CompletedAt
+	// also get populated for /loops + SSE consumers.
+	if err := c.loopTracker.UpdateCompletion(
+		completion.LoopID,
+		completion.Outcome,
+		completion.Result,
+		"",
+	); err != nil {
+		c.logger.Error("failed to record loop completion",
+			slog.String("loop_id", completion.LoopID),
+			slog.String("outcome", completion.Outcome),
+			slog.Any("error", err))
+		// Continue: response building below should still happen so the
+		// user sees something even if our internal tracker is out of sync.
+	}
 
 	// Record loop ended
 	c.metrics.recordLoopEnded()
@@ -792,8 +808,20 @@ func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 	}
 	failure := *failurePtr
 
-	// Update loop state
-	c.loopTracker.UpdateState(failure.LoopID, "failed")
+	// Update loop state via UpdateCompletion so failure.Error and
+	// CompletedAt are recorded too — UpdateState alone would only set
+	// the State field and discard everything else from the failure event.
+	if err := c.loopTracker.UpdateCompletion(
+		failure.LoopID,
+		failure.Outcome,
+		"",
+		failure.Error,
+	); err != nil {
+		c.logger.Error("failed to record loop failure",
+			slog.String("loop_id", failure.LoopID),
+			slog.String("outcome", failure.Outcome),
+			slog.Any("error", err))
+	}
 
 	// Record metrics
 	c.metrics.recordLoopEnded()
