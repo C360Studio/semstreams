@@ -420,6 +420,105 @@ func TestConfigManager_ModelRegistryKVUpdate(t *testing.T) {
 	}
 }
 
+// TestConfigManager_WatchModelRegistry verifies the typed convenience
+// channel for external library consumers: WatchModelRegistry emits
+// the latest *model.Registry on every model_registry KV update.
+// Pairs with model.Watch — together they provide the documented
+// "external consumer keeps own registry fresh" pattern.
+func TestConfigManager_WatchModelRegistry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+
+	cfg := &Config{
+		Version: "1.0.0",
+		Platform: PlatformConfig{
+			Org:  "c360",
+			ID:   "test-platform",
+			Type: "test",
+		},
+		Services:   make(types.ServiceConfigs),
+		Components: make(ComponentConfigs),
+		ModelRegistry: &model.Registry{
+			Endpoints: map[string]*model.EndpointConfig{
+				"initial": {
+					Provider: "ollama", URL: "http://x/v1",
+					Model: "initial-model", MaxTokens: 1024,
+				},
+			},
+			Defaults: model.DefaultsConfig{Model: "initial"},
+		},
+	}
+
+	client := natsclient.NewTestClient(t, natsclient.WithJetStream())
+
+	cm, err := NewConfigManager(cfg, client.Client, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, cm.PushToKV(ctx))
+	require.NoError(t, cm.Start(ctx))
+	defer cm.Stop(5 * time.Second)
+
+	// Subscribe BEFORE the KV write so we don't race the watcher setup.
+	regCh := cm.WatchModelRegistry()
+
+	// Drain the initial config emit (mirrors OnChange semantics).
+	select {
+	case <-regCh:
+	case <-time.After(200 * time.Millisecond):
+		// No initial emit is acceptable too; the channel may simply
+		// not have warmed up yet. We care about the KV-driven update.
+	}
+
+	// Update KV with a new registry shape.
+	updated := &model.Registry{
+		Endpoints: map[string]*model.EndpointConfig{
+			"swapped": {
+				Provider: "anthropic",
+				Model:    "claude-test",
+			},
+		},
+		Defaults: model.DefaultsConfig{Model: "swapped"},
+	}
+	data, err := json.Marshal(updated)
+	require.NoError(t, err)
+	_, err = cm.kv.Put(ctx, "model_registry", data)
+	require.NoError(t, err)
+
+	// WatchModelRegistry must emit the new registry.
+	select {
+	case got := <-regCh:
+		require.NotNil(t, got)
+		assert.Equal(t, "swapped", got.GetDefault())
+		assert.NotNil(t, got.GetEndpoint("swapped"))
+		assert.Nil(t, got.GetEndpoint("initial"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for WatchModelRegistry update")
+	}
+}
+
+// TestConfigManager_WatchModelRegistry_ImplementsModelWatcher proves
+// the public surface satisfies model.Watcher at compile time, so
+// model.Watch can consume cm directly. Catches accidental signature
+// drift between the two packages.
+func TestConfigManager_WatchModelRegistry_ImplementsModelWatcher(t *testing.T) {
+	cfg := &Config{
+		Version:    "1.0.0",
+		Platform:   PlatformConfig{Org: "c360", ID: "test", Type: "test"},
+		Services:   make(types.ServiceConfigs),
+		Components: make(ComponentConfigs),
+	}
+	client := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	cm, err := NewConfigManager(cfg, client.Client, nil)
+	require.NoError(t, err)
+
+	var w model.Watcher = cm
+	_ = w
+}
+
 func TestConfigManager_MultipleSubscribers(t *testing.T) {
 	cfg := &Config{
 		Version:    "1.0.0",

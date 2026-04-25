@@ -78,6 +78,52 @@ func (cm *Manager) GetConfig() *SafeConfig {
 	return cm.config
 }
 
+// WatchModelRegistry returns a channel that emits the latest
+// *model.Registry whenever the model_registry KV key changes. The
+// channel is buffered (cap 1); slow consumers see the most recent
+// registry on their next read — intermediate updates coalesce.
+//
+// Use this for external library consumers that hold their own
+// *model.Registry alongside the semstreams runtime and need to refresh
+// it on KV change. semstreams components do NOT need this — they're
+// restarted by ComponentManager when their factory declares
+// component.DepModelRegistry.
+//
+// See model.Watch for a one-line consumer pattern.
+//
+// The channel closes when the manager Stop()s.
+func (cm *Manager) WatchModelRegistry() <-chan *model.Registry {
+	in := cm.OnChange("model_registry")
+	out := make(chan *model.Registry, 1)
+
+	cm.wg.Add(1)
+	go func() {
+		defer cm.wg.Done()
+		defer close(out)
+		for u := range in {
+			if cm.stopped.Load() {
+				return
+			}
+			cfg := u.Config.Get()
+			// Coalesce: if a previous registry is still pending in the
+			// buffer, drop it in favor of the latest. Keeps slow
+			// consumers from staring at stale state.
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- cfg.ModelRegistry:
+			default:
+				// Should not happen since we just drained, but be
+				// defensive against concurrent reader.
+			}
+		}
+	}()
+
+	return out
+}
+
 // OnChange subscribes to configuration changes matching the pattern
 // Returns a channel that receives updates when configuration changes
 // Pattern examples:
