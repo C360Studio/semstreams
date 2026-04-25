@@ -121,6 +121,34 @@ func TestValidate(t *testing.T) {
 			wantErr: "endpoint \"bad\" is nil",
 		},
 		{
+			name: "endpoint with empty name",
+			modify: func(r *Registry) {
+				r.Endpoints[""] = &EndpointConfig{Model: "test", MaxTokens: 1000}
+			},
+			wantErr: "endpoint name must not be empty",
+		},
+		{
+			name: "endpoint name with dot",
+			modify: func(r *Registry) {
+				r.Endpoints["bad.name"] = &EndpointConfig{Model: "test", MaxTokens: 1000}
+			},
+			wantErr: "name contains invalid character",
+		},
+		{
+			name: "endpoint name with space",
+			modify: func(r *Registry) {
+				r.Endpoints["bad name"] = &EndpointConfig{Model: "test", MaxTokens: 1000}
+			},
+			wantErr: "name contains invalid character",
+		},
+		{
+			name: "endpoint name with slash",
+			modify: func(r *Registry) {
+				r.Endpoints["org/model"] = &EndpointConfig{Model: "test", MaxTokens: 1000}
+			},
+			wantErr: "name contains invalid character",
+		},
+		{
 			name: "capability references non-existent preferred",
 			modify: func(r *Registry) {
 				r.Capabilities["bad"] = &CapabilityConfig{

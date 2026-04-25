@@ -230,7 +230,36 @@ func (r *Registry) Validate() error {
 	return nil
 }
 
+// validateEndpointName checks that the endpoint name (registry map key)
+// is well-formed enough to be used downstream as part of an entity ID.
+// Bad names — empty, dot-bearing, or non-alphanumeric — pass JSON
+// unmarshal cleanly but later panic when agentic.ModelEndpointEntityID
+// constructs a 6-part ID from them at agentic-loop Start. Catching the
+// problem at config-load time instead surfaces a clear error before any
+// component starts.
+//
+// Allowed characters mirror message.IsValidEntityID's per-part rules:
+// ASCII letters, digits, hyphen, underscore. Non-empty.
+func validateEndpointName(name string) error {
+	if name == "" {
+		return fmt.Errorf("endpoint name must not be empty")
+	}
+	for _, c := range name {
+		ok := (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') ||
+			c == '-' || c == '_'
+		if !ok {
+			return fmt.Errorf("endpoint %q: name contains invalid character %q (allowed: alphanumeric, '-', '_')", name, c)
+		}
+	}
+	return nil
+}
+
 func validateEndpoint(name string, ep *EndpointConfig) error {
+	if err := validateEndpointName(name); err != nil {
+		return err
+	}
 	if ep == nil {
 		return fmt.Errorf("endpoint %q is nil", name)
 	}
