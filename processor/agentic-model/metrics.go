@@ -34,6 +34,9 @@ type modelMetrics struct {
 
 	// Truncation
 	lengthTruncationsTotal *prometheus.CounterVec
+
+	// Endpoint health (circuit-breaker observability)
+	endpointHealthState *prometheus.GaugeVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -125,6 +128,13 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 				Name:      "length_truncations_total",
 				Help:      "Total responses truncated due to finish_reason=length (max_tokens hit)",
 			}, []string{"model"}),
+
+			endpointHealthState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_model",
+				Name:      "endpoint_health_state",
+				Help:      "Circuit-breaker state for each endpoint (1 if endpoint is in this state, 0 otherwise). state label: closed, open, half_open.",
+			}, []string{"endpoint", "state"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -140,6 +150,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = registry.RegisterCounterVec("agentic-model", "rate_limit_hits_total", metrics.rateLimitHits)
 			_ = registry.RegisterCounterVec("agentic-model", "rate_limit_retries_total", metrics.rateLimitRetries)
 			_ = registry.RegisterCounterVec("agentic-model", "length_truncations_total", metrics.lengthTruncationsTotal)
+			_ = registry.RegisterGaugeVec("agentic-model", "endpoint_health_state", metrics.endpointHealthState)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestsTotal)
@@ -153,9 +164,27 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitHits)
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitRetries)
 			_ = prometheus.DefaultRegisterer.Register(metrics.lengthTruncationsTotal)
+			_ = prometheus.DefaultRegisterer.Register(metrics.endpointHealthState)
 		}
 	})
 	return metrics
+}
+
+// recordEndpointHealthState sets the gauge for one endpoint to indicate
+// its current circuit-breaker state. Sets the matching label to 1 and
+// the other two states to 0 so dashboards can sum across the state
+// label and rely on the result equaling 1.
+//
+// Called from the request path each time recordHealthResult fires so
+// the gauge converges on the latest state without a separate poller.
+func (m *modelMetrics) recordEndpointHealthState(endpoint, state string) {
+	for _, s := range []string{"closed", "open", "half_open"} {
+		v := 0.0
+		if s == state {
+			v = 1.0
+		}
+		m.endpointHealthState.WithLabelValues(endpoint, s).Set(v)
+	}
 }
 
 // recordRequestStart records the start of a model request.

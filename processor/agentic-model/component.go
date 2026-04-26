@@ -29,8 +29,14 @@ type Component struct {
 	name          string
 	config        Config
 	modelRegistry model.RegistryReader
-	natsClient    *natsclient.Client
-	logger        *slog.Logger
+	// healthPolicy gates the fallback chain in getClientForRequest:
+	// endpoints with an Open circuit breaker are skipped during
+	// resolution. Defaults to an in-process RollingWindowBreaker;
+	// callers can override via WithHealthPolicy for shared-state or
+	// custom policies (e.g., NATS-KV-backed for cross-process state).
+	healthPolicy model.HealthPolicy
+	natsClient   *natsclient.Client
+	logger       *slog.Logger
 
 	// Dynamic client cache — clients are created on-demand from registry endpoints
 	clientCache map[string]*Client // cache key -> client
@@ -53,6 +59,29 @@ type Component struct {
 	lastActivity      time.Time
 	metrics           *modelMetrics
 }
+
+// Option configures optional Component behavior at construction time.
+// Pass to NewComponentWithOptions for non-default wiring.
+type Option func(*Component)
+
+// WithHealthPolicy injects a custom HealthPolicy. The default is an
+// in-process RollingWindowBreaker tuned for typical LLM workloads
+// (window=20, min=5, threshold=0.5, cooldown=30s). Override to share
+// circuit-breaker state across processes (e.g., NATS-KV-backed) or to
+// disable circuit breaking with model.NewAlwaysHealthyPolicy().
+func WithHealthPolicy(p model.HealthPolicy) Option {
+	return func(c *Component) {
+		if p != nil {
+			c.healthPolicy = p
+		}
+	}
+}
+
+// HealthPolicy returns the active health policy. Useful for callers
+// that want to consult endpoint state from outside agentic-model
+// (e.g., a sibling dispatcher consulting circuit-breaker state before
+// routing) without going through the registry interface.
+func (c *Component) HealthPolicy() model.HealthPolicy { return c.healthPolicy }
 
 // consumerInfo tracks JetStream consumer details for cleanup
 type consumerInfo struct {
@@ -96,16 +125,62 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 	}
 
+	return newComponent(config, deps, messageTimeout), nil
+}
+
+// NewComponentWithOptions is the option-aware constructor. The factory
+// path (NewComponent) calls this with no options, yielding the default
+// in-process RollingWindowBreaker for circuit breaking. Tests and
+// callers wanting a custom HealthPolicy use this directly.
+func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependencies, opts ...Option) (component.Discoverable, error) {
+	var config Config
+	if err := json.Unmarshal(rawConfig, &config); err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
+	}
+	if config.Ports == nil {
+		config = DefaultConfig()
+		if err := json.Unmarshal(rawConfig, &config); err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
+		}
+	}
+	if err := config.Validate(); err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "validate config")
+	}
+	if deps.ModelRegistry == nil {
+		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponentWithOptions", "model registry is required")
+	}
+
+	messageTimeout := 120 * time.Second
+	if config.Timeout != "" {
+		var err error
+		messageTimeout, err = time.ParseDuration(config.Timeout)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "parse timeout")
+		}
+	}
+
+	c := newComponent(config, deps, messageTimeout)
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
+// newComponent builds the Component value with default policies wired
+// in. Shared between NewComponent (no options) and
+// NewComponentWithOptions (caller-supplied options applied after).
+func newComponent(config Config, deps component.Dependencies, messageTimeout time.Duration) *Component {
 	return &Component{
 		name:           "agentic-model",
 		config:         config,
 		modelRegistry:  deps.ModelRegistry,
+		healthPolicy:   model.NewRollingWindowBreaker(model.BreakerConfig{}),
 		clientCache:    make(map[string]*Client),
 		natsClient:     deps.NATSClient,
 		logger:         deps.GetLogger(),
 		messageTimeout: messageTimeout,
 		metrics:        getMetrics(deps.MetricsRegistry),
-	}, nil
+	}
 }
 
 // Initialize prepares the component (no-op for this component)
@@ -341,7 +416,7 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 		slog.String("model", req.Model),
 		slog.String("role", req.Role))
 
-	client, endpoint, capability, err := c.getClientForRequest(req)
+	client, endpoint, capability, endpointName, err := c.getClientForRequest(req)
 	if err != nil {
 		c.logger.Error("Failed to resolve endpoint", "error", err, "model", req.Model)
 		c.publishErrorResponse(ctx, req.RequestID, err.Error())
@@ -356,13 +431,61 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 
 	resp, err := c.executeRequest(ctx, client, req, endpoint, capability)
 	duration := time.Since(startTime).Seconds()
+	latency := time.Since(startTime)
 
 	if err != nil || resp.Status == "error" {
+		c.recordHealthResult(ctx, endpointName, false, err, resp.Error, latency)
 		c.handleModelError(ctx, req, resp, err, duration)
 		return
 	}
 
+	c.recordHealthResult(ctx, endpointName, true, nil, "", latency)
 	c.handleModelSuccess(ctx, req, resp, duration)
+}
+
+// recordHealthResult forwards a request outcome to the health policy.
+// Centralizes the success/error → model.Result translation so the
+// breaker accounting and metrics agree on classification.
+func (c *Component) recordHealthResult(ctx context.Context, endpointName string, success bool, err error, respErr string, latency time.Duration) {
+	if c.healthPolicy == nil || endpointName == "" {
+		return
+	}
+	kind := model.ErrorKindNone
+	if !success {
+		errMsg := respErr
+		if err != nil {
+			errMsg = err.Error()
+		}
+		kind = mapErrorKind(ctx, errMsg)
+	}
+	c.healthPolicy.RecordResult(endpointName, model.Result{
+		Success: success,
+		Kind:    kind,
+		Latency: latency,
+	})
+	if c.metrics != nil {
+		c.metrics.recordEndpointHealthState(endpointName, c.healthPolicy.EndpointStatus(endpointName).String())
+	}
+}
+
+// mapErrorKind classifies an error string for HealthPolicy accounting.
+// Mirrors classifyError (used by metrics) so circuit-breaker math and
+// Prometheus error_type labels stay aligned.
+func mapErrorKind(ctx context.Context, errorMsg string) model.ErrorKind {
+	if ctx != nil && ctx.Err() != nil {
+		return model.ErrorKindTimeout
+	}
+	switch {
+	case strings.Contains(errorMsg, "rate limit"), strings.Contains(errorMsg, "429"):
+		return model.ErrorKindRateLimit
+	case strings.Contains(errorMsg, "connection"), strings.Contains(errorMsg, "dial"):
+		return model.ErrorKindNetwork
+	case strings.Contains(errorMsg, "500"), strings.Contains(errorMsg, "502"),
+		strings.Contains(errorMsg, "503"), strings.Contains(errorMsg, "504"):
+		return model.ErrorKindServerError
+	default:
+		return model.ErrorKindUnknown
+	}
 }
 
 // parseAgentRequest extracts an AgentRequest from raw message data
@@ -466,37 +589,70 @@ func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentReq
 // Returns the resolved client, the endpoint config, and the capability name (empty
 // when req.Model was a concrete endpoint name). Callers use the capability name to
 // look up per-capability timeouts.
-func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *model.EndpointConfig, string, error) {
-	var ep *model.EndpointConfig
-	var capability string
 
-	// 1. Try capability-based resolution
+// resolveEndpoint walks the chain → direct → default → last-ditch
+// resolution path, returning the first endpoint that maps to a real
+// EndpointConfig under the active health policy. Splitting this out
+// of getClientForRequest keeps the caller below the revive
+// function-length limit and makes the resolution logic separately
+// testable.
+func (c *Component) resolveEndpoint(req agentic.AgentRequest) (*model.EndpointConfig, string, string) {
 	chain := c.modelRegistry.GetFallbackChain(req.Model)
+	capability := ""
 	if len(chain) > 0 {
 		capability = req.Model
 	}
+
+	// 1. Capability chain — first healthy endpoint wins.
+	for _, name := range chain {
+		candidate := c.modelRegistry.GetEndpoint(name)
+		if candidate == nil {
+			continue
+		}
+		if !c.healthPolicy.IsHealthy(name) {
+			c.logger.Info("skipping unhealthy endpoint in fallback chain",
+				slog.String("endpoint", name),
+				slog.String("status", c.healthPolicy.EndpointStatus(name).String()))
+			continue
+		}
+		return candidate, name, capability
+	}
+
+	// 2. Direct endpoint name — health-gated for the same reason.
+	if candidate := c.modelRegistry.GetEndpoint(req.Model); candidate != nil {
+		if c.healthPolicy.IsHealthy(req.Model) {
+			return candidate, req.Model, capability
+		}
+		c.logger.Info("requested endpoint unhealthy; falling through to default",
+			slog.String("endpoint", req.Model),
+			slog.String("status", c.healthPolicy.EndpointStatus(req.Model).String()))
+	}
+
+	// 3. Default — NOT health-gated. Last guaranteed responder; we'd
+	// rather attempt and let the breaker re-record than queue dead air.
+	if defaultName := c.modelRegistry.GetDefault(); defaultName != "" {
+		if ep := c.modelRegistry.GetEndpoint(defaultName); ep != nil {
+			return ep, defaultName, capability
+		}
+	}
+
+	// 4. Last-ditch: chain unhealthy AND no default. Retry chain
+	// ignoring health so the next request result reaches the breaker.
 	for _, name := range chain {
 		if candidate := c.modelRegistry.GetEndpoint(name); candidate != nil {
-			ep = candidate
-			break
+			c.logger.Warn("all chain endpoints unhealthy; attempting anyway",
+				slog.String("endpoint", name))
+			return candidate, name, capability
 		}
 	}
 
-	// 2. Try direct endpoint name
-	if ep == nil {
-		ep = c.modelRegistry.GetEndpoint(req.Model)
-	}
+	return nil, "", capability
+}
 
-	// 3. Fall back to default
+func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *model.EndpointConfig, string, string, error) {
+	ep, endpointName, capability := c.resolveEndpoint(req)
 	if ep == nil {
-		defaultName := c.modelRegistry.GetDefault()
-		if defaultName != "" {
-			ep = c.modelRegistry.GetEndpoint(defaultName)
-		}
-	}
-
-	if ep == nil {
-		return nil, nil, "", errs.WrapInvalid(
+		return nil, nil, "", "", errs.WrapInvalid(
 			fmt.Errorf("no endpoint found for model %q in registry", req.Model),
 			"Component", "getClientForRequest", "resolve endpoint",
 		)
@@ -509,12 +665,12 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *mod
 	defer c.clientMu.Unlock()
 
 	if client, ok := c.clientCache[cacheKey]; ok {
-		return client, ep, capability, nil
+		return client, ep, capability, endpointName, nil
 	}
 
 	client, err := NewClient(ep)
 	if err != nil {
-		return nil, nil, "", errs.Wrap(err, "Component", "getClientForRequest", fmt.Sprintf("create client for model %q", req.Model))
+		return nil, nil, "", "", errs.Wrap(err, "Component", "getClientForRequest", fmt.Sprintf("create client for model %q", req.Model))
 	}
 
 	// Wire provider adapter for request/response normalization.
@@ -538,7 +694,7 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *mod
 	}
 
 	c.clientCache[cacheKey] = client
-	return client, ep, capability, nil
+	return client, ep, capability, endpointName, nil
 }
 
 // makeChunkHandler returns a ChunkHandler that publishes chunks to core NATS.
