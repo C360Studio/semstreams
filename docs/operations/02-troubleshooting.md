@@ -158,8 +158,9 @@ func (t *MyMessage) MarshalJSON() ([]byte, error) {
 
 **Diagnosis**:
 ```go
-// List all registered payloads
-payloads := component.GlobalPayloadRegistry().ListPayloads()
+// List all registered payloads (via the global package-level registry).
+// In tests or scratch code, build your own via payloadregistry.New().
+payloads := payloadregistry.Global().List()
 for msgType := range payloads {
     fmt.Println(msgType)
 }
@@ -181,7 +182,7 @@ import _ "github.com/c360studio/semstreams/mypackage"
 
 ```go
 // Registration
-component.RegisterPayload(&component.PayloadRegistration{
+payloadregistry.Register(&payloadregistry.Registration{
     Domain:   "agentic",
     Category: "task",      // <-- Must match exactly
     Version:  "v1",

@@ -254,7 +254,7 @@ func (p *RobotPositionPayload) EntityType() string {
 
 // Register with global registry
 func init() {
-    err := component.RegisterPayload(&component.PayloadRegistration{
+    err := payloadregistry.Register(&payloadregistry.Registration{
         Domain:      "robotics",
         Category:    "position",
         Version:     "v1",
@@ -371,7 +371,7 @@ func TestProcessorWithLocatable(t *testing.T) {
     func (m *MockLocatable) Location() (float64, float64) { return m.Lat, m.Lon }
 
     // Register mock type
-    component.RegisterPayload(&component.PayloadRegistration{
+    payloadregistry.Register(&payloadregistry.Registration{
         Domain: "mock",
         Category: "locatable",
         Version: "v1",
@@ -605,7 +605,7 @@ func migrateOldMessage(old *OldMessage) (*message.BaseMessage, error) {
 
 ```go
 func init() {
-    component.RegisterPayload(&component.PayloadRegistration{
+    payloadregistry.Register(&payloadregistry.Registration{
         Domain: "X",
         Category: "Y",
         Version: "Z",

@@ -2,7 +2,19 @@
 
 ## Status
 
-Proposed — **refreshed 2026-04-18** with ADR-028 framing. The original "dynamic flow composition" framing stands for the tool set, but the coordinator's primary purpose is broader: it is the **judgment role** in the three-layer orchestration architecture (ADR-028). Dynamic flow composition is one of its capabilities, not its definition.
+**Partial — Phase 1 shipped, dynamic-composition tools deferred.** The
+coordinator persona, the `decide` terminal tool, and the deep-research
+flow that exercises coordinator judgment are all landed and verified
+e2e. The six dynamic-flow-composition tools below (`create_rule`,
+`update_rule`, `manage_flow`, `list_components`, `list_personas`,
+`list_flow_templates`, `monitor_flow`) are partially shipped — rule and
+flow CRUD tools are wired (via ADR-029 Pattern B); component-catalog
+and flow-monitor are wired; persona/flow-template tools are wired but
+have not been exercised end-to-end by a coordinator. Refreshed
+2026-04-18 with ADR-028 framing. The coordinator's primary purpose is
+broader than dynamic flow composition: it is the **judgment role** in
+the three-layer orchestration architecture (ADR-028). Dynamic flow
+composition is one of its capabilities, not its definition.
 
 ## Role within the three-layer orchestration architecture
 

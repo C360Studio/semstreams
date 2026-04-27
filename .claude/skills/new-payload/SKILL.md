@@ -56,10 +56,10 @@ Create a `payload_registry.go` file in your package:
 // yourpackage/payload_registry.go
 package yourpackage
 
-import "github.com/c360studio/semstreams/component"
+import "github.com/c360studio/semstreams/payloadregistry"
 
 func init() {
-    err := component.RegisterPayload(&component.PayloadRegistration{
+    err := payloadregistry.Register(&payloadregistry.Registration{
         Domain:      Domain,
         Category:    CategoryYourCat,
         Version:     Version,
@@ -128,7 +128,7 @@ func TestYourMessage_RoundTrip(t *testing.T) {
 
 ```go
 // List all registered payloads
-payloads := component.GlobalPayloadRegistry().ListPayloads()
+payloads := payloadregistry.Global().List()
 for msgType, reg := range payloads {
     fmt.Printf("%s: %s\n", msgType, reg.Description)
 }

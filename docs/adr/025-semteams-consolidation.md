@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed
+**Accepted — Phases 1 & 2 shipped.** Phase 1 (framework primitives:
+approval filter, tool governance hooks) and Phase 2 (personalization
+layer upstreamed from semteams) landed in the alpha series. Remaining
+work: complete the per-component upstream sweep and retire the
+duplicated `teams-*` processors. semdragons doesn't import semteams,
+so this ADR has no semdragons-facing surface — but the upstreamed
+primitives are part of the framework downstream consumers will use.
 
 ## Context
 

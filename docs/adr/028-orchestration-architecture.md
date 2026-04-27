@@ -2,10 +2,15 @@
 
 ## Status
 
-Proposed. Layer 1 (data-flow substrate + retry plumbing) is built. Layers 3
-and 4 (coordinator agent, ops agent) are named here and detailed in ADR-026
-and ADR-027 respectively — both refreshed 2026-04-18 with the framing below.
-This ADR supersedes the implicit assumption in earlier rule-engine work that
+**Accepted — Layers 1 & 2 shipped, Layer 3 partial, Layer 4 Phase 1
+shipped.** Layer 1 (data-flow substrate + retry plumbing) is built and
+verified by the deep-research e2e. Layer 2 (rule skeleton in
+`processor/rule/`) was already in place. Layer 3 (coordinator agent,
+ADR-026) has its persona, `decide` tool, and deep-research flow
+landed; the dynamic-composition toolset is partially wired. Layer 4
+(ops agent, ADR-027) Phase 1 shipped 2026-04-20 (read-only diagnosis
+via `emit_diagnosis`). Phase 2/3 of Layer 4 remain proposed. This ADR
+supersedes the implicit assumption in earlier rule-engine work that
 pure-rule orchestration is sufficient for real-world agentic flows.
 
 ## Context

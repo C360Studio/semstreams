@@ -157,8 +157,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/c360studio/semstreams/component"
     "github.com/c360studio/semstreams/message"
+    "github.com/c360studio/semstreams/payloadregistry"
 )
 
 // init registers the SensorReading payload type with the global PayloadRegistry.
@@ -167,7 +167,7 @@ import (
 //
 // CRITICAL: Without this registration, JSON deserialization will fail silently.
 func init() {
-    err := component.RegisterPayload(&component.PayloadRegistration{
+    err := payloadregistry.Register(&payloadregistry.Registration{
         Domain:      "iot",
         Category:    "sensor",
         Version:     "v1",
@@ -1300,7 +1300,7 @@ Before deploying your processor:
 - [ ] Required fields are validated
 - [ ] Constants defined for all predicates
 - [ ] Vocabulary registered with vocabulary.Register()
-- [ ] Payload registered in init() with component.RegisterPayload()
+- [ ] Payload registered in init() with payloadregistry.Register()
 - [ ] Schema() matches payload registration domain/category/version
 - [ ] MarshalJSON and UnmarshalJSON implemented
 - [ ] Validate() checks all required fields

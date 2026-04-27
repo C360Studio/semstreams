@@ -71,10 +71,10 @@ Payload types are registered in `init()` functions, which run when the package i
 // agentic/payload_registry.go
 package agentic
 
-import "github.com/c360studio/semstreams/component"
+import "github.com/c360studio/semstreams/payloadregistry"
 
 func init() {
-    err := component.RegisterPayload(&component.PayloadRegistration{
+    err := payloadregistry.Register(&payloadregistry.Registration{
         Domain:      Domain,           // "agentic"
         Category:    CategoryTask,     // "task"
         Version:     SchemaVersion,    // "v1"
@@ -91,7 +91,7 @@ func init() {
 
 At registration time, the registry validates that the factory produces payloads with a `Schema()` method matching the registration. If a payload's `Schema()` returns different domain/category/version values than the registration specifies, the application will panic at startup during `init()`. This catches mismatches early rather than at runtime when messages fail to deserialize.
 
-See `component/payload_registry.go` for the `validateSchemaConsistency` implementation.
+See `payloadregistry/registry.go` for the `validateSchemaConsistency` implementation.
 
 ### Serialization (MarshalJSON)
 
@@ -136,7 +136,7 @@ func (m *BaseMessage) UnmarshalJSON(data []byte) error {
     json.Unmarshal(data, &envelope)
 
     // 2. Lookup factory in registry
-    factory := component.GlobalPayloadRegistry().CreatePayload(
+    factory := payloadregistry.Global().Create(
         envelope.Type.Domain,
         envelope.Type.Category,
         envelope.Type.Version,
@@ -198,10 +198,10 @@ func (f *FooMessage) MarshalJSON() ([]byte, error) {
 // mypackage/payload_registry.go
 package mypackage
 
-import "github.com/c360studio/semstreams/component"
+import "github.com/c360studio/semstreams/payloadregistry"
 
 func init() {
-    err := component.RegisterPayload(&component.PayloadRegistration{
+    err := payloadregistry.Register(&payloadregistry.Registration{
         Domain:      Domain,
         Category:    CategoryFoo,
         Version:     Version,
@@ -249,7 +249,7 @@ type BadMessage struct {
 
 ```go
 // Registration
-component.RegisterPayload(&component.PayloadRegistration{
+payloadregistry.Register(&payloadregistry.Registration{
     Domain:   "agentic",
     Category: "task",
     Version:  "v1",
@@ -279,7 +279,7 @@ func (t *TaskMessage) MarshalJSON() ([]byte, error) {
 // mypackage/payload_registry.go
 func init() {
     // This never runs because package is never imported
-    component.RegisterPayload(...)
+    payloadregistry.Register(...)
 }
 ```
 
@@ -317,7 +317,7 @@ func (t *TaskMessage) MarshalJSON() ([]byte, error) {
 ### List Registered Payloads
 
 ```go
-payloads := component.GlobalPayloadRegistry().ListPayloads()
+payloads := payloadregistry.Global().List()
 for msgType, reg := range payloads {
     fmt.Printf("%s: %s\n", msgType, reg.Description)
 }

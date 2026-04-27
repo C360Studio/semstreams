@@ -2,7 +2,18 @@
 
 ## Status
 
-Proposed — 2026-04-18
+**Accepted — Patterns A & B shipped for the instance types this ADR
+covers.** Pattern A normalization landed in v1.0.0-beta.16
+(2026-04-27): tools registry retired its package-level singleton and
+joined `component.Registry` and the service registry as
+constructor-injected boot-registries. Pattern B is shipped for rules,
+flows, personas, and flow-templates (each shipped its own KV-backed
+CRUD `Manager` per ADR-029 step 4). Pattern C (component lifecycle +
+factory) was already in place. The generic `Manager[T]` interface
+captured in "Future direction" remains deferred — the four concrete
+managers serve us better today. The payload registry remains a v1
+follow-up (still half-Pattern-A, half-singleton); see
+`payloadregistry/global.go` for the residual singleton.
 
 ## Context
 

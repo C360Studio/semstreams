@@ -10,8 +10,13 @@ switch to explicit registration on a process-owned `*ExecutorRegistry`.
 
 The payload registry has also moved to a new leaf package
 (`payloadregistry/`) so `component/` can declare a `ToolRegistryReader`
-interface without an import cycle. Existing payload registrations using
-`component.RegisterPayload` keep working unchanged via delegation.
+interface without an import cycle. **This is a breaking change for
+payload registrants** — the package-level helpers
+(`component.RegisterPayload`, `component.PayloadRegistration`,
+`component.CreatePayload`) are removed and existing call sites must swap
+their import path and rename the symbols. Roughly 17 files in the
+semstreams repo itself needed the swap; downstream binaries with their
+own payload registrations will need the same edit.
 
 ## Why
 
@@ -40,6 +45,14 @@ and plumbed through Dependencies. Removing the singleton:
 | `agentictools.ListRegisteredTools()` | `deps.ToolRegistry.ListTools()` (component side) or `(*ExecutorRegistry).ListTools()` |
 | `agentictools.DeregisterTool(name)` | not needed — per-test registries are isolated |
 | `executors.RegisterAll(ctx, deps)` | `executors.RegisterBuiltins(ctx, reg, deps)` |
+| `component.RegisterPayload(reg)` | `payloadregistry.Register(reg)` |
+| `component.PayloadRegistration` | `payloadregistry.Registration` |
+| `component.CreatePayload(d, c, v)` | `payloadregistry.Create(d, c, v)` |
+| `component.BuildPayload(d, c, v, f)` | `payloadregistry.Build(d, c, v, f)` |
+
+`(*component.Registry).RegisterPayload` (instance method) is preserved
+and now delegates to the leaf package; only the package-level helpers
+moved.
 
 ### Behaviour changes
 
@@ -147,6 +160,54 @@ Build a fresh registry per test instead:
 + if errors.Is(err, agentic.ErrToolNotFound) {
      // fall back...
  }
+```
+
+### 6. Swap payload-registry imports
+
+If you have `init()`-style payload registrations using the
+`component.RegisterPayload` / `component.PayloadRegistration` helpers,
+update the import and rename the symbols. The shape of the
+`Registration` struct is otherwise unchanged.
+
+```diff
+ package mypayloads
+
+ import (
+-    "github.com/c360studio/semstreams/component"
++    "github.com/c360studio/semstreams/payloadregistry"
+ )
+
+ func init() {
+-    err := component.RegisterPayload(&component.PayloadRegistration{
++    err := payloadregistry.Register(&payloadregistry.Registration{
+         Domain:   "myorg",
+         Category: "mytype",
+         Version:  "v1",
+         Factory:  func() any { return &MyPayload{} },
+     })
+     if err != nil { panic(err) }
+ }
+```
+
+The same swap pattern applies to call sites of `component.CreatePayload`
+→ `payloadregistry.Create` and `component.BuildPayload` →
+`payloadregistry.Build`.
+
+A repo-wide find-and-replace covers most cases:
+
+```bash
+# Adjust paths as needed.
+git grep -l 'component\.\(RegisterPayload\|PayloadRegistration\|CreatePayload\|BuildPayload\)' \
+  | xargs sed -i '' \
+    -e 's|component\.RegisterPayload|payloadregistry.Register|g' \
+    -e 's|component\.PayloadRegistration|payloadregistry.Registration|g' \
+    -e 's|component\.CreatePayload|payloadregistry.Create|g' \
+    -e 's|component\.BuildPayload|payloadregistry.Build|g'
+
+# Then add the payloadregistry import to each touched file (goimports
+# can do this) and remove the now-unused component import where it
+# only existed for these symbols.
+goimports -w .
 ```
 
 ## Boot-time behaviour (non-breaking)
