@@ -106,10 +106,16 @@ func TestWrappingPattern_DuplicateRegistrationErrors(t *testing.T) {
 }
 
 // Test C: when both a component-local registry and a deps-injected shared
-// registry have an executor for the same tool name, the local one wins.
-// This is the "wrapping pattern" payoff: a downstream binary registers a
-// thin wrapper locally on the component without disturbing the shared
-// registry that other components in the process share.
+// registry have an executor for the same tool name, the local one wins
+// at dispatch time. This is the "wrapping pattern" payoff: a downstream
+// binary registers a thin wrapper locally on the component without
+// disturbing the shared registry that other components in the process
+// share. Verified two ways:
+//
+//  1. component.Execute returns the local executor's result (the actual
+//     local-first dispatch invariant).
+//  2. The shared registry's own Execute still resolves the original
+//     implementation — the component-local registration is isolated.
 func TestWrappingPattern_LocalBeatsShared(t *testing.T) {
 	t.Parallel()
 
@@ -140,22 +146,45 @@ func TestWrappingPattern_LocalBeatsShared(t *testing.T) {
 	if !ok {
 		t.Fatalf("component should implement RegisterToolExecutor")
 	}
-	implB := &stubExecutor{name: "shared_target", content: "local"}
+	implB := &wrappingExecutor{
+		inner: &stubExecutor{name: "shared_target", content: "shared"},
+		tag:   "LOCAL",
+	}
 	if err := registrar.RegisterToolExecutor(implB); err != nil {
 		t.Fatalf("RegisterToolExecutor: %v", err)
 	}
 
-	// Confirm the shared registry was NOT mutated by the component-local
-	// registration. The local override is an isolation guarantee.
-	res, err := shared.Execute(context.Background(), agentic.ToolCall{
+	// 1. Dispatch invariant: comp.Execute must hit the local wrapper, not
+	//    the shared implA. This is the contract executeOnce promises.
+	executor, ok := comp.(interface {
+		Execute(context.Context, agentic.ToolCall) (agentic.ToolResult, error)
+	})
+	if !ok {
+		t.Fatalf("component should implement Execute")
+	}
+	res, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID:   "dispatch-call",
+		Name: "shared_target",
+	})
+	if err != nil {
+		t.Fatalf("comp.Execute: %v", err)
+	}
+	if res.Content != "LOCAL:shared" {
+		t.Fatalf("dispatch: Content = %q, want LOCAL:shared (local wrapper should win)", res.Content)
+	}
+
+	// 2. Isolation: the shared registry was NOT mutated by the
+	//    component-local registration. Other components sharing the same
+	//    deps.ToolRegistry still see the original.
+	sharedRes, err := shared.Execute(context.Background(), agentic.ToolCall{
 		ID:   "shared-call",
 		Name: "shared_target",
 	})
 	if err != nil {
 		t.Fatalf("shared Execute: %v", err)
 	}
-	if res.Content != "shared" {
-		t.Fatalf("shared registry mutated: Content = %q, want shared", res.Content)
+	if sharedRes.Content != "shared" {
+		t.Fatalf("shared registry mutated: Content = %q, want shared", sharedRes.Content)
 	}
 
 	// Sanity check: the typed not-found sentinel still fires when neither

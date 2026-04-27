@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"fmt"
 	"log/slog"
 
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -17,12 +18,13 @@ const (
 	flowTemplateToolInstantiate = "instantiate_flow_template"
 )
 
-// registerFlowTemplates wires FlowTemplateExecutor globally. Nil manager
-// skips registration.
-func registerFlowTemplates(tools *agentictools.ExecutorRegistry, manager FlowTemplateManager, logger *slog.Logger) {
+// registerFlowTemplates wires FlowTemplateExecutor. A nil manager is a
+// deployment choice (skip + nil); a registry-level failure (duplicate
+// name) propagates so RegisterBuiltins can surface it at boot.
+func registerFlowTemplates(tools *agentictools.ExecutorRegistry, manager FlowTemplateManager, logger *slog.Logger) error {
 	if manager == nil {
 		logger.Debug("flow-template CRUD tools disabled: no FlowTemplateManager provided")
-		return
+		return nil
 	}
 
 	executor := NewFlowTemplateExecutor(manager)
@@ -36,12 +38,10 @@ func registerFlowTemplates(tools *agentictools.ExecutorRegistry, manager FlowTem
 	}
 	for _, name := range toolNames {
 		if err := tools.RegisterTool(name, executor); err != nil {
-			logger.Warn("Failed to register flow-template tool",
-				slog.String("tool", name),
-				slog.Any("error", err))
-			return
+			return fmt.Errorf("register flow-template tool %q: %w", name, err)
 		}
 	}
-	logger.Info("Registered flow-template tools (global)",
+	logger.Info("Registered flow-template tools",
 		slog.Int("count", len(toolNames)))
+	return nil
 }

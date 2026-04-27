@@ -2,6 +2,7 @@ package executors
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -28,10 +29,11 @@ var entityStatesBucketConfig = jetstream.KeyValueConfig{
 }
 
 // registerGraphQuery wires the query_entity tool against ENTITY_STATES.
-// Failure is non-fatal: if the bucket is unavailable (e.g. the flow
-// didn't declare it), we log a warning and skip. The rest of the
-// caller's tools stay available.
-func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger) {
+// A bucket-open failure is a non-fatal skip (e.g. the flow didn't declare
+// the bucket); the rest of the caller's registrations proceed. A
+// registry-level failure (duplicate name) propagates so RegisterBuiltins
+// can surface it at boot.
+func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger) error {
 	const toolName = "query_entity"
 
 	bucket, err := natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
@@ -39,17 +41,17 @@ func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistr
 		logger.Warn("query_entity tool disabled: could not open entity-states bucket",
 			slog.String("bucket", entityStatesBucket),
 			slog.Any("error", err))
-		return
+		return nil
 	}
 
 	store := natsClient.NewKVStore(bucket)
 	executor := NewGraphQueryExecutor(&graphQueryKVAdapter{store: store})
 	if err := tools.RegisterTool(toolName, executor); err != nil {
-		logger.Warn("Failed to register query_entity tool", slog.Any("error", err))
-		return
+		return fmt.Errorf("register query_entity: %w", err)
 	}
-	logger.Info("Registered query_entity tool (global)",
+	logger.Info("Registered query_entity tool",
 		slog.String("bucket", entityStatesBucket))
+	return nil
 }
 
 // graphQueryKVAdapter bridges natsclient.KVStore to the KVGetter shape

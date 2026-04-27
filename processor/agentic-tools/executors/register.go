@@ -15,6 +15,7 @@ package executors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/component"
@@ -49,20 +50,26 @@ type ToolDependencies struct {
 	// LoopsBucket is the NATS KV bucket name holding agent-loop state.
 	// read_loop_result + flow_monitor both read from it. Empty falls back
 	// to "AGENT_LOOPS". One bucket per process — wiring is boot-time so
-	// the name is frozen at RegisterAll for the lifetime of the process.
+	// the name is frozen at RegisterBuiltins for the lifetime of the
+	// process.
 	LoopsBucket string
 }
 
-// RegisterBuiltins wires every tool this package owns into the
-// supplied registry. Errors propagate so callers see misconfigurations
-// at boot rather than silently dropped registrations — the previous
-// "already registered" swallow that lived here was a workaround for
-// the global singleton's lifecycle and is no longer needed now that
-// each process owns its registry explicitly.
+// RegisterBuiltins wires every tool this package owns into the supplied
+// registry. Errors from individual register_* functions are aggregated via
+// errors.Join so a misconfigured deployment sees every collision on a
+// single boot, not just the first. The aggregate error is returned to the
+// caller (main.go) which surfaces it via its normal error-return path —
+// no panics, just a non-zero exit.
 //
-// Stateful tools (NATS-bound) skip silently when their dependency is
-// nil; that's intentional and lets callers ship partial-feature
-// deployments (e.g., graph-only flows without an LLM loop).
+// Two distinct failure shapes:
+//
+//   - Pre-condition skips (nil manager, missing env var, KV bucket
+//     unreachable) are intentional disable paths. They log and proceed —
+//     not an error from this function's perspective.
+//   - Registry-level failures (duplicate tool names, invalid args) are
+//     misconfigurations that should block boot. Each register_* returns
+//     them; we join them and return the aggregate.
 func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, deps ToolDependencies) error {
 	if reg == nil {
 		return errors.New("RegisterBuiltins: nil registry")
@@ -72,34 +79,43 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		logger = slog.Default()
 	}
 
-	registerBash(reg, logger)
-	registerWebSearch(reg, logger)
-	registerHTTPRequest(reg, logger)
-	registerGitHub(reg, logger)
-
 	loopsBucket := deps.LoopsBucket
 	if loopsBucket == "" {
 		loopsBucket = "AGENT_LOOPS"
 	}
 
+	var errs []error
+	track := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	track(registerBash(reg, logger))
+	track(registerWebSearch(reg, logger))
+	track(registerHTTPRequest(reg, logger))
+	track(registerGitHub(reg, logger))
+
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity)")
 	} else {
-		registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket)
-		registerDecide(reg, deps.NATSClient, deps.Platform, logger)
-		registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger)
-		registerGraphQuery(ctx, reg, deps.NATSClient, logger)
+		track(registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket))
+		track(registerDecide(reg, deps.NATSClient, deps.Platform, logger))
+		track(registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger))
+		track(registerGraphQuery(ctx, reg, deps.NATSClient, logger))
 	}
 
-	// Pattern-B registry-backed tools. Each wire function handles a nil
-	// manager as a skip so callers can ship partial configs without
-	// exploding.
-	registerRules(reg, deps.RuleManager, logger)
-	registerFlows(reg, deps.FlowManager, logger)
-	registerPersonas(reg, deps.PersonaManager, logger)
-	registerFlowTemplates(reg, deps.FlowTemplateManager, logger)
-	registerComponentCatalog(reg, deps.ComponentRegistry, logger)
-	registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket)
+	// Pattern-B registry-backed tools. A nil manager is a legal skip;
+	// duplicate-name failures propagate.
+	track(registerRules(reg, deps.RuleManager, logger))
+	track(registerFlows(reg, deps.FlowManager, logger))
+	track(registerPersonas(reg, deps.PersonaManager, logger))
+	track(registerFlowTemplates(reg, deps.FlowTemplateManager, logger))
+	track(registerComponentCatalog(reg, deps.ComponentRegistry, logger))
+	track(registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket))
 
+	if len(errs) > 0 {
+		return fmt.Errorf("RegisterBuiltins: %w", errors.Join(errs...))
+	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"fmt"
 	"log/slog"
 
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -17,22 +18,22 @@ const (
 	ruleToolGet    = "get_rule"
 )
 
-// registerRules wires the RuleExecutor globally so any agent role scoped
-// to rule tools (via publish_agent.tools or default_tools) can call
-// list_rules / get_rule / create_rule / update_rule / delete_rule.
+// registerRules wires the RuleExecutor so any agent role scoped to rule
+// tools (via publish_agent.tools or default_tools) can call list_rules /
+// get_rule / create_rule / update_rule / delete_rule.
 //
 // RuleExecutor is one executor that exposes five tools. We register the
 // executor once under each tool name — all five dispatch into the same
 // Execute() method which switches on ToolCall.Name. This matches how
 // GraphQueryExecutor handles its four tools in register_graph_query.go.
 //
-// A nil manager is legal: callers that don't want rule CRUD simply pass
-// nil, and we skip registration. Matches the nil-natsClient handling in
-// RegisterAll for stateful tools that can't find their bucket.
-func registerRules(tools *agentictools.ExecutorRegistry, manager RuleManager, logger *slog.Logger) {
+// A nil manager is a deployment choice (callers without rule CRUD pass
+// nil); registration skips and returns nil. A registry-level failure
+// (duplicate name) propagates so RegisterBuiltins can surface it at boot.
+func registerRules(tools *agentictools.ExecutorRegistry, manager RuleManager, logger *slog.Logger) error {
 	if manager == nil {
 		logger.Debug("rule CRUD tools disabled: no RuleManager provided")
-		return
+		return nil
 	}
 
 	executor := NewRuleExecutor(manager)
@@ -46,12 +47,10 @@ func registerRules(tools *agentictools.ExecutorRegistry, manager RuleManager, lo
 
 	for _, name := range toolNames {
 		if err := tools.RegisterTool(name, executor); err != nil {
-			logger.Warn("Failed to register rule tool",
-				slog.String("tool", name),
-				slog.Any("error", err))
-			return
+			return fmt.Errorf("register rule tool %q: %w", name, err)
 		}
 	}
-	logger.Info("Registered rule CRUD tools (global)",
+	logger.Info("Registered rule CRUD tools",
 		slog.Int("count", len(toolNames)))
+	return nil
 }

@@ -2,6 +2,7 @@ package executors
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -24,19 +25,23 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 }
 
 // registerFlowMonitor opens the loops KV bucket and wires the monitor_flow
-// tool globally. Nil natsClient or flowMgr → skip with warn (the tool
-// requires both to be useful). The bucketName must match the one
-// registerReadLoopResult used — they're the same physical bucket, different
-// access pattern (scan vs point-get). ToolDependencies.LoopsBucket is the
-// single source of truth for both.
-func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) {
+// tool. Nil natsClient or flowMgr → skip with warn (the tool requires
+// both). A bucket-open failure is a non-fatal skip. A registry-level
+// failure (duplicate name) propagates so RegisterBuiltins can surface it
+// at boot.
+//
+// The bucketName must match the one registerReadLoopResult used —
+// they're the same physical bucket, different access pattern (scan vs
+// point-get). ToolDependencies.LoopsBucket is the single source of truth
+// for both.
+func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) error {
 	if natsClient == nil {
 		logger.Warn("monitor_flow tool disabled: no NATS client provided")
-		return
+		return nil
 	}
 	if flowMgr == nil {
 		logger.Warn("monitor_flow tool disabled: no FlowManager provided")
-		return
+		return nil
 	}
 
 	// Open a fresh handle to the same KV bucket read_loop_result opened.
@@ -49,7 +54,7 @@ func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsc
 		logger.Warn("monitor_flow tool disabled: could not open loops bucket",
 			slog.String("bucket", bucketName),
 			slog.Any("error", err))
-		return
+		return nil
 	}
 
 	store := natsClient.NewKVStore(bucket)
@@ -57,9 +62,9 @@ func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsc
 	executor := agentictools.NewFlowMonitorExecutor(store, adapter, logger)
 
 	if err := tools.RegisterTool(agentictools.FlowMonitorToolName, executor); err != nil {
-		logger.Warn("Failed to register monitor_flow tool", slog.Any("error", err))
-		return
+		return fmt.Errorf("register monitor_flow: %w", err)
 	}
-	logger.Info("Registered monitor_flow tool (global)",
+	logger.Info("Registered monitor_flow tool",
 		slog.String("bucket", bucketName))
+	return nil
 }

@@ -1,34 +1,31 @@
 package executors
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
-// registerGitHub registers github_read + github_write when a GITHUB_TOKEN
-// is present in the environment. No-op otherwise, so the binary starts
-// cleanly in environments without GitHub integration.
-//
-// Pre-consolidation this was an init() in github_init.go that ran on
-// package import. Now it's explicit from RegisterAll so main owns the
-// registration schedule.
-func registerGitHub(tools *agentictools.ExecutorRegistry, logger *slog.Logger) {
+// registerGitHub registers github_read + github_write when GITHUB_TOKEN is
+// present. Returns nil and skips silently when the token is absent — that's
+// a deployment choice, not a misconfiguration. Registry-level failures
+// (duplicate names) propagate so RegisterBuiltins can surface them at boot.
+func registerGitHub(tools *agentictools.ExecutorRegistry, logger *slog.Logger) error {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
-		return
+		return nil
 	}
 
 	client := NewGitHubHTTPClient(token)
 
 	if err := tools.RegisterTool("github_read", NewGitHubReadExecutor(client)); err != nil {
-		logger.Warn("Failed to register github_read tool", slog.Any("error", err))
-		return
+		return fmt.Errorf("register github_read: %w", err)
 	}
 	if err := tools.RegisterTool("github_write", NewGitHubWriteExecutor(client)); err != nil {
-		logger.Warn("Failed to register github_write tool", slog.Any("error", err))
-		return
+		return fmt.Errorf("register github_write: %w", err)
 	}
-	logger.Info("Registered github_read + github_write tools (global)")
+	logger.Info("Registered github_read + github_write tools")
+	return nil
 }

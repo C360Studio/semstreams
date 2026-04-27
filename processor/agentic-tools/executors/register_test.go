@@ -3,6 +3,7 @@ package executors
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -12,13 +13,15 @@ import (
 )
 
 // TestRegisterRules_NilManagerSkips — every Pattern-B wire function must
-// treat a nil manager as "skip registration" so callers can ship partial
-// configs without exploding on missing deps. With per-test registries we
-// can assert "skipped" directly: the registry must be empty afterwards.
+// treat a nil manager as an intentional skip (deployment choice), not an
+// error. The registry must be empty afterwards and the function must
+// return nil so RegisterBuiltins doesn't aggregate a spurious error.
 func TestRegisterRules_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
-	registerRules(reg, nil, slog.Default())
+	if err := registerRules(reg, nil, slog.Default()); err != nil {
+		t.Fatalf("registerRules(nil) should be a clean skip, got err: %v", err)
+	}
 	if got := len(reg.ListTools()); got != 0 {
 		t.Fatalf("registerRules(nil) registered %d tools, want 0", got)
 	}
@@ -27,7 +30,9 @@ func TestRegisterRules_NilManagerSkips(t *testing.T) {
 func TestRegisterFlows_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
-	registerFlows(reg, nil, slog.Default())
+	if err := registerFlows(reg, nil, slog.Default()); err != nil {
+		t.Fatalf("registerFlows(nil) should be a clean skip, got err: %v", err)
+	}
 	if got := len(reg.ListTools()); got != 0 {
 		t.Fatalf("registerFlows(nil) registered %d tools, want 0", got)
 	}
@@ -36,7 +41,9 @@ func TestRegisterFlows_NilManagerSkips(t *testing.T) {
 func TestRegisterPersonas_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
-	registerPersonas(reg, nil, slog.Default())
+	if err := registerPersonas(reg, nil, slog.Default()); err != nil {
+		t.Fatalf("registerPersonas(nil) should be a clean skip, got err: %v", err)
+	}
 	if got := len(reg.ListTools()); got != 0 {
 		t.Fatalf("registerPersonas(nil) registered %d tools, want 0", got)
 	}
@@ -45,10 +52,58 @@ func TestRegisterPersonas_NilManagerSkips(t *testing.T) {
 func TestRegisterFlowTemplates_NilManagerSkips(t *testing.T) {
 	t.Parallel()
 	reg := agentictools.NewExecutorRegistry()
-	registerFlowTemplates(reg, nil, slog.Default())
+	if err := registerFlowTemplates(reg, nil, slog.Default()); err != nil {
+		t.Fatalf("registerFlowTemplates(nil) should be a clean skip, got err: %v", err)
+	}
 	if got := len(reg.ListTools()); got != 0 {
 		t.Fatalf("registerFlowTemplates(nil) registered %d tools, want 0", got)
 	}
+}
+
+// TestRegisterBuiltins_DuplicateNameAggregatesError — boot-time
+// duplicate-name collisions must return an error to the caller (main),
+// not be silently swallowed. Pre-registering "bash" on the same
+// registry forces registerBash to collide; RegisterBuiltins must
+// surface the collision in its returned error.
+func TestRegisterBuiltins_DuplicateNameAggregatesError(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+
+	// Pre-occupy "bash" so registerBash will collide.
+	stub := &registerTestStubExecutor{name: "bash"}
+	if err := reg.RegisterTool("bash", stub); err != nil {
+		t.Fatalf("preload bash: %v", err)
+	}
+
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		Logger: slog.Default(),
+	})
+	if err == nil {
+		t.Fatalf("RegisterBuiltins should return an error when a builtin name collides")
+	}
+	// The aggregate must mention the colliding tool name so operators
+	// can diagnose without re-running with verbose logging.
+	if !strings.Contains(err.Error(), "bash") {
+		t.Fatalf("aggregated error should reference the colliding tool name, got: %v", err)
+	}
+}
+
+// registerTestStubExecutor is a minimal ToolExecutor for the collision
+// smoke test. Does no work; the registration check is what's exercised.
+type registerTestStubExecutor struct {
+	name string
+}
+
+func (e *registerTestStubExecutor) ListTools() []agentic.ToolDefinition {
+	return []agentic.ToolDefinition{{
+		Name:        e.name,
+		Description: "register_test stub",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	}}
+}
+
+func (e *registerTestStubExecutor) Execute(_ context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+	return agentic.ToolResult{CallID: call.ID, Content: "stub"}, nil
 }
 
 // TestRegisterBuiltins_NilNATSClientSkipsStatefulTools — RegisterBuiltins

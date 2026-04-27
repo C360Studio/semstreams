@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"fmt"
 	"log/slog"
 
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -16,14 +17,15 @@ const (
 	flowToolGet    = "get_flow"
 )
 
-// registerFlows wires FlowExecutor globally so any agent role scoped to
-// flow tools (via publish_agent.tools or default_tools) can manage flow
-// definitions. Nil manager is a legal skip, matching the RuleManager path
-// in registerRules.
-func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, logger *slog.Logger) {
+// registerFlows wires FlowExecutor so any agent role scoped to flow tools
+// (via publish_agent.tools or default_tools) can manage flow definitions.
+// A nil manager is a deployment choice (skip + nil); a registry-level
+// failure (duplicate name) propagates so RegisterBuiltins can surface it
+// at boot.
+func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, logger *slog.Logger) error {
 	if manager == nil {
 		logger.Debug("flow CRUD tools disabled: no FlowManager provided")
-		return
+		return nil
 	}
 
 	executor := NewFlowExecutor(manager)
@@ -37,12 +39,10 @@ func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, lo
 
 	for _, name := range toolNames {
 		if err := tools.RegisterTool(name, executor); err != nil {
-			logger.Warn("Failed to register flow tool",
-				slog.String("tool", name),
-				slog.Any("error", err))
-			return
+			return fmt.Errorf("register flow tool %q: %w", name, err)
 		}
 	}
-	logger.Info("Registered flow CRUD tools (global)",
+	logger.Info("Registered flow CRUD tools",
 		slog.Int("count", len(toolNames)))
+	return nil
 }
