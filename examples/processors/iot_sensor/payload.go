@@ -82,13 +82,22 @@ func buildSensorReading(fields map[string]any) (any, error) {
 }
 
 // init registers the SensorReading payload type with the global PayloadRegistry.
-// This enables BaseMessage.UnmarshalJSON to recreate SensorReading payloads
-// from JSON when the message type is "iot.sensor.v1".
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself. Examples
+// demonstrate the recipe downstream consumers follow when adding
+// custom payload packages.
 func init() {
-	// Register SensorReading payload factory
-	// Type format: domain.category.version (3 parts)
-	// Result: iot.sensor.v1
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("iot_sensor.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers the SensorReading payload type
+// (iot.sensor.v1) with the supplied registry. Called by binaries that
+// want to load this example processor's payload — typically
+// cmd/e2e-semstreams/main.go.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      "iot",
 		Category:    "sensor",
 		Version:     "v1",
@@ -106,9 +115,6 @@ func init() {
 			"Platform":   "logistics",
 		},
 	})
-	if err != nil {
-		panic("failed to register SensorReading payload: " + err.Error())
-	}
 }
 
 // SensorReading represents an IoT sensor measurement. It implements the Graphable

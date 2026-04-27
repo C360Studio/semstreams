@@ -22,12 +22,19 @@ func buildGenericJSONPayload(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init registers the GenericJSON payload type with the global PayloadRegistry.
-// This enables BaseMessage.UnmarshalJSON to recreate GenericJSON payloads
-// from JSON when the message type is "core.json.v1".
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	// Register GenericJSON payload factory
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("message.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers the GenericJSON payload type (core.json.v1)
+// with the supplied registry. Called from payloadbuiltins.Register at
+// process bootstrap.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      "core",
 		Category:    "json",
 		Version:     "v1",
@@ -44,9 +51,6 @@ func init() {
 			},
 		},
 	})
-	if err != nil {
-		panic("failed to register GenericJSON payload: " + err.Error())
-	}
 }
 
 // GenericJSONPayload provides a simple, explicitly flexible payload type

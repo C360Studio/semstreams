@@ -38,6 +38,7 @@ type ComponentManager struct {
 	// core component management
 	registry         *component.Registry
 	toolRegistry     component.ToolRegistryReader           // Shared tool registry plumbed via deps.ToolRegistry to managed components
+	payloadRegistry  component.PayloadRegistryReader        // Shared payload registry plumbed via deps.PayloadRegistry to managed components
 	componentConfigs config.ComponentConfigs                // Component configurations
 	platform         types.PlatformMeta                     // Platform identity for components
 	components       map[string]*component.ManagedComponent // Track managed components
@@ -140,10 +141,12 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	var platform types.PlatformMeta
 	var registry *component.Registry
 	var toolRegistry component.ToolRegistryReader
+	var payloadRegistry component.PayloadRegistryReader
 	if deps != nil {
 		platform = deps.Platform
 		registry = deps.ComponentRegistry
 		toolRegistry = deps.ToolRegistry
+		payloadRegistry = deps.PayloadRegistry
 	}
 
 	// Fallback to creating a new registry if not provided
@@ -156,6 +159,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		config:               cfg, // Store config as field
 		registry:             registry,
 		toolRegistry:         toolRegistry,
+		payloadRegistry:      payloadRegistry,
 		componentConfigs:     componentsConfig,
 		platform:             platform,
 		components:           make(map[string]*component.ManagedComponent),
@@ -1529,6 +1533,7 @@ func (cm *ComponentManager) buildComponentDependencies() component.Dependencies 
 		Security:          securityCfg,
 		ModelRegistry:     modelReg,
 		ToolRegistry:      cm.toolRegistry,
+		PayloadRegistry:   cm.payloadRegistry,
 		ComponentRegistry: cm.registry,
 	}
 

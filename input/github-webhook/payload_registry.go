@@ -1,9 +1,25 @@
 package githubwebhook
 
-import "github.com/c360studio/semstreams/payloadregistry"
+import (
+	"errors"
+	"fmt"
 
+	"github.com/c360studio/semstreams/payloadregistry"
+)
+
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	registrations := []payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("github-webhook.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers github webhook payload types
+// (IssueEvent, PREvent, ReviewEvent, CommentEvent) with the supplied
+// registry. Called from payloadbuiltins.Register at process bootstrap.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	registrations := []*payloadregistry.Registration{
 		{
 			Domain:      "github",
 			Category:    "issue_event",
@@ -34,10 +50,11 @@ func init() {
 		},
 	}
 
-	for idx := range registrations {
-		r := &registrations[idx]
-		if err := payloadregistry.Register(r); err != nil {
-			panic("failed to register github payload: " + err.Error())
+	var errs []error
+	for _, r := range registrations {
+		if err := reg.Register(r); err != nil {
+			errs = append(errs, fmt.Errorf("register %s: %w", r.MessageType(), err))
 		}
 	}
+	return errors.Join(errs...)
 }

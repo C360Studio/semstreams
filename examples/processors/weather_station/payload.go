@@ -54,13 +54,19 @@ func buildWeatherReading(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init registers the WeatherReading payload type with the global PayloadRegistry.
-// This enables BaseMessage.UnmarshalJSON to recreate WeatherReading payloads
-// from JSON when the message type is "weather.station.v1".
-//
-// CRITICAL: Without this registration, JSON deserialization will fail silently.
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("weather_station.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers the WeatherReading payload type
+// (weather.station.v1) with the supplied registry. Called by binaries
+// that load this example processor.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      "weather",
 		Category:    "station",
 		Version:     "v1",
@@ -76,9 +82,6 @@ func init() {
 			"Condition":   "sunny",
 		},
 	})
-	if err != nil {
-		panic("failed to register WeatherReading payload: " + err.Error())
-	}
 }
 
 // WeatherReading represents a weather station measurement.

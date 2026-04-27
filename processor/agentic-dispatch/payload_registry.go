@@ -35,10 +35,19 @@ func buildSignalMessage(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init registers dispatch payload types with the global PayloadRegistry.
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	// Register SignalMessage payload factory
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("agentic-dispatch.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers the SignalMessage payload type with the
+// supplied registry. Called from payloadbuiltins.Register at process
+// bootstrap.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      agentic.Domain,
 		Category:    agentic.CategorySignalMessage,
 		Version:     agentic.SchemaVersion,
@@ -46,7 +55,4 @@ func init() {
 		Factory:     func() any { return &SignalMessage{} },
 		Builder:     buildSignalMessage,
 	})
-	if err != nil {
-		panic("failed to register SignalMessage payload: " + err.Error())
-	}
 }

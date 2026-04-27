@@ -1,12 +1,25 @@
 package githubprworkflow
 
-import "github.com/c360studio/semstreams/payloadregistry"
+import (
+	"errors"
+	"fmt"
 
-// init registers all GitHub payload types with the global PayloadRegistry.
-// This enables BaseMessage.UnmarshalJSON to recreate typed payloads from JSON
-// when the message type matches one of the github entity types.
+	"github.com/c360studio/semstreams/payloadregistry"
+)
+
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	registrations := []payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("github-pr-workflow.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers all GitHub PR workflow payload types
+// with the supplied registry. Called by binaries that load this
+// example workflow.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	registrations := []*payloadregistry.Registration{
 		{
 			Domain:      domainGitHub,
 			Category:    categoryIssueEntity,
@@ -37,9 +50,11 @@ func init() {
 		},
 	}
 
-	for i := range registrations {
-		if err := payloadregistry.Register(&registrations[i]); err != nil {
-			panic("register github entity: " + err.Error())
+	var errs []error
+	for _, r := range registrations {
+		if err := reg.Register(r); err != nil {
+			errs = append(errs, fmt.Errorf("register %s: %w", r.MessageType(), err))
 		}
 	}
+	return errors.Join(errs...)
 }

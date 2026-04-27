@@ -71,16 +71,23 @@ func (e *ValidationError) Error() string {
 	return "validation error: " + e.Field + " " + e.Message
 }
 
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	// Register the workflow trigger payload for proper BaseMessage deserialization
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("rule.init: " + err.Error())
+	}
+}
+
+// RegisterPayloads registers the workflow-trigger payload type with the
+// supplied registry. Called from payloadbuiltins.Register at process
+// bootstrap.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      WorkflowTriggerDomain,
 		Category:    WorkflowTriggerCategory,
 		Version:     WorkflowTriggerVersion,
 		Description: "Workflow trigger message from rule processor",
-		Factory:     func() interface{} { return &WorkflowTriggerPayload{} },
+		Factory:     func() any { return &WorkflowTriggerPayload{} },
 	})
-	if err != nil {
-		panic("failed to register workflow trigger payload: " + err.Error())
-	}
 }

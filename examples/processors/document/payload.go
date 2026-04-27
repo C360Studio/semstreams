@@ -23,6 +23,7 @@
 package document
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -34,15 +35,18 @@ const (
 	defaultConfidence = 1.0
 )
 
-// payloadRegistrationErrors collects errors from init() for deferred handling.
-// This avoids panics during init() which are difficult to handle.
+// payloadRegistrationErrors collects errors from init() for deferred
+// handling. CheckPayloadRegistration() returns the aggregate. Used
+// only by the init() path; explicit RegisterPayloads(reg) callers
+// receive the error directly.
 var payloadRegistrationErrors []error
 
-// init registers all document payload types with the global PayloadRegistry.
-// Errors are collected in payloadRegistrationErrors instead of panicking.
-// Call CheckPayloadRegistration() to verify registration succeeded.
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	registerPayloads()
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		payloadRegistrationErrors = append(payloadRegistrationErrors, err)
+	}
 }
 
 // Builder functions for document payload types
@@ -242,91 +246,77 @@ func buildSensorDocument(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// registerPayloads registers all payload types, collecting errors instead of panicking.
-func registerPayloads() {
-	// Register Document payload
-	if err := payloadregistry.Register(&payloadregistry.Registration{
-		Domain:      "content",
-		Category:    "document",
-		Version:     "v1",
-		Description: "Generic document payload with Graphable implementation",
-		Factory: func() any {
-			return &Document{}
+// RegisterPayloads registers all document payload types
+// (Document, Maintenance, Observation, SensorDocument) with the
+// supplied registry. Called by binaries that load this example
+// processor — typically cmd/e2e-semstreams/main.go.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	registrations := []*payloadregistry.Registration{
+		{
+			Domain:      "content",
+			Category:    "document",
+			Version:     "v1",
+			Description: "Generic document payload with Graphable implementation",
+			Factory:     func() any { return &Document{} },
+			Builder:     buildDocument,
+			Example: map[string]any{
+				"ID":          "doc-001",
+				"Title":       "Safety Manual",
+				"Description": "Comprehensive safety guidelines",
+				"Category":    "safety",
+			},
 		},
-		Builder: buildDocument,
-		Example: map[string]any{
-			"ID":          "doc-001",
-			"Title":       "Safety Manual",
-			"Description": "Comprehensive safety guidelines",
-			"Category":    "safety",
+		{
+			Domain:      "content",
+			Category:    "maintenance",
+			Version:     "v1",
+			Description: "Maintenance record payload with Graphable implementation",
+			Factory:     func() any { return &Maintenance{} },
+			Builder:     buildMaintenance,
+			Example: map[string]any{
+				"ID":         "maint-001",
+				"Title":      "Pump Repair",
+				"Technician": "John Smith",
+				"Status":     "completed",
+			},
 		},
-	}); err != nil {
-		payloadRegistrationErrors = append(payloadRegistrationErrors,
-			fmt.Errorf("registering Document payload: %w", err))
+		{
+			Domain:      "content",
+			Category:    "observation",
+			Version:     "v1",
+			Description: "Observation record payload with Graphable implementation",
+			Factory:     func() any { return &Observation{} },
+			Builder:     buildObservation,
+			Example: map[string]any{
+				"ID":       "obs-001",
+				"Title":    "Safety Hazard Report",
+				"Observer": "Jane Doe",
+				"Severity": "high",
+			},
+		},
+		{
+			Domain:      "content",
+			Category:    "sensor_doc",
+			Version:     "v1",
+			Description: "Sensor documentation payload with Graphable implementation",
+			Factory:     func() any { return &SensorDocument{} },
+			Builder:     buildSensorDocument,
+			Example: map[string]any{
+				"ID":       "sensor-doc-001",
+				"Title":    "Temperature Sensor T-42",
+				"Location": "Warehouse B",
+				"Unit":     "celsius",
+			},
+		},
 	}
 
-	// Register Maintenance payload
-	if err := payloadregistry.Register(&payloadregistry.Registration{
-		Domain:      "content",
-		Category:    "maintenance",
-		Version:     "v1",
-		Description: "Maintenance record payload with Graphable implementation",
-		Factory: func() any {
-			return &Maintenance{}
-		},
-		Builder: buildMaintenance,
-		Example: map[string]any{
-			"ID":         "maint-001",
-			"Title":      "Pump Repair",
-			"Technician": "John Smith",
-			"Status":     "completed",
-		},
-	}); err != nil {
-		payloadRegistrationErrors = append(payloadRegistrationErrors,
-			fmt.Errorf("registering Maintenance payload: %w", err))
+	var errs []error
+	for _, r := range registrations {
+		if err := reg.Register(r); err != nil {
+			errs = append(errs, fmt.Errorf("register %s: %w", r.MessageType(), err))
+		}
 	}
-
-	// Register Observation payload
-	if err := payloadregistry.Register(&payloadregistry.Registration{
-		Domain:      "content",
-		Category:    "observation",
-		Version:     "v1",
-		Description: "Observation record payload with Graphable implementation",
-		Factory: func() any {
-			return &Observation{}
-		},
-		Builder: buildObservation,
-		Example: map[string]any{
-			"ID":       "obs-001",
-			"Title":    "Safety Hazard Report",
-			"Observer": "Jane Doe",
-			"Severity": "high",
-		},
-	}); err != nil {
-		payloadRegistrationErrors = append(payloadRegistrationErrors,
-			fmt.Errorf("registering Observation payload: %w", err))
-	}
-
-	// Register SensorDocument payload
-	if err := payloadregistry.Register(&payloadregistry.Registration{
-		Domain:      "content",
-		Category:    "sensor_doc",
-		Version:     "v1",
-		Description: "Sensor documentation payload with Graphable implementation",
-		Factory: func() any {
-			return &SensorDocument{}
-		},
-		Builder: buildSensorDocument,
-		Example: map[string]any{
-			"ID":       "sensor-doc-001",
-			"Title":    "Temperature Sensor T-42",
-			"Location": "Warehouse B",
-			"Unit":     "celsius",
-		},
-	}); err != nil {
-		payloadRegistrationErrors = append(payloadRegistrationErrors,
-			fmt.Errorf("registering SensorDocument payload: %w", err))
-	}
+	return errors.Join(errs...)
 }
 
 // CheckPayloadRegistration returns any errors that occurred during payload registration.

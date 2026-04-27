@@ -26,6 +26,8 @@ import (
 	"github.com/c360studio/semstreams/flowtemplate"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
@@ -113,6 +115,22 @@ func run() error {
 		return err
 	}
 
+	// Build the shared payload registry and register builtins BEFORE
+	// service deps. Mirrors cmd/semstreams/main.go. Examples loaded by
+	// this binary (iot_sensor, document) register their own payload
+	// types separately — payloadbuiltins.Register intentionally covers
+	// only first-party builtins, mirroring the componentregistry split.
+	payloadReg := payloadregistry.New()
+	if err := payloadbuiltins.Register(payloadReg); err != nil {
+		return fmt.Errorf("register builtin payloads: %w", err)
+	}
+	if err := iotsensor.RegisterPayloads(payloadReg); err != nil {
+		return fmt.Errorf("register iot_sensor payloads: %w", err)
+	}
+	if err := document.RegisterPayloads(payloadReg); err != nil {
+		return fmt.Errorf("register document payloads: %w", err)
+	}
+
 	// Build the shared tool registry and register builtins BEFORE
 	// service deps so component construction can resolve via
 	// deps.ToolRegistry. Mirrors cmd/semstreams/main.go — see ADR-029.
@@ -132,6 +150,7 @@ func run() error {
 
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
+	svcDeps.PayloadRegistry = payloadReg
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err

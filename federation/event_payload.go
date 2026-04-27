@@ -53,15 +53,24 @@ func (p *EventPayload) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(p))
 }
 
-// RegisterPayload registers the federation event payload for a specific domain.
-// Each sem* service calls this with its own domain (e.g., "semsource", "semquery").
-// This enables domain-specific message routing while sharing the same payload structure.
-func RegisterPayload(domain string) error {
-	return payloadregistry.Register(&payloadregistry.Registration{
+// RegisterPayloads registers the federation event payload for a
+// specific domain on the supplied registry. Each sem* service calls
+// this with its own domain (e.g., "semsource", "semquery"). NOT
+// included in payloadbuiltins.Register because it's
+// domain-parameterized — callers know their domain at boot time.
+func RegisterPayloads(reg *payloadregistry.Registry, domain string) error {
+	return reg.Register(&payloadregistry.Registration{
 		Domain:      domain,
 		Category:    "graph_event",
 		Version:     "v1",
 		Description: "Federation graph event payload for " + domain,
 		Factory:     func() any { return &EventPayload{} },
 	})
+}
+
+// RegisterPayload preserved as a transitional alias to the global —
+// downstream products that haven't migrated keep working through C4.
+// Deprecated in beta.18; use RegisterPayloads(reg, domain) instead.
+func RegisterPayload(domain string) error {
+	return RegisterPayloads(payloadregistry.Global(), domain)
 }

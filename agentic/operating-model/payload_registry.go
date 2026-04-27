@@ -1,37 +1,50 @@
 package operatingmodel
 
-import "github.com/c360studio/semstreams/payloadregistry"
+import (
+	"errors"
+	"fmt"
 
-// init registers the operating-model payload types with the semstreams global
-// payloadregistry.Registry so BaseMessage.UnmarshalJSON can recreate typed
-// payloads from JSON across the message bus.
-//
-// Builders are intentionally omitted: the registry's JSON fallback
-// (Factory + json.Unmarshal) handles payload construction without requiring
-// duplicate field-mapping code.
+	"github.com/c360studio/semstreams/payloadregistry"
+)
+
+// init populates the package-level global registry for transitional
+// compat. Removed in C4 along with the global itself.
 func init() {
-	registerOrPanic(&payloadregistry.Registration{
-		Domain:      Domain,
-		Category:    CategoryLayerApproved,
-		Version:     SchemaVersion,
-		Description: "Approved operating-model layer checkpoint emitted by the /onboard interview.",
-		Factory:     func() any { return &LayerApproved{} },
-	})
-
-	registerOrPanic(&payloadregistry.Registration{
-		Domain:      Domain,
-		Category:    CategoryProfileContext,
-		Version:     SchemaVersion,
-		Description: "Assembled operating-model profile context for loop system-prompt injection.",
-		Factory:     func() any { return &ProfileContext{} },
-	})
+	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
+		panic("operating-model.init: " + err.Error())
+	}
 }
 
-// registerOrPanic wraps payloadregistry.Register and panics on failure.
-// Registration errors at init() time are programming bugs — the process must
-// not start with a half-registered payload surface.
-func registerOrPanic(registration *payloadregistry.Registration) {
-	if err := payloadregistry.Register(registration); err != nil {
-		panic("operating-model: failed to register " + registration.MessageType() + ": " + err.Error())
+// RegisterPayloads registers the operating-model payload types with the
+// supplied registry. Called from payloadbuiltins.Register at process
+// bootstrap.
+//
+// Builders are intentionally omitted: the registry's JSON fallback
+// (Factory + json.Unmarshal) handles payload construction without
+// requiring duplicate field-mapping code.
+func RegisterPayloads(reg *payloadregistry.Registry) error {
+	registrations := []*payloadregistry.Registration{
+		{
+			Domain:      Domain,
+			Category:    CategoryLayerApproved,
+			Version:     SchemaVersion,
+			Description: "Approved operating-model layer checkpoint emitted by the /onboard interview.",
+			Factory:     func() any { return &LayerApproved{} },
+		},
+		{
+			Domain:      Domain,
+			Category:    CategoryProfileContext,
+			Version:     SchemaVersion,
+			Description: "Assembled operating-model profile context for loop system-prompt injection.",
+			Factory:     func() any { return &ProfileContext{} },
+		},
 	}
+
+	var errs []error
+	for _, r := range registrations {
+		if err := reg.Register(r); err != nil {
+			errs = append(errs, fmt.Errorf("register %s: %w", r.MessageType(), err))
+		}
+	}
+	return errors.Join(errs...)
 }

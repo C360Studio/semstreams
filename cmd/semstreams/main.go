@@ -26,6 +26,8 @@ import (
 	"github.com/c360studio/semstreams/flowtemplate"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
@@ -127,7 +129,17 @@ func run() error {
 		return err
 	}
 
-	// 9. Build the shared tool registry and register builtins. Done
+	// 9a. Build the shared payload registry and register builtins. Done
+	// BEFORE the tools registry so any boot path that needs payload
+	// resolution (e.g., a stateful tool unmarshaling stored messages)
+	// has the registry available. Mirrors the tools-registry shape
+	// shipped in beta.16.
+	payloadReg := payloadregistry.New()
+	if err := payloadbuiltins.Register(payloadReg); err != nil {
+		return fmt.Errorf("register builtin payloads: %w", err)
+	}
+
+	// 9b. Build the shared tool registry and register builtins. Done
 	// BEFORE creating service dependencies so the registry is available
 	// to component construction via deps.ToolRegistry. Pattern-B
 	// managers (rule, flow, persona, flow-template) are built here too;
@@ -156,6 +168,7 @@ func run() error {
 	// 10. Create service dependencies
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
+	svcDeps.PayloadRegistry = payloadReg
 
 	// 11. Configure and create services
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
