@@ -358,25 +358,30 @@ type ToolExecutor interface {
 
 **Tool Registration**:
 
-Tools can be registered in two ways:
+The tool registry is a constructor-injected registry plumbed through
+`component.Dependencies.ToolRegistry`. Tools can be registered in two ways:
 
-1. **Global registration via init()** (preferred for reusable tools):
+1. **Shared registration on the process registry** (preferred for tools used across components):
 
 ```go
-// In your tool package
-func init() {
-    agentictools.RegisterTool("file_reader", &FileReaderExecutor{})
-    agentictools.RegisterTool("web_search", &WebSearchExecutor{})
-}
+// At binary boot, after executors.RegisterBuiltins:
+reg := agentictools.NewExecutorRegistry()
+_ = executors.RegisterBuiltins(ctx, reg, /* ToolDependencies */)
+_ = reg.RegisterTool("file_reader", &FileReaderExecutor{})
+_ = reg.RegisterTool("web_search", &WebSearchExecutor{})
+
+deps := component.Dependencies{ToolRegistry: reg /* , ... */}
 ```
 
-1. **Per-component registration** (for component-specific tools):
+1. **Per-component registration** (for overrides or component-local wrappers):
 
 ```go
 comp, _ := agentictools.NewComponent(rawConfig, deps)
 toolsComp := comp.(*agentictools.Component)
 toolsComp.RegisterToolExecutor(&CustomExecutor{})
 ```
+
+Component-local registrations beat the shared registry for the same tool name. See `docs/operations/migration-beta16.md` and `processor/agentic-tools/README.md` for the wrapping-pattern recipe.
 
 The global registration pattern matches how components and rules are registered in SemStreams.
 

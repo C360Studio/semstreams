@@ -80,22 +80,30 @@
 //
 // # Tool Registration
 //
+// The tool registry is a constructor-injected ADR-029 Pattern A registry,
+// matching component.Registry. The embedding binary owns one
+// *ExecutorRegistry per process and plumbs it through
+// component.Dependencies.ToolRegistry. There is no package-level singleton.
+//
 // Tools can be registered in two ways:
 //
-// 1. Global registration via init() (preferred for reusable tools):
+// 1. Shared registration (preferred for tools used across components):
 //
-//	func init() {
-//	    agentictools.RegisterTool("my_tool", &MyToolExecutor{})
-//	}
+//		reg := agentictools.NewExecutorRegistry()
+//		if err := reg.RegisterTool("my_tool", &MyToolExecutor{}); err != nil {
+//		    return err
+//		}
+//		deps := component.Dependencies{ToolRegistry: reg}
 //
-// Global registration makes tools available to all agentic-tools components
-// automatically. This pattern matches how components and rules are registered.
+//	 2. Per-component registration (for component-specific overrides or
+//	    wrappers that should not be visible to other components):
 //
-// 2. Per-component registration (for component-specific tools):
+//	    comp, _ := agentictools.NewComponent(rawConfig, deps)
+//	    toolsComp := comp.(*agentictools.Component)
+//	    err := toolsComp.RegisterToolExecutor(&FileReader{})
 //
-//	comp, _ := agentictools.NewComponent(rawConfig, deps)
-//	toolsComp := comp.(*agentictools.Component)
-//	err := toolsComp.RegisterToolExecutor(&FileReader{})
+// Component-local registrations beat the shared registry for the same tool
+// name — see wrapping_pattern_test.go for the precedence contract.
 //
 // The processor extracts tool names from ListTools() for routing and validation.
 //

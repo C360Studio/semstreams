@@ -89,22 +89,51 @@ type ToolExecutor interface {
 }
 ```
 
-### Global Registration (Preferred)
+The tool registry follows ADR-029 Pattern A (boot-registry): the embedding binary constructs an `*ExecutorRegistry`, registers builtins and any custom tools at startup, then plumbs the registry through `component.Dependencies.ToolRegistry`. There is no package-level singleton — every process owns its registry explicitly. This mirrors how `component.Registry` is wired in `cmd/semstreams/main.go`.
 
-Register tools globally via `init()` so they're available to all agentic-tools components:
+### Shared Registration (Preferred)
+
+The shared registry is built once at boot and is what all components in the process resolve against. Embedders typically register builtins via `executors.RegisterBuiltins`, then layer custom tools on top:
 
 ```go
-package mytools
+package main
 
-import agentictools "github.com/c360/semstreams/processor/agentic-tools"
+import (
+    "github.com/c360studio/semstreams/component"
+    agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+    "github.com/c360studio/semstreams/processor/agentic-tools/executors"
+    mytools "example.com/mytools"
+)
 
-func init() {
-    agentictools.RegisterTool("read_file", &FileReader{})
-    agentictools.RegisterTool("query_graph", &GraphQueryExecutor{})
+func bootstrap(ctx context.Context /* ... */) error {
+    reg := agentictools.NewExecutorRegistry()
+
+    // Builtin tools (bash, http_request, github_*, rule CRUD, etc.).
+    if err := executors.RegisterBuiltins(ctx, reg, executors.ToolDependencies{
+        // ...nats client, platform, managers...
+    }); err != nil {
+        return err
+    }
+
+    // Custom tools.
+    if err := reg.RegisterTool("read_file", &mytools.FileReader{}); err != nil {
+        return err
+    }
+    if err := reg.RegisterTool("query_graph", &mytools.GraphQueryExecutor{}); err != nil {
+        return err
+    }
+
+    // Plumb into the dependencies that components see.
+    deps := component.Dependencies{
+        ToolRegistry: reg,
+        // ...nats client, etc...
+    }
+    _ = deps
+    return nil
 }
 ```
 
-This pattern matches how components and rules are registered in SemStreams. Globally registered tools are automatically available to all agentic-tools component instances.
+Duplicate registration returns an error — boot-time conflicts surface immediately rather than being silently swallowed.
 
 ### Per-Component Registration
 
@@ -123,7 +152,30 @@ lc.Initialize()
 lc.Start(ctx)
 ```
 
-Local tools take precedence over global tools with the same name.
+The component-local registry is dispatched first; the shared registry from `deps.ToolRegistry` is the fallback. **Local beats shared** — register a thin `ToolExecutor` wrapper locally to override or post-process a builtin without disturbing the shared registry that other components see.
+
+### Extending an existing tool (wrapping pattern)
+
+To customise a builtin (e.g., transform `http_request` results before they reach the loop), wrap the inner executor and register the wrapper at the same name on the component-local registry:
+
+```go
+type loggedHTTP struct{ inner agentictools.ToolExecutor }
+
+func (l loggedHTTP) ListTools() []agentic.ToolDefinition { return l.inner.ListTools() }
+
+func (l loggedHTTP) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+    res, err := l.inner.Execute(ctx, call)
+    // post-process / annotate / metricize / redact / ...
+    return res, err
+}
+
+// In the binary that owns the component:
+shared := /* the deps.ToolRegistry built at boot */
+inner := shared.GetTool("http_request")
+toolsComp.RegisterToolExecutor(loggedHTTP{inner: inner}) // local wins for this component
+```
+
+The shared registry is untouched, so other components in the process still resolve the original `http_request`. This is the recommended path for downstream consumers; see the test file `wrapping_pattern_test.go` for the contract this guarantees.
 
 ### Example Implementation
 

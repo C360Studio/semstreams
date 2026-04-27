@@ -273,12 +273,15 @@ func (e *MyToolExecutor) ListTools() []agentic.ToolDefinition {
 }
 ```
 
-Register in `init()`:
+Register on the shared tool registry at binary boot, then plumb it through
+component dependencies (see `docs/operations/migration-beta16.md`):
 
 ```go
-func init() {
-    agentictools.RegisterTool("my_tool", &MyToolExecutor{})
-}
+reg := agentictools.NewExecutorRegistry()
+_ = executors.RegisterBuiltins(ctx, reg, executors.ToolDependencies{ /* ... */ })
+_ = reg.RegisterTool("my_tool", &MyToolExecutor{})
+
+deps := component.Dependencies{ToolRegistry: reg /* , ... */}
 ```
 
 ## Production Configuration

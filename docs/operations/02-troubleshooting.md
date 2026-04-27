@@ -69,9 +69,9 @@ docker logs semstreams-app 2>&1 | grep agentic-model
 
 **Diagnosis**:
 ```go
-// List registered tools
-tools := agentictools.GlobalRegistry().ListAll()
-for _, t := range tools {
+// List registered tools (via the deps-injected shared registry).
+// In tests or scratch code, build your own registry directly.
+for _, t := range deps.ToolRegistry.ListTools() {
     fmt.Println(t.Name)
 }
 ```
