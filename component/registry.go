@@ -19,6 +19,18 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
+// Compile-time assertion that *payloadregistry.Registry satisfies
+// component.PayloadRegistryReader. Any future drift in either side's
+// signature breaks here at compile time rather than at first
+// nil-shared deployment.
+//
+// The assertion lives in component (not payloadregistry) on purpose:
+// payloadregistry must remain a leaf package. Importing component from
+// payloadregistry would re-introduce the cycle that beta.16 broke
+// (component → agentic → message → config → component). component
+// already imports payloadregistry, so the assertion is cycle-safe here.
+var _ PayloadRegistryReader = (*payloadregistry.Registry)(nil)
+
 // Info holds metadata about an available component type
 type Info struct {
 	Type        string `json:"type"`        // "input", "processor", "output", "storage"
