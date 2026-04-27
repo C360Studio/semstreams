@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -20,6 +21,13 @@ type ExecutorRegistry struct {
 	executors map[string]ToolExecutor
 	mu        sync.RWMutex
 }
+
+// Compile-time assertion that *ExecutorRegistry satisfies the
+// component.ToolRegistryReader interface. The component package's
+// Dependencies struct holds the registry as that interface; any future
+// drift in either side's signature breaks here at compile time rather
+// than at first nil-shared deployment.
+var _ component.ToolRegistryReader = (*ExecutorRegistry)(nil)
 
 // NewExecutorRegistry creates a new empty executor registry
 func NewExecutorRegistry() *ExecutorRegistry {
