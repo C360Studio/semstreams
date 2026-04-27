@@ -149,6 +149,29 @@ Build a fresh registry per test instead:
  }
 ```
 
+## Boot-time behaviour (non-breaking)
+
+These changes don't require migration but operators should know about
+them:
+
+- **Aggregated registration errors.** `RegisterBuiltins` collects every
+  registry-level failure across the boot via `errors.Join` and returns
+  the aggregate. A misconfigured deployment (two packages claiming the
+  same tool name) sees every collision in one error rather than only the
+  first. Pre-condition skips (nil manager, missing env var, KV bucket
+  unreachable after retries) remain warn-and-skip — those are intentional
+  disable paths, not misconfigurations.
+
+- **KV bucket open retried during boot.** `read_loop_result`,
+  `query_entity`, and `monitor_flow` now wrap their `CreateKeyValueBucket`
+  calls in `retry.Quick` (10 attempts over ~6s). A transient NATS hiccup
+  at boot — circuit breaker open from a recent flap, JetStream API
+  momentarily unavailable — no longer silently disables the tool for the
+  process lifetime. After retries are exhausted the warn-and-skip path
+  still applies, but the log line now reads `"...could not open … after
+  retries"` so the failure is distinguishable from the deployment-choice
+  case.
+
 ## Verification
 
 After migrating, the following should hold:
