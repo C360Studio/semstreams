@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/retry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -27,11 +28,15 @@ func newLoopResultBucketConfig(bucket string) jetstream.KeyValueConfig {
 }
 
 // registerReadLoopResult opens (or creates) the given KV bucket and
-// registers the read_loop_result tool. A bucket-open failure is a
-// non-fatal skip — the tool stays unregistered and the rest of the
-// caller's registrations proceed; the agent loop continues without the
-// loop-result-read capability. A registry-level failure (duplicate name)
-// propagates so RegisterBuiltins can surface it at boot.
+// registers the read_loop_result tool. The bucket open is wrapped in
+// retry.Quick (10 attempts over ~6s) so a transient NATS hiccup during
+// boot — circuit breaker open from a recent flap, JetStream API
+// momentarily unavailable — doesn't silently disable the tool for the
+// lifetime of the process. After retries are exhausted we fall through
+// to the warn-and-skip path: a misconfigured deployment shouldn't block
+// the binary's boot, but the operator gets a loud log line. A
+// registry-level failure (duplicate name) propagates so RegisterBuiltins
+// can surface it at boot.
 //
 // The tool needs to live on the shared registry that agentic-loop's
 // discoverTools advertises to the LLM — registering it only on a
@@ -45,9 +50,11 @@ func newLoopResultBucketConfig(bucket string) jetstream.KeyValueConfig {
 // process; products wanting isolated buckets wire different ToolDependencies
 // per process.
 func registerReadLoopResult(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger, bucketName string) error {
-	bucket, err := natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
+	bucket, err := retry.DoWithResult(ctx, retry.Quick(), func() (jetstream.KeyValue, error) {
+		return natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
+	})
 	if err != nil {
-		logger.Warn("read_loop_result tool disabled: could not open loops bucket",
+		logger.Warn("read_loop_result tool disabled: could not open loops bucket after retries",
 			slog.String("bucket", bucketName),
 			slog.Any("error", err))
 		return nil

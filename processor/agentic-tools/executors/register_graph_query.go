@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/retry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -29,16 +30,20 @@ var entityStatesBucketConfig = jetstream.KeyValueConfig{
 }
 
 // registerGraphQuery wires the query_entity tool against ENTITY_STATES.
-// A bucket-open failure is a non-fatal skip (e.g. the flow didn't declare
-// the bucket); the rest of the caller's registrations proceed. A
-// registry-level failure (duplicate name) propagates so RegisterBuiltins
-// can surface it at boot.
+// The bucket open is wrapped in retry.Quick so a transient NATS hiccup
+// at boot doesn't silently disable the tool for the process lifetime.
+// After retries are exhausted we fall through to warn-and-skip — a
+// flow that doesn't declare the bucket is still a legal deployment.
+// A registry-level failure (duplicate name) propagates so
+// RegisterBuiltins can surface it at boot.
 func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger) error {
 	const toolName = "query_entity"
 
-	bucket, err := natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
+	bucket, err := retry.DoWithResult(ctx, retry.Quick(), func() (jetstream.KeyValue, error) {
+		return natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
+	})
 	if err != nil {
-		logger.Warn("query_entity tool disabled: could not open entity-states bucket",
+		logger.Warn("query_entity tool disabled: could not open entity-states bucket after retries",
 			slog.String("bucket", entityStatesBucket),
 			slog.Any("error", err))
 		return nil
