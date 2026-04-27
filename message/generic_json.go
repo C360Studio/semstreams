@@ -4,7 +4,7 @@ package message
 import (
 	"encoding/json"
 
-	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -27,7 +27,7 @@ func buildGenericJSONPayload(fields map[string]any) (any, error) {
 // from JSON when the message type is "core.json.v1".
 func init() {
 	// Register GenericJSON payload factory
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "core",
 		Category:    "json",
 		Version:     "v1",

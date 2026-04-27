@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // EventPayload implements message.Payload and graph.Graphable for federation graph events.
@@ -57,7 +57,7 @@ func (p *EventPayload) UnmarshalJSON(data []byte) error {
 // Each sem* service calls this with its own domain (e.g., "semsource", "semquery").
 // This enables domain-specific message routing while sharing the same payload structure.
 func RegisterPayload(domain string) error {
-	return component.RegisterPayload(&component.PayloadRegistration{
+	return payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      domain,
 		Category:    "graph_event",
 		Version:     "v1",

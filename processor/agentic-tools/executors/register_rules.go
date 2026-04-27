@@ -1,6 +1,10 @@
 package executors
 
-import "log/slog"
+import (
+	"log/slog"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+)
 
 // Rule CRUD tool names. One constant per tool so callers scoping via
 // publish_agent.tools have a single source of truth rather than string
@@ -25,7 +29,7 @@ const (
 // A nil manager is legal: callers that don't want rule CRUD simply pass
 // nil, and we skip registration. Matches the nil-natsClient handling in
 // RegisterAll for stateful tools that can't find their bucket.
-func registerRules(manager RuleManager, logger *slog.Logger) {
+func registerRules(tools *agentictools.ExecutorRegistry, manager RuleManager, logger *slog.Logger) {
 	if manager == nil {
 		logger.Debug("rule CRUD tools disabled: no RuleManager provided")
 		return
@@ -41,7 +45,7 @@ func registerRules(manager RuleManager, logger *slog.Logger) {
 	}
 
 	for _, name := range toolNames {
-		if err := registerGlobal(name, executor); err != nil {
+		if err := tools.RegisterTool(name, executor); err != nil {
 			logger.Warn("Failed to register rule tool",
 				slog.String("tool", name),
 				slog.Any("error", err))

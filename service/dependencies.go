@@ -26,10 +26,11 @@ type Dependencies struct {
 	NATSClient        *natsclient.Client
 	MetricsRegistry   *metric.MetricsRegistry
 	Logger            *slog.Logger
-	Platform          types.PlatformMeta  // Platform identity
-	Manager           *config.Manager     // Centralized configuration management
-	ComponentRegistry *component.Registry // Component registry for ComponentManager
-	ServiceManager    *Manager            // Service manager for accessing other services
+	Platform          types.PlatformMeta           // Platform identity
+	Manager           *config.Manager              // Centralized configuration management
+	ComponentRegistry *component.Registry          // Component registry for ComponentManager
+	ToolRegistry      component.ToolRegistryReader // Shared tool executor registry plumbed to component deps
+	ServiceManager    *Manager                     // Service manager for accessing other services
 }
 
 // Constructor defines the standard constructor signature for all services.

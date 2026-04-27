@@ -14,14 +14,14 @@ import (
 // and the decide tool use). Registered globally so the ops-agent flow
 // advertises it to the LLM the same way all other global tools are
 // advertised.
-func registerEmitDiagnosis(natsClient *natsclient.Client, platform component.PlatformMeta, logger *slog.Logger) {
+func registerEmitDiagnosis(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, platform component.PlatformMeta, logger *slog.Logger) {
 	if natsClient == nil {
 		logger.Warn("nats client not available; skipping emit_diagnosis registration")
 		return
 	}
 	publisher := agentictools.NewNATSTriplePublisher(natsClient)
 	executor := agentictools.NewEmitDiagnosisExecutor(publisher, platform, logger)
-	if err := registerGlobal(agentictools.EmitDiagnosisToolName, executor); err != nil {
+	if err := tools.RegisterTool(agentictools.EmitDiagnosisToolName, executor); err != nil {
 		logger.Warn("Failed to register emit_diagnosis tool", slog.Any("error", err))
 		return
 	}

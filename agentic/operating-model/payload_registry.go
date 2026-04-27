@@ -1,18 +1,16 @@
 package operatingmodel
 
-import (
-	"github.com/c360studio/semstreams/component"
-)
+import "github.com/c360studio/semstreams/payloadregistry"
 
 // init registers the operating-model payload types with the semstreams global
-// component.PayloadRegistry so BaseMessage.UnmarshalJSON can recreate typed
+// payloadregistry.Registry so BaseMessage.UnmarshalJSON can recreate typed
 // payloads from JSON across the message bus.
 //
 // Builders are intentionally omitted: the registry's JSON fallback
 // (Factory + json.Unmarshal) handles payload construction without requiring
 // duplicate field-mapping code.
 func init() {
-	registerOrPanic(&component.PayloadRegistration{
+	registerOrPanic(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLayerApproved,
 		Version:     SchemaVersion,
@@ -20,7 +18,7 @@ func init() {
 		Factory:     func() any { return &LayerApproved{} },
 	})
 
-	registerOrPanic(&component.PayloadRegistration{
+	registerOrPanic(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryProfileContext,
 		Version:     SchemaVersion,
@@ -29,11 +27,11 @@ func init() {
 	})
 }
 
-// registerOrPanic wraps component.RegisterPayload and panics on failure.
+// registerOrPanic wraps payloadregistry.Register and panics on failure.
 // Registration errors at init() time are programming bugs — the process must
 // not start with a half-registered payload surface.
-func registerOrPanic(registration *component.PayloadRegistration) {
-	if err := component.RegisterPayload(registration); err != nil {
+func registerOrPanic(registration *payloadregistry.Registration) {
+	if err := payloadregistry.Register(registration); err != nil {
 		panic("operating-model: failed to register " + registration.MessageType() + ": " + err.Error())
 	}
 }

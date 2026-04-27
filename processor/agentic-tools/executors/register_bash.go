@@ -3,13 +3,15 @@ package executors
 import (
 	"log/slog"
 	"os"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // registerBash registers the bash executor globally. Always available —
 // resolves local vs sandbox mode from SANDBOX_URL at construction time.
-func registerBash(logger *slog.Logger) {
+func registerBash(tools *agentictools.ExecutorRegistry, logger *slog.Logger) {
 	bash := NewBashExecutorFromEnv()
-	if err := registerGlobal("bash", bash); err != nil {
+	if err := tools.RegisterTool("bash", bash); err != nil {
 		logger.Warn("Failed to register bash tool", slog.Any("error", err))
 		return
 	}

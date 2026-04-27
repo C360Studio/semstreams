@@ -25,7 +25,7 @@ package document
 import (
 	"fmt"
 
-	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // Triple source and confidence constants
@@ -245,7 +245,7 @@ func buildSensorDocument(fields map[string]any) (any, error) {
 // registerPayloads registers all payload types, collecting errors instead of panicking.
 func registerPayloads() {
 	// Register Document payload
-	if err := component.RegisterPayload(&component.PayloadRegistration{
+	if err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "content",
 		Category:    "document",
 		Version:     "v1",
@@ -266,7 +266,7 @@ func registerPayloads() {
 	}
 
 	// Register Maintenance payload
-	if err := component.RegisterPayload(&component.PayloadRegistration{
+	if err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "content",
 		Category:    "maintenance",
 		Version:     "v1",
@@ -287,7 +287,7 @@ func registerPayloads() {
 	}
 
 	// Register Observation payload
-	if err := component.RegisterPayload(&component.PayloadRegistration{
+	if err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "content",
 		Category:    "observation",
 		Version:     "v1",
@@ -308,7 +308,7 @@ func registerPayloads() {
 	}
 
 	// Register SensorDocument payload
-	if err := component.RegisterPayload(&component.PayloadRegistration{
+	if err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "content",
 		Category:    "sensor_doc",
 		Version:     "v1",

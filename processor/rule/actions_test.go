@@ -929,26 +929,21 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 }
 
 // T050b: Test PublishAgent resolves action.Tools → TaskMessage.Tools via the
-// agentictools global registry. Unknown names are dropped rather than
-// failing the spawn.
+// supplied tool registry. Unknown names are dropped rather than failing the
+// spawn.
 func TestAction_PublishAgent_ToolsResolved(t *testing.T) {
-	// Can't run in parallel — uses package-global agentictools registry.
+	t.Parallel()
 	ctx := context.Background()
 
-	// Register a fake tool with a unique name. Any collision with a
-	// previously-registered tool returns an error, so using a test-unique
-	// name keeps this test isolated from suite-wide state.
 	toolName := "test_action_publish_agent_resolver"
-	if err := agentictools.RegisterTool(toolName, &stubToolExecutor{name: toolName}); err != nil {
-		// Tolerate dupes when the test runs twice in the same process
-		// (rare, but keeps `go test -count=N` from failing spuriously).
-		if !strings.Contains(err.Error(), "already registered") {
-			t.Fatalf("register test tool: %v", err)
-		}
+	reg := agentictools.NewExecutorRegistry()
+	if err := reg.RegisterTool(toolName, &stubToolExecutor{name: toolName}); err != nil {
+		t.Fatalf("register test tool: %v", err)
 	}
 
 	mock := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, mock)
+	executor.SetToolRegistry(reg)
 	action := Action{
 		Type:    ActionTypePublishAgent,
 		Subject: "agent.task.test",

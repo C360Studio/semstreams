@@ -73,8 +73,14 @@ func (r *ExecutorRegistry) ListTools() []agentic.ToolDefinition {
 	return tools
 }
 
-// Execute executes a tool call using the registered executor
-// Returns an error result if the tool is not found or execution fails
+// Execute executes a tool call using the registered executor.
+//
+// On a miss, returns a populated ToolResult (so callers can publish
+// it as an error response without further work) plus a wrapped
+// agentic.ErrToolNotFound. Callers detect the miss via
+// errors.Is(err, agentic.ErrToolNotFound) instead of parsing error
+// strings — replaces the string-match dispatch fallback that lived in
+// component.go before the registry refactor.
 func (r *ExecutorRegistry) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	r.mu.RLock()
 	executor, exists := r.executors[call.Name]
@@ -88,7 +94,7 @@ func (r *ExecutorRegistry) Execute(ctx context.Context, call agentic.ToolCall) (
 			LoopID:    call.LoopID,
 			TraceID:   call.TraceID,
 		}
-		return result, errs.WrapInvalid(fmt.Errorf("tool %q not found", call.Name), "ExecutorRegistry", "Execute", "find tool")
+		return result, fmt.Errorf("ExecutorRegistry.Execute: %w: %q", agentic.ErrToolNotFound, call.Name)
 	}
 
 	// Execute with context (supports timeout/cancellation)

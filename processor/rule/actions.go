@@ -11,8 +11,8 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
-	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
@@ -166,9 +166,19 @@ type Publisher interface {
 // It handles triple mutations, NATS publishing, KV writes, and other action types.
 type ActionExecutor struct {
 	logger        *slog.Logger
-	tripleMutator TripleMutator // Optional: if nil, triple mutations are logged but not persisted
-	publisher     Publisher     // Optional: if nil, publish actions are logged but not sent
-	kvWriter      KVWriter      // Optional: if nil, update_kv actions are logged but not executed
+	tripleMutator TripleMutator                // Optional: if nil, triple mutations are logged but not persisted
+	publisher     Publisher                    // Optional: if nil, publish actions are logged but not sent
+	kvWriter      KVWriter                     // Optional: if nil, update_kv actions are logged but not executed
+	toolRegistry  component.ToolRegistryReader // Optional: if nil, publish_agent default_tools resolution returns empty
+}
+
+// SetToolRegistry installs the shared tool registry used by
+// resolveToolNames during publish_agent action execution. nil-valued
+// arg disables tool name resolution (tools list passed to the agent
+// is left empty). Set explicitly after construction by the rule
+// processor when it has access to deps.ToolRegistry.
+func (e *ActionExecutor) SetToolRegistry(r component.ToolRegistryReader) {
+	e.toolRegistry = r
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -507,7 +517,14 @@ func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefiniti
 	if len(names) == 0 {
 		return nil
 	}
-	all := agentictools.ListRegisteredTools()
+	if e.toolRegistry == nil {
+		if e.logger != nil {
+			e.logger.Debug("publish_agent: no shared tool registry; default_tools resolution skipped",
+				"requested", names)
+		}
+		return nil
+	}
+	all := e.toolRegistry.ListTools()
 	byName := make(map[string]agentic.ToolDefinition, len(all))
 	for _, t := range all {
 		byName[t.Name] = t

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 func buildSignalMessage(fields map[string]any) (any, error) {
@@ -38,7 +38,7 @@ func buildSignalMessage(fields map[string]any) (any, error) {
 // init registers dispatch payload types with the global PayloadRegistry.
 func init() {
 	// Register SignalMessage payload factory
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      agentic.Domain,
 		Category:    agentic.CategorySignalMessage,
 		Version:     agentic.SchemaVersion,

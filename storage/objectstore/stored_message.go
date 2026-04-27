@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -87,7 +87,7 @@ func buildStoredMessage(fields map[string]any) (any, error) {
 
 func init() {
 	// Register StoredMessage for proper unmarshaling in graph processors
-	component.RegisterPayload(&component.PayloadRegistration{
+	payloadregistry.Register(&payloadregistry.Registration{
 		Factory: func() interface{} {
 			return &StoredMessage{}
 		},

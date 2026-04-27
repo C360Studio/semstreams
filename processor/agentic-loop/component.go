@@ -138,6 +138,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	handler := NewMessageHandler(config, loopOpts...)
 	handler.modelRegistry = deps.ModelRegistry
+	handler.toolRegistry = deps.ToolRegistry
 
 	// Wire LLM-backed summarizer for context compaction if model registry is available
 	if deps.ModelRegistry != nil && config.Context.Enabled {

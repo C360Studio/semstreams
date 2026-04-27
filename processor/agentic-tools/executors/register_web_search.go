@@ -3,16 +3,18 @@ package executors
 import (
 	"log/slog"
 	"os"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // registerWebSearch registers the web_search executor: real Brave-backed
 // one when BRAVE_SEARCH_API_KEY is set, stub otherwise. The stub keeps
 // web_search advertised for researcher-role agents and e2e fixtures that
 // don't want to hit an external API.
-func registerWebSearch(logger *slog.Logger) {
+func registerWebSearch(tools *agentictools.ExecutorRegistry, logger *slog.Logger) {
 	if apiKey := os.Getenv("BRAVE_SEARCH_API_KEY"); apiKey != "" {
 		ws := NewWebSearchExecutor(apiKey)
-		if err := registerGlobal("web_search", ws); err != nil {
+		if err := tools.RegisterTool("web_search", ws); err != nil {
 			logger.Warn("Failed to register web_search tool", slog.Any("error", err))
 			return
 		}
@@ -20,7 +22,7 @@ func registerWebSearch(logger *slog.Logger) {
 		return
 	}
 	stub := NewStubWebSearchExecutor()
-	if err := registerGlobal("web_search", stub); err != nil {
+	if err := tools.RegisterTool("web_search", stub); err != nil {
 		logger.Warn("Failed to register web_search stub", slog.Any("error", err))
 		return
 	}

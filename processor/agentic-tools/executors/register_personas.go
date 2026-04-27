@@ -1,6 +1,10 @@
 package executors
 
-import "log/slog"
+import (
+	"log/slog"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+)
 
 // Persona CRUD tool names. Single source of truth for publish_agent.tools
 // scoping.
@@ -14,7 +18,7 @@ const (
 
 // registerPersonas wires PersonaExecutor globally. Nil manager = skip,
 // same pattern as registerRules / registerFlows.
-func registerPersonas(manager PersonaManager, logger *slog.Logger) {
+func registerPersonas(tools *agentictools.ExecutorRegistry, manager PersonaManager, logger *slog.Logger) {
 	if manager == nil {
 		logger.Debug("persona CRUD tools disabled: no PersonaManager provided")
 		return
@@ -29,7 +33,7 @@ func registerPersonas(manager PersonaManager, logger *slog.Logger) {
 		personaToolGet,
 	}
 	for _, name := range toolNames {
-		if err := registerGlobal(name, executor); err != nil {
+		if err := tools.RegisterTool(name, executor); err != nil {
 			logger.Warn("Failed to register persona tool",
 				slog.String("tool", name),
 				slog.Any("error", err))

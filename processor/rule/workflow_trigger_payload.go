@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // Workflow trigger payload type constants.
@@ -73,7 +73,7 @@ func (e *ValidationError) Error() string {
 
 func init() {
 	// Register the workflow trigger payload for proper BaseMessage deserialization
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      WorkflowTriggerDomain,
 		Category:    WorkflowTriggerCategory,
 		Version:     WorkflowTriggerVersion,

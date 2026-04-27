@@ -3,7 +3,6 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -24,23 +23,25 @@ func (e *testToolExecutor) ListTools() []agentic.ToolDefinition {
 	return e.tools
 }
 
-// registerTestToolOnce ensures test tools are registered only once across all tests
-var registerTestToolOnce sync.Once
-
-func ensureTestToolRegistered() {
-	registerTestToolOnce.Do(func() {
-		executor := &testToolExecutor{
-			tools: []agentic.ToolDefinition{
-				{
-					Name:        "test_tool",
-					Description: "A test tool for unit tests",
-					Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
-				},
+// newTestToolRegistry builds a per-test ExecutorRegistry preloaded with
+// the canonical "test_tool" stub. Each test that exercises tool discovery
+// calls this and wires the registry via handler.SetToolRegistry.
+func newTestToolRegistry(t *testing.T) *agentictools.ExecutorRegistry {
+	t.Helper()
+	executor := &testToolExecutor{
+		tools: []agentic.ToolDefinition{
+			{
+				Name:        "test_tool",
+				Description: "A test tool for unit tests",
+				Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 			},
-		}
-		// Ignore error if already registered (may happen in parallel test runs)
-		_ = agentictools.RegisterTool("test_tool", executor)
-	})
+		},
+	}
+	reg := agentictools.NewExecutorRegistry()
+	if err := reg.RegisterTool("test_tool", executor); err != nil {
+		t.Fatalf("register test_tool: %v", err)
+	}
+	return reg
 }
 
 func TestHandleTask_CreatesLoop(t *testing.T) {
@@ -1354,10 +1355,10 @@ type HandlerResult struct {
 }
 
 // TestHandleTask_PopulatesToolsInRequest verifies that AgentRequest.Tools
-// is populated with tool definitions from the global registry.
+// is populated with tool definitions from the wired registry.
 func TestHandleTask_PopulatesToolsInRequest(t *testing.T) {
-	ensureTestToolRegistered()
 	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
 
 	task := agenticloop.TaskMessage{
 		TaskID: "task-tools",
@@ -1415,8 +1416,8 @@ func TestHandleTask_PopulatesToolsInRequest(t *testing.T) {
 // TestHandleToolResult_NextRequestHasTools verifies that subsequent AgentRequest
 // messages (after tool completion) also include tool definitions.
 func TestHandleToolResult_NextRequestHasTools(t *testing.T) {
-	ensureTestToolRegistered()
 	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
 
 	// Create loop first
 	ctx := context.Background()
@@ -1555,8 +1556,8 @@ func TestHandleModelResponse_Complete_PopulatesTokenFields(t *testing.T) {
 // --- Per-task tools tests ---
 
 func TestHandleTask_PerTaskTools(t *testing.T) {
-	ensureTestToolRegistered()
 	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
 
 	customTools := []agentic.ToolDefinition{
 		{

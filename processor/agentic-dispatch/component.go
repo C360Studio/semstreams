@@ -15,20 +15,23 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// resolveDefaultTools looks up the named tools in the agentictools global
+// resolveDefaultTools looks up the named tools in the supplied tool
 // registry, logging and dropping any name not found. Mirror of the
-// resolver in processor/rule/actions.go — kept separate to avoid pulling
-// one processor into the other, since both resolvers are short.
-func resolveDefaultTools(names []string, logger *slog.Logger) []agentic.ToolDefinition {
-	if len(names) == 0 {
+// resolver in processor/rule/actions.go — kept separate to avoid
+// pulling one processor into the other, since both resolvers are
+// short.
+//
+// nil registry returns nil (default_tools resolution disabled —
+// matches deployments without agentic-tools wired in).
+func resolveDefaultTools(reg component.ToolRegistryReader, names []string, logger *slog.Logger) []agentic.ToolDefinition {
+	if len(names) == 0 || reg == nil {
 		return nil
 	}
-	all := agentictools.ListRegisteredTools()
+	all := reg.ListTools()
 	byName := make(map[string]agentic.ToolDefinition, len(all))
 	for _, t := range all {
 		byName[t.Name] = t
@@ -595,7 +598,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	// task.Tools, which the loop respects as "no tools for this role".
 	// Names not in the agentictools registry are logged and dropped.
 	if c.config.DefaultTools != nil {
-		resolved := resolveDefaultTools(c.config.DefaultTools, c.logger)
+		resolved := resolveDefaultTools(c.deps.ToolRegistry, c.config.DefaultTools, c.logger)
 		if resolved == nil {
 			resolved = []agentic.ToolDefinition{}
 		}

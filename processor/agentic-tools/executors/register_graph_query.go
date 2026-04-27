@@ -8,6 +8,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // entityStatesBucket is the KV bucket query_entity reads from. Same
@@ -30,7 +31,7 @@ var entityStatesBucketConfig = jetstream.KeyValueConfig{
 // Failure is non-fatal: if the bucket is unavailable (e.g. the flow
 // didn't declare it), we log a warning and skip. The rest of the
 // caller's tools stay available.
-func registerGraphQuery(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger) {
+func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger) {
 	const toolName = "query_entity"
 
 	bucket, err := natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
@@ -43,7 +44,7 @@ func registerGraphQuery(ctx context.Context, natsClient *natsclient.Client, logg
 
 	store := natsClient.NewKVStore(bucket)
 	executor := NewGraphQueryExecutor(&graphQueryKVAdapter{store: store})
-	if err := registerGlobal(toolName, executor); err != nil {
+	if err := tools.RegisterTool(toolName, executor); err != nil {
 		logger.Warn("Failed to register query_entity tool", slog.Any("error", err))
 		return
 	}

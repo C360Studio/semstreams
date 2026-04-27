@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/timestamp"
 	"github.com/google/uuid"
@@ -275,7 +275,7 @@ func (m *BaseMessage) UnmarshalJSON(data []byte) error {
 	m.meta = NewDefaultMetaWithReceivedAt(createdAt, receivedAt, source)
 
 	// Try to create typed payload using registry
-	payload := component.CreatePayload(m.msgType.Domain, m.msgType.Category, m.msgType.Version)
+	payload := payloadregistry.Create(m.msgType.Domain, m.msgType.Category, m.msgType.Version)
 	if payload == nil {
 		// Unknown type - payload must be registered or use core.json.v1
 		return errs.WrapInvalid(

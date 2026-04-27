@@ -27,6 +27,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
@@ -126,27 +127,19 @@ func run() error {
 		return err
 	}
 
-	// 9. Create service dependencies
-	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
-
-	// 10. Configure and create services
-	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
-		return err
-	}
-
-	// 11. Register the global agentic tool executors after components have
-	// been wired. Scheduling this post-configure lets Pattern-B managers
-	// (rule.ConfigManager today; flow/persona/template managers later per
-	// ADR-029) resolve against already-initialised infrastructure. Stateful
-	// tools (read_loop_result, decide, query_entity) need natsClient +
-	// platform which are available from step 7.
+	// 9. Build the shared tool registry and register builtins. Done
+	// BEFORE creating service dependencies so the registry is available
+	// to component construction via deps.ToolRegistry. Pattern-B
+	// managers (rule, flow, persona, flow-template) are built here too;
+	// stateful tools that need them resolve at registration.
 	personaMgr := buildPersonaManagerConcrete(natsClient, logger)
 	if personaMgr != nil {
 		if err := persona.LoadFromDirectory(ctx, "configs/personas/fragments", personaMgr, logger); err != nil {
 			logger.Warn("persona file loader encountered errors", slog.Any("error", err))
 		}
 	}
-	executors.RegisterAll(ctx, executors.ToolDependencies{
+	toolRegistry := agentictools.NewExecutorRegistry()
+	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:          natsClient,
 		Platform:            platform,
 		Logger:              logger,
@@ -156,9 +149,20 @@ func run() error {
 		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:   componentRegistry,
 		LoopsBucket:         extractLoopsBucket(cfg),
-	})
+	}); err != nil {
+		return fmt.Errorf("register builtin tools: %w", err)
+	}
 
-	// 11. Run application with signal handling
+	// 10. Create service dependencies
+	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
+	svcDeps.ToolRegistry = toolRegistry
+
+	// 11. Configure and create services
+	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
+		return err
+	}
+
+	// 12. Run application with signal handling
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
 }
 

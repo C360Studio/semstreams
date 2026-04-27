@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/types"
 
 	// Import packages to trigger their init() payload registrations
@@ -22,7 +22,7 @@ type schemaProvider interface {
 // have Schema() methods that return values matching their registration.
 // This test catches mismatches that would cause deserialization failures.
 func TestSchemaRegistrationConsistency(t *testing.T) {
-	payloads := component.GlobalPayloadRegistry().ListPayloads()
+	payloads := payloadregistry.Global().List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
@@ -30,7 +30,7 @@ func TestSchemaRegistrationConsistency(t *testing.T) {
 	for msgType, reg := range payloads {
 		t.Run(msgType, func(t *testing.T) {
 			// Create instance using factory
-			payload := component.CreatePayload(reg.Domain, reg.Category, reg.Version)
+			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
 			if payload == nil {
 				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
 			}
@@ -64,7 +64,7 @@ func TestSchemaRegistrationConsistency(t *testing.T) {
 // have required fields. This is expected and correct behavior - the contract
 // enforcement prevents invalid messages from being serialized.
 func TestBaseMessageRoundTrip(t *testing.T) {
-	payloads := component.GlobalPayloadRegistry().ListPayloads()
+	payloads := payloadregistry.Global().List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
@@ -72,7 +72,7 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 	for msgType, reg := range payloads {
 		t.Run(msgType, func(t *testing.T) {
 			// Create a payload instance
-			payload := component.CreatePayload(reg.Domain, reg.Category, reg.Version)
+			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
 			if payload == nil {
 				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
 			}
@@ -123,14 +123,14 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 // TestPayloadValidation verifies that newly created payloads from factories
 // pass validation (or fail with expected errors for required fields).
 func TestPayloadValidation(t *testing.T) {
-	payloads := component.GlobalPayloadRegistry().ListPayloads()
+	payloads := payloadregistry.Global().List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
 	for msgType, reg := range payloads {
 		t.Run(msgType, func(t *testing.T) {
-			payload := component.CreatePayload(reg.Domain, reg.Category, reg.Version)
+			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
 			if payload == nil {
 				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
 			}
@@ -150,14 +150,14 @@ func TestPayloadValidation(t *testing.T) {
 
 // TestPayloadMarshalJSON verifies that all registered payloads can marshal to JSON.
 func TestPayloadMarshalJSON(t *testing.T) {
-	payloads := component.GlobalPayloadRegistry().ListPayloads()
+	payloads := payloadregistry.Global().List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
 	for msgType, reg := range payloads {
 		t.Run(msgType, func(t *testing.T) {
-			payload := component.CreatePayload(reg.Domain, reg.Category, reg.Version)
+			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
 			if payload == nil {
 				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
 			}

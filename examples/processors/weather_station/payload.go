@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 func buildWeatherReading(fields map[string]any) (any, error) {
@@ -60,7 +60,7 @@ func buildWeatherReading(fields map[string]any) (any, error) {
 //
 // CRITICAL: Without this registration, JSON deserialization will fail silently.
 func init() {
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "weather",
 		Category:    "station",
 		Version:     "v1",

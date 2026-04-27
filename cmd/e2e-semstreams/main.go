@@ -27,6 +27,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
@@ -112,17 +113,11 @@ func run() error {
 		return err
 	}
 
-	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
-
-	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
-		return err
-	}
-
-	// Register the global agentic tool executors after services are
-	// configured. Mirrors cmd/semstreams/main.go — see ADR-029 for the
-	// pattern. Post-configure timing lets Pattern-B managers resolve
-	// against already-initialised infrastructure.
-	executors.RegisterAll(ctx, executors.ToolDependencies{
+	// Build the shared tool registry and register builtins BEFORE
+	// service deps so component construction can resolve via
+	// deps.ToolRegistry. Mirrors cmd/semstreams/main.go — see ADR-029.
+	toolRegistry := agentictools.NewExecutorRegistry()
+	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:          natsClient,
 		Platform:            platform,
 		Logger:              logger,
@@ -130,7 +125,17 @@ func run() error {
 		FlowManager:         buildFlowManager(natsClient, logger),
 		PersonaManager:      buildPersonaManager(natsClient, logger),
 		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
-	})
+		ComponentRegistry:   componentRegistry,
+	}); err != nil {
+		return fmt.Errorf("register builtin tools: %w", err)
+	}
+
+	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
+	svcDeps.ToolRegistry = toolRegistry
+
+	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
+		return err
+	}
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
 }

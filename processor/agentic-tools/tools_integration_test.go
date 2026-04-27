@@ -684,17 +684,18 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 	assert.True(t, foundInternalTool, "Response should include internal tool")
 }
 
-// TestIntegration_GlobalRegistryTools tests that globally registered tools appear in ListTools
-func TestIntegration_GlobalRegistryTools(t *testing.T) {
+// TestIntegration_SharedRegistryTools tests that tools registered in the
+// deps-injected shared registry appear in ListTools alongside per-component
+// local registrations.
+func TestIntegration_SharedRegistryTools(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
-	// Register a tool globally (simulating init() registration)
-	globalTool := &integrationMockExecutor{
-		toolName:      "global_test_tool",
-		resultContent: "Global result",
+	sharedReg := agentictools.NewExecutorRegistry()
+	sharedTool := &integrationMockExecutor{
+		toolName:      "shared_test_tool",
+		resultContent: "Shared result",
 	}
-	err := agentictools.RegisterTool("global_test_tool", globalTool)
-	require.NoError(t, err)
+	require.NoError(t, sharedReg.RegisterTool("shared_test_tool", sharedTool))
 
 	config := agentictools.Config{
 		Ports: &component.PortConfig{
@@ -717,7 +718,7 @@ func TestIntegration_GlobalRegistryTools(t *testing.T) {
 			},
 		},
 		StreamName:         "AGENT",
-		ConsumerNameSuffix: "global-reg-test",
+		ConsumerNameSuffix: "shared-reg-test",
 		Timeout:            "5s",
 	}
 
@@ -725,7 +726,8 @@ func TestIntegration_GlobalRegistryTools(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:   natsClient,
+		ToolRegistry: sharedReg,
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -742,13 +744,13 @@ func TestIntegration_GlobalRegistryTools(t *testing.T) {
 	err = toolsComp.RegisterToolExecutor(localTool)
 	require.NoError(t, err)
 
-	// Verify both global and local tools appear in ListTools
+	// Verify both shared and local tools appear in ListTools
 	tools := toolsComp.ListTools()
 
-	var foundGlobal, foundLocal bool
+	var foundShared, foundLocal bool
 	for _, tool := range tools {
-		if tool.Name == "global_test_tool" {
-			foundGlobal = true
+		if tool.Name == "shared_test_tool" {
+			foundShared = true
 			assert.Equal(t, "internal", tool.Provider)
 			assert.True(t, tool.Available)
 		}
@@ -759,21 +761,21 @@ func TestIntegration_GlobalRegistryTools(t *testing.T) {
 		}
 	}
 
-	assert.True(t, foundGlobal, "Should find globally registered tool")
+	assert.True(t, foundShared, "Should find shared-registered tool")
 	assert.True(t, foundLocal, "Should find locally registered tool")
 }
 
-// TestIntegration_GlobalRegistryExecution tests that globally registered tools can be executed
-func TestIntegration_GlobalRegistryExecution(t *testing.T) {
+// TestIntegration_SharedRegistryExecution tests that tools resolved via the
+// deps-injected shared registry can be executed by the component.
+func TestIntegration_SharedRegistryExecution(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
-	// Register a tool globally (simulating init() registration)
-	globalExecTool := &integrationMockExecutor{
-		toolName:      "global_exec_tool",
-		resultContent: "Executed from global registry",
+	sharedReg := agentictools.NewExecutorRegistry()
+	sharedExecTool := &integrationMockExecutor{
+		toolName:      "shared_exec_tool",
+		resultContent: "Executed from shared registry",
 	}
-	err := agentictools.RegisterTool("global_exec_tool", globalExecTool)
-	require.NoError(t, err)
+	require.NoError(t, sharedReg.RegisterTool("shared_exec_tool", sharedExecTool))
 
 	config := agentictools.Config{
 		Ports: &component.PortConfig{
@@ -796,7 +798,7 @@ func TestIntegration_GlobalRegistryExecution(t *testing.T) {
 			},
 		},
 		StreamName:         "AGENT",
-		ConsumerNameSuffix: "global-exec-test",
+		ConsumerNameSuffix: "shared-exec-test",
 		Timeout:            "5s",
 	}
 
@@ -804,7 +806,8 @@ func TestIntegration_GlobalRegistryExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:   natsClient,
+		ToolRegistry: sharedReg,
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -843,26 +846,26 @@ func TestIntegration_GlobalRegistryExecution(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Execute the globally registered tool (wrapped in BaseMessage)
+	// Execute the shared-registered tool (wrapped in BaseMessage)
 	toolCall := &agentic.ToolCall{
-		ID:   "call_global_exec",
-		Name: "global_exec_tool",
+		ID:   "call_shared_exec",
+		Name: "shared_exec_tool",
 		Arguments: map[string]any{
 			"input": "test",
 		},
 	}
-	publishToolCallMessage(t, natsClient, "tool.execute.global_exec_tool", toolCall)
+	publishToolCallMessage(t, natsClient, "tool.execute.shared_exec_tool", toolCall)
 
 	// Wait for result
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify result from globally registered tool
+	// Verify result from shared-registered tool
 	receiveMu.Lock()
 	defer receiveMu.Unlock()
 
 	require.Equal(t, 1, len(receivedResults), "Should receive one result")
 	result := receivedResults[0]
-	assert.Equal(t, "call_global_exec", result.CallID)
-	assert.Equal(t, "Executed from global registry", result.Content)
+	assert.Equal(t, "call_shared_exec", result.CallID)
+	assert.Equal(t, "Executed from shared registry", result.Content)
 	assert.Empty(t, result.Error)
 }

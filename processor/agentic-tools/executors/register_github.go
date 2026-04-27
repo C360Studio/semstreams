@@ -3,6 +3,8 @@ package executors
 import (
 	"log/slog"
 	"os"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // registerGitHub registers github_read + github_write when a GITHUB_TOKEN
@@ -12,7 +14,7 @@ import (
 // Pre-consolidation this was an init() in github_init.go that ran on
 // package import. Now it's explicit from RegisterAll so main owns the
 // registration schedule.
-func registerGitHub(logger *slog.Logger) {
+func registerGitHub(tools *agentictools.ExecutorRegistry, logger *slog.Logger) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		return
@@ -20,11 +22,11 @@ func registerGitHub(logger *slog.Logger) {
 
 	client := NewGitHubHTTPClient(token)
 
-	if err := registerGlobal("github_read", NewGitHubReadExecutor(client)); err != nil {
+	if err := tools.RegisterTool("github_read", NewGitHubReadExecutor(client)); err != nil {
 		logger.Warn("Failed to register github_read tool", slog.Any("error", err))
 		return
 	}
-	if err := registerGlobal("github_write", NewGitHubWriteExecutor(client)); err != nil {
+	if err := tools.RegisterTool("github_write", NewGitHubWriteExecutor(client)); err != nil {
 		logger.Warn("Failed to register github_write tool", slog.Any("error", err))
 		return
 	}

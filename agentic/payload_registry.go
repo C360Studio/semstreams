@@ -1,8 +1,6 @@
 package agentic
 
-import (
-	"github.com/c360studio/semstreams/component"
-)
+import "github.com/c360studio/semstreams/payloadregistry"
 
 // init registers all agentic payload types with the global PayloadRegistry.
 // This enables BaseMessage.UnmarshalJSON to recreate typed payloads from JSON
@@ -13,7 +11,7 @@ import (
 // variable interpolation without requiring duplicate field-mapping code.
 func init() {
 	// Register TaskMessage payload factory
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryTask,
 		Version:     SchemaVersion,
@@ -25,7 +23,7 @@ func init() {
 	}
 
 	// Register UserMessage payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryUserMessage,
 		Version:     SchemaVersion,
@@ -37,7 +35,7 @@ func init() {
 	}
 
 	// Register UserSignal payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategorySignal,
 		Version:     SchemaVersion,
@@ -49,7 +47,7 @@ func init() {
 	}
 
 	// Register UserResponse payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryUserResponse,
 		Version:     SchemaVersion,
@@ -61,7 +59,7 @@ func init() {
 	}
 
 	// Register AgentResponse payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryResponse,
 		Version:     SchemaVersion,
@@ -73,7 +71,7 @@ func init() {
 	}
 
 	// Register ToolResult payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryToolResult,
 		Version:     SchemaVersion,
@@ -85,7 +83,7 @@ func init() {
 	}
 
 	// Register AgentRequest payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryRequest,
 		Version:     SchemaVersion,
@@ -97,7 +95,7 @@ func init() {
 	}
 
 	// Register ToolCall payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryToolCall,
 		Version:     SchemaVersion,
@@ -109,7 +107,7 @@ func init() {
 	}
 
 	// Register LoopCreatedEvent payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLoopCreated,
 		Version:     SchemaVersion,
@@ -121,7 +119,7 @@ func init() {
 	}
 
 	// Register LoopCompletedEvent payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLoopCompleted,
 		Version:     SchemaVersion,
@@ -133,7 +131,7 @@ func init() {
 	}
 
 	// Register LoopFailedEvent payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLoopFailed,
 		Version:     SchemaVersion,
@@ -145,7 +143,7 @@ func init() {
 	}
 
 	// Register LoopCancelledEvent payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLoopCancelled,
 		Version:     SchemaVersion,
@@ -157,7 +155,7 @@ func init() {
 	}
 
 	// Register ContextEvent payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryContextEvent,
 		Version:     SchemaVersion,

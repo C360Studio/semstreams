@@ -1,12 +1,10 @@
 package boid
 
-import (
-	"github.com/c360studio/semstreams/component"
-)
+import "github.com/c360studio/semstreams/payloadregistry"
 
 func init() {
 	// Register AgentPosition payload factory
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryPosition,
 		Version:     SchemaVersion,
@@ -18,7 +16,7 @@ func init() {
 	}
 
 	// Register SteeringSignal payload factory
-	err = component.RegisterPayload(&component.PayloadRegistration{
+	err = payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategorySignal,
 		Version:     SchemaVersion,

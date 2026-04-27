@@ -40,7 +40,7 @@ func newLoopResultBucketConfig(bucket string) jetstream.KeyValueConfig {
 // The bucket name is frozen at registration time (boot). One bucket per
 // process; products wanting isolated buckets wire different ToolDependencies
 // per process.
-func registerReadLoopResult(ctx context.Context, natsClient *natsclient.Client, logger *slog.Logger, bucketName string) {
+func registerReadLoopResult(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger, bucketName string) {
 	bucket, err := natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
 	if err != nil {
 		logger.Warn("read_loop_result tool disabled: could not open loops bucket",
@@ -51,7 +51,7 @@ func registerReadLoopResult(ctx context.Context, natsClient *natsclient.Client, 
 
 	store := natsClient.NewKVStore(bucket)
 	executor := agentictools.NewReadLoopResultExecutor(store)
-	if err := registerGlobal(agentictools.ReadLoopResultToolName, executor); err != nil {
+	if err := tools.RegisterTool(agentictools.ReadLoopResultToolName, executor); err != nil {
 		logger.Warn("Failed to register read_loop_result tool", slog.Any("error", err))
 		return
 	}

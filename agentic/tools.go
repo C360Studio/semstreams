@@ -2,11 +2,21 @@ package agentic
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/c360studio/semstreams/message"
 )
+
+// ErrToolNotFound is the sentinel returned by tool registries when a
+// requested tool name has no executor. Callers use errors.Is to detect
+// the miss without parsing error strings — the previous string-match
+// fallback in agentic-tools/component.go was the source of repeated
+// extension friction. Lives here (alongside ToolCall/ToolResult)
+// rather than in agentic-tools so consumers in other processor
+// packages can check it without importing the executor package.
+var ErrToolNotFound = errors.New("tool not found")
 
 // ToolDefinition represents the definition of a tool that can be called
 type ToolDefinition struct {

@@ -1,12 +1,12 @@
 package githubprworkflow
 
-import "github.com/c360studio/semstreams/component"
+import "github.com/c360studio/semstreams/payloadregistry"
 
 // init registers all GitHub payload types with the global PayloadRegistry.
 // This enables BaseMessage.UnmarshalJSON to recreate typed payloads from JSON
 // when the message type matches one of the github entity types.
 func init() {
-	registrations := []component.PayloadRegistration{
+	registrations := []payloadregistry.Registration{
 		{
 			Domain:      domainGitHub,
 			Category:    categoryIssueEntity,
@@ -38,7 +38,7 @@ func init() {
 	}
 
 	for i := range registrations {
-		if err := component.RegisterPayload(&registrations[i]); err != nil {
+		if err := payloadregistry.Register(&registrations[i]); err != nil {
 			panic("register github entity: " + err.Error())
 		}
 	}

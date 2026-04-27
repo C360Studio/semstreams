@@ -1,10 +1,8 @@
-package config
+package component
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/c360studio/semstreams/component"
 )
 
 // TestConfigValidationErrors tests enhanced validation error structure (T020)
@@ -13,8 +11,8 @@ import (
 // Then: 400 with errors[0].field="port", code="max", message clear
 func TestConfigValidationErrors(t *testing.T) {
 	// Setup
-	schema := component.ConfigSchema{
-		Properties: map[string]component.PropertySchema{
+	schema := ConfigSchema{
+		Properties: map[string]PropertySchema{
 			"port": {
 				Type:    "int",
 				Minimum: intPtr(1),
@@ -29,7 +27,7 @@ func TestConfigValidationErrors(t *testing.T) {
 	}
 
 	// Execute
-	errors := component.ValidateConfig(invalidConfig, schema)
+	errors := ValidateConfig(invalidConfig, schema)
 
 	// Verify error structure
 	if len(errors) == 0 {
@@ -60,8 +58,8 @@ func TestConfigValidationErrors(t *testing.T) {
 // When: Validation performed
 // Then: All errors returned in array
 func TestConfigValidationMultipleErrors(t *testing.T) {
-	schema := component.ConfigSchema{
-		Properties: map[string]component.PropertySchema{
+	schema := ConfigSchema{
+		Properties: map[string]PropertySchema{
 			"port": {
 				Type:    "int",
 				Minimum: intPtr(1),
@@ -80,7 +78,7 @@ func TestConfigValidationMultipleErrors(t *testing.T) {
 	}
 
 	// Execute
-	errors := component.ValidateConfig(invalidConfig, schema)
+	errors := ValidateConfig(invalidConfig, schema)
 
 	// Should have at least 2 errors
 	if len(errors) < 2 {
@@ -106,7 +104,6 @@ func TestConfigValidationMultipleErrors(t *testing.T) {
 	}
 }
 
-// Helper function for creating int pointers
-func intPtr(i int) *int {
-	return &i
-}
+// intPtr lives in component/test_helpers.go now that this test
+// file moved into the component package; the local copy was the
+// duplicate that broke the build after the move.

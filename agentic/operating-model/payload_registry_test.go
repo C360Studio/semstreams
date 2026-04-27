@@ -3,12 +3,12 @@ package operatingmodel
 import (
 	"testing"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 func TestRegistry_LayerApprovedTypeExists(t *testing.T) {
-	p := component.CreatePayload(Domain, CategoryLayerApproved, SchemaVersion)
+	p := payloadregistry.Create(Domain, CategoryLayerApproved, SchemaVersion)
 	if p == nil {
 		t.Fatalf("CreatePayload returned nil; LayerApproved not registered")
 	}
@@ -18,7 +18,7 @@ func TestRegistry_LayerApprovedTypeExists(t *testing.T) {
 }
 
 func TestRegistry_ProfileContextTypeExists(t *testing.T) {
-	p := component.CreatePayload(Domain, CategoryProfileContext, SchemaVersion)
+	p := payloadregistry.Create(Domain, CategoryProfileContext, SchemaVersion)
 	if p == nil {
 		t.Fatalf("CreatePayload returned nil; ProfileContext not registered")
 	}
@@ -60,7 +60,7 @@ func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
 	// Documents the contract: attempting to re-register an already-registered
 	// message type returns a validation error rather than succeeding silently.
 	// init() panics on this error by design (see registerOrPanic).
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLayerApproved,
 		Version:     SchemaVersion,

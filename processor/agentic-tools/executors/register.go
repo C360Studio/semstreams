@@ -1,5 +1,5 @@
 // Package executors hosts the concrete tool implementations and their
-// wire-to-global-registry entry points.
+// wire-to-registry entry points.
 //
 // Stateless tools (bash, http_request, web_search, github_*) wire from env
 // vars alone. Stateful tools (query_entity, read_loop_result, decide) need
@@ -7,16 +7,15 @@
 // the binary has initialised streams/buckets — so their wire functions
 // take explicit arguments rather than registering at init() time.
 //
-// The single caller of RegisterAll is main.go, after ensureStreams and
-// before component.Start. Keeping wiring out of agentic-tools.Component
-// leaves that component a pure tool-execution endpoint (it reads from the
-// global registry, it doesn't write to it).
+// The single caller of RegisterBuiltins is main.go, after ensureStreams
+// and before component.Start. The registry is constructed by main and
+// passed in explicitly — there is no package-level singleton.
 package executors
 
 import (
 	"context"
+	"errors"
 	"log/slog"
-	"strings"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
@@ -54,20 +53,29 @@ type ToolDependencies struct {
 	LoopsBucket string
 }
 
-// RegisterAll wires every tool this package owns into the agentic-tools
-// global registry. Failures are logged; stateful-tool wiring that can't
-// reach its bucket skips silently and lets the rest proceed — same
-// philosophy as the pre-refactor init() pattern.
-func RegisterAll(ctx context.Context, deps ToolDependencies) {
+// RegisterBuiltins wires every tool this package owns into the
+// supplied registry. Errors propagate so callers see misconfigurations
+// at boot rather than silently dropped registrations — the previous
+// "already registered" swallow that lived here was a workaround for
+// the global singleton's lifecycle and is no longer needed now that
+// each process owns its registry explicitly.
+//
+// Stateful tools (NATS-bound) skip silently when their dependency is
+// nil; that's intentional and lets callers ship partial-feature
+// deployments (e.g., graph-only flows without an LLM loop).
+func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, deps ToolDependencies) error {
+	if reg == nil {
+		return errors.New("RegisterBuiltins: nil registry")
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	registerBash(logger)
-	registerWebSearch(logger)
-	registerHTTPRequest(logger)
-	registerGitHub(logger)
+	registerBash(reg, logger)
+	registerWebSearch(reg, logger)
+	registerHTTPRequest(reg, logger)
+	registerGitHub(reg, logger)
 
 	loopsBucket := deps.LoopsBucket
 	if loopsBucket == "" {
@@ -77,33 +85,21 @@ func RegisterAll(ctx context.Context, deps ToolDependencies) {
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity)")
 	} else {
-		registerReadLoopResult(ctx, deps.NATSClient, logger, loopsBucket)
-		registerDecide(deps.NATSClient, deps.Platform, logger)
-		registerEmitDiagnosis(deps.NATSClient, deps.Platform, logger)
-		registerGraphQuery(ctx, deps.NATSClient, logger)
+		registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket)
+		registerDecide(reg, deps.NATSClient, deps.Platform, logger)
+		registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger)
+		registerGraphQuery(ctx, reg, deps.NATSClient, logger)
 	}
 
 	// Pattern-B registry-backed tools. Each wire function handles a nil
 	// manager as a skip so callers can ship partial configs without
 	// exploding.
-	registerRules(deps.RuleManager, logger)
-	registerFlows(deps.FlowManager, logger)
-	registerPersonas(deps.PersonaManager, logger)
-	registerFlowTemplates(deps.FlowTemplateManager, logger)
-	registerComponentCatalog(deps.ComponentRegistry, logger)
-	registerFlowMonitor(deps.NATSClient, deps.FlowManager, logger, loopsBucket)
-}
+	registerRules(reg, deps.RuleManager, logger)
+	registerFlows(reg, deps.FlowManager, logger)
+	registerPersonas(reg, deps.PersonaManager, logger)
+	registerFlowTemplates(reg, deps.FlowTemplateManager, logger)
+	registerComponentCatalog(reg, deps.ComponentRegistry, logger)
+	registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket)
 
-// registerGlobal is the shared RegisterTool wrapper with idempotent
-// "already registered" handling. The global registry persists across
-// component Stop/Start cycles; a re-registration on restart would return
-// an error the wire functions should treat as a no-op.
-func registerGlobal(name string, executor agentictools.ToolExecutor) error {
-	if err := agentictools.RegisterTool(name, executor); err != nil {
-		if strings.Contains(err.Error(), "already registered") {
-			return nil
-		}
-		return err
-	}
 	return nil
 }

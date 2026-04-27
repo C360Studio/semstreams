@@ -1,8 +1,10 @@
 package component
 
 import (
+	"context"
 	"log/slog"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -20,6 +22,21 @@ type Lookup interface {
 	Component(name string) Discoverable
 }
 
+// ToolRegistryReader is the dependency-side surface of the agentic-
+// tools executor registry. *agentictools.ExecutorRegistry satisfies
+// it implicitly. Defined here in the component package so all
+// component consumers can refer to it through Dependencies without
+// importing agentic-tools — mirrors how model.RegistryReader is wired.
+//
+// On a tool miss, Execute returns a wrapped agentic.ErrToolNotFound
+// sentinel. Callers detect via errors.Is — the previous string-match
+// fallback in agentic-tools/component.go was the source of repeated
+// extension friction and is gone with this contract.
+type ToolRegistryReader interface {
+	Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
+	ListTools() []agentic.ToolDefinition
+}
+
 // Dependencies provides all external dependencies needed by components.
 type Dependencies struct {
 	NATSClient        *natsclient.Client      // NATS client for messaging
@@ -28,6 +45,7 @@ type Dependencies struct {
 	Platform          PlatformMeta            // Platform identity (organization and platform)
 	Security          security.Config         // Platform-wide security configuration
 	ModelRegistry     model.RegistryReader    // Unified model registry (can be nil)
+	ToolRegistry      ToolRegistryReader      // Shared tool executor registry (can be nil; agentic-tools requires it)
 	ComponentRegistry Lookup                  // Sibling component lookup (can be nil)
 }
 

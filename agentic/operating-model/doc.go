@@ -32,7 +32,7 @@
 //
 // # Message types
 //
-// Two payload types are registered with the global component.PayloadRegistry
+// Two payload types are registered with the global payloadregistry.Registry
 // in init():
 //
 //   - operating_model.layer_approved.v1   — emitted when a layer checkpoint is

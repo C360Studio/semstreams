@@ -29,7 +29,7 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 // registerReadLoopResult used — they're the same physical bucket, different
 // access pattern (scan vs point-get). ToolDependencies.LoopsBucket is the
 // single source of truth for both.
-func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) {
+func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, flowMgr FlowManager, logger *slog.Logger, bucketName string) {
 	if natsClient == nil {
 		logger.Warn("monitor_flow tool disabled: no NATS client provided")
 		return
@@ -56,7 +56,7 @@ func registerFlowMonitor(natsClient *natsclient.Client, flowMgr FlowManager, log
 	adapter := &flowStateAdapter{mgr: flowMgr}
 	executor := agentictools.NewFlowMonitorExecutor(store, adapter, logger)
 
-	if err := registerGlobal(agentictools.FlowMonitorToolName, executor); err != nil {
+	if err := tools.RegisterTool(agentictools.FlowMonitorToolName, executor); err != nil {
 		logger.Warn("Failed to register monitor_flow tool", slog.Any("error", err))
 		return
 	}

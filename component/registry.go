@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
@@ -102,11 +103,11 @@ type PortCapability struct {
 // It provides thread-safe registration and lookup of both factories (for creation)
 // and instances (for discovery and management).
 type Registry struct {
-	factories       map[string]*Registration // Factory registry by name
-	instances       map[string]Discoverable  // Instance registry by name
-	payloadRegistry *PayloadRegistry         // Registry for message payloads
-	resourceTracker map[string]string        // Resource ID -> Component instance name mapping
-	mu              sync.RWMutex             // Protects all maps
+	factories       map[string]*Registration  // Factory registry by name
+	instances       map[string]Discoverable   // Instance registry by name
+	payloadRegistry *payloadregistry.Registry // Registry for message payloads
+	resourceTracker map[string]string         // Resource ID -> Component instance name mapping
+	mu              sync.RWMutex              // Protects all maps
 
 	// NATS-backed capability discovery (new)
 	remoteCapabilities map[string]*CapabilityAnnouncement
@@ -124,7 +125,7 @@ func NewRegistry(opts ...func(*Registry)) *Registry {
 	r := &Registry{
 		factories:         make(map[string]*Registration),
 		instances:         make(map[string]Discoverable),
-		payloadRegistry:   NewPayloadRegistry(),
+		payloadRegistry:   payloadregistry.New(),
 		resourceTracker:   make(map[string]string),
 		instanceFactories: make(map[string]string),
 		logger:            slog.Default(),
@@ -504,21 +505,23 @@ func (r *Registry) ListAvailable() map[string]Info {
 	return result
 }
 
-// RegisterPayload registers a payload factory with the registry.
-// This allows typed payloads to be recreated during message deserialization.
-func (r *Registry) RegisterPayload(registration *PayloadRegistration) error {
-	return r.payloadRegistry.RegisterPayload(registration)
+// RegisterPayload registers a payload factory with this Registry's
+// owned PayloadRegistry. Type definitions live in the payloadregistry
+// package; this method is preserved for callers using the unified
+// component.Registry as their registration façade.
+func (r *Registry) RegisterPayload(registration *payloadregistry.Registration) error {
+	return r.payloadRegistry.Register(registration)
 }
 
 // CreatePayload creates a payload instance using the registered factory.
 // Returns nil if the message type is not registered.
 func (r *Registry) CreatePayload(domain, category, version string) any {
-	return r.payloadRegistry.CreatePayload(domain, category, version)
+	return r.payloadRegistry.Create(domain, category, version)
 }
 
 // ListPayloads returns all registered payload types.
-func (r *Registry) ListPayloads() map[string]*PayloadRegistration {
-	return r.payloadRegistry.ListPayloads()
+func (r *Registry) ListPayloads() map[string]*payloadregistry.Registration {
+	return r.payloadRegistry.List()
 }
 
 // Config validation constants - security limits
@@ -773,37 +776,11 @@ func GetFloat64(config map[string]any, key string, defaultValue float64) float64
 
 // Note: Component registration functions have been removed.
 // Components now use explicit Register(*Registry) methods for registration.
-// Payload registration remains global as payloads are data types, not components.
-
-// Global payload registry for message deserialization
-var globalPayloadRegistry = NewPayloadRegistry()
-
-// RegisterPayload registers a payload factory globally.
-// This allows typed payloads to be recreated during message deserialization.
-// Payloads use init() registration as they are data types, not lifecycle components.
-func RegisterPayload(registration *PayloadRegistration) error {
-	return globalPayloadRegistry.RegisterPayload(registration)
-}
-
-// CreatePayload creates a payload instance using the globally registered factory.
-// Returns nil if no factory is registered for the given type.
-func CreatePayload(domain, category, version string) any {
-	return globalPayloadRegistry.CreatePayload(domain, category, version)
-}
-
-// BuildPayload creates a typed payload from field mappings using the globally registered builder.
-// Returns an error if the payload type is not registered or if the builder fails.
-// This is used by workflow variable interpolation to construct typed payloads from step output maps.
-// Returns any to avoid import cycles - the actual payload implements message.Payload.
-func BuildPayload(domain, category, version string, fields map[string]any) (any, error) {
-	return globalPayloadRegistry.BuildPayload(domain, category, version, fields)
-}
-
-// GlobalPayloadRegistry returns the global payload registry.
-// This is useful for introspection, such as listing all registered payloads.
-func GlobalPayloadRegistry() *PayloadRegistry {
-	return globalPayloadRegistry
-}
+//
+// Payload registration moved to the payloadregistry package
+// (alongside PayloadRegistration, PayloadRegistry, the global
+// singleton, and Register/Create/Build helpers). Migration is a
+// straightforward import-path swap; the surface is preserved.
 
 // matchesPattern checks if subject matches NATS-style pattern with wildcards.
 // "*" matches exactly one token, ">" matches one or more tokens (only at end).

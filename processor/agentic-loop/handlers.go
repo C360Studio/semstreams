@@ -14,7 +14,6 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
-	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // TaskMessage is an alias for agentic.TaskMessage for backward compatibility.
@@ -54,6 +53,7 @@ type MessageHandler struct {
 	compactor         *Compactor
 	toolCallFilter    agentic.ToolCallFilter
 	modelRegistry     model.RegistryReader
+	toolRegistry      component.ToolRegistryReader
 	logger            *slog.Logger
 
 	// promptRegistry is the static fragment registry seeded with
@@ -215,10 +215,22 @@ func (h *MessageHandler) SetToolCallFilter(filter agentic.ToolCallFilter) {
 	h.toolCallFilter = filter
 }
 
-// discoverTools retrieves available tool definitions from the global registry.
-// This is called once per loop and cached for subsequent requests.
+// SetToolRegistry installs the shared tool registry used by discoverTools.
+// Production wiring lives in component.go via deps.ToolRegistry; tests use
+// this to inject a per-test registry.
+func (h *MessageHandler) SetToolRegistry(r component.ToolRegistryReader) {
+	h.toolRegistry = r
+}
+
+// discoverTools retrieves available tool definitions from the
+// shared registry plumbed through component.Dependencies.ToolRegistry.
+// Returns nil when no registry is wired (e.g., tests that exercise
+// the loop without an agentic-tools sibling).
 func (h *MessageHandler) discoverTools() []agentic.ToolDefinition {
-	return agentictools.ListRegisteredTools()
+	if h.toolRegistry == nil {
+		return nil
+	}
+	return h.toolRegistry.ListTools()
 }
 
 // configureLoopMetadata sets optional metadata on a newly created loop.

@@ -28,9 +28,17 @@ var agenticToolsSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{})
 
 // Component implements the agentic-tools processor
 type Component struct {
-	name       string
-	config     Config
-	registry   *ExecutorRegistry
+	name   string
+	config Config
+	// registry is this component's private executor registry —
+	// populated via RegisterToolExecutor at construction time and
+	// dispatched local-first.
+	registry *ExecutorRegistry
+	// shared is the process-wide tool registry plumbed through
+	// component.Dependencies.ToolRegistry. Built and populated by
+	// main.go via executors.RegisterBuiltins. May be nil for tests
+	// that exercise the component in isolation.
+	shared     component.ToolRegistryReader
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	platform   component.PlatformMeta
@@ -87,6 +95,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		name:       "agentic-tools",
 		config:     config,
 		registry:   NewExecutorRegistry(),
+		shared:     deps.ToolRegistry,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 		platform:   deps.Platform,
@@ -534,15 +543,16 @@ func (c *Component) executeWithTimeout(ctx context.Context, call agentic.ToolCal
 }
 
 // executeOnce performs a single attempt: per-attempt timeout, local
-// registry with fallback to the global registry when the local one reports
-// "not found".
+// registry with fallback to the shared (deps-injected) registry on a
+// typed not-found miss. Replaces the previous string-match fallback,
+// which broke whenever the underlying error text drifted.
 func (c *Component) executeOnce(ctx context.Context, call agentic.ToolCall, timeout time.Duration) (agentic.ToolResult, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	result, err := c.registry.Execute(callCtx, call)
-	if err != nil && strings.Contains(err.Error(), "not found") {
-		return GetGlobalRegistry().Execute(callCtx, call)
+	if err != nil && errors.Is(err, agentic.ErrToolNotFound) && c.shared != nil {
+		return c.shared.Execute(callCtx, call)
 	}
 	return result, err
 }
@@ -661,13 +671,19 @@ func (c *Component) RegisterToolExecutor(executor ToolExecutor) error {
 }
 
 // ListTools returns all tool definitions for discovery.
-// Combines tools from both the component's local registry and the global registry.
+// Combines tools from both the component's local registry and the
+// shared (deps-injected) registry. Local entries override shared
+// entries with the same name.
 func (c *Component) ListTools() []ToolDefinition {
 	// Get tools from component's local registry
 	localTools := c.registry.ListTools()
 
-	// Get tools from global registry
-	globalTools := ListRegisteredTools()
+	// Get tools from shared registry (nil-safe for tests that build
+	// the component without injecting a shared registry).
+	var globalTools []agentic.ToolDefinition
+	if c.shared != nil {
+		globalTools = c.shared.ListTools()
+	}
 
 	// Combine and convert to ToolDefinition format
 	// Use a map to deduplicate by name (local registry takes precedence)

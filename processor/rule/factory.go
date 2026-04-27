@@ -77,6 +77,10 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 		return nil, fmt.Errorf("failed to create rule processor: %w", err)
 	}
 
+	// Propagate the shared tool registry so publish_agent's
+	// default_tools can resolve tool definitions at action time.
+	processor.SetToolRegistry(deps.ToolRegistry)
+
 	// Set logger from dependencies
 	logger := deps.Logger
 	if logger == nil {

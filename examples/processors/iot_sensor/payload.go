@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 func buildSensorReading(fields map[string]any) (any, error) {
@@ -88,7 +88,7 @@ func init() {
 	// Register SensorReading payload factory
 	// Type format: domain.category.version (3 parts)
 	// Result: iot.sensor.v1
-	err := component.RegisterPayload(&component.PayloadRegistration{
+	err := payloadregistry.Register(&payloadregistry.Registration{
 		Domain:      "iot",
 		Category:    "sensor",
 		Version:     "v1",

@@ -664,8 +664,9 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 
 	// Validate configuration against schema if config manager is available
 	if cm.configManager != nil {
-		validationErrors := cm.configManager.ValidateComponentConfig(
+		validationErrors := component.ValidateComponentConfig(
 			r.Context(),
+			cm.logger,
 			cm.registry,
 			componentType,
 			req.Config,

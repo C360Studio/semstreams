@@ -1,4 +1,19 @@
-package component
+// Package payloadregistry provides type-discriminated payload
+// registration and lookup for message.BaseMessage deserialization.
+//
+// Lives as a leaf package (imports only stdlib + pkg/errs + pkg/types)
+// so it can be referenced by both `message` and `agentic` without
+// creating an import cycle. Previously these types lived in
+// `component`, which forced agentic and message to import component
+// solely for payload registration — the cycle that blocked clean
+// dependency wiring of model.RegistryReader-style typed registries.
+//
+// Pattern A (boot-registry) per ADR-029. The package-level singleton
+// (Register / Create / Build / GlobalRegistry) is preserved for
+// backward compatibility with existing init()-based registrations,
+// but new consumers should prefer the *Registry instance form and
+// dependency-inject it like other registries.
+package payloadregistry
 
 import (
 	"encoding/json"
@@ -9,12 +24,12 @@ import (
 	"github.com/c360studio/semstreams/pkg/types"
 )
 
-// PayloadFactory creates a payload instance for a specific message type.
+// Factory creates a payload instance for a specific message type.
 // The factory returns an any to avoid import cycles.
 // The actual payload should implement the message.Payload interface.
-type PayloadFactory func() any
+type Factory func() any
 
-// PayloadBuilder creates a typed payload from field mappings.
+// Builder creates a typed payload from field mappings.
 // Used by workflow variable interpolation to construct typed payloads
 // from step output maps. Returns error if required fields are missing
 // or field values cannot be converted to the target type.
@@ -23,14 +38,12 @@ type PayloadFactory func() any
 // OPTIONAL: If not provided, BuildPayload falls back to JSON marshal/unmarshal
 // using the Factory to create the target type. Custom builders are only needed
 // for performance optimization of high-frequency payload types.
-type PayloadBuilder func(fields map[string]any) (any, error)
+type Builder func(fields map[string]any) (any, error)
 
-// PayloadRegistration holds factory and metadata for a payload type.
-// This follows the same pattern as component Registration but is specific
-// to message payload types.
-type PayloadRegistration struct {
-	Factory     PayloadFactory `json:"-"`           // Factory function (not serializable)
-	Builder     PayloadBuilder `json:"-"`           // Builder function (not serializable)
+// Registration holds factory and metadata for a payload type.
+type Registration struct {
+	Factory     Factory        `json:"-"`           // Factory function (not serializable)
+	Builder     Builder        `json:"-"`           // Builder function (not serializable)
 	Domain      string         `json:"domain"`      // Message domain (e.g., "robotics", "sensors")
 	Category    string         `json:"category"`    // Message category (e.g., "heartbeat", "gps")
 	Version     string         `json:"version"`     // Schema version (e.g., "v1", "v2")
@@ -40,37 +53,34 @@ type PayloadRegistration struct {
 
 // MessageType returns the formatted message type string for this registration.
 // Format: "domain.category.version" (e.g., "robotics.heartbeat.v1")
-func (pr *PayloadRegistration) MessageType() string {
+func (pr *Registration) MessageType() string {
 	return fmt.Sprintf("%s.%s.%s", pr.Domain, pr.Category, pr.Version)
 }
 
-// PayloadRegistry manages payload factories for message deserialization.
+// Registry manages payload factories for message deserialization.
 // It provides thread-safe registration and lookup of payload factories,
 // enabling BaseMessage.UnmarshalJSON to recreate typed payloads from JSON.
-//
-// The registry follows the same patterns as the component Registry but is
-// specifically designed for message payload types.
-type PayloadRegistry struct {
-	registrations map[string]*PayloadRegistration // Registry by message type string
-	mu            sync.RWMutex                    // Protects the map
+type Registry struct {
+	registrations map[string]*Registration // Registry by message type string
+	mu            sync.RWMutex             // Protects the map
 }
 
-// NewPayloadRegistry creates a new empty payload registry.
-func NewPayloadRegistry() *PayloadRegistry {
-	return &PayloadRegistry{
-		registrations: make(map[string]*PayloadRegistration),
+// New creates a new empty payload registry.
+func New() *Registry {
+	return &Registry{
+		registrations: make(map[string]*Registration),
 	}
 }
 
-// RegisterPayload registers a payload factory with validation.
+// Register registers a payload factory with validation.
 // The message type is derived from the registration's Domain, Category, and Version fields.
 // Returns an error if validation fails or the type is already registered.
-func (pr *PayloadRegistry) RegisterPayload(registration *PayloadRegistration) error {
+func (pr *Registry) Register(registration *Registration) error {
 	if registration == nil {
 		return errs.WrapInvalid(
 			errs.ErrInvalidConfig,
 			"PayloadRegistry",
-			"RegisterPayload",
+			"Register",
 			"registration validation",
 		)
 	}
@@ -79,23 +89,23 @@ func (pr *PayloadRegistry) RegisterPayload(registration *PayloadRegistration) er
 		return errs.WrapInvalid(
 			errs.ErrInvalidConfig,
 			"PayloadRegistry",
-			"RegisterPayload",
+			"Register",
 			"factory function validation",
 		)
 	}
 
-	// Builder is optional - see BuildPayload for fallback behavior
+	// Builder is optional - see Build for fallback behavior
 
 	if registration.Domain == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "RegisterPayload", "domain validation")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "Register", "domain validation")
 	}
 
 	if registration.Category == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "RegisterPayload", "category validation")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "Register", "category validation")
 	}
 
 	if registration.Version == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "RegisterPayload", "version validation")
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "PayloadRegistry", "Register", "version validation")
 	}
 
 	// Verify factory produces payload with matching Schema()
@@ -112,7 +122,7 @@ func (pr *PayloadRegistry) RegisterPayload(registration *PayloadRegistration) er
 		return errs.WrapInvalid(
 			fmt.Errorf("payload type '%s' is already registered", msgType),
 			"PayloadRegistry",
-			"RegisterPayload",
+			"Register",
 			"duplicate payload check",
 		)
 	}
@@ -121,11 +131,11 @@ func (pr *PayloadRegistry) RegisterPayload(registration *PayloadRegistration) er
 	return nil
 }
 
-// CreatePayload creates a payload instance using the registered factory.
+// Create creates a payload instance using the registered factory.
 // Returns nil if the message type is not registered.
 // This allows BaseMessage.UnmarshalJSON to handle unknown types gracefully
 // by falling back to GenericPayload.
-func (pr *PayloadRegistry) CreatePayload(domain, category, version string) any {
+func (pr *Registry) Create(domain, category, version string) any {
 	typeStr := fmt.Sprintf("%s.%s.%s", domain, category, version)
 
 	pr.mu.RLock()
@@ -139,15 +149,12 @@ func (pr *PayloadRegistry) CreatePayload(domain, category, version string) any {
 	return registration.Factory()
 }
 
-// BuildPayload creates a typed payload from field mappings.
+// Build creates a typed payload from field mappings.
 // If a custom Builder is registered, it is used for efficient field mapping.
 // Otherwise, falls back to JSON marshal/unmarshal using the Factory.
 //
 // Returns an error if the message type is not registered or if building fails.
-// This is used by workflow variable interpolation to construct typed payloads
-// from step output maps.
-// Returns any to avoid import cycles - the actual payload implements message.Payload.
-func (pr *PayloadRegistry) BuildPayload(domain, category, version string, fields map[string]any) (any, error) {
+func (pr *Registry) Build(domain, category, version string, fields map[string]any) (any, error) {
 	typeStr := fmt.Sprintf("%s.%s.%s", domain, category, version)
 
 	pr.mu.RLock()
@@ -164,7 +171,6 @@ func (pr *PayloadRegistry) BuildPayload(domain, category, version string, fields
 	}
 
 	// Fallback: JSON round-trip using Factory
-	// This works for any payload type without requiring custom builder code
 	data, err := json.Marshal(fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal fields for %s: %w", typeStr, err)
@@ -180,7 +186,7 @@ func (pr *PayloadRegistry) BuildPayload(domain, category, version string, fields
 
 // GetRegistration returns the payload registration for a specific message type.
 // Returns the registration and true if found, nil and false otherwise.
-func (pr *PayloadRegistry) GetRegistration(msgType string) (*PayloadRegistration, bool) {
+func (pr *Registry) GetRegistration(msgType string) (*Registration, bool) {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
@@ -190,7 +196,7 @@ func (pr *PayloadRegistry) GetRegistration(msgType string) (*PayloadRegistration
 	}
 
 	// Return a copy to prevent external modification of the factory function
-	return &PayloadRegistration{
+	return &Registration{
 		Domain:      registration.Domain,
 		Category:    registration.Category,
 		Version:     registration.Version,
@@ -200,17 +206,16 @@ func (pr *PayloadRegistry) GetRegistration(msgType string) (*PayloadRegistration
 	}, true
 }
 
-// ListPayloads returns all registered payload types.
+// List returns all registered payload types.
 // Returns a copy of the registrations map to prevent external modification.
-func (pr *PayloadRegistry) ListPayloads() map[string]*PayloadRegistration {
+func (pr *Registry) List() map[string]*Registration {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
 	// Return a copy to prevent external modification
-	result := make(map[string]*PayloadRegistration, len(pr.registrations))
+	result := make(map[string]*Registration, len(pr.registrations))
 	for msgType, registration := range pr.registrations {
-		// Create a copy without the factory function for safety
-		result[msgType] = &PayloadRegistration{
+		result[msgType] = &Registration{
 			Domain:      registration.Domain,
 			Category:    registration.Category,
 			Version:     registration.Version,
@@ -226,15 +231,14 @@ func (pr *PayloadRegistry) ListPayloads() map[string]*PayloadRegistration {
 // ListByDomain returns all payload registrations for a specific domain.
 // This is useful for discovering what message types are available within
 // a particular domain (e.g., "robotics", "sensors").
-func (pr *PayloadRegistry) ListByDomain(domain string) []*PayloadRegistration {
+func (pr *Registry) ListByDomain(domain string) []*Registration {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
-	var result []*PayloadRegistration
+	var result []*Registration
 	for _, registration := range pr.registrations {
 		if registration.Domain == domain {
-			// Create a copy without the factory function for safety
-			result = append(result, &PayloadRegistration{
+			result = append(result, &Registration{
 				Domain:      registration.Domain,
 				Category:    registration.Category,
 				Version:     registration.Version,
@@ -256,15 +260,15 @@ type schemaProvider interface {
 
 // validateSchemaConsistency checks that a factory-produced payload's Schema()
 // method returns values matching the registration. This catches mismatches
-// between Schema() implementation and PayloadRegistration at init() time,
+// between Schema() implementation and Registration at init() time,
 // preventing runtime deserialization failures.
-func validateSchemaConsistency(reg *PayloadRegistration) error {
+func validateSchemaConsistency(reg *Registration) error {
 	testPayload := reg.Factory()
 	if testPayload == nil {
 		return errs.WrapInvalid(
 			errs.ErrInvalidConfig,
 			"PayloadRegistry",
-			"RegisterPayload",
+			"Register",
 			"factory returned nil payload",
 		)
 	}
@@ -287,7 +291,7 @@ func validateSchemaConsistency(reg *PayloadRegistration) error {
 				reg.Domain, reg.Category, reg.Version,
 			),
 			"PayloadRegistry",
-			"RegisterPayload",
+			"Register",
 			"schema consistency check",
 		)
 	}

@@ -3,7 +3,6 @@ package agenticdispatch
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -11,8 +10,7 @@ import (
 )
 
 // dispatchStubTool is a minimal ToolExecutor satisfying the agentictools
-// surface without pulling in real work. Registered globally once per test
-// run via unique names to keep -count=N stable.
+// surface without pulling in real work.
 type dispatchStubTool struct{ name string }
 
 func (s *dispatchStubTool) ListTools() []agentic.ToolDefinition {
@@ -27,13 +25,22 @@ func (s *dispatchStubTool) Execute(_ context.Context, call agentic.ToolCall) (ag
 	return agentic.ToolResult{CallID: call.ID, Content: "stub"}, nil
 }
 
+func newDispatchTestRegistry(t *testing.T, names ...string) *agentictools.ExecutorRegistry {
+	t.Helper()
+	reg := agentictools.NewExecutorRegistry()
+	for _, name := range names {
+		if err := reg.RegisterTool(name, &dispatchStubTool{name: name}); err != nil {
+			t.Fatalf("register %q: %v", name, err)
+		}
+	}
+	return reg
+}
+
 func TestResolveDefaultTools_KnownNameResolves(t *testing.T) {
 	name := "dispatch_default_tools_known"
-	if err := agentictools.RegisterTool(name, &dispatchStubTool{name: name}); err != nil && !strings.Contains(err.Error(), "already registered") {
-		t.Fatalf("register: %v", err)
-	}
+	reg := newDispatchTestRegistry(t, name)
 
-	got := resolveDefaultTools([]string{name}, slog.Default())
+	got := resolveDefaultTools(reg, []string{name}, slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("got %d tools, want 1", len(got))
 	}
@@ -44,11 +51,9 @@ func TestResolveDefaultTools_KnownNameResolves(t *testing.T) {
 
 func TestResolveDefaultTools_UnknownNameDropped(t *testing.T) {
 	name := "dispatch_default_tools_known2"
-	if err := agentictools.RegisterTool(name, &dispatchStubTool{name: name}); err != nil && !strings.Contains(err.Error(), "already registered") {
-		t.Fatalf("register: %v", err)
-	}
+	reg := newDispatchTestRegistry(t, name)
 
-	got := resolveDefaultTools([]string{name, "no_such_tool_xyz"}, slog.Default())
+	got := resolveDefaultTools(reg, []string{name, "no_such_tool_xyz"}, slog.Default())
 	if len(got) != 1 {
 		t.Fatalf("got %d tools, want 1 (unknown dropped)", len(got))
 	}
@@ -58,10 +63,17 @@ func TestResolveDefaultTools_UnknownNameDropped(t *testing.T) {
 }
 
 func TestResolveDefaultTools_EmptyInputReturnsNil(t *testing.T) {
-	if got := resolveDefaultTools(nil, slog.Default()); got != nil {
+	reg := newDispatchTestRegistry(t)
+	if got := resolveDefaultTools(reg, nil, slog.Default()); got != nil {
 		t.Fatalf("nil input should return nil, got %v", got)
 	}
-	if got := resolveDefaultTools([]string{}, slog.Default()); got != nil {
+	if got := resolveDefaultTools(reg, []string{}, slog.Default()); got != nil {
 		t.Fatalf("empty input should return nil, got %v", got)
+	}
+}
+
+func TestResolveDefaultTools_NilRegistryReturnsNil(t *testing.T) {
+	if got := resolveDefaultTools(nil, []string{"some_tool"}, slog.Default()); got != nil {
+		t.Fatalf("nil registry should return nil, got %v", got)
 	}
 }

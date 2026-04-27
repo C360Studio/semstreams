@@ -1,6 +1,10 @@
 package executors
 
-import "log/slog"
+import (
+	"log/slog"
+
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+)
 
 // Flow-template tool names. Single source of truth for publish_agent.tools
 // scoping.
@@ -15,7 +19,7 @@ const (
 
 // registerFlowTemplates wires FlowTemplateExecutor globally. Nil manager
 // skips registration.
-func registerFlowTemplates(manager FlowTemplateManager, logger *slog.Logger) {
+func registerFlowTemplates(tools *agentictools.ExecutorRegistry, manager FlowTemplateManager, logger *slog.Logger) {
 	if manager == nil {
 		logger.Debug("flow-template CRUD tools disabled: no FlowTemplateManager provided")
 		return
@@ -31,7 +35,7 @@ func registerFlowTemplates(manager FlowTemplateManager, logger *slog.Logger) {
 		flowTemplateToolInstantiate,
 	}
 	for _, name := range toolNames {
-		if err := registerGlobal(name, executor); err != nil {
+		if err := tools.RegisterTool(name, executor); err != nil {
 			logger.Warn("Failed to register flow-template tool",
 				slog.String("tool", name),
 				slog.Any("error", err))

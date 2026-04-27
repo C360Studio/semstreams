@@ -81,6 +81,13 @@ type Processor struct {
 	// Dependencies
 	metricsRegistry *metric.MetricsRegistry
 
+	// toolRegistry is the shared tool executor registry plumbed
+	// through component.Dependencies.ToolRegistry. Forwarded to the
+	// ActionExecutor at Initialize so publish_agent default_tools
+	// resolves against it. Nil when no agentic-tools is wired into
+	// the deployment (graph-only flows, etc.).
+	toolRegistry component.ToolRegistryReader
+
 	// Runtime state
 	running            bool          // Tracks if processor is running (protected by mu)
 	shutdown           chan struct{} // Closed to signal shutdown, never set to nil while running
@@ -218,8 +225,20 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 	return rp, nil
 }
 
-// setupPorts initializes input and output port definitions.
-// Ports configuration is validated in the constructor, so config.Ports is guaranteed non-nil.
+// SetToolRegistry installs the shared tool registry. Called by the
+// component factory after construction with deps.ToolRegistry. The
+// registry flows from here to ActionExecutor at Initialize time so
+// publish_agent's default_tools resolution sees the right tools.
+//
+// A nil arg is allowed and disables tool name resolution (deployments
+// without agentic-tools).
+func (rp *Processor) SetToolRegistry(r component.ToolRegistryReader) {
+	rp.toolRegistry = r
+}
+
+// setupPorts initializes input and output port definitions. Ports
+// configuration is validated in the constructor, so config.Ports is
+// guaranteed non-nil.
 func (rp *Processor) setupPorts() {
 	rp.inputPorts = make([]component.Port, len(rp.config.Ports.Inputs))
 	for i, portDef := range rp.config.Ports.Inputs {
@@ -413,6 +432,16 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	} else {
 		actionExecutor = NewActionExecutor(rp.logger)
 		rp.logger.Info("ActionExecutor initialized without NATS support")
+	}
+
+	// Propagate the shared tool registry down so publish_agent's
+	// default_tools resolution uses it. Type-asserts because
+	// ActionExecutorInterface is the test-friendly minimum surface;
+	// the concrete *ActionExecutor implementation owns the field.
+	if setter, ok := actionExecutor.(interface {
+		SetToolRegistry(component.ToolRegistryReader)
+	}); ok {
+		setter.SetToolRegistry(rp.toolRegistry)
 	}
 
 	// Create StatefulEvaluator
