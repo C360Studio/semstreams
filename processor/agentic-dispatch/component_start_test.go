@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,8 +30,9 @@ func TestComponent_Start_NilContext(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:    nil, // Not needed for this test
-		ModelRegistry: newTestRegistry(),
+		NATSClient:      nil, // Not needed for this test
+		ModelRegistry:   newTestRegistry(),
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads),
 	}
 
 	comp, err := NewComponent(rawConfig, deps)
@@ -51,8 +54,9 @@ func TestComponent_Start_CancelledContext(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:    nil, // Not needed for this test
-		ModelRegistry: newTestRegistry(),
+		NATSClient:      nil, // Not needed for this test
+		ModelRegistry:   newTestRegistry(),
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads),
 	}
 
 	comp, err := NewComponent(rawConfig, deps)

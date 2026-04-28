@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 )
@@ -167,8 +168,9 @@ func newProfileContextTestComponent(t *testing.T, reader operatingmodel.ProfileR
 	cfg := DefaultConfig()
 	rawCfg, _ := json.Marshal(cfg)
 	deps := component.Dependencies{
-		NATSClient: nil,
-		Platform:   component.PlatformMeta{Org: "c360", Platform: "ops"},
+		NATSClient:      nil,
+		Platform:        component.PlatformMeta{Org: "c360", Platform: "ops"},
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, operatingmodel.RegisterPayloads),
 	}
 	comp, err := NewComponent(rawCfg, deps)
 	if err != nil {

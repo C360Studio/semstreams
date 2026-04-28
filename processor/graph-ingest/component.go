@@ -165,6 +165,7 @@ type Component struct {
 	config Config
 
 	// Dependencies
+	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 
@@ -233,6 +234,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	comp := &Component{
 		name:            "graph-ingest",
 		config:          config,
+		decoder:         message.NewDecoder(deps.PayloadRegistry),
 		natsClient:      natsClient,
 		logger:          logger,
 		entitiesUpdated: getEntitiesUpdatedMetric(deps.MetricsRegistry),
@@ -811,8 +813,8 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 		slog.Int("size", len(data)))
 
 	// Try to unmarshal as a BaseMessage containing a Graphable payload
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Warn("Failed to unmarshal base message",
 			slog.String("subject", subject),
 			slog.Any("error", err))
@@ -821,7 +823,7 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 	}
 
 	// Extract entity from BaseMessage payload
-	entity, err := c.extractEntityFromMessage(&baseMsg)
+	entity, err := c.extractEntityFromMessage(baseMsg)
 	if err != nil {
 		c.logger.Warn("Failed to extract entity from message",
 			slog.String("subject", subject),

@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -26,12 +27,12 @@ type Dependencies struct {
 	NATSClient        *natsclient.Client
 	MetricsRegistry   *metric.MetricsRegistry
 	Logger            *slog.Logger
-	Platform          types.PlatformMeta              // Platform identity
-	Manager           *config.Manager                 // Centralized configuration management
-	ComponentRegistry *component.Registry             // Component registry for ComponentManager
-	ToolRegistry      component.ToolRegistryReader    // Shared tool executor registry plumbed to component deps
-	PayloadRegistry   component.PayloadRegistryReader // Shared payload registry plumbed to component deps
-	ServiceManager    *Manager                        // Service manager for accessing other services
+	Platform          types.PlatformMeta           // Platform identity
+	Manager           *config.Manager              // Centralized configuration management
+	ComponentRegistry *component.Registry          // Component registry for ComponentManager
+	ToolRegistry      component.ToolRegistryReader // Shared tool executor registry plumbed to component deps
+	PayloadRegistry   *payloadregistry.Registry    // Shared payload registry plumbed to component deps
+	ServiceManager    *Manager                     // Service manager for accessing other services
 }
 
 // Constructor defines the standard constructor signature for all services.

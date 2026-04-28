@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,8 +41,8 @@ func TestDocument_GraphableRoundtrip(t *testing.T) {
 	t.Logf("Serialized message: %s", string(data))
 
 	// Unmarshal back
-	var restored message.BaseMessage
-	err = json.Unmarshal(data, &restored)
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	restored, err := message.NewDecoder(reg).Decode(data)
 	require.NoError(t, err)
 
 	// Extract payload

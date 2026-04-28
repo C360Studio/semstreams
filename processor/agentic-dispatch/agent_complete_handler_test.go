@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // newCompletionTestComponent wires a Component for handleAgentComplete /
@@ -21,10 +22,12 @@ func newCompletionTestComponent(t *testing.T) (*Component, *captureSink) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sink := &captureSink{}
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
 	c := &Component{
 		logger:      logger,
 		loopTracker: NewLoopTrackerWithLogger(logger),
 		metrics:     getMetrics(nil),
+		decoder:     message.NewDecoder(reg),
 	}
 	c.sendResponseFn = sink.add
 	return c, sink

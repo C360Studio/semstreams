@@ -12,10 +12,20 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newActionsTestDecoder builds a message Decoder bound to a per-test
+// registry pre-populated with the payloads the rule action tests need
+// (agentic types for TaskMessage, plus rule's own workflow trigger).
+func newActionsTestDecoder(t *testing.T) *message.Decoder {
+	t.Helper()
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	return message.NewDecoder(reg)
+}
 
 // T039: Test Action AddTriple - creates a relationship triple
 func TestAction_AddTriple(t *testing.T) {
@@ -914,8 +924,8 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	require.Len(t, mock.published, 1)
 
 	// Parse the published payload (BaseMessage envelope)
-	var baseMsg message.BaseMessage
-	err = json.Unmarshal(mock.published[0].data, &baseMsg)
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	require.NoError(t, err)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok, "expected *agentic.TaskMessage, got %T", baseMsg.Payload())
@@ -957,8 +967,8 @@ func TestAction_PublishAgent_ToolsResolved(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
-	var baseMsg message.BaseMessage
-	require.NoError(t, json.Unmarshal(mock.published[0].data, &baseMsg))
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 
@@ -988,8 +998,8 @@ func TestAction_PublishAgent_EmptyToolsLeavesUnset(t *testing.T) {
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
 	require.Len(t, mock.published, 1)
 
-	var baseMsg message.BaseMessage
-	require.NoError(t, json.Unmarshal(mock.published[0].data, &baseMsg))
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 	assert.Empty(t, task.Tools, "empty action.Tools should leave TaskMessage.Tools unset")
@@ -1082,8 +1092,8 @@ func TestAction_PublishAgent_WorkflowFields(t *testing.T) {
 	require.Len(t, mock.published, 1)
 
 	// Parse the published TaskMessage
-	var baseMsg message.BaseMessage
-	err = json.Unmarshal(mock.published[0].data, &baseMsg)
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	require.NoError(t, err)
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
@@ -1117,8 +1127,8 @@ func TestAction_PublishAgent_WorkflowFieldsVariableSubstitution(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
-	var baseMsg message.BaseMessage
-	err = json.Unmarshal(mock.published[0].data, &baseMsg)
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	require.NoError(t, err)
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
@@ -1147,8 +1157,8 @@ func TestAction_PublishAgent_NoWorkflowFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
-	var baseMsg message.BaseMessage
-	err = json.Unmarshal(mock.published[0].data, &baseMsg)
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
 	require.NoError(t, err)
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
@@ -1258,8 +1268,8 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 
 	// Task was published with a generated taskID.
 	require.Len(t, mockPub.published, 1)
-	var env message.BaseMessage
-	require.NoError(t, json.Unmarshal(mockPub.published[0].data, &env))
+	env, err := newActionsTestDecoder(t).Decode(mockPub.published[0].data)
+	require.NoError(t, err)
 	task, ok := env.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 	require.NotEmpty(t, task.TaskID)
@@ -1576,8 +1586,7 @@ func TestAction_TriggerWorkflow_PayloadFormat(t *testing.T) {
 
 	// Parse the published BaseMessage (trigger_workflow wraps payload in BaseMessage)
 	var baseMsg map[string]any
-	err = json.Unmarshal(mock.published[0].data, &baseMsg)
-	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(mock.published[0].data, &baseMsg))
 
 	// Verify BaseMessage type field
 	msgType, ok := baseMsg["type"].(map[string]any)

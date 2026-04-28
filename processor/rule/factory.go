@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -80,6 +81,10 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 	// Propagate the shared tool registry so publish_agent's
 	// default_tools can resolve tool definitions at action time.
 	processor.SetToolRegistry(deps.ToolRegistry)
+
+	// Propagate the payload Decoder so handleSemanticMessage can
+	// unmarshal incoming envelopes against the shared payload registry.
+	processor.SetDecoder(message.NewDecoder(deps.PayloadRegistry))
 
 	// Set logger from dependencies
 	logger := deps.Logger

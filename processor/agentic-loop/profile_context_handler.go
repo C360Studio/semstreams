@@ -2,11 +2,9 @@ package agenticloop
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/message"
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 )
@@ -92,8 +90,8 @@ func (c *Component) handleProfileContextMessage(ctx context.Context, data []byte
 // unmarshalProfileContext decodes a BaseMessage envelope and type-asserts the
 // ProfileContext payload. Returns (nil, false) after logging on any failure.
 func (c *Component) unmarshalProfileContext(data []byte) (*operatingmodel.ProfileContext, bool) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal profile_context BaseMessage", "error", err)
 		return nil, false
 	}

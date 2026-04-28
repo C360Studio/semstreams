@@ -45,6 +45,7 @@ type Component struct {
 
 	// core dependencies
 	store           *Store
+	decoder         *message.Decoder
 	natsClient      *natsclient.Client
 	metricsRegistry *metric.MetricsRegistry
 	config          Config
@@ -137,6 +138,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		instanceName:    instanceName,
 		enabled:         true,
 		config:          cfg,
+		decoder:         message.NewDecoder(deps.PayloadRegistry),
 		natsClient:      deps.NATSClient,
 		metricsRegistry: deps.MetricsRegistry,
 		logger:          deps.GetLogger(),
@@ -162,6 +164,9 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Create the underlying ObjectStore with metrics support
 	store, err := NewStoreWithConfigAndMetrics(ctx, c.natsClient, c.config, c.metricsRegistry)
+	if store != nil {
+		store.SetDecoder(c.decoder)
+	}
 	if err != nil {
 		c.logger.Error(
 			"Failed to create ObjectStore",
@@ -403,8 +408,8 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 	}
 
 	// Try to parse as BaseMessage to extract Graphable payload
-	var baseMsg message.BaseMessage
-	if err := baseMsg.UnmarshalJSON(data); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Debug("Message not a BaseMessage, skipping StoredMessage emit",
 			slog.String("error", err.Error()))
 		return
@@ -749,8 +754,7 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) {
 	c.reportStoring(ctx)
 
 	// Try to parse as BaseMessage to check for ContentStorable payload
-	var baseMsg message.BaseMessage
-	if err := baseMsg.UnmarshalJSON(data); err == nil {
+	if baseMsg, err := c.decoder.Decode(data); err == nil {
 		// Successfully parsed - check if payload is ContentStorable
 		if cs, ok := baseMsg.Payload().(message.ContentStorable); ok {
 			// Use StoreContent for proper key generation and StoredContent envelope
@@ -772,7 +776,7 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) {
 			})
 
 			// Emit StoredMessage with proper StorageRef
-			c.emitStoredMessageFromContentStorable(&baseMsg, cs, storageRef)
+			c.emitStoredMessageFromContentStorable(baseMsg, cs, storageRef)
 			return
 		}
 	}

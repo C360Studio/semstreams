@@ -29,6 +29,7 @@ import (
 type Component struct {
 	config     Config
 	deps       component.Dependencies
+	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	metrics    *cliMetrics
@@ -95,6 +96,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	comp := &Component{
 		config:      config,
 		deps:        deps,
+		decoder:     message.NewDecoder(deps.PayloadRegistry),
 		natsClient:  deps.NATSClient,
 		logger:      deps.GetLogger(),
 		metrics:     getMetrics(deps.MetricsRegistry),
@@ -442,8 +444,8 @@ func (c *Component) publishMessage(ctx context.Context, content string) {
 // handleResponse processes responses from the router (wrapped in BaseMessage)
 func (c *Component) handleResponse(ctx context.Context, data []byte) {
 	// Responses are wrapped in BaseMessage by agentic-dispatch
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.ErrorContext(ctx, "Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
 		return
 	}

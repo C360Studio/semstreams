@@ -44,6 +44,15 @@ type BaseMessage struct {
 	msgType Type
 	payload Payload
 	meta    Meta
+
+	// registry is the payload registry used by UnmarshalJSON to map a
+	// type discriminator to an empty concrete struct. Unexported so
+	// encoding/json ignores it on the wire. Set only by Decoder (same
+	// package) when constructing a BaseMessage for unmarshaling. nil is
+	// fail-fast: UnmarshalJSON returns a clear error pointing at
+	// message.NewDecoder. There is no fallback — production code must
+	// go through Decoder; tests use payloadbuiltins.NewTestDecoder.
+	registry *payloadregistry.Registry
 }
 
 // Option is a functional option for configuring BaseMessage construction.
@@ -241,8 +250,14 @@ func (m *BaseMessage) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON implements json.Unmarshaler for BaseMessage.
-// Requires payload types to be registered in the global PayloadRegistry.
-// For generic JSON processing, use the well-known type "core.json.v1" (GenericJSONPayload).
+//
+// Resolves the payload type discriminator against m.registry, which
+// must be set by the Decoder before json.Unmarshal is invoked.
+// Production callers MUST go through message.NewDecoder(reg).Decode(data);
+// tests use payloadbuiltins.NewTestDecoder(t). Zero-value BaseMessage
+// is a hard error — there is no global fallback and no test-mode side
+// door. Mirrors stdlib's bufio.Scanner state-set-by-constructor
+// pattern.
 func (m *BaseMessage) UnmarshalJSON(data []byte) error {
 	var wire wireFormat
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -274,8 +289,16 @@ func (m *BaseMessage) UnmarshalJSON(data []byte) error {
 
 	m.meta = NewDefaultMetaWithReceivedAt(createdAt, receivedAt, source)
 
-	// Try to create typed payload using registry
-	payload := payloadregistry.Create(m.msgType.Domain, m.msgType.Category, m.msgType.Version)
+	// Fail-fast on zero-value BaseMessage — production must go through
+	// Decoder, tests through payloadbuiltins.NewTestDecoder.
+	if m.registry == nil {
+		return errs.WrapInvalid(
+			fmt.Errorf("no payload registry configured; use message.NewDecoder(reg).Decode(data)"),
+			"BaseMessage", "UnmarshalJSON", "missing registry")
+	}
+
+	// Try to create typed payload using the registry
+	payload := m.registry.Create(m.msgType.Domain, m.msgType.Category, m.msgType.Version)
 	if payload == nil {
 		// Unknown type - payload must be registered or use core.json.v1
 		return errs.WrapInvalid(

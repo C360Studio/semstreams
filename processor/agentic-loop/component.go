@@ -39,6 +39,7 @@ type Component struct {
 	config     Config
 	handler    *MessageHandler
 	deps       component.Dependencies
+	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 
@@ -151,6 +152,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		config:         config,
 		handler:        handler,
 		deps:           deps,
+		decoder:        message.NewDecoder(deps.PayloadRegistry),
 		natsClient:     deps.NATSClient,
 		logger:         deps.GetLogger(),
 		messageTimeout: messageTimeout,
@@ -519,7 +521,7 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 		}
 
 		// Initialize the Boid handler with configured TTL
-		c.boidHandler = NewBoidHandlerWithTTL(c.positionsBucket, c.logger, signalTTL)
+		c.boidHandler = NewBoidHandlerWithTTL(c.positionsBucket, c.logger, c.decoder, signalTTL)
 		c.logger.Info("Boid coordination enabled", "positions_bucket", bucketName, "signal_ttl", signalTTL)
 	}
 
@@ -755,8 +757,8 @@ func sanitizeSubject(subject string) string {
 
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		return
 	}
@@ -820,8 +822,8 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
 // extractAgentResponse parses an agent response message and finds its loop.
 // Returns the response, loop ID, and success flag.
 func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, bool) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		return nil, "", false
 	}
@@ -966,8 +968,8 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 
 // handleToolResultMessage processes incoming tool result messages
 func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		return
 	}
@@ -1272,8 +1274,8 @@ func (c *Component) findLoopIDForToolCall(callID string) string {
 
 // handleSignalMessage processes incoming signal messages (cancel, pause, etc.)
 func (c *Component) handleSignalMessage(ctx context.Context, data []byte) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		return
 	}

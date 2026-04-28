@@ -15,6 +15,7 @@ import (
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -30,6 +31,7 @@ type Component struct {
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	platform   component.PlatformMeta
+	decoder    *message.Decoder
 
 	hydrator      *Hydrator
 	extractor     *LLMExtractor
@@ -85,6 +87,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 		platform:   deps.Platform,
+		decoder:    message.NewDecoder(deps.PayloadRegistry),
 		hydrator:   hydrator,
 		extractor:  extractor,
 	}

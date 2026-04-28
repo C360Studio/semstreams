@@ -101,9 +101,11 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 				return
 			}
 
-			// Unmarshal back
-			var restored message.BaseMessage
-			if err := json.Unmarshal(data, &restored); err != nil {
+			// Unmarshal back via the global registry (the blank imports
+			// at the top of this file trigger init() which populates
+			// payloadregistry.Global()).
+			restored, err := message.NewDecoder(payloadregistry.Global()).Decode(data)
+			if err != nil {
 				t.Fatalf("Failed to unmarshal BaseMessage: %v\nJSON: %s", err, string(data))
 			}
 

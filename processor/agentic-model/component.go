@@ -35,6 +35,7 @@ type Component struct {
 	// callers can override via WithHealthPolicy for shared-state or
 	// custom policies (e.g., NATS-KV-backed for cross-process state).
 	healthPolicy model.HealthPolicy
+	decoder      *message.Decoder
 	natsClient   *natsclient.Client
 	logger       *slog.Logger
 
@@ -175,6 +176,7 @@ func newComponent(config Config, deps component.Dependencies, messageTimeout tim
 		config:         config,
 		modelRegistry:  deps.ModelRegistry,
 		healthPolicy:   model.NewRollingWindowBreaker(model.BreakerConfig{}),
+		decoder:        message.NewDecoder(deps.PayloadRegistry),
 		clientCache:    make(map[string]*Client),
 		natsClient:     deps.NATSClient,
 		logger:         deps.GetLogger(),
@@ -490,8 +492,8 @@ func mapErrorKind(ctx context.Context, errorMsg string) model.ErrorKind {
 
 // parseAgentRequest extracts an AgentRequest from raw message data
 func (c *Component) parseAgentRequest(data []byte) (agentic.AgentRequest, error) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		return agentic.AgentRequest{}, errs.WrapInvalid(err, "Component", "parseAgentRequest", "unmarshal BaseMessage")
 	}
 

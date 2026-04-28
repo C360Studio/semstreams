@@ -96,8 +96,8 @@ func (c *Component) handleLoopCreated(ctx context.Context, data []byte) {
 // LoopCreatedEvent payload. Returns (event, true) on success, (nil, false) after
 // logging+counting on any failure.
 func (c *Component) unmarshalLoopCreated(data []byte) (*agentic.LoopCreatedEvent, bool) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal loop_created BaseMessage", "error", err)
 		atomic.AddInt64(&c.errors, 1)
 		return nil, false

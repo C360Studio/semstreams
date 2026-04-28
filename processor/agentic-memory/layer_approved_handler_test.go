@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // newHandlerTestComponent builds a teams-memory Component suitable for driving
@@ -24,8 +26,9 @@ func newHandlerTestComponent(t *testing.T, org, platform string) *Component {
 		t.Fatalf("marshal default config: %v", err)
 	}
 	deps := component.Dependencies{
-		NATSClient: nil,
-		Platform:   component.PlatformMeta{Org: org, Platform: platform},
+		NATSClient:      nil,
+		Platform:        component.PlatformMeta{Org: org, Platform: platform},
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, operatingmodel.RegisterPayloads),
 	}
 	comp, err := NewComponent(rawCfg, deps)
 	if err != nil {

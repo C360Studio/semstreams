@@ -76,6 +76,7 @@ type Processor struct {
 	outputSubjs []string // Support multiple output subjects
 	rules       []FilterRule
 	config      Config // Store full config for port type checking
+	decoder     *message.Decoder
 	natsClient  *natsclient.Client
 	logger      *slog.Logger
 
@@ -152,6 +153,7 @@ func NewProcessor(
 		outputSubjs: outputSubjects,
 		rules:       config.Rules,
 		config:      config, // Store full config for port type checking
+		decoder:     message.NewDecoder(deps.PayloadRegistry),
 		natsClient:  deps.NATSClient,
 		logger:      deps.GetLogger(),
 		shutdown:    make(chan struct{}),
@@ -476,8 +478,8 @@ func (f *Processor) handleMessage(ctx context.Context, msgData []byte) {
 		"size_bytes", len(msgData))
 
 	// Parse as BaseMessage
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(msgData, &baseMsg); err != nil {
+	baseMsg, err := f.decoder.Decode(msgData)
+	if err != nil {
 		atomic.AddInt64(&f.errors, 1)
 		f.metrics.recordError(f.name, "parse")
 		f.logger.Debug("Failed to parse message as BaseMessage",

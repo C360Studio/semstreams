@@ -48,6 +48,7 @@ type consumerInfo struct {
 // are handled by JSON rules in configs/rules/github-pr-workflow/.
 type PRWorkflowComponent struct {
 	config     Config
+	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	platform   component.PlatformMeta
@@ -89,6 +90,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 	c := &PRWorkflowComponent{
 		config:     cfg,
+		decoder:    message.NewDecoder(deps.PayloadRegistry),
 		natsClient: deps.NATSClient,
 		logger:     logger,
 		platform:   deps.Platform,
@@ -324,8 +326,8 @@ func (c *PRWorkflowComponent) handleIssueEvent(ctx context.Context, data []byte)
 // handleLoopCompleted processes an agentic loop completion event.
 func (c *PRWorkflowComponent) handleLoopCompleted(ctx context.Context, data []byte) {
 	// Parse the BaseMessage envelope
-	var base message.BaseMessage
-	if err := json.Unmarshal(data, &base); err != nil {
+	base, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Debug("Failed to unmarshal loop completed envelope", "error", err)
 		c.errors.Add(1)
 		return

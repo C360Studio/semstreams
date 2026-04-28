@@ -14,22 +14,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
-
-// Compile-time assertion that *payloadregistry.Registry satisfies
-// component.PayloadRegistryReader. Any future drift in either side's
-// signature breaks here at compile time rather than at first
-// nil-shared deployment.
-//
-// The assertion lives in component (not payloadregistry) on purpose:
-// payloadregistry must remain a leaf package. Importing component from
-// payloadregistry would re-introduce the cycle that beta.16 broke
-// (component → agentic → message → config → component). component
-// already imports payloadregistry, so the assertion is cycle-safe here.
-var _ PayloadRegistryReader = (*payloadregistry.Registry)(nil)
 
 // Info holds metadata about an available component type
 type Info struct {
@@ -115,11 +102,10 @@ type PortCapability struct {
 // It provides thread-safe registration and lookup of both factories (for creation)
 // and instances (for discovery and management).
 type Registry struct {
-	factories       map[string]*Registration  // Factory registry by name
-	instances       map[string]Discoverable   // Instance registry by name
-	payloadRegistry *payloadregistry.Registry // Registry for message payloads
-	resourceTracker map[string]string         // Resource ID -> Component instance name mapping
-	mu              sync.RWMutex              // Protects all maps
+	factories       map[string]*Registration // Factory registry by name
+	instances       map[string]Discoverable  // Instance registry by name
+	resourceTracker map[string]string        // Resource ID -> Component instance name mapping
+	mu              sync.RWMutex             // Protects all maps
 
 	// NATS-backed capability discovery (new)
 	remoteCapabilities map[string]*CapabilityAnnouncement
@@ -137,7 +123,6 @@ func NewRegistry(opts ...func(*Registry)) *Registry {
 	r := &Registry{
 		factories:         make(map[string]*Registration),
 		instances:         make(map[string]Discoverable),
-		payloadRegistry:   payloadregistry.New(),
 		resourceTracker:   make(map[string]string),
 		instanceFactories: make(map[string]string),
 		logger:            slog.Default(),
@@ -515,25 +500,6 @@ func (r *Registry) ListAvailable() map[string]Info {
 	}
 
 	return result
-}
-
-// RegisterPayload registers a payload factory with this Registry's
-// owned PayloadRegistry. Type definitions live in the payloadregistry
-// package; this method is preserved for callers using the unified
-// component.Registry as their registration façade.
-func (r *Registry) RegisterPayload(registration *payloadregistry.Registration) error {
-	return r.payloadRegistry.Register(registration)
-}
-
-// CreatePayload creates a payload instance using the registered factory.
-// Returns nil if the message type is not registered.
-func (r *Registry) CreatePayload(domain, category, version string) any {
-	return r.payloadRegistry.Create(domain, category, version)
-}
-
-// ListPayloads returns all registered payload types.
-func (r *Registry) ListPayloads() map[string]*payloadregistry.Registration {
-	return r.payloadRegistry.List()
 }
 
 // Config validation constants - security limits

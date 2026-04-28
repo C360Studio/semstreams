@@ -39,6 +39,7 @@ type Component struct {
 	// main.go via executors.RegisterBuiltins. May be nil for tests
 	// that exercise the component in isolation.
 	shared     component.ToolRegistryReader
+	decoder    *message.Decoder
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 	platform   component.PlatformMeta
@@ -96,6 +97,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		config:     config,
 		registry:   NewExecutorRegistry(),
 		shared:     deps.ToolRegistry,
+		decoder:    message.NewDecoder(deps.PayloadRegistry),
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 		platform:   deps.Platform,
@@ -336,8 +338,8 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 	c.mu.Unlock()
 
 	// Parse BaseMessage envelope
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
 		c.incrementErrors()
 		return

@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
@@ -38,7 +39,7 @@ type ComponentManager struct {
 	// core component management
 	registry         *component.Registry
 	toolRegistry     component.ToolRegistryReader           // Shared tool registry plumbed via deps.ToolRegistry to managed components
-	payloadRegistry  component.PayloadRegistryReader        // Shared payload registry plumbed via deps.PayloadRegistry to managed components
+	payloadRegistry  *payloadregistry.Registry              // Shared payload registry plumbed via deps.PayloadRegistry to managed components
 	componentConfigs config.ComponentConfigs                // Component configurations
 	platform         types.PlatformMeta                     // Platform identity for components
 	components       map[string]*component.ManagedComponent // Track managed components
@@ -141,7 +142,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	var platform types.PlatformMeta
 	var registry *component.Registry
 	var toolRegistry component.ToolRegistryReader
-	var payloadRegistry component.PayloadRegistryReader
+	var payloadRegistry *payloadregistry.Registry
 	if deps != nil {
 		platform = deps.Platform
 		registry = deps.ComponentRegistry

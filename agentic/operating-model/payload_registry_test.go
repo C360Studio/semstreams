@@ -40,9 +40,10 @@ func TestRegistry_BaseMessageRoundTripLayerApproved(t *testing.T) {
 		t.Fatalf("BaseMessage.MarshalJSON failed: %v", err)
 	}
 
-	var roundTripped message.BaseMessage
-	if err := roundTripped.UnmarshalJSON(data); err != nil {
-		t.Fatalf("BaseMessage.UnmarshalJSON failed: %v", err)
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	roundTripped, err := message.NewDecoder(reg).Decode(data)
+	if err != nil {
+		t.Fatalf("Decoder.Decode failed: %v", err)
 	}
 
 	payload := roundTripped.Payload()
@@ -85,9 +86,10 @@ func TestRegistry_BaseMessageRoundTripProfileContext(t *testing.T) {
 		t.Fatalf("BaseMessage.MarshalJSON failed: %v", err)
 	}
 
-	var roundTripped message.BaseMessage
-	if err := roundTripped.UnmarshalJSON(data); err != nil {
-		t.Fatalf("BaseMessage.UnmarshalJSON failed: %v", err)
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	roundTripped, err := message.NewDecoder(reg).Decode(data)
+	if err != nil {
+		t.Fatalf("Decoder.Decode failed: %v", err)
 	}
 
 	payload := roundTripped.Payload()

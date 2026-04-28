@@ -41,6 +41,16 @@ type Store struct {
 	keyGenerator      storage.KeyGenerator
 	metadataExtractor storage.MetadataExtractor
 	metrics           *storeMetrics
+	decoder           *message.Decoder
+}
+
+// SetDecoder installs the payload Decoder used by FetchContent's
+// fallback path (extractContentFromBaseMessage). Callers that store
+// raw BaseMessage bytes and later read them back via FetchContent
+// MUST set this; otherwise FetchContent falls through to a clear
+// error pointing at the fix.
+func (s *Store) SetDecoder(d *message.Decoder) {
+	s.decoder = d
 }
 
 // NewStoreWithConfig creates a new ObjectStore with cache configuration.
@@ -473,8 +483,12 @@ func (s *Store) FetchContent(ctx context.Context, ref *message.StorageReference)
 // extractContentFromBaseMessage extracts content from a stored BaseMessage.
 // This enables ContentStorable pattern when raw messages are stored.
 func (s *Store) extractContentFromBaseMessage(data []byte) (*StoredContent, error) {
-	var baseMsg message.BaseMessage
-	if err := baseMsg.UnmarshalJSON(data); err != nil {
+	if s.decoder == nil {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Store", "extractContentFromBaseMessage",
+			"no payload decoder configured; call (*Store).SetDecoder before FetchContent")
+	}
+	baseMsg, err := s.decoder.Decode(data)
+	if err != nil {
 		// Include data prefix for debugging malformed content
 		prefix := string(data)
 		if len(prefix) > 100 {

@@ -55,6 +55,7 @@ func resolveDefaultTools(reg component.ToolRegistryReader, names []string, logge
 type Component struct {
 	config        Config
 	deps          component.Dependencies
+	decoder       *message.Decoder
 	natsClient    *natsclient.Client
 	logger        *slog.Logger
 	loopTracker   *LoopTracker
@@ -139,6 +140,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	comp := &Component{
 		config:        config,
 		deps:          deps,
+		decoder:       message.NewDecoder(deps.PayloadRegistry),
 		natsClient:    deps.NATSClient,
 		logger:        logger,
 		loopTracker:   NewLoopTrackerWithLogger(logger),
@@ -434,8 +436,8 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 func (c *Component) handleUserMessage(ctx context.Context, data []byte) {
 	startTime := time.Now()
 
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
 		return
 	}
@@ -669,8 +671,8 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 // handleAgentComplete processes agent completion events
 func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 	// Parse BaseMessage envelope
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
 		return
 	}
@@ -748,8 +750,8 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 // handleAgentCreated processes loop creation events for workflow context sync
 func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 	// Parse BaseMessage envelope
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
 		return
 	}
@@ -797,8 +799,8 @@ func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 // handleAgentFailed processes loop failure events
 func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 	// Parse BaseMessage envelope
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
 		return
 	}

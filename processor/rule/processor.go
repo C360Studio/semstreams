@@ -88,6 +88,12 @@ type Processor struct {
 	// the deployment (graph-only flows, etc.).
 	toolRegistry component.ToolRegistryReader
 
+	// decoder unmarshal incoming BaseMessage envelopes against the
+	// shared payload registry. Set via SetDecoder after construction
+	// (the existing NewProcessor signature predates Dependencies-based
+	// wiring; SetDecoder mirrors the SetToolRegistry pattern).
+	decoder *message.Decoder
+
 	// Runtime state
 	running            bool          // Tracks if processor is running (protected by mu)
 	shutdown           chan struct{} // Closed to signal shutdown, never set to nil while running
@@ -234,6 +240,15 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 // without agentic-tools).
 func (rp *Processor) SetToolRegistry(r component.ToolRegistryReader) {
 	rp.toolRegistry = r
+}
+
+// SetDecoder installs the payload Decoder used to unmarshal incoming
+// BaseMessage envelopes. Called by the component factory after
+// construction with message.NewDecoder(deps.PayloadRegistry). Mirrors
+// SetToolRegistry. A nil arg leaves the processor unable to handle
+// semantic messages — handleSemanticMessage will fail-fast.
+func (rp *Processor) SetDecoder(d *message.Decoder) {
+	rp.decoder = d
 }
 
 // setupPorts initializes input and output port definitions. Ports

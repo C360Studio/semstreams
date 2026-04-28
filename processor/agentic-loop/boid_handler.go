@@ -188,6 +188,7 @@ func (s *SignalStore) Cleanup() int {
 type BoidHandler struct {
 	positionsBucket jetstream.KeyValue
 	logger          *slog.Logger
+	decoder         *message.Decoder
 
 	// Entity ID extraction patterns
 	entityIDPattern *regexp.Regexp
@@ -197,12 +198,14 @@ type BoidHandler struct {
 }
 
 // NewBoidHandler creates a new boid handler with the default signal TTL.
-func NewBoidHandler(positionsBucket jetstream.KeyValue, logger *slog.Logger) *BoidHandler {
-	return NewBoidHandlerWithTTL(positionsBucket, logger, defaultSignalTTL)
+// decoder may be nil for tests that don't exercise message decoding paths;
+// HandleSteeringSignalMessage will fail loudly if invoked with a nil decoder.
+func NewBoidHandler(positionsBucket jetstream.KeyValue, logger *slog.Logger, decoder *message.Decoder) *BoidHandler {
+	return NewBoidHandlerWithTTL(positionsBucket, logger, decoder, defaultSignalTTL)
 }
 
 // NewBoidHandlerWithTTL creates a new boid handler with a custom signal TTL.
-func NewBoidHandlerWithTTL(positionsBucket jetstream.KeyValue, logger *slog.Logger, signalTTL time.Duration) *BoidHandler {
+func NewBoidHandlerWithTTL(positionsBucket jetstream.KeyValue, logger *slog.Logger, decoder *message.Decoder, signalTTL time.Duration) *BoidHandler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -212,6 +215,7 @@ func NewBoidHandlerWithTTL(positionsBucket jetstream.KeyValue, logger *slog.Logg
 	return &BoidHandler{
 		positionsBucket: positionsBucket,
 		logger:          logger,
+		decoder:         decoder,
 		// Pattern to extract entity IDs from content (6-part federated IDs)
 		entityIDPattern: regexp.MustCompile(`([a-z0-9_-]+\.){5}[a-z0-9_-]+`),
 		signalStore:     NewSignalStore(signalTTL),
@@ -437,8 +441,8 @@ func (h *BoidHandler) ClearSignals(loopID string) {
 // HandleSteeringSignalMessage handles incoming boid steering signal messages from NATS.
 // Returns the signal type if successfully processed, empty string otherwise.
 func (h *BoidHandler) HandleSteeringSignalMessage(ctx context.Context, data []byte, getContextManager func(loopID string) *ContextManager) string {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := h.decoder.Decode(data)
+	if err != nil {
 		h.logger.Error("Failed to unmarshal steering signal", "error", err)
 		return ""
 	}

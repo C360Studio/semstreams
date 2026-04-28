@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -180,9 +181,9 @@ func TestIntegration_ToolExecution(t *testing.T) {
 	receivedResults := make([]agentic.ToolResult, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
 				receiveMu.Lock()
 				receivedResults = append(receivedResults, *result)
@@ -295,9 +296,9 @@ func TestIntegration_ToolAllowedList(t *testing.T) {
 	receivedResults := make([]agentic.ToolResult, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
 				receiveMu.Lock()
 				receivedResults = append(receivedResults, *result)
@@ -403,9 +404,9 @@ func TestIntegration_ToolTimeout(t *testing.T) {
 	receivedResults := make([]agentic.ToolResult, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
 				receiveMu.Lock()
 				receivedResults = append(receivedResults, *result)
@@ -526,9 +527,9 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 	receivedResults := make([]agentic.ToolResult, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
 				receiveMu.Lock()
 				receivedResults = append(receivedResults, *result)
@@ -832,9 +833,9 @@ func TestIntegration_SharedRegistryExecution(t *testing.T) {
 	receivedResults := make([]agentic.ToolResult, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
 				receiveMu.Lock()
 				receivedResults = append(receivedResults, *result)

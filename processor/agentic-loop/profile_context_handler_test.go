@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 )
@@ -28,8 +29,9 @@ func newProfileContextTestComponent(t *testing.T, inject bool) *Component {
 		t.Fatalf("marshal config: %v", err)
 	}
 	deps := component.Dependencies{
-		NATSClient: nil,
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NATSClient:      nil,
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 	comp, err := NewComponent(rawCfg, deps)
 	if err != nil {

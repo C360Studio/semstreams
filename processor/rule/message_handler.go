@@ -2,7 +2,6 @@ package rule
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -77,8 +76,8 @@ func (rp *Processor) handleMessage(ctx context.Context, subject string, data []b
 
 // handleSemanticMessage processes semantic messages (BaseMessage format)
 func (rp *Processor) handleSemanticMessage(ctx context.Context, subject string, data []byte) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := rp.decoder.Decode(data)
+	if err != nil {
 		rp.recordError(fmt.Sprintf("failed to unmarshal BaseMessage: %v", err))
 		return
 	}
@@ -86,7 +85,7 @@ func (rp *Processor) handleSemanticMessage(ctx context.Context, subject string, 
 	rp.logger.Debug("Successfully unmarshaled BaseMessage", "type", baseMsg.Type().String())
 
 	// Process through rules
-	rp.evaluateRulesForMessage(ctx, subject, &baseMsg)
+	rp.evaluateRulesForMessage(ctx, subject, baseMsg)
 }
 
 // evaluateRulesForMessage performs rule evaluation for any message type

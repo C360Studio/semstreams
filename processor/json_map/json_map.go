@@ -82,6 +82,7 @@ type Processor struct {
 	addFields    map[string]any
 	removeFields map[string]bool // Set for fast lookup
 	config       Config          // Store full config for port type checking
+	decoder      *message.Decoder
 	natsClient   *natsclient.Client
 	logger       *slog.Logger
 
@@ -162,6 +163,7 @@ func NewProcessor(
 		addFields:    config.AddFields,
 		removeFields: removeFieldsSet,
 		config:       config, // Store full config for port type checking
+		decoder:      message.NewDecoder(deps.PayloadRegistry),
 		natsClient:   deps.NATSClient,
 		logger:       deps.GetLogger(),
 		shutdown:     make(chan struct{}),
@@ -469,8 +471,8 @@ func (m *Processor) handleMessage(ctx context.Context, msgData []byte) {
 		"size_bytes", len(msgData))
 
 	// Parse as BaseMessage
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(msgData, &baseMsg); err != nil {
+	baseMsg, err := m.decoder.Decode(msgData)
+	if err != nil {
 		atomic.AddInt64(&m.errors, 1)
 		m.metrics.recordError(m.name, "parse")
 		m.logger.Debug("Failed to parse message as BaseMessage",

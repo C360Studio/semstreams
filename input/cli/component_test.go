@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +18,7 @@ func TestComponent_Meta(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	meta := comp.Meta()
@@ -30,7 +31,7 @@ func TestComponent_Ports(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -48,7 +49,7 @@ func TestComponent_Health(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -63,7 +64,7 @@ func TestComponent_LocalCommands(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -96,7 +97,7 @@ func TestComponent_ActiveLoop(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -117,7 +118,7 @@ func TestComponent_DisplayResponse(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -183,7 +184,7 @@ func TestComponent_DisplayResponse_WithActions(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -213,7 +214,7 @@ func TestComponent_HandleResponse_TracksActiveLoop(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -245,7 +246,7 @@ func TestComponent_ConfigSchema(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -261,7 +262,7 @@ func TestNewComponent_DefaultsApplied(t *testing.T) {
 	config := map[string]interface{}{}
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -276,7 +277,7 @@ func TestComponent_SetReaderWriter(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, _ := json.Marshal(config)
 
-	comp, err := NewComponent(configJSON, mockDependencies())
+	comp, err := NewComponent(configJSON, mockDependencies(t))
 	require.NoError(t, err)
 
 	cliComp := comp.(*Component)
@@ -297,10 +298,14 @@ func TestComponent_SetReaderWriter(t *testing.T) {
 	assert.Contains(t, writer.String(), "test output")
 }
 
-// mockDependencies creates mock dependencies for testing
-func mockDependencies() component.Dependencies {
+// mockDependencies creates mock dependencies for testing.
+// Takes testing.TB so the test-only payload registry constructor is
+// callable; production code physically cannot reach this helper.
+func mockDependencies(tb testing.TB) component.Dependencies {
+	tb.Helper()
 	return component.Dependencies{
-		NATSClient: nil, // Tests don't need actual NATS
-		Logger:     nil,
+		NATSClient:      nil, // Tests don't need actual NATS
+		Logger:          nil,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(tb),
 	}
 }

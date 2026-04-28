@@ -38,36 +38,25 @@ type ToolRegistryReader interface {
 	ListTools() []agentic.ToolDefinition
 }
 
-// PayloadRegistryReader is the dependency-side surface of the payload
-// registry. *payloadregistry.Registry satisfies it implicitly. Defined
-// here in the component package so all component consumers can refer
-// to it through Dependencies without depending on payloadregistry's
-// concrete type — mirrors ToolRegistryReader.
-//
-// Beta.18 deliverable: payloads previously registered via init() side
-// effects on a package-level singleton; that singleton is being
-// retired in favor of a constructor-injected *Registry plumbed through
-// this interface. message.BaseMessage.UnmarshalJSON looks up
-// type-discriminator → empty-instance via this interface; callers
-// that build a BaseMessage for unmarshaling supply a registry via
-// message.NewBaseMessageForUnmarshal or message.NewDecoder.
-type PayloadRegistryReader interface {
-	Create(domain, category, version string) any
-	Build(domain, category, version string, fields map[string]any) (any, error)
-	List() map[string]*payloadregistry.Registration
-}
-
 // Dependencies provides all external dependencies needed by components.
+//
+// PayloadRegistry uses the concrete *payloadregistry.Registry rather
+// than an interface (the way ToolRegistry uses ToolRegistryReader) on
+// purpose: payloadregistry is a leaf package this package already
+// imports, so there's no cycle to dodge, and message.NewDecoder also
+// requires the concrete type. An interface here would force callers
+// to type-assert at every Decoder construction site — pure friction
+// for no abstraction win.
 type Dependencies struct {
-	NATSClient        *natsclient.Client      // NATS client for messaging
-	MetricsRegistry   *metric.MetricsRegistry // Metrics registry for Prometheus (can be nil)
-	Logger            *slog.Logger            // Structured logger (can be nil, defaults to slog.Default())
-	Platform          PlatformMeta            // Platform identity (organization and platform)
-	Security          security.Config         // Platform-wide security configuration
-	ModelRegistry     model.RegistryReader    // Unified model registry (can be nil)
-	ToolRegistry      ToolRegistryReader      // Shared tool executor registry (can be nil; agentic-tools requires it)
-	PayloadRegistry   PayloadRegistryReader   // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
-	ComponentRegistry Lookup                  // Sibling component lookup (can be nil)
+	NATSClient        *natsclient.Client        // NATS client for messaging
+	MetricsRegistry   *metric.MetricsRegistry   // Metrics registry for Prometheus (can be nil)
+	Logger            *slog.Logger              // Structured logger (can be nil, defaults to slog.Default())
+	Platform          PlatformMeta              // Platform identity (organization and platform)
+	Security          security.Config           // Platform-wide security configuration
+	ModelRegistry     model.RegistryReader      // Unified model registry (can be nil)
+	ToolRegistry      ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
+	PayloadRegistry   *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
+	ComponentRegistry Lookup                    // Sibling component lookup (can be nil)
 }
 
 // GetLogger returns the configured logger or a default logger if none is provided

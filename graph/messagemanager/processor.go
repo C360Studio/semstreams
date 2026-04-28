@@ -3,7 +3,6 @@ package messagemanager
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,8 +18,9 @@ import (
 // Manager implements the MessageHandler interface
 type Manager struct {
 	// Dependencies
-	deps   Dependencies
-	config Config
+	deps    Dependencies
+	config  Config
+	decoder *message.Decoder
 
 	// Prometheus metrics for observability
 	metrics *Metrics
@@ -39,6 +39,7 @@ func NewManager(config Config, deps Dependencies, errorCallback func(string)) *M
 	return &Manager{
 		deps:          deps,
 		config:        config,
+		decoder:       message.NewDecoder(deps.PayloadRegistry),
 		metrics:       NewMetrics(deps.MetricsRegistry),
 		errorCallback: errorCallback,
 		lastActivity:  time.Now(),
@@ -119,8 +120,8 @@ func (mp *Manager) recordMessageProcessed() {
 
 // parseBaseMessage unmarshals raw data into a BaseMessage and extracts the payload.
 func (mp *Manager) parseBaseMessage(data []byte) (any, string, error) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := mp.decoder.Decode(data)
+	if err != nil {
 		mp.recordError(fmt.Sprintf("failed to unmarshal BaseMessage: %v", err))
 		if mp.metrics != nil {
 			mp.metrics.MessagesFailed.Inc()

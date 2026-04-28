@@ -96,6 +96,9 @@ func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Ser
 	}
 
 	ml, err := NewMessageLogger(&cfg, deps.NATSClient, opts...)
+	if ml != nil {
+		ml.SetDecoder(message.NewDecoder(deps.PayloadRegistry))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +194,12 @@ type MessageLogger struct {
 	*BaseService
 
 	config MessageLoggerConfig // Consistent config field (not pointer)
+
+	// Payload decoder for typed BaseMessage parsing. Optional — when
+	// nil, messages are logged as "raw" type (unparseable envelope).
+	// Set via SetDecoder; the production constructor wires it from
+	// deps.PayloadRegistry.
+	decoder *message.Decoder
 
 	// NATS dependencies
 	natsClient    *natsclient.Client
@@ -330,6 +339,25 @@ func discoverSubjectsFromComponents(components map[string]json.RawMessage) ([]st
 	return result, metadata
 }
 
+// SetDecoder installs the payload Decoder used for typed BaseMessage
+// parsing in handleMessage. nil disables typed parsing — messages
+// fall through to the "raw" type. Production wires this from
+// deps.PayloadRegistry; tests can leave it nil to log raw envelopes.
+func (ml *MessageLogger) SetDecoder(d *message.Decoder) {
+	ml.decoder = d
+}
+
+// decodeBaseMessage parses data as a typed BaseMessage when a decoder
+// is configured. Returns an error when the decoder is unset or the
+// data is not a parseable envelope; handleMessage falls through to
+// the "raw" type in either case.
+func (ml *MessageLogger) decodeBaseMessage(data []byte) (*message.BaseMessage, error) {
+	if ml.decoder == nil {
+		return nil, fmt.Errorf("no payload decoder configured")
+	}
+	return ml.decoder.Decode(data)
+}
+
 // shouldSample returns true if this message should be logged based on sample rate
 func (ml *MessageLogger) shouldSample() bool {
 	if ml.sampleRate <= 1 {
@@ -447,11 +475,10 @@ func (ml *MessageLogger) handleMessage(ctx context.Context, subject string, data
 	// raw JSON structs without BaseMessage wrapping. These are still valuable
 	// for observability so we log them with the subject as the type identifier.
 	var msgType, summary string
-	var msg message.BaseMessage
-	if err := json.Unmarshal(data, &msg); err == nil {
+	if msg, err := ml.decodeBaseMessage(data); err == nil {
 		ml.stats.validMessages.Add(1)
 		msgType = msg.Type().String()
-		summary = ml.generateSummary(&msg)
+		summary = ml.generateSummary(msg)
 	} else {
 		ml.stats.validMessages.Add(1)
 		msgType = "raw"

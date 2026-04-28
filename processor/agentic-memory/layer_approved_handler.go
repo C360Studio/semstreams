@@ -2,12 +2,10 @@ package agenticmemory
 
 import (
 	"context"
-	"encoding/json"
 	"sync/atomic"
 	"time"
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
-	"github.com/c360studio/semstreams/message"
 )
 
 // handleLayerApproved processes operating-model layer-approved events published by
@@ -88,8 +86,8 @@ func (c *Component) recordLayerApprovedSuccess(payload *operatingmodel.LayerAppr
 // unmarshalLayerApproved decodes a BaseMessage envelope and asserts the payload type.
 // Returns (payload, true) on success and (nil, false) on any failure after logging.
 func (c *Component) unmarshalLayerApproved(data []byte) (*operatingmodel.LayerApproved, bool) {
-	var baseMsg message.BaseMessage
-	if err := json.Unmarshal(data, &baseMsg); err != nil {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
 		c.logger.Error("Failed to unmarshal layer_approved BaseMessage", "error", err)
 		atomic.AddInt64(&c.errors, 1)
 		return nil, false

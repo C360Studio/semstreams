@@ -9,7 +9,7 @@ import (
 )
 
 func TestBoidHandler_ExtractEntitiesFromToolResult(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	tests := []struct {
 		name     string
@@ -76,7 +76,7 @@ func TestBoidHandler_ExtractEntitiesFromToolResult(t *testing.T) {
 }
 
 func TestBoidHandler_ExtractEntitiesFromContext(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	tests := []struct {
 		name     string
@@ -136,7 +136,7 @@ func TestBoidHandler_ExtractEntitiesFromContext(t *testing.T) {
 }
 
 func TestBoidHandler_CalculateVelocity(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	tests := []struct {
 		name      string
@@ -382,7 +382,7 @@ func TestSignalStore_Cleanup(t *testing.T) {
 // --- BoidHandler Signal Integration Tests ---
 
 func TestBoidHandler_ProcessSteeringSignal(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	signal := &boid.SteeringSignal{
 		LoopID:        "loop-1",
@@ -407,7 +407,7 @@ func TestBoidHandler_ProcessSteeringSignal(t *testing.T) {
 }
 
 func TestBoidHandler_ApplySteeringToEntities(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// Store separation and cohesion signals
 	handler.ProcessSteeringSignal(context.Background(), &boid.SteeringSignal{
@@ -433,7 +433,7 @@ func TestBoidHandler_ApplySteeringToEntities(t *testing.T) {
 }
 
 func TestBoidHandler_FilterEntitiesBySignals(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// Store signals
 	handler.ProcessSteeringSignal(context.Background(), &boid.SteeringSignal{
@@ -465,7 +465,7 @@ func TestBoidHandler_FilterEntitiesBySignals(t *testing.T) {
 }
 
 func TestBoidHandler_FilterEntitiesBySignals_NoSignals(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// No signals stored - should return original order
 	entities := []string{"entity.a", "entity.b", "entity.c"}
@@ -479,7 +479,7 @@ func TestBoidHandler_FilterEntitiesBySignals_NoSignals(t *testing.T) {
 }
 
 func TestBoidHandler_GetAlignmentPatterns(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// No signal - should return nil
 	patterns := handler.GetAlignmentPatterns("loop-1")
@@ -504,7 +504,7 @@ func TestBoidHandler_GetAlignmentPatterns(t *testing.T) {
 }
 
 func TestBoidHandler_ClearSignals(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// Store signals
 	handler.ProcessSteeringSignal(context.Background(), &boid.SteeringSignal{
@@ -531,7 +531,7 @@ func TestBoidHandler_ClearSignals(t *testing.T) {
 }
 
 func TestBoidHandler_ProcessSteeringSignal_AppliesSteeringToContext(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	// Create a context manager with some graph entities
 	cfg := ContextConfig{
@@ -569,7 +569,7 @@ func TestBoidHandler_ProcessSteeringSignal_AppliesSteeringToContext(t *testing.T
 }
 
 func TestBoidHandler_ProcessSteeringSignal_AllSignalTypes(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 	cfg := ContextConfig{
 		Enabled:          true,
 		CompactThreshold: 0.8,
@@ -625,7 +625,7 @@ func TestBoidHandler_ProcessSteeringSignal_AllSignalTypes(t *testing.T) {
 }
 
 func TestBoidHandler_ExtractPredicatesFromToolResult(t *testing.T) {
-	handler := NewBoidHandler(nil, nil)
+	handler := NewBoidHandler(nil, nil, nil)
 
 	tests := []struct {
 		name     string
@@ -780,7 +780,7 @@ func TestNewBoidHandlerWithTTL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewBoidHandlerWithTTL(nil, nil, tt.ttl)
+			handler := NewBoidHandlerWithTTL(nil, nil, nil, tt.ttl)
 			if handler == nil {
 				t.Fatal("handler should not be nil")
 			}

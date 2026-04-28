@@ -24,6 +24,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 )
 
@@ -170,9 +171,9 @@ func TestIntegration_ModelCompleteResponse(t *testing.T) {
 	receivedResponses := make([]agentic.AgentResponse, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	sub, err := natsClient.Subscribe(ctx, "agent.response.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if resp, ok := baseMsg.Payload().(*agentic.AgentResponse); ok {
 				receiveMu.Lock()
 				receivedResponses = append(receivedResponses, *resp)
@@ -321,9 +322,9 @@ func TestIntegration_ModelToolCallResponse(t *testing.T) {
 	receivedResponses := make([]agentic.AgentResponse, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	sub, err := natsClient.Subscribe(ctx, "agent.response.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if resp, ok := baseMsg.Payload().(*agentic.AgentResponse); ok {
 				receiveMu.Lock()
 				receivedResponses = append(receivedResponses, *resp)
@@ -506,9 +507,9 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 	receivedResponses := make([]agentic.AgentResponse, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	sub, err := natsClient.Subscribe(ctx, "agent.response.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if resp, ok := baseMsg.Payload().(*agentic.AgentResponse); ok {
 				receiveMu.Lock()
 				receivedResponses = append(receivedResponses, *resp)

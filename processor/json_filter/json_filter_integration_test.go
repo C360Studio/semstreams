@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	jsonfilter "github.com/c360studio/semstreams/processor/json_filter"
 )
 
@@ -139,9 +140,10 @@ func TestIntegration_JSONFilterProcessing(t *testing.T) {
 	receivedMessages := make([]message.GenericJSONPayload, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "test.jsonfilter.output", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr == nil {
 			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
 				receiveMu.Lock()
 				receivedMessages = append(receivedMessages, *payload)
@@ -257,9 +259,10 @@ func TestIntegration_MultipleRules(t *testing.T) {
 	receivedMessages := make([]message.GenericJSONPayload, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "test.jsonfilter.multi.output", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr == nil {
 			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
 				receiveMu.Lock()
 				receivedMessages = append(receivedMessages, *payload)
@@ -362,9 +365,10 @@ func TestIntegration_ContainsOperator(t *testing.T) {
 	receivedMessages := make([]message.GenericJSONPayload, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "test.jsonfilter.contains.output", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr == nil {
 			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
 				receiveMu.Lock()
 				receivedMessages = append(receivedMessages, *payload)
@@ -463,9 +467,10 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 	receivedMessages := make([]message.GenericJSONPayload, 0)
 	var receiveMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "test.jsonfilter.reject.output", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr == nil {
 			if payload, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
 				receiveMu.Lock()
 				receivedMessages = append(receivedMessages, *payload)

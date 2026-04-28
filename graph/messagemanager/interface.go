@@ -7,6 +7,7 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/datamanager"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/payloadregistry"
 )
 
 // MessageHandler handles all message processing business logic
@@ -27,6 +28,7 @@ type Dependencies struct {
 	IndexManager    IndexManager
 	Logger          Logger
 	MetricsRegistry *metric.MetricsRegistry
+	PayloadRegistry *payloadregistry.Registry
 }
 
 // IndexManager interface for index operations

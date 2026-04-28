@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -164,9 +165,9 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 	receivedRequests := make([]agentic.AgentRequest, 0)
 	var requestMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "agent.request.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if req, ok := baseMsg.Payload().(*agentic.AgentRequest); ok {
 				requestMu.Lock()
 				receivedRequests = append(receivedRequests, *req)
@@ -322,9 +323,9 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 	var currentRequestID string
 	var requestMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "agent.request.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if req, ok := baseMsg.Payload().(*agentic.AgentRequest); ok {
 				requestMu.Lock()
 				currentRequestID = req.RequestID
@@ -339,8 +340,7 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 	var toolMu sync.Mutex
 
 	_, err = natsClient.Subscribe(ctx, "tool.execute.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if call, ok := baseMsg.Payload().(*agentic.ToolCall); ok {
 				toolMu.Lock()
 				receivedToolCalls = append(receivedToolCalls, *call)
@@ -492,9 +492,9 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 	var requestMu sync.Mutex
 	var lastRequestID string
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "agent.request.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if req, ok := baseMsg.Payload().(*agentic.AgentRequest); ok {
 				requestMu.Lock()
 				requestCount++
@@ -742,9 +742,9 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	var requestID string
 	var requestMu sync.Mutex
 
+	dec := payloadbuiltins.NewTestDecoder(t)
 	_, err = natsClient.Subscribe(ctx, "agent.request.>", func(_ context.Context, msg *nats.Msg) {
-		var baseMsg message.BaseMessage
-		if err := json.Unmarshal(msg.Data, &baseMsg); err == nil {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
 			if req, ok := baseMsg.Payload().(*agentic.AgentRequest); ok {
 				requestMu.Lock()
 				requestID = req.RequestID

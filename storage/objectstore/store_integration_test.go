@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	dto "github.com/prometheus/client_model/go"
@@ -345,8 +346,8 @@ func TestIntegration_BaseMessageRoundTrip(t *testing.T) {
 	assert.Equal(t, msgBytes, retrieved, "stored bytes should match original - no base64 encoding")
 
 	// 6. Verify we can unmarshal the retrieved data back to BaseMessage
-	var parsedMsg message.BaseMessage
-	err = parsedMsg.UnmarshalJSON(retrieved)
+	dec := payloadbuiltins.NewTestDecoder(t)
+	parsedMsg, err := dec.Decode(retrieved)
 	require.NoError(t, err, "should be able to unmarshal stored data as BaseMessage")
 
 	// 7. Verify payload was preserved correctly
