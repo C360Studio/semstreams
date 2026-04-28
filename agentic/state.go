@@ -67,6 +67,15 @@ type LoopEntity struct {
 	CancelledBy      string    `json:"cancelled_by,omitempty"`       // User who cancelled the loop
 	CancelledAt      time.Time `json:"cancelled_at,omitempty"`       // When the loop was cancelled
 
+	// Approval-gating fields (set when a tool call is rejected by the
+	// agentic-tools approval filter). The loop transitions to
+	// LoopStateAwaitingApproval and persists the pending call here so
+	// it can be re-dispatched on approval. StateBeforeApproval lets us
+	// restore the prior workflow state once the approval response
+	// arrives.
+	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
+	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
+
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop
 	ChannelType string `json:"channel_type,omitempty"` // cli, slack, discord, web
@@ -129,6 +138,77 @@ func (e *LoopEntity) TransitionTo(newState LoopState) error {
 		return fmt.Errorf("cannot transition from terminal state %s", e.State)
 	}
 	e.State = newState
+	return nil
+}
+
+// PendingApprovalState captures the gated tool call so the loop can
+// re-dispatch (or reject) it once a human approval response arrives.
+// Persisted on LoopEntity so a process restart mid-approval still
+// remembers what the human is reviewing.
+type PendingApprovalState struct {
+	CallID      string         `json:"call_id"`
+	ToolName    string         `json:"tool_name"`
+	Arguments   map[string]any `json:"arguments,omitempty"`
+	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason
+	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop paused
+	Timeout     time.Duration  `json:"timeout,omitempty"`  // Auto-reject deadline; zero means wait indefinitely
+	TraceID     string         `json:"trace_id,omitempty"` // Propagated for audit correlation
+}
+
+// BeginAwaitingApproval transitions the loop into
+// LoopStateAwaitingApproval and stores the pending call. Returns an
+// error if the loop is already terminal or already awaiting approval
+// for a different call (which would indicate a logic bug — two
+// rejections for the same loop shouldn't be possible while the first
+// is still pending).
+func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments map[string]any, reason string, timeout time.Duration, traceID string) error {
+	if e.State.IsTerminal() {
+		return fmt.Errorf("cannot begin awaiting approval from terminal state %s", e.State)
+	}
+	if e.PendingApproval != nil && e.PendingApproval.CallID != callID {
+		return fmt.Errorf("loop already awaiting approval for call %s", e.PendingApproval.CallID)
+	}
+	if callID == "" {
+		return fmt.Errorf("call_id required")
+	}
+	if toolName == "" {
+		return fmt.Errorf("tool_name required")
+	}
+	e.StateBeforeApproval = e.State
+	e.State = LoopStateAwaitingApproval
+	e.PendingApproval = &PendingApprovalState{
+		CallID:      callID,
+		ToolName:    toolName,
+		Arguments:   arguments,
+		Reason:      reason,
+		RequestedAt: time.Now().UTC(),
+		Timeout:     timeout,
+		TraceID:     traceID,
+	}
+	return nil
+}
+
+// ResolveApproval clears the pending approval and restores the prior
+// state so the loop can resume normal iteration. Caller is
+// responsible for re-dispatching the tool (approve/modify) or
+// synthesizing a rejection (reject) before invoking this.
+func (e *LoopEntity) ResolveApproval() error {
+	if e.State != LoopStateAwaitingApproval {
+		return fmt.Errorf("loop not awaiting approval (state=%s)", e.State)
+	}
+	if e.PendingApproval == nil {
+		return fmt.Errorf("loop awaiting approval but PendingApproval is nil")
+	}
+	restore := e.StateBeforeApproval
+	if restore == "" || restore == LoopStateAwaitingApproval {
+		// Defensive: if we somehow lost the prior state, fall back to
+		// executing so the loop can advance. Should not happen because
+		// BeginAwaitingApproval always captures it.
+		restore = LoopStateExecuting
+	}
+	e.State = restore
+	e.StateBeforeApproval = ""
+	e.PendingApproval = nil
 	return nil
 }
 
