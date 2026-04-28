@@ -223,22 +223,27 @@ The TODO markers force a manual review per call site — you'll need to
 decide whether each gets `deps.PayloadRegistry`, a constructor-injected
 registry, or a per-test registry from `payloadbuiltins.NewTestRegistry(t)`.
 
-## Known limitation: `approval_required` is not loop-gated
+## Known limitation (CLOSED in beta.19): `approval_required` is not loop-gated
 
-Unrelated to the payload-registry retirement, but flagged here so
-audits of beta.18 see it: the `approval_required` config in
-`processor/agentic-tools` rejects the first call to a listed tool but
-does **not halt the agent loop**. The agentic-loop has no special-case
-for `ToolErrorPermission` / `IsApprovalRequired` rejections — the
-rejection flows back as a normal tool error and the next LLM
-round-trip can retry the same tool with different arguments, call a
-related tool, or work around the gate entirely. This has been the
-behaviour since beta.15; it is **not introduced or changed by
-beta.18**, but products depending on `approval_required` for
-human-in-the-loop safety should be aware.
+The `approval_required` config in `processor/agentic-tools` shipped
+through beta.15-beta.18 as a tool-side filter only: it rejected the
+first call to a listed tool but did **not halt the agent loop**. The
+agentic-loop had no special-case for `ToolErrorPermission` /
+`IsApprovalRequired` rejections, so the rejection flowed back as a
+normal tool error and the next LLM round-trip could retry the same
+tool, call a related tool, or work around the gate entirely.
 
-Until the framework lands loop-side wiring (a beta.19 candidate),
-products needing real human-approval gating should:
+**Beta.19 closes this gap.** The agent loop now transitions to
+`awaiting_approval` on the first `IsApprovalRequired` rejection,
+persists the pending call on `LoopEntity.PendingApproval`, emits an
+`ApprovalPendingEvent` on `agent.approval_pending.<loop_id>`, and
+resumes only when a matching `ApprovalResponse` arrives on
+`agent.approval_response.<loop_id>`. See
+[migration-beta19.md](migration-beta19.md) and the
+[approval flow concept doc](../concepts/17-approval-flow.md) for the
+product-layer integration recipe.
+
+Until you upgrade to beta.19, the prior workarounds still apply:
 
 1. **Defend at the tool layer** — require an explicit per-call
    approval token minted by an out-of-band human-approval flow, so
@@ -250,12 +255,6 @@ products needing real human-approval gating should:
    `decide` tool whose schema enumerates the action; trigger the
    side-effect via a downstream rule with a human-approval
    entrypoint between the coordinator and the rule.
-
-The planned upstream fix: when agentic-loop receives a
-`ToolResult` whose error matches `IsApprovalRequired`, mark the loop
-`awaiting_approval`, persist the pending call to a KV bucket, surface
-a NATS event for a product-layer approval UI, and resume on a
-matching `agent.approval_response.<loop_id>` decision.
 
 ## Verification
 
