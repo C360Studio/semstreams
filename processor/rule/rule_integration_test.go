@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -131,6 +132,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
 	// Initialize and start
@@ -234,6 +236,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
 	err = processor.Initialize()
@@ -377,6 +380,7 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
 	err = processor.Initialize()
@@ -438,6 +442,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
 	err = processor.Initialize()
@@ -526,6 +531,7 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 
 	err = processor.Initialize()
 	require.NoError(t, err)
@@ -669,6 +675,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 
 	processor, err := rule.NewProcessor(natsClient, &config)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 	require.NotNil(t, processor)
 
 	err = processor.Initialize()
@@ -813,6 +820,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	metricsRegistry := metric.NewMetricsRegistry()
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, metricsRegistry)
 	require.NoError(t, err)
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
 
 	err = processor.Initialize()
 	require.NoError(t, err)

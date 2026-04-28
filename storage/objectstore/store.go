@@ -45,10 +45,18 @@ type Store struct {
 }
 
 // SetDecoder installs the payload Decoder used by FetchContent's
-// fallback path (extractContentFromBaseMessage). Callers that store
-// raw BaseMessage bytes and later read them back via FetchContent
-// MUST set this; otherwise FetchContent falls through to a clear
-// error pointing at the fix.
+// fallback path (extractContentFromBaseMessage). Required ONLY when
+// callers store raw BaseMessage bytes via Store and later read them
+// back via FetchContent — that path needs to type-discriminate the
+// envelope. Pure StoreContent (write-side) and Open (streaming
+// read-side) consumers can leave this nil; only the FetchContent
+// fallback exercises the decoder.
+//
+// agentic-loop and graph-embedding both construct stores directly
+// without calling SetDecoder; both are write-only / streaming-only
+// consumers and never reach the FetchContent fallback. The
+// objectstore Component (used by graph-ingest) wires the decoder via
+// its lifecycle Start because its read path uses FetchContent.
 func (s *Store) SetDecoder(d *message.Decoder) {
 	s.decoder = d
 }
