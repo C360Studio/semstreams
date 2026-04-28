@@ -468,7 +468,11 @@ func (c *PRWorkflowComponent) writeTriple(ctx context.Context, entityID, predica
 		return fmt.Errorf("marshal AddTripleRequest: %w", err)
 	}
 
-	respData, err := c.natsClient.Request(ctx, "graph.mutation.triple.add", reqData, 5*time.Second)
+	// RequestWithRetry handles transient "no responders" errors when
+	// graph-gateway is restarting or its subscription hasn't yet
+	// propagated. Triple mutations are idempotent on the responder
+	// side (same triple twice = same state), so retry is safe.
+	respData, err := c.natsClient.RequestWithRetry(ctx, "graph.mutation.triple.add", reqData, 5*time.Second, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("NATS request failed: %w", err)
 	}

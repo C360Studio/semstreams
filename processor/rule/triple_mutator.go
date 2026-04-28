@@ -59,8 +59,13 @@ func (m *tripleMutator) AddTriple(ctx context.Context, ruleID string, triple mes
 		return 0, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// Make NATS request
-	respData, err := m.natsClient.Request(ctx, SubjectTripleAdd, reqData, MutationTimeout)
+	// RequestWithRetry handles transient "no responders" errors when
+	// graph-gateway is restarting or its subscription hasn't yet
+	// propagated. Without retry, rule-driven add_triple actions
+	// silently fail during graph-gateway startup races. The mutation
+	// is idempotent (graph is a set of triples; same triple twice =
+	// same state), so retry is safe.
+	respData, err := m.natsClient.RequestWithRetry(ctx, SubjectTripleAdd, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return 0, fmt.Errorf("NATS request failed: %w", err)
 	}
@@ -100,8 +105,10 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 		return 0, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// Make NATS request
-	respData, err := m.natsClient.Request(ctx, SubjectTripleRemove, reqData, MutationTimeout)
+	// RequestWithRetry: same rationale as AddTriple. Removing
+	// already-removed is a no-op success on the responder side, so
+	// duplicate retries converge to the same state.
+	respData, err := m.natsClient.RequestWithRetry(ctx, SubjectTripleRemove, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return 0, fmt.Errorf("NATS request failed: %w", err)
 	}

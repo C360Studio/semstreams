@@ -255,7 +255,13 @@ func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Trip
 	if err != nil {
 		return fmt.Errorf("marshal add-triple request: %w", err)
 	}
-	respData, err := p.client.Request(ctx, decideMutationSubject, reqData, decideMutationTimeout)
+	// RequestWithRetry handles transient "no responders" errors when
+	// graph-gateway is restarting or its subscription hasn't yet
+	// propagated. The decide tool's terminal action is the triple
+	// downstream rules trigger on — silent failure here breaks the
+	// coordinator pattern's workflow. Idempotent (graph is a set of
+	// triples), so retry is safe.
+	respData, err := p.client.RequestWithRetry(ctx, decideMutationSubject, reqData, decideMutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", decideMutationSubject, err)
 	}
