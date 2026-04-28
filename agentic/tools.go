@@ -44,6 +44,12 @@ type ToolCall struct {
 	Metadata  map[string]any `json:"metadata,omitempty"` // Domain context, propagated from task
 	LoopID    string         `json:"loop_id,omitempty"`
 	TraceID   string         `json:"trace_id,omitempty"`
+	// ApprovedBy is set by the loop when re-dispatching a previously
+	// gated tool call after receiving an ApprovalResponse. The
+	// agentic-tools approval filter recognises a non-empty ApprovedBy
+	// as the explicit bypass token (see C5). Empty means the call has
+	// not been through human approval — normal filter rules apply.
+	ApprovedBy string `json:"approved_by,omitempty"`
 }
 
 // Validate checks if the ToolCall is valid

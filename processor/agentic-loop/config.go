@@ -288,6 +288,14 @@ func DefaultConfig() Config {
 					Required:    false,
 					Description: "Boid steering signals for agent coordination",
 				},
+				{
+					Name:        "agent.approval_response",
+					Type:        "jetstream",
+					Subject:     "agent.approval_response.*",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Human approval responses for gated tool calls",
+				},
 			},
 			Outputs: []component.PortDefinition{
 				{

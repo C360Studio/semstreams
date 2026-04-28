@@ -559,6 +559,8 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			handler = c.handleToolResultMessage
 		case "agent.signal":
 			handler = c.handleSignalMessage
+		case "agent.approval_response":
+			handler = c.handleApprovalResponseMessage
 		case "agent.boid":
 			// Only subscribe to Boid signals if Boid coordination is enabled
 			if !c.config.BoidEnabled {

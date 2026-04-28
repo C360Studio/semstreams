@@ -34,8 +34,8 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	ports := comp.InputPorts()
 
-	if len(ports) != 5 {
-		t.Fatalf("InputPorts() count = %d, want 5", len(ports))
+	if len(ports) != 6 {
+		t.Fatalf("InputPorts() count = %d, want 6", len(ports))
 	}
 
 	// Expected input ports with required flag
@@ -44,11 +44,12 @@ func TestComponent_InputPorts(t *testing.T) {
 		required bool
 	}
 	expected := map[string]portExpectation{
-		"agent.task":     {"agent.task.*", true},
-		"agent.response": {"agent.response.>", true},
-		"tool.result":    {"tool.result.>", true},
-		"agent.signal":   {"agent.signal.*", false}, // Optional - not all deployments need signal handling
-		"agent.boid":     {"agent.boid.>", false},   // Optional - Boid steering signals for coordination
+		"agent.task":              {"agent.task.*", true},
+		"agent.response":          {"agent.response.>", true},
+		"tool.result":             {"tool.result.>", true},
+		"agent.signal":            {"agent.signal.*", false},            // Optional - not all deployments need signal handling
+		"agent.boid":              {"agent.boid.>", false},              // Optional - Boid steering signals for coordination
+		"agent.approval_response": {"agent.approval_response.*", false}, // Optional - human-in-the-loop approval flow
 	}
 
 	for _, port := range ports {

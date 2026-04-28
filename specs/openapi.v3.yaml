@@ -1692,6 +1692,8 @@ components:
                                         tool_calls:
                                             items:
                                                 properties:
+                                                    approved_by:
+                                                        type: string
                                                     arguments:
                                                         additionalProperties: {}
                                                         type: object
@@ -1742,6 +1744,8 @@ components:
                             tool_calls:
                                 items:
                                     properties:
+                                        approved_by:
+                                            type: string
                                         arguments:
                                             additionalProperties: {}
                                             type: object
@@ -1917,6 +1921,8 @@ components:
                             tool_calls:
                                 items:
                                     properties:
+                                        approved_by:
+                                            type: string
                                         arguments:
                                             additionalProperties: {}
                                             type: object
@@ -1967,6 +1973,8 @@ components:
                 tool_calls:
                     items:
                         properties:
+                            approved_by:
+                                type: string
                             arguments:
                                 additionalProperties: {}
                                 type: object
