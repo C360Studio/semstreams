@@ -31,6 +31,8 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		{Domain: Domain, Category: CategoryLoopFailed, Version: SchemaVersion, Description: "Loop failure event", Factory: func() any { return &LoopFailedEvent{} }},
 		{Domain: Domain, Category: CategoryLoopCancelled, Version: SchemaVersion, Description: "Loop cancellation event", Factory: func() any { return &LoopCancelledEvent{} }},
 		{Domain: Domain, Category: CategoryContextEvent, Version: SchemaVersion, Description: "Context management event", Factory: func() any { return &ContextEvent{} }},
+		{Domain: Domain, Category: CategoryApprovalPending, Version: SchemaVersion, Description: "Approval-pending event for human-in-the-loop tool gating", Factory: func() any { return &ApprovalPendingEvent{} }},
+		{Domain: Domain, Category: CategoryApprovalResponse, Version: SchemaVersion, Description: "Approval response from human-in-the-loop UI", Factory: func() any { return &ApprovalResponse{} }},
 	}
 
 	var errs []error

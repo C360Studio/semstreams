@@ -8,20 +8,30 @@ const (
 
 // Category constants for message types.
 const (
-	CategoryTask          = "task"
-	CategoryUserMessage   = "user_message"
-	CategorySignal        = "signal"
-	CategoryUserResponse  = "user_response"
-	CategoryRequest       = "request"
-	CategoryResponse      = "response"
-	CategoryToolCall      = "tool_call"
-	CategoryToolResult    = "tool_result"
-	CategoryLoopCreated   = "loop_created"
-	CategoryLoopCompleted = "loop_completed"
-	CategoryLoopFailed    = "loop_failed"
-	CategoryLoopCancelled = "loop_cancelled"
-	CategoryContextEvent  = "context_event"
-	CategorySignalMessage = "signal_message"
+	CategoryTask             = "task"
+	CategoryUserMessage      = "user_message"
+	CategorySignal           = "signal"
+	CategoryUserResponse     = "user_response"
+	CategoryRequest          = "request"
+	CategoryResponse         = "response"
+	CategoryToolCall         = "tool_call"
+	CategoryToolResult       = "tool_result"
+	CategoryLoopCreated      = "loop_created"
+	CategoryLoopCompleted    = "loop_completed"
+	CategoryLoopFailed       = "loop_failed"
+	CategoryLoopCancelled    = "loop_cancelled"
+	CategoryContextEvent     = "context_event"
+	CategorySignalMessage    = "signal_message"
+	CategoryApprovalPending  = "approval_pending"
+	CategoryApprovalResponse = "approval_response"
+)
+
+// Decision values for ApprovalResponse — what the human-in-the-loop
+// approver decided about a tool call gated by approval_required.
+const (
+	ApprovalDecisionApprove = "approve"
+	ApprovalDecisionReject  = "reject"
+	ApprovalDecisionModify  = "modify"
 )
 
 // Outcome values for loop completion events.
