@@ -347,14 +347,14 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 }
 
 // verifyRegisteredTools confirms the ADR-026 M2 tools (list_components,
-// monitor_flow) actually registered into the global tool registry at
+// monitor_flow) actually registered into the shared tool registry at
 // binary startup. This catches wiring regressions that unit tests
 // can't see — e.g. cmd/semstreams/main.go dropping
-// ComponentRegistry from ToolDependencies, or executors.RegisterAll
+// ComponentRegistry from ToolDependencies, or executors.RegisterBuiltins
 // dropping the registerComponentCatalog call. Each register fn emits
-// a distinct slog.Info "Registered <tool> tool (global)" line on
-// success and a slog.Warn "<tool> disabled: ..." on nil-skip; we grep
-// container logs for the success lines and fail on absence.
+// a distinct slog.Info "Registered <tool> tool" line on success and a
+// slog.Warn "<tool> disabled: ..." on nil-skip; we grep container logs
+// for the success lines and fail on absence.
 //
 // This is a lightweight substitute for a full tool-invocation e2e.
 // Exercising the tools through the LLM → dispatcher → executor chain
@@ -364,8 +364,8 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 // test belongs in a coordinator-flavored scenario (follow-up).
 func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.Result) error {
 	required := map[string]string{
-		"list_components": "Registered list_components tool (global)",
-		"monitor_flow":    "Registered monitor_flow tool (global)",
+		"list_components": "Registered list_components tool",
+		"monitor_flow":    "Registered monitor_flow tool",
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", "logs", s.config.AppContainer)
@@ -386,7 +386,7 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 		return fmt.Errorf(
 			"ADR-026 M2 tools not registered at startup: %v — "+
 				"check cmd/semstreams/main.go ToolDependencies and "+
-				"executors.RegisterAll wiring",
+				"executors.RegisterBuiltins wiring",
 			missing)
 	}
 

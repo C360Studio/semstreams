@@ -238,7 +238,7 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	}
 	logs := string(out)
 
-	const emitDiagMarker = "Registered emit_diagnosis tool (global)"
+	const emitDiagMarker = "Registered emit_diagnosis tool"
 	if !strings.Contains(logs, emitDiagMarker) {
 		return fmt.Errorf(
 			"emit_diagnosis not registered at startup: %q not found in logs — "+
