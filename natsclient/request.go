@@ -15,6 +15,13 @@ const DefaultRequestTimeout = 5 * time.Second
 // It publishes a message to the subject and waits for a response.
 // The timeout parameter controls how long to wait for a response.
 // If timeout is 0, DefaultRequestTimeout is used.
+//
+// Request is the right call for QUERIES (read paths) — failures
+// surface to the caller, who decides whether to retry, fall back, or
+// raise an error. For MUTATIONS use RequestWithRetry instead;
+// without retry, transient "no responders" errors during startup
+// races / responder restarts cause silent data loss. See
+// docs/operations/07-nats-request-retry.md for the full rule.
 func (c *Client) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	c.mu.RLock()
 	conn := c.conn
@@ -242,6 +249,13 @@ func DefaultRetryConfig() RetryConfig {
 // RequestWithRetry performs a request with configurable retry on failure.
 // This is useful for handling transient "no responders" errors in NATS
 // where the subscriber may not be ready when the request arrives.
+//
+// Use this for MUTATIONS (write paths) where the responder is
+// idempotent — the retry path may re-deliver the same request if the
+// first attempt's response gets lost, so the responder must converge
+// to the same state on duplicate receives. For QUERIES use Request
+// instead; retrying on timeout masks hung responders as latency. See
+// docs/operations/07-nats-request-retry.md for the full rule.
 func (c *Client) RequestWithRetry(
 	ctx context.Context,
 	subject string,
