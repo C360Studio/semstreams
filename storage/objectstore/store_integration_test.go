@@ -345,8 +345,13 @@ func TestIntegration_BaseMessageRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, msgBytes, retrieved, "stored bytes should match original - no base64 encoding")
 
-	// 6. Verify we can unmarshal the retrieved data back to BaseMessage
-	dec := payloadbuiltins.NewTestDecoder(t)
+	// 6. Verify we can unmarshal the retrieved data back to BaseMessage.
+	// The test stores a content.document.v1 payload, which lives in the
+	// example processors and is NOT in payloadbuiltins.Register —
+	// register it explicitly into a per-test registry.
+	reg := payloadbuiltins.NewTestRegistry(t)
+	require.NoError(t, document.RegisterPayloads(reg))
+	dec := message.NewDecoder(reg)
 	parsedMsg, err := dec.Decode(retrieved)
 	require.NoError(t, err, "should be able to unmarshal stored data as BaseMessage")
 
@@ -815,6 +820,13 @@ func TestIntegration_ExtractTextFields_KeyMapping(t *testing.T) {
 	store, err := objectstore.NewStoreWithConfig(ctx, natsClient, config)
 	require.NoError(t, err)
 	defer store.Close()
+
+	// FetchContent's BaseMessage-extraction fallback needs a decoder
+	// that knows about content.document.v1 — register the document
+	// example explicitly into a per-test registry.
+	reg := payloadbuiltins.NewTestRegistry(t)
+	require.NoError(t, document.RegisterPayloads(reg))
+	store.SetDecoder(message.NewDecoder(reg))
 
 	// Create a Document with description field
 	// Document.ContentFields() returns {"abstract": "description", "body": "body", "title": "title"}

@@ -145,8 +145,9 @@ func TestIntegration_ModelCompleteResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:    natsClient,
-		ModelRegistry: registry,
+		NATSClient:      natsClient,
+		ModelRegistry:   registry,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticmodel.NewComponent(rawConfig, deps)
@@ -296,8 +297,9 @@ func TestIntegration_ModelToolCallResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:    natsClient,
-		ModelRegistry: registry,
+		NATSClient:      natsClient,
+		ModelRegistry:   registry,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticmodel.NewComponent(rawConfig, deps)
@@ -481,8 +483,9 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:    natsClient,
-		ModelRegistry: registry,
+		NATSClient:      natsClient,
+		ModelRegistry:   registry,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticmodel.NewComponent(rawConfig, deps)

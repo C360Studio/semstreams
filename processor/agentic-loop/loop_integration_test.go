@@ -140,7 +140,8 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)
@@ -298,7 +299,8 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)
@@ -466,7 +468,8 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)
@@ -612,7 +615,8 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)
@@ -717,7 +721,8 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)

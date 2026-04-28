@@ -77,7 +77,15 @@ func (w *graphWriter) writeTriple(ctx context.Context, triple message.Triple) er
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	respData, err := w.natsClient.Request(ctx, graphMutationSubject, reqData, graphWriterTimeout)
+	// RequestWithRetry handles transient "no responders" errors that
+	// happen when graph-gateway is restarting or the subscription
+	// hasn't propagated to the NATS server yet. Without retry, a
+	// single trajectory step on the boundary of a gateway restart
+	// silently loses its triples — matches the pre-existing flake on
+	// TestWriteTrajectorySteps_NoContentStore_StillWritesTriples
+	// when -race + many test containers in flight delay subscription
+	// readiness past the per-request timeout.
+	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("NATS request failed: %w", err)
 	}

@@ -144,7 +144,8 @@ func TestIntegration_ToolExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -253,7 +254,8 @@ func TestIntegration_ToolAllowedList(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -366,7 +368,8 @@ func TestIntegration_ToolTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -475,7 +478,8 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -620,7 +624,8 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -727,8 +732,9 @@ func TestIntegration_SharedRegistryTools(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:   natsClient,
-		ToolRegistry: sharedReg,
+		NATSClient:      natsClient,
+		ToolRegistry:    sharedReg,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)
@@ -807,8 +813,9 @@ func TestIntegration_SharedRegistryExecution(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient:   natsClient,
-		ToolRegistry: sharedReg,
+		NATSClient:      natsClient,
+		ToolRegistry:    sharedReg,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	comp, err := agentictools.NewComponent(rawConfig, deps)

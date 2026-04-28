@@ -106,7 +106,8 @@ func TestIntegration_FieldRenaming(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	// Create JSON map processor
@@ -217,7 +218,8 @@ func TestIntegration_StringTransforms(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	mapComp, err := jsonmapprocessor.NewProcessor(rawConfig, deps)
@@ -318,7 +320,8 @@ func TestIntegration_AddRemoveFields(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	mapComp, err := jsonmapprocessor.NewProcessor(rawConfig, deps)
@@ -429,7 +432,8 @@ func TestIntegration_CombinedTransformations(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	mapComp, err := jsonmapprocessor.NewProcessor(rawConfig, deps)

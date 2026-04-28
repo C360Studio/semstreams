@@ -109,7 +109,8 @@ func TestIntegration_JSONFilterProcessing(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	// Create JSON filter processor
@@ -234,7 +235,8 @@ func TestIntegration_MultipleRules(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	filterComp, err := jsonfilter.NewProcessor(rawConfig, deps)
@@ -340,7 +342,8 @@ func TestIntegration_ContainsOperator(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	filterComp, err := jsonfilter.NewProcessor(rawConfig, deps)
@@ -442,7 +445,8 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 
 	deps := component.Dependencies{
-		NATSClient: natsClient,
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	}
 
 	filterComp, err := jsonfilter.NewProcessor(rawConfig, deps)
