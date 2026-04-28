@@ -611,34 +611,66 @@ Use the `model` field in requests to route to specific endpoints.
 
 Each component exposes Prometheus metrics:
 
+All metrics use the `semstreams_` namespace.
+
 **agentic-loop**:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `agentic_loop_started_total` | counter | role | Loops started |
-| `agentic_loop_completed_total` | counter | role, status | Loops completed |
-| `agentic_loop_iterations_total` | counter | loop_id | Iterations per loop |
-| `agentic_loop_duration_seconds` | histogram | role | Loop duration |
-| `agentic_loop_pending_tools` | gauge | loop_id | Currently pending tool calls |
+| `semstreams_agentic_loop_loops_created_total` | counter | — | Loops created |
+| `semstreams_agentic_loop_loops_completed_total` | counter | — | Loops completed successfully |
+| `semstreams_agentic_loop_loops_failed_total` | counter | reason | Loops that failed (reason: max_iterations, length_truncated, model_error, etc.) |
+| `semstreams_agentic_loop_loops_timeout_total` | counter | — | Loops that timed out |
+| `semstreams_agentic_loop_active_loops` | gauge | — | Currently active loops |
+| `semstreams_agentic_loop_iterations_total` | counter | — | Total iterations across all loops |
+| `semstreams_agentic_loop_iterations_per_loop` | histogram | — | Distribution of iterations per loop |
+| `semstreams_agentic_loop_duration_seconds` | histogram | status | Loop duration |
+| `semstreams_agentic_loop_trajectory_steps_total` | counter | step_type | Trajectory steps (step_type: model_request, model_response, tool_call, context_compaction, context_compaction_retry) |
+| `semstreams_agentic_loop_tool_calls_dispatched_total` | counter | tool_name | **Per-tool-call dispatch count** — what the loop emitted to `tool.execute` |
+| `semstreams_agentic_loop_tool_results_received_total` | counter | status | Tool results received (status: success, error) |
+| `semstreams_agentic_loop_tool_results_truncated_total` | counter | — | Tool results truncated for size before context insertion |
+| `semstreams_agentic_loop_request_tokens_in` | histogram | — | Prompt tokens per LLM request |
+| `semstreams_agentic_loop_request_tokens_out` | histogram | — | Completion tokens per LLM request |
+| `semstreams_agentic_loop_context_utilization` | gauge | loop_id | Context utilization (0.0-1.0) |
+| `semstreams_agentic_loop_context_compactions_total` | counter | — | Context compaction events |
+| `semstreams_agentic_loop_context_compaction_tokens_saved` | histogram | — | Tokens saved per compaction |
 
 **agentic-model**:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `agentic_model_requests_total` | counter | endpoint, status | Requests to LLM |
-| `agentic_model_tokens_in_total` | counter | endpoint | Input tokens |
-| `agentic_model_tokens_out_total` | counter | endpoint | Output tokens |
-| `agentic_model_latency_seconds` | histogram | endpoint | Request latency |
-| `agentic_model_retries_total` | counter | endpoint | Retry attempts |
-| `semstreams_agentic_model_rate_limit_hits_total` | counter | model | HTTP 429 responses received |
+| `semstreams_agentic_model_requests_total` | counter | model, status | Requests to LLM |
+| `semstreams_agentic_model_request_duration_seconds` | histogram | model | Request latency |
+| `semstreams_agentic_model_requests_in_flight` | gauge | model | Currently in-flight requests |
+| `semstreams_agentic_model_errors_total` | counter | model, error_type | Model errors broken down by type |
+| `semstreams_agentic_model_tokens_total` | counter | model, type | Token usage (type: `prompt` or `completion`) |
+| `semstreams_agentic_model_tool_calls_returned` | histogram | model | Distribution of tool_calls per response |
+| `semstreams_agentic_model_stream_chunks_total` | counter | model | Streaming chunks received |
+| `semstreams_agentic_model_stream_ttft_seconds` | histogram | model | Time-to-first-token for streaming |
+| `semstreams_agentic_model_rate_limit_hits_total` | counter | model | HTTP 429 responses |
+| `semstreams_agentic_model_rate_limit_retries_total` | counter | model | Retries after 429 |
+| `semstreams_agentic_model_length_truncations_total` | counter | model | Responses truncated due to `finish_reason=length` |
+| `semstreams_agentic_model_endpoint_health_state` | gauge | endpoint, state | Circuit-breaker state (state: closed, open, half_open) |
 
 **agentic-tools**:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `agentic_tools_executed_total` | counter | tool_name, status | Tool executions |
-| `agentic_tools_duration_seconds` | histogram | tool_name | Execution duration |
-| `agentic_tools_blocked_total` | counter | tool_name | Blocked by allowlist |
+| `semstreams_agentic_tools_executions_total` | counter | tool_name, status | **Per-tool-call execution count** — status: success, error, timeout. Sum across statuses for total executions per tool; filter `{status="success"}` for the success rate. |
+| `semstreams_agentic_tools_execution_duration_seconds` | histogram | tool_name | Execution latency |
+| `semstreams_agentic_tools_errors_total` | counter | tool_name, error_type | Tool errors broken down by type (timeout, not_found, invalid_args, permission, network, external, internal, unknown) |
+| `semstreams_agentic_tools_timeout_total` | counter | tool_name | Tool execution timeouts |
+| `semstreams_agentic_tools_filtered_total` | counter | tool_name, reason | Tool calls filtered/blocked (reason: not_allowed, approval_required, approved_bypass) |
+| `semstreams_agentic_tools_retries_total` | counter | tool_name, error_kind | Tool retries triggered (per `Config.ToolRetries` policy) |
+| `semstreams_agentic_tools_retries_exhausted_total` | counter | tool_name | Tool retry budgets exhausted without success |
+| `semstreams_agentic_tools_registered` | gauge | — | Number of registered tools |
+
+Per-tool-call counts live in **two places** with complementary
+semantics: `agentic_loop_tool_calls_dispatched_total{tool_name}`
+counts what the loop *attempted* to run; `agentic_tools_executions_total{tool_name, status}`
+counts what the executor *actually* ran. The difference between them
+tells you what got rejected before execution (allowlist, approval
+gate, dispatch errors).
 
 ### Trajectory Analysis
 

@@ -224,15 +224,33 @@ curl http://localhost:8080/api/agent/loops/loop_abc123
 
 ### Via Metrics
 
-Prometheus metrics at `:9090/metrics`:
+Prometheus metrics at `:9090/metrics`. All metrics use the
+`semstreams_` namespace. A few you'll reach for first:
 
 ```
-agentic_loop_started_total{role="general"}
-agentic_loop_completed_total{role="general",status="complete"}
-agentic_loop_iterations_total{loop_id="abc123"}
-agentic_model_tokens_in_total{endpoint="openai"}
-agentic_tools_executed_total{tool_name="query_entity"}
+# Loop lifecycle
+semstreams_agentic_loop_loops_created_total
+semstreams_agentic_loop_loops_completed_total
+semstreams_agentic_loop_loops_failed_total{reason="length_truncated"}
+semstreams_agentic_loop_iterations_total
+
+# Per-tool-call counts (the metric to watch for "did this tool run
+# and how often"). Two complementary views:
+#   - dispatched_total counts what the loop emitted to tool.execute
+#   - executions_total counts what the executor actually ran (status
+#     ∈ {success, error, timeout})
+# Sum across statuses for "any execution"; filter on
+# {status="success"} for the success rate.
+semstreams_agentic_loop_tool_calls_dispatched_total{tool_name="query_entity"}
+semstreams_agentic_tools_executions_total{tool_name="query_entity",status="success"}
+
+# Token spend
+semstreams_agentic_model_tokens_total{model="qwen-32b",type="prompt"}
+semstreams_agentic_model_tokens_total{model="qwen-32b",type="completion"}
 ```
+
+For the full metrics catalogue see
+[`docs/advanced/08-agentic-components.md#metrics`](../advanced/08-agentic-components.md#metrics).
 
 ## Writing Custom Tools
 
