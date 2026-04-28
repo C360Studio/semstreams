@@ -71,14 +71,6 @@ func (e *ValidationError) Error() string {
 	return "validation error: " + e.Field + " " + e.Message
 }
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("rule.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers the workflow-trigger payload type with the
 // supplied registry. Called from payloadbuiltins.Register at process
 // bootstrap.

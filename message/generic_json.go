@@ -22,14 +22,6 @@ func buildGenericJSONPayload(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("message.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers the GenericJSON payload type (core.json.v1)
 // with the supplied registry. Called from payloadbuiltins.Register at
 // process bootstrap.

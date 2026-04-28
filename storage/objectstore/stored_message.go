@@ -85,14 +85,6 @@ func buildStoredMessage(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("objectstore.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers the StoredMessage payload type with the
 // supplied registry. Called from payloadbuiltins.Register at process
 // bootstrap.

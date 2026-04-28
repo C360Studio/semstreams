@@ -7,14 +7,6 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("github-pr-workflow.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers all GitHub PR workflow payload types
 // with the supplied registry. Called by binaries that load this
 // example workflow.

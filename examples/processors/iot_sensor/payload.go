@@ -81,17 +81,6 @@ func buildSensorReading(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// init registers the SensorReading payload type with the global PayloadRegistry.
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself. Examples
-// demonstrate the recipe downstream consumers follow when adding
-// custom payload packages.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("iot_sensor.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers the SensorReading payload type
 // (iot.sensor.v1) with the supplied registry. Called by binaries that
 // want to load this example processor's payload — typically

@@ -35,20 +35,6 @@ const (
 	defaultConfidence = 1.0
 )
 
-// payloadRegistrationErrors collects errors from init() for deferred
-// handling. CheckPayloadRegistration() returns the aggregate. Used
-// only by the init() path; explicit RegisterPayloads(reg) callers
-// receive the error directly.
-var payloadRegistrationErrors []error
-
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		payloadRegistrationErrors = append(payloadRegistrationErrors, err)
-	}
-}
-
 // Builder functions for document payload types
 
 func buildDocument(fields map[string]any) (any, error) {
@@ -317,13 +303,4 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// CheckPayloadRegistration returns any errors that occurred during payload registration.
-// Call this during component initialization to verify all payloads registered correctly.
-func CheckPayloadRegistration() error {
-	if len(payloadRegistrationErrors) == 0 {
-		return nil
-	}
-	return fmt.Errorf("payload registration errors: %v", payloadRegistrationErrors)
 }

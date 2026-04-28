@@ -7,17 +7,6 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
-// init populates the package-level global registry for transitional
-// compat with code paths that still resolve through
-// payloadregistry.Create at runtime (notably BaseMessage.UnmarshalJSON
-// pre-C3). Both init() and the global are removed in C4 once every
-// caller has been migrated to use a constructor-injected registry.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("agentic.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers all agentic payload types with the
 // supplied registry. Called from payloadbuiltins.Register during
 // process bootstrap. Returns aggregated errors via errors.Join so

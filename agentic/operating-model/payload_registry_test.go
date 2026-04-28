@@ -8,22 +8,24 @@ import (
 )
 
 func TestRegistry_LayerApprovedTypeExists(t *testing.T) {
-	p := payloadregistry.Create(Domain, CategoryLayerApproved, SchemaVersion)
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	p := reg.Create(Domain, CategoryLayerApproved, SchemaVersion)
 	if p == nil {
-		t.Fatalf("CreatePayload returned nil; LayerApproved not registered")
+		t.Fatalf("Create returned nil; LayerApproved not registered")
 	}
 	if _, ok := p.(*LayerApproved); !ok {
-		t.Fatalf("CreatePayload returned %T, want *LayerApproved", p)
+		t.Fatalf("Create returned %T, want *LayerApproved", p)
 	}
 }
 
 func TestRegistry_ProfileContextTypeExists(t *testing.T) {
-	p := payloadregistry.Create(Domain, CategoryProfileContext, SchemaVersion)
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	p := reg.Create(Domain, CategoryProfileContext, SchemaVersion)
 	if p == nil {
-		t.Fatalf("CreatePayload returned nil; ProfileContext not registered")
+		t.Fatalf("Create returned nil; ProfileContext not registered")
 	}
 	if _, ok := p.(*ProfileContext); !ok {
-		t.Fatalf("CreatePayload returned %T, want *ProfileContext", p)
+		t.Fatalf("Create returned %T, want *ProfileContext", p)
 	}
 }
 
@@ -60,8 +62,10 @@ func TestRegistry_BaseMessageRoundTripLayerApproved(t *testing.T) {
 func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
 	// Documents the contract: attempting to re-register an already-registered
 	// message type returns a validation error rather than succeeding silently.
-	// init() panics on this error by design (see registerOrPanic).
-	err := payloadregistry.Register(&payloadregistry.Registration{
+	// Build a registry, register payloads once via the package's
+	// RegisterPayloads, then attempt a manual duplicate registration.
+	reg := payloadregistry.NewWithSubset(t, RegisterPayloads)
+	err := reg.Register(&payloadregistry.Registration{
 		Domain:      Domain,
 		Category:    CategoryLayerApproved,
 		Version:     SchemaVersion,
@@ -69,7 +73,7 @@ func TestRegistry_DuplicateRegistrationErrors(t *testing.T) {
 		Factory:     func() any { return &LayerApproved{} },
 	})
 	if err == nil {
-		t.Fatalf("second RegisterPayload returned nil; expected duplicate error")
+		t.Fatalf("second Register returned nil; expected duplicate error")
 	}
 }
 

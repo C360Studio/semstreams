@@ -5,12 +5,9 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/types"
-
-	// Import packages to trigger their init() payload registrations
-	_ "github.com/c360studio/semstreams/agentic"
-	_ "github.com/c360studio/semstreams/processor/agentic-dispatch"
 )
 
 // schemaProvider matches message.Payload's Schema() method
@@ -18,21 +15,33 @@ type schemaProvider interface {
 	Schema() types.Type
 }
 
+// contractRegistry returns a fresh registry populated with all
+// first-party payload registrations. Pre-beta.18 this test relied on
+// blank imports of agentic + agentic-dispatch to trigger init() side
+// effects on a process-wide singleton; post-beta.18 the singleton is
+// gone and the test wires its own registry explicitly via
+// payloadbuiltins.NewTestRegistry.
+func contractRegistry(t *testing.T) *payloadregistry.Registry {
+	t.Helper()
+	return payloadbuiltins.NewTestRegistry(t)
+}
+
 // TestSchemaRegistrationConsistency verifies that all registered payloads
 // have Schema() methods that return values matching their registration.
 // This test catches mismatches that would cause deserialization failures.
 func TestSchemaRegistrationConsistency(t *testing.T) {
-	payloads := payloadregistry.Global().List()
+	reg := contractRegistry(t)
+	payloads := reg.List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
-	for msgType, reg := range payloads {
+	for msgType, registration := range payloads {
 		t.Run(msgType, func(t *testing.T) {
 			// Create instance using factory
-			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
+			payload := reg.Create(registration.Domain, registration.Category, registration.Version)
 			if payload == nil {
-				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
+				t.Fatalf("Create returned nil for registered type %s", msgType)
 			}
 
 			// Check if payload implements Schema()
@@ -44,14 +53,14 @@ func TestSchemaRegistrationConsistency(t *testing.T) {
 
 			// Verify Schema() matches registration
 			schema := sp.Schema()
-			if schema.Domain != reg.Domain {
-				t.Errorf("Schema().Domain = %q, want %q", schema.Domain, reg.Domain)
+			if schema.Domain != registration.Domain {
+				t.Errorf("Schema().Domain = %q, want %q", schema.Domain, registration.Domain)
 			}
-			if schema.Category != reg.Category {
-				t.Errorf("Schema().Category = %q, want %q", schema.Category, reg.Category)
+			if schema.Category != registration.Category {
+				t.Errorf("Schema().Category = %q, want %q", schema.Category, registration.Category)
 			}
-			if schema.Version != reg.Version {
-				t.Errorf("Schema().Version = %q, want %q", schema.Version, reg.Version)
+			if schema.Version != registration.Version {
+				t.Errorf("Schema().Version = %q, want %q", schema.Version, registration.Version)
 			}
 		})
 	}
@@ -64,17 +73,20 @@ func TestSchemaRegistrationConsistency(t *testing.T) {
 // have required fields. This is expected and correct behavior - the contract
 // enforcement prevents invalid messages from being serialized.
 func TestBaseMessageRoundTrip(t *testing.T) {
-	payloads := payloadregistry.Global().List()
+	reg := contractRegistry(t)
+	payloads := reg.List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
-	for msgType, reg := range payloads {
+	dec := message.NewDecoder(reg)
+
+	for msgType, registration := range payloads {
 		t.Run(msgType, func(t *testing.T) {
 			// Create a payload instance
-			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
+			payload := reg.Create(registration.Domain, registration.Category, registration.Version)
 			if payload == nil {
-				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
+				t.Fatalf("Create returned nil for registered type %s", msgType)
 			}
 
 			// Cast to message.Payload
@@ -86,9 +98,9 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 
 			// Create BaseMessage
 			msgTypeStruct := types.Type{
-				Domain:   reg.Domain,
-				Category: reg.Category,
-				Version:  reg.Version,
+				Domain:   registration.Domain,
+				Category: registration.Category,
+				Version:  registration.Version,
 			}
 			original := message.NewBaseMessage(msgTypeStruct, msgPayload, "contract-test")
 
@@ -101,10 +113,8 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 				return
 			}
 
-			// Unmarshal back via the global registry (the blank imports
-			// at the top of this file trigger init() which populates
-			// payloadregistry.Global()).
-			restored, err := message.NewDecoder(payloadregistry.Global()).Decode(data)
+			// Unmarshal back via the per-test registry-bound Decoder.
+			restored, err := dec.Decode(data)
 			if err != nil {
 				t.Fatalf("Failed to unmarshal BaseMessage: %v\nJSON: %s", err, string(data))
 			}
@@ -125,16 +135,17 @@ func TestBaseMessageRoundTrip(t *testing.T) {
 // TestPayloadValidation verifies that newly created payloads from factories
 // pass validation (or fail with expected errors for required fields).
 func TestPayloadValidation(t *testing.T) {
-	payloads := payloadregistry.Global().List()
+	reg := contractRegistry(t)
+	payloads := reg.List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
-	for msgType, reg := range payloads {
+	for msgType, registration := range payloads {
 		t.Run(msgType, func(t *testing.T) {
-			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
+			payload := reg.Create(registration.Domain, registration.Category, registration.Version)
 			if payload == nil {
-				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
+				t.Fatalf("Create returned nil for registered type %s", msgType)
 			}
 
 			msgPayload, ok := payload.(message.Payload)
@@ -152,16 +163,17 @@ func TestPayloadValidation(t *testing.T) {
 
 // TestPayloadMarshalJSON verifies that all registered payloads can marshal to JSON.
 func TestPayloadMarshalJSON(t *testing.T) {
-	payloads := payloadregistry.Global().List()
+	reg := contractRegistry(t)
+	payloads := reg.List()
 	if len(payloads) == 0 {
 		t.Skip("No payloads registered")
 	}
 
-	for msgType, reg := range payloads {
+	for msgType, registration := range payloads {
 		t.Run(msgType, func(t *testing.T) {
-			payload := payloadregistry.Create(reg.Domain, reg.Category, reg.Version)
+			payload := reg.Create(registration.Domain, registration.Category, registration.Version)
 			if payload == nil {
-				t.Fatalf("CreatePayload returned nil for registered type %s", msgType)
+				t.Fatalf("Create returned nil for registered type %s", msgType)
 			}
 
 			msgPayload, ok := payload.(message.Payload)
@@ -173,9 +185,8 @@ func TestPayloadMarshalJSON(t *testing.T) {
 			// Test MarshalJSON doesn't panic
 			_, err := msgPayload.MarshalJSON()
 			if err != nil {
-				// Some payloads may fail to marshal when empty due to validation
-				// This is expected behavior - log but don't fail
-				t.Logf("Payload %s MarshalJSON error (may be expected for empty payload): %v", msgType, err)
+				// Validation failures are expected for empty payloads
+				t.Logf("MarshalJSON returned error for empty payload (expected): %v", err)
 			}
 		})
 	}

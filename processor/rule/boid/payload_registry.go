@@ -7,14 +7,6 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("boid.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers boid payload types (AgentPosition,
 // SteeringSignal) with the supplied registry. Called from
 // payloadbuiltins.Register at process bootstrap.

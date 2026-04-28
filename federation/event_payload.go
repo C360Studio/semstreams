@@ -67,10 +67,3 @@ func RegisterPayloads(reg *payloadregistry.Registry, domain string) error {
 		Factory:     func() any { return &EventPayload{} },
 	})
 }
-
-// RegisterPayload preserved as a transitional alias to the global —
-// downstream products that haven't migrated keep working through C4.
-// Deprecated in beta.18; use RegisterPayloads(reg, domain) instead.
-func RegisterPayload(domain string) error {
-	return RegisterPayloads(payloadregistry.Global(), domain)
-}

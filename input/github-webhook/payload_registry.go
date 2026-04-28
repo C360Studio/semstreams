@@ -7,14 +7,6 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
-// init populates the package-level global registry for transitional
-// compat. Removed in C4 along with the global itself.
-func init() {
-	if err := RegisterPayloads(payloadregistry.Global()); err != nil {
-		panic("github-webhook.init: " + err.Error())
-	}
-}
-
 // RegisterPayloads registers github webhook payload types
 // (IssueEvent, PREvent, ReviewEvent, CommentEvent) with the supplied
 // registry. Called from payloadbuiltins.Register at process bootstrap.
