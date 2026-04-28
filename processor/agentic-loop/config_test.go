@@ -209,8 +209,8 @@ func TestDefaultConfig(t *testing.T) {
 	// Verify output ports (agent.created + agent.failed declared as explicit
 	// output ports so downstream products can override their subjects via
 	// port config, matching the existing treatment of agent.request etc).
-	if len(cfg.Ports.Outputs) != 6 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 6", len(cfg.Ports.Outputs))
+	if len(cfg.Ports.Outputs) != 7 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 7", len(cfg.Ports.Outputs))
 	}
 
 	// Verify KV ports

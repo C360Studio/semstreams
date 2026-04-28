@@ -3,10 +3,38 @@ package agentic
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
 )
+
+// ApprovalRequiredPrefix is prepended to rejection reasons when a tool
+// requires human approval. The agentic-loop detects this prefix and
+// transitions the loop to LoopStateAwaitingApproval instead of storing
+// a normal error result.
+const ApprovalRequiredPrefix = "approval_required: "
+
+// ApprovalRejectedPrefix is prepended to rejection reasons synthesised
+// by the loop after an ApprovalResponse with Decision == reject. The
+// distinct prefix prevents the loop from re-triggering the
+// awaiting-approval branch when the rejection result flows through
+// HandleToolResult.
+const ApprovalRejectedPrefix = "approval_rejected: "
+
+// IsApprovalRequired reports whether a rejection reason indicates the
+// tool needs human approval rather than being a genuine error.
+func IsApprovalRequired(reason string) bool {
+	return strings.HasPrefix(reason, ApprovalRequiredPrefix)
+}
+
+// IsApprovalRejected reports whether a rejection reason originates
+// from a denied ApprovalResponse. Distinct from IsApprovalRequired so
+// the loop can flow these through normally without re-entering the
+// awaiting-approval branch.
+func IsApprovalRejected(reason string) bool {
+	return strings.HasPrefix(reason, ApprovalRejectedPrefix)
+}
 
 // ApprovalPendingEvent is published by agentic-loop when a tool call
 // is gated by Config.ApprovalRequired and the loop has transitioned to

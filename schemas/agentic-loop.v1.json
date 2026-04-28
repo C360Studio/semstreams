@@ -5,6 +5,11 @@
   "title": "agentic-loop Configuration",
   "description": "Orchestrates agentic loops with tool calls, state management, and trajectory tracking",
   "properties": {
+    "approval_timeout": {
+      "type": "string",
+      "description": "Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely",
+      "category": "advanced"
+    },
     "boid_enabled": {
       "type": "boolean",
       "description": "Enable Boid-style agent coordination (position tracking and steering signals)",

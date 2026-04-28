@@ -27,6 +27,7 @@ type Config struct {
 	TrajectoryDetail     string                `json:"trajectory_detail,omitempty" schema:"type:string,description:Trajectory detail level: summary (default) or full,default:summary,category:advanced"`
 	ContentBucket        string                `json:"content_bucket,omitempty" schema:"type:string,description:NATS ObjectStore bucket for trajectory step content (tool results and model responses),default:AGENT_CONTENT,category:advanced"`
 	TrajectoryCacheTTL   string                `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
+	ApprovalTimeoutStr   string                `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
 	Consumer             ConsumerConfig        `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context              ContextConfig         `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
 	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
@@ -89,6 +90,17 @@ func (c Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("trajectory_detail must be 'summary' or 'full'"), "Config", "Validate", "check trajectory_detail")
 	}
 
+	// Validate approval timeout (empty is allowed — means wait forever)
+	if strings.TrimSpace(c.ApprovalTimeoutStr) != "" {
+		d, err := time.ParseDuration(c.ApprovalTimeoutStr)
+		if err != nil {
+			return errs.WrapInvalid(err, "Config", "Validate", "parse approval_timeout format")
+		}
+		if d < 0 {
+			return errs.WrapInvalid(fmt.Errorf("approval_timeout must be non-negative"), "Config", "Validate", "check approval_timeout value")
+		}
+	}
+
 	// Validate consumer config
 	if err := c.Consumer.Validate(); err != nil {
 		return err
@@ -96,6 +108,20 @@ func (c Config) Validate() error {
 
 	// Validate context config
 	return c.Context.Validate()
+}
+
+// ApprovalTimeout returns the parsed duration for ApprovalTimeoutStr.
+// Returns zero (wait indefinitely) when unset or unparseable; the
+// validation step is the safety net for malformed input.
+func (c Config) ApprovalTimeout() time.Duration {
+	if c.ApprovalTimeoutStr == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.ApprovalTimeoutStr)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // Validate validates the context configuration.
@@ -305,6 +331,13 @@ func DefaultConfig() Config {
 					Subject:     "agent.context.compaction.*",
 					StreamName:  "AGENT",
 					Description: "Context compaction events (JetStream)",
+				},
+				{
+					Name:        "agent.approval_pending",
+					Type:        "jetstream",
+					Subject:     "agent.approval_pending.*",
+					StreamName:  "AGENT",
+					Description: "Tool calls awaiting human approval (JetStream)",
 				},
 			},
 			KVWrite: []component.PortDefinition{

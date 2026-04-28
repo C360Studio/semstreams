@@ -2,20 +2,22 @@ package agentictools
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
 )
 
-// ApprovalRequiredPrefix is prepended to rejection reasons when a tool requires
-// human approval. The agentic-loop detects this prefix and transitions the loop
-// to LoopStateAwaitingApproval instead of storing a normal error result.
-const ApprovalRequiredPrefix = "approval_required: "
+// ApprovalRequiredPrefix is an alias for agentic.ApprovalRequiredPrefix
+// retained so existing call sites in this package compile unchanged.
+// The canonical declaration lives in the agentic package because both
+// agentic-tools (filter producer) and agentic-loop (filter consumer)
+// need to reference it; keeping it here would force agentic-loop to
+// import a sibling component.
+const ApprovalRequiredPrefix = agentic.ApprovalRequiredPrefix
 
-// IsApprovalRequired checks whether a rejection reason indicates the tool
-// needs human approval rather than being a genuine error.
+// IsApprovalRequired delegates to agentic.IsApprovalRequired so this
+// package's existing test suite keeps working without churn.
 func IsApprovalRequired(reason string) bool {
-	return strings.HasPrefix(reason, ApprovalRequiredPrefix)
+	return agentic.IsApprovalRequired(reason)
 }
 
 // ApprovalFilter implements agentic.ToolCallFilter. It checks each tool call

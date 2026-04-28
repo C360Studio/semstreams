@@ -1054,6 +1054,12 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 			slog.String("error", addErr.Error()))
 	}
 
+	// Handle approval gating: pause on first approval_required result,
+	// absorb sibling results that land afterward.
+	if h.checkApprovalGate(loopID, &entity, toolResult, &result) {
+		return result, nil
+	}
+
 	// Tool-initiated loop termination: the tool signals that no further iterations
 	// are needed (e.g., a terminal action like decompose, submit, approve).
 	// Content becomes the LoopCompletedEvent.Result.
@@ -1090,6 +1096,92 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	}
 
 	return result, nil
+}
+
+// checkApprovalGate implements the awaiting-approval branch logic
+// extracted from HandleToolResult. Returns true when the caller
+// should stop processing this result (either we just paused, or the
+// loop is already paused and this is a sibling result). Mutates
+// result.State and result.PublishedMessages when transitioning.
+func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) bool {
+	// If the loop is already awaiting approval, store the result and
+	// the trajectory step (done by caller) but stop here. Sibling
+	// tool results from the same batch can land after we paused on
+	// the first approval_required hit — they must not advance the
+	// loop or trigger the next model request. The pending approval
+	// handler drains PendingToolResults when the loop resumes.
+	if entity.State == agentic.LoopStateAwaitingApproval {
+		return true
+	}
+	// Approval-gated rejection: the agentic-tools approval filter
+	// returned an "approval_required: ..." error. Pause the loop,
+	// snapshot the call, and emit ApprovalPendingEvent so a
+	// product-layer UI can surface the request.
+	if !agentic.IsApprovalRequired(toolResult.Error) {
+		return false
+	}
+	pubMsg, err := h.gateForApproval(loopID, entity, toolResult)
+	if err != nil {
+		h.logger.Warn("failed to gate loop for approval",
+			slog.String("loop_id", loopID),
+			slog.String("call_id", toolResult.CallID),
+			slog.String("error", err.Error()))
+	} else if pubMsg != nil {
+		result.PublishedMessages = append(result.PublishedMessages, *pubMsg)
+	}
+	result.State = agentic.LoopStateAwaitingApproval
+	return true
+}
+
+// gateForApproval transitions the loop into LoopStateAwaitingApproval,
+// persists the pending call on the entity, clears any queued tool
+// calls (they'll be re-deliberated by the LLM after the human
+// responds), and builds the ApprovalPendingEvent for publication.
+// Returns the published message (or nil if event construction fails)
+// alongside any non-fatal error so the caller can decide whether to
+// surface it.
+func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {
+	toolName := h.loopManager.GetToolName(toolResult.CallID)
+	if toolName == "" {
+		// Fall back to the tool name on the result envelope when the
+		// LoopManager cache has been cleared (e.g., process restart).
+		toolName = toolResult.Name
+	}
+	args := h.loopManager.GetToolArguments(toolResult.CallID)
+
+	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
+		return nil, fmt.Errorf("begin awaiting approval: %w", err)
+	}
+
+	// Clear sibling tool calls queued behind this one. Once the human
+	// responds, the LLM will get a fresh round-trip with the
+	// approve/reject result and can decide whether to re-issue the
+	// other calls.
+	h.loopManager.ClearQueuedTools(loopID)
+
+	if err := h.loopManager.UpdateLoop(*entity); err != nil {
+		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
+	}
+
+	pending := &agentic.ApprovalPendingEvent{
+		LoopID:      loopID,
+		CallID:      toolResult.CallID,
+		ToolName:    toolName,
+		Arguments:   args,
+		Reason:      toolResult.Error,
+		RequestedAt: time.Now().UTC(),
+		Timeout:     h.config.ApprovalTimeout(),
+		TraceID:     toolResult.TraceID,
+	}
+	envelope := message.NewBaseMessage(pending.Schema(), pending, "agentic-loop")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("marshal approval pending event: %w", err)
+	}
+	return &PublishedMessage{
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID),
+		Data:    data,
+	}, nil
 }
 
 // buildToolTrajectoryStep constructs the tool_call trajectory step for a
