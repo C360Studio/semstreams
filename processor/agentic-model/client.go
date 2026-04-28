@@ -449,6 +449,12 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 		if err != nil {
 			// Mid-stream error — not retryable. Preserve any partial tokens
 			// the accumulator received before the connection died.
+			// Precedence: a transport error overrides any prior status
+			// the accumulator may have set, including length_truncated.
+			// This is intentional — partial state cannot be replayed once
+			// the connection died, and the caller needs to know the
+			// stream itself failed (Status="error") rather than that the
+			// model finished gracefully short.
 			resp := acc.toAgentResponse(requestID)
 			resp.Status = "error"
 			resp.Error = err.Error()
@@ -511,18 +517,20 @@ func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID s
 
 	choice := resp.Choices[0]
 
-	// Map finish reason to status
+	// Map finish reason to status. Uses the typed openai constants
+	// rather than string literals so future SDK churn / typo drift
+	// breaks at compile time.
 	response.FinishReason = string(choice.FinishReason)
 	switch choice.FinishReason {
-	case "stop":
+	case openai.FinishReasonStop:
 		response.Status = agentic.StatusComplete
-	case "length":
+	case openai.FinishReasonLength:
 		response.Status = agentic.StatusLengthTruncated
 		if c.logger != nil {
 			c.logger.Warn("model response truncated: finish_reason=length (max_tokens hit)",
 				"request_id", requestID)
 		}
-	case "tool_calls":
+	case openai.FinishReasonToolCalls:
 		response.Status = agentic.StatusToolCall
 	default:
 		response.Status = agentic.StatusComplete
@@ -535,14 +543,32 @@ func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID s
 		ReasoningContent: choice.Message.ReasoningContent,
 	}
 
-	// Convert tool calls if present
-	if len(choice.Message.ToolCalls) > 0 {
+	// Convert tool calls if present — but ONLY when the response
+	// wasn't truncated. Same rationale as the streaming path's
+	// toAgentResponse: a truncated response cannot be trusted to have
+	// complete tool-call arguments, and the malformed-args fallback
+	// below would silently substitute {} for unparseable args. Beta.2
+	// wired finish_reason=length to fail loudly for content responses;
+	// this preserves that contract for the tool-call path so the
+	// loop's truncation handler can decide whether to retry with
+	// compaction or fail with a diagnostic message.
+	if choice.FinishReason == openai.FinishReasonLength {
+		if len(choice.Message.ToolCalls) > 0 && c.logger != nil {
+			c.logger.Warn("response truncated mid-tool-call: dropping potentially-incomplete tool_calls",
+				"request_id", requestID,
+				"tool_calls_accumulated", len(choice.Message.ToolCalls),
+				"completion_tokens", resp.Usage.CompletionTokens)
+		}
+	} else if len(choice.Message.ToolCalls) > 0 {
 		response.Status = "tool_call"
 		toolCalls := make([]agentic.ToolCall, len(choice.Message.ToolCalls))
 		for i, tc := range choice.Message.ToolCalls {
 			// Parse arguments JSON — must never be nil or the replay
 			// path will marshal it as "null" (a string), which the
 			// Anthropic API rejects ("Input should be a valid dictionary").
+			// This branch is reserved for the genuine "model emitted
+			// broken JSON without truncation" case; truncation bails
+			// earlier above.
 			args := make(map[string]any)
 			if tc.Function.Arguments != "" {
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {

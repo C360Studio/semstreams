@@ -544,3 +544,46 @@ func TestStreamChatCompletion_NonStreamEndpoint(t *testing.T) {
 		t.Errorf("Content = %q, want non-stream", resp.Message.Content)
 	}
 }
+
+// TestStreamAccumulator_LengthTruncation_WithToolCalls is the
+// regression guard for beta.21's chunker fix: when finish_reason=length
+// arrives mid-tool-call, Status MUST stay "length_truncated" and
+// ToolCalls MUST be dropped. Previously, the unconditional
+// `resp.Status = "tool_call"` overwrite at toAgentResponse silently
+// lost the truncation signal and the malformed-arguments fallback
+// turned the partial tool call into a dispatch with empty args.
+func TestStreamAccumulator_LengthTruncation_WithToolCalls(t *testing.T) {
+	chunks := []string{
+		// Tool call starts with name + opening of the arguments JSON.
+		`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_trunc","type":"function","function":{"name":"big_tool","arguments":"{\"q"}}]}}]}`,
+		// Arguments continue, but max_tokens hits before the JSON closes.
+		`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"uery\":\"par"}}]}}]}`,
+		// finish_reason=length arrives — mid-arguments.
+		`{"id":"1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}`,
+		`{"id":"1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}}`,
+	}
+
+	server := sseServer(t, chunks)
+	defer server.Close()
+
+	client := newStreamingClient(t, server.URL)
+
+	resp, err := client.ChatCompletion(context.Background(), simpleRequest("req-trunc-tool"))
+	if err != nil {
+		t.Fatalf("ChatCompletion() error: %v", err)
+	}
+
+	if resp.Status != "length_truncated" {
+		t.Errorf("Status = %q, want %q (truncation signal must not be overwritten by tool_calls)",
+			resp.Status, "length_truncated")
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+	if resp.Message.ToolCalls != nil {
+		t.Errorf("ToolCalls = %+v, want nil (truncated tool calls must NOT dispatch)", resp.Message.ToolCalls)
+	}
+	if resp.TokenUsage.CompletionTokens != 4096 {
+		t.Errorf("CompletionTokens = %d, want 4096 (forensics preserved)", resp.TokenUsage.CompletionTokens)
+	}
+}

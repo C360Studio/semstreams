@@ -593,6 +593,89 @@ func TestChatCompletion_ResponseMapping(t *testing.T) {
 	}
 }
 
+// TestChatCompletion_LengthTruncation_WithToolCalls is the regression
+// guard for beta.21's chunker fix on the non-streaming path: when the
+// model returns finish_reason=length with tool_calls present (the
+// model started emitting a tool call but ran out of output budget
+// before the JSON closed), Status MUST stay "length_truncated" and
+// ToolCalls MUST be dropped. Previously, the unconditional
+// `response.Status = "tool_call"` overwrite at convertResponse silently
+// lost the truncation signal and the malformed-arguments fallback
+// turned the partial tool call into a dispatch with empty args.
+func TestChatCompletion_LengthTruncation_WithToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]any{
+			"id":      "chatcmpl-trunc-tool",
+			"object":  "chat.completion",
+			"created": 1677652288,
+			"model":   "gpt-4",
+			"choices": []map[string]any{
+				{
+					"index": 0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "",
+						"tool_calls": []map[string]any{
+							{
+								"id":   "call_trunc",
+								"type": "function",
+								"function": map[string]any{
+									"name": "big_tool",
+									// Truncated mid-arguments — JSON never closes.
+									"arguments": `{"query":"par`,
+								},
+							},
+						},
+					},
+					"finish_reason": "length",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     5,
+				"completion_tokens": 4096,
+				"total_tokens":      4101,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	endpoint := &model.EndpointConfig{
+		URL:       server.URL,
+		Model:     "gpt-4",
+		MaxTokens: 128000,
+	}
+
+	client, err := agenticmodel.NewClient(endpoint)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	resp, err := client.ChatCompletion(context.Background(), agentic.AgentRequest{
+		RequestID: "req-trunc-tool",
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "Test"}},
+		Model:     "gpt-4",
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() failed: %v", err)
+	}
+
+	if resp.Status != "length_truncated" {
+		t.Errorf("Status = %q, want %q (truncation signal must not be overwritten by tool_calls)",
+			resp.Status, "length_truncated")
+	}
+	if resp.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+	if resp.Message.ToolCalls != nil {
+		t.Errorf("ToolCalls = %+v, want nil (truncated tool calls must NOT dispatch)", resp.Message.ToolCalls)
+	}
+	if resp.TokenUsage.CompletionTokens != 4096 {
+		t.Errorf("CompletionTokens = %d, want 4096 (forensics preserved)", resp.TokenUsage.CompletionTokens)
+	}
+}
+
 func TestChatCompletion_ChatTemplateKwargs(t *testing.T) {
 	var capturedRequest map[string]any
 

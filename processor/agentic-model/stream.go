@@ -144,22 +144,40 @@ func (a *streamAccumulator) toAgentResponse(requestID string) agentic.AgentRespo
 		},
 	}
 
-	// Map finish reason to status
+	// Map finish reason to status. The "length" branch handles
+	// truncation in one place: set Status, log, and bail BEFORE the
+	// tool_calls conversion below — a truncated response cannot be
+	// trusted to have complete tool-call arguments (the JSON may
+	// have been cut mid-string, mid-escape, or mid-multi-byte UTF-8),
+	// and the malformed-arguments fallback would otherwise silently
+	// substitute an empty {} for unparseable args, turning a
+	// "truncated" signal into a "tool with empty input" silent
+	// dispatch. Beta.2 wired finish_reason=length to fail loudly for
+	// content responses; this preserves that contract for the tool-
+	// call path. The accumulated raw arguments live only in logs from
+	// here on; the loop's truncation handler decides whether to retry
+	// with compaction or fail with a diagnostic message.
 	resp.FinishReason = string(a.finishReason)
 	switch a.finishReason {
-	case "tool_calls":
+	case openai.FinishReasonToolCalls:
 		resp.Status = agentic.StatusToolCall
-	case "length":
+	case openai.FinishReasonLength:
 		resp.Status = agentic.StatusLengthTruncated
 		if a.logger != nil {
 			a.logger.Warn("streaming response truncated: finish_reason=length (max_tokens hit)",
 				"request_id", requestID)
+			if len(a.toolCalls) > 0 {
+				a.logger.Warn("streaming response truncated mid-tool-call: dropping potentially-incomplete tool_calls",
+					"request_id", requestID,
+					"tool_calls_accumulated", len(a.toolCalls),
+					"completion_tokens", a.completionTokens)
+			}
 		}
+		return resp
 	default:
 		resp.Status = agentic.StatusComplete
 	}
 
-	// Sort tool calls by index and convert to agentic types
 	if len(a.toolCalls) > 0 {
 		resp.Status = "tool_call"
 
@@ -177,6 +195,9 @@ func (a *streamAccumulator) toAgentResponse(requestID string) agentic.AgentRespo
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 					// Malformed arguments — fall back to empty object so the
 					// replay path never serializes "null" for tool_use input.
+					// This branch is now reserved for the genuine "model
+					// emitted broken JSON without truncation" case; the
+					// truncation case bails earlier above.
 					if a.logger != nil {
 						a.logger.Warn("malformed tool call arguments, falling back to empty object",
 							slog.String("tool_name", tc.Function.Name),
