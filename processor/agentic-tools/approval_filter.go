@@ -40,19 +40,31 @@ func NewApprovalFilter(approvalRequired []string) *ApprovalFilter {
 
 var _ agentic.ToolCallFilter = (*ApprovalFilter)(nil)
 
-// FilterToolCalls checks each call against the configured approval list.
+// FilterToolCalls checks each call against the configured approval
+// list. A call carrying a non-empty ApprovedBy is the explicit bypass
+// token: the loop only sets it when re-dispatching after a human
+// ApprovalResponse arrived, so we trust it and pass the call through
+// regardless of the gating list. Empty ApprovedBy means the call has
+// not been through approval and the gating list applies normally.
 func (f *ApprovalFilter) FilterToolCalls(_ string, calls []agentic.ToolCall) (agentic.ToolCallFilterResult, error) {
 	var result agentic.ToolCallFilterResult
 
 	for _, call := range calls {
-		if f.approvalSet[call.Name] {
-			result.Rejected = append(result.Rejected, agentic.ToolCallRejection{
-				Call:   call,
-				Reason: fmt.Sprintf("%sTool '%s' requires human approval before execution", ApprovalRequiredPrefix, call.Name),
-			})
-		} else {
+		if !f.approvalSet[call.Name] {
 			result.Approved = append(result.Approved, call)
+			continue
 		}
+		if call.ApprovedBy != "" {
+			// Loop-injected bypass after an ApprovalResponse —
+			// approver identity flows through into trajectory audit
+			// via the dispatched ToolCall envelope.
+			result.Approved = append(result.Approved, call)
+			continue
+		}
+		result.Rejected = append(result.Rejected, agentic.ToolCallRejection{
+			Call:   call,
+			Reason: fmt.Sprintf("%sTool '%s' requires human approval before execution", ApprovalRequiredPrefix, call.Name),
+		})
 	}
 
 	return result, nil
