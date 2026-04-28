@@ -205,6 +205,55 @@ After upgrading, the following should hold:
   pauses, and you must wire an approval UI (or an automated
   responder) to resolve it.
 
+## Security Model — IMPORTANT
+
+`ToolCall.ApprovedBy` is the bypass token the agentic-tools approval
+filter checks (`processor/agentic-tools/approval_filter.go`). The
+agent loop sets it only when re-dispatching a tool after a valid
+`ApprovalResponse`. **The filter trusts the field unconditionally.**
+This has a real consequence: any process with NATS publish rights
+to `tool.execute.>` can publish a forged `ToolCall{ApprovedBy:
+"x"}` and bypass every gated tool — the filter cannot tell a
+loop-injected re-dispatch from an external publisher.
+
+In a single-process deployment with no NATS auth scoping, the
+threat surface is "anything with NATS write rights to your stream."
+For most semstreams deployments today that's the deployment itself
+(every pod, every test harness left wired up).
+
+### What you should do
+
+- **Scope `tool.execute.>` writes via NATS auth.** Use NATS
+  accounts or stream-level publish permissions to allow only the
+  agentic-loop process(es) to publish on `tool.execute.>`. This
+  is the cleanest fix and the recommended posture for any
+  deployment where `approval_required` is part of the safety
+  boundary. NATS docs:
+  [Multi-Tenancy via Accounts](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/accounts).
+- **Tool-side defence in depth still applies.** The same advice
+  from the beta.18 known-limitation section is still correct:
+  if a tool genuinely must not run without human review, the
+  tool implementation itself should require an out-of-band
+  approval token (HMAC-signed, KV-cached, etc.) that the LLM
+  cannot mint. The framework's approval flow is a coordination
+  mechanism, not an authorization mechanism.
+- **Allowlist-scope the registered tools.** A tool that isn't in
+  `default_tools` cannot be invoked by an LLM, forged or not. If
+  the threat model includes a compromised LLM or an in-process
+  attacker, prefer "can't reach the tool at all" over "tool
+  rejects without approval token."
+
+### What's planned upstream (not in beta.19)
+
+A future tag will move the bypass decision off the wire payload.
+Likely shape: when the loop dispatches an approved re-execution
+it writes a one-shot KV token keyed by `call_id` into a framework-
+owned bucket; the executor (or a server-side filter wrapper) reads
+and consumes the token before running the tool. Forging
+`ApprovedBy` over the wire then has no effect because the executor
+ignores the field and trusts only the KV record. Out of scope for
+beta.19 because the surface change touches every executor.
+
 ## Out of Scope
 
 - The auto-reject timer. The `approval_timeout` config field is

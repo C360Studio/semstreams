@@ -3,6 +3,8 @@ package agenticloop_test
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -215,6 +217,89 @@ func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {
 	}
 	if len(result.PublishedMessages) != 0 {
 		t.Errorf("stale response should not publish messages, got %d", len(result.PublishedMessages))
+	}
+}
+
+// TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve is the
+// regression guard for M1 (go-reviewer 2026-04-28): two responses
+// for the same loop racing through HandleApprovalResponse must NOT
+// both pass the awaiting-approval check and both dispatch.
+// LoopManager.ResolveApprovalIfPending serialises the transition
+// out of awaiting_approval — exactly one caller wins, the rest get
+// an idempotent drop. For a safety feature this is load-bearing:
+// the gated tool must dispatch at most once per resolved approval.
+func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	loopID := gateLoopAtCall(t, handler, "call-race", "delete_rule", map[string]any{"rule_id": "rule-42"})
+
+	const n = 16
+	var wg sync.WaitGroup
+	var dispatchCount int64
+	var resultsMu sync.Mutex
+	var dispatchSubjects []string
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Half approve, half reject — the race guarantee must hold
+			// across mixed decisions too.
+			resp := agentic.ApprovalResponse{
+				LoopID:     loopID,
+				CallID:     "call-race",
+				ApprovedBy: "concurrent-approver",
+				DecidedAt:  time.Now().UTC(),
+			}
+			if i%2 == 0 {
+				resp.Decision = agentic.ApprovalDecisionApprove
+			} else {
+				resp.Decision = agentic.ApprovalDecisionReject
+				resp.Reason = "racing reject"
+			}
+			result, err := handler.HandleApprovalResponse(context.Background(), resp)
+			if err != nil {
+				t.Errorf("goroutine %d: %v", i, err)
+				return
+			}
+			resultsMu.Lock()
+			defer resultsMu.Unlock()
+			for _, msg := range result.PublishedMessages {
+				if strings.HasPrefix(msg.Subject, "tool.execute.") {
+					atomic.AddInt64(&dispatchCount, 1)
+					dispatchSubjects = append(dispatchSubjects, msg.Subject)
+				}
+			}
+			// Reject path turns into a synthetic rejection result that
+			// flows through HandleToolResult; on the winner it
+			// advances the loop and may publish agent.request. The
+			// losers see an empty result with state == awaiting_approval
+			// (mismatch ignored) or the resolved-prior state if they
+			// arrived after the winner committed.
+			//
+			// Either way the only resolution-side effect we care about
+			// is the at-most-one dispatch — see assertion below.
+		}(i)
+	}
+	wg.Wait()
+
+	// Across n concurrent responses for the SAME call_id, at most one
+	// must produce a tool.execute dispatch. If two winners
+	// double-dispatched we'd see ≥2 here, which is the bug.
+	if got := atomic.LoadInt64(&dispatchCount); got > 1 {
+		t.Errorf("concurrent responses produced %d tool.execute dispatches (want ≤1): %v", got, dispatchSubjects)
+	}
+
+	// And the loop must be out of awaiting_approval — exactly one
+	// resolver won, regardless of which decision it carried.
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	if entity.State == agentic.LoopStateAwaitingApproval {
+		t.Errorf("loop still awaiting_approval after %d concurrent responses", n)
+	}
+	if entity.PendingApproval != nil {
+		t.Errorf("PendingApproval not cleared after concurrent resolve: %+v", entity.PendingApproval)
 	}
 }
 

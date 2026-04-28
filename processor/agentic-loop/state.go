@@ -186,6 +186,44 @@ func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {
 	return nil
 }
 
+// ResolveApprovalIfPending atomically transitions the loop out of
+// LoopStateAwaitingApproval if and only if the supplied call_id
+// matches the currently pinned PendingApproval. Returns a snapshot
+// of the pending state (so the caller has the original tool name +
+// arguments + trace context for re-dispatch) plus a bool indicating
+// whether the resolve actually happened. A false return is the
+// idempotent drop case: the loop is no longer awaiting approval, or
+// the response targets a different call_id (typical when a
+// duplicate UI click races with an automated reject scheduler).
+//
+// This is the only path that should mutate PendingApproval +
+// State out of awaiting_approval after BeginAwaitingApproval. The
+// previous load → mutate → UpdateLoop pattern in
+// HandleApprovalResponse let two concurrent responses both pass
+// the awaiting-state check and both dispatch — for a safety
+// feature, that double-execution risk is unacceptable.
+func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.PendingApprovalState, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return agentic.PendingApprovalState{}, false, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "ResolveApprovalIfPending", "find loop")
+	}
+	if entity.State != agentic.LoopStateAwaitingApproval {
+		return agentic.PendingApprovalState{}, false, nil
+	}
+	if entity.PendingApproval == nil || entity.PendingApproval.CallID != callID {
+		return agentic.PendingApprovalState{}, false, nil
+	}
+
+	pending := *entity.PendingApproval
+	if err := entity.ResolveApproval(); err != nil {
+		return agentic.PendingApprovalState{}, false, errs.Wrap(err, "LoopManager", "ResolveApprovalIfPending", "resolve approval")
+	}
+	return pending, true, nil
+}
+
 // DeleteLoop deletes a loop entity and all associated tracking data.
 func (m *LoopManager) DeleteLoop(loopID string) error {
 	m.mu.Lock()

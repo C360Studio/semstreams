@@ -157,6 +157,49 @@ The approval flow is one layer. Treat it as part of a stack:
    `agent.approval_pending.>` give you three independent records
    of what happened.
 
+## Threat model
+
+The approval flow is a **coordination mechanism**, not an
+authorization mechanism. Understand what it does and does not
+defend against.
+
+**Defends against:** A confused or hallucinating LLM that emits a
+sensitive tool call. The gate stops the call from executing,
+surfaces it to a human, and only re-dispatches with an explicit
+approve/modify/reject decision. The audit trail records every
+gated action with the approver identity.
+
+**Does NOT defend against:** A process with NATS publish rights to
+`tool.execute.>` forging a `ToolCall{ApprovedBy: "x"}` envelope.
+The agentic-tools approval filter trusts a non-empty `ApprovedBy`
+unconditionally — it cannot tell a loop-injected re-dispatch from
+an external publisher. In a deployment where NATS auth doesn't
+scope `tool.execute.>` writes to the loop process specifically,
+any pod with cluster network access can bypass every gated tool.
+
+**What to do about it:**
+
+- **Scope `tool.execute.>` via NATS accounts or per-subject
+  publish permissions** so only agentic-loop processes can
+  publish there. This is the cleanest mitigation and the
+  recommended posture.
+- **For tools that genuinely must not run without authorization,
+  implement an out-of-band token at the tool layer.** The tool
+  refuses to execute without a token only the human-approval
+  flow can mint (HMAC signature, one-shot KV record, etc.).
+  This is what `feedback_approval_required_gap.md` recommended
+  before beta.19 shipped, and it's still the right answer when
+  the threat model includes a hostile in-cluster publisher.
+- **Don't register tools the LLM should never call at all.**
+  Allowlist scoping (`default_tools` / `publish_agent.tools`) is
+  always stronger than gating — a tool the agent can't see can't
+  be invoked, forged or not.
+
+A future framework release will move the bypass decision off the
+wire payload (likely a per-call_id one-shot KV token) so forging
+`ApprovedBy` has no effect. Until then, the deployment-side
+mitigations above are how you close the gap.
+
 ## Related
 
 - [migration-beta19.md](../operations/migration-beta19.md) — the

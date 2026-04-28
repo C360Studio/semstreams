@@ -16,46 +16,50 @@ import (
 // (reject). The component publishes any messages and persists the
 // loop state.
 //
-// Mismatches (loop not awaiting approval, call_id pinned to a
-// different tool, response.Validate() fails) return a defensive log
-// + a non-error empty result so duplicate or stale UI clicks don't
-// crash the loop.
+// The transition out of awaiting_approval happens atomically inside
+// LoopManager.ResolveApprovalIfPending. Two concurrent responses
+// (e.g., a human approve racing an automated reject scheduler) cannot
+// both pass the awaiting check — exactly one wins; the loser sees ok=
+// false and we treat it as a stale-response idempotent drop. This is
+// load-bearing for the safety claim: a sensitive tool must not
+// dispatch twice off two responses for the same call_id.
+//
+// Other mismatches (loop not found, response.Validate() fails) return
+// a defensive log + non-error empty result so duplicate or stale UI
+// clicks don't crash the loop.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (HandlerResult, error) {
 	if err := response.Validate(); err != nil {
 		return HandlerResult{}, errs.WrapInvalid(err, "agentic-loop", "HandleApprovalResponse", "validate response")
 	}
 
 	loopID := response.LoopID
-	entity, err := h.GetLoop(loopID)
+
+	pending, ok, err := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
 	if err != nil {
 		return HandlerResult{}, err
 	}
-
-	if entity.State != agentic.LoopStateAwaitingApproval {
-		h.logger.Warn("approval response ignored: loop not awaiting approval",
-			slog.String("loop_id", loopID),
-			slog.String("state", string(entity.State)),
-			slog.String("call_id", response.CallID))
-		return HandlerResult{LoopID: loopID, State: entity.State}, nil
-	}
-	if entity.PendingApproval == nil || entity.PendingApproval.CallID != response.CallID {
-		var pendingID string
-		if entity.PendingApproval != nil {
-			pendingID = entity.PendingApproval.CallID
+	if !ok {
+		// Stale or duplicate: loop is no longer awaiting approval, or
+		// the response targets a different call_id than the one
+		// currently pinned. Either way the right move is to log and
+		// drop — never error, never dispatch.
+		entity, getErr := h.GetLoop(loopID)
+		state := agentic.LoopState("")
+		if getErr == nil {
+			state = entity.State
 		}
-		h.logger.Warn("approval response ignored: call_id mismatch",
+		h.logger.Warn("approval response ignored: not awaiting or call_id mismatch",
 			slog.String("loop_id", loopID),
 			slog.String("response_call_id", response.CallID),
-			slog.String("pending_call_id", pendingID))
-		return HandlerResult{LoopID: loopID, State: entity.State}, nil
+			slog.String("loop_state", string(state)))
+		return HandlerResult{LoopID: loopID, State: state}, nil
 	}
 
-	pending := *entity.PendingApproval
-	if err := entity.ResolveApproval(); err != nil {
-		return HandlerResult{}, errs.Wrap(err, "agentic-loop", "HandleApprovalResponse", "resolve approval")
-	}
-	if err := h.UpdateLoop(entity); err != nil {
-		return HandlerResult{}, errs.Wrap(err, "agentic-loop", "HandleApprovalResponse", "persist resolved entity")
+	// We won the resolve race. Fetch the now-resolved entity so the
+	// HandlerResult.State reflects the restored prior state.
+	entity, err := h.GetLoop(loopID)
+	if err != nil {
+		return HandlerResult{}, err
 	}
 
 	result := HandlerResult{
