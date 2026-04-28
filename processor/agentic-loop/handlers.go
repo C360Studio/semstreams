@@ -734,15 +734,31 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// Add assistant response to context manager if enabled.
 	// Must store tool_call messages even when content is empty — they are
 	// required in the conversation history for the next model request.
+	//
+	// Truncated responses are EXCLUDED from this path: a partial
+	// assistant turn must not pollute the context (the next request
+	// would see the orphan and either continue from a half-finished
+	// draft or, with tool_calls present in the partial turn, break
+	// tool_use/tool_result pair integrity). Compaction is also
+	// deliberately skipped here for the truncated case —
+	// handleLengthTruncation owns the compact-and-retry decision below
+	// and reads pre-compaction utilization to make it; running
+	// maybeCompact here first would post-compact the context before
+	// the decision and make the diagnostic / retry-vs-fail branch
+	// see stale numbers.
 	cm := h.loopManager.GetContextManager(loopID)
 	hasContent := response.Message.Content != "" || response.Message.ReasoningContent != "" || len(response.Message.ToolCalls) > 0
-	if hasContent {
+	if hasContent && response.Status != agentic.StatusLengthTruncated {
 		_ = cm.AddMessage(RegionRecentHistory, response.Message)
 		h.maybeCompact(ctx, cm, loopID, entity.Iterations, &result)
 	}
 
 	switch response.Status {
 	case agentic.StatusToolCall:
+		// Forward progress — clear the truncation retry counter so a
+		// future truncation can self-heal once.
+		h.loopManager.ResetTruncationRetry(loopID)
+
 		if err := h.handleToolCallResponse(&result, loopID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
@@ -759,18 +775,15 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		}
 
 	case agentic.StatusComplete:
+		// Forward progress — clear the truncation retry counter.
+		h.loopManager.ResetTruncationRetry(loopID)
+
 		if err := h.handleCompleteResponse(&result, loopID, entity, response.Message.Content); err != nil {
 			return result, err
 		}
 
 	case agentic.StatusLengthTruncated:
-		h.logger.Warn("model response truncated (finish_reason=length), failing loop",
-			slog.String("loop_id", loopID),
-			slog.String("finish_reason", response.FinishReason),
-			slog.Int("completion_tokens", response.TokenUsage.CompletionTokens))
-
-		truncationError := "model response truncated: output hit max_tokens limit (finish_reason=length)"
-		if err := h.failLoop(&result, loopID, agentic.OutcomeTruncated, "length_truncated", truncationError); err != nil {
+		if err := h.handleLengthTruncation(ctx, loopID, entity, cm, response, &result); err != nil {
 			return result, err
 		}
 
@@ -892,6 +905,178 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		Data:    toolData,
 	})
 	return nil
+}
+
+// handleLengthTruncation is the StatusLengthTruncated arm of
+// HandleModelResponse. It branches on context utilization and the
+// per-loop retry counter:
+//
+//   - Utilization < CompactThreshold OR already retried this loop:
+//     fail with OutcomeTruncated and a diagnostic message that names
+//     the actual numbers (utilization, model_limit, completion_tokens,
+//     compaction_attempted boolean). Operator reads the message and
+//     decides: switch models, raise max_tokens, or tune compaction.
+//   - Utilization >= CompactThreshold AND first retry: call the
+//     compactor inline, capture pre/post utilization, append a
+//     compaction_retry ContextEvent for trajectory visibility, and
+//     emit a fresh agent.request from the now-smaller context. Do NOT
+//     fail and do NOT increment the loop's iteration counter — this is
+//     within-iteration recovery. The per-loop retry counter caps the
+//     budget at exactly one self-heal attempt; a second consecutive
+//     truncation falls through to the failure branch above.
+func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID string, entity agentic.LoopEntity, cm *ContextManager, response agentic.AgentResponse, result *HandlerResult) error {
+	preUtilization := cm.Utilization()
+	completionTokens := response.TokenUsage.CompletionTokens
+	modelLimit := cm.ModelLimit()
+
+	// Branch 1: structurally can't recover. Either we already tried
+	// (the prior retry hit the same wall) or there's nothing for the
+	// compactor to compact away.
+	retryCount := h.loopManager.IncrementTruncationRetry(loopID)
+	canRetry := preUtilization >= h.config.Context.CompactThreshold && retryCount == 1
+
+	if !canRetry {
+		compactionAttempted := retryCount > 1 // we got here through a retry that also truncated
+		message := h.buildTruncationDiagnostic(modelLimit, completionTokens, preUtilization, 0, compactionAttempted)
+
+		h.logger.Warn("model response truncated, failing loop",
+			slog.String("loop_id", loopID),
+			slog.String("finish_reason", response.FinishReason),
+			slog.Int("completion_tokens", completionTokens),
+			slog.Float64("pre_compact_utilization", preUtilization),
+			slog.Int("model_limit", modelLimit),
+			slog.Bool("compaction_attempted", compactionAttempted),
+			slog.Int("retry_count", retryCount))
+
+		// Reset so a parent retry (new loop) starts fresh.
+		h.loopManager.ResetTruncationRetry(loopID)
+		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
+	}
+
+	// Branch 2: high utilization, first retry. Compact and re-request.
+	h.logger.Info("length-truncated response triggered compaction retry",
+		slog.String("loop_id", loopID),
+		slog.Float64("pre_compact_utilization", preUtilization),
+		slog.Int("completion_tokens", completionTokens),
+		slog.Int("model_limit", modelLimit))
+
+	compactStart := time.Now()
+	compactResult, compactErr := h.compactor.Compact(ctx, cm)
+	if compactErr != nil {
+		// Compaction failed — fall through to the failure branch with a
+		// diagnostic that names the failure. Don't burn another retry
+		// attempt; the parent decides whether a fresh-loop retry helps.
+		h.loopManager.ResetTruncationRetry(loopID)
+		message := fmt.Sprintf("truncated and compaction failed (model_limit=%d, utilization=%.0f%%, completion_tokens=%d, compactor_error=%s) — try a larger model or tune CompactThreshold/HeadroomTokens",
+			modelLimit, preUtilization*100, completionTokens, compactErr.Error())
+		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
+	}
+	compactDuration := time.Since(compactStart).Milliseconds()
+	postUtilization := cm.Utilization()
+	tokensSaved := compactResult.EvictedTokens - compactResult.NewTokens
+
+	// Trajectory + ContextEvent for observability. Step type is
+	// distinct from the routine-pre-iteration "context_compaction" so
+	// operators reading a trajectory can tell retry-driven compaction
+	// from threshold-driven compaction at a glance.
+	result.ContextEvents = append(result.ContextEvents, agentic.ContextEvent{
+		Type:        agentic.ContextEventCompactionRetry,
+		LoopID:      loopID,
+		Iteration:   entity.Iterations,
+		Utilization: preUtilization,
+		TokensSaved: tokensSaved,
+		Summary:     compactResult.Summary,
+	})
+	retryStep := agentic.TrajectoryStep{
+		Timestamp:   time.Now(),
+		StepType:    "context_compaction_retry",
+		Response:    compactResult.Summary,
+		TokensIn:    compactResult.EvictedTokens,
+		TokensOut:   compactResult.NewTokens,
+		Model:       compactResult.Model,
+		Utilization: preUtilization,
+		Duration:    compactDuration,
+	}
+	result.TrajectorySteps = append(result.TrajectorySteps, retryStep)
+	if _, addErr := h.trajectoryManager.AddStep(loopID, retryStep); addErr != nil {
+		h.logger.Warn("failed to add compaction-retry trajectory step",
+			slog.String("loop_id", loopID),
+			slog.String("error", addErr.Error()))
+	}
+
+	// Build and emit the retry agent.request from the freshly-compacted
+	// context. We do NOT increment the iteration counter — this is a
+	// within-iteration self-heal. The truncationRetryAttempts counter
+	// (now ==1) prevents a second truncation from re-entering this
+	// branch.
+	return h.emitRetryRequest(ctx, loopID, entity, cm, result, postUtilization)
+}
+
+// emitRetryRequest builds a fresh agent.request from the current
+// context (post-compaction) and appends it to result.PublishedMessages.
+// Mirrors the request-construction tail of handleToolsComplete but
+// without the tool-result drain or iteration increment.
+func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, entity agentic.LoopEntity, cm *ContextManager, result *HandlerResult, postUtilization float64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	messages := cm.GetContext()
+	if !hasUserOrAssistantMessage(messages) {
+		messages = h.recoverEmptyContext(loopID, cm, entity.Iterations, 0)
+	}
+
+	budgetMsg := BuildIterationBudgetMessage(entity.Iterations, entity.MaxIterations)
+	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
+
+	tools := h.loopManager.GetCachedTools(loopID)
+	toolChoice := h.loopManager.GetCachedToolChoice(loopID)
+
+	request := agentic.AgentRequest{
+		RequestID:  h.loopManager.GenerateRequestID(loopID),
+		LoopID:     loopID,
+		Role:       entity.Role,
+		Model:      entity.Model,
+		Messages:   messages,
+		Tools:      tools,
+		ToolChoice: toolChoice,
+		Timeout:    h.loopManager.GetCachedRequestTimeout(loopID),
+	}
+
+	h.loopManager.TrackRequest(request.RequestID, loopID)
+	h.loopManager.TrackRequestStart(request.RequestID)
+
+	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
+	requestData, err := json.Marshal(requestMsg)
+	if err != nil {
+		return err
+	}
+	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
+		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+		Data:    requestData,
+	})
+
+	h.logger.Info("emitted compaction-retry agent.request",
+		slog.String("loop_id", loopID),
+		slog.String("request_id", request.RequestID),
+		slog.Float64("post_compact_utilization", postUtilization))
+	return nil
+}
+
+// buildTruncationDiagnostic formats the operator-facing message that
+// accompanies a OutcomeTruncated failure. compactionAttempted=false +
+// low pre_utilization means "output budget too small for task";
+// compactionAttempted=true means "compaction did its job but the
+// response still doesn't fit." Both messages are actionable: the
+// operator reads the numbers and chooses to switch models, raise
+// max_tokens, or tune CompactThreshold/HeadroomTokens.
+func (h *MessageHandler) buildTruncationDiagnostic(modelLimit, completionTokens int, preUtilization, postUtilization float64, compactionAttempted bool) string {
+	if compactionAttempted {
+		return fmt.Sprintf("truncated after compaction (model_limit=%d, pre-compact utilization=%.0f%%, post-compact utilization=%.0f%%, completion_tokens=%d) — response exceeds available budget even after freeing context; try a larger model or raise max_tokens",
+			modelLimit, preUtilization*100, postUtilization*100, completionTokens)
+	}
+	return fmt.Sprintf("truncated at %.0f%% utilization without compaction attempted (model_limit=%d, completion_tokens=%d) — output budget too small for task; raise max_tokens or use a model with larger output capacity",
+		preUtilization*100, modelLimit, completionTokens)
 }
 
 // failLoop transitions a loop to failed state, records completion data, and builds failure events.

@@ -61,6 +61,11 @@ const (
 const (
 	ContextEventCompactionStarting = "compaction_starting"
 	ContextEventCompactionComplete = "compaction_complete"
+	// ContextEventCompactionRetry is emitted when a length-truncated
+	// response triggers an inline compaction + within-iteration retry
+	// (see beta.21). Carries pre-compaction Utilization and TokensSaved
+	// so operators can see the recovery in the loop's history.
+	ContextEventCompactionRetry = "compaction_retry"
 )
 
 // Role values for agent loops.
