@@ -1386,36 +1386,43 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 		}
 	}
 
-	// Verify community data exists and has members
-	keys, err := communityBucket.Keys(ctx)
-	require.NoError(t, err)
-
-	communityCount := 0
-	for _, key := range keys {
-		// Skip entity mapping keys
-		if len(key) > 7 && key[:7] == "entity." {
-			continue
-		}
-		// Community keys start with a digit (level)
-		if len(key) == 0 || key[0] < '0' || key[0] > '9' {
-			continue
-		}
-
-		entry, err := communityBucket.Get(ctx, key)
+	// Verify community data exists and has members. Poll because the
+	// detection loop writes entity→community mappings and community
+	// member-list keys in sequence — the first Eventually above can
+	// resolve on the entity mappings alone, leaving a brief window
+	// where Keys() doesn't yet list the community key.
+	var communityCount int
+	require.Eventually(t, func() bool {
+		keys, err := communityBucket.Keys(ctx)
 		if err != nil {
-			continue
+			return false
 		}
-
-		var community map[string]interface{}
-		if err := json.Unmarshal(entry.Value(), &community); err != nil {
-			continue
+		count := 0
+		for _, key := range keys {
+			// Skip entity mapping keys
+			if len(key) > 7 && key[:7] == "entity." {
+				continue
+			}
+			// Community keys start with a digit (level)
+			if len(key) == 0 || key[0] < '0' || key[0] > '9' {
+				continue
+			}
+			entry, err := communityBucket.Get(ctx, key)
+			if err != nil {
+				continue
+			}
+			var community map[string]interface{}
+			if err := json.Unmarshal(entry.Value(), &community); err != nil {
+				continue
+			}
+			if members, ok := community["members"].([]interface{}); ok {
+				t.Logf("Community %s has %d members: %v", key, len(members), members)
+				count++
+			}
 		}
-
-		if members, ok := community["members"].([]interface{}); ok {
-			t.Logf("Community %s has %d members: %v", key, len(members), members)
-			communityCount++
-		}
-	}
+		communityCount = count
+		return count >= 1
+	}, 10*time.Second, 250*time.Millisecond, "At least one community should exist")
 
 	assert.GreaterOrEqual(t, communityCount, 1, "At least one community should exist")
 	assert.GreaterOrEqual(t, len(entitiesFoundInCommunity), 2,
