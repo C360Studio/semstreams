@@ -430,6 +430,18 @@ func TestReadProfileVersion(t *testing.T) {
 			t.Errorf("version = %d, want 0", v)
 		}
 	})
+
+	t.Run("transport error surfaces", func(t *testing.T) {
+		// A non-NotFound KV error must propagate so the dispatch caller
+		// can log + fall back to 1 instead of silently picking 1 as if
+		// no profile existed. Distinguishes "graph unavailable" from
+		// "no prior profile yet".
+		r := newTestReader(&errKV{err: errors.New("nats down")})
+		_, err := r.ReadProfileVersion(context.Background(), "acme", "ops", "alice")
+		if err == nil {
+			t.Fatal("err = nil, want propagated transport error")
+		}
+	})
 }
 
 func TestReadOperatingModel_KVError(t *testing.T) {

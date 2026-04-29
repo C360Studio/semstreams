@@ -54,14 +54,32 @@ func NewGraphProfileReader(ctx context.Context, nc *natsclient.Client, bucketNam
 
 // ReadProfileVersion implements ProfileReader. It loads only the user's
 // profile entity (one KV get) and returns the user.operating_model.version
-// triple. Returns 0 if no profile exists yet. Use this when only the
-// version is needed; ReadOperatingModel fetches the full layer/entry tree.
+// triple. Returns (0, nil) when the profile does not exist yet, and
+// (0, error) when the KV get returns a transport error so callers can
+// distinguish "no prior profile" from "graph unavailable" (the dispatch
+// re-run path uses the err signal to log a warning and fall back to
+// version 1, instead of silently picking 1 on a real outage).
 func (r *GraphProfileReader) ReadProfileVersion(ctx context.Context, org, platform, userID string) (int, error) {
 	if org == "" || platform == "" || userID == "" {
 		return 0, nil
 	}
-	profile := r.getState(ctx, ProfileEntityID(org, platform, userID))
-	return readVersionFromState(profile), nil
+
+	profileID := ProfileEntityID(org, platform, userID)
+	entry, err := r.kv.Get(ctx, profileID)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read profile %q: %w", profileID, err)
+	}
+	var state graph.EntityState
+	if err := json.Unmarshal(entry.Value, &state); err != nil {
+		// Corrupt state is also surfaced — same reasoning: the caller's
+		// fallback should only kick in for real "no profile" cases, not
+		// for data we couldn't parse.
+		return 0, fmt.Errorf("decode profile %q: %w", profileID, err)
+	}
+	return readVersionFromState(&state), nil
 }
 
 // ReadOperatingModel implements ProfileReader. It walks the user's profile

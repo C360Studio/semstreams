@@ -33,16 +33,29 @@ ReadProfileVersion(ctx context.Context, org, platform, userID string) (int, erro
 
 `GraphProfileReader.ReadProfileVersion` issues a single KV get on
 the user's profile entity and reads the
-`user.operating_model.version` triple. Returns `0` when no profile
-exists. Cheaper than `ReadOperatingModel` for callers that only
-need the version.
+`user.operating_model.version` triple. Cheaper than
+`ReadOperatingModel` for callers that only need the version.
+
+Return contract:
+
+| Result | Meaning |
+|---|---|
+| `(0, nil)` | No profile exists for this user yet (KV NotFound). Caller treats as first-time onboard. |
+| `(N, nil)` for `N > 0` | Persisted version. |
+| `(0, error)` | KV transport error or corrupt state. Caller surfaces the failure (in dispatch, this triggers a Warn-and-fall-back-to-1). |
+
+This split lets callers distinguish "no prior profile" from
+"graph briefly unavailable" — important so a one-off KV
+hiccup during a re-run doesn't silently look like a first-time
+onboard.
 
 `EmptyProfileReader.ReadProfileVersion` returns `(0, nil)`.
 
 **Migration impact for products:** any custom implementation of
 the `ProfileReader` interface must add the new method. The
-recommended fallback is to return `(0, nil)` so first-time
-behaviour is preserved.
+recommended pattern: return `(0, nil)` for absent-profile cases,
+and propagate transport errors as `(0, err)` so callers can
+distinguish the two.
 
 ### `agenticdispatch.Component` wires a `ProfileReader`
 
