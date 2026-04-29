@@ -32,9 +32,10 @@ type Manager struct {
 	mu       sync.RWMutex
 
 	// HTTP server infrastructure
-	httpServer *http.Server
-	httpMux    *http.ServeMux
-	config     ManagerConfig
+	httpServer     *http.Server
+	httpMux        *http.ServeMux
+	httpMiddleware []HTTPMiddleware // applied outermost-first; see ADR-030 Phase 1
+	config         ManagerConfig
 
 	// Track if we're the instance managing HTTP
 	isHTTPManager bool
@@ -828,6 +829,59 @@ func (m *Manager) Stop(timeout time.Duration) error {
 	return m.BaseService.Stop(timeout)
 }
 
+// UseHTTPMiddleware appends product-supplied middleware to the
+// chain wrapped around every HTTP route the framework registers
+// (component handlers, gateway-component handlers, system endpoints
+// like /openapi.json and /health). Order is outermost-first: the
+// first middleware passed in this call (or across calls) is the
+// outermost wrapper.
+//
+// This is the framework's only HTTP middleware seam. The framework
+// ships zero default middleware; auth, request logging, panic
+// recovery, rate limiting, and CORS are product policy. Products
+// pairing identity-aware middleware with the beta.22 helpers should
+// call agenticdispatch.WithIdentity from inside the middleware so
+// agenticdispatch.IdentityFromRequest picks it up downstream.
+//
+// Must be called before the HTTP server starts (i.e., before the
+// owning service.Manager.Start*HTTP* path runs). Calls after the
+// server is already up are ignored with a warning log — late
+// registration would be silently dropped at the chain since the
+// http.Server's Handler field is set at boot, and a warning is the
+// closest we can get to "you didn't get what you asked for" without
+// a panic. Multiple calls before boot are concatenated in call
+// order, so a product may layer middleware progressively.
+func (m *Manager) UseHTTPMiddleware(mws ...HTTPMiddleware) {
+	if len(mws) == 0 {
+		return
+	}
+	// Lock protects against late registration racing concurrent boot
+	// completion (completeHTTPSetup / startHTTPServer take the same
+	// mutex when reading m.httpMiddleware to build the wrapped handler).
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.httpServer != nil {
+		logger := m.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn("UseHTTPMiddleware called after HTTP server started; ignoring",
+			"middleware_count", len(mws))
+		return
+	}
+	m.httpMiddleware = append(m.httpMiddleware, mws...)
+}
+
+// buildHTTPHandler returns the framework's HTTP mux wrapped with
+// the product-supplied middleware chain. Both completeHTTPSetup and
+// the deprecated startHTTPServer call this when assigning to
+// http.Server.Handler so the wrapping happens in one place — and so
+// tests can assert the wired chain runs without booting a real
+// listener. Caller must hold m.mu.
+func (m *Manager) buildHTTPHandler() http.Handler {
+	return chainMiddleware(m.httpMux, m.httpMiddleware)
+}
+
 // initializeHTTPInfrastructure creates the HTTP mux and registers system endpoints only
 // This is called early in StartAll before services are created
 func (m *Manager) initializeHTTPInfrastructure() error {
@@ -876,7 +930,7 @@ func (m *Manager) completeHTTPSetup() error {
 	// All request contexts (r.Context()) derive from this, so they cancel on shutdown.
 	m.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(m.config.HTTPPort),
-		Handler: m.httpMux,
+		Handler: m.buildHTTPHandler(),
 		BaseContext: func(_ net.Listener) context.Context {
 			if m.lifecycleCtx != nil {
 				return m.lifecycleCtx
@@ -927,7 +981,7 @@ func (m *Manager) startHTTPServer() error {
 	// Create HTTP server with lifecycle context as BaseContext
 	m.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(m.config.HTTPPort),
-		Handler: m.httpMux,
+		Handler: m.buildHTTPHandler(),
 		BaseContext: func(_ net.Listener) context.Context {
 			if m.lifecycleCtx != nil {
 				return m.lifecycleCtx
