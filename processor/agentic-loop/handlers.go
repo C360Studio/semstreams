@@ -866,22 +866,183 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 		}
 	}
 
-	// Serial dispatch: execute one tool at a time. Queue remaining calls
-	// for dispatch after each result arrives in HandleToolResult.
-	// Parallelism is an app-level concern (parallel agents via semspec),
-	// not a per-tool concern within a single agent loop.
-	if len(approved) > 1 {
-		h.loopManager.QueueToolCalls(loopID, approved[1:])
-	}
-
-	if len(approved) > 0 {
-		if err := h.dispatchToolCall(result, loopID, approved[0]); err != nil {
-			return err
+	// Serial dispatch with synth-on-failure fallback. Try each approved
+	// call in order; emit a synth-result for any whose dispatch fails
+	// and continue to the next. The first successful dispatch claims
+	// the in-flight slot; remaining calls are queued for serial
+	// dispatch via HandleToolResult's dequeue path.
+	//
+	// Mode (a) of the orphan-tool-call recovery: if all dispatches
+	// fail, every approved call gets a synth-result, the queue stays
+	// empty, AllToolsComplete is true, and the caller's edge-case
+	// branch (HandleModelResponse handling tool_call) routes through
+	// to handleToolsComplete with a clean tool-pair set instead of
+	// failing terminal with orphans.
+	idx := 0
+	for idx < len(approved) {
+		dispatched, storeErr := h.tryDispatchOrSynthesize(result, loopID, approved[idx])
+		if storeErr != nil {
+			return storeErr
 		}
+		idx++
+		if dispatched {
+			// Queue any remaining calls for serial dispatch by
+			// HandleToolResult's dequeue path.
+			if idx < len(approved) {
+				h.loopManager.QueueToolCalls(loopID, approved[idx:])
+			}
+			break
+		}
+		// Synth-result emitted; loop to try the next approved call.
 	}
 
 	result.PendingTools = h.loopManager.GetPendingTools(loopID)
 	return nil
+}
+
+// synthesizeToolFailure stores a synthetic failure result for a single
+// tool call so the assistant message's tool_calls field has a matching
+// tool_result on the next agent.request. Mirrors the existing pattern
+// used for empty-name calls (handleToolCallResponse:813), filter
+// rejections (:840), and explicit approval rejections (beta.19's
+// approval_response_handler.go:122). Reason is the diagnostic surfaced
+// to the model so it can decide how to recover.
+//
+// Idempotent at the loopManager.StoreToolResult layer — duplicate
+// call_ids dedupe naturally.
+func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason string) error {
+	if name == "" {
+		// Best-effort recovery — the call may have been registered via
+		// TrackToolName at dispatch time even if the dispatch later
+		// failed. Falls back to a sentinel only if no name was tracked.
+		if tracked := h.loopManager.GetToolName(callID); tracked != "" {
+			name = tracked
+		} else {
+			name = "unknown_tool"
+		}
+	}
+	synth := agentic.ToolResult{
+		CallID: callID,
+		Name:   name,
+		Error:  reason,
+		LoopID: loopID,
+	}
+	return h.loopManager.StoreToolResult(loopID, synth)
+}
+
+// drainPendingToolFailures emits a synthetic failure result for every
+// currently-pending tool call on the loop, with the supplied reason as
+// the diagnostic. Used by terminal-transition paths (failLoop,
+// max-iterations, cancel signal) so an interrupted loop's KV-persisted
+// context doesn't carry orphan tool_calls that would 400 the model API
+// if the loop is later restored or its state is replayed.
+//
+// No-op when no pending tools exist. Best-effort: errors from
+// individual StoreToolResult calls are logged but don't stop the drain
+// — partial cleanup beats no cleanup.
+//
+// Concurrency note: callers run on the loop's owning goroutine. A
+// concurrent real result on a different goroutine could overwrite a
+// just-written synth via StoreToolResult's CallID-keyed map (state.go
+// PendingToolResults), or be overwritten by it depending on
+// interleaving. The race is benign because the loop is transitioning
+// to terminal — HandleToolResult's AllToolsComplete branch is gated
+// on !entity.State.IsTerminal() at handlers.go:1411, so neither write
+// triggers a new agent.request regardless of which won.
+func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
+	// Drop any queued-but-not-yet-dispatched calls unconditionally —
+	// they'd never get a real result on a terminating loop, and
+	// leaving them queued risks a future dispatch attempt against a
+	// terminal loop. Cheap when the queue is empty (single map lookup).
+	h.loopManager.ClearQueuedTools(loopID)
+
+	pending := h.loopManager.GetPendingTools(loopID)
+	if len(pending) == 0 {
+		return
+	}
+	h.logger.Info("draining pending tool calls with synthetic failures",
+		slog.String("loop_id", loopID),
+		slog.Int("count", len(pending)),
+		slog.String("reason", reason))
+	for _, callID := range pending {
+		if err := h.synthesizeToolFailure(loopID, callID, "", reason); err != nil {
+			h.logger.Warn("failed to store synthetic failure during drain",
+				slog.String("loop_id", loopID),
+				slog.String("call_id", callID),
+				slog.String("error", err.Error()))
+		}
+		// Remove from pending so a late-arriving real result is dropped
+		// silently (the synth-result already filled the slot).
+		_ = h.loopManager.RemovePendingTool(loopID, callID)
+	}
+}
+
+// tryDispatchOrSynthesize attempts to dispatch a tool call. On
+// dispatch failure, emits a synthetic failure result so the
+// assistant tool_call has a matching result on the next agent.request,
+// and returns dispatched=false so the caller can try the next queued
+// call instead of returning the original error and dying.
+//
+// Mode (a) of the orphan-tool-call recovery work. dispatchToolCall's
+// real failure modes are: AddPendingTool returning loop-not-found
+// (the loop isn't tracked, e.g., racing a cancel), and json.Marshal
+// failing on un-marshalable arguments (a chan or func value sneaking
+// through the model's tool_call). Both manifest pre-publish — the
+// "NATS publish error" path doesn't exist here because the
+// publication is queued via result.PublishedMessages and serviced
+// downstream, not synchronously.
+func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID string, tc agentic.ToolCall) (dispatched bool, storeErr error) {
+	err := h.dispatchToolCall(result, loopID, tc)
+	if err == nil {
+		return true, nil
+	}
+	h.logger.Warn("tool dispatch failed; emitting synthetic failure result",
+		slog.String("loop_id", loopID),
+		slog.String("call_id", tc.ID),
+		slog.String("tool_name", tc.Name),
+		slog.String("error", err.Error()))
+	// Best-effort cleanup of any partial pending bookkeeping —
+	// dispatchToolCall registers pending before the publish, so a
+	// publish-failure leaves a phantom pending entry that the
+	// drain helper would later see.
+	_ = h.loopManager.RemovePendingTool(loopID, tc.ID)
+	reason := fmt.Sprintf("tool dispatch failed: %s", err.Error())
+	return false, h.synthesizeToolFailure(loopID, tc.ID, tc.Name, reason)
+}
+
+// dispatchedFromQueue drains the loop's queued tool calls until one
+// dispatches successfully or the queue is empty. Synth-result
+// recovery (mode a) absorbs individual dispatch failures so a string
+// of bad calls doesn't drop the loop into a terminal state with
+// orphan tool_calls. Returns dispatched=true on the first successful
+// publish (caller should return early to await the result), false
+// when the queue drained without a success (caller should fall
+// through to AllToolsComplete).
+func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID string) (dispatched bool, storeErr error) {
+	// Defensive cap: queue length at entry. DequeueToolCall is the only
+	// queue-shrinking op the loop runs, so under any sane LoopManager
+	// state the queue is bounded by entry-time length. The cap stops
+	// a future bug in DequeueToolCall (e.g., one that returned ok=true
+	// without consuming) from infinite-looping the dispatch path.
+	maxIter := len(h.loopManager.GetPendingTools(loopID)) + 64
+	for i := 0; i < maxIter; i++ {
+		next, ok := h.loopManager.DequeueToolCall(loopID)
+		if !ok {
+			return false, nil
+		}
+		ok, sErr := h.tryDispatchOrSynthesize(result, loopID, next)
+		if sErr != nil {
+			return false, sErr
+		}
+		if ok {
+			return true, nil
+		}
+		// Synth-result emitted for this call; loop to try the next.
+	}
+	h.logger.Warn("dispatchedFromQueue iteration cap hit; queue may have leaked",
+		slog.String("loop_id", loopID),
+		slog.Int("max_iter", maxIter))
+	return false, nil
 }
 
 // dispatchToolCall publishes a single tool call for execution and registers
@@ -1081,6 +1242,12 @@ func (h *MessageHandler) buildTruncationDiagnostic(modelLimit, completionTokens 
 
 // failLoop transitions a loop to failed state, records completion data, and builds failure events.
 func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason, errorMsg string) error {
+	// Drain any pending tool calls into synth-results before transitioning
+	// to terminal state. Modes (c) and (d) of orphan-tool-call recovery —
+	// late-arriving results dropped silently; KV-restored loops won't
+	// carry orphan tool_calls. No-op when no pending tools exist.
+	h.drainPendingToolFailures(loopID, fmt.Sprintf("loop failed: %s", reason))
+
 	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
 		return err
 	}
@@ -1256,14 +1423,13 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		return result, nil
 	}
 
-	// Serial dispatch: if there are queued tool calls waiting, dispatch the
-	// next one. Results accumulate in PendingToolResults until the queue is
-	// drained and AllToolsComplete, then handleToolsComplete batches them
-	// into context for the next model request.
-	if next, ok := h.loopManager.DequeueToolCall(loopID); ok {
-		if err := h.dispatchToolCall(&result, loopID, next); err != nil {
-			return result, err
-		}
+	// Serial dispatch: drain the queue until one call dispatches
+	// successfully or the queue is empty. dispatchedFromQueue handles
+	// the synth-on-failure recovery (mode a) so a string of dispatch
+	// failures still preserves tool-pair integrity.
+	if dispatched, storeErr := h.dispatchedFromQueue(&result, loopID); storeErr != nil {
+		return result, storeErr
+	} else if dispatched {
 		result.PendingTools = h.loopManager.GetPendingTools(loopID)
 		return result, nil
 	}
@@ -1414,7 +1580,12 @@ func (h *MessageHandler) handleToolsComplete(
 	// Increment iteration counter
 	err := h.loopManager.IncrementIteration(loopID)
 	if err != nil {
-		// Max iterations reached - mark as failed
+		// Max iterations reached - mark as failed.
+		// Drain any pending tools first so KV-persisted context for this
+		// loop carries clean tool-pair structure (mode d of orphan
+		// recovery — iteration limit hit while tools still in-flight).
+		h.drainPendingToolFailures(loopID, "max iterations reached before tool results returned")
+
 		if transitionErr := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transitionErr != nil {
 			return *result, errs.Wrap(transitionErr, "agentic-loop", "handleToolsComplete", fmt.Sprintf("transition loop to failed state (original error: %v)", err))
 		}

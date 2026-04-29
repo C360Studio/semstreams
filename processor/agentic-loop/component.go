@@ -1314,6 +1314,14 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) {
 func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) {
 	loopID := signal.LoopID
 
+	// Drain any in-flight tool calls into synth-results BEFORE the
+	// CancelLoop transition so tool-pair integrity is preserved in
+	// KV-persisted context. Mode (e) of orphan-tool-call recovery —
+	// without this, a cancelled loop's stored context would carry
+	// assistant tool_calls with no matching tool_results, 400ing any
+	// downstream replay.
+	c.handler.drainPendingToolFailures(loopID, fmt.Sprintf("loop cancelled by %s", signal.UserID))
+
 	// Atomically cancel the loop and get the updated entity
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
