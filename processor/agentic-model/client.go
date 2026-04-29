@@ -468,22 +468,31 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 
 		// Process choice deltas
 		for _, choice := range chunk.Choices {
-			acc.processDelta(choice)
+			// processDelta returns the routed (content, reasoning)
+			// split — inline <think>...</think> blocks are split out
+			// of the raw content so the chunk handler sees clean
+			// content + reasoning even on inline-tag providers (qwen3,
+			// deepseek-r1, qwen3-coder via OpenAI-compat). Channel-
+			// based reasoning_content is merged into reasoningDelta
+			// here so consumers see one stream regardless of provider.
+			contentDelta, reasoningDelta := acc.processDelta(choice)
 
 			// Build chunk for handler
 			if c.chunkHandler != nil {
 				sc := StreamChunk{
 					RequestID:      requestID,
-					ContentDelta:   choice.Delta.Content,
-					ReasoningDelta: choice.Delta.ReasoningContent,
+					ContentDelta:   contentDelta,
+					ReasoningDelta: reasoningDelta,
 				}
 				c.chunkHandler(sc)
 			}
 
-			// Record streaming metrics
+			// Record streaming metrics. TTFT is gated on either side
+			// having content — first reasoning byte counts as a token
+			// for time-to-first-token, same as before.
 			if c.metrics != nil {
 				c.metrics.recordStreamChunk(chatReq.Model)
-				if !firstTokenRecorded && (choice.Delta.Content != "" || choice.Delta.ReasoningContent != "") {
+				if !firstTokenRecorded && (contentDelta != "" || reasoningDelta != "") {
 					c.metrics.recordStreamTTFT(chatReq.Model, time.Since(streamStart).Seconds())
 					firstTokenRecorded = true
 				}
@@ -502,8 +511,19 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 // convertResponse converts OpenAI response to AgentResponse.
 // NormalizeResponse is called before conversion so provider adapters can
 // adjust the raw response (e.g., strip provider-specific fields).
+//
+// After provider-specific normalization, extractThinkBlocksFromResponse
+// runs unconditionally — inline <think>...</think> blocks (qwen3 /
+// deepseek-r1 / qwen3-coder pattern) are routed out of Content and
+// into ReasoningContent so the AgentResponse shape is symmetric with
+// the channel-based reasoning_content path. The hot path is allocation-
+// free for responses without inline tags (a single strings.Contains).
+// Universal rather than per-adapter because inline-think is a
+// model-family quirk, not a provider quirk — qwen3-via-Ollama (generic
+// adapter) and qwen3-via-OpenAI-compat (openai adapter) both emit it.
 func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID string) agentic.AgentResponse {
 	c.getAdapter().NormalizeResponse(&resp)
+	extractThinkBlocksFromResponse(&resp)
 
 	response := agentic.AgentResponse{
 		RequestID: requestID,
