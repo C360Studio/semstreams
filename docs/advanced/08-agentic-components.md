@@ -672,6 +672,24 @@ counts what the executor *actually* ran. The difference between them
 tells you what got rejected before execution (allowlist, approval
 gate, dispatch errors).
 
+**agentic-dispatch (router)**:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `semstreams_router_messages_received_total` | counter | channel_type | Inbound user messages by channel |
+| `semstreams_router_commands_executed_total` | counter | command | Command executions |
+| `semstreams_router_tasks_submitted_total` | counter | — | Task submissions to agentic-loop |
+| `semstreams_router_active_loops` | gauge | — | Currently active loops in the dispatch tracker |
+| `semstreams_router_routing_duration_seconds` | histogram | — | Time to route an inbound message |
+| `semstreams_router_completions_received_total` | counter | status | Loop completion events received (status: completed, failed, cancelled) |
+| `semstreams_router_http_requests_total` | counter | endpoint, method, status | HTTP requests to dispatch endpoints |
+| `semstreams_router_http_request_duration_seconds` | histogram | endpoint, method | HTTP request latency |
+| `semstreams_router_loop_signals_sent_total` | counter | signal_type, accepted | Loop control signals (pause, resume, cancel) |
+| `semstreams_router_loop_approvals_submitted_total` | counter | decision, status | Approval submissions via `POST /loops/{id}/approval` (status: success/error). Beta.22+. |
+| `semstreams_router_sse_connections_active` | gauge | — | Active SSE clients on `/activity` |
+| `semstreams_router_sse_events_total` | counter | event_type | SSE events emitted |
+| `semstreams_router_sse_errors_total` | counter | error_type | SSE connection errors |
+
 ### Trajectory Analysis
 
 Query trajectories for debugging and analytics:
