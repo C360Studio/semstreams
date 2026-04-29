@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/graph"
@@ -205,11 +204,6 @@ func readVersionFromState(profile *graph.EntityState) int {
 		return 0
 	}
 	return objToInt(val)
-}
-
-// discardLogger returns a logger that discards all output, for tests.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // --- triple-object type conversion helpers ---

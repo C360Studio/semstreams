@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -11,6 +13,12 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 )
+
+// discardLogger returns a logger that discards all output, for tests.
+// Lives in the test file so production binaries don't carry test-only scaffolding.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // fakeKV is an in-memory kvGetter for unit tests. It stores raw bytes per
 // key and returns ErrKVKeyNotFound for unknown keys, matching the contract
@@ -385,30 +393,82 @@ func TestReadOperatingModel_EntryMissingRequiredFieldsSkipped(t *testing.T) {
 }
 
 func TestReadOperatingModel_KVError(t *testing.T) {
-	kv := &errKV{err: errors.New("nats down")}
-	r := newTestReader(kv)
-	got, err := r.ReadOperatingModel(context.Background(), "acme", "ops", "alice")
-	// Profile fetch failure is treated as "no profile" by getState (matches
-	// pre-fix behaviour). The reader must not surface the underlying error
-	// for missing-profile scenarios — but a non-NotFound KV error on the
-	// profile read should still produce an empty result, not a crash.
-	if err != nil {
-		t.Fatalf("err = %v, want nil (KV transient errors are logged, not surfaced)", err)
-	}
-	if got == nil {
-		t.Fatal("result = nil, want empty ProfileResult")
-	}
-	if len(got.Entries) != 0 {
-		t.Errorf("Entries = %d, want 0", len(got.Entries))
-	}
+	t.Run("profile read fails", func(t *testing.T) {
+		// Every key fails: covers the "profile fetch hits transient KV
+		// error" path.
+		kv := &errKV{err: errors.New("nats down")}
+		r := newTestReader(kv)
+		got, err := r.ReadOperatingModel(context.Background(), "acme", "ops", "alice")
+		// getState swallows non-NotFound errors as "no profile" (matches
+		// pre-fix behaviour). The reader must not surface the underlying
+		// error for missing-profile scenarios.
+		if err != nil {
+			t.Fatalf("err = %v, want nil (KV transient errors are logged, not surfaced)", err)
+		}
+		if got == nil {
+			t.Fatal("result = nil, want empty ProfileResult")
+		}
+		if len(got.Entries) != 0 {
+			t.Errorf("Entries = %d, want 0", len(got.Entries))
+		}
+	})
+
+	t.Run("partial failure: profile loads, layer fetch errors", func(t *testing.T) {
+		// Profile loads cleanly, but the layer entity get returns a
+		// transport error. Reader must skip the broken layer (logged at
+		// Debug) and return a result with the version intact and zero
+		// entries — no crash, no surfaced error.
+		base := newFakeKV()
+		ref := ProfileRef{Org: "acme", Platform: "ops", UserID: "alice", Version: 4}
+		base.writeProfile(t, ref, LayerOperatingRhythms, []Entry{
+			mkEntry(LayerOperatingRhythms, "1", "weekly", "blocked"),
+		})
+
+		layerID := LayerEntityID(ref.Org, ref.Platform, ref.UserID, LayerOperatingRhythms)
+		kv := &selectiveErrKV{
+			delegate: base,
+			failKey:  layerID,
+			err:      errors.New("nats down on layer"),
+		}
+		r := newTestReader(kv)
+		got, err := r.ReadOperatingModel(context.Background(), ref.Org, ref.Platform, ref.UserID)
+		if err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+		if got == nil {
+			t.Fatal("result = nil")
+		}
+		if got.Version != ref.Version {
+			t.Errorf("Version = %d, want %d (profile loaded successfully)", got.Version, ref.Version)
+		}
+		if len(got.Entries) != 0 {
+			t.Errorf("Entries = %d, want 0 (layer fetch failed)", len(got.Entries))
+		}
+	})
 }
 
 // errKV always returns the configured error from Get. Used to cover the
-// "transient KV failure" path.
+// "transient KV failure" path on the profile read.
 type errKV struct{ err error }
 
 func (e *errKV) Get(_ context.Context, _ string) (*natsclient.KVEntry, error) {
 	return nil, e.err
+}
+
+// selectiveErrKV delegates Get to an underlying fakeKV but injects a
+// configured error for one specific key. Used to exercise the partial-
+// failure path: profile loads, but a layer or entry fetch errors.
+type selectiveErrKV struct {
+	delegate *fakeKV
+	failKey  string
+	err      error
+}
+
+func (s *selectiveErrKV) Get(ctx context.Context, key string) (*natsclient.KVEntry, error) {
+	if key == s.failKey {
+		return nil, s.err
+	}
+	return s.delegate.Get(ctx, key)
 }
 
 func contains(haystack []string, needle string) bool {

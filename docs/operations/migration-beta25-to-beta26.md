@@ -80,13 +80,18 @@ change beyond the leak being closed.
 
 ### Read-amplification
 
-The new traversal does more KV gets than the old prefix scan
-when a profile has many layers and entries: roughly `1 + L +
-E` reads vs. `1 + N` (where N is the global entry count). For
-typical profiles (L=5 canonical layers, E ≈ 5–20 entries) this
-is an order-of-magnitude *reduction* in reads compared to the
-flat scan over a multi-user bucket, since it stops touching
-other users' data.
+The new traversal scales with the *user's own profile size*,
+not the bucket-wide entry count. Pre-fix, the call cost was
+`1 prefix scan + N point gets` (where N is *every* user's
+entries in the bucket). Post-fix, the call cost is `1 + L + E`
+point gets (profile + layers + entries reachable from this
+user's profile only).
+
+For typical profiles (L=5 canonical layers, E ≈ 5–20 entries
+per user), the new path does fewer round-trips than the old
+path on any bucket with more than one user, and the cost no
+longer grows when other users onboard. Single-user deployments
+see roughly the same total read count.
 
 The `getState` path is read-only and uses the same
 `KVStore.Get` plumbing as before.
