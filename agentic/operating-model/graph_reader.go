@@ -6,10 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
+
+// defaultLessonsLimit caps how many lessons GraphProfileReader.ReadLessons
+// returns when the caller passes limit <= 0. Bounds the KV-traversal cost
+// for users that accumulate a long lesson history; the assembler typically
+// only renders 5–10 anyway.
+const defaultLessonsLimit = 50
 
 // kvGetter is the minimal slice of natsclient.KVStore that GraphProfileReader
 // needs. Narrowing the dependency to this interface lets unit tests inject a
@@ -80,6 +88,77 @@ func (r *GraphProfileReader) ReadProfileVersion(ctx context.Context, org, platfo
 		return 0, fmt.Errorf("decode profile %q: %w", profileID, err)
 	}
 	return readVersionFromState(&state), nil
+}
+
+// ReadLessons implements ProfileReader. It traverses the profile's
+// has_lesson edges, fetches each referenced lesson entity, and returns
+// up to `limit` lessons sorted most-recent-first by LearnedAt.
+//
+// Reads: 1 profile + N lesson entity gets where N is min(actual_lessons,
+// defaultLessonsLimit). Lessons that fail to load (KV miss, malformed
+// state) are skipped silently — a missing lesson is not a hard failure for
+// the caller's sake of rendering a profile-context preamble.
+func (r *GraphProfileReader) ReadLessons(ctx context.Context, org, platform, userID string, limit int) ([]Lesson, error) {
+	if org == "" || platform == "" || userID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = defaultLessonsLimit
+	}
+
+	profile := r.getState(ctx, ProfileEntityID(org, platform, userID))
+	if profile == nil {
+		return nil, nil
+	}
+	lessonIDs := relationshipTargets(profile, PredicateProfileHasLesson)
+	if len(lessonIDs) == 0 {
+		return nil, nil
+	}
+
+	out := make([]Lesson, 0, len(lessonIDs))
+	for _, lessonID := range lessonIDs {
+		l, ok := r.readLesson(ctx, lessonID)
+		if ok {
+			out = append(out, l)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].LearnedAt.After(out[j].LearnedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// readLesson hydrates a single Lesson entity from its triples. Returns
+// (Lesson{}, false) for missing or malformed entities (logged at Debug).
+func (r *GraphProfileReader) readLesson(ctx context.Context, entityID string) (Lesson, bool) {
+	state := r.getState(ctx, entityID)
+	if state == nil {
+		return Lesson{}, false
+	}
+	l := Lesson{LessonID: lastDotSegment(entityID)}
+
+	if v, ok := state.GetPropertyValue(PredicateLessonSummary); ok {
+		l.Summary = objToString(v)
+	}
+	if v, ok := state.GetPropertyValue(PredicateLessonSessionID); ok {
+		l.SessionID = objToString(v)
+	}
+	if v, ok := state.GetPropertyValue(PredicateLessonLearnedAt); ok {
+		if s := objToString(v); s != "" {
+			if parsed, err := time.Parse(time.RFC3339, s); err == nil {
+				l.LearnedAt = parsed
+			}
+		}
+	}
+	if l.Summary == "" {
+		r.logger.Debug("skipping lesson with missing summary",
+			"entity_id", entityID)
+		return Lesson{}, false
+	}
+	return l, true
 }
 
 // ReadOperatingModel implements ProfileReader. It walks the user's profile

@@ -5,12 +5,19 @@ import (
 	"encoding/json"
 	"sync/atomic"
 	"time"
+
+	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/message"
+	"github.com/google/uuid"
 )
 
-// ContextEvent matches the structure from agentic-loop/handlers.go
+// ContextEvent matches the structure from agentic-loop/handlers.go.
+// Mirrors agentic.ContextEvent; kept locally so the handler can decode it
+// without pulling the full agentic payload registry.
 type ContextEvent struct {
 	Type        string  `json:"type"` // "compaction_starting", "compaction_complete"
 	LoopID      string  `json:"loop_id"`
+	UserID      string  `json:"user_id,omitempty"`
 	Iteration   int     `json:"iteration"`
 	Utilization float64 `json:"utilization,omitempty"`
 	TokensSaved int     `json:"tokens_saved,omitempty"`
@@ -106,6 +113,55 @@ func (c *Component) handleCompactionComplete(ctx context.Context, event ContextE
 	c.logger.Debug("Post-compaction context injected",
 		"loop_id", event.LoopID,
 		"token_count", hydrated.TokenCount)
+
+	// Persist the compaction summary as a Lesson on the user's profile so
+	// future loops can fold it into ProfileContext.LessonsLearned. Best
+	// effort — a publish failure is logged but does not retry, since the
+	// context has already been hydrated for the current loop and a missed
+	// lesson is a degradation of future-session quality, not a hard error.
+	c.persistCompactionAsLesson(ctx, event)
+}
+
+// persistCompactionAsLesson converts a compaction_complete event's summary
+// into a Lesson entity attached to the owning user's profile. No-op when
+// the event has no UserID (e.g. system-initiated loops, pre-beta.29 events
+// from older publishers) or no summary.
+func (c *Component) persistCompactionAsLesson(ctx context.Context, event ContextEvent) {
+	if event.UserID == "" || event.Summary == "" {
+		return
+	}
+	lesson := operatingmodel.Lesson{
+		LessonID:  "lesson-" + uuid.New().String()[:8],
+		Summary:   event.Summary,
+		SessionID: event.LoopID,
+		LearnedAt: time.Now().UTC(),
+	}
+	if err := lesson.Validate(); err != nil {
+		c.logger.WarnContext(ctx, "lesson validation failed; skipping persist",
+			"loop_id", event.LoopID, "user_id", event.UserID, "error", err)
+		return
+	}
+
+	triples := operatingmodel.LessonTriples(operatingmodel.ProfileRef{
+		Org:      c.platform.Org,
+		Platform: c.platform.Platform,
+		UserID:   event.UserID,
+	}, lesson)
+
+	if err := c.publishLessonTriples(ctx, event.LoopID, triples); err != nil {
+		c.logger.WarnContext(ctx, "lesson publish failed; future sessions will miss this insight",
+			"loop_id", event.LoopID, "user_id", event.UserID, "error", err)
+		return
+	}
+	c.logger.Debug("compaction summary persisted as lesson",
+		"loop_id", event.LoopID, "user_id", event.UserID, "lesson_id", lesson.LessonID)
+}
+
+// publishLessonTriples sends lesson triples through the same graph_mutations
+// output port the existing fact-extraction path uses. graph-ingest applies
+// them via AddTriple → CAS write to ENTITY_STATES.
+func (c *Component) publishLessonTriples(ctx context.Context, loopID string, triples []message.Triple) error {
+	return c.publishGraphMutations(ctx, loopID, "add_triples", triples)
 }
 
 // handleCompactionStarting processes compaction start events

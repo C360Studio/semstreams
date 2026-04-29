@@ -157,6 +157,10 @@ func (s stubVersionReader) ReadProfileVersion(_ context.Context, _, _, _ string)
 	return s.version, nil
 }
 
+func (s stubVersionReader) ReadLessons(_ context.Context, _, _, _ string, _ int) ([]operatingmodel.Lesson, error) {
+	return nil, nil
+}
+
 func newOnboardTestComponentWithReader(reader operatingmodel.ProfileReader) *Component {
 	c := newOnboardTestComponent()
 	c.deps = component.Dependencies{

@@ -146,6 +146,18 @@ func (h *MessageHandler) SetPersonaFragments(src PersonaFragmentSource) {
 	h.personaFragments = src
 }
 
+// lookupLoopUserID resolves the owning user for a loop, returning "" when the
+// loop is unknown or has no UserID. Used to stamp ContextEvents so downstream
+// consumers (e.g. agentic-memory's lessons-learned persister) can scope
+// extracted artifacts to a user without a separate KV round-trip.
+func (h *MessageHandler) lookupLoopUserID(loopID string) string {
+	entity, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return ""
+	}
+	return entity.UserID
+}
+
 // maybeCompact checks if context compaction is needed and performs it,
 // recording both a context event and a trajectory step.
 func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, loopID string, iteration int, result *HandlerResult) {
@@ -154,9 +166,11 @@ func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, l
 	}
 
 	utilization := cm.Utilization()
+	userID := h.lookupLoopUserID(loopID)
 	result.ContextEvents = append(result.ContextEvents, agentic.ContextEvent{
 		Type:        "compaction_starting",
 		LoopID:      loopID,
+		UserID:      userID,
 		Iteration:   iteration,
 		Utilization: utilization,
 	})
@@ -179,6 +193,7 @@ func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, l
 	result.ContextEvents = append(result.ContextEvents, agentic.ContextEvent{
 		Type:        "compaction_complete",
 		LoopID:      loopID,
+		UserID:      userID,
 		Iteration:   iteration,
 		TokensSaved: tokensSaved,
 		Summary:     compactResult.Summary,
@@ -1143,6 +1158,7 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 	result.ContextEvents = append(result.ContextEvents, agentic.ContextEvent{
 		Type:        agentic.ContextEventCompactionRetry,
 		LoopID:      loopID,
+		UserID:      h.lookupLoopUserID(loopID),
 		Iteration:   entity.Iterations,
 		Utilization: preUtilization,
 		TokensSaved: tokensSaved,

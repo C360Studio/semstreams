@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -389,6 +390,153 @@ func TestReadOperatingModel_EntryMissingRequiredFieldsSkipped(t *testing.T) {
 	}
 	if len(got.Entries) != 1 {
 		t.Errorf("Entries = %d, want 1 (malformed skipped)", len(got.Entries))
+	}
+}
+
+func TestReadLessons_Empty(t *testing.T) {
+	r := newTestReader(newFakeKV())
+	got, err := r.ReadLessons(context.Background(), "acme", "ops", "alice", 10)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+func TestReadLessons_RanksByRecencyDesc(t *testing.T) {
+	kv := newFakeKV()
+	ref := ProfileRef{Org: "acme", Platform: "ops", UserID: "alice"}
+	now := time.Now().UTC()
+
+	// Three lessons learned at increasing times. Most recent must come first.
+	for i, l := range []Lesson{
+		{LessonID: "l-old", Summary: "oldest", LearnedAt: now.Add(-3 * time.Hour)},
+		{LessonID: "l-mid", Summary: "middle", LearnedAt: now.Add(-2 * time.Hour)},
+		{LessonID: "l-new", Summary: "newest", LearnedAt: now.Add(-1 * time.Hour)},
+	} {
+		_ = i
+		writeLessonToFakeKV(t, kv, ref, l)
+	}
+
+	r := newTestReader(kv)
+	got, err := r.ReadLessons(context.Background(), ref.Org, ref.Platform, ref.UserID, 10)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	if got[0].Summary != "newest" || got[1].Summary != "middle" || got[2].Summary != "oldest" {
+		t.Errorf("ranking wrong: %v", []string{got[0].Summary, got[1].Summary, got[2].Summary})
+	}
+}
+
+func TestReadLessons_LimitCaps(t *testing.T) {
+	kv := newFakeKV()
+	ref := ProfileRef{Org: "acme", Platform: "ops", UserID: "alice"}
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		writeLessonToFakeKV(t, kv, ref, Lesson{
+			LessonID: fmt.Sprintf("l-%d", i),
+			Summary:  fmt.Sprintf("lesson %d", i),
+			// LearnedAt strictly increasing so ranking is deterministic.
+			LearnedAt: now.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	r := newTestReader(kv)
+	got, err := r.ReadLessons(context.Background(), ref.Org, ref.Platform, ref.UserID, 2)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2 (limit applied)", len(got))
+	}
+}
+
+func TestReadLessons_MultiUserIsolation(t *testing.T) {
+	// Same regression as #14 but for lessons. Bob's lessons must not leak
+	// into Alice's read.
+	kv := newFakeKV()
+	now := time.Now().UTC()
+	writeLessonToFakeKV(t, kv,
+		ProfileRef{Org: "acme", Platform: "ops", UserID: "alice"},
+		Lesson{LessonID: "l-a1", Summary: "alice insight", LearnedAt: now})
+	writeLessonToFakeKV(t, kv,
+		ProfileRef{Org: "acme", Platform: "ops", UserID: "bob"},
+		Lesson{LessonID: "l-b1", Summary: "bob insight", LearnedAt: now})
+
+	r := newTestReader(kv)
+	alice, err := r.ReadLessons(context.Background(), "acme", "ops", "alice", 10)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(alice) != 1 || alice[0].Summary != "alice insight" {
+		t.Errorf("alice got %v, want [alice insight]", alice)
+	}
+}
+
+func TestReadLessons_SkipsLessonsWithMissingSummary(t *testing.T) {
+	// A lesson entity referenced from has_lesson but missing the summary
+	// triple is silently skipped (matches readEntry behavior).
+	kv := newFakeKV()
+	ref := ProfileRef{Org: "acme", Platform: "ops", UserID: "alice"}
+	now := time.Now().UTC()
+	writeLessonToFakeKV(t, kv, ref,
+		Lesson{LessonID: "l-good", Summary: "real lesson", LearnedAt: now})
+
+	// Inject a malformed lesson entity (no summary) and a has_lesson edge.
+	malformedID := LessonEntityID(ref.Org, ref.Platform, "l-bad")
+	kv.putState(t, graph.EntityState{
+		ID: malformedID,
+		Triples: []message.Triple{
+			{Subject: malformedID, Predicate: PredicateLessonLearnedAt,
+				Object: now.Format(time.RFC3339), Source: LessonTripleSource,
+				Timestamp: now, Confidence: 1.0},
+		},
+		UpdatedAt: now,
+	})
+	profileID := ProfileEntityID(ref.Org, ref.Platform, ref.UserID)
+	prof, _ := kv.Get(context.Background(), profileID)
+	var ps graph.EntityState
+	_ = json.Unmarshal(prof.Value, &ps)
+	ps.Triples = append(ps.Triples, message.Triple{
+		Subject: profileID, Predicate: PredicateProfileHasLesson, Object: malformedID,
+		Source: LessonTripleSource, Timestamp: now, Confidence: 1.0,
+	})
+	kv.putState(t, ps)
+
+	r := newTestReader(kv)
+	got, err := r.ReadLessons(context.Background(), ref.Org, ref.Platform, ref.UserID, 10)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 1 || got[0].Summary != "real lesson" {
+		t.Errorf("got %v, want only valid lesson", got)
+	}
+}
+
+// writeLessonToFakeKV mirrors writeProfile: appends the lesson's triples
+// onto whatever EntityStates already live in fakeKV, so multiple lessons
+// (and operating-model entries) can coexist on the same profile entity.
+func writeLessonToFakeKV(t *testing.T, kv *fakeKV, ref ProfileRef, l Lesson) {
+	t.Helper()
+	triples := LessonTriples(ref, l)
+
+	bySubject := make(map[string][]message.Triple)
+	for _, tr := range triples {
+		bySubject[tr.Subject] = append(bySubject[tr.Subject], tr)
+	}
+	for id, ts := range bySubject {
+		existing, _ := kv.Get(context.Background(), id)
+		state := graph.EntityState{ID: id, UpdatedAt: time.Now().UTC()}
+		if existing != nil {
+			if err := json.Unmarshal(existing.Value, &state); err != nil {
+				t.Fatalf("unmarshal %s: %v", id, err)
+			}
+		}
+		state.Triples = append(state.Triples, ts...)
+		kv.putState(t, state)
 	}
 }
 

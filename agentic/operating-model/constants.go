@@ -92,6 +92,7 @@ const (
 	PredicateProfileVersion     = "user.operating_model.version"
 	PredicateProfileLastUpdated = "user.operating_model.last_updated"
 	PredicateProfileHasLayer    = "user.operating_model.has_layer"
+	PredicateProfileHasLesson   = "user.profile.has_lesson"
 
 	// Layer-level predicates
 	PredicateLayerName              = "om.layer.name"
@@ -109,7 +110,18 @@ const (
 	PredicateEntryConstraints      = "om.entry.constraints"
 	PredicateEntrySourceConfidence = "om.entry.source_confidence"
 	PredicateEntryStatus           = "om.entry.status"
+
+	// Lesson-level predicates. A lesson is a compaction-extracted insight
+	// the agent learned during a prior session, attached to the user's
+	// profile via PredicateProfileHasLesson.
+	PredicateLessonSummary   = "user.lesson.summary"
+	PredicateLessonSessionID = "user.lesson.session_id"
+	PredicateLessonLearnedAt = "user.lesson.learned_at"
 )
+
+// LessonTripleSource identifies lesson triples in the Source field. Distinct
+// from operating-model TripleSource so observers can filter the two streams.
+const LessonTripleSource = "lessons_learned"
 
 // TripleSource identifies operating-model triples in the Source field.
 // This matches the convention from semstreams' agentic graph_writer where

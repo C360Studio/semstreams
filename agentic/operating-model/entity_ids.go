@@ -63,6 +63,22 @@ func EntryEntityID(org, platform, entryID string) string {
 	return id
 }
 
+// LessonEntityID constructs the 6-part entity ID for a compaction-extracted
+// lesson. Lessons live under each user via PredicateProfileHasLesson and are
+// queried via the same profile-traversal pattern as om-entry entities.
+// Format: {org}.{platform}.user.teams.lesson.{lessonID}
+//
+// Panics if any input part is empty or contains a dot.
+func LessonEntityID(org, platform, lessonID string) string {
+	mustValidatePart("org", org)
+	mustValidatePart("platform", platform)
+	mustValidatePart("lessonID", lessonID)
+
+	id := fmt.Sprintf("%s.%s.user.teams.lesson.%s", org, platform, lessonID)
+	mustValidateEntityID("LessonEntityID", id)
+	return id
+}
+
 // mustValidatePart panics if value is empty or contains a dot. Dots are
 // reserved as part separators in the 6-part entity ID format.
 func mustValidatePart(name, value string) {

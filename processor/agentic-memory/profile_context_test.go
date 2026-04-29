@@ -55,7 +55,7 @@ func TestAssembleProfileContext_PopulatesOperatingModelSlice(t *testing.T) {
 		t.Errorf("rendered content missing key entry:\n%s", got.OperatingModel.Content)
 	}
 	if got.LessonsLearned.Content != "" {
-		t.Errorf("lessons_learned should be empty in v1, got %q", got.LessonsLearned.Content)
+		t.Errorf("lessons_learned should be empty when no lessons input, got %q", got.LessonsLearned.Content)
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("assembled payload fails Validate: %v", err)
@@ -149,6 +149,7 @@ func TestAssembleProfileContext_DeterministicAcrossCalls(t *testing.T) {
 // stubProfileReader returns a fixed result set.
 type stubProfileReader struct {
 	entries []operatingmodel.Entry
+	lessons []operatingmodel.Lesson
 	version int
 	err     error
 }
@@ -171,6 +172,13 @@ func (s stubProfileReader) ReadProfileVersion(ctx context.Context, _, _, _ strin
 		return 0, s.err
 	}
 	return s.version, nil
+}
+
+func (s stubProfileReader) ReadLessons(ctx context.Context, _, _, _ string, _ int) ([]operatingmodel.Lesson, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.lessons, nil
 }
 
 func newProfileContextTestComponent(t *testing.T, reader operatingmodel.ProfileReader) *Component {
