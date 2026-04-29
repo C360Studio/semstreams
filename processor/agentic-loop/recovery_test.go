@@ -510,3 +510,107 @@ func TestSynthesizeToolFailure_LoopNotFoundReturnsError(t *testing.T) {
 		t.Fatal("expected error for non-existent loop, got nil")
 	}
 }
+
+// TestRepairToolPairs_StripsOrphanFromInjectedContext is the C3
+// safety-net test: simulate a KV-restored loop with corrupt context
+// (assistant message carrying tool_calls but no matching tool
+// results) by injecting messages directly into the ContextManager,
+// then call the public RepairToolPairs to assert the orphan group is
+// removed. This is what defends against any future failure path that
+// adds an assistant tool_call to context without ensuring matched
+// results — even if every C1-wired terminal-transition path is
+// correct, this audit is the belt-and-suspenders.
+func TestRepairToolPairs_StripsOrphanFromInjectedContext(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	cm := handler.loopManager.GetContextManager(loopID)
+
+	// Inject an assistant message with two tool_calls, but only one
+	// matching tool_result. The pair (call-2) is orphaned; the
+	// repair must drop the entire group (assistant + the call-1
+	// result) because partial pairs cause provider 400s.
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role:    "user",
+		Content: "do something",
+	})
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role: "assistant",
+		ToolCalls: []agentic.ToolCall{
+			{ID: "call-1", Name: "search"},
+			{ID: "call-2", Name: "read_file"},
+		},
+	})
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role:       "tool",
+		ToolCallID: "call-1",
+		Content:    "search result",
+	})
+	// call-2 has no matching tool result — the orphan.
+
+	// Pre-audit: 3 messages (user + assistant-with-tool_calls +
+	// only-one-tool-result; the second tool_call's result is
+	// deliberately missing).
+	if got := cm.GetContext(); len(got) != 3 {
+		t.Fatalf("setup: GetContext returned %d messages, want 3", len(got))
+	}
+
+	removed := cm.RepairToolPairs()
+	if removed == 0 {
+		t.Error("expected RepairToolPairs to remove orphan group; got 0")
+	}
+
+	// Post-audit: only the user message survives. The orphan group
+	// (assistant + call-1 result) is dropped together because partial
+	// pairs are invalid for the next agent.request.
+	post := cm.GetContext()
+	for _, msg := range post {
+		if len(msg.ToolCalls) > 0 {
+			t.Errorf("post-audit context still has assistant message with tool_calls: %+v", msg)
+		}
+		if msg.ToolCallID != "" {
+			t.Errorf("post-audit context still has tool result message: %+v", msg)
+		}
+	}
+}
+
+// TestRepairToolPairs_NoOpOnWellFormedContext confirms the hot path
+// is a no-op when every tool_call has a matching result. Linear scan,
+// no allocations, no warning logged.
+func TestRepairToolPairs_NoOpOnWellFormedContext(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	cm := handler.loopManager.GetContextManager(loopID)
+
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role:    "user",
+		Content: "do something",
+	})
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role: "assistant",
+		ToolCalls: []agentic.ToolCall{
+			{ID: "call-1", Name: "search"},
+		},
+	})
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role:       "tool",
+		ToolCallID: "call-1",
+		Content:    "search result",
+	})
+
+	pre := len(cm.GetContext())
+	removed := cm.RepairToolPairs()
+	post := len(cm.GetContext())
+
+	if removed != 0 {
+		t.Errorf("expected zero removed on well-formed context; got %d", removed)
+	}
+	if pre != post {
+		t.Errorf("context length changed: %d → %d (well-formed should be unchanged)", pre, post)
+	}
+}

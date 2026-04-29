@@ -1182,6 +1182,17 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 		return err
 	}
 
+	// Pre-request integrity audit — same defensive sweep as
+	// handleToolsComplete. The retry-after-truncation path doesn't
+	// add new tool results (the truncation drops them) but the
+	// existing context may carry orphans from an earlier failed
+	// iteration that compaction didn't catch.
+	if removed := cm.RepairToolPairs(); removed > 0 {
+		h.logger.Warn("retry-request tool-pair audit removed orphan messages",
+			slog.String("loop_id", loopID),
+			slog.Int("removed", removed))
+	}
+
 	messages := cm.GetContext()
 	if !hasUserOrAssistantMessage(messages) {
 		messages = h.recoverEmptyContext(loopID, cm, entity.Iterations, 0)
@@ -1619,6 +1630,17 @@ func (h *MessageHandler) handleToolsComplete(
 
 	for _, tm := range toolMessages {
 		_ = cm.AddMessage(RegionRecentHistory, tm)
+	}
+
+	// Pre-request integrity audit. Belt-and-suspenders for any orphan
+	// tool_calls C1's synth-result wiring missed (KV-restored loops
+	// with corrupt context, future failure paths added without the
+	// synth-emission, manual state mutations). No-op on well-formed
+	// contexts — single linear scan of recent history.
+	if removed := cm.RepairToolPairs(); removed > 0 {
+		h.logger.Warn("pre-request tool-pair audit removed orphan messages",
+			slog.String("loop_id", loopID),
+			slog.Int("removed", removed))
 	}
 
 	messages := cm.GetContext()

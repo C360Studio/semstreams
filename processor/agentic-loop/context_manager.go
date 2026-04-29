@@ -236,6 +236,32 @@ func (cm *ContextManager) GetRegionTokens(region RegionType) int {
 	return total
 }
 
+// RepairToolPairs is the public entry point for the tool-pair
+// integrity audit. Locks cm.mu and delegates to repairToolPairsLocked.
+//
+// Beta.25 hoisted this from compaction-only (it was previously called
+// only by SliceForBudget) to a general-purpose pre-request safety
+// net. Beta.25 C1 wired synth-result emission at every known
+// terminal-transition path (failLoop, max-iter, cancel signal,
+// dispatch failure) so most orphan tool_calls get matched results
+// before they ever reach context. RepairToolPairs is the belt-and-
+// suspenders for cases the synth-result path missed:
+//   - loops restored from KV with corrupt context written by an
+//     older binary version,
+//   - any future failure path that adds an assistant tool_call to
+//     context without ensuring matched results,
+//   - third-party state mutations (e.g., manual KV edits during
+//     debugging).
+//
+// Returns the number of messages removed; zero on the hot path
+// (well-formed contexts iterate the recent-history slice once and
+// return without allocations).
+func (cm *ContextManager) RepairToolPairs() int {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.repairToolPairsLocked()
+}
+
 // repairToolPairsLocked removes orphaned tool pair messages from RegionRecentHistory.
 // An assistant message with ToolCalls is orphaned if any of its tool results are missing.
 // A tool result message is orphaned if its corresponding assistant message is missing.
