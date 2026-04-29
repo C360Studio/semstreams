@@ -2,15 +2,20 @@
 
 ## Status
 
-**Proposed (2026-04-29).** Not committed to any specific tag.
-Beta.22 lands the first concrete forward-compatible step
-(`agenticdispatch.IdentityFromRequest` and `WithIdentity` helpers
-in `processor/agentic-dispatch/identity.go`) so the future contract
-has a place to plug in without rewriting handlers. The full
-implementation — middleware-chain plumbing, NATS message-header
-identity, server-side bypass tokens — is deferred until the pattern
-problem becomes a felt friction point or a security incident
-forces it.
+**Phase 0 (beta.22) and Phase 1 (beta.23) shipped (2026-04-29).**
+Phases 2 (NATS message-header identity) and 3 (server-side bypass
+tokens) remain deferred until the pattern problem becomes a felt
+friction point or a security incident forces them.
+
+- Phase 0 (beta.22): `agenticdispatch.IdentityFromRequest` and
+  `WithIdentity` helpers in
+  `processor/agentic-dispatch/identity.go` — the small forward-
+  compatible seam handlers consume.
+- Phase 1 (beta.23): `service.HTTPMiddleware` type and
+  `(*service.Manager).UseHTTPMiddleware` setter — the framework-
+  level middleware chain that wraps every registered route.
+  Products plug in their auth / logging / recovery / rate-limit
+  middleware here. The framework ships zero default middleware.
 
 ## Context
 
@@ -77,32 +82,39 @@ authenticated identity from any caller that passed an empty
 user_id field — a privilege-escalation-shaped surprise we want to
 foreclose now while the seam is small.
 
-### Phase 1 — Framework HTTP middleware contract
+### Phase 1 — Framework HTTP middleware contract (beta.23, shipped)
 
-Define a middleware seam on `service.Manager` (or
-`component.Dependencies`, TBD):
+The seam landed on `service.Manager` rather than
+`service.Dependencies` — `Dependencies` is per-service constructor
+input, but middleware is a Manager-level concern (it wraps the
+shared mux, not any individual service). Final shape:
 
 ```go
+// service/middleware.go
 type HTTPMiddleware func(http.Handler) http.Handler
 
-// Future shape on service.Dependencies or service.Manager:
-type Dependencies struct {
-    // ... existing fields ...
-    HTTPMiddleware []HTTPMiddleware // applied in order, outermost-first
-}
+// service/service_manager.go
+func (m *Manager) UseHTTPMiddleware(mws ...HTTPMiddleware)
 ```
 
-When a component or service calls `RegisterHTTPHandlers(prefix, mux)`,
-the framework wraps every handler with the chain before mounting.
-Products supply their middleware at binary boot. semteams plugs in
-a middleware that reads `X-User-Id` and calls `WithIdentity`;
-semspec plugs in OAuth bearer-token validation; semdragon does
-something else. The framework stays neutral on auth shape.
+Products call `manager.UseHTTPMiddleware(...)` between
+`NewServiceManager(...)` and `StartAll(ctx)`; the framework wraps
+the mux at boot via `m.buildHTTPHandler()` and assigns the result
+to `http.Server.Handler`. Calls after the server is running are
+ignored with a warning (the `Handler` field is set at boot;
+late additions can't take effect, and a warning surfaces operator
+misuse instead of silently dropping).
 
-Migration path: the existing `RegisterHTTPHandlers` signature stays
-intact; the wrapping happens transparently inside the framework's
-mux setup. Handlers that already use `IdentityFromRequest` get the
-middleware-supplied identity for free.
+The existing `RegisterHTTPHandlers(prefix, *http.ServeMux)`
+signature stays intact; wrapping is transparent. Handlers that
+use `IdentityFromRequest` get the middleware-supplied identity
+for free. semteams plugs in `X-User-Id` → `WithIdentity`;
+semspec plugs in OAuth bearer-token validation; semdragon does
+its own thing. The framework stays neutral on auth shape and
+ships zero default middleware.
+
+Operations doc: `docs/operations/09-http-middleware.md`.
+Migration: `docs/operations/migration-beta22-to-beta23.md`.
 
 ### Phase 2 — NATS message-header identity
 
@@ -174,10 +186,13 @@ This phase closes the M2 forgery finding in
 - Phase 0 (beta.22) is shipped. The helper API is the public
   contract for product-shell middleware to plug into; future phases
   expand around it.
-- Phase 1 has no committed tag. The right trigger is two or more
-  products needing the same middleware (auth, rate limit, audit
-  trail) — at that point a framework-level chain is cheaper than
-  duplicating in each product binary.
+- Phase 1 (beta.23) is shipped. The seam landed on
+  `service.Manager` (not `Dependencies` — see Phase 1 section
+  above for why). Composition is reverse-build outermost-first,
+  nil entries are skipped, and the no-middleware path compiles to
+  the bare mux with no overhead. The framework ships zero default
+  middleware; products supply auth / logging / recovery / rate
+  limiting at boot.
 - Phase 2 has no committed tag. The trigger is either a security
   audit finding the wire-forgery surface, or a product needing
   cross-process identity propagation that body fields can't
@@ -186,13 +201,25 @@ This phase closes the M2 forgery finding in
   exploitation of the forgery surface, or a regulated-deployment
   customer asking for it.
 
-## Critical files (Phase 0, shipped)
+## Critical files
+
+### Phase 0 (beta.22, shipped)
 
 | File | Role |
 |---|---|
 | `processor/agentic-dispatch/identity.go` | `IdentityFromRequest` + `WithIdentity` + `DefaultIdentity` |
 | `processor/agentic-dispatch/identity_test.go` | Resolution-order regression guards including the security-shaped body-empty-vs-ctx-precedence test |
 | `processor/agentic-dispatch/http.go` | Two existing handlers (`handleHTTPMessage`, `handleLoopApproval`) consume the helper |
+
+### Phase 1 (beta.23, shipped)
+
+| File | Role |
+|---|---|
+| `service/middleware.go` | `HTTPMiddleware` type + unexported `chainMiddleware` helper |
+| `service/middleware_test.go` | Order, pass-through, short-circuit, nil-skip, setter behavior, wired-boot-path coverage |
+| `service/service_manager.go` | `httpMiddleware` field on `Manager`, `UseHTTPMiddleware` setter, `buildHTTPHandler` helper, two `Handler:` edits at the http.Server construction sites |
+| `docs/operations/09-http-middleware.md` | Product-facing contract doc with paired-helper, panic-recovery, request-log, CORS, and per-prefix patterns |
+| `docs/operations/migration-beta22-to-beta23.md` | Migration guide |
 
 ## Related
 
