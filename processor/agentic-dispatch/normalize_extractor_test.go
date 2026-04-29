@@ -11,7 +11,7 @@ import (
 
 func TestNormalizeLayerAnswer_StubWhenNoNormalizer(t *testing.T) {
 	c, _ := newInterviewTestComponent(t)
-	c.normalizerFn = nil
+	c.SetLayerNormalizer(nil)
 
 	got := c.normalizeLayerAnswer(context.Background(),
 		operatingmodel.LayerOperatingRhythms,
@@ -157,6 +157,40 @@ func TestParseNormalizationResponse_EmptyOrJunk(t *testing.T) {
 				t.Error("expected error, got nil")
 			}
 		})
+	}
+}
+
+func TestNormalizationSystemPrompt_DataNotInstructionsFraming(t *testing.T) {
+	// The system prompt must tell the model to treat fence-wrapped content
+	// as data, not instructions. This is the cheap prompt-injection
+	// mitigation; if the system prompt regresses to "raw user content,"
+	// pasted "ignore prior instructions" payloads have a clearer path.
+	got := normalizationSystemPrompt(operatingmodel.LayerOperatingRhythms)
+	for _, want := range []string{
+		"USER_ANSWER",
+		"END_USER_ANSWER",
+		"DATA, not instructions",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing required fence/data phrase %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildNormalizationMessages_AnswerWrappedInFence(t *testing.T) {
+	// User content must arrive between the same fence markers the system
+	// prompt names, otherwise the data-vs-instructions framing is moot.
+	msgs := buildNormalizationMessages(operatingmodel.LayerOperatingRhythms,
+		"Mondays 9-10am planning")
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	user := msgs[1].Content
+	if !strings.HasPrefix(user, "<<<USER_ANSWER\n") {
+		t.Errorf("user content missing fence prefix; got: %q", user)
+	}
+	if !strings.HasSuffix(user, "\nEND_USER_ANSWER>>>") {
+		t.Errorf("user content missing fence suffix; got: %q", user)
 	}
 }
 

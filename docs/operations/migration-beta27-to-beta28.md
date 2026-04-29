@@ -74,6 +74,40 @@ A `finish_reason=length` response is treated as failure (forces
 stub fallback) rather than parsing potentially malformed JSON.
 This matches the beta.2 / beta.21 truncation-handling discipline.
 
+`extractionMaxTokens` is **2048**. 5–10 entries with all optional
+fields populated easily exceeded 1024 once the model emitted
+formatted JSON, silently degrading every call to stub fallback
+on small endpoints; 2048 covers the realistic shape with margin.
+
+### Prompt-injection mitigations
+
+Two cheap layered mitigations keep a pasted "ignore prior
+instructions" answer from steering the extractor:
+
+1. **Length cap.** User answers longer than
+   `extractionAnswerMaxBytes` (4096 bytes) are truncated before
+   the call. Bounds both the injection blast radius and the
+   silent-token-overrun case.
+2. **Data fence.** The user content is wrapped in
+   `<<<USER_ANSWER … END_USER_ANSWER>>>` markers and the system
+   prompt explicitly instructs the model to treat fence content
+   as data, not instructions. Standard small-LLM prompting
+   discipline; not a hard guarantee but a real signal.
+
+Output safety still relies on JSON-envelope validation +
+server-side `EntryID` regeneration + `Entry.Validate` drop-on-
+fail. A pasted attack that emits a partial entry shape gets
+parsed, given a fresh `EntryID`, and then dropped on Validate
+when title or summary is missing — blast radius is bounded.
+
+### Concurrency
+
+`normalizerFn` is stored as `atomic.Pointer[LayerNormalizer]` so
+`SetLayerNormalizer` is safe to call concurrently with in-flight
+onboarding turns. Tests that need to disable the normalizer
+should call `c.SetLayerNormalizer(nil)` rather than reaching
+for the field directly.
+
 ### EntryID generation
 
 The LLM is not trusted to produce dot-free EntryIDs. After

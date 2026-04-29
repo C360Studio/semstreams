@@ -84,10 +84,12 @@ type Component struct {
 
 	// normalizerFn turns a freeform onboarding answer into structured
 	// operating-model entries. Production wires this to
-	// normalizeLayerAnswerWithLLM during construction; tests can swap it for
-	// a deterministic stub. Nil disables LLM normalization and forces the
-	// fallback to the deterministic NormalizeLayerAnswer stub.
-	normalizerFn LayerNormalizer
+	// normalizeLayerAnswerWithLLM during construction; tests can swap it
+	// via SetLayerNormalizer. Stored as atomic.Pointer so SetLayerNormalizer
+	// is safe to call concurrently with in-flight onboarding turns. Nil
+	// payload (or no payload stored) disables LLM normalization and forces
+	// the fallback to the deterministic NormalizeLayerAnswer stub.
+	normalizerFn atomic.Pointer[LayerNormalizer]
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -168,7 +170,8 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 	// Default normalizer: LLM-backed extraction with stub fallback. Tests
 	// override via SetLayerNormalizer to keep the suite hermetic.
-	comp.normalizerFn = comp.normalizeLayerAnswerWithLLM
+	defaultNormalizer := LayerNormalizer(comp.normalizeLayerAnswerWithLLM)
+	comp.normalizerFn.Store(&defaultNormalizer)
 
 	// Register built-in commands
 	comp.registerBuiltinCommands()
@@ -204,10 +207,28 @@ func (c *Component) getProfileReader() operatingmodel.ProfileReader {
 // SetLayerNormalizer installs a LayerNormalizer used by /onboard's
 // answer-recording path. Production deployments leave this alone (the
 // constructor seeds the LLM-backed normalizer); tests override with a
-// deterministic stub. Passing nil disables LLM normalization and forces the
-// deterministic fallback in NormalizeLayerAnswer.
+// deterministic stub. Passing nil disables LLM normalization and forces
+// the deterministic fallback in NormalizeLayerAnswer.
+//
+// Safe to call concurrently with in-flight onboarding turns: stored via
+// atomic.Pointer so a swap is visible to the next read on any goroutine
+// without a data race.
 func (c *Component) SetLayerNormalizer(fn LayerNormalizer) {
-	c.normalizerFn = fn
+	if fn == nil {
+		c.normalizerFn.Store(nil)
+		return
+	}
+	c.normalizerFn.Store(&fn)
+}
+
+// getLayerNormalizer returns the currently-installed normalizer, or nil
+// when none is wired (forces stub fallback in normalizeLayerAnswer).
+func (c *Component) getLayerNormalizer() LayerNormalizer {
+	p := c.normalizerFn.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // Meta returns component metadata
