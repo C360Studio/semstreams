@@ -355,6 +355,25 @@ func (t *LoopTracker) gcPendingApprovalBufferLocked() {
 	}
 }
 
+// GetPendingApprovalCallID atomically snapshots the CallID of the
+// loop's currently-pinned PendingApproval. Returns ("", false) when
+// the loop is unknown or has no pending approval. Returning a value-
+// type instead of a *PendingApprovalInfo pointer prevents callers
+// from racing against concurrent SetPendingApproval / Clear /
+// UpdateCompletion mutations — the previous Get→deref pattern read
+// mutable fields outside the tracker's RLock and is unsound under
+// concurrent HTTP requests.
+func (t *LoopTracker) GetPendingApprovalCallID(loopID string) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	info, ok := t.loops[loopID]
+	if !ok || info.PendingApproval == nil {
+		return "", false
+	}
+	return info.PendingApproval.CallID, true
+}
+
 // ClearPendingApproval drops the pending-approval record for a loop.
 // Called when the loop transitions out of awaiting_approval (the
 // approval was resolved, the loop was cancelled, etc.). Idempotent —

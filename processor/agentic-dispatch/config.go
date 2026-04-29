@@ -125,6 +125,13 @@ func DefaultConfig() Config {
 					StreamName:  "USER",
 					Description: "Responses back to users",
 				},
+				{
+					Name:        "agent.approval_response",
+					Type:        "jetstream",
+					Subject:     "agent.approval_response.*",
+					StreamName:  "AGENT",
+					Description: "Approval responses submitted via the dispatch HTTP /loops/{id}/approval endpoint, consumed by agentic-loop's approval-response handler",
+				},
 			},
 		},
 	}

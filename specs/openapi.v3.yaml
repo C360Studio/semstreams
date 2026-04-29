@@ -558,6 +558,40 @@ paths:
                                 type: object
                 "404":
                     description: Loop not found
+    /loops/{id}/approval:
+        post:
+            summary: Submit human approval response for a gated tool call
+            description: Drives the beta.19 approval flow over HTTP. The loop must be awaiting approval (see config.approval_required). Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.
+            tags:
+                - AgenticDispatch
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  description: Loop ID
+                  schema: {}
+            requestBody:
+                description: Approval decision and optional modifications
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/ApprovalRequest'
+            responses:
+                "200":
+                    description: Approval submitted
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Invalid request body or decision value
+                "404":
+                    description: Loop not found
+                "409":
+                    description: Loop exists but is not awaiting approval
+                "500":
+                    description: Failed to publish approval (NATS error)
     /loops/{id}/signal:
         post:
             summary: Send control signal to loop
@@ -902,6 +936,38 @@ components:
                 - loop_id
                 - timestamp
             type: object
+        ApprovalAcceptResponse:
+            properties:
+                accepted:
+                    type: boolean
+                decision:
+                    type: string
+                loop_id:
+                    type: string
+                message:
+                    type: string
+                timestamp:
+                    type: string
+            required:
+                - loop_id
+                - decision
+                - accepted
+                - timestamp
+            type: object
+        ApprovalRequest:
+            properties:
+                decision:
+                    type: string
+                modified_arguments:
+                    additionalProperties: {}
+                    type: object
+                reason:
+                    type: string
+                user_id:
+                    type: string
+            required:
+                - decision
+            type: object
         ComponentType:
             properties:
                 category:
@@ -1178,6 +1244,29 @@ components:
                     type: object
                 outcome:
                     type: string
+                pending_approval:
+                    anyOf:
+                        - properties:
+                            arguments:
+                                additionalProperties: {}
+                                type: object
+                            call_id:
+                                type: string
+                            reason:
+                                type: string
+                            requested_at:
+                                format: date-time
+                                type: string
+                            tool_name:
+                                type: string
+                            trace_id:
+                                type: string
+                          required:
+                            - call_id
+                            - tool_name
+                            - requested_at
+                          type: object
+                        - type: "null"
                 result:
                     type: string
                 role:

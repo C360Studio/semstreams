@@ -721,6 +721,44 @@ func TestLoopTracker_SetPendingApproval_BufferRespectsCallerSetState(t *testing.
 		"caller-supplied PendingApproval must take precedence over buffer")
 }
 
+// TestLoopTracker_GetPendingApprovalCallID covers the atomic-read
+// accessor introduced to fix the prior data race where the HTTP
+// handler dereferenced LoopInfo.PendingApproval outside the
+// tracker's lock.
+func TestLoopTracker_GetPendingApprovalCallID(t *testing.T) {
+	tracker := NewLoopTracker()
+
+	t.Run("unknown loop returns false", func(t *testing.T) {
+		callID, ok := tracker.GetPendingApprovalCallID("ghost")
+		assert.False(t, ok)
+		assert.Empty(t, callID)
+	})
+
+	tracker.Track(&LoopInfo{LoopID: "loop-1", UserID: "user-1", State: "executing"})
+
+	t.Run("tracked loop without pending returns false", func(t *testing.T) {
+		callID, ok := tracker.GetPendingApprovalCallID("loop-1")
+		assert.False(t, ok)
+		assert.Empty(t, callID)
+	})
+
+	tracker.SetPendingApproval("loop-1", &PendingApprovalInfo{CallID: "call-001", ToolName: "delete_rule"})
+
+	t.Run("tracked loop with pending returns CallID", func(t *testing.T) {
+		callID, ok := tracker.GetPendingApprovalCallID("loop-1")
+		assert.True(t, ok)
+		assert.Equal(t, "call-001", callID)
+	})
+
+	tracker.ClearPendingApproval("loop-1")
+
+	t.Run("cleared returns false again", func(t *testing.T) {
+		callID, ok := tracker.GetPendingApprovalCallID("loop-1")
+		assert.False(t, ok)
+		assert.Empty(t, callID)
+	})
+}
+
 func TestLoopTracker_ClearPendingApproval(t *testing.T) {
 	tracker := NewLoopTracker()
 	tracker.Track(&LoopInfo{LoopID: "loop-1", UserID: "user-1", State: "executing"})

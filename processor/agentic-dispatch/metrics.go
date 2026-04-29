@@ -24,6 +24,10 @@ type routerMetrics struct {
 	// Loop signal metrics
 	loopSignalsSent *prometheus.CounterVec
 
+	// Loop approval metrics — counts approval submissions through the
+	// HTTP /loops/{id}/approval endpoint by decision and outcome.
+	loopApprovalsSubmitted *prometheus.CounterVec
+
 	// SSE metrics
 	sseConnectionsActive prometheus.Gauge
 	sseEventsTotal       *prometheus.CounterVec
@@ -131,6 +135,14 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Help:      "Total number of loop control signals sent",
 		}, []string{"signal_type", "accepted"}),
 
+		// Loop approval metrics
+		loopApprovalsSubmitted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "loop_approvals_submitted_total",
+			Help:      "Total number of approval responses submitted via HTTP, labelled by decision and submission outcome (status: success/error)",
+		}, []string{"decision", "status"}),
+
 		// SSE metrics
 		sseConnectionsActive: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "semstreams",
@@ -165,6 +177,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterCounterVec("router", "http_requests_total", m.httpRequestsTotal)
 		_ = registry.RegisterHistogramVec("router", "http_request_duration_seconds", m.httpRequestDuration)
 		_ = registry.RegisterCounterVec("router", "loop_signals_sent_total", m.loopSignalsSent)
+		_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)
 		_ = registry.RegisterGauge("router", "sse_connections_active", m.sseConnectionsActive)
 		_ = registry.RegisterCounterVec("router", "sse_events_total", m.sseEventsTotal)
 		_ = registry.RegisterCounterVec("router", "sse_errors_total", m.sseErrorsTotal)
@@ -179,6 +192,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.loopSignalsSent)
+		_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)
 		_ = prometheus.DefaultRegisterer.Register(m.sseConnectionsActive)
 		_ = prometheus.DefaultRegisterer.Register(m.sseEventsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.sseErrorsTotal)
@@ -239,6 +253,21 @@ func (m *routerMetrics) recordLoopSignal(signalType string, accepted bool) {
 		acceptedStr = "true"
 	}
 	m.loopSignalsSent.WithLabelValues(signalType, acceptedStr).Inc()
+}
+
+// recordLoopApproval records an HTTP approval submission attempt.
+// success=true means the response was published successfully on
+// agent.approval_response.<loop_id>; success=false means the publish
+// failed or the request was rejected at the dispatch boundary
+// (validation, missing pending state, etc.). The status label uses
+// "success"/"error" rather than a boolean so it lines up with the
+// agentic-tools executions_total convention.
+func (m *routerMetrics) recordLoopApproval(decision string, success bool) {
+	status := "error"
+	if success {
+		status = "success"
+	}
+	m.loopApprovalsSubmitted.WithLabelValues(decision, status).Inc()
 }
 
 // recordSSEConnect increments the active SSE connections gauge.

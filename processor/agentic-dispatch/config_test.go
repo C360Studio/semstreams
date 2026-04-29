@@ -23,7 +23,7 @@ func TestDefaultConfig(t *testing.T) {
 	// Check ports
 	require.NotNil(t, config.Ports)
 	assert.Len(t, config.Ports.Inputs, 5)
-	assert.Len(t, config.Ports.Outputs, 3)
+	assert.Len(t, config.Ports.Outputs, 4)
 }
 
 func TestConfig_Validate(t *testing.T) {

@@ -91,6 +91,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 	mux.HandleFunc("GET "+prefix+"loops", c.handleListLoops)
 	mux.HandleFunc("GET "+prefix+"loops/{id}", c.handleGetLoop)
 	mux.HandleFunc("POST "+prefix+"loops/{id}/signal", c.handleLoopSignal)
+	mux.HandleFunc("POST "+prefix+"loops/{id}/approval", c.handleLoopApproval)
 
 	// Real-time activity stream (SSE)
 	mux.HandleFunc("GET "+prefix+"activity", c.handleActivityStream)
@@ -120,10 +121,13 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply defaults
-	if req.UserID == "" {
-		req.UserID = "http-user"
-	}
+	// Resolve identity through the IdentityFromRequest helper so a
+	// future HTTP middleware contract (ADR-030) can populate
+	// authenticated identity via ctx and we'll pick it up here
+	// without rewriting the handler. Today, no middleware sets ctx,
+	// so this resolves to req.UserID || "http-user" — behavior-
+	// equivalent to the prior inline default.
+	req.UserID = IdentityFromRequest(r, req.UserID)
 	if req.ChannelType == "" {
 		req.ChannelType = "http"
 	}
@@ -463,6 +467,36 @@ type SignalResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// ApprovalRequest is the body of POST /loops/{id}/approval. Drives
+// the beta.19 approval flow from an HTTP caller — the framework's
+// approval-response handler subscribes on
+// agent.approval_response.<loop_id>; this endpoint marshals the
+// payload and publishes there.
+//
+// UserID is the body-level "claimed" identity, optional. Final
+// identity resolves through IdentityFromRequest (ctx > body >
+// "http-user" default) so middleware can authenticate it without
+// handler edits.
+type ApprovalRequest struct {
+	Decision          string         `json:"decision"`                     // approve | reject | modify
+	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"` // only meaningful for modify
+	Reason            string         `json:"reason,omitempty"`             // optional, free text
+	UserID            string         `json:"user_id,omitempty"`            // optional; resolves via IdentityFromRequest
+}
+
+// ApprovalAcceptResponse is the dispatch HTTP response for a
+// successful approval submission. Named distinctly from the
+// agentic.ApprovalResponse wire payload to avoid type confusion —
+// this struct is the dispatch's HTTP-success envelope, not the
+// NATS wire format the framework's loop consumes.
+type ApprovalAcceptResponse struct {
+	LoopID    string `json:"loop_id"`
+	Decision  string `json:"decision"`
+	Accepted  bool   `json:"accepted"`
+	Message   string `json:"message,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
 // ActivityEvent represents a real-time activity event sent via SSE.
 type ActivityEvent struct {
 	Type      string          `json:"type"` // loop_created, loop_updated, loop_deleted
@@ -635,6 +669,173 @@ func (c *Component) handleLoopSignal(w http.ResponseWriter, r *http.Request) {
 			slog.String("request_id", requestID),
 			slog.String("error", err.Error()))
 	}
+}
+
+// handleLoopApproval drives the beta.19 approval flow over HTTP.
+// Mirrors handleLoopSignal's shape: path-param extraction, loop
+// existence check, JSON body decode, validation, NATS publish,
+// JSON success response. Identity resolves via IdentityFromRequest
+// (ctx > body > "http-user" default) so middleware can authenticate
+// without handler edits.
+//
+// The framework's agentic-loop subscribes on
+// agent.approval_response.<loop_id>; this handler publishes the
+// agentic.ApprovalResponse wire payload there. Concurrent races
+// against the same call_id are arbitrated by the loop's atomic
+// LoopManager.ResolveApprovalIfPending (beta.19 M1 fix), so dispatch
+// just publishes — no locking needed here.
+func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
+	ctx, requestID := c.withRequestID(w, r)
+	startTime := time.Now()
+
+	loopID := r.PathValue("id")
+	if loopID == "" {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest, "loop ID is required")
+		return
+	}
+
+	// Loop must exist in dispatch's tracker. A 404 here means we
+	// either never saw the loop (e.g., process restart lost the
+	// in-memory tracker before this request) or the loop has been
+	// removed.
+	if c.loopTracker.Get(loopID) == nil {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "404")
+		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+		c.writeJSONError(w, http.StatusNotFound, "loop not found")
+		return
+	}
+
+	// Decode body.
+	var req ApprovalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate decision.
+	switch req.Decision {
+	case agentic.ApprovalDecisionApprove,
+		agentic.ApprovalDecisionReject,
+		agentic.ApprovalDecisionModify:
+		// Valid.
+	default:
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest, fmt.Sprintf(
+			"invalid decision %q: must be %s, %s, or %s",
+			req.Decision,
+			agentic.ApprovalDecisionApprove,
+			agentic.ApprovalDecisionReject,
+			agentic.ApprovalDecisionModify,
+		))
+		return
+	}
+
+	// Atomic CallID snapshot. The previous Get→deref pattern read
+	// loop.PendingApproval outside the tracker's lock and races
+	// against concurrent SetPendingApproval / UpdateCompletion /
+	// ClearPendingApproval mutations. Returns ("", false) when the
+	// loop is no longer awaiting approval — the cache divergence
+	// case (process restart, race lost, already resolved). 409
+	// Conflict is the right REST signal for "resource exists but is
+	// in the wrong state for this operation."
+	callID, awaiting := c.loopTracker.GetPendingApprovalCallID(loopID)
+	if !awaiting {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
+		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
+		return
+	}
+
+	approver := IdentityFromRequest(r, req.UserID)
+
+	c.logger.DebugContext(ctx, "submitting approval response for loop",
+		slog.String("request_id", requestID),
+		slog.String("loop_id", loopID),
+		slog.String("call_id", callID),
+		slog.String("decision", req.Decision),
+		slog.String("approved_by", approver))
+
+	// Build + publish the framework's ApprovalResponse payload.
+	subject, err := c.publishApprovalResponse(ctx, loopID, callID, &req, approver)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to publish approval response",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", err.Error()))
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "500")
+		c.metrics.recordLoopApproval(req.Decision, false)
+		c.writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Clear the local cache after a successful publish so a fast-
+	// follow duplicate HTTP request doesn't re-publish for the same
+	// CallID. The framework's ResolveApprovalIfPending arbitrates
+	// duplicates atomically anyway, but clearing here saves a NATS
+	// round-trip + metric noise.
+	c.loopTracker.ClearPendingApproval(loopID)
+
+	c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "200")
+	c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+	c.metrics.recordLoopApproval(req.Decision, true)
+
+	c.logger.DebugContext(ctx, "approval response published",
+		slog.String("request_id", requestID),
+		slog.String("loop_id", loopID),
+		slog.String("decision", req.Decision),
+		slog.String("subject", subject))
+
+	resp := ApprovalAcceptResponse{
+		LoopID:    loopID,
+		Decision:  req.Decision,
+		Accepted:  true,
+		Message:   fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		c.logger.ErrorContext(ctx, "failed to encode approval response",
+			slog.String("request_id", requestID),
+			slog.String("error", err.Error()))
+	}
+}
+
+// publishApprovalResponse builds the agentic.ApprovalResponse wire
+// envelope and publishes it on agent.approval_response.<loop_id>.
+// Returns the resolved subject (for logging) and any error from
+// marshal or publish. Extracted from handleLoopApproval to keep the
+// HTTP handler under revive's function-length budget.
+//
+// Defensive nil-check on the NATS client mirrors LoopTracker.SendSignal —
+// production wiring always has a client, but unit tests construct
+// Components with natsClient nil and we surface a clean error rather
+// than letting the underlying client.PublishToStream NPE.
+func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID string, req *ApprovalRequest, approver string) (string, error) {
+	if c.natsClient == nil {
+		return "", ErrNATSClientNil
+	}
+	response := &agentic.ApprovalResponse{
+		LoopID:            loopID,
+		CallID:            callID,
+		Decision:          req.Decision,
+		ModifiedArguments: req.ModifiedArguments,
+		Reason:            req.Reason,
+		ApprovedBy:        approver,
+		DecidedAt:         time.Now().UTC(),
+	}
+	envelope := message.NewBaseMessage(response.Schema(), response, "agentic-dispatch")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return "", fmt.Errorf("marshal approval response: %w", err)
+	}
+
+	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)
+	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
+		return subject, fmt.Errorf("publish approval response on %s: %w", subject, err)
+	}
+	return subject, nil
 }
 
 // handleActivityStream streams real-time activity events via SSE.
@@ -1016,6 +1217,39 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 					},
 				},
 			},
+			"/loops/{id}/approval": {
+				POST: &service.OperationSpec{
+					Summary:     "Submit human approval response for a gated tool call",
+					Description: "Drives the beta.19 approval flow over HTTP. The loop must be awaiting approval (see config.approval_required). Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.",
+					Tags:        []string{"AgenticDispatch"},
+					RequestBody: &service.RequestBodySpec{
+						Description: "Approval decision and optional modifications",
+						Required:    true,
+						SchemaRef:   "#/components/schemas/ApprovalRequest",
+					},
+					Parameters: []service.ParameterSpec{
+						{Name: "id", In: "path", Description: "Loop ID", Required: true},
+					},
+					Responses: map[string]service.ResponseSpec{
+						"200": {
+							Description: "Approval submitted",
+							ContentType: "application/json",
+						},
+						"400": {
+							Description: "Invalid request body or decision value",
+						},
+						"404": {
+							Description: "Loop not found",
+						},
+						"409": {
+							Description: "Loop exists but is not awaiting approval",
+						},
+						"500": {
+							Description: "Failed to publish approval (NATS error)",
+						},
+					},
+				},
+			},
 			"/activity": {
 				GET: &service.OperationSpec{
 					Summary:     "Real-time activity events (SSE)",
@@ -1048,10 +1282,12 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			reflect.TypeOf(HTTPMessageResponse{}),
 			reflect.TypeOf(SignalResponse{}),
 			reflect.TypeOf(ActivityEvent{}),
+			reflect.TypeOf(ApprovalAcceptResponse{}),
 		},
 		RequestBodyTypes: []reflect.Type{
 			reflect.TypeOf(HTTPMessageRequest{}),
 			reflect.TypeOf(SignalRequest{}),
+			reflect.TypeOf(ApprovalRequest{}),
 		},
 	}
 }
