@@ -565,3 +565,128 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 
 	assert.Equal(t, 2, len(receivedResponses), "Should receive two responses")
 }
+
+// TestIntegration_InlineThinkExtraction confirms the end-to-end
+// path strips inline <think>...</think> blocks out of Content and
+// routes them to ReasoningContent, mirroring the channel-based
+// reasoning_content path. Targets the qwen3 / qwen3-coder /
+// deepseek-r1 wire shape (semspec gap reported 2026-04-29).
+func TestIntegration_InlineThinkExtraction(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		response := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "<think>Let me reason about this step by step. The answer should be 42.</think>The answer is 42.",
+					},
+					"finish_reason": "stop",
+				},
+			},
+			"usage": map[string]any{
+				"prompt_tokens":     50,
+				"completion_tokens": 30,
+			},
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer mockServer.Close()
+
+	config := agenticmodel.Config{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{Name: "requests", Type: "jetstream", Subject: "agent.request.>", StreamName: "AGENT", Required: true},
+			},
+			Outputs: []component.PortDefinition{
+				{Name: "responses", Type: "jetstream", Subject: "agent.response.*", StreamName: "AGENT"},
+			},
+		},
+		StreamName:           "AGENT",
+		ConsumerNameSuffix:   "test-" + t.Name(),
+		DeleteConsumerOnStop: true,
+		Timeout:              "5s",
+	}
+
+	registry := &model.Registry{
+		Endpoints: map[string]*model.EndpointConfig{
+			"qwen3-mock": {
+				URL:       mockServer.URL + "/v1/chat/completions",
+				Model:     "qwen3-mock",
+				MaxTokens: 128000,
+			},
+		},
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.Dependencies{
+		NATSClient:      natsClient,
+		ModelRegistry:   registry,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	}
+
+	comp, err := agenticmodel.NewComponent(rawConfig, deps)
+	require.NoError(t, err)
+
+	lc, ok := comp.(component.LifecycleComponent)
+	require.True(t, ok)
+
+	require.NoError(t, lc.Initialize())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, lc.Start(ctx))
+	defer func() { _ = lc.Stop(5 * time.Second) }()
+
+	time.Sleep(200 * time.Millisecond)
+
+	receivedResponses := make([]agentic.AgentResponse, 0)
+	var receiveMu sync.Mutex
+
+	dec := payloadbuiltins.NewTestDecoder(t)
+	sub, err := natsClient.Subscribe(ctx, "agent.response.>", func(_ context.Context, msg *nats.Msg) {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
+			if resp, ok := baseMsg.Payload().(*agentic.AgentResponse); ok {
+				receiveMu.Lock()
+				receivedResponses = append(receivedResponses, *resp)
+				receiveMu.Unlock()
+			}
+		}
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	request := &agentic.AgentRequest{
+		RequestID: "req_think",
+		LoopID:    "loop_think",
+		Role:      "general",
+		Model:     "qwen3-mock",
+		Messages: []agentic.ChatMessage{
+			{Role: "user", Content: "What is 6*7?"},
+		},
+	}
+	publishAgentRequestMessage(t, natsClient, "agent.request.think", request)
+
+	time.Sleep(1 * time.Second)
+
+	receiveMu.Lock()
+	defer receiveMu.Unlock()
+
+	require.Equal(t, 1, len(receivedResponses), "Should receive one response")
+	resp := receivedResponses[0]
+
+	assert.Equal(t, "req_think", resp.RequestID)
+	assert.Equal(t, "complete", resp.Status)
+	assert.Equal(t, "The answer is 42.", resp.Message.Content,
+		"inline <think> block should be removed from Content")
+	assert.Equal(t, "Let me reason about this step by step. The answer should be 42.",
+		resp.Message.ReasoningContent,
+		"inline <think> block content should be routed to ReasoningContent")
+}
