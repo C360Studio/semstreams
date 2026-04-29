@@ -81,6 +81,13 @@ type Component struct {
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
 	sendResponseFn func(agentic.UserResponse)
+
+	// normalizerFn turns a freeform onboarding answer into structured
+	// operating-model entries. Production wires this to
+	// normalizeLayerAnswerWithLLM during construction; tests can swap it for
+	// a deterministic stub. Nil disables LLM normalization and forces the
+	// fallback to the deterministic NormalizeLayerAnswer stub.
+	normalizerFn LayerNormalizer
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -159,6 +166,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	var emptyReader operatingmodel.ProfileReader = operatingmodel.EmptyProfileReader{}
 	comp.profileReader.Store(&emptyReader)
 
+	// Default normalizer: LLM-backed extraction with stub fallback. Tests
+	// override via SetLayerNormalizer to keep the suite hermetic.
+	comp.normalizerFn = comp.normalizeLayerAnswerWithLLM
+
 	// Register built-in commands
 	comp.registerBuiltinCommands()
 
@@ -188,6 +199,15 @@ func (c *Component) getProfileReader() operatingmodel.ProfileReader {
 		return *r
 	}
 	return operatingmodel.EmptyProfileReader{}
+}
+
+// SetLayerNormalizer installs a LayerNormalizer used by /onboard's
+// answer-recording path. Production deployments leave this alone (the
+// constructor seeds the LLM-backed normalizer); tests override with a
+// deterministic stub. Passing nil disables LLM normalization and forces the
+// deterministic fallback in NormalizeLayerAnswer.
+func (c *Component) SetLayerNormalizer(fn LayerNormalizer) {
+	c.normalizerFn = fn
 }
 
 // Meta returns component metadata
