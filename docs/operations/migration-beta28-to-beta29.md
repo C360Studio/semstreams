@@ -135,23 +135,60 @@ Existing callers that don't set `Lessons` keep their
 operating-model rendering unchanged; the lessons slice stays
 empty.
 
+### Type alias for compaction events (no drift)
+
+`agenticmemory.ContextEvent` is now a type alias for
+`agentic.ContextEvent`:
+
+```go
+type ContextEvent = agentic.ContextEvent
+```
+
+The previous mirror declaration silently drifted from the
+canonical struct twice (this tag's UserID add being the second
+instance). The alias makes future drift impossible while keeping
+the local-package name `agenticmemory.ContextEvent{...}` that
+integration tests rely on.
+
 ### Compaction handler persists summaries as lessons
 
 `processor/agentic-memory/handlers.go`'s
 `handleCompactionComplete` now calls
 `persistCompactionAsLesson(event)` after the existing post-
-compaction hydration. The new helper:
+compaction hydration. The new helper short-circuits in three
+ways before constructing any entity ID:
 
-1. No-ops when `event.UserID == ""` or `event.Summary == ""`.
-2. Builds a `Lesson{LessonID: "lesson-<8 hex>", Summary:
+1. Empty `event.UserID` → no-op (system-initiated loops, or
+   pre-beta.29 publishers that don't set the field).
+2. Empty `event.Summary` → no-op (no payload to persist).
+3. Empty `c.platform.Org` or `c.platform.Platform` → no-op with
+   a Debug log. Without this guard, `LessonEntityID` /
+   `ProfileEntityID` would panic in `mustValidatePart`; the
+   panic would feed `safeHandleMessage`'s recover → nak → NATS
+   redeliver loop → DLQ. Matches the identical guard in
+   `layer_approved_handler.go`.
+
+When all three guards pass, the helper:
+
+1. Builds a `Lesson{LessonID: "lesson-<8 hex>", Summary:
    event.Summary, SessionID: event.LoopID, LearnedAt: now}`.
-3. Validates and emits `LessonTriples(...)` via the existing
+2. Validates and emits `LessonTriples(...)` via the existing
    `publishGraphMutations` path.
 
 Publish failures are logged at `Warn` and not retried —
 post-hydration has already succeeded for the current loop, and a
 missed lesson degrades future-session quality, not current
 correctness.
+
+### `splitTokenBudget` tiny-budget contract
+
+For totals 1–3 the 25% lessons share rounds to 0 and the
+operating-model slice claims the whole budget. The renderer's
+at-least-one contract still emits content if entries exist; the
+invariant `lessons + om == total` always holds. The original
+implementation tried to bump both shares to a minimum of 1 for
+tiny totals, which violated the invariant and could underflow
+either share to zero in a confusing way.
 
 ## What is NOT changing
 

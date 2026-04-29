@@ -205,22 +205,24 @@ func AssembleProfileContext(in ProfileContextInputs) *operatingmodel.ProfileCont
 }
 
 // splitTokenBudget divides the total budget between the lessons slice (25%)
-// and the operating-model slice (the remainder). A zero or negative total is
-// passed through unchanged so callers that opt out of budgeting still get
-// best-effort renders from both slices.
+// and the operating-model slice (the remainder).
+//
+// Contract:
+//   - total <= 0: passes through as (0, 0). Callers that opt out of
+//     budgeting still get best-effort renders from both slices.
+//   - total > 0: lessons + om == total exactly. The dominant slice
+//     (operating-model) gets the floor when 25% rounds to 0 — for total
+//     in {1, 2, 3} the lessons share is 0 and operating-model gets the
+//     whole budget. The renderer's at-least-one contract still emits
+//     content if entries exist, but degenerate-tiny budgets stay
+//     well-defined: no negative shares, no inflation, and the invariant
+//     `lessons + om == total` always holds.
 func splitTokenBudget(total int) (lessons, om int) {
 	if total <= 0 {
 		return 0, 0
 	}
 	lessons = int(float64(total) * lessonsBudgetShare)
-	if lessons < 1 {
-		lessons = 1
-	}
 	om = total - lessons
-	if om < 1 {
-		om = 1
-		lessons = total - om
-	}
 	return lessons, om
 }
 

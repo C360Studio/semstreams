@@ -6,23 +6,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/message"
 	"github.com/google/uuid"
 )
 
-// ContextEvent matches the structure from agentic-loop/handlers.go.
-// Mirrors agentic.ContextEvent; kept locally so the handler can decode it
-// without pulling the full agentic payload registry.
-type ContextEvent struct {
-	Type        string  `json:"type"` // "compaction_starting", "compaction_complete"
-	LoopID      string  `json:"loop_id"`
-	UserID      string  `json:"user_id,omitempty"`
-	Iteration   int     `json:"iteration"`
-	Utilization float64 `json:"utilization,omitempty"`
-	TokensSaved int     `json:"tokens_saved,omitempty"`
-	Summary     string  `json:"summary,omitempty"`
-}
+// ContextEvent is the compaction event shape this handler decodes. It is a
+// type alias for agentic.ContextEvent (the canonical definition publishers
+// produce) so any future field added on the agentic side propagates here
+// automatically — no more silent drift between mirror and original.
+//
+// Local-package call sites and integration tests that reference
+// `agenticmemory.ContextEvent{...}` keep working since the alias is the
+// same underlying type.
+type ContextEvent = agentic.ContextEvent
 
 // HydrateRequest represents an explicit hydration request message
 type HydrateRequest struct {
@@ -125,9 +123,17 @@ func (c *Component) handleCompactionComplete(ctx context.Context, event ContextE
 // persistCompactionAsLesson converts a compaction_complete event's summary
 // into a Lesson entity attached to the owning user's profile. No-op when
 // the event has no UserID (e.g. system-initiated loops, pre-beta.29 events
-// from older publishers) or no summary.
+// from older publishers), no summary, or when the component's platform
+// metadata is unconfigured — Org/Platform empty would otherwise panic in
+// LessonEntityID/ProfileEntityID, fail safeHandleMessage's recover, and
+// trigger a NATS redeliver loop into DLQ.
 func (c *Component) persistCompactionAsLesson(ctx context.Context, event ContextEvent) {
 	if event.UserID == "" || event.Summary == "" {
+		return
+	}
+	if c.platform.Org == "" || c.platform.Platform == "" {
+		c.logger.DebugContext(ctx, "lesson persist skipped: platform unconfigured",
+			"loop_id", event.LoopID, "user_id", event.UserID)
 		return
 	}
 	lesson := operatingmodel.Lesson{

@@ -34,24 +34,35 @@ func TestSplitTokenBudget_Default(t *testing.T) {
 
 func TestSplitTokenBudget_Edge(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		total     int
-		wantSplit bool // when true, both shares > 0
+		name            string
+		total           int
+		wantLessons     int
+		wantOM          int
+		expectInvariant bool // when true, lessons + om must equal total
 	}{
-		{"zero passes through", 0, false},
-		{"negative passes through", -100, false},
-		{"tiny budget gets minimum", 4, true},
+		{"zero passes through", 0, 0, 0, false},
+		{"negative passes through", -100, 0, 0, false},
+		// Tiny budgets: 25% rounds to 0; operating-model gets the whole
+		// budget. The renderer's at-least-one contract still emits content
+		// when entries exist. Invariant lessons + om == total holds.
+		{"total=1 → 0/1", 1, 0, 1, true},
+		{"total=2 → 0/2", 2, 0, 2, true},
+		{"total=3 → 0/3", 3, 0, 3, true},
+		{"total=4 → 1/3 (first budget where 25% hits 1)", 4, 1, 3, true},
+		{"total=800 default → 200/600", 800, 200, 600, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lessons, om := splitTokenBudget(tc.total)
-			if !tc.wantSplit {
-				if lessons != 0 || om != 0 {
-					t.Errorf("zero/negative total should produce 0/0 split, got %d/%d", lessons, om)
-				}
-				return
+			if lessons != tc.wantLessons || om != tc.wantOM {
+				t.Errorf("split(%d) = (%d, %d), want (%d, %d)",
+					tc.total, lessons, om, tc.wantLessons, tc.wantOM)
 			}
-			if lessons < 1 || om < 1 {
-				t.Errorf("tiny budget should give both at least 1: got %d/%d", lessons, om)
+			if tc.expectInvariant && lessons+om != tc.total {
+				t.Errorf("invariant lessons+om == total violated: %d + %d != %d",
+					lessons, om, tc.total)
+			}
+			if lessons < 0 || om < 0 {
+				t.Errorf("negative shares: lessons=%d om=%d", lessons, om)
 			}
 		})
 	}
@@ -178,6 +189,24 @@ func TestPersistCompactionAsLesson_NoOpWhenSummaryEmpty(t *testing.T) {
 		UserID: "coby",
 		// Summary intentionally empty
 	})
+}
+
+func TestPersistCompactionAsLesson_NoOpWhenPlatformUnconfigured(t *testing.T) {
+	// Empty Org/Platform would otherwise panic in LessonEntityID /
+	// ProfileEntityID and feed safeHandleMessage's recover, then drive a
+	// NATS redeliver loop. The guard short-circuits cleanly with a Debug
+	// log instead.
+	c := newProfileContextTestComponent(t, stubProfileReader{})
+	c.platform.Org = ""
+	c.platform.Platform = ""
+	c.persistCompactionAsLesson(context.Background(), ContextEvent{
+		Type:    "compaction_complete",
+		LoopID:  "loop-abc",
+		UserID:  "coby",
+		Summary: "we learned a thing",
+	})
+	// No assertion beyond "did not panic." If the guard regressed, the
+	// panic from mustValidatePart would propagate up and fail the test.
 }
 
 func TestRenderLessonsSlice_AtLeastOneRendersEvenIfOversize(t *testing.T) {
