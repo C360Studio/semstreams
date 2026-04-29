@@ -27,16 +27,36 @@ import (
 // Other mismatches (loop not found, response.Validate() fails) return
 // a defensive log + non-error empty result so duplicate or stale UI
 // clicks don't crash the loop.
-func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (HandlerResult, error) {
-	if err := response.Validate(); err != nil {
-		return HandlerResult{}, errs.WrapInvalid(err, "agentic-loop", "HandleApprovalResponse", "validate response")
+func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
+	// Panic recovery — beta.25 mode (f). A panic in the resolve race,
+	// dispatch path, or rejection-synth would otherwise leave the
+	// gated tool_call orphaned (loop stays in awaiting_approval, no
+	// result, no resolution). Recover and return a benign empty
+	// result so the component-level caller logs and continues; the
+	// approval-timeout sweeper picks up the still-awaiting loop on
+	// its next tick and auto-rejects via the timeout path. Loud log
+	// + structured panic value so the underlying bug is debuggable.
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Error("panic recovered in HandleApprovalResponse",
+				slog.Any("panic", r),
+				slog.String("loop_id", response.LoopID),
+				slog.String("call_id", response.CallID),
+				slog.String("decision", response.Decision))
+			result = HandlerResult{LoopID: response.LoopID}
+			err = nil
+		}
+	}()
+
+	if vErr := response.Validate(); vErr != nil {
+		return HandlerResult{}, errs.WrapInvalid(vErr, "agentic-loop", "HandleApprovalResponse", "validate response")
 	}
 
 	loopID := response.LoopID
 
-	pending, ok, err := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
-	if err != nil {
-		return HandlerResult{}, err
+	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
+	if resolveErr != nil {
+		return HandlerResult{}, resolveErr
 	}
 	if !ok {
 		// Stale or duplicate: loop is no longer awaiting approval, or
@@ -57,12 +77,12 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 
 	// We won the resolve race. Fetch the now-resolved entity so the
 	// HandlerResult.State reflects the restored prior state.
-	entity, err := h.GetLoop(loopID)
-	if err != nil {
-		return HandlerResult{}, err
+	entity, getErr := h.GetLoop(loopID)
+	if getErr != nil {
+		return HandlerResult{}, getErr
 	}
 
-	result := HandlerResult{
+	result = HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
 		PublishedMessages: []PublishedMessage{},

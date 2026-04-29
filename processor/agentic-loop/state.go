@@ -197,6 +197,56 @@ func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {
 	return nil
 }
 
+// ApprovalTimeoutCandidate captures the loop+call coordinates the
+// approval-timeout sweeper needs to publish an auto-rejection. The
+// sweeper builds an agentic.ApprovalResponse from these and feeds
+// it through HandleApprovalResponse — same code path a real human
+// rejection would take.
+type ApprovalTimeoutCandidate struct {
+	LoopID      string
+	CallID      string
+	ToolName    string
+	RequestedAt time.Time
+	Timeout     time.Duration
+}
+
+// SnapshotExpiredApprovals returns a snapshot of loops whose pending
+// approval has timed out (RequestedAt + Timeout <= now). Skips loops
+// whose Timeout is zero (wait-indefinitely policy). Read-locked; the
+// snapshot is taken under the lock and the lock released before
+// return so callers can act on each candidate without holding the
+// mutex.
+//
+// Beta.25 adds this for the orphan-tool-call recovery work. The
+// approval-timeout timer was a deferred item from beta.19; closing
+// it now ensures a stuck human-approval flow doesn't leave the
+// gated tool_call orphaned indefinitely (mode f of orphan recovery).
+func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutCandidate {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []ApprovalTimeoutCandidate
+	for id, loop := range m.loops {
+		if loop.State != agentic.LoopStateAwaitingApproval || loop.PendingApproval == nil {
+			continue
+		}
+		if loop.PendingApproval.Timeout == 0 {
+			continue
+		}
+		deadline := loop.PendingApproval.RequestedAt.Add(loop.PendingApproval.Timeout)
+		if now.Before(deadline) {
+			continue
+		}
+		out = append(out, ApprovalTimeoutCandidate{
+			LoopID:      id,
+			CallID:      loop.PendingApproval.CallID,
+			ToolName:    loop.PendingApproval.ToolName,
+			RequestedAt: loop.PendingApproval.RequestedAt,
+			Timeout:     loop.PendingApproval.Timeout,
+		})
+	}
+	return out
+}
+
 // IncrementTruncationRetry bumps the within-loop truncation retry
 // counter and returns the new value. Caller branches on the return
 // to decide between "first retry — compact and try again" (==1) and

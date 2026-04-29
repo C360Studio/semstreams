@@ -71,6 +71,13 @@ type Component struct {
 	// Query subscription for trajectory requests
 	trajectorySub *natsclient.Subscription
 
+	// Approval-timeout sweeper lifecycle. cancel is called from Stop
+	// to terminate the goroutine; done is closed by the goroutine on
+	// exit so Stop can synchronize cleanly. nil when no sweeper is
+	// running (component not started, or no approval flow active).
+	sweeperCancel context.CancelFunc
+	sweeperDone   chan struct{}
+
 	// Metrics
 	metrics *loopMetrics
 
@@ -310,6 +317,24 @@ func (c *Component) Start(ctx context.Context) error {
 	c.started = true
 	c.startTime = time.Now()
 
+	// Start the approval-timeout sweeper. Derives a sub-context so
+	// Stop can terminate the sweeper independently of whatever
+	// passed in `ctx`. Cheap when no loops await approval — the
+	// snapshot is a single map iteration under read-lock.
+	//
+	// Capture the done channel locally before launching the goroutine
+	// — Stop nils c.sweeperDone before waiting on it, and the
+	// goroutine's deferred close needs a stable reference that
+	// survives that nilling.
+	sweepCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	c.sweeperCancel = cancel
+	c.sweeperDone = done
+	go func() {
+		defer close(done)
+		c.runApprovalTimeoutSweeper(sweepCtx)
+	}()
+
 	// Build the prompt-assembly registry: framework-universal + role
 	// defaults from prompt.DefaultFragments, overridden by any product-
 	// supplied personas in the PERSONAS KV bucket. See ADR-029 step 3b.
@@ -370,6 +395,36 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 	if !c.started {
 		return nil
+	}
+
+	// Stop the approval-timeout sweeper before unsubscribing — the
+	// sweeper calls into HandleApprovalResponse which may publish
+	// results via NATS, and we'd rather drain those callbacks
+	// before the consumers tear down.
+	//
+	// Capture the cancel + done channel under c.mu, then release the
+	// lock BEFORE waiting on the goroutine. Holding c.mu across the
+	// wait is a latent deadlock: the sweeper's per-candidate path
+	// (publishResults / persistLoopState / handler.GetLoop) doesn't
+	// take c.mu today, but a future defensive guard there would
+	// block the in-flight goroutine on c.mu while Stop blocks on
+	// sweeperDone. Release-then-wait keeps the cleanup race-free.
+	cancel := c.sweeperCancel
+	done := c.sweeperDone
+	c.sweeperCancel = nil
+	c.sweeperDone = nil
+	if cancel != nil {
+		c.mu.Unlock()
+		cancel()
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(timeout):
+				c.logger.Warn("approval-timeout sweeper did not exit within Stop timeout",
+					slog.Duration("timeout", timeout))
+			}
+		}
+		c.mu.Lock()
 	}
 
 	// Unsubscribe from trajectory query handler
@@ -1028,8 +1083,15 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 
 }
 
-// publishResults publishes all output messages from a handler result using JetStream
+// publishResults publishes all output messages from a handler result using JetStream.
+// Defensive against nil natsClient — pure unit tests construct
+// Components without one, and the approval-timeout sweeper goroutine
+// can race with Stop's natsClient teardown. Mirrors the existing
+// persistLoopState's loopsBucket-nil guard pattern.
 func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
+	if c.natsClient == nil {
+		return
+	}
 	for _, msg := range result.PublishedMessages {
 		// Use JetStream for publishing to ensure delivery
 		if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {
