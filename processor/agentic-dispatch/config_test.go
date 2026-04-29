@@ -22,7 +22,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Check ports
 	require.NotNil(t, config.Ports)
-	assert.Len(t, config.Ports.Inputs, 4)
+	assert.Len(t, config.Ports.Inputs, 5)
 	assert.Len(t, config.Ports.Outputs, 3)
 }
 

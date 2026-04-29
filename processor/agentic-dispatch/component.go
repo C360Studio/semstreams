@@ -400,6 +400,43 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		consumerName: agentFailedCfg.ConsumerName,
 	})
 
+	// Subscribe to approval-pending events so the HTTP approval
+	// handler has the loop's CallID + tool args available locally
+	// (no KV.Get round-trip per request). Optional port — the
+	// dispatch surface continues to function without it; only the
+	// approval HTTP endpoint requires the cache populated.
+	//
+	// MaxDeliver is intentionally higher than the sibling agent.*
+	// subscriptions (10 vs 3): a missed approval-pending event has
+	// asymmetric blast radius — it leaves the HTTP approval handler
+	// returning 400 forever for that loop until the next approval
+	// cycle. Sibling agent.complete / agent.failed losses just delay
+	// SSE updates. Combined with the LoopTracker's early-arrival
+	// buffer (drains on the matching agent.created), 10 retries gives
+	// generous slack for race resolution without unbounded redelivery.
+	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
+		StreamName:    c.inputPortStream("agent.approval_pending", "AGENT"),
+		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
+		FilterSubject: c.inputPortSubject("agent.approval_pending", "agent.approval_pending.*"),
+		DeliverPolicy: "new",
+		AckPolicy:     "explicit",
+		MaxDeliver:    10,
+		AutoCreate:    false,
+	}
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+		c.handleAgentApprovalPending(msgCtx, msg.Data())
+		if ackErr := msg.Ack(); ackErr != nil {
+			c.logger.Error("Failed to ack agent approval-pending message", slog.String("error", ackErr.Error()))
+		}
+	})
+	if err != nil {
+		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
+	}
+	c.consumerInfos = append(c.consumerInfos, consumerInfo{
+		streamName:   agentApprovalPendingCfg.StreamName,
+		consumerName: agentApprovalPendingCfg.ConsumerName,
+	})
+
 	return nil
 }
 
@@ -847,6 +884,48 @@ func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 		slog.String("loop_id", failure.LoopID),
 		slog.String("reason", failure.Reason),
 		slog.String("error", failure.Error))
+}
+
+// handleAgentApprovalPending records the gated tool-call info on the
+// loop tracker so the HTTP approval handler has the loop's CallID +
+// tool args available locally without a KV.Get round-trip per
+// request. The framework's agentic-loop emits this event when a tool
+// call hits config.approval_required and the loop transitions to
+// LoopStateAwaitingApproval; dispatch is one of several subscribers
+// (the others being product-layer approval UIs).
+func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) {
+	baseMsg, err := c.decoder.Decode(data)
+	if err != nil {
+		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
+		return
+	}
+
+	pending, ok := baseMsg.Payload().(*agentic.ApprovalPendingEvent)
+	if !ok {
+		c.logger.Error("Unexpected payload type",
+			slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
+		return
+	}
+
+	if pending.LoopID == "" || pending.CallID == "" {
+		c.logger.Warn("approval-pending event missing required fields",
+			slog.String("loop_id", pending.LoopID),
+			slog.String("call_id", pending.CallID))
+		return
+	}
+
+	// SetPendingApproval handles the unknown-loop race internally by
+	// buffering until the matching agent.created arrives. Returns
+	// false on miss-or-buffered; either way the framework's loop
+	// state is canonical and the HTTP handler degrades gracefully.
+	c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
+		CallID:      pending.CallID,
+		ToolName:    pending.ToolName,
+		Arguments:   pending.Arguments,
+		Reason:      pending.Reason,
+		RequestedAt: pending.RequestedAt,
+		TraceID:     pending.TraceID,
+	})
 }
 
 // sendResponse publishes a response to the user's channel

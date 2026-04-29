@@ -94,6 +94,14 @@ func DefaultConfig() Config {
 					Required:    false,
 					Description: "Loop failure events",
 				},
+				{
+					Name:        "agent.approval_pending",
+					Type:        "jetstream",
+					Subject:     "agent.approval_pending.*",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
+				},
 			},
 			Outputs: []component.PortDefinition{
 				{

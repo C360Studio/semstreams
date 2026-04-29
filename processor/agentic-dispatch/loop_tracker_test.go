@@ -3,6 +3,7 @@ package agenticdispatch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -575,4 +576,201 @@ func TestLoopTracker_UpdateCompletion_InvalidOutcome(t *testing.T) {
 	err := tracker.UpdateCompletion("any-loop", "bogus", "result", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid outcome")
+}
+
+func TestLoopTracker_SetPendingApproval(t *testing.T) {
+	tracker := NewLoopTracker()
+	tracker.Track(&LoopInfo{
+		LoopID: "loop-1",
+		UserID: "user-1",
+		State:  "executing",
+	})
+
+	pending := &PendingApprovalInfo{
+		CallID:      "call-001",
+		ToolName:    "delete_rule",
+		Arguments:   map[string]any{"rule_id": "rule-42"},
+		Reason:      "approval_required: deny",
+		RequestedAt: time.Now().UTC(),
+	}
+
+	ok := tracker.SetPendingApproval("loop-1", pending)
+	assert.True(t, ok, "should return true when loop exists")
+
+	info := tracker.Get("loop-1")
+	require.NotNil(t, info.PendingApproval)
+	assert.Equal(t, "call-001", info.PendingApproval.CallID)
+	assert.Equal(t, "delete_rule", info.PendingApproval.ToolName)
+	assert.Equal(t, "rule-42", info.PendingApproval.Arguments["rule_id"])
+}
+
+// TestLoopTracker_SetPendingApproval_BuffersUnknownLoop verifies
+// the early-arrival race fix: an approval-pending event for a loop
+// not yet tracked goes into the bounded TTL'd buffer; the next Track
+// for that loop drains the buffer and attaches the record.
+func TestLoopTracker_SetPendingApproval_BuffersUnknownLoop(t *testing.T) {
+	tracker := NewLoopTracker()
+
+	// Approval-pending arrives FIRST (race: agent.approval_pending
+	// drained before agent.created on independent JetStream
+	// consumers).
+	ok := tracker.SetPendingApproval("loop-late", &PendingApprovalInfo{
+		CallID:   "call-001",
+		ToolName: "delete_rule",
+	})
+	assert.False(t, ok, "should return false when loop not yet tracked (buffered)")
+	assert.Nil(t, tracker.Get("loop-late"), "loop must not appear in tracker until Track is called")
+
+	// agent.created arrives SECOND. Track drains the buffer.
+	tracker.Track(&LoopInfo{
+		LoopID: "loop-late",
+		UserID: "user-1",
+		State:  "awaiting_approval",
+	})
+
+	info := tracker.Get("loop-late")
+	require.NotNil(t, info)
+	require.NotNil(t, info.PendingApproval, "buffered approval must attach on Track")
+	assert.Equal(t, "call-001", info.PendingApproval.CallID)
+	assert.Equal(t, "delete_rule", info.PendingApproval.ToolName)
+}
+
+// TestLoopTracker_SetPendingApproval_BufferRespectsCap pins the
+// drop-newest cap policy: when the buffer is full, new events are
+// dropped while older entries remain available to drain. Older
+// entries are statistically more likely to drain soon (their
+// agent.created event is ahead in the redelivery queue), and a
+// flood beyond cap is pathological — alerting via the warn log is
+// the right behavior, not silently evicting older state.
+func TestLoopTracker_SetPendingApproval_BufferRespectsCap(t *testing.T) {
+	tracker := NewLoopTracker()
+
+	// Fill the buffer to capacity with orphaned events.
+	for i := 0; i < pendingApprovalBufferCap; i++ {
+		_ = tracker.SetPendingApproval(fmt.Sprintf("loop-%d", i), &PendingApprovalInfo{
+			CallID: fmt.Sprintf("call-%d", i),
+		})
+	}
+
+	// Overflow: cap+1 entry must be dropped.
+	ok := tracker.SetPendingApproval("loop-overflow", &PendingApprovalInfo{CallID: "call-overflow"})
+	assert.False(t, ok, "cap-overflow should report not-applied")
+
+	// The overflow loop's eventual Track must NOT find a buffered entry.
+	tracker.Track(&LoopInfo{LoopID: "loop-overflow", UserID: "u", State: "executing"})
+	assert.Nil(t, tracker.Get("loop-overflow").PendingApproval,
+		"overflow event must not have been buffered")
+
+	// One of the existing buffered loops must still drain successfully.
+	tracker.Track(&LoopInfo{LoopID: "loop-0", UserID: "u", State: "executing"})
+	require.NotNil(t, tracker.Get("loop-0").PendingApproval,
+		"older buffered entry must still be available to drain")
+	assert.Equal(t, "call-0", tracker.Get("loop-0").PendingApproval.CallID)
+}
+
+// TestLoopTracker_SetPendingApproval_TTLExpiry pins the safety
+// property that an expired buffer entry never attaches to a
+// late-arriving Track. Attaching stale state would resurrect an
+// approval the framework's loop has already moved past, corrupting
+// dispatch's view.
+func TestLoopTracker_SetPendingApproval_TTLExpiry(t *testing.T) {
+	tracker := NewLoopTracker()
+
+	// Buffer an early-arrival, then force its expiry by hand
+	// (white-box: easier than waiting 60s in a unit test).
+	tracker.SetPendingApproval("loop-stale", &PendingApprovalInfo{CallID: "call-old"})
+	tracker.mu.Lock()
+	tracker.pendingApprovalBuffer["loop-stale"].ExpiresAt = time.Now().Add(-time.Second)
+	tracker.mu.Unlock()
+
+	// Track arrives after the TTL has passed.
+	tracker.Track(&LoopInfo{LoopID: "loop-stale", UserID: "u", State: "executing"})
+
+	info := tracker.Get("loop-stale")
+	require.NotNil(t, info, "loop must still be tracked")
+	assert.Nil(t, info.PendingApproval,
+		"expired buffer entry must not attach — would corrupt dispatch's view of an already-resolved approval")
+}
+
+// TestLoopTracker_SetPendingApproval_BufferRespectsCallerSetState
+// verifies that if Track is called with a LoopInfo that already has
+// PendingApproval set, the buffer drain doesn't overwrite it.
+func TestLoopTracker_SetPendingApproval_BufferRespectsCallerSetState(t *testing.T) {
+	tracker := NewLoopTracker()
+
+	// Buffer an early-arrival.
+	tracker.SetPendingApproval("loop-race", &PendingApprovalInfo{
+		CallID:   "call-buffered",
+		ToolName: "delete_rule",
+	})
+
+	// Track with caller-supplied PendingApproval — should win.
+	tracker.Track(&LoopInfo{
+		LoopID: "loop-race",
+		UserID: "user-1",
+		State:  "awaiting_approval",
+		PendingApproval: &PendingApprovalInfo{
+			CallID:   "call-caller-supplied",
+			ToolName: "delete_rule",
+		},
+	})
+
+	info := tracker.Get("loop-race")
+	require.NotNil(t, info.PendingApproval)
+	assert.Equal(t, "call-caller-supplied", info.PendingApproval.CallID,
+		"caller-supplied PendingApproval must take precedence over buffer")
+}
+
+func TestLoopTracker_ClearPendingApproval(t *testing.T) {
+	tracker := NewLoopTracker()
+	tracker.Track(&LoopInfo{LoopID: "loop-1", UserID: "user-1", State: "executing"})
+	tracker.SetPendingApproval("loop-1", &PendingApprovalInfo{
+		CallID:   "call-001",
+		ToolName: "delete_rule",
+	})
+	require.NotNil(t, tracker.Get("loop-1").PendingApproval)
+
+	tracker.ClearPendingApproval("loop-1")
+	assert.Nil(t, tracker.Get("loop-1").PendingApproval)
+
+	// Idempotent — clearing twice is a no-op.
+	tracker.ClearPendingApproval("loop-1")
+	assert.Nil(t, tracker.Get("loop-1").PendingApproval)
+
+	// Unknown loop is also a no-op.
+	tracker.ClearPendingApproval("ghost")
+}
+
+// TestLoopTracker_UpdateCompletion_ClearsPendingApproval guards the
+// clear-on-progress hook: a loop that completed (success/failed/
+// cancelled) cannot still have a pending approval — the framework's
+// loop has either resolved or terminated, and any HTTP approval
+// arriving against it is meaningless. The hook prevents a stale
+// PendingApproval from giving the handler a false-positive.
+func TestLoopTracker_UpdateCompletion_ClearsPendingApproval(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome string
+	}{
+		{"success", agentic.OutcomeSuccess},
+		{"failed", agentic.OutcomeFailed},
+		{"cancelled", agentic.OutcomeCancelled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracker := NewLoopTracker()
+			tracker.Track(&LoopInfo{LoopID: "loop-1", UserID: "user-1", State: "awaiting_approval"})
+			tracker.SetPendingApproval("loop-1", &PendingApprovalInfo{
+				CallID:   "call-001",
+				ToolName: "delete_rule",
+			})
+
+			err := tracker.UpdateCompletion("loop-1", tt.outcome, "result", "")
+			require.NoError(t, err)
+
+			info := tracker.Get("loop-1")
+			assert.Nil(t, info.PendingApproval, "PendingApproval should be cleared on terminal state")
+		})
+	}
 }

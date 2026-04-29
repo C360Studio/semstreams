@@ -46,6 +46,54 @@ type LoopInfo struct {
 	Result      string    `json:"result,omitempty"`       // LLM response content
 	Error       string    `json:"error,omitempty"`        // Error message on failure
 	CompletedAt time.Time `json:"completed_at,omitempty"` // When the loop completed
+
+	// PendingApproval is populated from agent.approval_pending events
+	// when the loop transitions to LoopStateAwaitingApproval. The
+	// approval HTTP handler reads this to recover the CallID it needs
+	// to publish on agent.approval_response. Cleared on terminal-state
+	// transitions and on a successful approval response.
+	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
+}
+
+// PendingApprovalInfo mirrors the relevant fields of
+// agentic.PendingApprovalState that the dispatch HTTP handler needs
+// to surface to a caller and to reconstruct the ApprovalResponse
+// envelope. Stored on LoopInfo, not duplicated in a separate map, so
+// /loops/{id} GET responses can include it for free. TraceID is
+// preserved so a "why is this loop stuck on approval?" investigation
+// is greppable across loop, dispatch, and any product UI without a
+// graph query. Timeout is intentionally NOT mirrored — only the
+// framework's loop enforces it, and exposing it here would invite
+// dispatch consumers to second-guess that authority.
+type PendingApprovalInfo struct {
+	CallID      string         `json:"call_id"`
+	ToolName    string         `json:"tool_name"`
+	Arguments   map[string]any `json:"arguments,omitempty"`
+	Reason      string         `json:"reason,omitempty"`
+	RequestedAt time.Time      `json:"requested_at"`
+	TraceID     string         `json:"trace_id,omitempty"`
+}
+
+// pendingApprovalBufferCap caps the early-arrival buffer so a flood
+// of approval-pending events for never-tracked loops can't grow the
+// tracker unboundedly. Sized for "the same loop's create event is
+// almost always already on its way" — exceeding this cap means
+// something has gone wrong upstream.
+const pendingApprovalBufferCap = 256
+
+// pendingApprovalBufferTTL bounds how long an early-arrival entry
+// can sit unmatched before being evicted. The race window between
+// agent.created and agent.approval_pending is typically <1s in
+// healthy deployments; 60s gives ample slack for slow consumers
+// without hoarding orphaned state.
+const pendingApprovalBufferTTL = 60 * time.Second
+
+// bufferedPendingApproval holds an approval-pending record that
+// arrived before its loop was tracked. Track drains the buffer when
+// the matching loop appears.
+type bufferedPendingApproval struct {
+	Info      *PendingApprovalInfo
+	ExpiresAt time.Time
 }
 
 // LoopTracker tracks active loops per user and channel
@@ -54,25 +102,36 @@ type LoopTracker struct {
 	userLoops    map[string]string    // user_id -> most recent loop_id
 	channelLoops map[string]string    // channel_id -> most recent loop_id
 	loops        map[string]*LoopInfo // loop_id -> LoopInfo
-	logger       *slog.Logger
+	// pendingApprovalBuffer absorbs the agent.approval_pending vs
+	// agent.created subscription race: when an approval-pending event
+	// arrives before its loop has been tracked, we stash the record
+	// here keyed by loop_id. Track drains the buffer on insert so the
+	// approval lands on the right LoopInfo as soon as the create event
+	// catches up. Capped by pendingApprovalBufferCap and entries TTL'd
+	// at pendingApprovalBufferTTL so a flood of orphan events can't
+	// grow the tracker unboundedly.
+	pendingApprovalBuffer map[string]*bufferedPendingApproval
+	logger                *slog.Logger
 }
 
 // NewLoopTracker creates a new LoopTracker
 func NewLoopTracker() *LoopTracker {
 	return &LoopTracker{
-		userLoops:    make(map[string]string),
-		channelLoops: make(map[string]string),
-		loops:        make(map[string]*LoopInfo),
+		userLoops:             make(map[string]string),
+		channelLoops:          make(map[string]string),
+		loops:                 make(map[string]*LoopInfo),
+		pendingApprovalBuffer: make(map[string]*bufferedPendingApproval),
 	}
 }
 
 // NewLoopTrackerWithLogger creates a new LoopTracker with logging.
 func NewLoopTrackerWithLogger(logger *slog.Logger) *LoopTracker {
 	return &LoopTracker{
-		userLoops:    make(map[string]string),
-		channelLoops: make(map[string]string),
-		loops:        make(map[string]*LoopInfo),
-		logger:       logger,
+		userLoops:             make(map[string]string),
+		channelLoops:          make(map[string]string),
+		loops:                 make(map[string]*LoopInfo),
+		pendingApprovalBuffer: make(map[string]*bufferedPendingApproval),
+		logger:                logger,
 	}
 }
 
@@ -81,7 +140,11 @@ func (t *LoopTracker) SetLogger(logger *slog.Logger) {
 	t.logger = logger
 }
 
-// Track adds or updates a loop in the tracker
+// Track adds or updates a loop in the tracker. If an
+// approval-pending event arrived before this loop was tracked (the
+// race window between agent.created and agent.approval_pending
+// subscriptions), the buffered record is attached here so the
+// HTTP approval handler can resolve CallID without losing state.
 func (t *LoopTracker) Track(info *LoopInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -91,6 +154,21 @@ func (t *LoopTracker) Track(info *LoopInfo) {
 	t.userLoops[info.UserID] = info.LoopID
 	if info.ChannelID != "" {
 		t.channelLoops[info.ChannelID] = info.LoopID
+	}
+
+	// Drain any buffered approval-pending record that arrived before
+	// this loop was tracked. Caller-supplied PendingApproval (rare)
+	// takes precedence over the buffer.
+	if buffered, ok := t.pendingApprovalBuffer[info.LoopID]; ok {
+		delete(t.pendingApprovalBuffer, info.LoopID)
+		if info.PendingApproval == nil && time.Now().Before(buffered.ExpiresAt) {
+			info.PendingApproval = buffered.Info
+			if t.logger != nil {
+				t.logger.Debug("attached buffered pending-approval to newly-tracked loop",
+					slog.String("loop_id", info.LoopID),
+					slog.String("call_id", buffered.Info.CallID))
+			}
+		}
 	}
 
 	if t.logger != nil {
@@ -180,7 +258,9 @@ func (t *LoopTracker) UpdateIterations(loopID string, iterations int) {
 
 // UpdateCompletion updates a loop with completion data (outcome, result, error).
 // This is called when a loop finishes to populate fields for SSE delivery.
-// It also updates the State field to match the terminal state implied by the outcome.
+// It also updates the State field to match the terminal state implied by
+// the outcome AND clears any stale PendingApproval — once a loop has
+// completed, an approval request against it is meaningless.
 func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) error {
 	if !isValidOutcome(outcome) {
 		return errs.WrapInvalid(fmt.Errorf("invalid outcome: %s", outcome), "LoopTracker", "UpdateCompletion", "validate outcome")
@@ -199,6 +279,7 @@ func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) e
 	info.Error = errMsg
 	info.CompletedAt = time.Now()
 	info.State = outcomeToState(outcome)
+	info.PendingApproval = nil
 
 	if t.logger != nil {
 		t.logger.Debug("loop completion updated",
@@ -210,6 +291,90 @@ func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) e
 	}
 
 	return nil
+}
+
+// SetPendingApproval records the gated tool-call info for a loop
+// awaiting human approval. Called by the agent.approval_pending
+// subscription handler. When the loop isn't tracked yet (the race
+// where approval-pending arrives before agent.created), the record
+// is stashed in a TTL'd, capped buffer that Track drains on insert.
+// Returns true when the record landed on a tracked loop, false when
+// it was buffered or dropped — the distinction matters mostly for
+// logging/metrics; either way the framework's own state is the
+// source of truth.
+func (t *LoopTracker) SetPendingApproval(loopID string, pending *PendingApprovalInfo) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if info, ok := t.loops[loopID]; ok {
+		info.PendingApproval = pending
+		if t.logger != nil {
+			t.logger.Debug("loop pending-approval recorded",
+				slog.String("loop_id", loopID),
+				slog.String("call_id", pending.CallID),
+				slog.String("tool_name", pending.ToolName))
+		}
+		return true
+	}
+
+	// Loop isn't tracked yet. Buffer the record so Track can drain
+	// it when the matching agent.created arrives. Lazy GC of expired
+	// entries on each call keeps the buffer bounded without a
+	// background sweeper.
+	t.gcPendingApprovalBufferLocked()
+	if len(t.pendingApprovalBuffer) >= pendingApprovalBufferCap {
+		if t.logger != nil {
+			t.logger.Warn("approval-pending buffer full, dropping event",
+				slog.String("loop_id", loopID),
+				slog.String("call_id", pending.CallID),
+				slog.Int("buffer_size", len(t.pendingApprovalBuffer)))
+		}
+		return false
+	}
+	t.pendingApprovalBuffer[loopID] = &bufferedPendingApproval{
+		Info:      pending,
+		ExpiresAt: time.Now().Add(pendingApprovalBufferTTL),
+	}
+	if t.logger != nil {
+		t.logger.Debug("approval-pending buffered for unknown loop",
+			slog.String("loop_id", loopID),
+			slog.String("call_id", pending.CallID),
+			slog.Int("buffer_size", len(t.pendingApprovalBuffer)))
+	}
+	return false
+}
+
+// gcPendingApprovalBufferLocked evicts expired entries from the
+// approval-pending buffer. Caller must hold t.mu in write mode.
+func (t *LoopTracker) gcPendingApprovalBufferLocked() {
+	now := time.Now()
+	for loopID, entry := range t.pendingApprovalBuffer {
+		if !now.Before(entry.ExpiresAt) {
+			delete(t.pendingApprovalBuffer, loopID)
+		}
+	}
+}
+
+// ClearPendingApproval drops the pending-approval record for a loop.
+// Called when the loop transitions out of awaiting_approval (the
+// approval was resolved, the loop was cancelled, etc.). Idempotent —
+// no-op when no pending state exists.
+func (t *LoopTracker) ClearPendingApproval(loopID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	info, ok := t.loops[loopID]
+	if !ok || info.PendingApproval == nil {
+		return
+	}
+	cleared := info.PendingApproval.CallID
+	info.PendingApproval = nil
+
+	if t.logger != nil {
+		t.logger.Debug("loop pending-approval cleared",
+			slog.String("loop_id", loopID),
+			slog.String("call_id", cleared))
+	}
 }
 
 // isValidOutcome checks if the outcome is one of the valid constants.
