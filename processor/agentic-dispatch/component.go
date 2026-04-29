@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
@@ -62,6 +64,7 @@ type Component struct {
 	registry      *CommandRegistry
 	metrics       *routerMetrics
 	modelRegistry model.RegistryReader // Unified model registry for model selection
+	profileReader atomic.Pointer[operatingmodel.ProfileReader]
 
 	// Lifecycle state
 	mu        sync.RWMutex
@@ -151,6 +154,11 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		outputPorts:   outputPorts,
 	}
 
+	// Default to an empty profile reader; production deployments wire a
+	// graph-backed reader via SetProfileReader after construction.
+	var emptyReader operatingmodel.ProfileReader = operatingmodel.EmptyProfileReader{}
+	comp.profileReader.Store(&emptyReader)
+
 	// Register built-in commands
 	comp.registerBuiltinCommands()
 
@@ -158,6 +166,28 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	comp.loadGlobalCommands()
 
 	return comp, nil
+}
+
+// SetProfileReader wires a ProfileReader for reading operating-model state
+// (e.g. prior ProfileVersion on /onboard re-run). Production deployments
+// call this with a graph-backed reader during component initialization;
+// tests may supply a stub. Passing nil restores the empty default so the
+// component never holds a nil reader.
+func (c *Component) SetProfileReader(reader operatingmodel.ProfileReader) {
+	if reader == nil {
+		reader = operatingmodel.EmptyProfileReader{}
+	}
+	c.profileReader.Store(&reader)
+}
+
+// getProfileReader returns the currently-installed ProfileReader. Always
+// non-nil — the constructor seeds an EmptyProfileReader and SetProfileReader
+// substitutes it back if the caller passes nil.
+func (c *Component) getProfileReader() operatingmodel.ProfileReader {
+	if r := c.profileReader.Load(); r != nil {
+		return *r
+	}
+	return operatingmodel.EmptyProfileReader{}
 }
 
 // Meta returns component metadata

@@ -98,6 +98,7 @@ func (c *Component) handleOnboardCommand(ctx context.Context, msg agentic.UserMe
 
 	newLoopID := "loop_" + uuid.New().String()[:8]
 	firstLayer := operatingmodel.LayerOperatingRhythms
+	profileVersion := c.nextProfileVersion(ctx, msg.UserID)
 
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:        newLoopID,
@@ -111,7 +112,7 @@ func (c *Component) handleOnboardCommand(ctx context.Context, msg agentic.UserMe
 		WorkflowStep:  firstLayer,
 		CreatedAt:     time.Now(),
 		Metadata: map[string]any{
-			OnboardMetaProfileVersion: 1,
+			OnboardMetaProfileVersion: profileVersion,
 			OnboardMetaLayerOrder:     1,
 		},
 	})
@@ -123,7 +124,8 @@ func (c *Component) handleOnboardCommand(ctx context.Context, msg agentic.UserMe
 	c.logger.DebugContext(ctx, "Onboarding started",
 		slog.String("loop_id", newLoopID),
 		slog.String("user_id", msg.UserID),
-		slog.String("layer", firstLayer))
+		slog.String("layer", firstLayer),
+		slog.Int("profile_version", profileVersion))
 
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -135,4 +137,27 @@ func (c *Component) handleOnboardCommand(ctx context.Context, msg agentic.UserMe
 		Content:     OnboardingOpeningQuestion(firstLayer),
 		Timestamp:   time.Now(),
 	}, nil
+}
+
+// nextProfileVersion returns the ProfileVersion to stamp on a new /onboard
+// loop's metadata. First-time onboarders get 1; re-runs get prior+1 so the
+// `user.operating_model.version` triple records monotonically increasing
+// versions across re-interviews.
+//
+// Falls back to 1 when no profile reader is wired (default
+// EmptyProfileReader), when the user has no prior profile, or when the
+// reader returns an error — the version-bump is best-effort and must not
+// block /onboard from starting.
+func (c *Component) nextProfileVersion(ctx context.Context, userID string) int {
+	prior, err := c.getProfileReader().ReadProfileVersion(ctx, c.deps.Platform.Org, c.deps.Platform.Platform, userID)
+	if err != nil {
+		c.logger.WarnContext(ctx, "onboard: prior profile version read failed; defaulting to 1",
+			slog.String("user_id", userID),
+			slog.Any("error", err))
+		return 1
+	}
+	if prior < 1 {
+		return 1
+	}
+	return prior + 1
 }

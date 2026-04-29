@@ -392,6 +392,46 @@ func TestReadOperatingModel_EntryMissingRequiredFieldsSkipped(t *testing.T) {
 	}
 }
 
+func TestReadProfileVersion(t *testing.T) {
+	t.Run("no profile", func(t *testing.T) {
+		r := newTestReader(newFakeKV())
+		v, err := r.ReadProfileVersion(context.Background(), "acme", "ops", "alice")
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if v != 0 {
+			t.Errorf("version = %d, want 0", v)
+		}
+	})
+
+	t.Run("returns persisted version", func(t *testing.T) {
+		kv := newFakeKV()
+		ref := ProfileRef{Org: "acme", Platform: "ops", UserID: "alice", Version: 5}
+		kv.writeProfile(t, ref, LayerOperatingRhythms,
+			[]Entry{mkEntry(LayerOperatingRhythms, "1", "t", "s")})
+
+		r := newTestReader(kv)
+		v, err := r.ReadProfileVersion(context.Background(), ref.Org, ref.Platform, ref.UserID)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if v != ref.Version {
+			t.Errorf("version = %d, want %d", v, ref.Version)
+		}
+	})
+
+	t.Run("empty args return zero without error", func(t *testing.T) {
+		r := newTestReader(newFakeKV())
+		v, err := r.ReadProfileVersion(context.Background(), "", "ops", "alice")
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if v != 0 {
+			t.Errorf("version = %d, want 0", v)
+		}
+	})
+}
+
 func TestReadOperatingModel_KVError(t *testing.T) {
 	t.Run("profile read fails", func(t *testing.T) {
 		// Every key fails: covers the "profile fetch hits transient KV

@@ -2,14 +2,15 @@ package agenticdispatch
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
-
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/component"
 )
 
 // newOnboardTestComponent builds a Component with just enough wiring to drive
@@ -135,6 +136,103 @@ func TestOnboardingOpeningQuestion_PanicsOnUnknownLayer(t *testing.T) {
 		}
 	}()
 	OnboardingOpeningQuestion("definitely_not_a_layer")
+}
+
+// stubVersionReader is a minimal ProfileReader that satisfies the interface
+// for tests focused on the version-bump path. ReadOperatingModel is never
+// called from /onboard, so it returns a zero result.
+type stubVersionReader struct {
+	version int
+	err     error
+}
+
+func (s stubVersionReader) ReadOperatingModel(_ context.Context, _, _, _ string) (*operatingmodel.ProfileResult, error) {
+	return nil, nil
+}
+
+func (s stubVersionReader) ReadProfileVersion(_ context.Context, _, _, _ string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.version, nil
+}
+
+func newOnboardTestComponentWithReader(reader operatingmodel.ProfileReader) *Component {
+	c := newOnboardTestComponent()
+	c.deps = component.Dependencies{
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	}
+	c.SetProfileReader(reader)
+	return c
+}
+
+func TestHandleOnboardCommand_FirstRunStartsAtVersion1(t *testing.T) {
+	// No prior profile (Empty reader returns 0) → first /onboard stamps
+	// ProfileVersion=1.
+	c := newOnboardTestComponentWithReader(operatingmodel.EmptyProfileReader{})
+	resp, err := c.handleOnboardCommand(context.Background(), onboardUserMsg(), nil, "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	info := c.loopTracker.Get(resp.InReplyTo)
+	if got := info.Metadata[OnboardMetaProfileVersion]; got != 1 {
+		t.Errorf("profile_version = %v, want 1", got)
+	}
+}
+
+func TestHandleOnboardCommand_RerunBumpsVersion(t *testing.T) {
+	// Prior profile at version 3 → /onboard stamps version 4 on the new
+	// loop's metadata.
+	c := newOnboardTestComponentWithReader(stubVersionReader{version: 3})
+	resp, err := c.handleOnboardCommand(context.Background(), onboardUserMsg(), nil, "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	info := c.loopTracker.Get(resp.InReplyTo)
+	if got := info.Metadata[OnboardMetaProfileVersion]; got != 4 {
+		t.Errorf("profile_version = %v, want 4 (3+1)", got)
+	}
+}
+
+func TestHandleOnboardCommand_ReaderErrorFallsBackTo1(t *testing.T) {
+	// Reader failure must not block /onboard. The loop starts at version 1
+	// and the warning is logged.
+	c := newOnboardTestComponentWithReader(stubVersionReader{err: errors.New("graph down")})
+	resp, err := c.handleOnboardCommand(context.Background(), onboardUserMsg(), nil, "")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	info := c.loopTracker.Get(resp.InReplyTo)
+	if got := info.Metadata[OnboardMetaProfileVersion]; got != 1 {
+		t.Errorf("profile_version = %v, want 1 (fallback on read error)", got)
+	}
+}
+
+func TestHandleOnboardCommand_VersionFlowsThroughToLayerApproved(t *testing.T) {
+	// End-to-end: bumped version on loop metadata is what the
+	// onboardingApproveLayer handler reads when constructing LayerApproved.
+	// This is the seam that closes the version-bump → triple-write loop.
+	c := newOnboardTestComponentWithReader(stubVersionReader{version: 7})
+	resp, _ := c.handleOnboardCommand(context.Background(), onboardUserMsg(), nil, "")
+	info := c.loopTracker.Get(resp.InReplyTo)
+
+	// metaInt is the same accessor onboardingApproveLayer uses.
+	got := metaInt(info.Metadata, OnboardMetaProfileVersion, 1)
+	if got != 8 {
+		t.Errorf("metaInt(profile_version) = %d, want 8", got)
+	}
+}
+
+func TestSetProfileReader_NilRestoresEmpty(t *testing.T) {
+	c := newOnboardTestComponentWithReader(stubVersionReader{version: 5})
+	c.SetProfileReader(nil)
+	got, err := c.getProfileReader().ReadProfileVersion(context.Background(), "acme", "ops", "alice")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if got != 0 {
+		t.Errorf("Empty reader returned %d, want 0", got)
+	}
 }
 
 func TestOnboardCommand_RegisteredInRegistry(t *testing.T) {

@@ -163,6 +163,16 @@ func (s stubProfileReader) ReadOperatingModel(ctx context.Context, _, _, _ strin
 	return &operatingmodel.ProfileResult{Entries: s.entries, Version: s.version}, nil
 }
 
+func (s stubProfileReader) ReadProfileVersion(ctx context.Context, _, _, _ string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.version, nil
+}
+
 func newProfileContextTestComponent(t *testing.T, reader operatingmodel.ProfileReader) *Component {
 	t.Helper()
 	cfg := DefaultConfig()

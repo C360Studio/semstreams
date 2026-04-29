@@ -52,6 +52,18 @@ func NewGraphProfileReader(ctx context.Context, nc *natsclient.Client, bucketNam
 	return &GraphProfileReader{kv: kv, logger: logger}, nil
 }
 
+// ReadProfileVersion implements ProfileReader. It loads only the user's
+// profile entity (one KV get) and returns the user.operating_model.version
+// triple. Returns 0 if no profile exists yet. Use this when only the
+// version is needed; ReadOperatingModel fetches the full layer/entry tree.
+func (r *GraphProfileReader) ReadProfileVersion(ctx context.Context, org, platform, userID string) (int, error) {
+	if org == "" || platform == "" || userID == "" {
+		return 0, nil
+	}
+	profile := r.getState(ctx, ProfileEntityID(org, platform, userID))
+	return readVersionFromState(profile), nil
+}
+
 // ReadOperatingModel implements ProfileReader. It walks the user's profile
 // entity through has_layer and has_entry relationship triples, returning
 // only entries reachable from the requested user's profile.
