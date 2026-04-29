@@ -3,20 +3,37 @@ package operatingmodel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
+// kvGetter is the minimal slice of natsclient.KVStore that GraphProfileReader
+// needs. Narrowing the dependency to this interface lets unit tests inject a
+// fake without spinning up NATS.
+type kvGetter interface {
+	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
+}
+
 // GraphProfileReader implements ProfileReader by querying the ENTITY_STATES
-// KV bucket for operating-model entities. It reconstructs []Entry from
-// predicate-per-field triples stored by the graph-ingest component.
+// KV bucket for operating-model entities.
+//
+// It traverses the graph via the relationship triples written by graph-ingest:
+//
+//	profile entity --user.operating_model.has_layer--> layer entity
+//	layer entity   --om.layer.has_entry--> entry entity
+//
+// All reads are scoped under the requested user's profile entity, which is
+// itself user-scoped by ID. This guarantees one user's call cannot return
+// another user's entries.
 //
 // All KV operations go through semstreams' natsclient.KVStore wrapper.
 type GraphProfileReader struct {
-	kv     *natsclient.KVStore
+	kv     kvGetter
 	logger *slog.Logger
 }
 
@@ -36,46 +53,61 @@ func NewGraphProfileReader(ctx context.Context, nc *natsclient.Client, bucketNam
 	return &GraphProfileReader{kv: kv, logger: logger}, nil
 }
 
-// ReadOperatingModel implements ProfileReader. It fetches the user's profile
-// entity for the version number, then scans for all om-entry.* entities and
-// reconstructs typed Entry objects from their triples.
+// ReadOperatingModel implements ProfileReader. It walks the user's profile
+// entity through has_layer and has_entry relationship triples, returning
+// only entries reachable from the requested user's profile.
 func (r *GraphProfileReader) ReadOperatingModel(ctx context.Context, org, platform, userID string) (*ProfileResult, error) {
 	if org == "" || platform == "" || userID == "" {
 		return nil, nil
 	}
 
-	profileVersion := r.readProfileVersion(ctx, org, platform, userID)
-
-	entryPrefix := fmt.Sprintf("%s.%s.user.teams.om-entry.", org, platform)
-	keys, err := r.kv.KeysByPrefix(ctx, entryPrefix)
-	if err != nil {
-		return nil, fmt.Errorf("list entry keys: %w", err)
-	}
-	if len(keys) == 0 {
-		return &ProfileResult{Version: profileVersion}, nil
+	profileID := ProfileEntityID(org, platform, userID)
+	profile := r.getState(ctx, profileID)
+	if profile == nil {
+		return &ProfileResult{}, nil
 	}
 
-	entries := make([]Entry, 0, len(keys))
-	for _, key := range keys {
-		entry, ok := r.readEntry(ctx, key)
+	version := readVersionFromState(profile)
+
+	layerIDs := relationshipTargets(profile, PredicateProfileHasLayer)
+	if len(layerIDs) == 0 {
+		return &ProfileResult{Version: version}, nil
+	}
+
+	entryIDs := r.collectEntryIDs(ctx, layerIDs)
+	if len(entryIDs) == 0 {
+		return &ProfileResult{Version: version}, nil
+	}
+
+	entries := make([]Entry, 0, len(entryIDs))
+	for _, entryID := range entryIDs {
+		entry, ok := r.readEntry(ctx, entryID)
 		if ok {
 			entries = append(entries, entry)
 		}
 	}
-	return &ProfileResult{Entries: entries, Version: profileVersion}, nil
+	return &ProfileResult{Entries: entries, Version: version}, nil
 }
 
-func (r *GraphProfileReader) readProfileVersion(ctx context.Context, org, platform, userID string) int {
-	profileID := ProfileEntityID(org, platform, userID)
-	state := r.getState(ctx, profileID)
-	if state == nil {
-		return 0
+// collectEntryIDs walks each layer's has_entry triples and returns a
+// deduplicated list of entry entity IDs in encounter order.
+func (r *GraphProfileReader) collectEntryIDs(ctx context.Context, layerIDs []string) []string {
+	seen := make(map[string]struct{}, len(layerIDs)*4)
+	var entryIDs []string
+	for _, layerID := range layerIDs {
+		layer := r.getState(ctx, layerID)
+		if layer == nil {
+			continue
+		}
+		for _, target := range relationshipTargets(layer, PredicateLayerHasEntry) {
+			if _, dup := seen[target]; dup {
+				continue
+			}
+			seen[target] = struct{}{}
+			entryIDs = append(entryIDs, target)
+		}
 	}
-	val, ok := state.GetPropertyValue(PredicateProfileVersion)
-	if !ok {
-		return 0
-	}
-	return objToInt(val)
+	return entryIDs
 }
 
 func (r *GraphProfileReader) readEntry(ctx context.Context, entityID string) (Entry, bool) {
@@ -127,7 +159,7 @@ func (r *GraphProfileReader) readEntry(ctx context.Context, entityID string) (En
 func (r *GraphProfileReader) getState(ctx context.Context, entityID string) *graph.EntityState {
 	entry, err := r.kv.Get(ctx, entityID)
 	if err != nil {
-		if !natsclient.IsKVNotFoundError(err) {
+		if !errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			r.logger.Debug("KV get failed", "entity_id", entityID, "error", err)
 		}
 		return nil
@@ -139,6 +171,45 @@ func (r *GraphProfileReader) getState(ctx context.Context, entityID string) *gra
 		return nil
 	}
 	return &state
+}
+
+// relationshipTargets returns the Object value of every triple on `state`
+// whose predicate matches `predicate` and whose Object is a string. Used
+// to walk multi-valued has_layer / has_entry edges where EntityState's
+// single-value GetPropertyValue helper isn't enough.
+func relationshipTargets(state *graph.EntityState, predicate string) []string {
+	if state == nil {
+		return nil
+	}
+	var out []string
+	for _, t := range state.Triples {
+		if t.Predicate != predicate {
+			continue
+		}
+		if s, ok := t.Object.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// readVersionFromState extracts the profile version from an already-loaded
+// profile state. Splitting this out avoids a second KV round-trip for the
+// version.
+func readVersionFromState(profile *graph.EntityState) int {
+	if profile == nil {
+		return 0
+	}
+	val, ok := profile.GetPropertyValue(PredicateProfileVersion)
+	if !ok {
+		return 0
+	}
+	return objToInt(val)
+}
+
+// discardLogger returns a logger that discards all output, for tests.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // --- triple-object type conversion helpers ---
