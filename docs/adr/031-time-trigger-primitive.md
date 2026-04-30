@@ -2,9 +2,20 @@
 
 ## Status
 
-**Proposed (2026-04-29).** No tag is committed. This ADR captures the
-design space for a future framework primitive so the discussion has a
-target before implementation pressure forces a quick choice.
+**Accepted — Option A (2026-04-30).** Implementation pending; tracked
+in [issue #15](https://github.com/c360studio/semstreams/issues/15).
+
+The semteams onboarding flow captures cadence and trigger fields per
+operating-model entry (`om.entry.cadence`, `om.entry.trigger`) and has
+no way to act on them. That's the internal forcing function the
+"Implementation-pressure triggers" section below anticipated. Building
+Option A — a `"type": "cron"` rule kind layered into the existing
+rule processor — is small enough to ship without locking in surface
+that a future Option B couldn't extract from underneath.
+
+Originally proposed 2026-04-29 with a lean toward Option A but no
+implementation commitment. That posture lasted one day before the
+internal need surfaced.
 
 ## Context
 

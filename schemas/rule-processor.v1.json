@@ -48,6 +48,127 @@
       "items": {
         "type": "object",
         "properties": {
+          "actions": {
+            "type": "array",
+            "description": "actions",
+            "items": {
+              "type": "object",
+              "properties": {
+                "boid_signal_type": {
+                  "type": "string",
+                  "description": "boid_signal_type"
+                },
+                "boid_strength": {
+                  "type": "number",
+                  "description": "boid_strength"
+                },
+                "bucket": {
+                  "type": "string",
+                  "description": "bucket"
+                },
+                "context_data": {
+                  "type": "object",
+                  "description": "context_data"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "key"
+                },
+                "merge": {
+                  "type": "boolean",
+                  "description": "merge"
+                },
+                "model": {
+                  "type": "string",
+                  "description": "model"
+                },
+                "object": {
+                  "type": "string",
+                  "description": "object"
+                },
+                "payload": {
+                  "type": "object",
+                  "description": "payload"
+                },
+                "predicate": {
+                  "type": "string",
+                  "description": "predicate"
+                },
+                "prompt": {
+                  "type": "string",
+                  "description": "prompt"
+                },
+                "properties": {
+                  "type": "object",
+                  "description": "properties"
+                },
+                "role": {
+                  "type": "string",
+                  "description": "role"
+                },
+                "subject": {
+                  "type": "string",
+                  "description": "subject"
+                },
+                "tools": {
+                  "type": "array",
+                  "description": "tools",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ttl": {
+                  "type": "string",
+                  "description": "ttl"
+                },
+                "type": {
+                  "type": "string",
+                  "description": "type"
+                },
+                "when": {
+                  "type": "array",
+                  "description": "when",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "field": {
+                        "type": "string",
+                        "description": "field"
+                      },
+                      "from": {
+                        "type": "string",
+                        "description": "from"
+                      },
+                      "operator": {
+                        "type": "string",
+                        "description": "operator"
+                      },
+                      "required": {
+                        "type": "boolean",
+                        "description": "required"
+                      },
+                      "value": {
+                        "type": "string",
+                        "description": "value"
+                      }
+                    }
+                  }
+                },
+                "workflow_id": {
+                  "type": "string",
+                  "description": "workflow_id"
+                },
+                "workflow_slug": {
+                  "type": "string",
+                  "description": "workflow_slug"
+                },
+                "workflow_step": {
+                  "type": "string",
+                  "description": "workflow_step"
+                }
+              }
+            }
+          },
           "conditions": {
             "type": "array",
             "description": "conditions",
@@ -503,6 +624,10 @@
           "rerun_on_recovery": {
             "type": "boolean",
             "description": "rerun_on_recovery"
+          },
+          "schedule": {
+            "type": "string",
+            "description": "schedule"
           },
           "type": {
             "type": "string",
