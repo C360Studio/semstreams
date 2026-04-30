@@ -22,6 +22,14 @@ func (a *GenericAdapter) NormalizeRequest(_ *openai.ChatCompletionRequest) {}
 //     absent content; setting it to a single space is a widely-used convention
 //     (LiteLLM, OpenAI proxy, etc.) and accepted by all known providers.
 //
+//  3. Consecutive messages with the same role are collapsed into one by joining
+//     their content with "\n\n". Several providers (Anthropic and some Gemini
+//     compatibility layers, including OpenRouter routes that bridge to them)
+//     require strict role alternation and reject consecutive same-role messages.
+//     Tool messages and assistant messages with tool_calls are preserved as-is —
+//     each carries identity-bearing fields (ToolCallID, ToolCalls) that cannot
+//     be merged without breaking tool-pair invariants.
+//
 // reasoning_content omission is handled structurally during message conversion
 // (the field is never copied into the outgoing openai.ChatCompletionMessage).
 func (a *GenericAdapter) NormalizeMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
@@ -33,7 +41,36 @@ func (a *GenericAdapter) NormalizeMessages(messages []openai.ChatCompletionMessa
 			messages[i].Content = " "
 		}
 	}
-	return messages
+	return collapseConsecutiveSameRole(messages)
+}
+
+// collapseConsecutiveSameRole merges adjacent messages with the same role by
+// joining their Content with "\n\n". Tool messages and any message carrying
+// tool_calls are excluded from merging because their identity-bearing fields
+// (ToolCallID, ToolCalls) would be lost.
+func collapseConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(messages) < 2 {
+		return messages
+	}
+	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, m := range messages {
+		last := len(out) - 1
+		canMerge := last >= 0 &&
+			out[last].Role == m.Role &&
+			m.Role != "tool" &&
+			len(m.ToolCalls) == 0 && len(out[last].ToolCalls) == 0
+		if !canMerge {
+			out = append(out, m)
+			continue
+		}
+		switch {
+		case out[last].Content == "":
+			out[last].Content = m.Content
+		case m.Content != "":
+			out[last].Content = out[last].Content + "\n\n" + m.Content
+		}
+	}
+	return out
 }
 
 // NormalizeStreamDelta infers the tool call index when the provider omits it.

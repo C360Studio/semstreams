@@ -107,6 +107,79 @@ func TestGenericAdapter_NormalizeMessages_SameAsGemini(t *testing.T) {
 	}
 }
 
+func TestGenericAdapter_NormalizeMessages_CollapsesConsecutiveSameRole(t *testing.T) {
+	adapter := agenticmodel.AdapterFor("")
+	messages := []openai.ChatCompletionMessage{
+		{Role: "system", Content: "rule one"},
+		{Role: "system", Content: "rule two"},
+		{Role: "user", Content: "hi"},
+		{Role: "user", Content: "are you there?"},
+		{Role: "assistant", Content: "yes"},
+	}
+
+	result := adapter.NormalizeMessages(messages)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 messages after collapse, got %d", len(result))
+	}
+	if result[0].Role != "system" || result[0].Content != "rule one\n\nrule two" {
+		t.Errorf("merged system → role=%q content=%q", result[0].Role, result[0].Content)
+	}
+	if result[1].Role != "user" || result[1].Content != "hi\n\nare you there?" {
+		t.Errorf("merged user → role=%q content=%q", result[1].Role, result[1].Content)
+	}
+	if result[2].Role != "assistant" || result[2].Content != "yes" {
+		t.Errorf("standalone assistant → role=%q content=%q", result[2].Role, result[2].Content)
+	}
+}
+
+func TestGenericAdapter_NormalizeMessages_PreservesToolPairs(t *testing.T) {
+	adapter := agenticmodel.AdapterFor("")
+	messages := []openai.ChatCompletionMessage{
+		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call-1"}}},
+		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call-2"}}},
+		{Role: "tool", ToolCallID: "call-1", Name: "read_file", Content: "result one"},
+		{Role: "tool", ToolCallID: "call-2", Name: "read_file", Content: "result two"},
+	}
+
+	result := adapter.NormalizeMessages(messages)
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 messages preserved (assistant w/ tool_calls + tool results), got %d", len(result))
+	}
+	if len(result[0].ToolCalls) != 1 || result[0].ToolCalls[0].ID != "call-1" {
+		t.Errorf("first assistant tool_calls lost: %+v", result[0].ToolCalls)
+	}
+	if len(result[1].ToolCalls) != 1 || result[1].ToolCalls[0].ID != "call-2" {
+		t.Errorf("second assistant tool_calls lost: %+v", result[1].ToolCalls)
+	}
+	if result[2].ToolCallID != "call-1" || result[3].ToolCallID != "call-2" {
+		t.Errorf("tool result IDs collapsed: %q, %q", result[2].ToolCallID, result[3].ToolCallID)
+	}
+}
+
+func TestGenericAdapter_NormalizeMessages_MergesEmptyContent(t *testing.T) {
+	adapter := agenticmodel.AdapterFor("")
+	messages := []openai.ChatCompletionMessage{
+		{Role: "user", Content: ""},
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+		{Role: "assistant", Content: ""},
+	}
+
+	result := adapter.NormalizeMessages(messages)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
+	}
+	if result[0].Content != "hello" {
+		t.Errorf("empty + nonempty user → %q, want %q", result[0].Content, "hello")
+	}
+	if result[1].Content != "hi" {
+		t.Errorf("nonempty + empty assistant → %q, want %q", result[1].Content, "hi")
+	}
+}
+
 func TestOpenAIAdapter_NormalizeMessages_NoChanges(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("openai")
 	messages := []openai.ChatCompletionMessage{
