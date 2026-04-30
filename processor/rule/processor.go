@@ -611,7 +611,12 @@ func (rp *Processor) initializeCronScheduler() error {
 		return fmt.Errorf("cannot initialize cron scheduler: action executor not initialized")
 	}
 
-	scheduler, err := NewCronScheduler(rp.actionExecutor, rp.scheduleTracker, rp.logger)
+	scheduler, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: rp.actionExecutor,
+		Tracker:  rp.scheduleTracker,
+		Metrics:  getCronMetrics(rp.metricsRegistry),
+		Logger:   rp.logger,
+	})
 	if err != nil {
 		return fmt.Errorf("create cron scheduler: %w", err)
 	}

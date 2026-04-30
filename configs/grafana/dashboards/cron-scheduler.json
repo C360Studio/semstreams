@@ -1,0 +1,291 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "description": "Cron rule fire rate by outcome. Spikes in {status=\"error\"} indicate downstream action failures (NATS, KV, publish_agent). Any value on {status=\"panic\"} is a programming-bug signal — page someone. {status=\"cooldown_skipped\"} means the cron expression ticks faster than actions complete on average; tune cooldown or schedule.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(semstreams_cron_rule_fires_total[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cron Rule Fire Rate (by status)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Action-dispatch latency per cron rule. p99 climbing past the rule's cooldown is the early warning that the next tick will be cooldown-skipped or inflight-blocked.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, rule_id) (rate(semstreams_cron_rule_fire_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{rule_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, rule_id) (rate(semstreams_cron_rule_fire_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{rule_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, rule_id) (rate(semstreams_cron_rule_fire_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{rule_id}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Fire Duration (p50/p95/p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Missed fires detected on scheduler restart. Per ADR-031 missed fires are log-only (not auto-replayed). Sustained non-zero rate means the binary is restarting frequently across cron-fire boundaries.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 3,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "sum by (rule_id) (increase(semstreams_cron_rule_missed_fires_total[1h]))",
+          "legendFormat": "missed/h {{rule_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (rule_id) (increase(semstreams_cron_rule_missed_fires_capped_total[1h]))",
+          "legendFormat": "capped/h {{rule_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Missed Fires (per hour)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Number of cron rules currently registered with the scheduler. Drops on hot-reload removals. Useful for confirming a config change took effect.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "semstreams_cron_rule_registered",
+          "refId": "A"
+        }
+      ],
+      "title": "Registered Cron Rules",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "1 = scheduler is started and ticking. 0 = stopped. Alert on this dropping while the processor is otherwise healthy — catches the 'scheduler crashed but processor still alive' pathology.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "red", "text": "STOPPED" } }, "type": "value" },
+            { "options": { "1": { "color": "green", "text": "RUNNING" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 16 },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "semstreams_cron_scheduler_running",
+          "refId": "A"
+        }
+      ],
+      "title": "Scheduler Running",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Panic-status fire rate (last 5m). Any non-zero value is a programming bug. Alert: rate(semstreams_cron_rule_fires_total{status=\"panic\"}[5m]) > 0 → page someone. The recover keeps the scheduler alive but a panic means a downstream action threw an unrecoverable error — fix the code, do not tune the alert.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.000001 }
+            ]
+          },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
+      "id": 7,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "sum(rate(semstreams_cron_rule_fires_total{status=\"panic\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Panic Fire Rate (page on > 0)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Time until each rule's next scheduled fire, derived from next_fire_timestamp_seconds - time(). Negative values mean the rule should have fired but hasn't — investigate the scheduler. Useful as the operational answer to 'when does this thing fire next?'",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 6,
+      "options": {
+        "legend": { "calcs": ["mean", "min"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "9.0.0",
+      "targets": [
+        {
+          "expr": "semstreams_cron_rule_next_fire_timestamp_seconds - time()",
+          "legendFormat": "{{rule_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Time Until Next Fire (per rule)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["semstreams", "cron", "scheduler"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Cron Scheduler",
+  "uid": "semstreams-cron",
+  "version": 1
+}

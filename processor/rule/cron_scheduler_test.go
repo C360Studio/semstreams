@@ -7,6 +7,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/metric"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // recordingExecutor is a test-only ActionExecutorInterface that records every
@@ -46,7 +49,10 @@ func (r *recordingExecutor) callCount() int {
 
 func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {
 	t.Helper()
-	s, err := NewCronScheduler(exec, nil, slog.Default())
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Logger:   slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("NewCronScheduler = %v, want nil", err)
 	}
@@ -68,7 +74,7 @@ func cronRuleForTest(t *testing.T, mutate func(*Definition)) *CronRule {
 }
 
 func TestNewCronScheduler_RejectsNilExecutor(t *testing.T) {
-	_, err := NewCronScheduler(nil, nil, slog.Default())
+	_, err := NewCronScheduler(CronSchedulerConfig{Logger: slog.Default()})
 	if err == nil {
 		t.Fatal("err = nil, want non-nil for nil executor")
 	}
@@ -417,7 +423,11 @@ func newSchedulerWithTrackerForTest(t *testing.T, exec ActionExecutorInterface) 
 	t.Helper()
 	bucket := newMockKVBucket()
 	tracker := NewScheduleTracker(bucket, slog.Default())
-	s, err := NewCronScheduler(exec, tracker, slog.Default())
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Tracker:  tracker,
+		Logger:   slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("NewCronScheduler = %v", err)
 	}
@@ -714,4 +724,346 @@ type ecCapturingExecutor struct {
 func (e *ecCapturingExecutor) Execute(_ context.Context, _ Action, ec *ExecutionContext) error {
 	e.ec = ec
 	return nil
+}
+
+// newSchedulerWithMetricsForTest builds a scheduler wired to a fresh
+// MetricsRegistry-backed cronMetrics so test code can assert on counter
+// / gauge / histogram state without touching global Prometheus state.
+func newSchedulerWithMetricsForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *cronMetrics) {
+	t.Helper()
+	m := getCronMetrics(metric.NewMetricsRegistry())
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Metrics:  m,
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+	return s, m
+}
+
+// Register flips the registered gauge and seeds the next-fire gauge.
+// Deregister reverses both. Together they prove hot-reload-time changes
+// are visible in Prometheus state.
+func TestCronScheduler_Metrics_RegisterDeregisterFlipsGauges(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	if got := testutil.ToFloat64(m.registered); got != 1 {
+		t.Errorf("registered after Register = %f, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID())); got == 0 {
+		t.Errorf("next_fire = 0, want non-zero (Schedule.Next should be in the future)")
+	}
+
+	s.Deregister(rule.ID())
+	if got := testutil.ToFloat64(m.registered); got != 0 {
+		t.Errorf("registered after Deregister = %f, want 0", got)
+	}
+	if got := testutil.CollectAndCount(m.nextFireTimestampSecs); got != 0 {
+		t.Errorf("next_fire vector cardinality after Deregister = %d, want 0 (gauge should be cleared)", got)
+	}
+}
+
+// fire() records duration + status=success on a clean dispatch.
+func TestCronScheduler_Metrics_FireSuccessRecorded(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusSuccess)); got != 1 {
+		t.Errorf("fires{success} = %f, want 1", got)
+	}
+	if got := testutil.CollectAndCount(m.fireDurationSeconds); got == 0 {
+		t.Errorf("fire_duration histogram empty, want at least one observation")
+	}
+}
+
+// An action returning error downgrades the fire status to "error" while
+// still permitting subsequent actions in the same tick.
+func TestCronScheduler_Metrics_FireErrorRecorded(t *testing.T) {
+	exec := &recordingExecutor{errOnce: errors.New("boom")}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusError)); got != 1 {
+		t.Errorf("fires{error} = %f, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusSuccess)); got != 0 {
+		t.Errorf("fires{success} = %f, want 0 (action errored)", got)
+	}
+}
+
+// A panicking action surfaces as status=panic. The recover keeps
+// robfig's goroutine alive (the test doesn't crash); the metric
+// distinguishes this from status=error so an alert can page on the
+// programming-bug class specifically.
+func TestCronScheduler_Metrics_FirePanicRecordedAsPanic(t *testing.T) {
+	exec := &recordingExecutor{panicOn: "boom"}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Actions = []Action{{Type: ActionTypePublish, Subject: "boom"}}
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID()) // recover keeps the test alive
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusPanic)); got != 1 {
+		t.Errorf("fires{panic} = %f, want 1", got)
+	}
+}
+
+// A cooldown-skipped fire records under the dedicated status without
+// observing the duration histogram (skipped fires never dispatched).
+func TestCronScheduler_Metrics_CooldownSkippedRecorded(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Cooldown = "10s"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID()) // first fire dispatches
+	s.fire(rule.ID()) // second within 10s is cooldown-skipped
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusSuccess)); got != 1 {
+		t.Errorf("fires{success} = %f, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusCooldownSkipped)); got != 1 {
+		t.Errorf("fires{cooldown_skipped} = %f, want 1", got)
+	}
+}
+
+// fire() must update the next-fire gauge after every successful
+// dispatch so the gauge always reflects the freshest schedule.Next.
+// The post-fire value must be strictly in the future from the test's
+// frame of reference — proves fire is actually writing the gauge,
+// without relying on wallclock-precision tricks across small sleeps.
+func TestCronScheduler_Metrics_FireUpdatesNextFireGauge(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Schedule = "@every 1h"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	gauge := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID()))
+	now := float64(time.Now().Unix())
+	if gauge <= now {
+		t.Errorf("next_fire = %f, want > now (%f)", gauge, now)
+	}
+}
+
+// Start flips scheduler_running to 1; Stop returns it to 0. Catches
+// the "scheduler crashed but processor still alive" pathology.
+func TestCronScheduler_Metrics_SchedulerRunningGauge(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	if got := testutil.ToFloat64(m.schedulerRunning); got != 0 {
+		t.Errorf("running before Start = %f, want 0", got)
+	}
+
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	if got := testutil.ToFloat64(m.schedulerRunning); got != 1 {
+		t.Errorf("running after Start = %f, want 1", got)
+	}
+
+	stopCtx := s.Stop()
+	<-stopCtx.Done()
+	if got := testutil.ToFloat64(m.schedulerRunning); got != 0 {
+		t.Errorf("running after Stop = %f, want 0", got)
+	}
+}
+
+// Panic-after-some-actions-succeed: status=panic must win over the
+// partial-success accumulated before the panic. Verifies the deferred
+// recover unconditionally overwrites the status that the dispatch loop
+// set, rather than leaving a previously-set "success" or "error".
+func TestCronScheduler_Metrics_PanicWinsOverPartialSuccess(t *testing.T) {
+	exec := &recordingExecutor{panicOn: "boom"}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Actions = []Action{
+			{Type: ActionTypePublish, Subject: "ok-1"},
+			{Type: ActionTypePublish, Subject: "ok-2"},
+			{Type: ActionTypePublish, Subject: "boom"},
+		}
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID()) // recover keeps the test alive
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusPanic)); got != 1 {
+		t.Errorf("fires{panic} = %f, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusSuccess)); got != 0 {
+		t.Errorf("fires{success} = %f, want 0 (panic must overwrite partial success)", got)
+	}
+}
+
+// Hot-reload: Deregister followed by Register-with-same-id ends up with
+// registered=1 (Inc → Dec → Inc nets to +1). Pins the post-reload
+// gauge value so a future refactor that, e.g., made Register idempotent
+// without paired Deregister wouldn't double-count.
+func TestCronScheduler_Metrics_HotReloadKeepsRegisteredAtOne(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("first Register = %v", err)
+	}
+	s.Deregister(rule.ID())
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("re-Register = %v", err)
+	}
+
+	if got := testutil.ToFloat64(m.registered); got != 1 {
+		t.Errorf("registered after Register/Deregister/Register = %f, want 1", got)
+	}
+}
+
+// Disabled rules must not bump the registered gauge — Register
+// silently skips them. Pins "registered" as "running rules", not
+// "configured rules".
+func TestCronScheduler_Metrics_DisabledRuleNoGaugeBump(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) { d.Enabled = false })
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register disabled = %v", err)
+	}
+	if got := testutil.ToFloat64(m.registered); got != 0 {
+		t.Errorf("registered for disabled rule = %f, want 0", got)
+	}
+}
+
+// Cooldown-skipped fires must NOT update the next-fire gauge. The
+// gauge is meaningful only after a real dispatch advances Schedule.Next;
+// updating it on a skip would muddle the dashboard's time-until-next-fire
+// view.
+func TestCronScheduler_Metrics_CooldownSkippedDoesNotUpdateNextFire(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Cooldown = "10s"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID()) // first fire dispatches; updates next_fire
+	afterFirstFire := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID()))
+
+	// Sleep past wallclock granularity so a real fire would advance
+	// the gauge — proves cooldown_skipped path doesn't.
+	time.Sleep(2 * time.Millisecond)
+	s.fire(rule.ID()) // cooldown-skipped
+
+	if got := testutil.ToFloat64(m.nextFireTimestampSecs.WithLabelValues(rule.ID())); got != afterFirstFire {
+		t.Errorf("next_fire after cooldown_skipped = %f, want unchanged %f", got, afterFirstFire)
+	}
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusCooldownSkipped)); got != 1 {
+		t.Errorf("fires{cooldown_skipped} = %f, want 1", got)
+	}
+}
+
+// Inflight-skipped surfaces the operator-error case of "actions are
+// slower than schedule, no cooldown configured". Distinct status from
+// cooldown_skipped because the operator action is different.
+func TestCronScheduler_Metrics_InflightSkippedRecorded(t *testing.T) {
+	// Slow executor causes the first fire to still be running when the
+	// second arrives. Inflight CAS rejects the second; metric should
+	// reflect inflight_skipped.
+	exec := &recordingExecutor{delay: 100 * time.Millisecond}
+	s, m := newSchedulerWithMetricsForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); s.fire(rule.ID()) }()
+	time.Sleep(10 * time.Millisecond) // let first fire grab the inflight CAS
+	go func() { defer wg.Done(); s.fire(rule.ID()) }()
+	wg.Wait()
+
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusInflightSkipped)); got != 1 {
+		t.Errorf("fires{inflight_skipped} = %f, want 1", got)
+	}
+}
+
+// restoreFromTracker increments missed_fires_total by the detected
+// count and missed_fires_capped_total when the cap fires.
+func TestCronScheduler_Metrics_RestoreRecordsMissedFires(t *testing.T) {
+	exec := &recordingExecutor{}
+	bucket := newMockKVBucket()
+	tracker := NewScheduleTracker(bucket, slog.Default())
+	m := getCronMetrics(metric.NewMetricsRegistry())
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Tracker:  tracker,
+		Metrics:  m,
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Schedule = "@every 1s"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+
+	// Seed a 5s-old record so the detector counts a few missed fires
+	// (exact count depends on schedule.Next semantics around wallclock
+	// granularity; we just assert > 0).
+	if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), time.Now().Add(-5*time.Second)); err != nil {
+		t.Fatalf("RecordFire = %v", err)
+	}
+
+	s.restoreFromTracker(context.Background())
+
+	if got := testutil.ToFloat64(m.missedFiresTotal.WithLabelValues(rule.ID())); got <= 0 {
+		t.Errorf("missed_fires = %f, want > 0", got)
+	}
 }

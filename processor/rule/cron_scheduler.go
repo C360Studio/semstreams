@@ -42,6 +42,7 @@ type CronScheduler struct {
 	cron     *cronlib.Cron
 	executor ActionExecutorInterface
 	tracker  *ScheduleTracker
+	metrics  *cronMetrics
 	logger   *slog.Logger
 
 	mu      sync.Mutex
@@ -85,20 +86,42 @@ type cronEntry struct {
 	inflight atomic.Bool
 }
 
+// CronSchedulerConfig groups the collaborators NewCronScheduler needs.
+// Constructed by initializeCronScheduler in production; tests build it
+// inline with whichever fields they exercise. Following the team's
+// "4+ args → request struct" convention so future additions (timeouts,
+// custom parsers, observers) don't grow a positional arg list.
+type CronSchedulerConfig struct {
+	// Executor is required. A nil executor is rejected because every
+	// fire would silently no-op, hiding misconfiguration.
+	Executor ActionExecutorInterface
+
+	// Tracker is optional. Pass nil to run without persistence — no
+	// cross-restart missed-fire detection, no cooldown hydration on
+	// startup. Tests typically pass nil; the production processor
+	// wires in a tracker bound to the RULE_SCHEDULES bucket.
+	Tracker *ScheduleTracker
+
+	// Metrics is optional. Pass nil to run without Prometheus
+	// observability — every recordX call short-circuits on the nil
+	// receiver. Tests that don't assert on metrics pass nil; the
+	// production processor wires in metrics scoped to its registry.
+	Metrics *cronMetrics
+
+	// Logger is optional. Defaults to slog.Default() when nil so the
+	// scheduler always has something to log to.
+	Logger *slog.Logger
+}
+
 // NewCronScheduler builds a scheduler that will dispatch actions through
-// the given executor. The logger is required (use slog.Default() if no
-// component logger is available); a nil executor is rejected because every
-// fire would silently no-op, hiding misconfiguration.
-//
-// The tracker is optional: pass nil and the scheduler runs without
-// persistence (no missed-fire detection on restart, no cross-process
-// readability of last-fired timestamps). Tests typically pass nil; the
-// production processor wires in a tracker bound to the RULE_SCHEDULES
-// bucket.
-func NewCronScheduler(executor ActionExecutorInterface, tracker *ScheduleTracker, logger *slog.Logger) (*CronScheduler, error) {
-	if executor == nil {
+// cfg.Executor. Returns an error only when cfg.Executor is nil — the
+// other fields are all optional with documented degraded-mode
+// behaviour.
+func NewCronScheduler(cfg CronSchedulerConfig) (*CronScheduler, error) {
+	if cfg.Executor == nil {
 		return nil, errors.New("cron scheduler: executor is required")
 	}
+	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -109,8 +132,9 @@ func NewCronScheduler(executor ActionExecutorInterface, tracker *ScheduleTracker
 		// to satisfy our own cronParser (cron_rule.go). The Cron's own
 		// parser is therefore unused.
 		cron:     cronlib.New(),
-		executor: executor,
-		tracker:  tracker,
+		executor: cfg.Executor,
+		tracker:  cfg.Tracker,
+		metrics:  cfg.Metrics,
 		logger:   logger,
 		entries:  make(map[string]*cronEntry),
 	}, nil
@@ -146,6 +170,9 @@ func (s *CronScheduler) Register(rule *CronRule) error {
 	entry.entryID = s.cron.Schedule(rule.Schedule(), job)
 	s.entries[ruleID] = entry
 
+	s.metrics.recordRuleRegistered()
+	s.metrics.recordNextFire(ruleID, float64(rule.Schedule().Next(time.Now()).Unix()))
+
 	s.logger.Info("Cron rule registered",
 		"rule_id", ruleID,
 		"schedule", rule.ScheduleString(),
@@ -165,6 +192,8 @@ func (s *CronScheduler) Deregister(ruleID string) {
 	}
 	s.cron.Remove(entry.entryID)
 	delete(s.entries, ruleID)
+	s.metrics.recordRuleDeregistered()
+	s.metrics.clearNextFire(ruleID)
 	s.logger.Info("Cron rule deregistered", "rule_id", ruleID)
 }
 
@@ -198,6 +227,7 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	s.restoreFromTracker(ctx)
 
 	s.cron.Start()
+	s.metrics.recordSchedulerRunning(true)
 	s.logger.Info("Cron scheduler started", "registered_rules", s.RegisteredCount())
 	return nil
 }
@@ -286,13 +316,19 @@ func (s *CronScheduler) restoreFromTracker(ctx context.Context) {
 			continue
 		}
 
+		capped := missed >= missedCap
+		s.metrics.recordMissedFire(rule.ID(), missed)
+		if capped {
+			s.metrics.recordMissedFireCapped(rule.ID())
+		}
+
 		s.logger.Warn("Cron rule missed fires while scheduler was offline",
 			"rule_id", rule.ID(),
 			"schedule", rule.ScheduleString(),
 			"last_fired_at", rec.LastFiredAt,
 			"missed_fires", missed,
 			"last_expected_fire", lastExpected,
-			"capped", missed >= missedCap)
+			"capped", capped)
 	}
 }
 
@@ -313,6 +349,7 @@ func (s *CronScheduler) Stop() context.Context {
 	}
 	s.started = false
 	stopCtx := s.cron.Stop()
+	s.metrics.recordSchedulerRunning(false)
 	s.logger.Info("Cron scheduler stopping")
 	return stopCtx
 }
@@ -375,6 +412,7 @@ func (s *CronScheduler) fire(ruleID string) {
 	// that ticks faster than actions complete on average.
 	if cooldown := entry.rule.Cooldown(); cooldown > 0 {
 		if previousFiredNanos > 0 && time.Since(time.Unix(0, previousFiredNanos)) < cooldown {
+			s.metrics.recordFire(ruleID, cronFireStatusCooldownSkipped, 0)
 			s.logger.Debug("Cron rule fire skipped (cooldown)",
 				"rule_id", ruleID,
 				"cooldown", cooldown)
@@ -386,27 +424,53 @@ func (s *CronScheduler) fire(ruleID string) {
 	// is the source of truth for "currently dispatching"; cooldown above
 	// is wallclock-based and orthogonal. Both are needed: cooldown handles
 	// fast-cycling slow rules, inflight handles a fire that exceeded its
-	// own period.
+	// own period. Distinct status from cooldown_skipped because the
+	// operator action is different: cooldown_skipped means "configured
+	// throttling worked", inflight_skipped means "actions are slower
+	// than the schedule, configure a cooldown or speed them up".
 	if !entry.inflight.CompareAndSwap(false, true) {
+		s.metrics.recordFire(ruleID, cronFireStatusInflightSkipped, 0)
 		s.logger.Warn("Cron rule fire skipped (previous fire still running)",
 			"rule_id", ruleID)
 		return
 	}
 	defer entry.inflight.Store(false)
 
-	// Defer panic-recover before any action dispatch so a panicking
-	// action surfaces as a logged error instead of crashing robfig's
-	// internal goroutine. A panic mid-loop intentionally drops the
-	// remaining sibling actions in this tick — the next scheduled tick
-	// will retry from the top. The deferred inflight reset above runs
-	// after this recover (LIFO) so the next tick is not gated by the
-	// panicker.
+	s.dispatchAndRecord(parentCtx, ruleID, entry, previousFiredNanos)
+}
+
+// dispatchAndRecord is the post-gates portion of fire(). Extracted from
+// fire() so the gate-heavy entry path stays under the function-length
+// lint cap; behaviour is unchanged. Holds the deferred panic-recover
+// (backstop only — cron-side code does not panic deliberately) and the
+// metric / persistence side-effects that a fire produces regardless of
+// whether the dispatch loop succeeded, errored, or panicked.
+//
+// status=panic on fires_total is a programming-bug signal distinct
+// from status=error (expected downstream failures). An operator alert
+// on rate(cron_rule_fires_total{status="panic"}[5m]) should page
+// someone — if you see panics, fix the code, don't tune the alert.
+//
+// A panic mid-loop intentionally drops the remaining sibling actions
+// in this tick — the next scheduled tick will retry from the top. The
+// caller's deferred inflight reset runs after this recover (LIFO) so
+// the next tick is not gated by the panicker.
+func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID string, entry *cronEntry, previousFiredNanos int64) {
+	dispatchStart := time.Now()
+	status := cronFireStatusSuccess
+
 	defer func() {
 		if r := recover(); r != nil {
+			status = cronFireStatusPanic
 			s.logger.Error("Cron rule fire panicked",
 				"rule_id", ruleID,
 				"panic", r)
 		}
+		// Single source of truth for fires_total + fire_duration: the
+		// deferred block runs whether we exited normally or via panic,
+		// so the counter and histogram always reflect the actual
+		// outcome.
+		s.metrics.recordFire(ruleID, status, time.Since(dispatchStart).Seconds())
 	}()
 
 	rule := entry.rule
@@ -444,6 +508,9 @@ func (s *CronScheduler) fire(ruleID string) {
 			// publish doesn't block sibling triple writes etc.
 		}
 	}
+	if !dispatchedOK {
+		status = cronFireStatusError
+	}
 
 	// Record last-fired timestamp only after dispatch — both in-memory
 	// (cooldown gate) and persisted to RULE_SCHEDULES KV (cross-restart
@@ -452,6 +519,7 @@ func (s *CronScheduler) fire(ruleID string) {
 	// overwrite the record.
 	firedAt := time.Now()
 	entry.lastFiredNanos.Store(firedAt.UnixNano())
+	s.metrics.recordNextFire(ruleID, float64(rule.Schedule().Next(firedAt).Unix()))
 
 	if s.tracker != nil {
 		// Best-effort persistence: the cooldown gate uses entry.lastFiredNanos
