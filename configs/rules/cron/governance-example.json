@@ -1,0 +1,24 @@
+{
+  "id": "governance_kill_switch_sweep",
+  "type": "cron",
+  "name": "Daily kill-switch sweep",
+  "description": "Worked starting point for the cron → publish_agent → ops-role coordinator pattern (ADR-028). The cron rule is just the clock; the spawned governance coordinator does the actual scan over flagged entities and emits structured ops.diagnosis.* triples via emit_diagnosis. A downstream expression rule can match those triples and react. See docs/concepts/18-rule-driven-artifacts.md → 'When to combine cron + ops-role coordinator'.",
+  "enabled": true,
+  "schedule": "@daily",
+  "cooldown": "20h",
+  "actions": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.governance.kill_switch_sweep.$schedule.id",
+      "role": "governance",
+      "model": "default",
+      "prompt": "Daily kill-switch sweep — fired by cron rule $schedule.id at $now. Previous sweep: $schedule.last_fired_at. Walk the kill-switch markers, identify entities that should be disabled, and emit ops.diagnosis.kill_switch.* findings via emit_diagnosis for human review. Per ADR-028 ops-role Phase 1: read-only — do not mutate.",
+      "tools": ["read_entity", "graph_query", "emit_diagnosis"]
+    }
+  ],
+  "metadata": {
+    "ops_pattern": "cron-coordinator",
+    "phase": "1-read-only",
+    "adr": "028"
+  }
+}
