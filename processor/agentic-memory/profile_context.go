@@ -113,8 +113,8 @@ func (c *Component) unmarshalLoopCreated(data []byte) (*agentic.LoopCreatedEvent
 }
 
 // assembleProfileContextFromGraph reads the user's operating-model profile
-// and runs it through the pure assembler. Extracted so the assembler can be
-// unit-tested without the I/O boundary.
+// and lessons, then runs them through the pure assembler. Extracted so the
+// assembler can be unit-tested without the I/O boundary.
 func (c *Component) assembleProfileContextFromGraph(
 	ctx context.Context,
 	userID, loopID string,
@@ -130,11 +130,22 @@ func (c *Component) assembleProfileContextFromGraph(
 		entries = result.Entries
 		profileVersion = result.Version
 	}
+
+	// ReadLessons errors are non-fatal — a missing lessons-learned slice is
+	// strictly less serious than a missing operating-model slice, and the
+	// rendered preamble already handles either being empty.
+	lessons, lessonsErr := reader.ReadLessons(ctx, c.platform.Org, c.platform.Platform, userID, 0)
+	if lessonsErr != nil {
+		c.logger.WarnContext(ctx, "profile context: lessons read failed; continuing without lessons slice",
+			"user_id", userID, "loop_id", loopID, "error", lessonsErr)
+	}
+
 	return AssembleProfileContext(ProfileContextInputs{
 		UserID:         userID,
 		LoopID:         loopID,
 		ProfileVersion: profileVersion,
 		Entries:        entries,
+		Lessons:        lessons,
 		TokenBudget:    defaultProfileContextTokenBudget,
 		Now:            time.Now().UTC(),
 	}), nil
@@ -148,38 +159,71 @@ type ProfileContextInputs struct {
 	LoopID         string
 	ProfileVersion int
 	Entries        []operatingmodel.Entry
+	Lessons        []operatingmodel.Lesson
 	TokenBudget    int
 	Now            time.Time
 }
 
+// lessonsBudgetShare reserves 25% of the total budget for the lessons slice.
+// Operating-model gets the remaining 75%. Picked to match the project plan's
+// default split; values are not currently config-tunable.
+const lessonsBudgetShare = 0.25
+
 // AssembleProfileContext builds an operating_model.profile_context.v1 payload
-// from a set of operating-model entries. Entries are ranked (active status +
-// friction priority + recency) and truncated to fit within TokenBudget.
-//
-// The lessons_learned slice is intentionally left empty in v1 — the shape is
-// reserved for a later phase that folds compaction-extracted facts in.
+// from a set of operating-model entries and lessons. Entries are ranked
+// (active status + friction priority + recency) and truncated to fit within
+// the operating-model share of TokenBudget. Lessons are ranked
+// most-recent-first by the reader and truncated to fit the lessons share.
 func AssembleProfileContext(in ProfileContextInputs) *operatingmodel.ProfileContext {
 	assembledAt := in.Now
 	if assembledAt.IsZero() {
 		assembledAt = time.Now().UTC()
 	}
 
+	lessonsBudget, omBudget := splitTokenBudget(in.TokenBudget)
 	ranked := rankEntries(in.Entries)
-	rendered, entryCount, tokenCount := renderOperatingModelSlice(ranked, in.TokenBudget)
+	omRendered, omEntryCount, omTokenCount := renderOperatingModelSlice(ranked, omBudget)
+	lessonsRendered, lessonEntryCount, lessonTokenCount := renderLessonsSlice(in.Lessons, lessonsBudget)
 
 	return &operatingmodel.ProfileContext{
 		UserID:         in.UserID,
 		LoopID:         in.LoopID,
 		ProfileVersion: in.ProfileVersion,
 		OperatingModel: operatingmodel.ProfileContextSlice{
-			Content:    rendered,
-			TokenCount: tokenCount,
-			EntryCount: entryCount,
+			Content:    omRendered,
+			TokenCount: omTokenCount,
+			EntryCount: omEntryCount,
 		},
-		LessonsLearned: operatingmodel.ProfileContextSlice{}, // reserved
-		TokenBudget:    in.TokenBudget,
-		AssembledAt:    assembledAt,
+		LessonsLearned: operatingmodel.ProfileContextSlice{
+			Content:    lessonsRendered,
+			TokenCount: lessonTokenCount,
+			EntryCount: lessonEntryCount,
+		},
+		TokenBudget: in.TokenBudget,
+		AssembledAt: assembledAt,
 	}
+}
+
+// splitTokenBudget divides the total budget between the lessons slice (25%)
+// and the operating-model slice (the remainder).
+//
+// Contract:
+//   - total <= 0: passes through as (0, 0). Callers that opt out of
+//     budgeting still get best-effort renders from both slices.
+//   - total > 0: lessons + om == total exactly. The dominant slice
+//     (operating-model) gets the floor when 25% rounds to 0 — for total
+//     in {1, 2, 3} the lessons share is 0 and operating-model gets the
+//     whole budget. The renderer's at-least-one contract still emits
+//     content if entries exist, but degenerate-tiny budgets stay
+//     well-defined: no negative shares, no inflation, and the invariant
+//     `lessons + om == total` always holds.
+func splitTokenBudget(total int) (lessons, om int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	lessons = int(float64(total) * lessonsBudgetShare)
+	om = total - lessons
+	return lessons, om
 }
 
 // rankEntries orders entries so active ones land first, then unresolved,
@@ -250,6 +294,43 @@ func renderOperatingModelSlice(entries []operatingmodel.Entry, budget int) (stri
 	}
 	content := b.String()
 	return content, count, estimatePromptTokens(content)
+}
+
+// renderLessonsSlice turns lessons into a rendered bullet list, taking
+// lessons in input order (already ranked most-recent-first by the reader)
+// until the lessons-share token budget is exhausted. Returns the rendered
+// content, the number of lessons rendered, and the token count.
+//
+// At least one lesson is always rendered if any are provided, matching the
+// renderOperatingModelSlice contract — a too-long lesson is more useful
+// than nothing.
+func renderLessonsSlice(lessons []operatingmodel.Lesson, budget int) (string, int, int) {
+	if len(lessons) == 0 {
+		return "", 0, 0
+	}
+	var b strings.Builder
+	count := 0
+	for _, l := range lessons {
+		line := renderLessonLine(l)
+		projected := estimatePromptTokens(b.String()) + estimatePromptTokens(line)
+		if budget > 0 && projected > budget && count > 0 {
+			break
+		}
+		b.WriteString(line)
+		count++
+		if budget > 0 && estimatePromptTokens(b.String()) >= budget {
+			break
+		}
+	}
+	content := b.String()
+	return content, count, estimatePromptTokens(content)
+}
+
+// renderLessonLine produces one compact line per lesson. Session ID is
+// elided to keep the line dense — the model gets the lesson text, which is
+// what informs its behavior.
+func renderLessonLine(l operatingmodel.Lesson) string {
+	return "- " + l.Summary + "\n"
 }
 
 // renderEntryLine produces a single compact line per entry. Format keeps the

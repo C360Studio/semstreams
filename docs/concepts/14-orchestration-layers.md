@@ -482,3 +482,4 @@ agentLoopsBucket.Put(ctx, "COMPLETE_exec123", completionData)
 
 - [Advanced Guide: Reactive Workflows](../advanced/10-reactive-workflows.md) — Usage guide and examples
 - [Concept: Agentic Systems](./13-agentic-systems.md) — Agentic loop fundamentals
+- [Concept: Rule-Driven Artifacts](./18-rule-driven-artifacts.md) — Pattern for emitting markdown / JSON / webhook artifacts from rule actions

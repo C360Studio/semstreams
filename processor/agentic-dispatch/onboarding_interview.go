@@ -108,7 +108,7 @@ func (c *Component) handleOnboardingTurn(ctx context.Context, msg agentic.UserMe
 // Empty answers are rejected without advancing sub-state — the user stays in
 // awaiting_answer and is asked to try again.
 func (c *Component) onboardingRecordAnswer(ctx context.Context, msg agentic.UserMessage, info *LoopInfo) {
-	entries := NormalizeLayerAnswer(info.WorkflowStep, msg.Content)
+	entries := c.normalizeLayerAnswer(ctx, info.WorkflowStep, msg.Content)
 	if len(entries) == 0 {
 		c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),

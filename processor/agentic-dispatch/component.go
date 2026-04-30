@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
@@ -62,6 +64,7 @@ type Component struct {
 	registry      *CommandRegistry
 	metrics       *routerMetrics
 	modelRegistry model.RegistryReader // Unified model registry for model selection
+	profileReader atomic.Pointer[operatingmodel.ProfileReader]
 
 	// Lifecycle state
 	mu        sync.RWMutex
@@ -78,6 +81,15 @@ type Component struct {
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
 	sendResponseFn func(agentic.UserResponse)
+
+	// normalizerFn turns a freeform onboarding answer into structured
+	// operating-model entries. Production wires this to
+	// normalizeLayerAnswerWithLLM during construction; tests can swap it
+	// via SetLayerNormalizer. Stored as atomic.Pointer so SetLayerNormalizer
+	// is safe to call concurrently with in-flight onboarding turns. Nil
+	// payload (or no payload stored) disables LLM normalization and forces
+	// the fallback to the deterministic NormalizeLayerAnswer stub.
+	normalizerFn atomic.Pointer[LayerNormalizer]
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -151,6 +163,16 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		outputPorts:   outputPorts,
 	}
 
+	// Default to an empty profile reader; production deployments wire a
+	// graph-backed reader via SetProfileReader after construction.
+	var emptyReader operatingmodel.ProfileReader = operatingmodel.EmptyProfileReader{}
+	comp.profileReader.Store(&emptyReader)
+
+	// Default normalizer: LLM-backed extraction with stub fallback. Tests
+	// override via SetLayerNormalizer to keep the suite hermetic.
+	defaultNormalizer := LayerNormalizer(comp.normalizeLayerAnswerWithLLM)
+	comp.normalizerFn.Store(&defaultNormalizer)
+
 	// Register built-in commands
 	comp.registerBuiltinCommands()
 
@@ -158,6 +180,55 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	comp.loadGlobalCommands()
 
 	return comp, nil
+}
+
+// SetProfileReader wires a ProfileReader for reading operating-model state
+// (e.g. prior ProfileVersion on /onboard re-run). Production deployments
+// call this with a graph-backed reader during component initialization;
+// tests may supply a stub. Passing nil restores the empty default so the
+// component never holds a nil reader.
+func (c *Component) SetProfileReader(reader operatingmodel.ProfileReader) {
+	if reader == nil {
+		reader = operatingmodel.EmptyProfileReader{}
+	}
+	c.profileReader.Store(&reader)
+}
+
+// getProfileReader returns the currently-installed ProfileReader. Always
+// non-nil — the constructor seeds an EmptyProfileReader and SetProfileReader
+// substitutes it back if the caller passes nil.
+func (c *Component) getProfileReader() operatingmodel.ProfileReader {
+	if r := c.profileReader.Load(); r != nil {
+		return *r
+	}
+	return operatingmodel.EmptyProfileReader{}
+}
+
+// SetLayerNormalizer installs a LayerNormalizer used by /onboard's
+// answer-recording path. Production deployments leave this alone (the
+// constructor seeds the LLM-backed normalizer); tests override with a
+// deterministic stub. Passing nil disables LLM normalization and forces
+// the deterministic fallback in NormalizeLayerAnswer.
+//
+// Safe to call concurrently with in-flight onboarding turns: stored via
+// atomic.Pointer so a swap is visible to the next read on any goroutine
+// without a data race.
+func (c *Component) SetLayerNormalizer(fn LayerNormalizer) {
+	if fn == nil {
+		c.normalizerFn.Store(nil)
+		return
+	}
+	c.normalizerFn.Store(&fn)
+}
+
+// getLayerNormalizer returns the currently-installed normalizer, or nil
+// when none is wired (forces stub fallback in normalizeLayerAnswer).
+func (c *Component) getLayerNormalizer() LayerNormalizer {
+	p := c.normalizerFn.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // Meta returns component metadata
