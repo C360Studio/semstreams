@@ -54,17 +54,26 @@ func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
 
 // applyRuleChanges applies dynamic rule configuration changes
 func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
-	// Ensure matchCounters and ruleDefinitions are initialized (struct-literal callers may omit them).
+	// Ensure maps are initialized (struct-literal callers may omit them).
 	if rp.matchCounters == nil {
 		rp.matchCounters = make(map[string]*atomic.Int64)
 	}
 	if rp.ruleDefinitions == nil {
 		rp.ruleDefinitions = make(map[string]Definition)
 	}
+	if rp.cronRules == nil {
+		rp.cronRules = make(map[string]*CronRule)
+	}
 
-	// Track rules to remove (existing rules not in new config)
+	// Track existing rules in both registries so we can compute removals at
+	// the end. Cron rules and expression rules share the same ID namespace
+	// — a rule cannot switch types in place; the deletion + re-add path
+	// handles type changes naturally.
 	currentRuleIDs := make(map[string]bool)
 	for ruleID := range rp.rules {
+		currentRuleIDs[ruleID] = true
+	}
+	for ruleID := range rp.cronRules {
 		currentRuleIDs[ruleID] = true
 	}
 
@@ -74,39 +83,21 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 
 		ruleMap := ruleConfig.(map[string]any) // Validated in ValidateConfigUpdate
 
-		// Create or update rule
-		newRule, def, err := rp.createRuleFromConfig(ruleID, ruleMap)
-		if err != nil {
-			return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
+		if t, _ := ruleMap["type"].(string); t == CronRuleType {
+			if err := rp.applyCronRuleChange(ruleID, ruleMap); err != nil {
+				return err
+			}
+			continue
 		}
 
-		// Install new rule (replacing any existing rule).
-		rp.rules[ruleID] = newRule
-
-		// Store the full Definition so FireEveryNEvents gating and stateful actions
-		// (OnEnter/OnExit/WhileTrue) are honoured for hot-reloaded rules. Without
-		// this, hasDefinition==false in message_handler.go and both the sampling
-		// gate and stateful-action branches are bypassed.
-		rp.ruleDefinitions[ruleID] = def
-
-		// Store rule configuration for GetRuntimeConfig
-		rp.ruleConfigs[ruleID] = ruleMap
-
-		// Reset (or create) the match counter for this rule. A policy change
-		// implies a fresh rhythm: the caller's intent on update is "apply this
-		// new definition from here on," not "preserve the previous counter state."
-		rp.matchCounters[ruleID] = &atomic.Int64{}
-
-		rp.logger.Info("Applied rule configuration", "rule_id", ruleID, "rule_type", ruleMap["type"])
+		if err := rp.applyExpressionRuleChange(ruleID, ruleMap); err != nil {
+			return err
+		}
 	}
 
 	// Remove rules that are no longer configured
 	for ruleID := range currentRuleIDs {
-		delete(rp.rules, ruleID)
-		delete(rp.ruleDefinitions, ruleID)
-		delete(rp.ruleConfigs, ruleID)
-		delete(rp.matchCounters, ruleID)
-		rp.logger.Info("Removed rule", "rule_id", ruleID)
+		rp.removeRule(ruleID)
 	}
 
 	// Update active rules metric
@@ -115,6 +106,98 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 	}
 
 	return nil
+}
+
+// applyCronRuleChange installs or replaces a cron rule definition. If a
+// rule with the same ID already exists in either registry it is dropped
+// from both before the new cron rule is registered, which makes type
+// swaps (expression → cron) symmetric with applyExpressionRuleChange.
+//
+// Caller holds rp.mu.Lock.
+func (rp *Processor) applyCronRuleChange(ruleID string, ruleMap map[string]any) error {
+	def, err := definitionFromMap(ruleID, ruleMap)
+	if err != nil {
+		return fmt.Errorf("failed to parse cron rule %s: %w", ruleID, err)
+	}
+	cronRule, err := NewCronRule(def)
+	if err != nil {
+		return fmt.Errorf("failed to create cron rule %s: %w", ruleID, err)
+	}
+
+	// Validate-then-mutate ordering: register on the scheduler BEFORE we
+	// touch the rp.* maps. If Register fails, the rule isn't yet visible
+	// in cronRules/ruleDefinitions/ruleConfigs and the operator just sees
+	// the error — no inconsistent half-state where the maps say
+	// "registered" but the scheduler doesn't.
+	if rp.cronScheduler != nil {
+		// Deregister is a no-op when the rule isn't registered, so
+		// first-time additions and replacements share one path. The
+		// replacement is logically atomic from the operator's perspective;
+		// in the worst case a tick lands between Deregister and Register
+		// and is dropped, which matches the log-only missed-fire policy.
+		rp.cronScheduler.Deregister(ruleID)
+		if err := rp.cronScheduler.Register(cronRule); err != nil {
+			return fmt.Errorf("failed to register cron rule %s: %w", ruleID, err)
+		}
+	}
+
+	// Drop any previous Rule-typed entry under this ID (type swap), then
+	// install the new cron-side bookkeeping.
+	delete(rp.rules, ruleID)
+	delete(rp.matchCounters, ruleID)
+	rp.cronRules[ruleID] = cronRule
+	rp.ruleDefinitions[ruleID] = def
+	rp.ruleConfigs[ruleID] = ruleMap
+
+	rp.logger.Info("Applied cron rule configuration",
+		"rule_id", ruleID,
+		"schedule", def.Schedule,
+		"action_count", len(def.Actions))
+	return nil
+}
+
+// applyExpressionRuleChange installs or replaces an expression-style rule.
+// Drops any previous CronRule under the same ID first to keep type swaps
+// symmetric with applyCronRuleChange.
+//
+// Caller holds rp.mu.Lock.
+func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string]any) error {
+	newRule, def, err := rp.createRuleFromConfig(ruleID, ruleMap)
+	if err != nil {
+		return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
+	}
+
+	if _, hadCron := rp.cronRules[ruleID]; hadCron {
+		if rp.cronScheduler != nil {
+			rp.cronScheduler.Deregister(ruleID)
+		}
+		delete(rp.cronRules, ruleID)
+	}
+
+	rp.rules[ruleID] = newRule
+	rp.ruleDefinitions[ruleID] = def
+	rp.ruleConfigs[ruleID] = ruleMap
+	rp.matchCounters[ruleID] = &atomic.Int64{}
+
+	rp.logger.Info("Applied rule configuration", "rule_id", ruleID, "rule_type", ruleMap["type"])
+	return nil
+}
+
+// removeRule drops a rule from every registry it might appear in (rules,
+// cronRules, scheduler, definitions, configs, matchCounters). Called from
+// the removals loop in applyRuleChanges. Caller holds rp.mu.Lock.
+func (rp *Processor) removeRule(ruleID string) {
+	if _, isCron := rp.cronRules[ruleID]; isCron {
+		if rp.cronScheduler != nil {
+			rp.cronScheduler.Deregister(ruleID)
+		}
+		delete(rp.cronRules, ruleID)
+	}
+	delete(rp.rules, ruleID)
+	delete(rp.ruleDefinitions, ruleID)
+	delete(rp.ruleConfigs, ruleID)
+	delete(rp.matchCounters, ruleID)
+	rp.logger.Info("Removed rule", "rule_id", ruleID)
 }
 
 // GetRuntimeConfig returns current runtime configuration

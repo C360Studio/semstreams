@@ -82,6 +82,31 @@ func (rp *Processor) loadRules() error {
 			continue
 		}
 
+		// Cron rules take a separate construction path: they don't go through
+		// the factory registry because CronRule does not implement the Rule
+		// interface (Subscribe/Evaluate/ExecuteEvents are message-driven and
+		// cron has no message). The scheduler picks them up later in
+		// initializeCronScheduler. Definition is stored on rp.ruleDefinitions
+		// so hot-reload, GetRuntimeConfig, and FireEveryNEvents accounting
+		// stay symmetric across rule kinds.
+		if def.Type == CronRuleType {
+			cronRule, err := NewCronRule(def)
+			if err != nil {
+				rp.logger.Error("Failed to create cron rule from definition",
+					"rule_id", def.ID,
+					"error", err)
+				continue
+			}
+			rp.cronRules[def.ID] = cronRule
+			rp.ruleDefinitions[def.ID] = def
+			rp.logger.Info("Loaded cron rule from definition",
+				"rule_id", def.ID,
+				"rule_name", def.Name,
+				"schedule", def.Schedule,
+				"action_count", len(def.Actions))
+			continue
+		}
+
 		// Create rule from definition
 		rule, err := CreateRuleFromDefinition(def, ruleDeps)
 		if err != nil {

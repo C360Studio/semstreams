@@ -92,6 +92,24 @@ func (rp *Processor) validateSingleRuleConfig(ruleID string, ruleConfig any) err
 			"RuleProcessor", "validateSingleRuleConfig", "check rule type")
 	}
 
+	// Cron rules carry a different shape — schedule + actions, no
+	// conditions, no logic. Build the Definition and round-trip it through
+	// NewCronRule so the same validation surface (forbidden fields,
+	// schedule parse, cooldown parse, action type non-empty) catches both
+	// file-loaded and hot-reloaded rules.
+	if ruleTypeStr == CronRuleType {
+		def, err := definitionFromMap(ruleID, ruleMap)
+		if err != nil {
+			return errs.Wrap(err, "RuleProcessor", "validateSingleRuleConfig",
+				fmt.Sprintf("parse cron rule %s", ruleID))
+		}
+		if _, err := NewCronRule(def); err != nil {
+			return errs.WrapInvalid(err, "RuleProcessor", "validateSingleRuleConfig",
+				fmt.Sprintf("validate cron rule %s", ruleID))
+		}
+		return nil
+	}
+
 	// Validate expression-based rules if conditions are present
 	if _, hasConditions := ruleMap["conditions"]; hasConditions {
 		if err := rp.validateExpressionRule(ruleID, ruleMap); err != nil {
@@ -170,8 +188,13 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 	return nil
 }
 
-// isKnownRuleType checks if a rule type is supported
+// isKnownRuleType checks if a rule type is supported. Cron is a built-in
+// type that does not go through the factory registry (CronRule does not
+// implement the Rule interface), so it is recognised here directly.
 func (rp *Processor) isKnownRuleType(ruleType string) bool {
+	if ruleType == CronRuleType {
+		return true
+	}
 	_, exists := GetRuleFactory(ruleType)
 	return exists
 }
@@ -279,6 +302,22 @@ func definitionFromMap(ruleID string, ruleMap map[string]any) (Definition, error
 	def.OnExit = parseActions("on_exit")
 	def.WhileTrue = parseActions("while_true")
 	def.OnRecovery = parseActions("on_recovery")
+
+	// Cron-specific fields. These are populated regardless of Type so the
+	// round-trip (Definition → ruleMap → Definition) is lossless and so
+	// validation in NewCronRule has the full surface available. NewCronRule
+	// rejects them when Type != "cron" via its forbidden-field check.
+	def.Actions = parseActions("actions")
+	def.Schedule = getStringWithDefault(ruleMap, "schedule", "")
+	def.Cooldown = getStringWithDefault(ruleMap, "cooldown", "")
+
+	// Parse metadata if present — provenance carried through to action
+	// substitution (e.g., om_entry_id from semteams onboarding).
+	if metaVal, ok := ruleMap["metadata"]; ok {
+		if metaMap, ok := metaVal.(map[string]any); ok {
+			def.Metadata = metaMap
+		}
+	}
 
 	// Parse RerunOnRecovery flag if present
 	def.RerunOnRecovery = getBoolWithDefault(ruleMap, "rerun_on_recovery", false)

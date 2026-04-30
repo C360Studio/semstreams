@@ -156,7 +156,12 @@ func GetRuleFactory(ruleType string) (Factory, bool) {
 	return factory, exists
 }
 
-// GetRegisteredRuleTypes returns all registered rule types
+// GetRegisteredRuleTypes returns all registered rule types.
+//
+// Note: built-in rule kinds that do not go through the factory registry
+// (today: "cron" — see CronRuleType) are not returned here. Callers that
+// need the complete known-types surface should also include them
+// explicitly. See isKnownRuleType for the validation-side equivalent.
 func GetRegisteredRuleTypes() []string {
 	factoryMutex.RLock()
 	defer factoryMutex.RUnlock()
