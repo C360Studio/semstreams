@@ -1845,3 +1845,126 @@ func TestBuildChatRequest_ToolChoiceFunction(t *testing.T) {
 		t.Errorf("tool_choice.function.name = %v, want read_file", fn["name"])
 	}
 }
+
+// captureMaxTokensServer returns a test server that decodes the incoming
+// chat-completions body and exposes the max_tokens field via the returned
+// pointer. The pointer is nil if the field was absent from the request.
+func captureMaxTokensServer(t *testing.T) (*httptest.Server, func() *float64) {
+	t.Helper()
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "max-tok", "object": "chat.completion",
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+		})
+	}))
+	return server, func() *float64 {
+		if captured == nil {
+			return nil
+		}
+		v, ok := captured["max_tokens"].(float64)
+		if !ok {
+			return nil
+		}
+		return &v
+	}
+}
+
+// TestBuildChatRequest_MaxOutputTokens_RequestWinsOverEndpoint verifies the
+// precedence rule: a per-request MaxTokens beats the endpoint MaxOutputTokens
+// default.
+func TestBuildChatRequest_MaxOutputTokens_RequestWinsOverEndpoint(t *testing.T) {
+	server, getMaxTokens := captureMaxTokensServer(t)
+	defer server.Close()
+
+	client, err := agenticmodel.NewClient(&model.EndpointConfig{
+		URL: server.URL, Model: "test", MaxOutputTokens: 8000,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	_, err = client.ChatCompletion(context.Background(), agentic.AgentRequest{
+		RequestID: "r1",
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "hi"}},
+		Model:     "test",
+		MaxTokens: 32000,
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() failed: %v", err)
+	}
+
+	got := getMaxTokens()
+	if got == nil {
+		t.Fatal("max_tokens missing from outgoing request")
+	}
+	if *got != 32000 {
+		t.Errorf("max_tokens = %v, want 32000 (per-request value should win)", *got)
+	}
+}
+
+// TestBuildChatRequest_MaxOutputTokens_EndpointDefaultApplied verifies the
+// fallback: when AgentRequest.MaxTokens is unset, endpoint.MaxOutputTokens is
+// forwarded. Closes the silent-16384-truncation gap semspec hit on a model
+// that produces >16K with an explicit cap.
+func TestBuildChatRequest_MaxOutputTokens_EndpointDefaultApplied(t *testing.T) {
+	server, getMaxTokens := captureMaxTokensServer(t)
+	defer server.Close()
+
+	client, err := agenticmodel.NewClient(&model.EndpointConfig{
+		URL: server.URL, Model: "test", MaxOutputTokens: 32000,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	_, err = client.ChatCompletion(context.Background(), agentic.AgentRequest{
+		RequestID: "r2",
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "hi"}},
+		Model:     "test",
+		// MaxTokens deliberately omitted.
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() failed: %v", err)
+	}
+
+	got := getMaxTokens()
+	if got == nil {
+		t.Fatal("max_tokens missing — endpoint default should have been forwarded")
+	}
+	if *got != 32000 {
+		t.Errorf("max_tokens = %v, want 32000 (endpoint default)", *got)
+	}
+}
+
+// TestBuildChatRequest_MaxOutputTokens_NeitherSetOmitsField verifies the
+// legacy behaviour: with neither per-request nor endpoint default, max_tokens
+// is omitted entirely so the provider applies its own default.
+func TestBuildChatRequest_MaxOutputTokens_NeitherSetOmitsField(t *testing.T) {
+	server, getMaxTokens := captureMaxTokensServer(t)
+	defer server.Close()
+
+	client, err := agenticmodel.NewClient(&model.EndpointConfig{
+		URL: server.URL, Model: "test", // no MaxOutputTokens
+	})
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	_, err = client.ChatCompletion(context.Background(), agentic.AgentRequest{
+		RequestID: "r3",
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "hi"}},
+		Model:     "test",
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() failed: %v", err)
+	}
+
+	if got := getMaxTokens(); got != nil {
+		t.Errorf("max_tokens = %v, want field absent (zero-value omitted)", *got)
+	}
+}

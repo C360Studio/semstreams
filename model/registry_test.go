@@ -87,6 +87,15 @@ func TestValidate(t *testing.T) {
 			wantErr: "endpoint \"bad\": max_tokens must not be negative",
 		},
 		{
+			name: "endpoint negative max_output_tokens",
+			modify: func(r *Registry) {
+				r.Endpoints["bad"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000, MaxOutputTokens: -1,
+				}
+			},
+			wantErr: "endpoint \"bad\": max_output_tokens must not be negative",
+		},
+		{
 			name: "endpoint unknown provider",
 			modify: func(r *Registry) {
 				r.Endpoints["bad"] = &EndpointConfig{

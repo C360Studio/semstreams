@@ -73,6 +73,16 @@ type EndpointConfig struct {
 	// routing (picking the largest-context endpoint) and context-budget
 	// math in agentic-loop — the provider determines the actual window.
 	MaxTokens int `json:"max_tokens"`
+	// MaxOutputTokens is the per-request output cap forwarded as the
+	// OpenAI-compatible `max_tokens` field on chat completions. It is used
+	// only when AgentRequest.MaxTokens is unset (zero); a non-zero per-request
+	// value always wins. 0 means no endpoint default — providers fall back to
+	// their own (often surprisingly low, e.g. 16384) implicit cap.
+	//
+	// This is distinct from MaxTokens above (context window). Most providers
+	// allow the output cap to be set well below the context window for cost
+	// control without changing routing behaviour.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 	// SupportsTools indicates whether this endpoint supports function/tool calling.
 	SupportsTools bool `json:"supports_tools,omitempty"`
 	// ToolFormat specifies the tool calling format: "anthropic" or "openai".
@@ -268,6 +278,9 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 	}
 	if ep.MaxTokens < 0 {
 		return fmt.Errorf("endpoint %q: max_tokens must not be negative", name)
+	}
+	if ep.MaxOutputTokens < 0 {
+		return fmt.Errorf("endpoint %q: max_output_tokens must not be negative", name)
 	}
 
 	validProviders := map[string]bool{

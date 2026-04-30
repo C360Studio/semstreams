@@ -187,6 +187,8 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 
 	if req.MaxTokens > 0 {
 		chatReq.MaxTokens = req.MaxTokens
+	} else if c.endpoint.MaxOutputTokens > 0 {
+		chatReq.MaxTokens = c.endpoint.MaxOutputTokens
 	}
 	if req.Temperature > 0 {
 		chatReq.Temperature = float32(req.Temperature)
