@@ -221,46 +221,48 @@ func ValidateDefinition(def Definition) error {
 // loadRules performs when reading from JSON files so that hot-reloaded rules
 // carry the same gate and stateful-action metadata as file-loaded rules.
 func definitionFromMap(ruleID string, ruleMap map[string]any) (Definition, error) {
+	// Defensive type assertion on Type: validateSingleRuleConfig gates
+	// on a string Type before reaching here, but the watcher path can
+	// also reach definitionFromMap from places that pre-date that
+	// validator. Failing with a typed error rather than a panic keeps
+	// the reconcile goroutine alive.
+	typeStr, ok := ruleMap["type"].(string)
+	if !ok {
+		return Definition{}, fmt.Errorf("rule %s: type must be a string, got %T", ruleID, ruleMap["type"])
+	}
 	def := Definition{
 		ID:      ruleID,
-		Type:    ruleMap["type"].(string),
+		Type:    typeStr,
 		Name:    getStringWithDefault(ruleMap, "name", ruleID),
 		Enabled: getBoolWithDefault(ruleMap, "enabled", true),
 		Logic:   getStringWithDefault(ruleMap, "logic", "and"),
 	}
 
-	// Parse description if present
-	if desc, ok := ruleMap["description"]; ok {
-		def.Description = desc.(string)
-	}
+	// Parse description if present. Defensive type assertion: a
+	// malformed KV record with a non-string description must not
+	// panic the watcher's reconcile goroutine.
+	def.Description = getStringWithDefault(ruleMap, "description", "")
 
-	// Parse conditions
-	if conditionsVal, ok := ruleMap["conditions"]; ok {
-		conditionsSlice := conditionsVal.([]any)
-		def.Conditions = make([]expression.ConditionExpression, len(conditionsSlice))
-		for i, condVal := range conditionsSlice {
-			condMap := condVal.(map[string]any)
-			cond := expression.ConditionExpression{
-				Field:    condMap["field"].(string),
-				Operator: condMap["operator"].(string),
-				Value:    condMap["value"],
-				Required: getBoolWithDefault(condMap, "required", true),
-			}
-			if from, ok := condMap["from"]; ok {
-				cond.From = from
-			}
-			def.Conditions[i] = cond
-		}
+	conds, err := parseConditionsFromMap(ruleID, ruleMap)
+	if err != nil {
+		return Definition{}, err
 	}
+	def.Conditions = conds
 
-	// Parse entity configuration if present
+	// Parse entity configuration if present. Defensive type assertions
+	// throughout — a malformed KV record must not panic the watcher's
+	// reconcile goroutine.
 	if entityVal, ok := ruleMap["entity"]; ok {
 		if entityMap, ok := entityVal.(map[string]any); ok {
 			def.Entity.Pattern = getStringWithDefault(entityMap, "pattern", "")
 			if buckets, ok := entityMap["watch_buckets"].([]any); ok {
-				def.Entity.WatchBuckets = make([]string, len(buckets))
+				def.Entity.WatchBuckets = make([]string, 0, len(buckets))
 				for i, b := range buckets {
-					def.Entity.WatchBuckets[i] = b.(string)
+					s, ok := b.(string)
+					if !ok {
+						return Definition{}, fmt.Errorf("rule %s: entity.watch_buckets[%d] must be string, got %T", ruleID, i, b)
+					}
+					def.Entity.WatchBuckets = append(def.Entity.WatchBuckets, s)
 				}
 			}
 		}
@@ -350,6 +352,42 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 		return nil, Definition{}, err
 	}
 	return r, def, nil
+}
+
+// parseConditionsFromMap extracts the conditions array from a ruleMap
+// (the hot-reload wire format). The map-key check is not enough — a
+// rule with no conditions (e.g. cron rules) JSON-marshals as
+// `"conditions": null` because Definition.Conditions has no `omitempty`
+// tag. Unmarshaling into map[string]any then yields a nil-but-present
+// entry; type-asserting nil to []any panics. Guarded explicitly so
+// cron rules round-trip cleanly through the hot-reload KV bucket.
+func parseConditionsFromMap(ruleID string, ruleMap map[string]any) ([]expression.ConditionExpression, error) {
+	conditionsVal, ok := ruleMap["conditions"]
+	if !ok || conditionsVal == nil {
+		return nil, nil
+	}
+	conditionsSlice, ok := conditionsVal.([]any)
+	if !ok {
+		return nil, fmt.Errorf("rule %s: conditions must be an array, got %T", ruleID, conditionsVal)
+	}
+	conds := make([]expression.ConditionExpression, len(conditionsSlice))
+	for i, condVal := range conditionsSlice {
+		condMap, ok := condVal.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("rule %s: condition[%d] must be an object", ruleID, i)
+		}
+		cond := expression.ConditionExpression{
+			Field:    getStringWithDefault(condMap, "field", ""),
+			Operator: getStringWithDefault(condMap, "operator", ""),
+			Value:    condMap["value"],
+			Required: getBoolWithDefault(condMap, "required", true),
+		}
+		if from, ok := condMap["from"]; ok {
+			cond.From = from
+		}
+		conds[i] = cond
+	}
+	return conds, nil
 }
 
 // getStringWithDefault safely gets a string value with default

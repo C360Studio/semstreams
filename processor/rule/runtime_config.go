@@ -3,6 +3,7 @@ package rule
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -114,8 +115,24 @@ func (rp *Processor) applyRuleChanges(rulesMap map[string]any) error {
 // from both before the new cron rule is registered, which makes type
 // swaps (expression → cron) symmetric with applyExpressionRuleChange.
 //
+// Idempotent on identical re-applies: when ruleMap equals the previously-
+// stored config for this ID, the function is a no-op. This matters for
+// the seed-then-reconcile path used at startup with InlineRules — the
+// inline rules get seeded to the KV bucket and the watcher's reconcile
+// pass replays them. Without the idempotency check, that replay would
+// Deregister + Register every cron rule, resetting in-memory cooldown
+// state and causing a transient "ignored cooldown" window right at
+// process startup.
+//
 // Caller holds rp.mu.Lock.
 func (rp *Processor) applyCronRuleChange(ruleID string, ruleMap map[string]any) error {
+	if existing, ok := rp.ruleConfigs[ruleID]; ok && reflect.DeepEqual(existing, ruleMap) {
+		// Same definition already applied. Skip the deregister-register
+		// hop — preserves entry.lastFiredNanos, tickCount, and any other
+		// in-memory scheduler state across the reconcile pass.
+		return nil
+	}
+
 	def, err := definitionFromMap(ruleID, ruleMap)
 	if err != nil {
 		return fmt.Errorf("failed to parse cron rule %s: %w", ruleID, err)

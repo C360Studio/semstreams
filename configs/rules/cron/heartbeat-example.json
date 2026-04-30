@@ -1,0 +1,20 @@
+{
+  "id": "system_cron_heartbeat",
+  "type": "cron",
+  "name": "System Heartbeat",
+  "description": "Publishes a heartbeat envelope on system.cron.heartbeat once per minute. Smallest worked example of the cron rule kind: useful as a liveness probe target for ops dashboards and as a copy-paste starting point for authoring new cron rules.",
+  "enabled": true,
+  "schedule": "* * * * *",
+  "actions": [
+    {
+      "type": "publish",
+      "subject": "system.cron.heartbeat",
+      "payload": {
+        "rule_id": "$schedule.id",
+        "spec": "$schedule.spec",
+        "fired_at": "$now",
+        "previous_fire": "$schedule.last_fired_at"
+      }
+    }
+  ]
+}

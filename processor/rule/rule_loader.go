@@ -8,6 +8,50 @@ import (
 	"time"
 )
 
+// definitionToRuleMap converts a Definition to the same map[string]any
+// shape that hot-reload's KV-watcher delivers. Populated into
+// rp.ruleConfigs alongside rp.ruleDefinitions so the idempotency check
+// in applyCronRuleChange recognises the seed-then-reconcile reapply as
+// a no-op (preserves in-memory cron scheduler state — entry.lastFiredNanos
+// in particular — across the reconcile pass that immediately follows
+// seeding inline rules to KV).
+//
+// # Round-trip stability
+//
+// The reflect.DeepEqual idempotency check in applyCronRuleChange
+// requires that this function produces the SAME map shape as the
+// watcher path (KV.Get → json.Unmarshal-into-Definition → json.Marshal
+// → KV.Put → KV.Get → json.Unmarshal-into-map). Both paths converge
+// because every Definition field has a fixed-point JSON shape:
+//
+//   - Typed numerics stay typed (Conditions are typed Go slices, not
+//     interface{} containers — so the float64-vs-int worry that bites
+//     map[string]any users doesn't apply here).
+//   - nil-vs-empty-slice is preserved by Go's encoding/json.
+//   - Map-iteration order is irrelevant under reflect.DeepEqual.
+//   - The interface{} fields (Conditions[i].Value, Metadata) round-trip
+//     stably because they were written from JSON sources upstream.
+//
+// On marshal failure the function logs at Debug and returns nil. The
+// caller treats nil as "no cached config", so the idempotency check
+// just falls through and the reapply runs — same behaviour as before
+// this helper existed.
+func (rp *Processor) definitionToRuleMap(def Definition) map[string]any {
+	data, err := json.Marshal(def)
+	if err != nil {
+		rp.logger.Debug("definitionToRuleMap: marshal failed; idempotency cache miss",
+			"rule_id", def.ID, "error", err)
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		rp.logger.Debug("definitionToRuleMap: unmarshal failed; idempotency cache miss",
+			"rule_id", def.ID, "error", err)
+		return nil
+	}
+	return m
+}
+
 // loadRuleDefinitionsFromFiles loads rule definitions from JSON files
 func (rp *Processor) loadRuleDefinitionsFromFiles() ([]Definition, error) {
 	var allDefinitions []Definition
@@ -99,6 +143,7 @@ func (rp *Processor) loadRules() error {
 			}
 			rp.cronRules[def.ID] = cronRule
 			rp.ruleDefinitions[def.ID] = def
+			rp.ruleConfigs[def.ID] = rp.definitionToRuleMap(def)
 			rp.logger.Info("Loaded cron rule from definition",
 				"rule_id", def.ID,
 				"rule_name", def.Name,
@@ -119,6 +164,7 @@ func (rp *Processor) loadRules() error {
 
 		rp.rules[def.ID] = rule
 		rp.ruleDefinitions[def.ID] = def // Store definition for stateful evaluation
+		rp.ruleConfigs[def.ID] = rp.definitionToRuleMap(def)
 
 		// Initialize match counter for FireEveryNEvents gating. The counter
 		// starts at zero regardless of FireEveryNEvents value; the first Nth
