@@ -120,6 +120,16 @@ type Client struct {
 	onHealthChange   func(bool)
 	onConnectionLost func(error)
 
+	// Connection-loss watchdog: when set, onConnectionLost fires once the
+	// connection has been continuously down for at least connectionLossTimeout.
+	// Reconnecting before the timeout cancels it. Useful for callers that
+	// want to bound how long the process tolerates an absent broker (e.g.
+	// trigger graceful shutdown so the supervisor can restart with a fresh
+	// connection instead of hot-looping in degraded mode forever).
+	connectionLossTimeout time.Duration
+	lossTimer             *time.Timer
+	lossTimerMu           sync.Mutex
+
 	// Health monitoring
 	healthTicker   *time.Ticker
 	healthInterval time.Duration
@@ -508,6 +518,9 @@ func (m *Client) Close(ctx context.Context) error {
 
 	// Stop health monitoring first (before acquiring main mutex to avoid deadlock)
 	m.stopHealthMonitoring()
+
+	// Cancel any pending connection-loss watchdog so we don't fire after Close.
+	m.cancelConnectionLossTimer()
 
 	// Stop JetStream metrics polling
 	if m.metricsCancel != nil {
@@ -1131,11 +1144,14 @@ func (m *Client) handleDisconnect(_ *nats.Conn, err error) {
 	if onHealthChange != nil {
 		go onHealthChange(false)
 	}
+
+	m.armConnectionLossTimer(err)
 }
 
 func (m *Client) handleReconnect(_ *nats.Conn) {
 	m.setStatus(StatusConnected)
 	m.resetCircuit()
+	m.cancelConnectionLossTimer()
 
 	m.mu.RLock()
 	onReconnect := m.onReconnect
@@ -1147,6 +1163,55 @@ func (m *Client) handleReconnect(_ *nats.Conn) {
 	}
 	if onHealthChange != nil {
 		go onHealthChange(true)
+	}
+}
+
+// armConnectionLossTimer starts the connection-loss watchdog if it is
+// configured and not already armed. Idempotent across repeated disconnects:
+// a second disconnect without an intervening reconnect reuses the original
+// timer so the elapsed grace measures from the *first* loss of contact.
+func (m *Client) armConnectionLossTimer(disconnectErr error) {
+	if m.connectionLossTimeout <= 0 {
+		return
+	}
+
+	m.mu.RLock()
+	cb := m.onConnectionLost
+	m.mu.RUnlock()
+	if cb == nil {
+		return
+	}
+
+	m.lossTimerMu.Lock()
+	defer m.lossTimerMu.Unlock()
+	if m.lossTimer != nil {
+		return
+	}
+	timeout := m.connectionLossTimeout
+	m.lossTimer = time.AfterFunc(timeout, func() {
+		m.lossTimerMu.Lock()
+		m.lossTimer = nil
+		m.lossTimerMu.Unlock()
+
+		// Re-read the callback under the main lock so a concurrent option
+		// change or close doesn't race us into firing on a stale handle.
+		m.mu.RLock()
+		fire := m.onConnectionLost
+		m.mu.RUnlock()
+		if fire != nil && !m.closed.Load() {
+			fire(disconnectErr)
+		}
+	})
+}
+
+// cancelConnectionLossTimer stops the watchdog if armed. Safe to call when
+// no timer is pending.
+func (m *Client) cancelConnectionLossTimer() {
+	m.lossTimerMu.Lock()
+	defer m.lossTimerMu.Unlock()
+	if m.lossTimer != nil {
+		m.lossTimer.Stop()
+		m.lossTimer = nil
 	}
 }
 

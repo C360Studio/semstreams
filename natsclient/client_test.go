@@ -533,3 +533,159 @@ func TestCreateKeyValueBucket_AlreadyExists(t *testing.T) {
 		}
 	})
 }
+
+// TestConnectionLossTimeout_FiresAfterGrace verifies the watchdog fires
+// onConnectionLost once the broker has been continuously absent for grace.
+func TestConnectionLossTimeout_FiresAfterGrace(t *testing.T) {
+	var fired atomic.Int32
+	gotErr := make(chan error, 1)
+
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLossTimeout(50*time.Millisecond),
+		WithConnectionLostCallback(func(e error) {
+			fired.Add(1)
+			select {
+			case gotErr <- e:
+			default:
+			}
+		}),
+	)
+	assert.NoError(t, err)
+
+	disconnectErr := errors.New("broker gone")
+	manager.handleDisconnect(nil, disconnectErr)
+
+	select {
+	case e := <-gotErr:
+		assert.Equal(t, disconnectErr, e)
+	case <-time.After(time.Second):
+		t.Fatal("connection-loss callback did not fire within 1s")
+	}
+	assert.Equal(t, int32(1), fired.Load())
+}
+
+// TestConnectionLossTimeout_CancelledByReconnect verifies that a reconnect
+// arriving before grace expires cancels the watchdog.
+func TestConnectionLossTimeout_CancelledByReconnect(t *testing.T) {
+	var fired atomic.Int32
+
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLossTimeout(200*time.Millisecond),
+		WithConnectionLostCallback(func(_ error) {
+			fired.Add(1)
+		}),
+	)
+	assert.NoError(t, err)
+
+	manager.handleDisconnect(nil, errors.New("blip"))
+	time.Sleep(50 * time.Millisecond)
+	manager.handleReconnect(nil)
+
+	// Wait past the original grace window — callback must not fire.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, int32(0), fired.Load())
+}
+
+// TestConnectionLossTimeout_RepeatDisconnectKeepsOriginalDeadline verifies
+// that a second disconnect without an intervening reconnect does not reset
+// the grace window — total elapsed measures from the *first* loss. We
+// record the wallclock at fire time and assert it lands close to the
+// original deadline, not the second-disconnect deadline; a buggy reset
+// would extend by another ~75ms and the test would catch it.
+func TestConnectionLossTimeout_RepeatDisconnectKeepsOriginalDeadline(t *testing.T) {
+	const grace = 200 * time.Millisecond
+	const midGrace = 100 * time.Millisecond
+	const slack = 75 * time.Millisecond // < midGrace so a buggy reset (fire ~midGrace+grace) lies outside grace+slack
+
+	firedAt := make(chan time.Time, 1)
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLossTimeout(grace),
+		WithConnectionLostCallback(func(_ error) {
+			select {
+			case firedAt <- time.Now():
+			default:
+			}
+		}),
+	)
+	assert.NoError(t, err)
+
+	start := time.Now()
+	manager.handleDisconnect(nil, errors.New("first"))
+	time.Sleep(midGrace)
+	// Second disconnect mid-grace must NOT extend the deadline.
+	manager.handleDisconnect(nil, errors.New("second"))
+
+	select {
+	case fireTime := <-firedAt:
+		elapsed := fireTime.Sub(start)
+		// Deadline is `grace` from the first disconnect. A buggy reset
+		// would put fire at ~midGrace + grace = 225ms; correct behavior
+		// is ~grace = 150ms. Cap at grace + slack to catch the bug.
+		assert.LessOrEqual(t, elapsed, grace+slack,
+			"watchdog fired %v after first disconnect — deadline appears to have been extended", elapsed)
+		assert.GreaterOrEqual(t, elapsed, grace-slack,
+			"watchdog fired too early (%v before grace=%v)", elapsed, grace)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("watchdog did not fire within 500ms")
+	}
+}
+
+// TestConnectionLossTimeout_DisabledByDefault verifies the legacy behavior:
+// without WithConnectionLossTimeout, onConnectionLost never fires
+// automatically on disconnect.
+func TestConnectionLossTimeout_DisabledByDefault(t *testing.T) {
+	var fired atomic.Int32
+
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLostCallback(func(_ error) {
+			fired.Add(1)
+		}),
+	)
+	assert.NoError(t, err)
+
+	manager.handleDisconnect(nil, errors.New("boom"))
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int32(0), fired.Load())
+	// Structural check: no timer should have armed at all.
+	manager.lossTimerMu.Lock()
+	assert.Nil(t, manager.lossTimer)
+	manager.lossTimerMu.Unlock()
+}
+
+// TestConnectionLossTimeout_NoCallbackNoFire verifies the watchdog stays
+// idle when only the timeout is configured but no callback is registered.
+func TestConnectionLossTimeout_NoCallbackNoFire(t *testing.T) {
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLossTimeout(20*time.Millisecond),
+	)
+	assert.NoError(t, err)
+
+	manager.handleDisconnect(nil, errors.New("boom"))
+	time.Sleep(100 * time.Millisecond)
+	// Mostly we're confirming this doesn't panic; the timer should not have
+	// armed at all since onConnectionLost is nil.
+	manager.lossTimerMu.Lock()
+	assert.Nil(t, manager.lossTimer)
+	manager.lossTimerMu.Unlock()
+}
+
+// TestConnectionLossTimeout_CloseCancels verifies that closing the client
+// cancels a pending watchdog so the callback never fires after Close.
+func TestConnectionLossTimeout_CloseCancels(t *testing.T) {
+	var fired atomic.Int32
+
+	manager, err := NewClient("nats://localhost:4222",
+		WithConnectionLossTimeout(100*time.Millisecond),
+		WithConnectionLostCallback(func(_ error) {
+			fired.Add(1)
+		}),
+	)
+	assert.NoError(t, err)
+
+	manager.handleDisconnect(nil, errors.New("gone"))
+	// Close before the grace window expires.
+	_ = manager.Close(context.Background())
+
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, int32(0), fired.Load())
+}

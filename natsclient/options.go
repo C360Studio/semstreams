@@ -88,6 +88,25 @@ func WithConnectionLostCallback(fn func(error)) ClientOption {
 	}
 }
 
+// WithConnectionLossTimeout configures how long the client tolerates a
+// continuous broker outage before the connection-lost callback fires.
+//
+// When set together with WithConnectionLostCallback, a timer arms on the
+// first disconnect; if the connection has not recovered within grace, the
+// callback runs once with the original disconnect error. A reconnect
+// before the deadline cancels the timer. A non-positive grace disables the
+// watchdog (legacy behavior — onConnectionLost never fires automatically).
+//
+// The callback only signals — it does not call os.Exit or otherwise act on
+// the client. Callers decide the policy (graceful shutdown, alerting,
+// degraded-mode flag, etc.).
+func WithConnectionLossTimeout(grace time.Duration) ClientOption {
+	return func(c *Client) error {
+		c.connectionLossTimeout = grace
+		return nil
+	}
+}
+
 // WithCircuitBreakerThreshold sets the number of failures before opening circuit
 func WithCircuitBreakerThreshold(threshold int32) ClientOption {
 	return func(c *Client) error {
