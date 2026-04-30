@@ -41,6 +41,7 @@ import (
 type CronScheduler struct {
 	cron     *cronlib.Cron
 	executor ActionExecutorInterface
+	tracker  *ScheduleTracker
 	logger   *slog.Logger
 
 	mu      sync.Mutex
@@ -88,7 +89,13 @@ type cronEntry struct {
 // the given executor. The logger is required (use slog.Default() if no
 // component logger is available); a nil executor is rejected because every
 // fire would silently no-op, hiding misconfiguration.
-func NewCronScheduler(executor ActionExecutorInterface, logger *slog.Logger) (*CronScheduler, error) {
+//
+// The tracker is optional: pass nil and the scheduler runs without
+// persistence (no missed-fire detection on restart, no cross-process
+// readability of last-fired timestamps). Tests typically pass nil; the
+// production processor wires in a tracker bound to the RULE_SCHEDULES
+// bucket.
+func NewCronScheduler(executor ActionExecutorInterface, tracker *ScheduleTracker, logger *slog.Logger) (*CronScheduler, error) {
 	if executor == nil {
 		return nil, errors.New("cron scheduler: executor is required")
 	}
@@ -103,6 +110,7 @@ func NewCronScheduler(executor ActionExecutorInterface, logger *slog.Logger) (*C
 		// parser is therefore unused.
 		cron:     cronlib.New(),
 		executor: executor,
+		tracker:  tracker,
 		logger:   logger,
 		entries:  make(map[string]*cronEntry),
 	}, nil
@@ -164,6 +172,13 @@ func (s *CronScheduler) Deregister(ruleID string) {
 // and passed to every subsequent fire callback so action dispatches
 // inherit the processor's cancellation. Calling Start twice is an error;
 // the scheduler is single-shot per Start/Stop cycle.
+//
+// Before the ticker starts, Start runs a one-shot missed-fire detection
+// pass against the persisted last-fired records (when a tracker is
+// configured). Detected missed fires are logged at Warn — log-only per
+// ADR-031 product direction. Detection failures are logged but do not
+// block startup; a clean cron tick is more important than a perfect
+// audit log.
 func (s *CronScheduler) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("cron scheduler: Start requires a non-nil context")
@@ -177,9 +192,86 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
+	s.detectMissedFires(ctx)
+
 	s.cron.Start()
 	s.logger.Info("Cron scheduler started", "registered_rules", s.RegisteredCount())
 	return nil
+}
+
+// detectMissedFires walks the registered rules, looks up each rule's
+// last-fired record, and logs a Warn for any rule whose schedule expected
+// at least one fire between LastFiredAt and now. Per ADR-031 the policy
+// is log-only: the next regular tick still happens on its normal cadence.
+//
+// Rules with no persisted record are skipped — there's nothing to compare
+// against, and treating "first deploy" as "infinitely many missed fires"
+// would generate misleading noise.
+func (s *CronScheduler) detectMissedFires(ctx context.Context) {
+	if s.tracker == nil {
+		return
+	}
+
+	// Snapshot under lock, then release before per-rule KV reads. A
+	// concurrent Deregister between snapshot and iteration is benign:
+	// we'd emit at most one Warn line for a rule no longer registered,
+	// no dispatch happens. Concurrent Register can't race in practice
+	// because Start sets s.started before this runs and hot-reload
+	// goes through rp.mu.Lock — but even if it did, the new rule has
+	// no last-fired record yet and is treated as "first deploy".
+	s.mu.Lock()
+	rules := make([]*CronRule, 0, len(s.entries))
+	for _, entry := range s.entries {
+		rules = append(rules, entry.rule)
+	}
+	s.mu.Unlock()
+
+	// Capture now once: the audit horizon is a single instant, not
+	// per-rule. Calling time.Now() per iteration would let the horizon
+	// drift across the loop and slightly under-count missed fires for
+	// rules processed late in a slow startup.
+	now := time.Now()
+	for _, rule := range rules {
+		rec, err := s.tracker.LastFiredAt(ctx, rule.ID())
+		if err != nil {
+			if errors.Is(err, ErrScheduleRecordNotFound) {
+				continue
+			}
+			s.logger.Warn("Failed to read last-fired record for missed-fire detection",
+				"rule_id", rule.ID(),
+				"error", err)
+			continue
+		}
+
+		// Count expected fires between rec.LastFiredAt and now by walking
+		// the rule's schedule. A bounded loop prevents pathological log
+		// floods if a rule has been disabled across years of downtime —
+		// after the cap we report "many" rather than the true count.
+		const missedCap = 100
+		missed := 0
+		next := rule.Schedule().Next(rec.LastFiredAt)
+		var lastExpected time.Time
+		for !next.After(now) {
+			missed++
+			lastExpected = next
+			if missed >= missedCap {
+				break
+			}
+			next = rule.Schedule().Next(next)
+		}
+
+		if missed == 0 {
+			continue
+		}
+
+		s.logger.Warn("Cron rule missed fires while scheduler was offline",
+			"rule_id", rule.ID(),
+			"schedule", rule.ScheduleString(),
+			"last_fired_at", rec.LastFiredAt,
+			"missed_fires", missed,
+			"last_expected_fire", lastExpected,
+			"capped", missed >= missedCap)
+	}
 }
 
 // Stop signals the scheduler to halt. It returns the context returned by
@@ -313,10 +405,26 @@ func (s *CronScheduler) fire(ruleID string) {
 		}
 	}
 
-	// Record last-fired timestamp only after dispatch — Chunk 3 will
-	// also persist this to RULE_SCHEDULES KV for cross-restart
-	// missed-fire detection.
-	entry.lastFiredNanos.Store(time.Now().UnixNano())
+	// Record last-fired timestamp only after dispatch — both in-memory
+	// (cooldown gate) and persisted to RULE_SCHEDULES KV (cross-restart
+	// missed-fire detection). Persistence failures are logged but do
+	// not affect dispatch correctness; the next successful fire will
+	// overwrite the record.
+	firedAt := time.Now()
+	entry.lastFiredNanos.Store(firedAt.UnixNano())
+
+	if s.tracker != nil {
+		// Best-effort persistence: the cooldown gate uses entry.lastFiredNanos
+		// (in-memory), so KV unavailability is purely an observability
+		// concern. Worst case across a restart: missed-fire detection thinks
+		// the rule fired one tick earlier than it did → at most one stray
+		// Warn log on next startup, no dispatch impact.
+		if err := s.tracker.RecordFire(parentCtx, ruleID, rule.ScheduleString(), firedAt); err != nil {
+			s.logger.Warn("Failed to persist cron rule fire timestamp",
+				"rule_id", ruleID,
+				"error", err)
+		}
+	}
 
 	if dispatchedOK {
 		s.logger.Debug("Cron rule fired",

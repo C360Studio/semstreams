@@ -46,7 +46,7 @@ func (r *recordingExecutor) callCount() int {
 
 func newSchedulerForTest(t *testing.T, exec ActionExecutorInterface) *CronScheduler {
 	t.Helper()
-	s, err := NewCronScheduler(exec, slog.Default())
+	s, err := NewCronScheduler(exec, nil, slog.Default())
 	if err != nil {
 		t.Fatalf("NewCronScheduler = %v, want nil", err)
 	}
@@ -68,7 +68,7 @@ func cronRuleForTest(t *testing.T, mutate func(*Definition)) *CronRule {
 }
 
 func TestNewCronScheduler_RejectsNilExecutor(t *testing.T) {
-	_, err := NewCronScheduler(nil, slog.Default())
+	_, err := NewCronScheduler(nil, nil, slog.Default())
 	if err == nil {
 		t.Fatal("err = nil, want non-nil for nil executor")
 	}
@@ -407,5 +407,160 @@ func TestCronEntry_AtomicCountersAreSafe(t *testing.T) {
 	}
 	if entry.lastFiredNanos.Load() == 0 {
 		t.Error("lastFiredNanos = 0, want non-zero after 100 stores")
+	}
+}
+
+// newSchedulerWithTrackerForTest builds a scheduler wired to a real
+// ScheduleTracker backed by an in-memory bucket, so persistence behaviour
+// can be asserted without testcontainers.
+func newSchedulerWithTrackerForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *ScheduleTracker) {
+	t.Helper()
+	bucket := newMockKVBucket()
+	tracker := NewScheduleTracker(bucket, slog.Default())
+	s, err := NewCronScheduler(exec, tracker, slog.Default())
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+	return s, tracker
+}
+
+// fire() must persist a last-fired record when a tracker is wired in.
+// Skipped fires (cooldown/inflight/everyN) must not persist.
+func TestCronScheduler_FirePersistsLastFiredRecord(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	before := time.Now()
+	s.fire(rule.ID())
+
+	rec, err := tracker.LastFiredAt(context.Background(), rule.ID())
+	if err != nil {
+		t.Fatalf("LastFiredAt = %v, want nil", err)
+	}
+	if rec.RuleID != rule.ID() {
+		t.Errorf("RuleID = %q, want %q", rec.RuleID, rule.ID())
+	}
+	if rec.ScheduleSpec != rule.ScheduleString() {
+		t.Errorf("ScheduleSpec = %q, want %q", rec.ScheduleSpec, rule.ScheduleString())
+	}
+	if rec.LastFiredAt.Before(before.Add(-time.Second)) {
+		t.Errorf("LastFiredAt = %v, want >= %v", rec.LastFiredAt, before)
+	}
+}
+
+// fire() with no tracker must remain a clean no-op rather than panicking
+// — the scheduler degrades gracefully when the bucket couldn't be
+// created at startup.
+func TestCronScheduler_FireWithNilTrackerNoops(t *testing.T) {
+	exec := &recordingExecutor{}
+	s := newSchedulerForTest(t, exec) // tracker is nil
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+	s.fire(rule.ID()) // must not panic
+	if exec.callCount() != 1 {
+		t.Errorf("Execute calls = %d, want 1", exec.callCount())
+	}
+}
+
+// fire() must persist EVERY successful dispatch, overwriting prior
+// records. Verifies the timestamp advances across consecutive fires.
+func TestCronScheduler_FireOverwritesPriorRecord(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+	first, err := tracker.LastFiredAt(context.Background(), rule.ID())
+	if err != nil {
+		t.Fatalf("LastFiredAt after first = %v", err)
+	}
+
+	// Sleep past clock resolution so the second timestamp is definitively
+	// newer. 2ms is comfortably > nanosecond clock granularity on every
+	// supported OS without slowing CI.
+	time.Sleep(2 * time.Millisecond)
+	s.fire(rule.ID())
+	second, err := tracker.LastFiredAt(context.Background(), rule.ID())
+	if err != nil {
+		t.Fatalf("LastFiredAt after second = %v", err)
+	}
+	if !second.LastFiredAt.After(first.LastFiredAt) {
+		t.Errorf("second.LastFiredAt = %v, want after %v", second.LastFiredAt, first.LastFiredAt)
+	}
+}
+
+// detectMissedFires must skip rules with no persisted record — first
+// deploy is "fresh start", not "infinitely many missed fires".
+func TestCronScheduler_DetectMissedFires_NoRecordSkips(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, _ := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	// detectMissedFires must not error or panic; it simply has nothing
+	// to report.
+	s.detectMissedFires(context.Background())
+}
+
+// detectMissedFires with a tracker but no rules registered must be a
+// clean no-op; mirrors the bare-startup path before any cron rules
+// are loaded.
+func TestCronScheduler_DetectMissedFires_NoRulesNoop(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, _ := newSchedulerWithTrackerForTest(t, exec)
+	s.detectMissedFires(context.Background())
+}
+
+// detectMissedFires with a nil tracker is a clean no-op (degraded mode).
+func TestCronScheduler_DetectMissedFires_NilTrackerNoop(t *testing.T) {
+	exec := &recordingExecutor{}
+	s := newSchedulerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.detectMissedFires(context.Background())
+}
+
+// detectMissedFires walks the recorded last-fired backwards and counts
+// how many fires the rule's schedule expected since. Uses a high-cadence
+// schedule (@every 1s) plus a record from 5 seconds ago to deterministic-
+// ally land in the missed-fires regime without sleeping.
+func TestCronScheduler_DetectMissedFires_CountsExpectedFires(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Schedule = "@every 1s"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+
+	// Record a fire 5 seconds ago. With @every 1s, detection should see
+	// "several" missed fires; we don't assert an exact count because
+	// schedule.Next semantics interact with wallclock granularity.
+	five := time.Now().Add(-5 * time.Second)
+	if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), five); err != nil {
+		t.Fatalf("RecordFire = %v", err)
+	}
+
+	// Detection must complete without panicking and without dispatching
+	// (log-only policy: no replay).
+	s.detectMissedFires(context.Background())
+	if exec.callCount() != 0 {
+		t.Errorf("Execute calls = %d, want 0 (missed-fire detection must NOT dispatch)", exec.callCount())
 	}
 }

@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -172,6 +173,7 @@ func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string
 			rp.cronScheduler.Deregister(ruleID)
 		}
 		delete(rp.cronRules, ruleID)
+		rp.deleteScheduleRecord(ruleID)
 	}
 
 	rp.rules[ruleID] = newRule
@@ -192,12 +194,35 @@ func (rp *Processor) removeRule(ruleID string) {
 			rp.cronScheduler.Deregister(ruleID)
 		}
 		delete(rp.cronRules, ruleID)
+		rp.deleteScheduleRecord(ruleID)
 	}
 	delete(rp.rules, ruleID)
 	delete(rp.ruleDefinitions, ruleID)
 	delete(rp.ruleConfigs, ruleID)
 	delete(rp.matchCounters, ruleID)
 	rp.logger.Info("Removed rule", "rule_id", ruleID)
+}
+
+// deleteScheduleRecord clears the persisted last-fired record for a cron
+// rule that's being removed or type-swapped to expression. Best-effort:
+// failures log a Warn but do not block the rule removal — a stale record
+// is purely an observability concern, and a future re-add of the same
+// rule ID will overwrite the record on its first fire.
+//
+// Uses context.Background() because this runs under rp.mu.Lock from
+// hot-reload paths (ApplyConfigUpdate) where no caller-supplied context
+// is available. The KV Delete is fast and idempotent; the underlying
+// NATS client enforces its own request timeout, so an unbounded ctx
+// here is bounded in practice.
+func (rp *Processor) deleteScheduleRecord(ruleID string) {
+	if rp.scheduleTracker == nil {
+		return
+	}
+	if err := rp.scheduleTracker.Delete(context.Background(), ruleID); err != nil {
+		rp.logger.Warn("Failed to delete schedule record on rule removal",
+			"rule_id", ruleID,
+			"error", err)
+	}
 }
 
 // GetRuntimeConfig returns current runtime configuration
