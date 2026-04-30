@@ -11,19 +11,20 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 )
 
-// unresolvedTemplateVarRe matches any $entity.*, $related.*, or $state.*
-// token that survived substitution. These should never appear in a final
-// string: if they do, either the predicate is missing from the entity at
-// fire-time (common with race-y triple arrival), the ExecutionContext
-// wasn't populated, or the author used a name that doesn't match any known
-// substitution.
+// unresolvedTemplateVarRe matches any $entity.*, $related.*, $state.*,
+// or $schedule.* token that survived substitution. These should never
+// appear in a final string: if they do, either the predicate is missing
+// from the entity at fire-time (common with race-y triple arrival), the
+// ExecutionContext wasn't populated (e.g. a cron-only $schedule.* token
+// reached an expression-rule path, or vice versa), or the author used a
+// name that doesn't match any known substitution.
 //
 // Pattern rationale: first character after the dot must be a word char
 // (letter/digit/underscore), then any run of word chars and dots lets us
 // match deep predicate paths like $entity.triple.agent.loop.role. We stop
 // at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
 // doesn't over-match.
-var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state)\.\w[\w.]*`)
+var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule)\.\w[\w.]*`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -44,6 +45,13 @@ type ExecutionContext struct {
 	// State is the current match state including iteration tracking.
 	// May be nil for first evaluation before state is persisted.
 	State *MatchState
+
+	// Schedule carries cron-rule context (rule ID, spec, prior fire
+	// timestamp). Populated by CronScheduler.fire on time-driven
+	// dispatches; nil for message-path and KV-watch rules. The
+	// `$schedule.*` substitution layer reads this; see
+	// cron_substitution.go for the namespace contract.
+	Schedule *ScheduleContext
 }
 
 // RuleID returns the originating rule's identifier, or an empty string if the
@@ -59,19 +67,24 @@ func (ec *ExecutionContext) RuleID() string {
 
 // SubstituteVariables replaces template variables with values from the execution context.
 // Supported variables:
+//   - $now: Current wallclock as RFC3339 UTC (always available)
 //   - $entity.id: The primary entity ID
 //   - $related.id: The related entity ID (for pair rules)
 //   - $state.iteration: Current iteration count
 //   - $state.max_iterations: Configured max iterations
+//   - $schedule.id: Cron rule ID (cron rules only)
+//   - $schedule.spec: Cron expression (cron rules only)
+//   - $schedule.last_fired_at: Prior fire timestamp, RFC3339 UTC; empty on first fire
 //
 // Entity triple values can be accessed via $entity.triple.<predicate> syntax.
 //
 // If any template variable survives substitution (e.g. $entity.triple.X
 // where X isn't on the entity at fire time — a common race with
-// late-arriving triples), the literal stays in the output and a warning is
-// logged so the author sees the silent-pass. Downstream callers that feed
-// the result into an identifier (KV key, NATS subject) will then get a
-// loud failure instead of mysteriously wrong behaviour.
+// late-arriving triples, or a cron-only $schedule.* token reaching an
+// expression rule), the literal stays in the output and a warning is
+// logged so the author sees the silent-pass. Downstream callers that
+// feed the result into an identifier (KV key, NATS subject) will then
+// get a loud failure instead of mysteriously wrong behaviour.
 func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	result := template
 
@@ -95,6 +108,11 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 			result = strings.ReplaceAll(result, key, fmt.Sprintf("%v", triple.Object))
 		}
 	}
+
+	// Schedule substitutions (cron rules only). No-op when ec.Schedule
+	// is nil; unknown $schedule.* tokens will then trip the
+	// unresolved-template warning below.
+	result = applyScheduleSubstitutions(result, ec.Schedule)
 
 	ec.warnUnresolvedTemplateVars(template, result)
 

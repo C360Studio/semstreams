@@ -173,12 +173,15 @@ func (s *CronScheduler) Deregister(ruleID string) {
 // inherit the processor's cancellation. Calling Start twice is an error;
 // the scheduler is single-shot per Start/Stop cycle.
 //
-// Before the ticker starts, Start runs a one-shot missed-fire detection
+// Before the ticker starts, Start runs a one-shot restoreFromTracker
 // pass against the persisted last-fired records (when a tracker is
-// configured). Detected missed fires are logged at Warn — log-only per
-// ADR-031 product direction. Detection failures are logged but do not
-// block startup; a clean cron tick is more important than a perfect
-// audit log.
+// configured). It seeds each entry's in-memory lastFiredNanos cache so
+// the cooldown gate and `$schedule.last_fired_at` substitution behave
+// correctly across restarts, and it logs a Warn for any rule whose
+// schedule expected at least one fire between the persisted timestamp
+// and now (log-only per ADR-031 product direction). Tracker failures
+// are logged but do not block startup; a clean cron tick is more
+// important than a perfect audit log.
 func (s *CronScheduler) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("cron scheduler: Start requires a non-nil context")
@@ -192,37 +195,48 @@ func (s *CronScheduler) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
-	s.detectMissedFires(ctx)
+	s.restoreFromTracker(ctx)
 
 	s.cron.Start()
 	s.logger.Info("Cron scheduler started", "registered_rules", s.RegisteredCount())
 	return nil
 }
 
-// detectMissedFires walks the registered rules, looks up each rule's
-// last-fired record, and logs a Warn for any rule whose schedule expected
-// at least one fire between LastFiredAt and now. Per ADR-031 the policy
-// is log-only: the next regular tick still happens on its normal cadence.
+// restoreFromTracker walks the registered rules, looks up each rule's
+// last-fired record, and does two things:
+//
+//  1. Seeds entry.lastFiredNanos so the cooldown gate and the
+//     $schedule.last_fired_at substitution see the persisted timestamp
+//     immediately after restart, instead of treating the first
+//     post-restart fire as "never fired".
+//  2. Logs a Warn for any rule whose schedule expected at least one
+//     fire between the persisted timestamp and now. Per ADR-031 the
+//     policy is log-only: the next regular tick still happens on its
+//     normal cadence.
 //
 // Rules with no persisted record are skipped — there's nothing to compare
 // against, and treating "first deploy" as "infinitely many missed fires"
 // would generate misleading noise.
-func (s *CronScheduler) detectMissedFires(ctx context.Context) {
+func (s *CronScheduler) restoreFromTracker(ctx context.Context) {
 	if s.tracker == nil {
 		return
 	}
 
-	// Snapshot under lock, then release before per-rule KV reads. A
-	// concurrent Deregister between snapshot and iteration is benign:
-	// we'd emit at most one Warn line for a rule no longer registered,
-	// no dispatch happens. Concurrent Register can't race in practice
-	// because Start sets s.started before this runs and hot-reload
-	// goes through rp.mu.Lock — but even if it did, the new rule has
-	// no last-fired record yet and is treated as "first deploy".
+	// Snapshot entries (not just rules) under lock so the hydration
+	// step can write entry.lastFiredNanos without holding mu — the
+	// atomic.Int64 is its own synchronisation. A concurrent Register/
+	// Deregister between snapshot and iteration is benign: hydrating a
+	// removed entry's atomic is a no-op from the cron ticker's
+	// perspective (no callbacks fire for it), and Warn lines for a
+	// removed rule are at worst a single confusing log entry per
+	// restart. The benign-write argument is what matters; the call
+	// chain is not actually serialised because cronScheduler.Start
+	// runs on the processor's run() goroutine after rp.Start releases
+	// rp.mu, so an ApplyConfigUpdate could race the snapshot.
 	s.mu.Lock()
-	rules := make([]*CronRule, 0, len(s.entries))
+	entries := make([]*cronEntry, 0, len(s.entries))
 	for _, entry := range s.entries {
-		rules = append(rules, entry.rule)
+		entries = append(entries, entry)
 	}
 	s.mu.Unlock()
 
@@ -231,17 +245,25 @@ func (s *CronScheduler) detectMissedFires(ctx context.Context) {
 	// drift across the loop and slightly under-count missed fires for
 	// rules processed late in a slow startup.
 	now := time.Now()
-	for _, rule := range rules {
+	for _, entry := range entries {
+		rule := entry.rule
 		rec, err := s.tracker.LastFiredAt(ctx, rule.ID())
 		if err != nil {
 			if errors.Is(err, ErrScheduleRecordNotFound) {
 				continue
 			}
-			s.logger.Warn("Failed to read last-fired record for missed-fire detection",
+			s.logger.Warn("Failed to read last-fired record on startup",
 				"rule_id", rule.ID(),
 				"error", err)
 			continue
 		}
+
+		// Hydrate the in-memory cache. Done unconditionally on a
+		// successful tracker read so the cooldown gate immediately
+		// reflects pre-restart state and the $schedule.last_fired_at
+		// substitution renders the persisted timestamp on the first
+		// post-restart fire.
+		entry.lastFiredNanos.Store(rec.LastFiredAt.UnixNano())
 
 		// Count expected fires between rec.LastFiredAt and now by walking
 		// the rule's schedule. A bounded loop prevents pathological log
@@ -340,12 +362,19 @@ func (s *CronScheduler) fire(ruleID string) {
 		}
 	}
 
+	// Capture the previous fire timestamp once: the cooldown gate
+	// reads it for its check, and the ScheduleContext built for
+	// substitution below uses it as `$schedule.last_fired_at`. Reading
+	// once keeps both views consistent with each other (no mid-fire
+	// race where cooldown sees the prior timestamp but substitution
+	// sees `time.Now()` because another fire snuck in).
+	previousFiredNanos := entry.lastFiredNanos.Load()
+
 	// Cooldown gate — skip if the previous fire's wallclock is too
 	// recent. Defends against the operator-error case of a cron expression
 	// that ticks faster than actions complete on average.
 	if cooldown := entry.rule.Cooldown(); cooldown > 0 {
-		last := entry.lastFiredNanos.Load()
-		if last > 0 && time.Since(time.Unix(0, last)) < cooldown {
+		if previousFiredNanos > 0 && time.Since(time.Unix(0, previousFiredNanos)) < cooldown {
 			s.logger.Debug("Cron rule fire skipped (cooldown)",
 				"rule_id", ruleID,
 				"cooldown", cooldown)
@@ -384,12 +413,23 @@ func (s *CronScheduler) fire(ruleID string) {
 	actions := rule.Actions() // already a clone — safe to iterate
 
 	// ExecutionContext is intentionally sparse for cron fires: no entity,
-	// no related entity, no MatchState. SubstituteVariables in
-	// execution_context.go handles `$now` natively; Chunk 4 adds the
-	// `$schedule.*` namespace via a cron-specific shim. Until then,
-	// authors should restrict cron action templates to `$now` plus
-	// literal strings.
-	ec := &ExecutionContext{}
+	// no related entity, no MatchState. The Schedule shim supplies the
+	// cron-specific `$schedule.*` namespace; SubstituteVariables in
+	// execution_context.go also handles `$now` natively. The future
+	// per-entity fan-out extension (Definition.ForEach) populates
+	// EntityID / Entity / State per iteration alongside Schedule —
+	// neither shim leaks into the other.
+	var lastFired time.Time
+	if previousFiredNanos > 0 {
+		lastFired = time.Unix(0, previousFiredNanos).UTC()
+	}
+	ec := &ExecutionContext{
+		Schedule: &ScheduleContext{
+			ID:          ruleID,
+			Spec:        rule.ScheduleString(),
+			LastFiredAt: lastFired,
+		},
+	}
 
 	dispatchedOK := true
 	for i, action := range actions {

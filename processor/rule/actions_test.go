@@ -1445,6 +1445,27 @@ func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
 			template:      "a=$entity.triple.missing.one b=$related.id c=$state.iteration",
 			wantLeftovers: []string{"$entity.triple.missing.one", "$state.iteration"},
 		},
+		{
+			// Cron-only $schedule.* token in an expression-rule path
+			// (Schedule == nil). Locks the regex extension that added
+			// "schedule" to the alternation so a future refactor can't
+			// silently drop the namespace.
+			name:          "schedule token without schedule context",
+			ec:            &ExecutionContext{EntityID: "entity.001"},
+			template:      "key=$schedule.unknown_field",
+			wantLeftovers: []string{"$schedule.unknown_field"},
+		},
+		{
+			// Unknown $schedule.* field on a populated cron context —
+			// the schedule shim only handles id/spec/last_fired_at, so
+			// any other token survives and warns.
+			name: "unknown schedule field on populated context",
+			ec: &ExecutionContext{
+				Schedule: &ScheduleContext{ID: "r1", Spec: "@hourly"},
+			},
+			template:      "missing=$schedule.attempt",
+			wantLeftovers: []string{"$schedule.attempt"},
+		},
 	}
 
 	for _, tc := range tests {

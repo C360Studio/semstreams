@@ -501,45 +501,45 @@ func TestCronScheduler_FireOverwritesPriorRecord(t *testing.T) {
 	}
 }
 
-// detectMissedFires must skip rules with no persisted record — first
+// restoreFromTracker must skip rules with no persisted record — first
 // deploy is "fresh start", not "infinitely many missed fires".
-func TestCronScheduler_DetectMissedFires_NoRecordSkips(t *testing.T) {
+func TestCronScheduler_RestoreFromTracker_NoRecordSkips(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, _ := newSchedulerWithTrackerForTest(t, exec)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	// detectMissedFires must not error or panic; it simply has nothing
+	// restoreFromTracker must not error or panic; it simply has nothing
 	// to report.
-	s.detectMissedFires(context.Background())
+	s.restoreFromTracker(context.Background())
 }
 
-// detectMissedFires with a tracker but no rules registered must be a
+// restoreFromTracker with a tracker but no rules registered must be a
 // clean no-op; mirrors the bare-startup path before any cron rules
 // are loaded.
-func TestCronScheduler_DetectMissedFires_NoRulesNoop(t *testing.T) {
+func TestCronScheduler_RestoreFromTracker_NoRulesNoop(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, _ := newSchedulerWithTrackerForTest(t, exec)
-	s.detectMissedFires(context.Background())
+	s.restoreFromTracker(context.Background())
 }
 
-// detectMissedFires with a nil tracker is a clean no-op (degraded mode).
-func TestCronScheduler_DetectMissedFires_NilTrackerNoop(t *testing.T) {
+// restoreFromTracker with a nil tracker is a clean no-op (degraded mode).
+func TestCronScheduler_RestoreFromTracker_NilTrackerNoop(t *testing.T) {
 	exec := &recordingExecutor{}
 	s := newSchedulerForTest(t, exec)
 	rule := cronRuleForTest(t, nil)
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register = %v", err)
 	}
-	s.detectMissedFires(context.Background())
+	s.restoreFromTracker(context.Background())
 }
 
-// detectMissedFires walks the recorded last-fired backwards and counts
+// restoreFromTracker walks the recorded last-fired backwards and counts
 // how many fires the rule's schedule expected since. Uses a high-cadence
 // schedule (@every 1s) plus a record from 5 seconds ago to deterministic-
 // ally land in the missed-fires regime without sleeping.
-func TestCronScheduler_DetectMissedFires_CountsExpectedFires(t *testing.T) {
+func TestCronScheduler_RestoreFromTracker_CountsExpectedFires(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, tracker := newSchedulerWithTrackerForTest(t, exec)
 	rule := cronRuleForTest(t, func(d *Definition) {
@@ -559,8 +559,159 @@ func TestCronScheduler_DetectMissedFires_CountsExpectedFires(t *testing.T) {
 
 	// Detection must complete without panicking and without dispatching
 	// (log-only policy: no replay).
-	s.detectMissedFires(context.Background())
+	s.restoreFromTracker(context.Background())
 	if exec.callCount() != 0 {
 		t.Errorf("Execute calls = %d, want 0 (missed-fire detection must NOT dispatch)", exec.callCount())
 	}
+}
+
+// restoreFromTracker must seed entry.lastFiredNanos from the persisted
+// record. This is the cross-restart cooldown / `$schedule.last_fired_at`
+// fix: without hydration the first post-restart fire would behave as
+// "never fired", losing both the cooldown gate's enforcement and the
+// substitution context.
+func TestCronScheduler_RestoreFromTracker_HydratesLastFiredNanos(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+
+	persisted := time.Date(2026, 4, 30, 9, 0, 0, 0, time.UTC)
+	if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), persisted); err != nil {
+		t.Fatalf("RecordFire = %v", err)
+	}
+
+	s.restoreFromTracker(context.Background())
+
+	s.mu.Lock()
+	entry, ok := s.entries[rule.ID()]
+	s.mu.Unlock()
+	if !ok {
+		t.Fatalf("entry missing after restore")
+	}
+	got := entry.lastFiredNanos.Load()
+	if got != persisted.UnixNano() {
+		t.Errorf("lastFiredNanos = %d, want %d (hydration from persisted record)", got, persisted.UnixNano())
+	}
+}
+
+// Cross-restart cooldown: a rule with a 1h cooldown that fired 1 minute
+// before "restart" (simulated by hydrating the in-memory cache from a
+// freshly-recorded persisted timestamp) must skip the next fire on the
+// cooldown gate. Without hydration this skip would not happen and the
+// post-restart fire would dispatch immediately, doubling actions.
+func TestCronScheduler_RestoreFromTracker_EnforcesCooldownAcrossRestart(t *testing.T) {
+	exec := &recordingExecutor{}
+	s, tracker := newSchedulerWithTrackerForTest(t, exec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Cooldown = "1h"
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	// Pretend the previous process fired one minute ago and persisted.
+	prev := time.Now().Add(-1 * time.Minute)
+	if err := tracker.RecordFire(context.Background(), rule.ID(), rule.ScheduleString(), prev); err != nil {
+		t.Fatalf("RecordFire = %v", err)
+	}
+
+	s.restoreFromTracker(context.Background())
+
+	// First fire after restart must hit the cooldown gate (1m elapsed,
+	// 1h cooldown).
+	s.fire(rule.ID())
+	if got := exec.callCount(); got != 0 {
+		t.Errorf("Execute calls = %d, want 0 (cooldown should suppress post-restart fire)", got)
+	}
+}
+
+// fire() must build an ExecutionContext with Schedule populated so cron
+// action templates can use `$schedule.id`, `$schedule.spec`, and
+// `$schedule.last_fired_at`. Verifies that the executor receives an ec
+// whose substitution renders the cron-namespace tokens correctly.
+func TestCronScheduler_FireBuildsScheduleContext(t *testing.T) {
+	rec := &ecCapturingExecutor{}
+	s, _ := newSchedulerWithTrackerForTest(t, rec)
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Schedule = "0 9 * * MON"
+		d.Actions = []Action{{Type: ActionTypePublish, Subject: "$schedule.id"}}
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	ec := rec.ec
+	if ec == nil {
+		t.Fatal("executor did not receive ExecutionContext")
+	}
+	if ec.Schedule == nil {
+		t.Fatal("ec.Schedule = nil, want populated")
+	}
+	if ec.Schedule.ID != rule.ID() {
+		t.Errorf("Schedule.ID = %q, want %q", ec.Schedule.ID, rule.ID())
+	}
+	if ec.Schedule.Spec != "0 9 * * MON" {
+		t.Errorf("Schedule.Spec = %q, want %q", ec.Schedule.Spec, "0 9 * * MON")
+	}
+	// First fire: LastFiredAt is zero.
+	if !ec.Schedule.LastFiredAt.IsZero() {
+		t.Errorf("first fire LastFiredAt = %v, want zero", ec.Schedule.LastFiredAt)
+	}
+}
+
+// Second fire's ScheduleContext.LastFiredAt must reflect the first
+// fire's wallclock — the cooldown read and the substitution view of
+// "previous fire" must be the same value.
+func TestCronScheduler_FireScheduleContextSeesPriorFire(t *testing.T) {
+	rec := &ecCapturingExecutor{}
+	s, _ := newSchedulerWithTrackerForTest(t, rec)
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+	firstFireNanos := time.Now().UnixNano()
+	rec.ec = nil // clear so the second fire's ec is captured fresh
+
+	// Sleep past clock resolution so the second fire sees a strictly
+	// earlier LastFiredAt.
+	time.Sleep(2 * time.Millisecond)
+	s.fire(rule.ID())
+
+	if rec.ec == nil || rec.ec.Schedule == nil {
+		t.Fatal("second fire did not deliver Schedule context")
+	}
+	if rec.ec.Schedule.LastFiredAt.IsZero() {
+		t.Error("second fire LastFiredAt is zero, want the first fire's wallclock")
+	}
+	if rec.ec.Schedule.LastFiredAt.UnixNano() > firstFireNanos {
+		t.Errorf("LastFiredAt = %d, want <= %d (must reflect first fire, not the in-progress second)",
+			rec.ec.Schedule.LastFiredAt.UnixNano(), firstFireNanos)
+	}
+}
+
+// ecCapturingExecutor is a recordingExecutor sibling that snapshots the
+// last ExecutionContext it received. Lets tests assert on the ec the
+// scheduler actually passed through.
+//
+// No mutex: callers invoke s.fire() synchronously from the test
+// goroutine, so the write+read ordering is single-threaded by
+// construction. Tests that fire concurrently (none today) should add
+// their own synchronization or migrate to a lock-protected variant.
+type ecCapturingExecutor struct {
+	ec *ExecutionContext
+}
+
+func (e *ecCapturingExecutor) Execute(_ context.Context, _ Action, ec *ExecutionContext) error {
+	e.ec = ec
+	return nil
 }
