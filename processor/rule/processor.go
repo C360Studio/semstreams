@@ -137,6 +137,36 @@ type Processor struct {
 	stateTracker      *StateTracker
 	statefulEvaluator *StatefulEvaluator
 
+	// actionExecutor is shared between the StatefulEvaluator (message-path
+	// and KV-watch firings) and the CronScheduler (time-driven firings).
+	// Constructed in initializeStateTracker; read without holding mu since
+	// it is set once before any goroutine that uses it can start.
+	actionExecutor ActionExecutorInterface
+
+	// cronRules holds parsed CronRule definitions, keyed by rule ID. Cron
+	// rules live in a parallel registry from rp.rules because CronRule does
+	// not implement the Rule interface (Subscribe/Evaluate/ExecuteEvents are
+	// message-driven concepts that don't fit time-driven firing). Writers:
+	// loadRules and applyRuleChanges, both under mu.Lock; reads only happen
+	// from those same paths so the map needs no separate synchronization.
+	cronRules map[string]*CronRule
+
+	// cronScheduler dispatches CronRule actions on cron schedules. Created
+	// in initializeCronScheduler (called from Start, after the state tracker
+	// and ActionExecutor are ready). Started in run(), drained in Stop().
+	// Nil when no cron rules are configured AND the scheduler hasn't been
+	// pre-built — currently we always build it at Start so hot-reload can
+	// register rules added after startup.
+	cronScheduler *CronScheduler
+
+	// scheduleTracker persists per-rule last-fired timestamps to the
+	// RULE_SCHEDULES KV bucket. Created in initializeScheduleTracker
+	// (called from Start before initializeCronScheduler so the scheduler
+	// can hold a reference). Nil when bucket creation fails — the
+	// scheduler degrades to in-memory-only firing (no missed-fire
+	// detection across restarts) rather than refusing to start.
+	scheduleTracker *ScheduleTracker
+
 	// Revision tracking for per-rule feedback loop prevention.
 	// Keyed by (ruleID, entityID) → KV revision → tracked-at timestamp.
 	// A watcher update at one of those revisions skips only the rule that
@@ -199,6 +229,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		ruleDefinitions:  make(map[string]Definition),
 		ruleConfigs:      make(map[string]map[string]any),
 		matchCounters:    make(map[string]*atomic.Int64),
+		cronRules:        make(map[string]*CronRule),
 		messageCache:     msgCache,
 		config:           config,
 		metricsRegistry:  metricsRegistry,
@@ -376,6 +407,28 @@ func (rp *Processor) run(ctx context.Context) {
 		return
 	}
 
+	// Start the cron scheduler now that watchers and subscriptions are up.
+	// Doing this after setupSubscriptions guarantees the publisher's NATS
+	// subjects are ready before the first cron tick can dispatch a publish
+	// action. The deferred Stop drains in-flight fires when run() returns
+	// (either via shutdown or ctx cancellation) before the rest of the
+	// processor's resources are torn down in Stop().
+	if rp.cronScheduler != nil {
+		if err := rp.cronScheduler.Start(ctx); err != nil {
+			rp.logger.Warn("Failed to start cron scheduler", "error", err)
+			// Drop the scheduler reference so RegisteredCount and any
+			// future metrics gauge cannot read a stale never-started
+			// instance. Subsequent hot-reload Register/Deregister calls
+			// fall through their `!= nil` guards and become no-ops, which
+			// matches the "scheduler unavailable" semantics.
+			rp.mu.Lock()
+			rp.cronScheduler = nil
+			rp.mu.Unlock()
+		} else {
+			defer rp.drainCronScheduler()
+		}
+	}
+
 	// NOW mark healthy - watchers established, subscriptions ready
 	rp.mu.Lock()
 	rp.health.Healthy = true
@@ -389,6 +442,30 @@ func (rp *Processor) run(ctx context.Context) {
 		rp.logger.Info("Rule processor shutdown requested")
 	case <-ctx.Done():
 		rp.logger.Info("Rule processor context cancelled", "error", ctx.Err())
+	}
+}
+
+// cronSchedulerDrainTimeout bounds how long run() will wait for in-flight
+// cron fires to complete on shutdown. Keeping it under the processor's own
+// 5-second Stop grace period avoids stacking timeouts; the worst case is a
+// single fire that's still running when the timer expires, which is logged
+// and abandoned (its action errors are already best-effort).
+const cronSchedulerDrainTimeout = 3 * time.Second
+
+// drainCronScheduler stops the scheduler and waits for in-flight fires to
+// complete, bounded by cronSchedulerDrainTimeout. Called from run() via a
+// deferred call so it executes after the shutdown select returns.
+func (rp *Processor) drainCronScheduler() {
+	if rp.cronScheduler == nil {
+		return
+	}
+	stopCtx := rp.cronScheduler.Stop()
+	select {
+	case <-stopCtx.Done():
+		rp.logger.Debug("Cron scheduler drained cleanly")
+	case <-time.After(cronSchedulerDrainTimeout):
+		rp.logger.Warn("Cron scheduler drain timeout — abandoning in-flight fires",
+			"timeout", cronSchedulerDrainTimeout)
 	}
 }
 
@@ -459,10 +536,103 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		setter.SetToolRegistry(rp.toolRegistry)
 	}
 
+	// Persist the executor on the processor so the cron scheduler
+	// (initializeCronScheduler) can dispatch through the same instance
+	// the StatefulEvaluator uses. Single shared executor keeps publishing
+	// semantics, triple-mutation feedback-loop tracking, and tool-registry
+	// resolution identical across the message-path, KV-watch, and
+	// time-driven firing paths.
+	rp.actionExecutor = actionExecutor
+
 	// Create StatefulEvaluator
 	rp.statefulEvaluator = NewStatefulEvaluator(rp.stateTracker, actionExecutor, rp.logger)
 
 	rp.logger.Info("State tracker initialized for stateful ECA rules")
+	return nil
+}
+
+// initializeScheduleTracker creates the RULE_SCHEDULES KV bucket and binds
+// a ScheduleTracker to it. The bucket holds per-rule last-fired timestamps
+// used by the cron scheduler for missed-fire detection on restart and by
+// out-of-process readers (governance startup hooks) that need to issue
+// catch-up sweeps.
+//
+// Bucket creation is best-effort: failure leaves rp.scheduleTracker nil
+// and the scheduler runs without persistence, matching the same
+// degrade-gracefully posture initializeStateTracker uses for RULE_STATE.
+// History=1 (only current state matters), no TTL (last-fired records
+// outlive any operationally meaningful interval), no size cap.
+func (rp *Processor) initializeScheduleTracker(ctx context.Context) error {
+	if rp.natsClient == nil {
+		// Test paths and graph-only deployments construct the processor
+		// without NATS. The scheduler tolerates a nil tracker; logging
+		// at Debug avoids noise in those paths.
+		rp.logger.Debug("Skipping schedule tracker init: no NATS client")
+		return nil
+	}
+
+	js, err := rp.natsClient.JetStream()
+	if err != nil {
+		return fmt.Errorf("get JetStream context: %w", err)
+	}
+
+	bucket, err := js.KeyValue(ctx, ScheduleBucketName)
+	if err != nil {
+		bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:      ScheduleBucketName,
+			Description: "Per-rule last-fired timestamps for cron rule missed-fire detection",
+			TTL:         0,  // Records persist for the rule's lifecycle.
+			MaxBytes:    -1, // No size cap; one small record per cron rule.
+			History:     1,  // Only the most recent fire matters.
+		})
+		if err != nil {
+			return fmt.Errorf("create %s bucket: %w", ScheduleBucketName, err)
+		}
+		rp.logger.Info("Created RULE_SCHEDULES KV bucket for cron rule fire tracking")
+	} else {
+		rp.logger.Info("Using existing RULE_SCHEDULES KV bucket")
+	}
+
+	rp.scheduleTracker = NewScheduleTracker(bucket, rp.logger)
+	return nil
+}
+
+// initializeCronScheduler builds the CronScheduler against the shared
+// ActionExecutor and registers all cron rules already loaded by Initialize.
+// It is called from Start under rp.mu.Lock so the registration loop sees a
+// stable rp.cronRules snapshot.
+//
+// The scheduler is built unconditionally — even if rp.cronRules is empty —
+// so hot-reloaded cron rules added after startup have a registry to land
+// in. Returns an error if the executor isn't ready (the state tracker init
+// failed and left rp.actionExecutor nil).
+func (rp *Processor) initializeCronScheduler() error {
+	if rp.actionExecutor == nil {
+		return fmt.Errorf("cannot initialize cron scheduler: action executor not initialized")
+	}
+
+	scheduler, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: rp.actionExecutor,
+		Tracker:  rp.scheduleTracker,
+		Metrics:  getCronMetrics(rp.metricsRegistry),
+		Logger:   rp.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("create cron scheduler: %w", err)
+	}
+
+	for ruleID, rule := range rp.cronRules {
+		if err := scheduler.Register(rule); err != nil {
+			rp.logger.Warn("Failed to register cron rule, skipping",
+				"rule_id", ruleID,
+				"error", err)
+			continue
+		}
+	}
+
+	rp.cronScheduler = scheduler
+	rp.logger.Info("Cron scheduler initialized",
+		"registered_rules", scheduler.RegisteredCount())
 	return nil
 }
 
@@ -497,6 +667,25 @@ func (rp *Processor) Start(ctx context.Context) error {
 	if err := rp.initializeStateTracker(ctx); err != nil {
 		rp.logger.Warn("Failed to initialize state tracker, stateful rules will be disabled", "error", err)
 		// Don't fail - processor can still work with stateless rules
+	}
+
+	// Initialize ScheduleTracker for cron rule missed-fire detection.
+	// Must precede initializeCronScheduler so the scheduler can hold a
+	// reference. Failure leaves rp.scheduleTracker nil; the scheduler
+	// then runs without persistence (no missed-fire detection across
+	// restarts), which is the same posture as stateful-rule degradation.
+	if err := rp.initializeScheduleTracker(ctx); err != nil {
+		rp.logger.Warn("Failed to initialize schedule tracker, cron missed-fire detection disabled",
+			"error", err)
+	}
+
+	// Build the cron scheduler and register any cron rules already loaded by
+	// Initialize. The scheduler is constructed even when the cronRules map is
+	// empty so that hot-reloaded cron rules added after startup have a place
+	// to land. Failure here is non-fatal: cron rules are skipped, expression
+	// rules continue to work.
+	if err := rp.initializeCronScheduler(); err != nil {
+		rp.logger.Warn("Failed to initialize cron scheduler, cron rules will be disabled", "error", err)
 	}
 
 	// Note: entityCoalescer is initialized in run() before spawning watchers

@@ -46,7 +46,26 @@ essential for building maintainable, scalable systems.
 
 ## Reactive Patterns
 
-The reactive engine supports two patterns through the same unified infrastructure:
+The reactive engine fires rules in response to three signal kinds:
+
+| Signal | Rule kind | Triggered by |
+|---|---|---|
+| KV state change | expression rule (`type: "expression"`) | A bucket key transitioning to a state where the rule's `When` predicates match |
+| NATS subject match | expression rule (`type: "expression"`) | A message landing on a subject the rule subscribes to |
+| Wallclock | **cron rule (`type: "cron"`)** | A cron expression's `Next()` time elapsing |
+
+Cron rules ship in beta.27
+([ADR-031](../adr/031-time-trigger-primitive.md),
+[migration guide](../operations/migration-beta26-to-beta27.md)). They
+share every existing rule action (`publish`, `publish_agent`,
+`update_kv`, etc.) but bypass condition evaluation — there is no
+"state" for a clock to be in. A `"type": "cron"` rule accepts
+`schedule`, `actions`, `cooldown`, `fire_every_n_events`, `name`,
+`description`, `enabled`, `metadata` and nothing else; condition-side
+fields (`conditions`, `logic`, `on_enter`, `on_exit`, etc.) are
+rejected at config-load time.
+
+The reactive engine supports two coordination patterns through the same unified infrastructure:
 
 ### Single-Trigger Pattern (Rules-style)
 

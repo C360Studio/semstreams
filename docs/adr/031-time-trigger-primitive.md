@@ -2,9 +2,25 @@
 
 ## Status
 
-**Proposed (2026-04-29).** No tag is committed. This ADR captures the
-design space for a future framework primitive so the discussion has a
-target before implementation pressure forces a quick choice.
+**Accepted — Option A. Shipped in beta.27 (2026-04-30).**
+Implementation in commits `8ca3cc2..6a4c7a1` on issue
+[#15](https://github.com/c360studio/semstreams/issues/15);
+migration guide:
+[migration-beta26-to-beta27.md](../operations/migration-beta26-to-beta27.md).
+
+The semteams onboarding flow captures cadence and trigger fields per
+operating-model entry (`om.entry.cadence`, `om.entry.trigger`) and has
+no way to act on them. That's the internal forcing function the
+"Implementation-pressure triggers" section below anticipated. Building
+Option A — a `"type": "cron"` rule kind layered into the existing
+rule processor — was small enough to ship without locking in surface
+that a future Option B couldn't extract from underneath.
+
+Originally proposed 2026-04-29 with a lean toward Option A but no
+implementation commitment. That posture lasted one day before the
+internal need surfaced. Implementation landed across seven reviewable
+chunks in a single PR; see [Implementation notes](#implementation-notes)
+below.
 
 ## Context
 
@@ -176,12 +192,13 @@ CronJob, GCP Cloud Scheduler) to POST to existing HTTP entry points
 
 ## Decision
 
-**Defer commitment.** Adopt no implementation today. The decision the
-ADR records is: when scheduling pressure forces the build, **prefer
-Option A first** unless concrete operator-friction reasons emerge that
-make the dedicated scheduler component worth the surface cost.
+**Adopt Option A.** Originally drafted as "defer commitment, prefer
+Option A first when forced," the decision was promoted to "implement
+Option A now" on 2026-04-30 when semteams' onboarding-driven cadence
+need surfaced. Shipped in beta.27 across seven reviewable chunks; see
+[Implementation notes](#implementation-notes) below.
 
-### Rationale for the lean toward Option A
+### Rationale for Option A
 
 - The rule processor already owns "condition → action" — adding a
   time-source-of-truth condition stays inside its job description.
@@ -246,6 +263,65 @@ Until one of those, defer. Cadence-driven dispatch is a real gap, but
 shipping the wrong primitive locks the surface for every product
 downstream of it.
 
+## Implementation notes
+
+Shipped in beta.27 in seven reviewable chunks. Each chunk landed on
+the `feat/cron-rule-type` branch with a pre-commit go-reviewer pass
+per [feedback memory](../../) on review cadence:
+
+| Chunk | Commit | Surface |
+|---|---|---|
+| 1 | `8ca3cc2` | `CronRule` type, factory, `Definition` extensions (`Schedule`, `Actions` fields). `robfig/cron/v3` pulled (zero transitive deps). |
+| 2 | `339773a` | `CronScheduler` core + lifecycle wiring (`Register`/`Deregister`/`Start`/`Stop`, FireEveryN gate, cooldown gate, inflight CAS, panic backstop). |
+| 3 | `b0902de` | `RULE_SCHEDULES` KV bucket + `ScheduleTracker` + missed-fire detection on startup. |
+| 4 | `49b08a4` | `$schedule.*` substitution context + cross-restart `lastFiredNanos` hydration. |
+| 5 | `65a56f2` | Seven Prometheus metrics under `semstreams_cron_*` + Grafana dashboard. |
+| 6 | `6a4c7a1` | testcontainer-NATS integration tests + two latent bug fixes (null-conditions panic in `definitionFromMap`, seed-then-reconcile cooldown reset). |
+| 7 | (this commit) | Migration guide, ADR final-status update, concept-doc paragraphs, governance-shaped example. |
+
+Three retrofit-safe seams thread through the implementation per the
+"single-user MVP, multi-tenant-ready" design constraint:
+
+1. `RULE_SCHEDULES` keyed by bare `{ruleID}` for MVP; `scheduleKey()`
+   in `schedule_tracker.go` is the single chokepoint a future
+   `.{entityID}` suffix would extend without rewriting call sites.
+2. `$schedule.*` is cron-context-only and disjoint from `$entity.*`;
+   future `for_each` per-entity fan-out populates `$entity.*` per
+   iteration alongside `$schedule.*` with no shim changes.
+3. `Definition.Schedule` is global today; `Definition.ForEach`
+   would be additive — rules that don't set it keep current
+   single-fire semantics.
+
+### Settled implementation-pass questions
+
+The "What this ADR does NOT decide" section above listed four
+implementation-pass concerns. They settled as follows:
+
+- **Cron expression flavour**: POSIX 5-field + descriptors
+  (`@hourly`/`@daily`/`@weekly`/`@monthly`/`@yearly`/`@every Ns`).
+  Quartz seconds-precision and "first Tuesday of month" deferred.
+- **Per-tenant scoping**: deferred. MVP is single-user; the three
+  retrofit seams above keep the future per-tenant pass purely
+  additive.
+- **Concurrent-fire semantics**: each registered rule has its own
+  inflight CAS guard; cron rules within a tick fire concurrently
+  (robfig/cron's default). Per-rule `cooldown` and `fire_every_n_events`
+  control fire rate; no cross-rule ordering guarantees.
+- **Exposure surface**: config-only for MVP. HTTP API to register/
+  cancel schedules at runtime is deferred.
+
+### Deferred extensions
+
+Tracked in [issue #15](https://github.com/c360studio/semstreams/issues/15)
+as the ADR-031 implementation tracking issue:
+
+- Per-entity fan-out via `Definition.ForEach`
+- Per-tenant scoping (KV key suffix, action substitution scope)
+- Trigger-text parsing (freeform → cron, with confirmation step)
+- Runtime register/cancel HTTP API
+- Quartz syntax extensions (seconds-precision, "first Tuesday")
+- Cron rules with workflow-style multi-step actions
+
 ## Related
 
 - [ADR-028: Orchestration Architecture](028-orchestration-architecture.md)
@@ -254,7 +330,8 @@ downstream of it.
 - [Concept: Orchestration Layers](../concepts/14-orchestration-layers.md)
   — the two-layer rule/component model.
 - [Concept: Rule-Driven Artifacts](../concepts/18-rule-driven-artifacts.md)
-  — the event-driven version of the pattern this ADR proposes a
-  time-driven sibling for.
-- GitHub: c360studio/semstreams#15 — the issue that motivated this
-  ADR.
+  — the event-driven version of the pattern this ADR's primitive
+  enables a time-driven sibling for.
+- [Migration: beta.26 → beta.27](../operations/migration-beta26-to-beta27.md)
+  — the upgrade guide for the shipped implementation.
+- GitHub: c360studio/semstreams#15 — the tracking issue.

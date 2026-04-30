@@ -161,6 +161,75 @@ component is structurally cheaper than spawning a renderer agent.
   [#13](https://github.com/c360studio/semstreams/issues/13) closed
   out-of-scope on this principle.
 
+## Time-driven artifacts (cron rules)
+
+The patterns above all watch graph or NATS state. Beta.27 added the
+[time-driven sibling](../adr/031-time-trigger-primitive.md): a
+`"type": "cron"` rule fires on a wallclock schedule and uses the same
+`publish` / `publish_agent` actions to emit an artifact. The shape:
+
+```text
+┌──────────────┐  schedule    ┌────────────────┐ publish ┌──────────────────┐
+│ Wallclock    ├─────────────►│  Cron rule     ├────────►│ Output component │
+│ (cron tick)  │  matches     │  (rule         │ subject │ (file / httppost │
+│              │  expression  │   processor)   │         │  / etc.)         │
+└──────────────┘              └────────────────┘         └──────────┬───────┘
+                                                                    │
+                                                                    ▼
+                                                         ┌────────────────────┐
+                                                         │ Disk / HTTP / Obj  │
+                                                         │ Storage            │
+                                                         └────────────────────┘
+```
+
+Use a cron rule when the artifact emission is **cadence-driven** rather
+than state-driven — periodic snapshots, scheduled exports, daily roll-
+ups. State-driven emission (snapshot-on-profile-change) stays on the
+expression rule path described above.
+
+### Worked example: hourly status snapshot
+
+```json
+{
+  "id": "hourly-status-snapshot",
+  "type": "cron",
+  "name": "Hourly status snapshot",
+  "enabled": true,
+  "schedule": "@hourly",
+  "actions": [
+    {
+      "type": "publish",
+      "subject": "output.status-snapshot.hourly",
+      "payload": {
+        "rule_id": "$schedule.id",
+        "fired_at": "$now",
+        "previous_fire": "$schedule.last_fired_at"
+      }
+    }
+  ]
+}
+```
+
+An `output/file` component subscribes to `output.status-snapshot.hourly`
+and writes each message to a timestamped JSON file. The `$schedule.*`
+substitution tokens (`$schedule.id`, `$schedule.spec`,
+`$schedule.last_fired_at`) and the always-available `$now` give the
+output component everything it needs to name files and detect missed
+intervals.
+
+### When to combine cron + ops-role coordinator
+
+For artifacts that require *iteration over graph state* — a
+kill-switch sweep that disables flagged entities, a chain-hash audit
+that walks a chain looking for breaks — use the
+**cron → `publish_agent` → ops-role coordinator** pattern from
+[ADR-028](../adr/028-orchestration-architecture.md). The cron rule is
+just the clock; the spawned coordinator does the iteration / chain
+walk and emits structured `ops.diagnosis.*` triples that downstream
+expression rules can match on. See
+`configs/rules/cron/governance-example.json` for a worked starting
+point.
+
 ## Operational notes
 
 - **Subject naming.** Use the standard `output.<purpose>.<routing>`
@@ -186,5 +255,8 @@ component is structurally cheaper than spawning a renderer agent.
   right substrate when designing the watch side of the rule.
 - [ADR-028](../adr/028-orchestration-architecture.md) — why rules
   carry references, not content.
-- [ADR-031](../adr/031-time-trigger-primitive.md) — proposed time-
-  driven version of this pattern (cadence-based emission).
+- [ADR-031](../adr/031-time-trigger-primitive.md) — the time-driven
+  primitive that powers the cron-rule section above. Shipped in
+  beta.27.
+- [Migration: beta.26 → beta.27](../operations/migration-beta26-to-beta27.md)
+  — upgrade path for the cron rule kind.

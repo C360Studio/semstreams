@@ -53,6 +53,19 @@ type Definition struct {
 	// This is a parallel dimension to time-based AlertCooldownPeriod; neither
 	// replaces the other.
 	FireEveryNEvents int `json:"fire_every_n_events,omitempty"`
+
+	// Schedule is the cron expression for `type: "cron"` rules. Required
+	// when Type == "cron"; ignored otherwise. Supports POSIX 5-field
+	// (`min hour dom mon dow`) and the descriptors @hourly / @daily /
+	// @weekly / @monthly / @yearly. Parsed via robfig/cron/v3 at config
+	// load time; bad expressions fail rule construction.
+	Schedule string `json:"schedule,omitempty"`
+
+	// Actions is the action list for `type: "cron"` rules. Cron rules use
+	// this field instead of OnEnter/OnExit/WhileTrue because they have no
+	// state-transition semantics — every scheduled tick fires every Action
+	// here. Required when Type == "cron"; ignored otherwise.
+	Actions []Action `json:"actions,omitempty"`
 }
 
 // EntityConfig defines entity-specific configuration
@@ -143,7 +156,12 @@ func GetRuleFactory(ruleType string) (Factory, bool) {
 	return factory, exists
 }
 
-// GetRegisteredRuleTypes returns all registered rule types
+// GetRegisteredRuleTypes returns all registered rule types.
+//
+// Note: built-in rule kinds that do not go through the factory registry
+// (today: "cron" — see CronRuleType) are not returned here. Callers that
+// need the complete known-types surface should also include them
+// explicitly. See isKnownRuleType for the validation-side equivalent.
 func GetRegisteredRuleTypes() []string {
 	factoryMutex.RLock()
 	defer factoryMutex.RUnlock()
