@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/auth"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 )
@@ -688,6 +689,9 @@ func (m *Client) Subscribe(ctx context.Context, subject string, handler func(con
 		if tc := ExtractTrace(msg); tc != nil {
 			msgCtx = ContextWithTrace(msgCtx, tc)
 		}
+		if id := auth.ExtractIdentity(msg); id != nil {
+			msgCtx = auth.WithIdentity(msgCtx, id)
+		}
 
 		handler(msgCtx, msg)
 	})
@@ -716,6 +720,7 @@ func (m *Client) Publish(ctx context.Context, subject string, data []byte) error
 
 	msg := &nats.Msg{Subject: subject, Data: data}
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	return conn.PublishMsg(msg)
 }
@@ -795,6 +800,7 @@ func (m *Client) PublishToStream(ctx context.Context, subject string, data []byt
 		Data:    data,
 	}
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	_, err = js.PublishMsg(ctx, msg)
 	if err != nil {
