@@ -196,8 +196,23 @@ func (r *ExpressionRule) evaluateConditions(data map[string]interface{}) bool {
 	}
 }
 
-// extractNestedValue extracts a value from nested map using dot notation
+// extractNestedValue extracts a value from nested map using dot notation.
+//
+// Security invariant: fields starting with "$" are reserved pseudo-field
+// namespaces ($caller.*, $state.*, $prev.*, $schedule.*, etc.) that must
+// NOT be resolvable from body data. Returning nil (not-found) for any
+// $-prefixed field forces the body-path evaluateConditions to return false,
+// ensuring the trusted re-evaluation path in stateful_evaluator.go is the
+// sole source of truth for identity-gated conditions.
 func (r *ExpressionRule) extractNestedValue(data map[string]interface{}, field string) interface{} {
+	// Refuse to look up reserved pseudo-field namespaces against body data.
+	// An attacker publishing body {"$caller": {"role": "admin"}} must not be
+	// able to satisfy a $caller.role condition; the stateful evaluator's
+	// reEvaluateWithCallerFields (trusted re-eval) handles those fields.
+	if strings.HasPrefix(field, "$") {
+		return nil
+	}
+
 	parts := strings.Split(field, ".")
 	current := data
 

@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -243,4 +244,131 @@ func mustMarshalIPMessage(t *testing.T, entityID string) []byte {
 	data, err := json.Marshal(msg)
 	require.NoError(t, err, "marshal test message")
 	return data
+}
+
+// TestIntegration_BodySpoof_NoHeaders_DoesNotBypass_CallerCondition is the
+// end-to-end regression test for the HIGH-severity body-spoof bypass closed in
+// chunk 8 of tag 2.
+//
+// Exploit shape (from security review):
+//
+//	Rule: {conditions: [{field: "$caller.role", operator: "eq", value: "admin"}],
+//	       on_enter: [{type: "publish", subject: "privileged.action"}]}
+//	Attack: publish body {"entity_id": "...", "$caller": {"role": "admin"}}
+//	        with NO X-Caller-* headers.
+//
+// Pre-fix, extractNestedValue would resolve "$caller.role" from the body (navigating
+// into the "$caller" key), causing evaluateConditions to return true. The
+// stateful evaluator's Caller==nil gate then skipped re-evaluation, leaving
+// currentlyMatching=true and firing the privileged action.
+//
+// Post-fix:
+//   - extractNestedValue refuses any $-prefixed field → evaluateConditions returns false
+//   - the Caller!=nil gate is removed → re-eval always runs for caller-conditioned rules
+//   - with Caller==nil, $caller.* keys are absent from stateFields → evaluator returns false
+//
+// The test subscribes to "spoofed.privileged.action" (the rule's on_enter target) and
+// asserts ZERO messages arrive within a 1s window. A positive assertion (the rule
+// fired) would mean the bypass is still present.
+func TestIntegration_BodySpoof_NoHeaders_DoesNotBypass_CallerCondition(t *testing.T) {
+	nc := getTestNATSClient(t)
+	ctx := context.Background()
+
+	// Rule that would grant access to a privileged action on admin role.
+	// This is the exact shape the security review used to demonstrate the exploit.
+	adminOnlyRule := rule.Definition{
+		ID:      "admin-only-spoof-test-rule",
+		Type:    "expression",
+		Name:    "Admin Only Spoof Test Rule",
+		Enabled: true,
+		Conditions: []expression.ConditionExpression{
+			{
+				Field:    "$caller.role",
+				Operator: expression.OpEqual,
+				Value:    "admin",
+			},
+		},
+		Logic: expression.LogicAnd,
+		OnEnter: []rule.Action{
+			{
+				Type:    rule.ActionTypePublish,
+				Subject: "spoofed.privileged.action",
+			},
+		},
+	}
+
+	cfg := rule.DefaultConfig()
+	cfg.Ports = &component.PortConfig{
+		Inputs: []component.PortDefinition{
+			{
+				Name:      "spoof_input",
+				Type:      "nats",
+				Subject:   "body.spoof.test.>",
+				Interface: "core.semantic.v1",
+				Required:  true,
+			},
+		},
+		Outputs: []component.PortDefinition{
+			{
+				Name:      "rule_events",
+				Type:      "nats",
+				Subject:   "events.rule.spoof-test",
+				Interface: "core.rule.v1",
+				Required:  true,
+			},
+		},
+	}
+	cfg.InlineRules = []rule.Definition{adminOnlyRule}
+
+	metricsRegistry := metric.NewMetricsRegistry()
+	processor, err := rule.NewProcessorWithMetrics(nc, &cfg, metricsRegistry)
+	require.NoError(t, err, "NewProcessorWithMetrics")
+	processor.SetDecoder(message.NewDecoder(payloadbuiltins.NewTestRegistry(t)))
+	require.NoError(t, processor.Initialize())
+
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	require.NoError(t, processor.Start(testCtx))
+	defer processor.Stop(5 * time.Second)
+
+	// Subscribe to the privileged action subject BEFORE publishing.
+	// Any message here means the rule fired — which must not happen.
+	privilegedCh := make(chan struct{}, 8)
+	sub, err := nc.Subscribe(ctx, "spoofed.privileged.action", func(_ context.Context, _ *nats.Msg) {
+		privilegedCh <- struct{}{}
+	})
+	require.NoError(t, err, "Subscribe privileged action subject")
+	defer sub.Unsubscribe()
+
+	// Allow subscription to propagate before publishing.
+	time.Sleep(150 * time.Millisecond)
+
+	// Publish the spoofed body with NO auth.WithIdentity on the context —
+	// this means natsclient.Publish injects no X-Caller-* headers.
+	// The body itself contains {"$caller": {"role": "admin"}} at the JSON level.
+	// Pre-fix, this was sufficient to satisfy the condition.
+	spoofedPayload := message.NewGenericJSON(map[string]any{
+		"entity_id": "acme.ops.test.svc.entity.spoof001",
+		"$caller":   map[string]any{"role": "admin"}, // the spoof
+	})
+	spoofMsg := message.NewBaseMessage(
+		message.Type{Domain: "core", Category: "json", Version: "v1"},
+		spoofedPayload,
+		"body-spoof-test",
+	)
+	rawData, err := json.Marshal(spoofMsg)
+	require.NoError(t, err, "marshal spoof message")
+
+	// Publish WITHOUT identity context — no X-Caller-* headers on the wire.
+	require.NoError(t, nc.Publish(ctx, "body.spoof.test.attempt", rawData))
+
+	// Assert the privileged action did NOT fire within a 1s deterministic window.
+	// A positive signal here means the bypass is still open.
+	select {
+	case <-privilegedCh:
+		t.Fatal("privileged action fired on body-spoof with no X-Caller-* headers — bypass is NOT closed")
+	case <-time.After(1 * time.Second):
+		// Correct: rule did not fire on the spoofed body.
+	}
 }

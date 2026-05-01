@@ -702,3 +702,74 @@ func TestConfigParseInlineRules(t *testing.T) {
 		t.Errorf("Rule 2 ID: expected 'high-temp', got %q", rule2.ID)
 	}
 }
+
+// TestExtractNestedValue_DollarPrefixed_ReturnsNotFound verifies that the lookup
+// primitive refuses to resolve $-prefixed fields from body data. This is the
+// foundation of the body-spoof defence: an attacker cannot satisfy a $caller.role
+// condition by publishing {"$caller": {"role": "admin"}} in the message body.
+func TestExtractNestedValue_DollarPrefixed_ReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	def := Definition{
+		ID:      "spoof-guard-rule",
+		Type:    "expression",
+		Name:    "Spoof Guard",
+		Enabled: true,
+		Conditions: []expression.ConditionExpression{
+			{Field: "$caller.role", Operator: "eq", Value: "admin"},
+		},
+	}
+	rule, err := NewExpressionRule(def)
+	if err != nil {
+		t.Fatalf("NewExpressionRule: %v", err)
+	}
+
+	// Direct test of the lookup primitive: body carries $caller.role via a nested map.
+	body := map[string]interface{}{
+		"$caller": map[string]interface{}{
+			"role": "admin",
+		},
+	}
+	got := rule.extractNestedValue(body, "$caller.role")
+	if got != nil {
+		t.Errorf("extractNestedValue(body, \"$caller.role\") = %v, want nil — $-prefixed fields must be refused from body", got)
+	}
+}
+
+// TestExpressionRule_DollarPrefixedFieldFromBody_ReturnsNotFound verifies that the
+// full evaluateConditions path refuses body-sourced $-prefixed fields, causing the
+// body-path result to be false even when the body contains a matching value.
+//
+// With a rule condition {field: "$caller.role", operator: "eq", value: "admin"},
+// body {"$caller": {"role": "admin"}} must produce evaluateConditions=false.
+// The trusted re-evaluation path in the stateful evaluator (not this body-path)
+// is the only source of truth for $caller.* conditions.
+func TestExpressionRule_DollarPrefixedFieldFromBody_ReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	def := Definition{
+		ID:      "body-spoof-guard",
+		Type:    "expression",
+		Name:    "Body Spoof Guard",
+		Enabled: true,
+		Conditions: []expression.ConditionExpression{
+			{Field: "$caller.role", Operator: "eq", Value: "admin"},
+		},
+	}
+	rule, err := NewExpressionRule(def)
+	if err != nil {
+		t.Fatalf("NewExpressionRule: %v", err)
+	}
+
+	// Body contains the spoofed $caller key that an attacker would send.
+	spoofedBody := map[string]interface{}{
+		"entity_id": "acme.ops.test.svc.entity.001",
+		"$caller": map[string]interface{}{
+			"role": "admin",
+		},
+	}
+	got := rule.evaluateConditions(spoofedBody)
+	if got {
+		t.Error("evaluateConditions with spoofed $caller body returned true — body-spoof bypass present")
+	}
+}
