@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -191,7 +192,7 @@ func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 
 	body := `{"decision":"approve","user_id":"body-user"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-	req = req.WithContext(WithIdentity(req.Context(), "ctx-authenticated-user"))
+	req = req.WithContext(auth.WithIdentity(req.Context(), &auth.Identity{ID: "ctx-authenticated-user"}))
 	req.SetPathValue("id", "loop-1")
 	rec := httptest.NewRecorder()
 

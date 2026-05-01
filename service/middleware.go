@@ -18,9 +18,9 @@ import "net/http"
 // concerns — auth, request logging, panic recovery, rate limiting,
 // CORS — are product policy and live in product-shell middleware.
 // Products plugging in identity-aware middleware should pair with
-// agenticdispatch.WithIdentity to populate the ctx that
-// agenticdispatch.IdentityFromRequest consumes downstream (the
-// beta.22 helper pair).
+// auth.WithIdentity to populate the ctx that
+// auth.IdentityFromRequest consumes downstream (see auth/ package,
+// ADR-032 chunk 3 — migrated from beta.22 agenticdispatch helpers).
 type HTTPMiddleware func(http.Handler) http.Handler
 
 // chainMiddleware wraps h with the supplied middleware chain. With
