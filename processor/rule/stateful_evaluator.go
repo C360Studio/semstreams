@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -127,6 +128,19 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	// field values available.
 	currentlyMatching := e.reEvaluateTransitions(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.CurrentlyMatching)
 
+	// Re-evaluate conditions that reference $caller.* pseudo-fields. The message-path
+	// Rule.Evaluate(messages) call in the processor cannot see caller context (the Rule
+	// interface carries no identity), so CurrentlyMatching is always false for pure
+	// $caller.* conditions. We correct that here when a caller is in scope.
+	//
+	// This re-evaluation only changes currentlyMatching when the rule has $caller.*
+	// conditions AND a caller is present. Without a caller (cron, KV-watch), the
+	// absent-field semantic in the evaluator returns false for all $caller.* guards,
+	// keeping the gate closed for anonymous fires.
+	if ev.Caller != nil && hasCallerConditions(ev.Rule) {
+		currentlyMatching = e.reEvaluateWithCallerFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Caller, currentlyMatching)
+	}
+
 	transition := DetectTransition(wasMatching, currentlyMatching)
 
 	// Bootstrap recovery: a persisted matching state that still matches would
@@ -173,6 +187,15 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	}
 	for field, prevValue := range prevState.FieldValues {
 		stateFields["$prev."+field] = prevValue
+	}
+	// Populate $caller.* pseudo-fields from the caller identity when present.
+	// Absent (nil) caller leaves stateFields without $caller.* keys, which
+	// causes evaluateConditionWithState to return false for any $caller.*
+	// condition — the correct "no identity" semantic for cron and KV-watch fires.
+	if ev.Caller != nil {
+		stateFields["$caller.id"] = ev.Caller.ID
+		stateFields["$caller.role"] = ev.Caller.Role
+		stateFields["$caller.org"] = ev.Caller.Org
 	}
 
 	actions := e.selectActions(ev.Rule, transition, currentlyMatching, recovering, ev.EntityID, ev.RelatedID, iteration)
@@ -355,6 +378,60 @@ func hasTransitionConditions(ruleDef Definition) bool {
 		}
 	}
 	return false
+}
+
+// hasCallerConditions returns true if any top-level condition in the rule references
+// a $caller.* pseudo-field. Used to gate the re-evaluation pass in Evaluate so that
+// rules without caller conditions skip the extra expression.EvaluateWithStateFields call.
+func hasCallerConditions(ruleDef Definition) bool {
+	for _, cond := range ruleDef.Conditions {
+		if strings.HasPrefix(cond.Field, "$caller.") {
+			return true
+		}
+	}
+	return false
+}
+
+// reEvaluateWithCallerFields re-evaluates all rule conditions with $caller.* and $prev.*
+// fields populated. This corrects the match result for rules whose top-level conditions
+// reference $caller.* pseudo-fields: the upstream Rule.Evaluate(messages) call cannot
+// inject caller context (the Rule interface is identity-agnostic), so those conditions
+// always return false from the initial evaluation. We fix the result here, inside the
+// stateful evaluator that owns the caller-aware Evaluation struct.
+func (e *StatefulEvaluator) reEvaluateWithCallerFields(
+	ruleDef Definition,
+	entityID string,
+	entity *gtypes.EntityState,
+	prevState MatchState,
+	caller *CallerContext,
+	currentlyMatching bool,
+) bool {
+	callerFields := expression.StateFields{
+		"$caller.id":   caller.ID,
+		"$caller.role": caller.Role,
+		"$caller.org":  caller.Org,
+	}
+	for field, prevValue := range prevState.FieldValues {
+		callerFields["$prev."+field] = prevValue
+	}
+
+	expr := expression.LogicalExpression{
+		Conditions: ruleDef.Conditions,
+		Logic:      ruleDef.Logic,
+	}
+	if expr.Logic == "" {
+		expr.Logic = expression.LogicAnd
+	}
+
+	match, err := e.exprEvaluator.EvaluateWithStateFields(entity, callerFields, expr)
+	if err != nil {
+		e.logger.Warn("Failed to re-evaluate caller conditions",
+			"rule_id", ruleDef.ID,
+			"entity_id", entityID,
+			"error", err)
+		return currentlyMatching
+	}
+	return match
 }
 
 // captureTransitionFields scans a rule definition for transition conditions and
