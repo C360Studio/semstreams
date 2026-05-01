@@ -49,7 +49,8 @@ func NewStatefulEvaluator(stateTracker *StateTracker, actionExecutor ActionExecu
 // Evaluation groups the inputs to a single stateful rule evaluation.
 // Zero values are meaningful: Revision=0 means "no KV revision available"
 // (message-path rules), Bootstrap=false means live traffic (not startup replay),
-// Entity/Related=nil means message-path rule.
+// Entity/Related=nil means message-path rule, Caller=nil means no caller in
+// scope (cron fires, KV-watch fires).
 type Evaluation struct {
 	Rule              Definition
 	EntityID          string
@@ -59,6 +60,11 @@ type Evaluation struct {
 	Related           *gtypes.EntityState // nil for single-entity or message-path
 	Revision          uint64              // KV revision that triggered this evaluation; 0 if unknown
 	Bootstrap         bool                // true during watcher initial-state replay
+	// Caller carries the authenticated identity that triggered this evaluation.
+	// Populated by the message-path (HTTP-originated NATS messages carry
+	// X-Caller-* headers extracted by natsclient.Subscribe). Nil for KV-watch
+	// and cron fires which have no caller in scope.
+	Caller *CallerContext
 }
 
 // entityKey returns the state-tracker key (single entity or canonical pair).
@@ -157,6 +163,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 		Entity:    ev.Entity,
 		Related:   ev.Related,
 		State:     matchState,
+		Caller:    ev.Caller,
 	}
 
 	stateFields := expression.StateFields{
