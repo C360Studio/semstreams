@@ -12,7 +12,7 @@ others.
 | Tag | Beta | Status | Date | Notes |
 |---|---|---|---|---|
 | 1 | beta.32 | **Shipped** | 2026-05-01 | `$caller.{id,role,org}` substitution + `deny` action + `cronFireStatusDenied`. |
-| 2 | beta.33 | Pending | — | Identity-as-struct + NATS-header propagation |
+| 2 | beta.33 | **Shipped** | 2026-05-01 | Identity-as-struct (`auth.Identity`) + NATS `X-Caller-*` headers + `$caller.*` condition support. |
 | 3 | beta.34 | Pending | — | Shadow mode + `count_in_window` + `negate` + filter-output bridge |
 | 4 | beta.35 | Pending | — | Org wiring pass (HARD BREAKING) |
 | 5 | beta.36 | Pending | — | JetStream cluster docs + reconnect defaults |
