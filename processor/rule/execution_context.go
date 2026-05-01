@@ -24,7 +24,7 @@ import (
 // match deep predicate paths like $entity.triple.agent.loop.role. We stop
 // at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
 // doesn't over-match.
-var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule)\.\w[\w.]*`)
+var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller)\.\w[\w.]*`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -52,6 +52,15 @@ type ExecutionContext struct {
 	// `$schedule.*` substitution layer reads this; see
 	// cron_substitution.go for the namespace contract.
 	Schedule *ScheduleContext
+
+	// Caller carries the identity of the caller whose request triggered
+	// rule evaluation (user ID, role, org). Populated by the rule
+	// processor when an authenticated caller is present in scope (e.g.
+	// HTTP-originated messages in Tag 2+). Nil for cron-fired and pure
+	// KV-watch rules that have no caller in scope. The `$caller.*`
+	// substitution layer reads this; see caller_substitution.go for the
+	// namespace contract.
+	Caller *CallerContext
 }
 
 // RuleID returns the originating rule's identifier, or an empty string if the
@@ -75,6 +84,9 @@ func (ec *ExecutionContext) RuleID() string {
 //   - $schedule.id: Cron rule ID (cron rules only)
 //   - $schedule.spec: Cron expression (cron rules only)
 //   - $schedule.last_fired_at: Prior fire timestamp, RFC3339 UTC; empty on first fire
+//   - $caller.id: Caller identity ID (caller-aware rules only)
+//   - $caller.role: Caller role claim (caller-aware rules only)
+//   - $caller.org: Caller organization claim (caller-aware rules only)
 //
 // Entity triple values can be accessed via $entity.triple.<predicate> syntax.
 //
@@ -113,6 +125,11 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	// is nil; unknown $schedule.* tokens will then trip the
 	// unresolved-template warning below.
 	result = applyScheduleSubstitutions(result, ec.Schedule)
+
+	// Caller substitutions. No-op when ec.Caller is nil; unknown
+	// $caller.* tokens will then trip the unresolved-template warning
+	// below.
+	result = applyCallerSubstitutions(result, ec.Caller)
 
 	ec.warnUnresolvedTemplateVars(template, result)
 
