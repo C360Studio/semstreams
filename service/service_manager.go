@@ -839,9 +839,9 @@ func (m *Manager) Stop(timeout time.Duration) error {
 // This is the framework's only HTTP middleware seam. The framework
 // ships zero default middleware; auth, request logging, panic
 // recovery, rate limiting, and CORS are product policy. Products
-// pairing identity-aware middleware with the beta.22 helpers should
-// call agenticdispatch.WithIdentity from inside the middleware so
-// agenticdispatch.IdentityFromRequest picks it up downstream.
+// pairing identity-aware middleware should call auth.WithIdentity
+// from inside the middleware so auth.IdentityFromRequest picks it
+// up downstream (see auth/ package, ADR-032 chunk 3).
 //
 // Must be called before the HTTP server starts (i.e., before the
 // owning service.Manager.Start*HTTP* path runs). Calls after the

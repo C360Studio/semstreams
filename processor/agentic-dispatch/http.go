@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/auth"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/service"
@@ -121,13 +122,17 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve identity through the IdentityFromRequest helper so a
-	// future HTTP middleware contract (ADR-030) can populate
-	// authenticated identity via ctx and we'll pick it up here
-	// without rewriting the handler. Today, no middleware sets ctx,
-	// so this resolves to req.UserID || "http-user" — behavior-
-	// equivalent to the prior inline default.
-	req.UserID = IdentityFromRequest(r, req.UserID)
+	// Resolve identity through auth.IdentityFromRequest so a future
+	// HTTP middleware contract (ADR-030) can populate authenticated
+	// identity via ctx and we'll pick it up here without rewriting
+	// the handler. Today, no middleware sets ctx, so this resolves
+	// to req.UserID || "http-user" — behavior-equivalent to the
+	// prior inline default. auth.WithIdentity propagates the
+	// resolved identity to ctx so natsclient auto-injects
+	// X-Caller-* headers on downstream NATS publishes.
+	id := auth.IdentityFromRequest(r, req.UserID)
+	req.UserID = id.ID
+	ctx = auth.WithIdentity(ctx, id)
 	if req.ChannelType == "" {
 		req.ChannelType = "http"
 	}
@@ -674,7 +679,7 @@ func (c *Component) handleLoopSignal(w http.ResponseWriter, r *http.Request) {
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
 // Mirrors handleLoopSignal's shape: path-param extraction, loop
 // existence check, JSON body decode, validation, NATS publish,
-// JSON success response. Identity resolves via IdentityFromRequest
+// JSON success response. Identity resolves via auth.IdentityFromRequest
 // (ctx > body > "http-user" default) so middleware can authenticate
 // without handler edits.
 //
@@ -747,17 +752,19 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	approver := IdentityFromRequest(r, req.UserID)
+	approverID := auth.IdentityFromRequest(r, req.UserID)
+	// Propagate to ctx so natsclient auto-injects X-Caller-* headers.
+	ctx = auth.WithIdentity(ctx, approverID)
 
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
 		slog.String("loop_id", loopID),
 		slog.String("call_id", callID),
 		slog.String("decision", req.Decision),
-		slog.String("approved_by", approver))
+		slog.String("approved_by", approverID.ID))
 
 	// Build + publish the framework's ApprovalResponse payload.
-	subject, err := c.publishApprovalResponse(ctx, loopID, callID, &req, approver)
+	subject, err := c.publishApprovalResponse(ctx, loopID, callID, &req, approverID.ID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to publish approval response",
 			slog.String("request_id", requestID),
