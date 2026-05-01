@@ -58,6 +58,12 @@ const (
 	// alerting on inflight_skipped > 0 know to either tune the schedule,
 	// configure a cooldown explicitly, or speed up the actions.
 	cronFireStatusInflightSkipped = "inflight_skipped"
+	// cronFireStatusDenied is emitted when a deny action short-circuits the
+	// fire cycle. Semantically distinct from cronFireStatusError: "a rule said
+	// no" vs "things are broken". Dashboards that filter on status="error" for
+	// "fire failed" views must also include status="denied" if they want a
+	// unified "rule did not complete normally" view.
+	cronFireStatusDenied = "denied"
 )
 
 // cronMetrics holds the Prometheus collectors for cron-scheduler
@@ -186,8 +192,9 @@ func createAndRegisterCronMetrics(registry *metric.MetricsRegistry) *cronMetrics
 // recordFire is the single chokepoint for fires_total + fire_duration.
 // It increments fires_total{rule_id, status} unconditionally and
 // observes the duration histogram only for statuses that represent a
-// completed dispatch (success / error). Skipped statuses (cooldown,
-// inflight) and the panic backstop intentionally skip the histogram:
+// completed dispatch (success / error / denied). Skipped statuses
+// (cooldown, inflight) and the panic backstop intentionally skip the
+// histogram:
 //
 //   - cooldown / inflight skipped fires never dispatched; their
 //     "duration" is just the gate-check time and would pull the
@@ -196,6 +203,8 @@ func createAndRegisterCronMetrics(registry *metric.MetricsRegistry) *cronMetrics
 //     work + recovery overhead, which would distort success/error
 //     percentiles. Panics are paged on via the counter, not the
 //     histogram.
+//   - denied IS a completed dispatch (the deny action ran); its
+//     duration is meaningful for latency analysis alongside success/error.
 //
 // Callers always go through this method — there is no sibling helper
 // per status — so this is the only place a future contributor needs to
@@ -205,7 +214,7 @@ func (m *cronMetrics) recordFire(ruleID, status string, durationSeconds float64)
 		return
 	}
 	m.firesTotal.WithLabelValues(ruleID, status).Inc()
-	if status == cronFireStatusSuccess || status == cronFireStatusError {
+	if status == cronFireStatusSuccess || status == cronFireStatusError || status == cronFireStatusDenied {
 		m.fireDurationSeconds.WithLabelValues(ruleID).Observe(durationSeconds)
 	}
 }

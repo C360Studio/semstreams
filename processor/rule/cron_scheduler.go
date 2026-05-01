@@ -498,6 +498,20 @@ func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID stri
 	dispatchedOK := true
 	for i, action := range actions {
 		if err := s.executor.Execute(parentCtx, action, ec); err != nil {
+			if errors.Is(err, ErrDenyVerdict) {
+				// Deny is terminal for the fire cycle: subsequent actions do not run.
+				// "denied" is operator-distinct from "error" — "a rule said no" vs
+				// "things are broken". Alerting on status="error" will not surface
+				// denials; operators who want a unified "rule did not complete normally"
+				// view must also include status="denied" in their queries.
+				status = cronFireStatusDenied
+				s.logger.Info("Cron rule action denied; short-circuiting remaining actions",
+					"rule_id", ruleID,
+					"action_index", i,
+					"action_type", action.Type,
+					"error", err)
+				break
+			}
 			dispatchedOK = false
 			s.logger.Warn("Cron rule action failed",
 				"rule_id", ruleID,
@@ -508,7 +522,7 @@ func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID stri
 			// publish doesn't block sibling triple writes etc.
 		}
 	}
-	if !dispatchedOK {
+	if !dispatchedOK && status != cronFireStatusDenied {
 		status = cronFireStatusError
 	}
 

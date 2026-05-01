@@ -1067,3 +1067,108 @@ func TestCronScheduler_Metrics_RestoreRecordsMissedFires(t *testing.T) {
 		t.Errorf("missed_fires = %f, want > 0", got)
 	}
 }
+
+// denyOnceExecutor is a test-only executor that returns a *DenyVerdict for its
+// first Execute call and nil for all subsequent calls. It records every call so
+// tests can assert on short-circuit behaviour.
+type denyOnceExecutor struct {
+	mu     sync.Mutex
+	calls  []Action
+	denied bool // whether the deny has been returned yet
+}
+
+func (d *denyOnceExecutor) Execute(_ context.Context, action Action, _ *ExecutionContext) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, action)
+	if !d.denied {
+		d.denied = true
+		return &DenyVerdict{RuleID: "test-cron-rule", Reason: "cron deny test"}
+	}
+	return nil
+}
+
+func (d *denyOnceExecutor) callCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.calls)
+}
+
+// newDenySchedulerForTest builds a CronScheduler with a fresh per-test metrics
+// registry so counter assertions are isolated from other tests.
+func newDenySchedulerForTest(t *testing.T, exec ActionExecutorInterface) (*CronScheduler, *cronMetrics) {
+	t.Helper()
+	m := newCronMetricsForTest(t) // per-test isolated registry (from cron_metrics_test.go)
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Logger:   slog.Default(),
+		Metrics:  m,
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+	return s, m
+}
+
+// TestCronFire_DenyShortCircuits verifies that when the first action in a cron
+// fire returns *DenyVerdict, the cron scheduler:
+//   - emits status="denied" on the fires_total metric (not "error" or "success")
+//   - does NOT call Execute for subsequent sibling actions in the same tick
+func TestCronFire_DenyShortCircuits(t *testing.T) {
+	exec := &denyOnceExecutor{}
+	s, m := newDenySchedulerForTest(t, exec)
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Actions = []Action{
+			{Type: ActionTypeDeny, Reason: "blocked"},
+			{Type: ActionTypePublish, Subject: "after.deny"}, // must NOT run
+		}
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	// Only 1 Execute call: the deny action. The publish after it must not run.
+	if got := exec.callCount(); got != 1 {
+		t.Errorf("Execute call count = %d, want 1 (deny must short-circuit remaining actions)", got)
+	}
+
+	// The fires_total counter must carry status="denied".
+	if got := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusDenied)); got != 1 {
+		t.Errorf("fires_total{status=denied} = %f, want 1", got)
+	}
+}
+
+// TestCronFire_DeniedStatusDistinctFromError verifies that a deny verdict emits
+// status="denied" and NOT status="error". This is the operator-visible distinction
+// that separates "a rule said no" from "things are broken".
+func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
+	exec := &denyOnceExecutor{}
+	s, m := newDenySchedulerForTest(t, exec)
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Actions = []Action{
+			{Type: ActionTypeDeny, Reason: "blocked"},
+		}
+	})
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+	s.parentCtx = context.Background()
+
+	s.fire(rule.ID())
+
+	// Must have status="denied", NOT status="error".
+	deniedCount := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusDenied))
+	errorCount := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusError))
+
+	if deniedCount != 1 {
+		t.Errorf("fires_total{status=denied} = %f, want 1", deniedCount)
+	}
+	if errorCount != 0 {
+		t.Errorf("fires_total{status=error} = %f, want 0 (deny must not set error status)", errorCount)
+	}
+}
