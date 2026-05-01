@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/auth"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 )
@@ -93,6 +94,14 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 	// Increment evaluation counter for all messages (NATS and KV watcher)
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
+	// Extract caller identity from ctx (injected by natsclient.Subscribe via
+	// X-Caller-* headers on the inbound NATS message). Nil when no identity
+	// is present (internal publish paths, tests without identity, etc.).
+	var caller *CallerContext
+	if id, ok := auth.IdentityFromContext(ctx); ok {
+		caller = identityToCallerContext(id)
+	}
+
 	// Cache the message if needed
 	if rp.messageCache != nil {
 		cacheKey := fmt.Sprintf("%s_%d", subject, time.Now().UnixNano())
@@ -142,10 +151,13 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 
 			// Perform stateful evaluation. Message-path rules have no KV
 			// revision and no bootstrap phase, so those fields stay zero.
+			// Caller is threaded from the extracted identity above; nil when
+			// no identity was present on the inbound message.
 			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
 				Rule:              ruleDef,
 				EntityID:          entityID,
 				CurrentlyMatching: triggered,
+				Caller:            caller,
 			})
 			if err != nil {
 				rp.logger.Warn("Stateful evaluation failed", "rule_name", ruleName, "error", err)
@@ -290,6 +302,7 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 			// entityState is passed for When-clause access; revision/bootstrap
 			// propagate the KV-watch context so SourceRevision persists and
 			// OnRecovery can fire on restart.
+			// KV-watch fires have no caller context — Caller stays nil per tag-1 design.
 			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
 				Rule:              ruleDef,
 				EntityID:          entityID,
