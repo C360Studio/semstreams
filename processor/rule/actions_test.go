@@ -4,6 +4,7 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -1934,4 +1935,151 @@ func TestSubstitutePayloadVariables_ArrayValues(t *testing.T) {
 	assert.Equal(t, "plan.001", mixed[0])
 	assert.Equal(t, 42, mixed[1])
 	assert.Equal(t, true, mixed[2])
+}
+
+// --- DenyVerdict type tests ---
+
+// TestDenyVerdict_ErrorString verifies the Error() string format.
+func TestDenyVerdict_ErrorString(t *testing.T) {
+	t.Parallel()
+
+	dv := &DenyVerdict{RuleID: "r1", Reason: "no"}
+	want := "rule r1 denied: no"
+	if got := dv.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// TestDenyVerdict_ErrorsIs verifies errors.Is matching behaviour.
+// Any *DenyVerdict matches ErrDenyVerdict; unrelated errors do not.
+func TestDenyVerdict_ErrorsIs(t *testing.T) {
+	t.Parallel()
+
+	err := &DenyVerdict{RuleID: "r1", Reason: "no"}
+
+	if !errors.Is(err, ErrDenyVerdict) {
+		t.Error("errors.Is(&DenyVerdict{...}, ErrDenyVerdict) = false, want true")
+	}
+	if errors.Is(errors.New("other"), ErrDenyVerdict) {
+		t.Error("errors.Is(errors.New(\"other\"), ErrDenyVerdict) = true, want false")
+	}
+}
+
+// TestDenyVerdict_ErrorsAs verifies errors.As extracts fields correctly.
+func TestDenyVerdict_ErrorsAs(t *testing.T) {
+	t.Parallel()
+
+	var dv *DenyVerdict
+	err := &DenyVerdict{RuleID: "r1", Reason: "no"}
+	if !errors.As(err, &dv) {
+		t.Fatal("errors.As = false, want true")
+	}
+	if dv.RuleID != "r1" {
+		t.Errorf("dv.RuleID = %q, want %q", dv.RuleID, "r1")
+	}
+	if dv.Reason != "no" {
+		t.Errorf("dv.Reason = %q, want %q", dv.Reason, "no")
+	}
+}
+
+// --- executeDeny tests ---
+
+// newDenyTestEC builds an ExecutionContext with a populated MatchState (so
+// RuleID() returns a non-empty value) and an optional CallerContext.
+func newDenyTestEC(ruleID string, caller *CallerContext) *ExecutionContext {
+	return &ExecutionContext{
+		EntityID: "acme.ops.test.svc.entity.001",
+		State: &MatchState{
+			RuleID: ruleID,
+		},
+		Caller: caller,
+	}
+}
+
+// TestExecuteDeny_ReturnsDenyVerdict verifies that executeDeny returns a
+// *DenyVerdict carrying the expected RuleID and Reason.
+func TestExecuteDeny_ReturnsDenyVerdict(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	executor := NewActionExecutorWithMutator(slog.Default(), &mockTripleMutator{})
+	ec := newDenyTestEC("deny-rule-1", nil)
+	action := Action{Type: ActionTypeDeny, Reason: "access not allowed"}
+
+	err := executor.executeDeny(ctx, action, ec)
+	require.Error(t, err)
+
+	var dv *DenyVerdict
+	require.True(t, errors.As(err, &dv), "error should be *DenyVerdict")
+	assert.Equal(t, "deny-rule-1", dv.RuleID)
+	assert.Equal(t, "access not allowed", dv.Reason)
+}
+
+// TestExecuteDeny_AuditFailureDoesNotFlipDeny is the architect-flagged invariant:
+// if AddTriple fails (audit write error), executeDeny MUST still return *DenyVerdict,
+// not the audit error. A failing audit-write must never flip deny → allow.
+func TestExecuteDeny_AuditFailureDoesNotFlipDeny(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{addErr: errors.New("nats unavailable")}
+	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	ec := newDenyTestEC("deny-rule-audit-fail", nil)
+	action := Action{Type: ActionTypeDeny, Reason: "must deny"}
+
+	err := executor.executeDeny(ctx, action, ec)
+	require.Error(t, err)
+
+	// The error must be a *DenyVerdict, NOT the audit error.
+	require.True(t, errors.Is(err, ErrDenyVerdict),
+		"audit failure must not flip deny to allow: got %v", err)
+
+	var dv *DenyVerdict
+	require.True(t, errors.As(err, &dv))
+	assert.Equal(t, "deny-rule-audit-fail", dv.RuleID)
+	assert.Equal(t, "must deny", dv.Reason)
+}
+
+// TestExecuteDeny_WritesAuditTriple verifies that executeDeny calls
+// tripleMutator.AddTriple with predicate "rule.deny" and the expected reason object.
+func TestExecuteDeny_WritesAuditTriple(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	ec := newDenyTestEC("deny-rule-audit", nil)
+	action := Action{Type: ActionTypeDeny, Reason: "blocked by policy"}
+
+	_ = executor.executeDeny(ctx, action, ec)
+
+	require.Len(t, mut.addedTriples, 1, "AddTriple must be called exactly once")
+	triple := mut.addedTriples[0]
+	assert.Equal(t, PredicateRuleDeny, triple.Predicate,
+		"audit triple predicate must be %q", PredicateRuleDeny)
+	assert.Equal(t, "blocked by policy", triple.Object,
+		"audit triple object must be the reason string")
+}
+
+// TestExecuteDeny_VariableSubstitutionInReason verifies that $caller.role and
+// other template variables are substituted into the reason before it travels
+// in the DenyVerdict and the audit triple.
+func TestExecuteDeny_VariableSubstitutionInReason(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	ec := newDenyTestEC("deny-rule-subst", &CallerContext{ID: "alice", Role: "viewer", Org: "acme"})
+	action := Action{Type: ActionTypeDeny, Reason: "caller $caller.id with role $caller.role is denied"}
+
+	err := executor.executeDeny(ctx, action, ec)
+	require.Error(t, err)
+
+	var dv *DenyVerdict
+	require.True(t, errors.As(err, &dv))
+	assert.Equal(t, "caller alice with role viewer is denied", dv.Reason)
+
+	require.Len(t, mut.addedTriples, 1)
+	assert.Equal(t, "caller alice with role viewer is denied", mut.addedTriples[0].Object)
 }

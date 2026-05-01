@@ -3,6 +3,7 @@ package rule
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -1055,5 +1056,112 @@ func TestStatefulEvaluator_ZeroRevisionSkipsGuard(t *testing.T) {
 	}
 	if actionExecutor.whileTrueCalls != 1 {
 		t.Errorf("Expected WhileTrue to fire on message-path eval, got %d", actionExecutor.whileTrueCalls)
+	}
+}
+
+// sequencedExecutor is a test-only ActionExecutorInterface that returns errors
+// from a pre-seeded sequence, one per Execute call in order. After the sequence
+// is exhausted, subsequent calls succeed (return nil). It counts total calls so
+// tests can assert on how many actions ran.
+type sequencedExecutor struct {
+	sequence []error
+	calls    int
+}
+
+func (s *sequencedExecutor) Execute(_ context.Context, _ Action, _ *ExecutionContext) error {
+	idx := s.calls
+	s.calls++
+	if idx < len(s.sequence) {
+		return s.sequence[idx]
+	}
+	return nil
+}
+
+// TestRunActions_DenyShortCircuits verifies that when a deny action fires in the
+// middle of an action list, subsequent actions do NOT run.
+// Action list: [publish(allow), deny, publish(after-deny)]
+// Expected: Execute is called exactly twice (allow + deny), not three times.
+func TestRunActions_DenyShortCircuits(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+
+	// deny is the second action (index 1); allow-after is the third (index 2)
+	exec := &sequencedExecutor{
+		sequence: []error{
+			nil,                                      // action 0: allow passes
+			&DenyVerdict{RuleID: "r1", Reason: "no"}, // action 1: deny
+			// action 2 must NOT be called
+		},
+	}
+
+	evaluator := NewStatefulEvaluator(stateTracker, exec, logger)
+	ruleDef := Definition{
+		ID:   "deny-short-circuit-rule",
+		Type: "expression",
+		Name: "Deny Short Circuit",
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "allow.action"},
+			{Type: ActionTypeDeny, Reason: "no"},
+			{Type: ActionTypePublish, Subject: "after.deny"}, // must NOT run
+		},
+	}
+
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-deny-test",
+		CurrentlyMatching: true,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v, want nil (deny is handled inside runActions, not surfaced)", err)
+	}
+
+	// Only 2 Execute calls: allow + deny. The third (after-deny) must not run.
+	if exec.calls != 2 {
+		t.Errorf("Execute call count = %d, want 2 (deny must short-circuit after-deny action)", exec.calls)
+	}
+}
+
+// TestRunActions_NonDenyErrorContinues verifies that a non-deny error from one
+// action does NOT stop subsequent actions. Today's best-effort semantics preserved.
+// Action list: [failing_non_deny, allow_action_2]
+// Expected: Execute is called exactly twice — fail then continue.
+func TestRunActions_NonDenyErrorContinues(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+
+	exec := &sequencedExecutor{
+		sequence: []error{
+			errors.New("transient publish error"), // action 0: non-deny failure
+			nil,                                   // action 1: succeeds
+		},
+	}
+
+	evaluator := NewStatefulEvaluator(stateTracker, exec, logger)
+	ruleDef := Definition{
+		ID:   "non-deny-continue-rule",
+		Type: "expression",
+		Name: "Non-Deny Continue",
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "first.fails"},
+			{Type: ActionTypePublish, Subject: "second.runs"}, // must still run
+		},
+	}
+
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-non-deny-test",
+		CurrentlyMatching: true,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v, want nil", err)
+	}
+
+	// Both Execute calls must have fired — non-deny errors do not short-circuit.
+	if exec.calls != 2 {
+		t.Errorf("Execute call count = %d, want 2 (non-deny error must not short-circuit sibling actions)", exec.calls)
 	}
 }

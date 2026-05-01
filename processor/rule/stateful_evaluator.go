@@ -307,6 +307,16 @@ func (e *StatefulEvaluator) runActions(
 		}
 
 		if err := e.actionExecutor.Execute(ctx, action, ec); err != nil {
+			if errors.Is(err, ErrDenyVerdict) {
+				// Deny is terminal: subsequent actions in this evaluation cycle do not
+				// run. Non-deny errors continue best-effort dispatch (see else branch).
+				e.logger.Info("rule action denied; short-circuiting remaining actions",
+					"rule_id", ruleDef.ID,
+					"entity_id", entityID,
+					"action_type", action.Type,
+					"error", err)
+				break
+			}
 			e.logger.Error("Failed to execute action",
 				"rule_id", ruleDef.ID,
 				"entity_id", entityID,

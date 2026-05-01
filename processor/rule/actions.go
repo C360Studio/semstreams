@@ -34,7 +34,16 @@ const (
 	ActionTypePublishBoidSignal = "publish_boid_signal"
 	// ActionTypeUpdateKV writes JSON to a named KV bucket with optional CAS merge
 	ActionTypeUpdateKV = "update_kv"
+	// ActionTypeDeny issues a deny verdict that short-circuits subsequent actions
+	// and surfaces as *DenyVerdict to the caller. The deny is always the terminal
+	// outcome: no later action in the same evaluation cycle runs once a deny fires.
+	ActionTypeDeny = "deny"
 )
+
+// PredicateRuleDeny is the audit-triple predicate written by deny actions.
+// Downstream rules that gate on denials should match against this constant
+// so they stay in sync with any future rename.
+const PredicateRuleDeny = "rule.deny"
 
 // Action represents an action to execute when a rule fires.
 // Actions are triggered by state transitions (OnEnter, OnExit) or
@@ -118,6 +127,12 @@ type Action struct {
 	// true = CAS read-modify-write (merge payload into existing document)
 	// false = overwrite entire document (last writer wins)
 	Merge bool `json:"merge,omitempty"`
+
+	// Reason is the human-readable denial message for deny actions.
+	// It travels with the *DenyVerdict error so callers can record it
+	// without a side-channel lookup. Variable substitution is applied
+	// (e.g. "$caller.id denied: insufficient role $caller.role").
+	Reason string `json:"reason,omitempty"`
 }
 
 // ParseTTL parses the TTL string into a duration.
@@ -252,6 +267,8 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executePublishBoidSignal(ctx, action, ec)
 	case ActionTypeUpdateKV:
 		return e.executeUpdateKV(ctx, action, ec)
+	case ActionTypeDeny:
+		return e.executeDeny(ctx, action, ec)
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
@@ -822,6 +839,46 @@ func (e *ActionExecutor) executePublishBoidSignal(ctx context.Context, action Ac
 	}
 
 	return nil
+}
+
+// executeDeny issues a deny verdict that short-circuits the current evaluation
+// cycle. The deny verdict is the structural outcome — a *DenyVerdict error is
+// always returned. Before returning, a best-effort audit triple is written via
+// the TripleMutator so the denial is recorded in the knowledge graph.
+//
+// IMPORTANT: an audit-write failure MUST NOT flip the verdict from deny to
+// allow. If AddTriple fails, the error is logged at Error level (so operators
+// see the silent audit gap) and executeDeny still returns *DenyVerdict. Callers
+// must not retry the action on *DenyVerdict — denial is intentional and terminal.
+func (e *ActionExecutor) executeDeny(ctx context.Context, action Action, ec *ExecutionContext) error {
+	reason := ec.SubstituteVariables(action.Reason)
+	ruleID := ec.RuleID()
+
+	// Best-effort audit triple. Mirror executePublishAgent's triple-write pattern.
+	// If AddTriple fails, we log Error but DO NOT return that error — the deny
+	// verdict is the structural outcome and must not be flipped to "allow" by
+	// an audit-write failure.
+	if e.tripleMutator != nil {
+		auditTriple := message.Triple{
+			Subject:    ruleID,
+			Predicate:  PredicateRuleDeny,
+			Object:     reason,
+			Source:     "rule_engine",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+		}
+		if _, err := e.tripleMutator.AddTriple(ctx, ruleID, auditTriple); err != nil {
+			if e.logger != nil {
+				e.logger.Error("deny verdict audit triple write failed; verdict still applies",
+					"rule_id", ruleID,
+					"reason", reason,
+					"error", err)
+			}
+			// intentionally fall through — verdict is structural
+		}
+	}
+
+	return &DenyVerdict{RuleID: ruleID, Reason: reason}
 }
 
 // executeUpdateKV writes JSON to a named KV bucket with optional CAS merge semantics.
