@@ -22,6 +22,20 @@ const (
 	// CapabilityAnswerSynthesis is used by graph-query to synthesize natural language
 	// answers from community summaries and entity digests in globalSearch responses.
 	CapabilityAnswerSynthesis = "answer_synthesis"
+	// CapabilityIntentClassification is used by agentic-dispatch to classify
+	// every incoming user message into an intent (new_task / continue / signal /
+	// question / meta) before routing. The most-frequent user-facing LLM call
+	// in the system. Unbound deployments fall back to defaults.model.
+	CapabilityIntentClassification = "intent_classification"
+	// CapabilityLayerNormalization is used by agentic-dispatch to extract
+	// structured operating-model entries from freeform onboarding answers.
+	// Unbound deployments fall back to defaults.model.
+	CapabilityLayerNormalization = "layer_normalization"
+	// CapabilityAnomalyReview is used by graph/inference's ReviewWorker to
+	// classify suggested missing relationships as approve/reject. Unbound
+	// deployments fall back to the community_summary endpoint (the legacy
+	// piggyback behavior preserved for backward compatibility).
+	CapabilityAnomalyReview = "anomaly_review"
 )
 
 // ResolvedEndpoint holds the resolved connection details for a capability endpoint.

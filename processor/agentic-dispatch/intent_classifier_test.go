@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -166,4 +167,27 @@ func TestMockIntentClassifier_FallbackOnError(t *testing.T) {
 
 	_, err := classifier.Classify(context.Background(), msg, nil)
 	assert.Error(t, err)
+}
+
+// TestNewLLMIntentClassifier_DefaultsToCapabilityConstant verifies the
+// no-modelName-supplied path uses model.CapabilityIntentClassification
+// instead of the previous hardcoded "default" string. The capability
+// constant resolves through the registry's standard fallback chain, so
+// unbound deployments still land on defaults.model — preserving the
+// pre-Phase-2 piggyback behavior.
+func TestNewLLMIntentClassifier_DefaultsToCapabilityConstant(t *testing.T) {
+	c := NewLLMIntentClassifier(nil, "", nil)
+	require.NotNil(t, c)
+	assert.Equal(t, model.CapabilityIntentClassification, c.modelName,
+		"empty modelName should default to the intent_classification capability constant")
+}
+
+// TestNewLLMIntentClassifier_ExplicitModelNamePreserved verifies that an
+// explicit modelName (endpoint or capability) overrides the default. This
+// is the existing escape hatch for deployments that want to point intent
+// classification at a specific endpoint by name.
+func TestNewLLMIntentClassifier_ExplicitModelNamePreserved(t *testing.T) {
+	c := NewLLMIntentClassifier(nil, "fast-classifier", nil)
+	require.NotNil(t, c)
+	assert.Equal(t, "fast-classifier", c.modelName)
 }

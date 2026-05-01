@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
+	"github.com/c360studio/semstreams/model"
 )
 
 func TestNormalizeLayerAnswer_StubWhenNoNormalizer(t *testing.T) {
@@ -271,5 +272,17 @@ func TestFinalizeExtractedEntries_AssignsFreshEntryIDs(t *testing.T) {
 			t.Errorf("duplicate EntryID %q", e.EntryID)
 		}
 		seen[e.EntryID] = true
+	}
+}
+
+// TestExtractionModelName_BoundToCapabilityConstant verifies the resolution
+// key used by the layer normalizer is the layer_normalization capability
+// constant, not a hardcoded "default" string. Operators binding the
+// capability in the registry get a dedicated route; unbound deployments
+// continue to fall through to defaults.model via resolveModelEndpoint.
+func TestExtractionModelName_BoundToCapabilityConstant(t *testing.T) {
+	if extractionModelName != model.CapabilityLayerNormalization {
+		t.Errorf("extractionModelName = %q, want model.CapabilityLayerNormalization (%q)",
+			extractionModelName, model.CapabilityLayerNormalization)
 	}
 }

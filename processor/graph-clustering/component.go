@@ -299,8 +299,12 @@ type Component struct {
 	enhancementWorker *clustering.EnhancementWorker
 	llmClient         llm.Client
 
-	// Review worker (optional, for anomaly approval workflow)
-	reviewWorker *inference.ReviewWorker
+	// Review worker (optional, for anomaly approval workflow). The review
+	// worker may use a dedicated LLM client when the operator binds
+	// model.CapabilityAnomalyReview to a different endpoint than
+	// community_summary; otherwise it shares llmClient.
+	reviewWorker    *inference.ReviewWorker
+	reviewLLMClient llm.Client // non-nil only when distinct from llmClient
 
 	// Lifecycle state
 	mu                sync.RWMutex
@@ -675,6 +679,13 @@ func (c *Component) Stop(timeout time.Duration) error {
 	if c.llmClient != nil {
 		if err := c.llmClient.Close(); err != nil {
 			c.logger.Warn("LLM client close error", slog.Any("error", err))
+		}
+	}
+
+	// Close the dedicated review LLM client if distinct from the shared one.
+	if c.reviewLLMClient != nil {
+		if err := c.reviewLLMClient.Close(); err != nil {
+			c.logger.Warn("review LLM client close error", slog.Any("error", err))
 		}
 	}
 
@@ -1200,16 +1211,26 @@ func (c *Component) monitorLLMHealth(ctx context.Context, endpointURL string, wo
 // startReviewWorker initializes and starts the anomaly review worker.
 // The review worker processes pending anomalies and can auto-approve/reject
 // based on confidence thresholds, optionally using LLM for uncertain cases.
+//
+// LLM client selection precedence:
+//  1. If model.CapabilityAnomalyReview is bound in the registry, create a
+//     dedicated client for that endpoint. Stored in c.reviewLLMClient for
+//     cleanup.
+//  2. Otherwise fall back to c.llmClient (the community_summary endpoint),
+//     preserving the pre-capability piggyback behavior. May be nil for
+//     human-only mode.
 func (c *Component) startReviewWorker(ctx context.Context) error {
 	// Create relationship applier for approved anomalies
 	// Uses the mutation API to go through graph-ingest for proper indexing
 	applier := inference.NewMutationRelationshipApplier(c.natsClient, c.logger)
 
-	// Create review worker - llmClient may be nil for human-only mode
+	reviewClient := c.resolveReviewLLMClient()
+
+	// Create review worker - reviewClient may be nil for human-only mode
 	reviewWorker, err := inference.NewReviewWorker(&inference.ReviewWorkerConfig{
 		AnomalyBucket: c.anomalyBucket,
 		Storage:       c.anomalyStorage,
-		LLMClient:     c.llmClient, // May be nil for human-only mode
+		LLMClient:     reviewClient,
 		Applier:       applier,
 		Config:        c.config.AnomalyConfig.Review,
 		Logger:        c.logger,
@@ -1227,11 +1248,56 @@ func (c *Component) startReviewWorker(ctx context.Context) error {
 
 	c.logger.Info("review worker started",
 		slog.Int("workers", c.config.AnomalyConfig.Review.Workers),
-		slog.Bool("llm_enabled", c.llmClient != nil),
+		slog.Bool("llm_enabled", reviewClient != nil),
+		slog.Bool("llm_dedicated", c.reviewLLMClient != nil),
 		slog.Float64("auto_approve_threshold", c.config.AnomalyConfig.Review.AutoApproveThreshold),
 		slog.Float64("auto_reject_threshold", c.config.AnomalyConfig.Review.AutoRejectThreshold))
 
 	return nil
+}
+
+// resolveReviewLLMClient returns the LLM client the review worker should
+// use. Creates a dedicated client only when CapabilityAnomalyReview is
+// *explicitly* bound in the registry — otherwise (capability not present,
+// or any client construction error) falls back to c.llmClient, preserving
+// the legacy piggyback on the community_summary endpoint.
+//
+// We check explicit binding via GetCapability rather than ResolveEndpoint
+// because Resolve falls through to defaults.model for unknown capabilities;
+// using ResolveEndpoint would create a dedicated client for every
+// deployment even when no operator opted in, which doubles the connection
+// pool against the same endpoint and defeats the point of the fallback.
+func (c *Component) resolveReviewLLMClient() llm.Client {
+	if c.modelRegistry == nil {
+		return c.llmClient
+	}
+	if c.modelRegistry.GetCapability(model.CapabilityAnomalyReview) == nil {
+		// Capability not explicitly bound — preserve legacy piggyback.
+		return c.llmClient
+	}
+	resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityAnomalyReview)
+	if err != nil {
+		c.logger.Warn("anomaly_review capability bound but endpoint resolution failed; falling back to community_summary client",
+			slog.Any("error", err))
+		return c.llmClient
+	}
+	client, err := llm.NewOpenAIClient(llm.OpenAIConfig{
+		BaseURL: resolved.URL,
+		Model:   resolved.Model,
+		APIKey:  resolved.APIKey,
+		Logger:  c.logger,
+	})
+	if err != nil {
+		c.logger.Warn("failed to create dedicated anomaly review LLM client; falling back to community_summary client",
+			slog.Any("error", err),
+			slog.String("endpoint", resolved.URL))
+		return c.llmClient
+	}
+	c.reviewLLMClient = client
+	c.logger.Info("anomaly review using dedicated LLM endpoint",
+		slog.String("endpoint", resolved.URL),
+		slog.String("model", resolved.Model))
+	return client
 }
 
 // ============================================================================

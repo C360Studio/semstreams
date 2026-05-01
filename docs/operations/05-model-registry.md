@@ -98,47 +98,57 @@ Defined in `model/registry.go:124-140`.
 
 ## LLM Capability Inventory
 
-The registry defines five capability constants in `model/registry.go:11-25`.
-Components resolve them via `model.ResolveEndpoint(registry, model.Capability*)`.
+The registry defines eight capability constants in `model/registry.go:11-37`.
+Components resolve them via `model.ResolveEndpoint(registry, model.Capability*)`
+or, where the call site has its own resolution chain, by passing the
+capability constant as the resolution key.
 
-| Capability | Constant | Caller | Workload tier | Default route |
+| Capability | Constant | Caller | Workload tier | Default route when unbound |
 |---|---|---|---|---|
 | `summarization` | `model.CapabilitySummarization` | agentic-loop context compaction (`processor/agentic-loop/component.go:184`) | User-facing, blocking — fires inline when a loop hits its token budget | Largest-context endpoint when no binding; ops/deep-research configs typically bind `"fast"` |
 | `community_summary` | `model.CapabilityCommunitySummary` | graph-clustering enhancement worker (`processor/graph-clustering/component.go:1072`) | Background batch — async after community detection | `seminstruct` |
 | `query_classification` | `model.CapabilityQueryClassification` | graph-query T3 classifier fallback (`processor/graph-query/component.go:372`) | User-facing, slow path — only fires when keyword/spatial/temporal classifiers fail | Unbound by default; degrades gracefully to keyword-only |
 | `answer_synthesis` | `model.CapabilityAnswerSynthesis` | graph-query `globalSearch` answer composition (`processor/graph-query/component.go:406`) | User-facing, blocking | Unbound by default; falls back to template synthesis |
 | `embedding` | `model.CapabilityEmbedding` | graph-embedding (`processor/graph-embedding/component.go:622`) | Background batch | `semembed` (HTTP embedder, **not** chat completions — different protocol) |
+| `intent_classification` | `model.CapabilityIntentClassification` | agentic-dispatch (`processor/agentic-dispatch/intent_classifier.go`) — fires on every incoming user message | User-facing, blocking — most-frequent user-facing LLM call in the system | Falls through to `defaults.model` |
+| `layer_normalization` | `model.CapabilityLayerNormalization` | agentic-dispatch (`processor/agentic-dispatch/normalize_extractor.go`) — extracts structured operating-model entries from freeform onboarding answers | User-facing, async during onboarding | Falls through to `defaults.model` |
+| `anomaly_review` | `model.CapabilityAnomalyReview` | graph-inference ReviewWorker (`graph/inference/review_worker.go`) — classifies suggested missing relationships | Background batch | Falls through to the `community_summary` endpoint (legacy piggyback preserved) |
 
 Per-capability **model selection guidance** (input/output envelope,
 required model traits, latency budget, suggested probe prompts) lives
 in [11-llm-routing-and-model-selection.md](11-llm-routing-and-model-selection.md).
 
-### Known Gaps — workloads that bypass the registry
+### Resolution semantics for the last three capabilities
 
-Three production LLM call sites are **not yet capability-bound**.
-Operators reading the registry have no dedicated dial for them; they
-inherit routing implicitly. A future cleanup pass will lift each into
-its own capability constant. Document them here so the gap is visible.
+`intent_classification`, `layer_normalization`, and `anomaly_review`
+were lifted into capabilities in Phase 2 from previously hardcoded call
+sites. To keep upgrades zero-ceremony, each has slightly different
+fallback semantics:
 
-| Site | File | Current routing | Why this matters |
-|---|---|---|---|
-| **Anomaly relationship review** | `graph/inference/review_worker.go:408` | Receives the `LLMClient` graph-clustering resolved via `community_summary`. No separate dial. | Anomaly review prompts are short and structured (APPROVE/REJECT). Community summarization prompts are open-ended narrative. They share an endpoint by accident, not design. |
-| **Onboarding layer normalization** | `processor/agentic-dispatch/normalize_extractor.go:43` | Hardcoded `extractionModelName = "default"` — resolves to whatever endpoint `defaults.model` names. | Looks like `defaults.model` is the dial, but it actually serves multiple unrelated workloads. Editing `defaults.model` for one purpose silently affects this call. |
-| **Intent classification** (every user message) | `processor/agentic-dispatch/intent_classifier.go:57` | `modelName` defaults to `"default"`; same fallback chain as above. | The most-frequent user-facing LLM call in the system. Fires on every user message with a 15s timeout. Operators must be able to bind it to a fast endpoint independently of the agentic chat itself. |
+- **`intent_classification` and `layer_normalization`** — when the
+  capability is not bound, the call-site's resolution chain falls
+  through to `defaults.model`. This is the same endpoint these calls
+  used pre-Phase-2 via the hardcoded `"default"` string. Operators who
+  previously tuned `defaults.model` for these workloads see no change;
+  binding the capability gives them a per-site override.
+- **`anomaly_review`** — when the capability is not bound, the review
+  worker reuses graph-clustering's `community_summary` LLM client, the
+  same endpoint it piggybacked on pre-Phase-2. Operators who want a
+  separate model for review (e.g. a smaller, faster classifier) bind
+  `anomaly_review` explicitly.
 
-If you hit the limits of these implicit routes today (e.g. you want a
-distinct fast endpoint for intent classification), the workaround is to
-set `defaults.model` to the endpoint that should serve all three of
-these calls collectively. There is no per-site override yet.
+In all three cases, **doing nothing on upgrade preserves prior
+behavior bit-for-bit.** Binding the new capability is opt-in.
 
 ## Defaults
 
 `defaults.model` is the endpoint used when a capability resolves nowhere
-else (no preferred chain, no fallback). It is also the **silent backstop
-for the three Known Gaps above** — operators should be aware that
-changing `defaults.model` affects intent classification, layer
-normalization, and the implicit anomaly-review path even though the
-registry doesn't show those bindings explicitly.
+else (no preferred chain, no fallback). For the `intent_classification`
+and `layer_normalization` capabilities, `defaults.model` is the
+fallback target when those capabilities are not bound — preserving the
+pre-Phase-2 hardcoded behavior. Operators who want per-site routing for
+those workloads should bind the relevant capability explicitly rather
+than reshaping `defaults.model`.
 
 `defaults.capability` is used when an `AgentRequest` arrives without a
 specified `Model` or `Capability`. The named capability is resolved
