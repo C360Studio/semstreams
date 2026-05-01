@@ -35,12 +35,13 @@ const extractionMaxTokens = 2048
 // AgentRequest below) overrides endpoint and capability defaults.
 const extractionTimeoutDefault = 30 * time.Second
 
-// extractionModelName is the capability/endpoint name used to resolve a
-// model for normalization. The registry resolves it through the standard
-// fallback chain (configured name → fallback chain → default), so a
-// deployment that registers a "default" capability (the convention) gets
-// normalization for free without a dispatch config knob.
-const extractionModelName = "default"
+// extractionModelName is the capability name used to resolve a model for
+// normalization. The registry resolves it through the standard fallback
+// chain (configured name → fallback chain → defaults.model). When the
+// capability is unbound, resolveModelEndpoint falls through to
+// defaults.model — preserving the pre-capability behavior where this call
+// site shared whatever endpoint defaults.model named.
+const extractionModelName = model.CapabilityLayerNormalization
 
 // extractionAnswerMaxBytes caps how much of a freeform user answer is
 // forwarded to the model. The bound mitigates two classes of failure:

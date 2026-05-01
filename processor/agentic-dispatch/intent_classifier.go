@@ -52,9 +52,15 @@ type LLMIntentClassifier struct {
 
 // NewLLMIntentClassifier creates a classifier that uses the model registry
 // to resolve an endpoint and make classification calls.
+//
+// The default modelName is model.CapabilityIntentClassification. When that
+// capability is unbound in the registry, resolveEndpoint walks the standard
+// fallback chain (configured name → fallback chain → defaults.model), so
+// existing deployments without an explicit binding continue to use
+// defaults.model exactly as they did before this capability existed.
 func NewLLMIntentClassifier(registry model.RegistryReader, modelName string, logger *slog.Logger) *LLMIntentClassifier {
 	if modelName == "" {
-		modelName = "default"
+		modelName = model.CapabilityIntentClassification
 	}
 	return &LLMIntentClassifier{
 		modelRegistry: registry,

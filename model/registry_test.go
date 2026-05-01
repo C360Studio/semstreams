@@ -949,3 +949,32 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+// TestCapabilityConstants_Values pins the wire string for every capability
+// constant. The strings appear in production model_registry JSON so they
+// are part of the operator-facing config contract — renaming one is a
+// breaking change. Locking the value in a test makes accidental drift
+// impossible.
+func TestCapabilityConstants_Values(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"summarization", CapabilitySummarization, "summarization"},
+		{"community_summary", CapabilityCommunitySummary, "community_summary"},
+		{"embedding", CapabilityEmbedding, "embedding"},
+		{"query_classification", CapabilityQueryClassification, "query_classification"},
+		{"answer_synthesis", CapabilityAnswerSynthesis, "answer_synthesis"},
+		{"intent_classification", CapabilityIntentClassification, "intent_classification"},
+		{"layer_normalization", CapabilityLayerNormalization, "layer_normalization"},
+		{"anomaly_review", CapabilityAnomalyReview, "anomaly_review"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("constant = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
