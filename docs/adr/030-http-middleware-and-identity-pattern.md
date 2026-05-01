@@ -2,20 +2,25 @@
 
 ## Status
 
-**Phase 0 (beta.22) and Phase 1 (beta.23) shipped (2026-04-29).**
-Phases 2 (NATS message-header identity) and 3 (server-side bypass
-tokens) remain deferred until the pattern problem becomes a felt
-friction point or a security incident forces them.
+**Phases 0 (beta.22), 1 (beta.23), and 2 (beta.33) shipped.**
+Phase 3 (server-side bypass tokens) remains deferred until the
+forgery surface becomes a felt pain point or a regulated-deployment
+customer requires it.
 
 - Phase 0 (beta.22): `agenticdispatch.IdentityFromRequest` and
-  `WithIdentity` helpers in
-  `processor/agentic-dispatch/identity.go` — the small forward-
-  compatible seam handlers consume.
+  `WithIdentity` helpers — the small forward-compatible seam
+  handlers consume.
 - Phase 1 (beta.23): `service.HTTPMiddleware` type and
   `(*service.Manager).UseHTTPMiddleware` setter — the framework-
   level middleware chain that wraps every registered route.
   Products plug in their auth / logging / recovery / rate-limit
   middleware here. The framework ships zero default middleware.
+- Phase 2 (beta.33): Identity promoted to `*auth.Identity` struct
+  in new `auth/` package; NATS `X-Caller-*` headers as the wire
+  contract; `natsclient` auto-inject/extract at all publish and
+  subscribe sites; rule engine `$caller.*` condition support.
+  `agenticdispatch/identity.go` deleted — use `auth/` instead.
+  Implemented as tag 2 of the ADR-032 programme.
 
 ## Context
 
@@ -193,10 +198,16 @@ This phase closes the M2 forgery finding in
   the bare mux with no overhead. The framework ships zero default
   middleware; products supply auth / logging / recovery / rate
   limiting at boot.
-- Phase 2 has no committed tag. The trigger is either a security
-  audit finding the wire-forgery surface, or a product needing
-  cross-process identity propagation that body fields can't
-  carry (e.g., signed delegation chains).
+- Phase 2 (beta.33) is shipped via tag 2 of the ADR-032 programme.
+  Identity promoted from `string` to `*auth.Identity{ID, Role, Org,
+  Source}` in the new `auth/` top-level package. `agenticdispatch/
+  identity.go` deleted; `auth.WithIdentity` / `auth.IdentityFromContext`
+  / `auth.IdentityFromRequest` are the canonical helpers. NATS message
+  headers `X-Caller-{Id,Role,Org,Source}` are the wire format;
+  `natsclient` injects at all 8 publish sites and extracts at all 3
+  subscribe sites automatically. Rule engine expression evaluator gains
+  `$caller.*` condition support (previously substitution-only). See
+  `docs/operations/migration-beta32-to-beta33.md` for the migration guide.
 - Phase 3 has no committed tag. Trigger: a real production
   exploitation of the forgery surface, or a regulated-deployment
   customer asking for it.
