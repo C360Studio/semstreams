@@ -92,8 +92,18 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 	}
 }
 
-// evaluateConditionWithState evaluates a single condition, resolving $state.* fields
-// from stateFields before falling through to entity triple evaluation.
+// evaluateConditionWithState evaluates a single condition, resolving $state.* and
+// $caller.* pseudo-fields from stateFields before falling through to entity triple
+// evaluation. Caller fields are keyed as "$caller.id", "$caller.role", "$caller.org"
+// in stateFields and populated by the stateful evaluator from Evaluation.Caller.
+//
+// Missing caller semantics: if a $caller.* key is absent (nil caller or field not
+// populated), the condition returns false — the same conservative "field absent"
+// behaviour as $state.* and optional entity fields. This means:
+//   - $caller.role == "admin" with no caller → false  (correct: deny no claim)
+//   - $caller.role != "admin" with no caller → false  (conservative: no identity at all
+//     means the condition doesn't match, preventing cron/KV-watch triggers from being
+//     incorrectly admitted by a != guard that was intended only for authenticated callers)
 func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, stateFields StateFields, condition ConditionExpression) (bool, error) {
 	// Check for $state.* pseudo-fields first
 	if strings.HasPrefix(condition.Field, "$state.") {
@@ -109,6 +119,45 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 		}
 
 		// Get operator function
+		opFunc, opExists := e.operators[condition.Operator]
+		if !opExists {
+			return false, &EvaluationError{
+				Field:    condition.Field,
+				Operator: condition.Operator,
+				Message:  "unsupported operator",
+			}
+		}
+
+		result, err := opFunc(fieldValue, condition.Value)
+		if err != nil {
+			return false, &EvaluationError{
+				Field:    condition.Field,
+				Operator: condition.Operator,
+				Message:  "operator execution failed",
+				Err:      err,
+			}
+		}
+		return result, nil
+	}
+
+	// Check for $caller.* pseudo-fields. Keys are injected into stateFields by the
+	// stateful evaluator (e.g. "$caller.id", "$caller.role", "$caller.org").
+	// Absent keys — whether because caller was nil or the specific sub-field is
+	// unknown — always return false (field-absent semantic, same as $state.*).
+	// This ensures cron and KV-watch triggers (no caller) never accidentally satisfy
+	// a $caller.* guard designed for authenticated callers.
+	if strings.HasPrefix(condition.Field, "$caller.") {
+		fieldValue, exists := stateFields[condition.Field]
+		if !exists {
+			if condition.Required {
+				return false, &EvaluationError{
+					Field:   condition.Field,
+					Message: "required caller field not found",
+				}
+			}
+			return false, nil
+		}
+
 		opFunc, opExists := e.operators[condition.Operator]
 		if !opExists {
 			return false, &EvaluationError{
