@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/c360studio/semstreams/auth"
 )
 
 // DefaultRequestTimeout is the default timeout for request/reply operations.
@@ -54,6 +56,7 @@ func (c *Client) Request(ctx context.Context, subject string, data []byte, timeo
 	msg := nats.NewMsg(subject)
 	msg.Data = data
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	// Perform the request using NATS request/reply
 	reply, err := conn.RequestMsgWithContext(reqCtx, msg)
@@ -117,6 +120,7 @@ func (c *Client) RequestWithHeaders(
 
 	// Inject trace headers (in addition to user headers)
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	// Perform the request
 	reply, err := conn.RequestMsgWithContext(reqCtx, msg)
@@ -171,6 +175,7 @@ func (c *Client) ReplyWithHeaders(ctx context.Context, replyTo string, data []by
 
 	// Inject trace headers
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	return conn.PublishMsg(msg)
 }
@@ -197,6 +202,9 @@ func (c *Client) SubscribeForRequests(
 		msgCtx := ctx
 		if tc := ExtractTrace(msg); tc != nil {
 			msgCtx = ContextWithTrace(ctx, tc)
+		}
+		if id := auth.ExtractIdentity(msg); id != nil {
+			msgCtx = auth.WithIdentity(msgCtx, id)
 		}
 
 		// Create per-message context with timeout
@@ -292,6 +300,7 @@ func (c *Client) RequestWithRetry(
 		msg := nats.NewMsg(subject)
 		msg.Data = data
 		InjectTrace(ctx, msg)
+		auth.InjectIdentity(ctx, msg)
 
 		reply, err := conn.RequestMsgWithContext(reqCtx, msg)
 		cancel()

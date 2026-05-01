@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/auth"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -219,6 +220,9 @@ func (c *Client) ConsumeStreamWithConfig(
 		msgCtx := ctx
 		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
 			msgCtx = ContextWithTrace(ctx, tc)
+		}
+		if id := auth.ExtractIdentityFromJetStream(msg.Headers()); id != nil {
+			msgCtx = auth.WithIdentity(msgCtx, id)
 		}
 
 		// Create per-message context with configurable timeout
@@ -451,6 +455,7 @@ func (c *Client) PublishToStreamWithAck(
 		Data:    data,
 	}
 	InjectTrace(ctx, msg)
+	auth.InjectIdentity(ctx, msg)
 
 	ack, err := js.PublishMsg(ctx, msg)
 	if err != nil {
