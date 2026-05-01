@@ -246,6 +246,19 @@ BEFORE the dispatch handler reads body claims, so header identity takes preceden
   Empty body fields are treated as "no claim" and fall through — they do not strip an
   authenticated identity already in ctx (privilege-escalation guard, carried from beta.22).
 
+- **`$`-prefixed fields are reserved pseudo-field namespace; body fields cannot
+  populate them.** As a defense-in-depth security guarantee added in tag 2, the rule
+  engine's body-field lookup (`extractNestedValue`) refuses any field starting with
+  `$`. A message body like `{"$caller": {"role": "admin"}}` does NOT satisfy a
+  `$caller.role == "admin"` condition — the body lookup returns "not found," and the
+  trusted re-evaluation pass (which always runs for rules with `$caller.*` conditions)
+  resolves the value from the actual caller context (or treats the field as absent
+  if no caller is in scope, returning false uniformly for all operators). This applies
+  to all reserved namespaces: `$caller.*`, `$state.*`, `$prev.*`, `$schedule.*`, and
+  any future `$tenant.*`. Authors who happen to use a `$`-prefixed body field name
+  for unrelated reasons should rename the field — it will silently fail to match
+  rule conditions otherwise.
+
 ## Forward look
 
 Tag 3 (beta.34) lands shadow mode at the rule level, `count_in_window` windowed-aggregate
