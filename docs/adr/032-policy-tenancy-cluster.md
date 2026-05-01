@@ -2,14 +2,21 @@
 
 ## Status
 
-**Proposed (2026-04-30).** Single ADR covering three coordinated tracks
+**Accepted — In Progress (2026-04-30).** Single ADR covering three coordinated tracks
 because they surfaced together in a framework review and they are
 operationally coupled — adopting any one in production exposes the
 others.
 
-No tag is committed to any track. This ADR captures the direction so
-future design pressure has a target. Phase 0 (this document) is the
-only thing landing today.
+### Implementation Status
+
+| Tag | Beta | Status | Date | Notes |
+|---|---|---|---|---|
+| 1 | beta.32 | **Shipped** | 2026-05-01 | `$caller.{id,role,org}` substitution + `deny` action + `cronFireStatusDenied`. |
+| 2 | beta.33 | Pending | — | Identity-as-struct + NATS-header propagation |
+| 3 | beta.34 | Pending | — | Shadow mode + `count_in_window` + `negate` + filter-output bridge |
+| 4 | beta.35 | Pending | — | Org wiring pass (HARD BREAKING) |
+| 5 | beta.36 | Pending | — | JetStream cluster docs + reconnect defaults |
+| 6 | beta.37 | Pending | — | Cert-based auth + per-org-account hardening |
 
 The forcing function: a 2026-04-30 review of [Microsoft Agent
 Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit)
