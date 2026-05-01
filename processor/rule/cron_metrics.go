@@ -120,7 +120,7 @@ func createAndRegisterCronMetrics(registry *metric.MetricsRegistry) *cronMetrics
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "rule_fires_total",
-			Help:      "Cron rule fire attempts by rule and outcome (success/error/panic/cooldown_skipped)",
+			Help:      "Cron rule fire attempts by rule and outcome (success/error/panic/cooldown_skipped/inflight_skipped/denied)",
 		}, []string{"rule_id", "status"}),
 
 		fireDurationSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{

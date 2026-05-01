@@ -40,6 +40,11 @@ const (
 	ActionTypeDeny = "deny"
 )
 
+// PredicateRuleDeny is the audit-triple predicate written by deny actions.
+// Downstream rules that gate on denials should match against this constant
+// so they stay in sync with any future rename.
+const PredicateRuleDeny = "rule.deny"
+
 // Action represents an action to execute when a rule fires.
 // Actions are triggered by state transitions (OnEnter, OnExit) or
 // while a condition remains true (WhileTrue).
@@ -856,7 +861,7 @@ func (e *ActionExecutor) executeDeny(ctx context.Context, action Action, ec *Exe
 	if e.tripleMutator != nil {
 		auditTriple := message.Triple{
 			Subject:    ruleID,
-			Predicate:  "rule.deny",
+			Predicate:  PredicateRuleDeny,
 			Object:     reason,
 			Source:     "rule_engine",
 			Timestamp:  time.Now(),

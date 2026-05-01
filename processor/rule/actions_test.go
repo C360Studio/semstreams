@@ -2055,8 +2055,8 @@ func TestExecuteDeny_WritesAuditTriple(t *testing.T) {
 
 	require.Len(t, mut.addedTriples, 1, "AddTriple must be called exactly once")
 	triple := mut.addedTriples[0]
-	assert.Equal(t, "rule.deny", triple.Predicate,
-		"audit triple predicate must be %q", "rule.deny")
+	assert.Equal(t, PredicateRuleDeny, triple.Predicate,
+		"audit triple predicate must be %q", PredicateRuleDeny)
 	assert.Equal(t, "blocked by policy", triple.Object,
 		"audit triple object must be the reason string")
 }

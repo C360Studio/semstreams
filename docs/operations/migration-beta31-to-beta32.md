@@ -89,13 +89,13 @@ human-readable reason for logging or downstream use `errors.As`.
 triple:
 
 ```
-subject:  <entity ID under evaluation>
+subject:  <originating rule ID>
 predicate: rule.deny
 object:   <substituted reason string>
 ```
 
 Audit failure (NATS unavailable, graph write error) does not flip the verdict
-from deny to allow. The deny stands; the audit miss is logged at Warn level.
+from deny to allow. The deny stands; the audit miss is logged at Error level.
 
 **Action-list interaction.** A `deny` at any position in a `WhileTrue` or
 `actions` list terminates subsequent actions for that evaluation cycle. The

@@ -283,7 +283,7 @@ func TestIntegration_DenyFlow(t *testing.T) {
 
 		viewerActions := []rule.Action{
 			publishActionForTest("deny.test.publish"),
-			{Type: "deny", Reason: "user $caller.id is not admin"},
+			{Type: rule.ActionTypeDeny, Reason: "user $caller.id is not admin"},
 			publishActionForTest("deny.test.publish"),
 		}
 
@@ -332,8 +332,8 @@ func TestIntegration_DenyFlow(t *testing.T) {
 			"deny action must write exactly one audit triple")
 
 		at := auditTriples[0]
-		assert.Equal(t, "rule.deny", at.Predicate,
-			"audit triple predicate must be 'rule.deny'")
+		assert.Equal(t, rule.PredicateRuleDeny, at.Predicate,
+			"audit triple predicate must be %q", rule.PredicateRuleDeny)
 		assert.Equal(t, "user viewer-user-1 is not admin", at.Object,
 			"audit triple object must carry the substituted reason")
 		assert.Equal(t, "role-gate-rule", at.Subject,
