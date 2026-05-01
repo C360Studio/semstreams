@@ -164,8 +164,17 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
 	return []Event{&event}, nil
 }
 
-// extractNestedValue extracts a value from nested map using dot notation
+// extractNestedValue extracts a value from nested map using dot notation.
+//
+// Security invariant: fields starting with "$" are reserved pseudo-field
+// namespaces and must not be resolvable from body data. This mirrors the
+// same guard in ExpressionRule.extractNestedValue.
 func extractNestedValue(data map[string]interface{}, field string) interface{} {
+	// Refuse to resolve reserved pseudo-field namespaces from body data.
+	if strings.HasPrefix(field, "$") {
+		return nil
+	}
+
 	parts := strings.Split(field, ".")
 	current := data
 

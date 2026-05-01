@@ -131,13 +131,21 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	// Re-evaluate conditions that reference $caller.* pseudo-fields. The message-path
 	// Rule.Evaluate(messages) call in the processor cannot see caller context (the Rule
 	// interface carries no identity), so CurrentlyMatching is always false for pure
-	// $caller.* conditions. We correct that here when a caller is in scope.
+	// $caller.* conditions. We correct that here when the rule has caller conditions.
 	//
-	// This re-evaluation only changes currentlyMatching when the rule has $caller.*
-	// conditions AND a caller is present. Without a caller (cron, KV-watch), the
-	// absent-field semantic in the evaluator returns false for all $caller.* guards,
-	// keeping the gate closed for anonymous fires.
-	if ev.Caller != nil && hasCallerConditions(ev.Rule) {
+	// SECURITY: the gate deliberately omits the "ev.Caller != nil" half. The previous
+	// dual-gate (Caller!=nil && hasCallerConditions) allowed a body-spoof bypass:
+	// with Caller==nil the gate was skipped, leaving a body-resolved currentlyMatching
+	// value (from ExpressionRule.evaluateConditions) flowing through to action dispatch.
+	// An attacker publishing {"$caller": {"role": "admin"}} with no X-Caller-* headers
+	// could satisfy a positive-guard $caller.role==admin condition that way.
+	//
+	// Dropping the Caller!=nil half means re-eval always runs for caller-conditioned
+	// rules. With Caller==nil, reEvaluateWithCallerFields injects no $caller.* keys
+	// into stateFields, and the absent-field semantic in the expression evaluator
+	// returns false for ALL operators — the correct "no identity" outcome for
+	// cron and KV-watch fires.
+	if hasCallerConditions(ev.Rule) {
 		currentlyMatching = e.reEvaluateWithCallerFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Caller, currentlyMatching)
 	}
 
@@ -406,10 +414,20 @@ func (e *StatefulEvaluator) reEvaluateWithCallerFields(
 	caller *CallerContext,
 	currentlyMatching bool,
 ) bool {
-	callerFields := expression.StateFields{
-		"$caller.id":   caller.ID,
-		"$caller.role": caller.Role,
-		"$caller.org":  caller.Org,
+	// Populate $caller.* keys only when a caller is present. A nil caller
+	// (cron, KV-watch, any anonymous fire) leaves these keys absent from
+	// callerFields, which causes the expression evaluator's absent-field
+	// branch to return false for every $caller.* condition — the correct
+	// "no identity" semantic regardless of which operator is used (eq, ne, in, ...).
+	//
+	// Do NOT populate empty-string values for nil caller: that would change
+	// the semantics for "ne" guards ($caller.role != "admin" with nil caller
+	// would match "" != "admin" = true, incorrectly admitting anonymous fires).
+	callerFields := expression.StateFields{}
+	if caller != nil {
+		callerFields["$caller.id"] = caller.ID
+		callerFields["$caller.role"] = caller.Role
+		callerFields["$caller.org"] = caller.Org
 	}
 	for field, prevValue := range prevState.FieldValues {
 		callerFields["$prev."+field] = prevValue
