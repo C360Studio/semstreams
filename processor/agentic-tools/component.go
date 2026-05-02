@@ -647,25 +647,24 @@ func (c *Component) incrementErrors() {
 	c.mu.Unlock()
 }
 
-// RegisterToolExecutor registers a tool executor with the component
-// This method extracts all tools from the executor and registers them individually
+// RegisterToolExecutor registers a tool executor with the component.
+// Delegates to (*ExecutorRegistry).RegisterExecutor, which maps every name
+// returned by executor.ListTools() to the executor atomically. Atomicity
+// matters because partial commits on collision would leave dispatch in a
+// half-wired state — a name that earlier in the slice succeeded would
+// dispatch correctly while later names that collided would 400-not-found,
+// and the caller has no programmatic way to roll back.
 func (c *Component) RegisterToolExecutor(executor ToolExecutor) error {
-	// Get all tools from the executor
-	tools := executor.ListTools()
-
-	// Register each tool
-	for _, tool := range tools {
-		if err := c.registry.RegisterTool(tool.Name, executor); err != nil {
-			return err
-		}
+	if err := c.registry.RegisterExecutor(executor); err != nil {
+		return err
 	}
 
-	// Record total registered tools
 	if c.metrics != nil {
+		toolCount := len(executor.ListTools())
 		allTools := c.registry.ListTools()
 		c.metrics.recordToolsRegistered(len(allTools))
 		c.logger.Info("Tools registered",
-			slog.Int("count", len(tools)),
+			slog.Int("count", toolCount),
 			slog.Int("total", len(allTools)))
 	}
 

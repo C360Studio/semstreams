@@ -7,19 +7,13 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
-// Persona CRUD tool names. Single source of truth for publish_agent.tools
-// scoping.
-const (
-	personaToolCreate = "create_persona"
-	personaToolUpdate = "update_persona"
-	personaToolDelete = "delete_persona"
-	personaToolList   = "list_personas"
-	personaToolGet    = "get_persona"
-)
-
-// registerPersonas wires PersonaExecutor. A nil manager is a deployment
-// choice (skip + nil); a registry-level failure (duplicate name)
-// propagates so RegisterBuiltins can surface it at boot.
+// registerPersonas wires PersonaExecutor. PersonaExecutor exposes its tool
+// set via ListTools(); RegisterExecutor maps each advertised name to the
+// executor.
+//
+// A nil manager is a deployment choice (skip + nil); a registry-level
+// failure (duplicate name) propagates so RegisterBuiltins can surface it
+// at boot.
 func registerPersonas(tools *agentictools.ExecutorRegistry, manager PersonaManager, logger *slog.Logger) error {
 	if manager == nil {
 		logger.Debug("persona CRUD tools disabled: no PersonaManager provided")
@@ -27,19 +21,10 @@ func registerPersonas(tools *agentictools.ExecutorRegistry, manager PersonaManag
 	}
 
 	executor := NewPersonaExecutor(manager)
-	toolNames := []string{
-		personaToolCreate,
-		personaToolUpdate,
-		personaToolDelete,
-		personaToolList,
-		personaToolGet,
-	}
-	for _, name := range toolNames {
-		if err := tools.RegisterTool(name, executor); err != nil {
-			return fmt.Errorf("register persona tool %q: %w", name, err)
-		}
+	if err := tools.RegisterExecutor(executor); err != nil {
+		return fmt.Errorf("register persona tools: %w", err)
 	}
 	logger.Info("Registered persona CRUD tools",
-		slog.Int("count", len(toolNames)))
+		slog.Int("count", len(executor.ListTools())))
 	return nil
 }

@@ -29,7 +29,12 @@ var entityStatesBucketConfig = jetstream.KeyValueConfig{
 	TTL:     24 * time.Hour,
 }
 
-// registerGraphQuery wires the query_entity tool against ENTITY_STATES.
+// registerGraphQuery wires GraphQueryExecutor against ENTITY_STATES.
+// GraphQueryExecutor exposes five tools (query_entity, query_entities,
+// query_relationships, query_neighbors, query_by_type) via ListTools();
+// RegisterExecutor maps each advertised name to the executor so dispatch
+// resolves any of the five.
+//
 // The bucket open is wrapped in retry.Quick so a transient NATS hiccup
 // at boot doesn't silently disable the tool for the process lifetime.
 // After retries are exhausted we fall through to warn-and-skip — a
@@ -37,13 +42,11 @@ var entityStatesBucketConfig = jetstream.KeyValueConfig{
 // A registry-level failure (duplicate name) propagates so
 // RegisterBuiltins can surface it at boot.
 func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger) error {
-	const toolName = "query_entity"
-
 	bucket, err := retry.DoWithResult(ctx, retry.Quick(), func() (jetstream.KeyValue, error) {
 		return natsClient.CreateKeyValueBucket(ctx, entityStatesBucketConfig)
 	})
 	if err != nil {
-		logger.Warn("query_entity tool disabled: could not open entity-states bucket after retries",
+		logger.Warn("graph query tools disabled: could not open entity-states bucket after retries",
 			slog.String("bucket", entityStatesBucket),
 			slog.Any("error", err))
 		return nil
@@ -51,11 +54,12 @@ func registerGraphQuery(ctx context.Context, tools *agentictools.ExecutorRegistr
 
 	store := natsClient.NewKVStore(bucket)
 	executor := NewGraphQueryExecutor(&graphQueryKVAdapter{store: store})
-	if err := tools.RegisterTool(toolName, executor); err != nil {
-		return fmt.Errorf("register query_entity: %w", err)
+	if err := tools.RegisterExecutor(executor); err != nil {
+		return fmt.Errorf("register graph query tools: %w", err)
 	}
-	logger.Info("Registered query_entity tool",
-		slog.String("bucket", entityStatesBucket))
+	logger.Info("Registered graph query tools",
+		slog.String("bucket", entityStatesBucket),
+		slog.Int("count", len(executor.ListTools())))
 	return nil
 }
 

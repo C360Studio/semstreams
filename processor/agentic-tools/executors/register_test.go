@@ -125,8 +125,8 @@ func TestRegisterBuiltins_NilNATSClientSkipsStatefulTools(t *testing.T) {
 	}
 
 	names := reg.ListTools()
-	if !containsName(names, ruleToolList) {
-		t.Errorf("registerRules should fire even with nil NATSClient; %q not found", ruleToolList)
+	if !containsName(names, "list_rules") {
+		t.Errorf("registerRules should fire even with nil NATSClient; %q not found", "list_rules")
 	}
 	// Stateful tools should NOT be present.
 	if containsName(names, "read_loop_result") {

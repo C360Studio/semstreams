@@ -217,6 +217,202 @@ func TestExecutorRegistry_ListTools(t *testing.T) {
 	}
 }
 
+// TestExecutorRegistry_ListTools_DedupesAcrossEntries reproduces the
+// duplicate-advertise bug surfaced by semspec against beta.34: a multi-tool
+// executor registered under each of its tool names via RegisterTool-in-loop
+// caused ListTools() to emit N×N entries (one full ListTools() set per
+// registered key). Anthropic's API rejects duplicate tool names with 400.
+//
+// The fix: ListTools() dedups by Name. Five entries pointing at one
+// executor whose ListTools() returns five definitions should yield five
+// unique definitions, not 25.
+func TestExecutorRegistry_ListTools_DedupesAcrossEntries(t *testing.T) {
+	registry := agentictools.NewExecutorRegistry()
+
+	multiToolDefs := []agentic.ToolDefinition{
+		{Name: "create_rule", Description: "create"},
+		{Name: "update_rule", Description: "update"},
+		{Name: "delete_rule", Description: "delete"},
+		{Name: "list_rules", Description: "list"},
+		{Name: "get_rule", Description: "get"},
+	}
+	executor := &mockToolExecutor{
+		listToolsFunc: func() []agentic.ToolDefinition { return multiToolDefs },
+	}
+
+	// Pattern A: register the same executor under each of its tool names
+	// (the broken-but-still-shipping shape from beta.33's register_rules.go).
+	for _, def := range multiToolDefs {
+		if err := registry.RegisterTool(def.Name, executor); err != nil {
+			t.Fatalf("RegisterTool(%s) failed: %v", def.Name, err)
+		}
+	}
+
+	got := registry.ListTools()
+	if len(got) != len(multiToolDefs) {
+		t.Fatalf("ListTools() returned %d defs, want %d (one per unique tool name) — duplicates would explode this to %d",
+			len(got), len(multiToolDefs), len(multiToolDefs)*len(multiToolDefs))
+	}
+
+	seen := map[string]bool{}
+	for _, def := range got {
+		if seen[def.Name] {
+			t.Errorf("ListTools() returned duplicate %q", def.Name)
+		}
+		seen[def.Name] = true
+	}
+}
+
+// TestExecutorRegistry_RegisterExecutor_AllNamesDispatch reproduces the
+// dispatch-gap bug surfaced by semspec against beta.34: a multi-tool
+// executor registered under one canonical name (Pattern B from
+// register_graph_query.go) advertised all five tool defs but the registry
+// only knew the canonical name. The other four tools 400-not-found at
+// dispatch despite being advertised.
+//
+// The fix: RegisterExecutor maps each ListTools() entry's Name to the
+// executor, so dispatch resolves any of the five names.
+func TestExecutorRegistry_RegisterExecutor_AllNamesDispatch(t *testing.T) {
+	registry := agentictools.NewExecutorRegistry()
+
+	multiToolDefs := []agentic.ToolDefinition{
+		{Name: "query_entity", Description: "single"},
+		{Name: "query_entities", Description: "batch"},
+		{Name: "query_relationships", Description: "rels"},
+		{Name: "query_neighbors", Description: "hops"},
+		{Name: "query_by_type", Description: "by-type"},
+	}
+	executor := &mockToolExecutor{
+		listToolsFunc: func() []agentic.ToolDefinition { return multiToolDefs },
+		returnContent: "ok",
+	}
+
+	if err := registry.RegisterExecutor(executor); err != nil {
+		t.Fatalf("RegisterExecutor() failed: %v", err)
+	}
+
+	// Every advertised name must dispatch — no ErrToolNotFound.
+	for _, def := range multiToolDefs {
+		ctx := context.Background()
+		result, err := registry.Execute(ctx, agentic.ToolCall{
+			ID:   "call-1",
+			Name: def.Name,
+		})
+		if err != nil {
+			t.Errorf("Execute(%s) returned err = %v, want nil", def.Name, err)
+		}
+		if result.Error != "" {
+			t.Errorf("Execute(%s) result.Error = %q, want empty", def.Name, result.Error)
+		}
+	}
+
+	// And ListTools() emits exactly the five advertised defs (set equality,
+	// not just count — guards against a regression where dispatch works but
+	// ListTools silently drops or renames a tool).
+	got := registry.ListTools()
+	if len(got) != len(multiToolDefs) {
+		t.Errorf("ListTools() count = %d, want %d", len(got), len(multiToolDefs))
+	}
+	gotNames := map[string]bool{}
+	for _, def := range got {
+		gotNames[def.Name] = true
+	}
+	for _, expected := range multiToolDefs {
+		if !gotNames[expected.Name] {
+			t.Errorf("ListTools() missing %q", expected.Name)
+		}
+	}
+}
+
+func TestExecutorRegistry_RegisterExecutor_ValidationFailures(t *testing.T) {
+	t.Run("nil executor", func(t *testing.T) {
+		registry := agentictools.NewExecutorRegistry()
+		if err := registry.RegisterExecutor(nil); err == nil {
+			t.Error("RegisterExecutor(nil) returned nil, want error")
+		}
+	})
+
+	t.Run("empty ListTools", func(t *testing.T) {
+		registry := agentictools.NewExecutorRegistry()
+		executor := &mockToolExecutor{
+			listToolsFunc: func() []agentic.ToolDefinition { return nil },
+		}
+		if err := registry.RegisterExecutor(executor); err == nil {
+			t.Error("RegisterExecutor(empty) returned nil, want error")
+		}
+	})
+
+	t.Run("empty tool Name in defs", func(t *testing.T) {
+		registry := agentictools.NewExecutorRegistry()
+		executor := &mockToolExecutor{
+			listToolsFunc: func() []agentic.ToolDefinition {
+				return []agentic.ToolDefinition{{Name: ""}}
+			},
+		}
+		if err := registry.RegisterExecutor(executor); err == nil {
+			t.Error("RegisterExecutor with empty-name def returned nil, want error")
+		}
+	})
+
+	t.Run("name collision at index 1 rolls back atomically", func(t *testing.T) {
+		registry := agentictools.NewExecutorRegistry()
+		// Pre-occupy "tool_b" so the second registration's second name collides.
+		preExisting := &mockToolExecutor{name: "tool_b", returnContent: "pre"}
+		if err := registry.RegisterTool("tool_b", preExisting); err != nil {
+			t.Fatalf("seed RegisterTool: %v", err)
+		}
+
+		newExecutor := &mockToolExecutor{
+			listToolsFunc: func() []agentic.ToolDefinition {
+				return []agentic.ToolDefinition{
+					{Name: "tool_a"},
+					{Name: "tool_b"}, // collides
+					{Name: "tool_c"},
+				}
+			},
+		}
+		if err := registry.RegisterExecutor(newExecutor); err == nil {
+			t.Fatal("RegisterExecutor with colliding name returned nil, want error")
+		}
+
+		// Atomicity: tool_a and tool_c MUST NOT have been committed.
+		// Only the pre-existing tool_b survives.
+		if registry.GetTool("tool_a") != nil {
+			t.Error("partial commit: tool_a was registered despite later collision")
+		}
+		if registry.GetTool("tool_c") != nil {
+			t.Error("partial commit: tool_c was registered despite earlier collision in defs")
+		}
+	})
+
+	t.Run("name collision at index 0 commits nothing", func(t *testing.T) {
+		// Distinct from the index-1 test: proves the early-validation exit
+		// doesn't accidentally commit later names (tool_a). Today the
+		// two-pass structure makes this trivially true; the assertion exists
+		// so a future refactor that interleaves validate + commit fails here.
+		registry := agentictools.NewExecutorRegistry()
+		preExisting := &mockToolExecutor{name: "tool_b", returnContent: "pre"}
+		if err := registry.RegisterTool("tool_b", preExisting); err != nil {
+			t.Fatalf("seed RegisterTool: %v", err)
+		}
+
+		newExecutor := &mockToolExecutor{
+			listToolsFunc: func() []agentic.ToolDefinition {
+				return []agentic.ToolDefinition{
+					{Name: "tool_b"}, // collides immediately
+					{Name: "tool_a"},
+				}
+			},
+		}
+		if err := registry.RegisterExecutor(newExecutor); err == nil {
+			t.Fatal("RegisterExecutor with index-0 collision returned nil, want error")
+		}
+		if registry.GetTool("tool_a") != nil {
+			t.Error("partial commit: tool_a was registered despite first-name collision")
+		}
+	})
+}
+
 func TestExecutorRegistry_Execute_KnownTool(t *testing.T) {
 	registry := agentictools.NewExecutorRegistry()
 

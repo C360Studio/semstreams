@@ -7,18 +7,11 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
-// Flow CRUD tool names. One constant per tool so callers scoping via
-// publish_agent.tools have a single source of truth.
-const (
-	flowToolCreate = "create_flow"
-	flowToolUpdate = "update_flow"
-	flowToolDelete = "delete_flow"
-	flowToolList   = "list_flows"
-	flowToolGet    = "get_flow"
-)
-
 // registerFlows wires FlowExecutor so any agent role scoped to flow tools
 // (via publish_agent.tools or default_tools) can manage flow definitions.
+// FlowExecutor exposes its tool set via ListTools(); RegisterExecutor maps
+// each advertised name to the executor.
+//
 // A nil manager is a deployment choice (skip + nil); a registry-level
 // failure (duplicate name) propagates so RegisterBuiltins can surface it
 // at boot.
@@ -29,20 +22,10 @@ func registerFlows(tools *agentictools.ExecutorRegistry, manager FlowManager, lo
 	}
 
 	executor := NewFlowExecutor(manager)
-	toolNames := []string{
-		flowToolCreate,
-		flowToolUpdate,
-		flowToolDelete,
-		flowToolList,
-		flowToolGet,
-	}
-
-	for _, name := range toolNames {
-		if err := tools.RegisterTool(name, executor); err != nil {
-			return fmt.Errorf("register flow tool %q: %w", name, err)
-		}
+	if err := tools.RegisterExecutor(executor); err != nil {
+		return fmt.Errorf("register flow tools: %w", err)
 	}
 	logger.Info("Registered flow CRUD tools",
-		slog.Int("count", len(toolNames)))
+		slog.Int("count", len(executor.ListTools())))
 	return nil
 }

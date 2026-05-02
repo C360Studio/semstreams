@@ -37,7 +37,15 @@ func NewExecutorRegistry() *ExecutorRegistry {
 }
 
 // RegisterTool registers a tool executor with the given name
-// Returns an error if a tool with the same name is already registered
+// Returns an error if a tool with the same name is already registered.
+//
+// For executors that expose multiple tools via ListTools(), prefer
+// RegisterExecutor — calling RegisterTool in a loop with the same executor
+// under different names causes ListTools() to emit duplicate tool defs (one
+// per registered name × the executor's full ListTools() output). Anthropic's
+// API rejects duplicates with a 400. The dedup pass in (*ExecutorRegistry).
+// ListTools() now defends against this, but RegisterExecutor is the
+// intended call shape for multi-tool executors.
 func (r *ExecutorRegistry) RegisterTool(name string, executor ToolExecutor) error {
 	if name == "" {
 		return errs.WrapInvalid(fmt.Errorf("tool name cannot be empty"), "ExecutorRegistry", "RegisterTool", "validate name")
@@ -57,6 +65,57 @@ func (r *ExecutorRegistry) RegisterTool(name string, executor ToolExecutor) erro
 	return nil
 }
 
+// RegisterExecutor registers an executor under every tool name returned by
+// its ListTools(). Atomic: validates no name collisions before committing
+// any entry, and rolls back partial state if a later name conflicts.
+//
+// Use this for executors that expose multiple tools (e.g. GraphQueryExecutor
+// with five query_* tools, RuleExecutor with five rule CRUD tools). It is
+// the only registration shape that keeps ListTools() advertising and
+// Execute() dispatch consistent for multi-tool executors:
+//
+//   - RegisterTool with one name → dispatch misses on the executor's other
+//     tools (registry has only one key).
+//   - RegisterTool in a loop → ListTools() emits N×N entries (one set per
+//     registered key, each set being the executor's full output).
+//
+// RegisterExecutor maps each ListTools() entry's Name to the executor, so
+// dispatch finds every name and ListTools() walks unique executors and
+// dedups tool definitions by name (the latter handled in ListTools()).
+//
+// Returns an error if the executor is nil, ListTools() is empty, any
+// returned ToolDefinition has an empty Name, or any name collides with an
+// already-registered tool. On collision no entries are committed.
+func (r *ExecutorRegistry) RegisterExecutor(executor ToolExecutor) error {
+	if executor == nil {
+		return errs.WrapInvalid(fmt.Errorf("executor cannot be nil"), "ExecutorRegistry", "RegisterExecutor", "validate executor")
+	}
+
+	defs := executor.ListTools()
+	if len(defs) == 0 {
+		return errs.WrapInvalid(fmt.Errorf("executor exposes no tools"), "ExecutorRegistry", "RegisterExecutor", "validate defs")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Two-pass: validate every name before committing any. Prevents partial
+	// registration on the second-or-later name colliding with an existing
+	// entry — caller sees the failure and can decide to abort startup.
+	for _, def := range defs {
+		if def.Name == "" {
+			return errs.WrapInvalid(fmt.Errorf("tool definition has empty Name"), "ExecutorRegistry", "RegisterExecutor", "validate def name")
+		}
+		if _, exists := r.executors[def.Name]; exists {
+			return errs.WrapInvalid(fmt.Errorf("tool %q is already registered", def.Name), "ExecutorRegistry", "RegisterExecutor", "check duplicate")
+		}
+	}
+	for _, def := range defs {
+		r.executors[def.Name] = executor
+	}
+	return nil
+}
+
 // GetTool retrieves a tool executor by name
 // Returns nil if the tool is not registered
 func (r *ExecutorRegistry) GetTool(name string) ToolExecutor {
@@ -66,18 +125,41 @@ func (r *ExecutorRegistry) GetTool(name string) ToolExecutor {
 	return r.executors[name]
 }
 
-// ListTools returns all registered tool definitions
-// Returns an empty slice (not nil) when no tools are registered
+// ListTools returns all registered tool definitions, deduped by Name.
+// Returns an empty slice (not nil) when no tools are registered.
+//
+// Two registry shapes produce the duplicates this dedup eliminates:
+//
+//   - RegisterTool called in a loop with the same multi-tool executor under
+//     N different names. The map then has N entries pointing at one
+//     executor; the per-entry call to executor.ListTools() returns the
+//     executor's full set on each iteration, producing N copies.
+//   - Two registry entries pointing at separate executor instances that
+//     happen to expose the same tool name (rare but legal — e.g. two
+//     web_search providers behind a fallback). The first wins; the second
+//     is dropped silently. Use RegisterExecutor at registration time to
+//     surface name collisions explicitly.
+//
+// Map iteration order in Go is randomized, so when a collision occurs the
+// "first" winner is non-deterministic across process restarts. This is a
+// known limitation; callers concerned about stability should use
+// RegisterExecutor and treat duplicate-name registrations as configuration
+// errors at boot.
 func (r *ExecutorRegistry) ListTools() []agentic.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Initialize with empty slice to ensure non-nil return
+	seen := make(map[string]bool)
 	tools := []agentic.ToolDefinition{}
 	for _, executor := range r.executors {
-		tools = append(tools, executor.ListTools()...)
+		for _, def := range executor.ListTools() {
+			if seen[def.Name] {
+				continue
+			}
+			seen[def.Name] = true
+			tools = append(tools, def)
+		}
 	}
-
 	return tools
 }
 
