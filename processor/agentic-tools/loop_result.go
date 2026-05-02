@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
@@ -60,7 +61,7 @@ func (e *ReadLoopResultExecutor) ListTools() []agentic.ToolDefinition {
 				"properties": map[string]any{
 					"loop_id": map[string]any{
 						"type":        "string",
-						"description": "ID of the completed loop to fetch. Obtain from the rule substitution $entity.id or from another tool (query_entity, list loops).",
+						"description": "Loop ID. Use $entity.instance in rule templates (bare UUID); the full 6-part entity ID also works.",
 					},
 					"max_bytes": map[string]any{
 						"type":        "integer",
@@ -90,14 +91,16 @@ func (e *ReadLoopResultExecutor) Execute(ctx context.Context, call agentic.ToolC
 }
 
 func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	loopID, ok := call.Arguments["loop_id"].(string)
-	if !ok || loopID == "" {
+	rawLoopID, ok := call.Arguments["loop_id"].(string)
+	if !ok || rawLoopID == "" {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     "loop_id is required and must be a non-empty string",
 			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
+
+	loopID := normalizeLoopID(rawLoopID)
 
 	maxBytes := parsePositiveInt(call.Arguments["max_bytes"], defaultReadLoopResultChunk)
 	offset := parsePositiveInt(call.Arguments["offset"], 0)
@@ -148,6 +151,30 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 			"task_id":        event.TaskID,
 		},
 	}, nil
+}
+
+// normalizeLoopID accepts a loop_id argument in either of the two shapes
+// rule prompts produce in practice and returns the bare-UUID form the
+// AGENT_LOOPS KV bucket keys on (`COMPLETE_<bare-uuid>`).
+//
+// Rule templates that substitute `$entity.id` for an agent-loop entity
+// hand the LLM the full 6-part federated string
+// `org.platform.agent.agentic-loop.execution.<uuid>`. The LLM faithfully
+// copies that into the tool call. The bucket only knows about
+// `<uuid>` — the trailing segment after the last dot. Templates that
+// switch to `$entity.instance` (preferred — see entity_substitution.go)
+// hand the LLM `<uuid>` directly and this function is a no-op.
+//
+// We strip everything before the last `.` regardless of segment count.
+// The strip is safe for the bare-UUID case (no dot present, returns the
+// input unchanged), and tolerant of any partial-prefix shape an LLM
+// might hallucinate. UUIDs themselves never contain dots, so the strip
+// can never lose part of a real loop ID.
+func normalizeLoopID(loopID string) string {
+	if idx := strings.LastIndex(loopID, "."); idx >= 0 {
+		return loopID[idx+1:]
+	}
+	return loopID
 }
 
 // parsePositiveInt reads an integer argument that may arrive as float64 (the

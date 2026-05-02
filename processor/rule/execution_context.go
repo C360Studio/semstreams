@@ -77,8 +77,16 @@ func (ec *ExecutionContext) RuleID() string {
 // SubstituteVariables replaces template variables with values from the execution context.
 // Supported variables:
 //   - $now: Current wallclock as RFC3339 UTC (always available)
-//   - $entity.id: The primary entity ID
+//   - $entity.id: The primary entity ID (full 6-part federated string)
+//   - $entity.org / $entity.platform / $entity.domain / $entity.system / $entity.type / $entity.instance:
+//     individual segments of a valid 6-part entity ID. Use $entity.instance
+//     to pass the bare loop UUID into tools like read_loop_result without
+//     handing the LLM the full federated string. Tokens survive
+//     substitution (and trip the unresolved-template warning) when the
+//     entity ID isn't a valid 6-part form — see entity_substitution.go.
 //   - $related.id: The related entity ID (for pair rules)
+//   - $related.org / $related.platform / $related.domain / $related.system / $related.type / $related.instance:
+//     individual segments of a valid 6-part related entity ID, mirror of the entity set.
 //   - $state.iteration: Current iteration count
 //   - $state.max_iterations: Configured max iterations
 //   - $schedule.id: Cron rule ID (cron rules only)
@@ -106,6 +114,12 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	// Core ID substitutions
 	result = strings.ReplaceAll(result, "$entity.id", ec.EntityID)
 	result = strings.ReplaceAll(result, "$related.id", ec.RelatedID)
+
+	// Per-segment substitutions for valid 6-part entity IDs. No-op for
+	// non-conforming IDs; the unresolved-template warning below surfaces
+	// the misuse. See entity_substitution.go for the namespace contract.
+	result = applyEntityPartsSubstitutions(result, "entity", ec.EntityID)
+	result = applyEntityPartsSubstitutions(result, "related", ec.RelatedID)
 
 	// State substitutions
 	if ec.State != nil {

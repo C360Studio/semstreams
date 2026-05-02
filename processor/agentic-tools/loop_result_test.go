@@ -304,3 +304,71 @@ func TestReadLoopResultExecutor_UnknownTool(t *testing.T) {
 		t.Errorf("error kind = %v, want ToolErrorNotFound", res.ErrorKind)
 	}
 }
+
+// TestNormalizeLoopID covers the three shapes a loop_id argument can
+// arrive in: the bare-UUID form (the canonical contract), the full
+// 6-part federated form a $entity.id substitution produces, and a
+// no-dot fallback. Documented as the migration path for rule prompts
+// that haven't moved to $entity.instance yet.
+func TestNormalizeLoopID(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"bare uuid", "c1e90237-1cd5-4def-99ab-aabbccddeeff", "c1e90237-1cd5-4def-99ab-aabbccddeeff"},
+		{"full entity id", "c360.osh-demo-001.agent.agentic-loop.execution.c1e90237-1cd5", "c1e90237-1cd5"},
+		{"three parts", "agentic-loop.execution.uuid-here", "uuid-here"},
+		{"empty stays empty", "", ""},
+		{"single char", "x", "x"},
+		// Trailing dot pins the contract: strip-after-last-dot returns
+		// empty. Not LLM-reachable in practice, but locks the behaviour
+		// against a future "trim trailing dots first" tweak that would
+		// quietly change semantics.
+		{"trailing dot", "foo.", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeLoopID(tt.in); got != tt.want {
+				t.Errorf("normalizeLoopID(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReadLoopResultExecutor_FullEntityIDLoopArg proves the end-to-end
+// fix: a tool call whose loop_id argument is the full 6-part federated
+// entity ID (which is what the LLM produces when handed $entity.id)
+// resolves to the bare-uuid bucket key without the caller doing any
+// extra work. semspec hit this wedge in production against beta.34;
+// this regression test guards against re-introduction.
+func TestReadLoopResultExecutor_FullEntityIDLoopArg(t *testing.T) {
+	kv := newMockLoopsKV()
+	bareLoopID := "c1e90237-1cd5-4def-99ab-aabbccddeeff"
+	fullEntityID := "c360.osh-demo-001.agent.agentic-loop.execution." + bareLoopID
+	seedCompletion(t, kv, bareLoopID, agentic.LoopCompletedEvent{
+		LoopID:  bareLoopID,
+		Role:    "researcher",
+		Outcome: "success",
+		Result:  "research findings",
+	})
+
+	e := NewReadLoopResultExecutor(kv)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:   "c1",
+		Name: ReadLoopResultToolName,
+		Arguments: map[string]any{
+			"loop_id": fullEntityID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("expected lookup to succeed via normalize, got error: %s (kind=%s)", res.Error, res.ErrorKind)
+	}
+	if res.Content != "research findings" {
+		t.Errorf("content = %q, want %q", res.Content, "research findings")
+	}
+	if got := res.Metadata["loop_id"]; got != bareLoopID {
+		t.Errorf("metadata.loop_id = %v, want bare uuid %q (normalize must apply before downstream uses)", got, bareLoopID)
+	}
+}
