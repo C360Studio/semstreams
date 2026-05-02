@@ -162,7 +162,9 @@ func (r *ExpressionRule) evaluateConditions(data map[string]interface{}) bool {
 		// Extract nested field value (e.g., "battery.level")
 		value := r.extractNestedValue(data, cond.Field)
 
-		// Handle missing fields based on Required flag
+		// Handle missing fields based on Required flag. Negate does NOT apply
+		// to missing-field exits — the operator never ran, so there is no result
+		// to invert. Field-absent always returns false.
 		if value == nil {
 			if cond.Required {
 				return false // Required field missing - fail immediately
@@ -171,8 +173,12 @@ func (r *ExpressionRule) evaluateConditions(data map[string]interface{}) bool {
 			continue
 		}
 
-		// Evaluate condition
-		results[i] = r.evaluateCondition(value, cond.Operator, cond.Value)
+		// Evaluate condition, then apply negate if requested
+		result := r.evaluateCondition(value, cond.Operator, cond.Value)
+		if cond.Negate {
+			result = !result
+		}
+		results[i] = result
 	}
 
 	// Apply logic operator
@@ -184,6 +190,12 @@ func (r *ExpressionRule) evaluateConditions(data map[string]interface{}) bool {
 			}
 		}
 		return false
+	case "not":
+		// Config validation ensures exactly one condition; defensive guard here.
+		if len(results) != 1 {
+			return false
+		}
+		return !results[0]
 	case "and":
 		fallthrough
 	default:
@@ -400,11 +412,31 @@ func (f *ExpressionRuleFactory) Validate(def Definition) error {
 		if !isValidOperator(cond.Operator) {
 			return fmt.Errorf("rule %s condition[%d] invalid operator: %s", def.ID, i, cond.Operator)
 		}
+		// Reject negate:true on the transition operator — three plausible
+		// meanings of negation make rule semantics ambiguous. Rule authors
+		// who want to invert transition behavior must restate the rule.
+		if cond.Negate && cond.Operator == expression.OpTransition {
+			return fmt.Errorf("rule %s condition[%d] negate:true is forbidden on operator %q (ambiguous semantics)",
+				def.ID, i, expression.OpTransition)
+		}
 	}
 
 	// Validate logic operator
-	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" {
-		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and' or 'or')", def.ID, def.Logic)
+	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" && def.Logic != expression.LogicNot {
+		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and', 'or', or 'not')", def.ID, def.Logic)
+	}
+
+	// logic:"not" rule-level constraints: requires exactly 1 condition; cannot
+	// combine with per-condition negate:true (double-negation anti-pattern).
+	if def.Logic == expression.LogicNot {
+		if len(def.Conditions) != 1 {
+			return fmt.Errorf("rule %s logic=%q requires exactly 1 condition, got %d (use per-condition negate:true for compound negation)",
+				def.ID, expression.LogicNot, len(def.Conditions))
+		}
+		if def.Conditions[0].Negate {
+			return fmt.Errorf("rule %s logic=%q cannot combine with condition[0] negate:true (double-negation anti-pattern)",
+				def.ID, expression.LogicNot)
+		}
 	}
 
 	// Validate cooldown if specified

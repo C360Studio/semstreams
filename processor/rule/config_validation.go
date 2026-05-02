@@ -168,6 +168,20 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 				fmt.Errorf("rule %s condition[%d] has invalid operator: %s", ruleID, i, operator),
 				"RuleProcessor", "validateExpressionRule", "check operator")
 		}
+
+		// Reject negate:true on the transition operator — three plausible
+		// meanings of "negated transition" (NOT-transitioned, NOT-current-matches,
+		// NOT-prev-was-in-from) make the semantics ambiguous. Authors must
+		// reformulate using explicit conditions.
+		if negateVal, ok := condMap["negate"]; ok {
+			if negate, ok := negateVal.(bool); ok && negate {
+				if operator == expression.OpTransition {
+					return errs.WrapInvalid(
+						fmt.Errorf("rule %s condition[%d]: negate:true is forbidden on the transition operator (ambiguous semantics — reformulate with explicit conditions)", ruleID, i),
+						"RuleProcessor", "validateExpressionRule", "check negate on transition")
+				}
+			}
+		}
 	}
 
 	// Validate logic field if present
@@ -178,9 +192,35 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 				fmt.Errorf("rule %s logic must be string, got %T", ruleID, logicVal),
 				"RuleProcessor", "validateExpressionRule", "check logic type")
 		}
-		if logic != "and" && logic != "or" {
+
+		switch logic {
+		case expression.LogicAnd, expression.LogicOr:
+			// valid; no additional constraints
+
+		case expression.LogicNot:
+			// logic:"not" requires exactly one condition — De Morgan ambiguity
+			// prevents defining clear semantics for multiple conditions.
+			if len(conditionsSlice) != 1 {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s logic=\"not\" requires exactly 1 condition, got %d (use per-condition negate:true for compound negation)", ruleID, len(conditionsSlice)),
+					"RuleProcessor", "validateExpressionRule", "check logic not condition count")
+			}
+			// Reject combining logic:"not" with per-condition negate:true — double
+			// negation (NOT (NOT X) = X) is an anti-pattern that confuses readers.
+			for i, cond := range conditionsSlice {
+				condMap, _ := cond.(map[string]any)
+				if negateVal, ok := condMap["negate"]; ok {
+					if negate, ok := negateVal.(bool); ok && negate {
+						return errs.WrapInvalid(
+							fmt.Errorf("rule %s logic=\"not\" cannot combine with condition[%d] negate:true (double-negation anti-pattern — remove one negation)", ruleID, i),
+							"RuleProcessor", "validateExpressionRule", "check logic not double negate")
+					}
+				}
+			}
+
+		default:
 			return errs.WrapInvalid(
-				fmt.Errorf("rule %s logic must be 'and' or 'or', got: %s", ruleID, logic),
+				fmt.Errorf("rule %s logic must be 'and', 'or', or 'not', got: %s", ruleID, logic),
 				"RuleProcessor", "validateExpressionRule", "check logic value")
 		}
 	}
@@ -381,6 +421,7 @@ func parseConditionsFromMap(ruleID string, ruleMap map[string]any) ([]expression
 			Operator: getStringWithDefault(condMap, "operator", ""),
 			Value:    condMap["value"],
 			Required: getBoolWithDefault(condMap, "required", true),
+			Negate:   getBoolWithDefault(condMap, "negate", false),
 		}
 		if from, ok := condMap["from"]; ok {
 			cond.From = from

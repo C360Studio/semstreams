@@ -85,6 +85,16 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 		}
 		return true, nil
 
+	case LogicNot:
+		// Requires exactly one condition. Config validation enforces this at
+		// load time; the check here is a defensive runtime guard.
+		if len(expr.Conditions) != 1 {
+			return false, &EvaluationError{
+				Message: fmt.Sprintf("logic \"not\" requires exactly 1 condition, got %d", len(expr.Conditions)),
+			}
+		}
+		return !results[0], nil
+
 	default:
 		return false, &EvaluationError{
 			Message: fmt.Sprintf("unsupported logic operator: %s", expr.Logic),
@@ -104,6 +114,13 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 //   - $caller.role != "admin" with no caller → false  (conservative: no identity at all
 //     means the condition doesn't match, preventing cron/KV-watch triggers from being
 //     incorrectly admitted by a != guard that was intended only for authenticated callers)
+//
+// Negate: when condition.Negate is true, the operator's boolean result is inverted
+// (!result) before returning. Negate does NOT apply to missing-field early-exits
+// (field absent returns false unconditionally, regardless of negate) because the
+// operator never ran — there is no result to invert. Config validation rejects
+// negate:true on the transition operator at load time; the branch here will
+// never be reached for transition+negate in production.
 func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, stateFields StateFields, condition ConditionExpression) (bool, error) {
 	// Check for $state.* pseudo-fields first
 	if strings.HasPrefix(condition.Field, "$state.") {
@@ -136,6 +153,9 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 				Message:  "operator execution failed",
 				Err:      err,
 			}
+		}
+		if condition.Negate {
+			result = !result
 		}
 		return result, nil
 	}
@@ -176,10 +196,16 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 				Err:      err,
 			}
 		}
+		if condition.Negate {
+			result = !result
+		}
 		return result, nil
 	}
 
-	// Handle transition operator (needs previous value from state)
+	// Handle transition operator (needs previous value from state).
+	// Config validation rejects negate:true on transition at load time, so
+	// condition.Negate is always false here in production. The check below is
+	// a defensive belt-and-suspenders guard only.
 	if condition.Operator == OpTransition {
 		return e.evaluateTransition(entityState, stateFields, condition)
 	}
@@ -244,6 +270,9 @@ func (e *Evaluator) evaluateCondition(entityState *gtypes.EntityState, condition
 		}
 	}
 
+	if condition.Negate {
+		result = !result
+	}
 	return result, nil
 }
 

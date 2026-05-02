@@ -106,7 +106,7 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 				},
 			},
 			wantError: true,
-			errorMsg:  "logic must be 'and' or 'or'",
+			errorMsg:  "logic must be 'and', 'or', or 'not'",
 		},
 		{
 			name: "empty_conditions",

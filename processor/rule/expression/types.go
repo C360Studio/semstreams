@@ -14,6 +14,11 @@ type ConditionExpression struct {
 	Value    interface{} `json:"value"`          // Comparison value (20.0, "active", true)
 	Required bool        `json:"required"`       // If false, missing field doesn't fail evaluation
 	From     interface{} `json:"from,omitempty"` // For transition operator: allowed previous value(s)
+	// Negate inverts the boolean result of the operator. negate:true on
+	// eq means "not equal"; on in means "not in array"; etc. Forbidden
+	// on the transition operator (validate at config load) — three plausible
+	// meanings of "negated transition" make the semantics ambiguous.
+	Negate bool `json:"negate,omitempty"`
 }
 
 // LogicalExpression combines multiple conditions with logic operators
@@ -124,6 +129,11 @@ const (
 const (
 	LogicAnd = "and"
 	LogicOr  = "or"
+	// LogicNot wraps a single condition's boolean result in negation.
+	// Requires EXACTLY ONE condition — rejected at config-load time if zero
+	// or more than one condition is present (De Morgan ambiguity). Cannot be
+	// combined with per-condition Negate:true (double-negation anti-pattern).
+	LogicNot = "not"
 )
 
 // StateFields provides rule match state values for $state.* pseudo-field resolution

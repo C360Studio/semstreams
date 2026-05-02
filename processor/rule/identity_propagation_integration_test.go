@@ -177,7 +177,7 @@ func buildIPRuleProcessor(t *testing.T, nc *natsclient.Client) *rule.Processor {
 			},
 		},
 		Logic:   expression.LogicAnd,
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		// No Entity.Pattern set → Subscribe() returns [">"] → matches any
 		// subject the processor receives.
 		OnEnter: []rule.Action{
@@ -280,7 +280,7 @@ func TestIntegration_BodySpoof_NoHeaders_DoesNotBypass_CallerCondition(t *testin
 		ID:      "admin-only-spoof-test-rule",
 		Type:    "expression",
 		Name:    "Admin Only Spoof Test Rule",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{
 				Field:    "$caller.role",
