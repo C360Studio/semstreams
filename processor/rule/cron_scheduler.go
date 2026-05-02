@@ -148,7 +148,7 @@ func (s *CronScheduler) Register(rule *CronRule) error {
 	if rule == nil {
 		return errors.New("cron scheduler: nil rule")
 	}
-	if !rule.Enabled() {
+	if !rule.IsActive() {
 		s.logger.Debug("Skipping disabled cron rule", "rule_id", rule.ID())
 		return nil
 	}
@@ -493,6 +493,28 @@ func (s *CronScheduler) dispatchAndRecord(parentCtx context.Context, ruleID stri
 			Spec:        rule.ScheduleString(),
 			LastFiredAt: lastFired,
 		},
+	}
+
+	// Shadow gate: rule is in shadow mode — log every suppressed action,
+	// emit cronFireStatusShadow, and return without dispatching. The check
+	// runs AFTER the cooldown and inflight gates so shadow fires are
+	// correctly throttled.
+	//
+	// lastFiredNanos is advanced before the early return so the cooldown
+	// gate treats the shadow fire identically to a real fire: without this
+	// a shadow rule with a cooldown would never throttle consecutive ticks.
+	if rule.IsShadow() {
+		firedAt := time.Now()
+		entry.lastFiredNanos.Store(firedAt.UnixNano())
+		s.metrics.recordNextFire(ruleID, float64(rule.Schedule().Next(firedAt).Unix()))
+		for i, action := range actions {
+			s.logger.Info("shadow cron rule action suppressed",
+				"rule_id", ruleID,
+				"action_index", i,
+				"action_type", action.Type)
+		}
+		status = cronFireStatusShadow
+		return
 	}
 
 	dispatchedOK := true

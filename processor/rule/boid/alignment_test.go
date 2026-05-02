@@ -17,7 +17,7 @@ func TestAlignmentRule_Name(t *testing.T) {
 	def := rule.Definition{
 		ID:      "test-alignment",
 		Name:    "Test Alignment Rule",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 
 	r := NewAlignmentRule("test-alignment", def, config, 0, nil)
@@ -31,7 +31,7 @@ func TestAlignmentRule_EvaluateEntityState_Disabled(t *testing.T) {
 	config := &Config{BoidRule: RuleTypeAlignment}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: false, // Disabled
+		Enabled: rule.ModeDisabled, // Disabled
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -52,7 +52,7 @@ func TestAlignmentRule_EvaluateEntityState_NoProvider(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 	// No position provider set
@@ -75,7 +75,7 @@ func TestAlignmentRule_EvaluateEntityState_NoSameRoleAgents(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -116,7 +116,7 @@ func TestAlignmentRule_EvaluateEntityState_RoleFilter(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -150,7 +150,7 @@ func TestAlignmentRule_EvaluateEntityState_NoTraversalVectors(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -191,7 +191,7 @@ func TestAlignmentRule_EvaluateEntityState_CommonPredicatesFound(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -266,7 +266,7 @@ func TestAlignmentRule_EvaluateEntityState_FiltersCurrentPredicates(t *testing.T
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
@@ -307,7 +307,7 @@ func TestAlignmentRule_Cooldown(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	cooldown := 100 * time.Millisecond
 	r := NewAlignmentRule("test", def, config, cooldown, nil)
@@ -366,7 +366,7 @@ func TestAlignmentRule_ConcurrentEvaluation(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil) // No cooldown for concurrent test
 
@@ -411,7 +411,7 @@ func TestAlignmentRule_ConcurrentEvaluation(t *testing.T) {
 
 func TestAlignmentRule_SetterIsSafe(t *testing.T) {
 	config := &Config{BoidRule: RuleTypeAlignment}
-	def := rule.Definition{ID: "test", Enabled: true}
+	def := rule.Definition{ID: "test", Enabled: rule.ModeEnabled}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 
 	// Concurrent setter calls should not panic
@@ -439,7 +439,7 @@ func TestAlignmentRule_AlignmentWindowLimit(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewAlignmentRule("test", def, config, 0, nil)
 

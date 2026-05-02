@@ -381,7 +381,7 @@ func (rcm *ConfigManager) ListRules(ctx context.Context) (map[string]Definition,
 					ID:      ruleID,
 					Type:    getStringWithDefault(configMap, "type", ""),
 					Name:    getStringWithDefault(configMap, "name", ruleID),
-					Enabled: getBoolWithDefault(configMap, "enabled", true),
+					Enabled: getEnabledMode(configMap, "enabled", ModeEnabled),
 				}
 			}
 		}

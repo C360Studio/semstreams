@@ -120,8 +120,11 @@ func (rp *Processor) loadRules() error {
 	}
 
 	for _, def := range allDefinitions {
-		// Skip disabled rules
-		if !def.Enabled {
+		// Skip disabled rules (enabled=false or enabled="disabled").
+		// Shadow rules (enabled="shadow") are active — they register and
+		// evaluate, but action dispatch is suppressed inside runActions /
+		// dispatchAndRecord.
+		if !def.IsActive() {
 			rp.logger.Debug("Skipping disabled rule", "rule_id", def.ID)
 			continue
 		}

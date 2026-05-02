@@ -211,7 +211,7 @@
             "description": "description"
           },
           "enabled": {
-            "type": "boolean",
+            "type": "string",
             "description": "enabled"
           },
           "entity": {

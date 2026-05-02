@@ -64,6 +64,12 @@ const (
 	// "fire failed" views must also include status="denied" if they want a
 	// unified "rule did not complete normally" view.
 	cronFireStatusDenied = "denied"
+	// cronFireStatusShadow is emitted when a shadow-mode cron rule fires.
+	// The fire reached dispatchAndRecord (cleared all gates) but action
+	// dispatch was suppressed because the rule is in shadow mode. Distinct
+	// from cooldown_skipped / inflight_skipped so operators can tell "shadow
+	// ran" apart from "scheduled throttling prevented the fire".
+	cronFireStatusShadow = "shadow"
 )
 
 // cronMetrics holds the Prometheus collectors for cron-scheduler

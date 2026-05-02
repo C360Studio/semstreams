@@ -38,7 +38,7 @@ func TestCohesionRule_Name(t *testing.T) {
 	def := rule.Definition{
 		ID:      "test-cohesion",
 		Name:    "Test Cohesion Rule",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 
 	r := NewCohesionRule("test-cohesion", def, config, 0, nil)
@@ -52,7 +52,7 @@ func TestCohesionRule_EvaluateEntityState_Disabled(t *testing.T) {
 	config := &Config{BoidRule: RuleTypeCohesion}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: false, // Disabled
+		Enabled: rule.ModeDisabled, // Disabled
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -73,7 +73,7 @@ func TestCohesionRule_EvaluateEntityState_NoProvider(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 	// No position provider set
@@ -95,7 +95,7 @@ func TestCohesionRule_EvaluateEntityState_NoFocusEntities(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -129,7 +129,7 @@ func TestCohesionRule_EvaluateEntityState_RoleFilter(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -163,7 +163,7 @@ func TestCohesionRule_EvaluateEntityState_NoCentralityProvider(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -211,7 +211,7 @@ func TestCohesionRule_EvaluateEntityState_WithCentralityProvider(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -267,7 +267,7 @@ func TestCohesionRule_EvaluateEntityState_WithPivotIndex(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
@@ -317,7 +317,7 @@ func TestCohesionRule_Cooldown(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	cooldown := 100 * time.Millisecond
 	r := NewCohesionRule("test", def, config, cooldown, nil)
@@ -368,7 +368,7 @@ func TestCohesionRule_ConcurrentEvaluation(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewCohesionRule("test", def, config, 0, nil) // No cooldown for concurrent test
 
@@ -408,7 +408,7 @@ func TestCohesionRule_ConcurrentEvaluation(t *testing.T) {
 
 func TestCohesionRule_SettersAreSafe(t *testing.T) {
 	config := &Config{BoidRule: RuleTypeCohesion}
-	def := rule.Definition{ID: "test", Enabled: true}
+	def := rule.Definition{ID: "test", Enabled: rule.ModeEnabled}
 	r := NewCohesionRule("test", def, config, 0, nil)
 
 	// Concurrent setter calls should not panic

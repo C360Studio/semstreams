@@ -43,7 +43,7 @@ func TestSeparationRule_Name(t *testing.T) {
 	def := rule.Definition{
 		ID:      "test-separation",
 		Name:    "Test Separation Rule",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 
 	r := NewSeparationRule("test-separation", def, config, 0, nil)
@@ -80,7 +80,7 @@ func TestSeparationRule_EvaluateEntityState_Disabled(t *testing.T) {
 	config := &Config{BoidRule: RuleTypeSeparation}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: false, // Disabled
+		Enabled: rule.ModeDisabled, // Disabled
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 
@@ -101,7 +101,7 @@ func TestSeparationRule_EvaluateEntityState_NoProvider(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 	// No position provider set
@@ -123,7 +123,7 @@ func TestSeparationRule_EvaluateEntityState_NoFocusEntities(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 
@@ -157,7 +157,7 @@ func TestSeparationRule_EvaluateEntityState_RoleFilter(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 
@@ -191,7 +191,7 @@ func TestSeparationRule_EvaluateEntityState_NoOverlap(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 
@@ -232,7 +232,7 @@ func TestSeparationRule_EvaluateEntityState_WithOverlap(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	r := NewSeparationRule("test", def, config, 0, nil)
 
@@ -289,7 +289,7 @@ func TestSeparationRule_Cooldown(t *testing.T) {
 	}
 	def := rule.Definition{
 		ID:      "test",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	cooldown := 100 * time.Millisecond
 	r := NewSeparationRule("test", def, config, cooldown, nil)

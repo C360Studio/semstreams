@@ -65,7 +65,7 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 				{Field: "test.field", Operator: "eq", Value: "alpha", Required: true},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: ModeEnabled,
 		},
 		{
 			ID:   "rule_beta",
@@ -75,7 +75,7 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 				{Field: "test.field", Operator: "eq", Value: "beta", Required: true},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: ModeEnabled,
 		},
 	}
 
@@ -156,7 +156,7 @@ func TestHotReload_SeedRespectsOperatorEdits(t *testing.T) {
 		ID:      "rule_alpha",
 		Type:    "expression",
 		Name:    "Alpha-OperatorEdit",
-		Enabled: false,
+		Enabled: ModeDisabled,
 	}
 	data, err := json.Marshal(operatorDef)
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestHotReload_SeedRespectsOperatorEdits(t *testing.T) {
 	got, err := rcm.GetRule(ctx, "rule_alpha")
 	require.NoError(t, err)
 	assert.Equal(t, "Alpha-OperatorEdit", got.Name, "operator edit must be preserved after seed")
-	assert.False(t, got.Enabled, "operator edit (disabled) must be preserved after seed")
+	assert.False(t, got.IsActive(), "operator edit (disabled) must be preserved after seed")
 }
 
 // TestHotReload_ReconcileFromKV writes a rule via a separate KVStore handle,
@@ -200,7 +200,7 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 		ID:      "rule_gamma",
 		Type:    "expression",
 		Name:    "Gamma",
-		Enabled: true,
+		Enabled: ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{Field: "test.field", Operator: "eq", Value: "gamma", Required: true},
 		},
@@ -253,7 +253,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 		ID:      "rule_gamma",
 		Type:    "expression",
 		Name:    "Gamma",
-		Enabled: true,
+		Enabled: ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{Field: "test.field", Operator: "eq", Value: "gamma", Required: true},
 		},
@@ -330,7 +330,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 			ID:      id,
 			Type:    "expression",
 			Name:    id,
-			Enabled: true,
+			Enabled: ModeEnabled,
 			Conditions: []expression.ConditionExpression{
 				{Field: "test.field", Operator: "eq", Value: id, Required: true},
 			},
@@ -389,7 +389,7 @@ func TestHotReload_KVInitFailure(t *testing.T) {
 			ID:      "rule_nil_nats",
 			Type:    "expression",
 			Name:    "NilNats",
-			Enabled: true,
+			Enabled: ModeEnabled,
 			Conditions: []expression.ConditionExpression{
 				{Field: "test.field", Operator: "eq", Value: "nil_nats", Required: true},
 			},

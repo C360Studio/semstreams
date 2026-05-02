@@ -59,7 +59,7 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 					},
 				},
 				Logic:   "and",
-				Enabled: true,
+				Enabled: rule.ModeEnabled,
 			},
 			shouldErr: false,
 		},
@@ -110,7 +110,7 @@ func TestIntegration_FactoryCreate(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 
 	// Create rule via factory

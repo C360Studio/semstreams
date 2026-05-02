@@ -70,7 +70,7 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		Entity: rule.EntityConfig{
 			Pattern: "test.debounce.>",
 		},
@@ -272,7 +272,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 				},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: rule.ModeEnabled,
 			Entity: rule.EntityConfig{
 				Pattern: "c360.logistics.environmental.sensor.temperature.>",
 			},
@@ -290,7 +290,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 				},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: rule.ModeEnabled,
 			Entity: rule.EntityConfig{
 				Pattern: "c360.logistics.environmental.sensor.pressure.>",
 			},
@@ -308,7 +308,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 				},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: rule.ModeEnabled,
 			Entity: rule.EntityConfig{
 				Pattern: "c360.logistics.environmental.sensor.humidity.>",
 			},
@@ -326,7 +326,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 				},
 			},
 			Logic:   "and",
-			Enabled: true,
+			Enabled: rule.ModeEnabled,
 			Entity: rule.EntityConfig{
 				Pattern: "c360.logistics.environmental.sensor.vibration.>",
 			},

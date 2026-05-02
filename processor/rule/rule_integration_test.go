@@ -96,7 +96,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		Entity: rule.EntityConfig{
 			Pattern: "c360.platform1.test.>",
 		},
@@ -344,7 +344,7 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 
 	ruleJSON, err := json.Marshal(ruleDef)
@@ -435,7 +435,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	config.InlineRules = []rule.Definition{ruleDef}
 	config.EnableGraphIntegration = false
@@ -522,7 +522,7 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 			{Field: "robotics.battery.level", Operator: "lt", Value: 50.0, Required: true},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		Entity: rule.EntityConfig{
 			Pattern: ">", // Match all entities
 		},
@@ -668,7 +668,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 	}
 	config.InlineRules = []rule.Definition{ruleDef}
 	config.EnableGraphIntegration = true // Enable graph integration
@@ -783,7 +783,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: rule.ModeEnabled,
 		Entity: rule.EntityConfig{
 			Pattern: "c360.test.workflow.>",
 		},

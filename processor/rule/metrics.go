@@ -21,6 +21,7 @@ type Metrics struct {
 	activeRules           prometheus.Gauge
 	stateTransitionsTotal *prometheus.CounterVec // OnEnter/OnExit transitions
 	debounceDelaysTotal   prometheus.Counter     // Coalesced updates due to debouncing
+	shadowFires           *prometheus.CounterVec // Shadow-mode action suppression counter
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -123,6 +124,14 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Name:      "debounce_delays_total",
 				Help:      "Total number of debounced rule evaluations (coalesced updates)",
 			}),
+
+			shadowFires: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "shadow_fires_total",
+				Help: "Actions suppressed by shadow mode per rule and action type. " +
+					"Use this to validate a shadow rule against production traffic before enabling it.",
+			}, []string{"rule_id", "action_type"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -138,6 +147,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.activeRules,
 			ruleMetrics.stateTransitionsTotal,
 			ruleMetrics.debounceDelaysTotal,
+			ruleMetrics.shadowFires,
 		)
 	})
 

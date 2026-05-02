@@ -116,7 +116,7 @@ func TestCronScheduler_RegisterDuplicate(t *testing.T) {
 
 func TestCronScheduler_RegisterSkipsDisabled(t *testing.T) {
 	s := newSchedulerForTest(t, &recordingExecutor{})
-	rule := cronRuleForTest(t, func(d *Definition) { d.Enabled = false })
+	rule := cronRuleForTest(t, func(d *Definition) { d.Enabled = ModeDisabled })
 
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register disabled = %v, want nil (silent skip)", err)
@@ -962,7 +962,7 @@ func TestCronScheduler_Metrics_HotReloadKeepsRegisteredAtOne(t *testing.T) {
 func TestCronScheduler_Metrics_DisabledRuleNoGaugeBump(t *testing.T) {
 	exec := &recordingExecutor{}
 	s, m := newSchedulerWithMetricsForTest(t, exec)
-	rule := cronRuleForTest(t, func(d *Definition) { d.Enabled = false })
+	rule := cronRuleForTest(t, func(d *Definition) { d.Enabled = ModeDisabled })
 
 	if err := s.Register(rule); err != nil {
 		t.Fatalf("Register disabled = %v", err)
@@ -1170,5 +1170,139 @@ func TestCronFire_DeniedStatusDistinctFromError(t *testing.T) {
 	}
 	if errorCount != 0 {
 		t.Errorf("fires_total{status=error} = %f, want 0 (deny must not set error status)", errorCount)
+	}
+}
+
+// TestCronScheduler_ShadowMode_RegistersButSuppressesDispatch verifies that a
+// shadow-mode cron rule is registered with the scheduler (IsActive=true) and
+// that its fire path skips executor.Execute while still emitting
+// cronFireStatusShadow on fires_total.
+func TestCronScheduler_ShadowMode_RegistersButSuppressesDispatch(t *testing.T) {
+	exec := &recordingExecutor{}
+	m := getCronMetrics(metric.NewMetricsRegistry())
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Metrics:  m,
+		Logger:   slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler = %v", err)
+	}
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Enabled = ModeShadow
+	})
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register shadow rule = %v", err)
+	}
+	// Shadow rules are IsActive — they must be registered.
+	if got := s.RegisteredCount(); got != 1 {
+		t.Errorf("RegisteredCount = %d, want 1 (shadow rule must register)", got)
+	}
+
+	s.parentCtx = context.Background()
+	s.fire(rule.ID())
+
+	// Executor must NOT have been called.
+	if got := exec.callCount(); got != 0 {
+		t.Errorf("executor called %d times, want 0 (shadow suppresses dispatch)", got)
+	}
+
+	// fires_total must show status=shadow.
+	shadowCount := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusShadow))
+	if shadowCount != 1 {
+		t.Errorf("fires_total{status=shadow} = %f, want 1", shadowCount)
+	}
+
+	// fires_total must NOT show status=success or status=error.
+	successCount := testutil.ToFloat64(m.firesTotal.WithLabelValues(rule.ID(), cronFireStatusSuccess))
+	if successCount != 0 {
+		t.Errorf("fires_total{status=success} = %f, want 0", successCount)
+	}
+}
+
+// TestCronScheduler_ShadowMode_DoesNotRegisterDisabled verifies that a
+// disabled rule (Enabled="disabled") is NOT registered, confirming the
+// IsActive gate rejects ModeDisabled while accepting ModeShadow.
+func TestCronScheduler_ShadowMode_DoesNotRegisterDisabled(t *testing.T) {
+	exec := &recordingExecutor{}
+	s := newSchedulerForTest(t, exec)
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Enabled = ModeDisabled
+	})
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register disabled = %v", err)
+	}
+	if got := s.RegisteredCount(); got != 0 {
+		t.Errorf("RegisteredCount = %d, want 0 (disabled rule must not register)", got)
+	}
+}
+
+// TestCronScheduler_ShadowMode_LastFiredAdvancesAfterShadowFire verifies that
+// a shadow fire still advances entry.lastFiredNanos so the cooldown gate
+// works correctly on subsequent ticks.
+func TestCronScheduler_ShadowMode_LastFiredAdvancesAfterShadowFire(t *testing.T) {
+	exec := &recordingExecutor{}
+	s := newSchedulerForTest(t, exec)
+
+	rule := cronRuleForTest(t, func(d *Definition) {
+		d.Enabled = ModeShadow
+	})
+
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register = %v", err)
+	}
+
+	s.parentCtx = context.Background()
+
+	s.mu.Lock()
+	entry := s.entries[rule.ID()]
+	s.mu.Unlock()
+
+	before := entry.lastFiredNanos.Load()
+
+	s.fire(rule.ID())
+
+	after := entry.lastFiredNanos.Load()
+	if after <= before {
+		t.Errorf("lastFiredNanos did not advance after shadow fire: before=%d after=%d", before, after)
+	}
+}
+
+// TestLoader_ShadowRuleRegistersAndIsMarkedShadow verifies that a shadow rule
+// loaded via loadRules is placed in rp.cronRules (registered) and that
+// IsActive()/IsShadow() return the expected values — confirming the gate
+// change in loadRules from !def.Enabled to !def.IsActive() works end-to-end
+// for the loader path.
+func TestLoader_ShadowRuleRegistersAndIsMarkedShadow(t *testing.T) {
+	def := Definition{
+		ID:       "shadow-cron-loader",
+		Type:     CronRuleType,
+		Enabled:  ModeShadow,
+		Schedule: "0 * * * *",
+		Actions: []Action{
+			{Type: ActionTypePublish, Subject: "test.shadow.tick"},
+		},
+	}
+
+	if !def.IsActive() {
+		t.Fatal("shadow definition IsActive() = false, want true")
+	}
+	if !def.IsShadow() {
+		t.Fatal("shadow definition IsShadow() = false, want true")
+	}
+
+	rule, err := NewCronRule(def)
+	if err != nil {
+		t.Fatalf("NewCronRule shadow = %v, want nil", err)
+	}
+	if !rule.IsActive() {
+		t.Fatal("CronRule.IsActive() = false for shadow rule")
+	}
+	if !rule.IsShadow() {
+		t.Fatal("CronRule.IsShadow() = false for shadow rule")
 	}
 }

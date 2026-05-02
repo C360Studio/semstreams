@@ -13,7 +13,7 @@ func validCronDef() Definition {
 		ID:       "weekly-planning",
 		Type:     CronRuleType,
 		Name:     "Weekly planning prompt",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Schedule: "0 9 * * MON",
 		Actions: []Action{
 			{Type: ActionTypePublish, Subject: "system.cron.heartbeat"},

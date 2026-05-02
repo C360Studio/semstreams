@@ -2,6 +2,7 @@
 package rule
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -11,13 +12,36 @@ import (
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
-// Definition represents a JSON rule configuration
+// Mode is the rule's execution mode. Use Definition.Mode() to read it
+// (handles legacy bool encoding via the Enabled field's UnmarshalJSON).
+type Mode string
+
+const (
+	// ModeEnabled means the rule registers and fires actions on match.
+	ModeEnabled Mode = "enabled"
+	// ModeDisabled means the rule does not register (filtered at load time).
+	ModeDisabled Mode = "disabled"
+	// ModeShadow means the rule registers and evaluates conditions but
+	// suppresses action execution. Every action that would have fired is
+	// counted in rule_shadow_fires_total and logged at Info. Use shadow
+	// mode to validate a new rule against production traffic before
+	// enabling it.
+	ModeShadow Mode = "shadow"
+)
+
+// Definition represents a JSON rule configuration.
+//
+// The Enabled field uses a custom UnmarshalJSON that accepts both the
+// legacy bool shape (true/false) and the new string shape
+// ("enabled"/"disabled"/"shadow"). Use Mode(), IsActive(), and IsShadow()
+// helpers rather than reading Enabled directly — they normalise all
+// accepted input values to a canonical Mode constant.
 type Definition struct {
 	ID              string                           `json:"id"`
 	Type            string                           `json:"type"`
 	Name            string                           `json:"name"`
 	Description     string                           `json:"description"`
-	Enabled         bool                             `json:"enabled"`
+	Enabled         Mode                             `json:"enabled"`
 	Conditions      []expression.ConditionExpression `json:"conditions"`
 	Logic           string                           `json:"logic"`
 	Cooldown        string                           `json:"cooldown,omitempty"`
@@ -66,6 +90,83 @@ type Definition struct {
 	// state-transition semantics — every scheduled tick fires every Action
 	// here. Required when Type == "cron"; ignored otherwise.
 	Actions []Action `json:"actions,omitempty"`
+}
+
+// Mode returns the rule's execution mode, normalising all accepted input
+// values to a canonical Mode constant:
+//
+//   - "shadow"                     → ModeShadow
+//   - "disabled" / "false" / ""    → ModeDisabled
+//   - anything else (incl. "enabled" / "true") → ModeEnabled
+//
+// The normalisation of "" to ModeDisabled means a zero-value Definition
+// is disabled by default, which is safe (rules must be explicitly opted-in).
+func (d Definition) Mode() Mode {
+	switch d.Enabled {
+	case ModeShadow:
+		return ModeShadow
+	case ModeDisabled, "false", "":
+		return ModeDisabled
+	default:
+		return ModeEnabled
+	}
+}
+
+// IsActive reports whether the rule should be registered and evaluated.
+// Returns true for enabled and shadow modes; false for disabled.
+func (d Definition) IsActive() bool {
+	return d.Mode() != ModeDisabled
+}
+
+// IsShadow reports whether the rule is in shadow mode — evaluation runs but
+// action dispatch is suppressed. The suppressed actions are counted in
+// rule_shadow_fires_total and logged at Info so operators can validate
+// rule behaviour before enabling it in production.
+func (d Definition) IsShadow() bool {
+	return d.Mode() == ModeShadow
+}
+
+// UnmarshalJSON implements json.Unmarshaler. It accepts both legacy bool
+// (true → "enabled", false → "disabled") and new string values
+// ("enabled"/"disabled"/"shadow") so that existing JSON configs require
+// no migration when upgrading to the tristate.
+//
+// MarshalJSON uses the standard field encoding which always emits a string,
+// providing a canonical wire format for newly-written configs.
+func (d *Definition) UnmarshalJSON(data []byte) error {
+	// Use a type alias to avoid infinite recursion when calling
+	// json.Unmarshal on the same type.
+	type definitionAlias Definition
+	var raw struct {
+		definitionAlias
+		Enabled json.RawMessage `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*d = Definition(raw.definitionAlias)
+
+	// Enabled field: normalise legacy bool → typed Mode for backward compat.
+	if len(raw.Enabled) > 0 {
+		switch string(raw.Enabled) {
+		case "true":
+			d.Enabled = ModeEnabled
+		case "false":
+			d.Enabled = ModeDisabled
+		case `"shadow"`:
+			d.Enabled = ModeShadow
+		case `"disabled"`:
+			d.Enabled = ModeDisabled
+		case `"enabled"`:
+			d.Enabled = ModeEnabled
+		default:
+			// Treat unknown strings as enabled (forward-compat: new modes
+			// added in future tags default to active rather than silently
+			// disabling a rule the operator explicitly configured).
+			d.Enabled = ModeEnabled
+		}
+	}
+	return nil
 }
 
 // EntityConfig defines entity-specific configuration

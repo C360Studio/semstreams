@@ -457,7 +457,7 @@ func (s *Scenario) seedFireEveryNRule(ctx context.Context, result *scenarios.Res
 		Type:             "expression",
 		Name:             "Fire Every N Test",
 		Description:      "e2e sampling-gate test: fires only on every 3rd matching event",
-		Enabled:          true,
+		Enabled:          rule.ModeEnabled,
 		FireEveryNEvents: fireEveryNWindowN,
 		Conditions: []expression.ConditionExpression{
 			{Field: "entity.type", Operator: "eq", Value: fireEveryNEntityType},
@@ -764,7 +764,7 @@ func (s *Scenario) validateRuleContent(ctx context.Context, result *scenarios.Re
 	if def.Type != "expression" {
 		return fmt.Errorf("rule Type mismatch: stored %q, expected %q", def.Type, "expression")
 	}
-	if !def.Enabled {
+	if !def.IsActive() {
 		return fmt.Errorf("rule Enabled mismatch: stored false, expected true")
 	}
 	result.Details["rule_round_trip"] = map[string]any{

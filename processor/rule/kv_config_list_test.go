@@ -39,7 +39,7 @@ func TestListRules_KVStorePath(t *testing.T) {
 		Type:        "expression",
 		Name:        "Alpha",
 		Description: "first rule",
-		Enabled:     true,
+		Enabled:     ModeEnabled,
 	}
 	require.NoError(t, rcm.SaveRule(ctx, "alpha", def))
 
@@ -47,7 +47,7 @@ func TestListRules_KVStorePath(t *testing.T) {
 		ID:      "beta",
 		Type:    "expression",
 		Name:    "Beta",
-		Enabled: false,
+		Enabled: ModeDisabled,
 	}
 	require.NoError(t, rcm.SaveRule(ctx, "beta", def2))
 
@@ -65,11 +65,11 @@ func TestListRules_KVStorePath(t *testing.T) {
 	require.Equal(t, "expression", alpha.Type)
 	require.Equal(t, "Alpha", alpha.Name)
 	require.Equal(t, "first rule", alpha.Description)
-	require.True(t, alpha.Enabled)
+	require.True(t, alpha.IsActive(), "Enabled=enabled must round-trip")
 
 	beta, ok := rules["beta"]
 	require.True(t, ok, "beta must be present")
-	require.False(t, beta.Enabled, "Enabled=false must round-trip")
+	require.False(t, beta.IsActive(), "Enabled=disabled must round-trip")
 }
 
 // TestListRules_EmptyBucketReturnsEmptyMap — fresh bucket (nothing under
@@ -108,7 +108,7 @@ func TestListRules_SkipsUnmarshalFailures(t *testing.T) {
 
 	// Write a valid rule + a corrupt one.
 	require.NoError(t, rcm.SaveRule(ctx, "good", Definition{
-		ID: "good", Type: "expression", Name: "Good", Enabled: true,
+		ID: "good", Type: "expression", Name: "Good", Enabled: ModeEnabled,
 	}))
 	_, err := rcm.kvStore.Put(ctx, "rules.bad", []byte("{not valid json"))
 	require.NoError(t, err)

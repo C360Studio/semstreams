@@ -57,7 +57,7 @@ func NewExpressionRule(def Definition) (*ExpressionRule, error) {
 		name:        def.Name,
 		description: def.Description,
 		subscribed:  subjects,
-		enabled:     def.Enabled,
+		enabled:     def.IsActive(),
 		conditions:  def.Conditions,
 		logic:       logic,
 		cooldown:    cooldown,

@@ -284,7 +284,7 @@ func TestCreateRuleFromDefinition(t *testing.T) {
 			},
 		},
 		Logic:   "or",
-		Enabled: true,
+		Enabled: ModeEnabled,
 	}
 
 	deps := Dependencies{
@@ -422,7 +422,7 @@ func createTestRuleDefinition(id string, threshold float64) Definition {
 			},
 		},
 		Logic:   "and",
-		Enabled: true,
+		Enabled: ModeEnabled,
 	}
 }
 

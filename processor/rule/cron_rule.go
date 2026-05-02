@@ -45,7 +45,7 @@ type CronRule struct {
 	id          string
 	name        string
 	description string
-	enabled     bool
+	mode        Mode
 	scheduleStr string
 	schedule    cronlib.Schedule
 	actions     []Action
@@ -80,7 +80,7 @@ func NewCronRule(def Definition) (*CronRule, error) {
 		id:          def.ID,
 		name:        def.Name,
 		description: def.Description,
-		enabled:     def.Enabled,
+		mode:        def.Mode(),
 		scheduleStr: def.Schedule,
 		schedule:    schedule,
 		actions:     slices.Clone(def.Actions),
@@ -100,7 +100,17 @@ func (r *CronRule) Name() string { return r.name }
 func (r *CronRule) Description() string { return r.description }
 
 // Enabled reports whether the rule should be registered with the scheduler.
-func (r *CronRule) Enabled() bool { return r.enabled }
+// Deprecated: prefer IsActive() which also returns true for shadow mode.
+func (r *CronRule) Enabled() bool { return r.mode != ModeDisabled }
+
+// IsActive reports whether this rule should be registered — true for both
+// enabled and shadow modes. Use this in place of Enabled() wherever the
+// scheduler or hot-reload path decides whether to Register the rule.
+func (r *CronRule) IsActive() bool { return r.mode != ModeDisabled }
+
+// IsShadow reports whether this rule is in shadow mode. Action dispatch is
+// suppressed for shadow rules; the suppressed actions are logged and counted.
+func (r *CronRule) IsShadow() bool { return r.mode == ModeShadow }
 
 // ScheduleString returns the original cron expression, useful for metrics
 // labels and substitution variables.

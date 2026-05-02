@@ -11,6 +11,8 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestStatefulEvaluator_Evaluate tests state-based action firing
@@ -1164,4 +1166,153 @@ func TestRunActions_NonDenyErrorContinues(t *testing.T) {
 	if exec.calls != 2 {
 		t.Errorf("Execute call count = %d, want 2 (non-deny error must not short-circuit sibling actions)", exec.calls)
 	}
+}
+
+// TestStatefulEvaluator_ShadowMode_SuppressesAllActions verifies that a shadow
+// rule fires no actions against the executor even when CurrentlyMatching=true.
+// State persistence must still occur so the evaluator's match-state tracking
+// stays consistent (enabling→shadow→enabling transitions all share history).
+func TestStatefulEvaluator_ShadowMode_SuppressesAllActions(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	ruleDef := Definition{
+		ID:      "shadow-rule",
+		Type:    "expression",
+		Enabled: ModeShadow,
+		OnEnter: []Action{
+			{Type: ActionTypePublish, Subject: "test.entered"},
+			{Type: ActionTypePublish, Subject: "test.entered2"},
+		},
+		OnExit:    []Action{{Type: ActionTypePublish, Subject: "test.exited"}},
+		WhileTrue: []Action{{Type: ActionTypePublish, Subject: "test.while-true"}},
+	}
+
+	// Firing: false→true transition should produce TransitionEntered
+	// but must NOT call the executor.
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-shadow",
+		CurrentlyMatching: true,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v, want nil", err)
+	}
+	if transition != TransitionEntered {
+		t.Errorf("transition = %v, want TransitionEntered", transition)
+	}
+	if actionExecutor.executeCallCount != 0 {
+		t.Errorf("executor called %d times, want 0 (shadow suppresses all actions)", actionExecutor.executeCallCount)
+	}
+
+	// State must still be persisted — next evaluation should see wasMatching=true.
+	prevState, err := stateTracker.Get(ctx, ruleDef.ID, "entity-shadow")
+	if err != nil {
+		t.Fatalf("stateTracker.Get() error = %v", err)
+	}
+	if !prevState.IsMatching {
+		t.Error("persisted state IsMatching = false, want true (shadow persists state)")
+	}
+}
+
+// TestStatefulEvaluator_ShadowMode_ContinuesForEveryAction verifies that the
+// shadow gate uses `continue` (not `break`) so EVERY action in the slice is
+// individually counted/logged, not just the first.
+func TestStatefulEvaluator_ShadowMode_ContinuesForEveryAction(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+
+	// countingExecutor records each call so we can assert zero was called.
+	calls := 0
+	countingExec := &customActionExecutor{fn: func(_ Action) error { calls++; return nil }}
+	evaluator := NewStatefulEvaluator(stateTracker, countingExec, logger)
+
+	const actionCount = 4
+	actions := make([]Action, actionCount)
+	for i := range actions {
+		actions[i] = Action{Type: ActionTypePublish, Subject: "test.action"}
+	}
+
+	ruleDef := Definition{
+		ID:      "shadow-continue-rule",
+		Type:    "expression",
+		Enabled: ModeShadow,
+		OnEnter: actions,
+	}
+
+	if _, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "ent",
+		CurrentlyMatching: true,
+	}); err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("executor called %d times, want 0; shadow must continue over all %d actions", calls, actionCount)
+	}
+}
+
+// TestStatefulEvaluator_ShadowMode_MetricIncrement verifies that the
+// shadowFires counter is incremented once per suppressed action when metrics
+// are wired in. Builds a Metrics directly with a fresh counter so it
+// bypasses the package-level singleton and remains test-isolated.
+func TestStatefulEvaluator_ShadowMode_MetricIncrement(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+
+	// Construct a Metrics with only the shadowFires field populated.
+	// Other fields are nil; the evaluator only touches shadowFires in
+	// the shadow path.
+	shadowCounter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "test_rule_shadow_fires_total",
+	}, []string{"rule_id", "action_type"})
+	m := &Metrics{shadowFires: shadowCounter}
+
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+	evaluator.setMetrics(m)
+
+	const wantRuleID = "shadow-metric-rule"
+	const wantActionType = ActionTypePublish
+
+	ruleDef := Definition{
+		ID:      wantRuleID,
+		Type:    "expression",
+		Enabled: ModeShadow,
+		OnEnter: []Action{
+			{Type: wantActionType, Subject: "test.a"},
+			{Type: wantActionType, Subject: "test.b"},
+		},
+	}
+
+	if _, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "ent",
+		CurrentlyMatching: true,
+	}); err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+
+	// Both actions must be counted in shadow_fires_total (2 OnEnter actions).
+	got := testutil.ToFloat64(m.shadowFires.WithLabelValues(wantRuleID, wantActionType))
+	if got != 2 {
+		t.Errorf("shadow_fires_total{rule_id=%q, action_type=%q} = %v, want 2", wantRuleID, wantActionType, got)
+	}
+}
+
+// customActionExecutor is a minimal ActionExecutorInterface that delegates to fn.
+type customActionExecutor struct {
+	fn func(Action) error
+}
+
+func (c *customActionExecutor) Execute(_ context.Context, action Action, _ *ExecutionContext) error {
+	return c.fn(action)
 }

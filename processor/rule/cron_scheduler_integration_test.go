@@ -110,7 +110,7 @@ func TestIntegration_CronRule_FiresOnSchedule(t *testing.T) {
 		ID:       "every-second-heartbeat-" + t.Name(),
 		Type:     CronRuleType,
 		Name:     "every-second heartbeat",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Schedule: "@every 1s",
 		Actions: []Action{{
 			Type:    ActionTypePublish,
@@ -154,7 +154,7 @@ func TestIntegration_CronRule_PersistsLastFiredToKV(t *testing.T) {
 		ID:       ruleID,
 		Type:     CronRuleType,
 		Name:     "persist-fire test",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Schedule: "@every 1s",
 		Actions: []Action{{
 			Type:    ActionTypePublish,
@@ -207,7 +207,7 @@ func TestIntegration_CronRule_DetectsMissedFiresAcrossRestart(t *testing.T) {
 		ID:       ruleID,
 		Type:     CronRuleType,
 		Name:     "missed-fire test",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Schedule: "@every 1s",
 		Actions: []Action{{
 			Type:    ActionTypePublish,
@@ -286,7 +286,7 @@ func TestIntegration_CronRule_CooldownAcrossRestart(t *testing.T) {
 		ID:       ruleID,
 		Type:     CronRuleType,
 		Name:     "cooldown across restart",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Schedule: "@every 1s",
 		Cooldown: "1h",
 		Actions: []Action{{

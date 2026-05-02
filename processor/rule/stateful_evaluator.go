@@ -24,6 +24,7 @@ type StatefulEvaluator struct {
 	actionExecutor ActionExecutorInterface
 	exprEvaluator  *expression.Evaluator
 	logger         *slog.Logger
+	metrics        *Metrics
 }
 
 // ActionExecutorInterface defines the interface for action execution.
@@ -46,6 +47,11 @@ func NewStatefulEvaluator(stateTracker *StateTracker, actionExecutor ActionExecu
 		logger:         logger,
 	}
 }
+
+// setMetrics wires in the rule-processor metrics singleton. Called by
+// Processor after NewStatefulEvaluator so the evaluator can record
+// shadow-mode suppression without requiring metrics at construction time.
+func (e *StatefulEvaluator) setMetrics(m *Metrics) { e.metrics = m }
 
 // Evaluation groups the inputs to a single stateful rule evaluation.
 // Zero values are meaningful: Revision=0 means "no KV revision available"
@@ -324,7 +330,23 @@ func (e *StatefulEvaluator) runActions(
 	stateFields expression.StateFields,
 	entityID, relatedID string,
 ) {
-	for _, action := range actions {
+	for i, action := range actions {
+		// Shadow gate: rule is in shadow mode — log and count the suppressed
+		// action but do not execute it. continue (not break) so every action
+		// in the list is individually counted and logged, giving the operator
+		// a complete picture of what would have fired.
+		if ruleDef.IsShadow() {
+			if e.metrics != nil && e.metrics.shadowFires != nil {
+				e.metrics.shadowFires.WithLabelValues(ruleDef.ID, action.Type).Inc()
+			}
+			e.logger.Info("shadow rule action suppressed",
+				"rule_id", ruleDef.ID,
+				"entity_id", entityID,
+				"action_type", action.Type,
+				"action_index", i)
+			continue
+		}
+
 		if len(action.When) > 0 {
 			match, whenErr := e.evaluateWhen(action.When, entity, stateFields)
 			if whenErr != nil {

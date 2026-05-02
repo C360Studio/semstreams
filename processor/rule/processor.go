@@ -546,6 +546,7 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 
 	// Create StatefulEvaluator
 	rp.statefulEvaluator = NewStatefulEvaluator(rp.stateTracker, actionExecutor, rp.logger)
+	rp.statefulEvaluator.setMetrics(rp.metrics)
 
 	rp.logger.Info("State tracker initialized for stateful ECA rules")
 	return nil

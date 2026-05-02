@@ -177,7 +177,7 @@ func (f *RuleFactory) Schema() rule.Schema {
 					ID:      "boid_separation",
 					Type:    "boid",
 					Name:    "Agent Separation",
-					Enabled: true,
+					Enabled: rule.ModeEnabled,
 					Entity: rule.EntityConfig{
 						WatchBuckets: []string{KVBucketAgentPositions},
 					},
@@ -219,7 +219,7 @@ func newBaseBoidRule(id string, def rule.Definition, config *Config, cooldown ti
 		id:          id,
 		name:        def.Name,
 		description: def.Description,
-		enabled:     def.Enabled,
+		enabled:     def.IsActive(),
 		config:      config,
 		cooldown:    cooldown,
 		logger:      logger,

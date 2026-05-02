@@ -169,7 +169,7 @@ func TestFireEveryNEvents_CounterResetOnRuleUpdate(t *testing.T) {
 		ID:               ruleID,
 		Type:             "test_rule",
 		Name:             ruleID,
-		Enabled:          true,
+		Enabled:          ModeEnabled,
 		FireEveryNEvents: 5,
 	}
 	initialCounter := &atomic.Int64{}

@@ -52,7 +52,7 @@ func TestExpressionFactoryValidation(t *testing.T) {
 				ID:      "test-rule",
 				Type:    "expression",
 				Name:    "Test Rule",
-				Enabled: true,
+				Enabled: ModeEnabled,
 				Conditions: []expression.ConditionExpression{
 					{Field: "battery.level", Operator: "lte", Value: 20.0},
 				},
@@ -65,7 +65,7 @@ func TestExpressionFactoryValidation(t *testing.T) {
 				ID:      "multi-condition",
 				Type:    "expression",
 				Name:    "Multi Condition Rule",
-				Enabled: true,
+				Enabled: ModeEnabled,
 				Logic:   "and",
 				Conditions: []expression.ConditionExpression{
 					{Field: "battery.level", Operator: "lte", Value: 20.0},
@@ -195,7 +195,7 @@ func TestExpressionRuleCreation(t *testing.T) {
 		Type:        "expression",
 		Name:        "Low Battery Alert",
 		Description: "Triggers when battery is low",
-		Enabled:     true,
+		Enabled:     ModeEnabled,
 		Logic:       "and",
 		Cooldown:    "1m",
 		Conditions: []expression.ConditionExpression{
@@ -336,7 +336,7 @@ func TestExpressionRuleEvaluation(t *testing.T) {
 				ID:         "test-rule",
 				Type:       "expression",
 				Name:       "Test",
-				Enabled:    true,
+				Enabled:    ModeEnabled,
 				Logic:      tt.logic,
 				Conditions: tt.conditions,
 			}
@@ -362,7 +362,7 @@ func TestExpressionRuleCooldown(t *testing.T) {
 		ID:       "cooldown-test",
 		Type:     "expression",
 		Name:     "Cooldown Test",
-		Enabled:  true,
+		Enabled:  ModeEnabled,
 		Cooldown: "100ms",
 		Conditions: []expression.ConditionExpression{
 			{Field: "value", Operator: "eq", Value: "trigger"},
@@ -404,7 +404,7 @@ func TestCreateRuleFromDefinition_Expression(t *testing.T) {
 		ID:      "factory-test",
 		Type:    "expression",
 		Name:    "Factory Test Rule",
-		Enabled: true,
+		Enabled: ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{Field: "test.field", Operator: "eq", Value: "expected"},
 		},
@@ -623,7 +623,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 				ID:         "test-rule",
 				Type:       "expression",
 				Name:       "Test",
-				Enabled:    true,
+				Enabled:    ModeEnabled,
 				Logic:      tt.logic,
 				Conditions: tt.conditions,
 			}
@@ -714,7 +714,7 @@ func TestExtractNestedValue_DollarPrefixed_ReturnsNotFound(t *testing.T) {
 		ID:      "spoof-guard-rule",
 		Type:    "expression",
 		Name:    "Spoof Guard",
-		Enabled: true,
+		Enabled: ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{Field: "$caller.role", Operator: "eq", Value: "admin"},
 		},
@@ -751,7 +751,7 @@ func TestExpressionRule_DollarPrefixedFieldFromBody_ReturnsNotFound(t *testing.T
 		ID:      "body-spoof-guard",
 		Type:    "expression",
 		Name:    "Body Spoof Guard",
-		Enabled: true,
+		Enabled: ModeEnabled,
 		Conditions: []expression.ConditionExpression{
 			{Field: "$caller.role", Operator: "eq", Value: "admin"},
 		},

@@ -234,7 +234,7 @@ func definitionFromMap(ruleID string, ruleMap map[string]any) (Definition, error
 		ID:      ruleID,
 		Type:    typeStr,
 		Name:    getStringWithDefault(ruleMap, "name", ruleID),
-		Enabled: getBoolWithDefault(ruleMap, "enabled", true),
+		Enabled: getEnabledMode(ruleMap, "enabled", ModeEnabled),
 		Logic:   getStringWithDefault(ruleMap, "logic", "and"),
 	}
 
@@ -427,4 +427,40 @@ func (rp *Processor) convertToStringSlice(val any) []string {
 	}
 
 	return []string{}
+}
+
+// getEnabledMode reads the "enabled" field from a map[string]any, accepting
+// both the legacy bool shape (true → "enabled", false → "disabled") and the
+// new string shape ("enabled"/"disabled"/"shadow"). Falls back to defaultVal
+// when the key is absent or its type is unrecognised.
+//
+// This replaces getBoolWithDefault for the enabled field specifically so that
+// hot-reload's KV-to-Definition path handles all three states without losing
+// the shadow mode during a reconcile.
+func getEnabledMode(m map[string]any, key string, defaultVal Mode) Mode {
+	v, ok := m[key]
+	if !ok {
+		return defaultVal
+	}
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return ModeEnabled
+		}
+		return ModeDisabled
+	case string:
+		switch Mode(val) {
+		case ModeEnabled, ModeDisabled, ModeShadow:
+			return Mode(val)
+		}
+		switch val {
+		case "true":
+			return ModeEnabled
+		case "false":
+			return ModeDisabled
+		}
+		return defaultVal
+	default:
+		return defaultVal
+	}
 }
