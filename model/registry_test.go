@@ -216,6 +216,43 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: "defaults.capability \"nonexistent\" references non-existent capability",
 		},
+		{
+			name: "endpoint invalid idle_conn_timeout",
+			modify: func(r *Registry) {
+				r.Endpoints["bad"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000, IdleConnTimeout: "30 seconds",
+				}
+			},
+			wantErr: "endpoint \"bad\": idle_conn_timeout \"30 seconds\" is not a valid Go duration",
+		},
+		{
+			name: "endpoint invalid response_header_timeout",
+			modify: func(r *Registry) {
+				r.Endpoints["bad"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000, ResponseHeaderTimeout: "thirty",
+				}
+			},
+			wantErr: "endpoint \"bad\": response_header_timeout \"thirty\" is not a valid Go duration",
+		},
+		{
+			name: "endpoint invalid request_timeout",
+			modify: func(r *Registry) {
+				r.Endpoints["bad"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000, RequestTimeout: "5 minutes",
+				}
+			},
+			wantErr: "endpoint \"bad\": request_timeout \"5 minutes\" is not a valid Go duration",
+		},
+		{
+			name: "endpoint valid duration fields",
+			modify: func(r *Registry) {
+				r.Endpoints["good"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000,
+					IdleConnTimeout: "30s", ResponseHeaderTimeout: "45s",
+					RequestTimeout: "10m", DisableKeepAlives: true,
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

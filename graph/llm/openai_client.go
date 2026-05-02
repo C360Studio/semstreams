@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
+	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/sashabaranov/go-openai"
 )
@@ -65,6 +65,14 @@ type OpenAIConfig struct {
 
 	// Logger for error logging (optional, defaults to slog.Default()).
 	Logger *slog.Logger
+
+	// IdleConnTimeout, ResponseHeaderTimeout, and DisableKeepAlives mirror
+	// the same fields on model.EndpointConfig. Empty/false preserves Go
+	// defaults. See model/httpclient.go for behaviour and the migration
+	// guide for tuning recommendations per provider.
+	IdleConnTimeout       string
+	ResponseHeaderTimeout string
+	DisableKeepAlives     bool
 }
 
 // NewOpenAIClient creates a new OpenAI-compatible LLM client.
@@ -96,14 +104,13 @@ func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = cfg.BaseURL
-	config.HTTPClient = &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-		},
-	}
+	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptions{
+		Timeout:               timeout,
+		IdleConnTimeout:       cfg.IdleConnTimeout,
+		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
+		DisableKeepAlives:     cfg.DisableKeepAlives,
+		MaxIdleConnsPerHost:   10,
+	})
 
 	client := openai.NewClientWithConfig(config)
 

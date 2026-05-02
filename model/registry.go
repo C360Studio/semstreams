@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 )
 
 // Capability name constants for registry-based endpoint resolution.
@@ -143,6 +144,26 @@ type EndpointConfig struct {
 	// the capability or component-level timeout applies. See agentic-model
 	// Timeout Resolution for the full precedence chain.
 	RequestTimeout string `json:"request_timeout,omitempty"`
+	// IdleConnTimeout bounds how long a pooled HTTP connection stays idle
+	// before the client closes it. Go duration string (e.g. "30s"). Empty
+	// preserves the Go default (90s). Tighten this on endpoints whose
+	// upstream gateway silently drops idle connections (Ollama, OpenRouter
+	// in some configurations) — a stale pooled connection causes the next
+	// Read to block until the request-level timeout fires.
+	IdleConnTimeout string `json:"idle_conn_timeout,omitempty"`
+	// ResponseHeaderTimeout caps how long the client waits for response
+	// headers after the request body is fully written. Go duration string.
+	// Empty preserves the Go default (no timeout). DO NOT set this on
+	// endpoints that legitimately take longer than the value to generate
+	// for non-streaming requests — the server sends headers only after
+	// generation completes for non-streaming OpenAI-compat. Safe to set
+	// on streaming endpoints (servers send headers immediately for SSE).
+	ResponseHeaderTimeout string `json:"response_header_timeout,omitempty"`
+	// DisableKeepAlives forces a fresh TCP/TLS connection for every request.
+	// Costs a handshake per call (~50-300ms for TLS) but eliminates the
+	// stale-pooled-connection class of wedge entirely. Use on known-wedgy
+	// gateways where shorter IdleConnTimeout has been insufficient.
+	DisableKeepAlives bool `json:"disable_keepalives,omitempty"`
 }
 
 // CapabilityConfig defines model preferences for a capability.
@@ -280,6 +301,21 @@ func validateEndpointName(name string) error {
 	return nil
 }
 
+// validateDurationField parses an optional Go duration string from an endpoint
+// config field. Empty values are allowed (treated as "use the default" by the
+// HTTP client builder); invalid values are rejected at config load time so
+// operators see a parse error before the endpoint is ever invoked.
+func validateDurationField(endpointName, field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := time.ParseDuration(value); err != nil {
+		return fmt.Errorf("endpoint %q: %s %q is not a valid Go duration: %w",
+			endpointName, field, value, err)
+	}
+	return nil
+}
+
 func validateEndpoint(name string, ep *EndpointConfig) error {
 	if err := validateEndpointName(name); err != nil {
 		return err
@@ -324,7 +360,13 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 		return fmt.Errorf("endpoint %q: output_price_per_1m_tokens must not be negative", name)
 	}
 
-	return nil
+	if err := validateDurationField(name, "idle_conn_timeout", ep.IdleConnTimeout); err != nil {
+		return err
+	}
+	if err := validateDurationField(name, "response_header_timeout", ep.ResponseHeaderTimeout); err != nil {
+		return err
+	}
+	return validateDurationField(name, "request_timeout", ep.RequestTimeout)
 }
 
 func (r *Registry) validateCapability(name string, cap *CapabilityConfig) error {

@@ -68,6 +68,12 @@ func NewClient(endpoint *model.EndpointConfig) (*Client, error) {
 	if endpoint.URL != "" {
 		config.BaseURL = endpoint.URL
 	}
+	// Replace the SDK's default &http.Client{} with one whose Transport
+	// honours the EndpointConfig connection-hygiene fields. Empty/zero
+	// fields preserve Go's net/http defaults (backward compatible).
+	// See model/httpclient.go and operations/09-openai-client-keepalive.md
+	// for the failure modes this addresses.
+	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(endpoint))
 
 	client := openai.NewClientWithConfig(config)
 
