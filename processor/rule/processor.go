@@ -167,6 +167,14 @@ type Processor struct {
 	// detection across restarts) rather than refusing to start.
 	scheduleTracker *ScheduleTracker
 
+	// windowTracker provides bucketed sliding-window counters for
+	// count_in_window rule conditions. Stored in the RULE_WINDOWS KV
+	// bucket. Created in initializeWindowTracker (called from Start
+	// alongside initializeScheduleTracker). Nil when bucket creation
+	// fails — count_in_window conditions return an error and the rule
+	// evaluates to false (conservative non-match) rather than panicking.
+	windowTracker *WindowTracker
+
 	// Revision tracking for per-rule feedback loop prevention.
 	// Keyed by (ruleID, entityID) → KV revision → tracked-at timestamp.
 	// A watcher update at one of those revisions skips only the rule that
@@ -598,6 +606,57 @@ func (rp *Processor) initializeScheduleTracker(ctx context.Context) error {
 	return nil
 }
 
+// initializeWindowTracker creates the RULE_WINDOWS KV bucket and binds a
+// WindowTracker to it. The bucket stores per-rule sliding-window counters for
+// count_in_window conditions. Bucket creation is best-effort: failure leaves
+// rp.windowTracker nil and count_in_window conditions return false (conservative
+// non-match) rather than refusing to start, matching the schedule/state tracker
+// degrade-gracefully posture.
+//
+// History=1 (only current window state matters), no TTL (keys are swept by the
+// opt-in janitor cron rule — see chunk 3b), and MaxBytes=-1 (bounded by
+// DefaultMaxDistinctDimensionsPerRule × ~500 bytes per record).
+func (rp *Processor) initializeWindowTracker(ctx context.Context) error {
+	if rp.natsClient == nil {
+		rp.logger.Debug("Skipping window tracker init: no NATS client")
+		return nil
+	}
+
+	js, err := rp.natsClient.JetStream()
+	if err != nil {
+		return fmt.Errorf("get JetStream context: %w", err)
+	}
+
+	bucket, err := js.KeyValue(ctx, WindowsBucketName)
+	if err != nil {
+		bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:      WindowsBucketName,
+			Description: "Per-rule sliding-window counters for count_in_window conditions",
+			TTL:         0,  // Keys swept by opt-in janitor cron rule (see chunk 3b).
+			MaxBytes:    -1, // Bounded by DefaultMaxDistinctDimensionsPerRule × record size.
+			History:     1,  // Only current state matters; previous revisions unused.
+		})
+		if err != nil {
+			return fmt.Errorf("create %s bucket: %w", WindowsBucketName, err)
+		}
+		rp.logger.Info("Created RULE_WINDOWS KV bucket for count_in_window conditions")
+	} else {
+		rp.logger.Info("Using existing RULE_WINDOWS KV bucket")
+	}
+
+	rp.windowTracker = NewWindowTracker(bucket, rp.logger)
+	rp.windowTracker.setMetrics(rp.metrics)
+
+	// Wire the tracker into the stateful evaluator so count_in_window
+	// conditions can call Increment during rule evaluation. The stateful
+	// evaluator may be nil when initializeStateTracker failed earlier
+	// (degraded path); the nil-check avoids a panic in that case.
+	if rp.statefulEvaluator != nil {
+		rp.statefulEvaluator.setWindowTracker(rp.windowTracker)
+	}
+	return nil
+}
+
 // initializeCronScheduler builds the CronScheduler against the shared
 // ActionExecutor and registers all cron rules already loaded by Initialize.
 // It is called from Start under rp.mu.Lock so the registration loop sees a
@@ -677,6 +736,15 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// restarts), which is the same posture as stateful-rule degradation.
 	if err := rp.initializeScheduleTracker(ctx); err != nil {
 		rp.logger.Warn("Failed to initialize schedule tracker, cron missed-fire detection disabled",
+			"error", err)
+	}
+
+	// Initialize WindowTracker for count_in_window conditions. Failure is
+	// non-fatal: count_in_window conditions will return false (conservative
+	// non-match) when the tracker is nil, and expression rules without
+	// count_in_window conditions are completely unaffected.
+	if err := rp.initializeWindowTracker(ctx); err != nil {
+		rp.logger.Warn("Failed to initialize window tracker, count_in_window conditions disabled",
 			"error", err)
 	}
 

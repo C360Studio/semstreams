@@ -22,6 +22,8 @@ type Metrics struct {
 	stateTransitionsTotal *prometheus.CounterVec // OnEnter/OnExit transitions
 	debounceDelaysTotal   prometheus.Counter     // Coalesced updates due to debouncing
 	shadowFires           *prometheus.CounterVec // Shadow-mode action suppression counter
+	windowDimCapHit       *prometheus.CounterVec // count_in_window cardinality cap rejections
+	windowTruncation      *prometheus.CounterVec // count_in_window per-key count cap truncations
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -132,6 +134,33 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Help: "Actions suppressed by shadow mode per rule and action type. " +
 					"Use this to validate a shadow rule against production traffic before enabling it.",
 			}, []string{"rule_id", "action_type"}),
+
+			// count_in_window cardinality cap — label: rule_id ONLY.
+			// Intentionally NO dimension label: logging the dimension value here
+			// would itself cause unbounded Prometheus label cardinality — exactly
+			// the DoS surface the cap exists to prevent.
+			windowDimCapHit: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "window_dimension_cap_hit_total",
+				Help: "New dimension values rejected by the per-rule cardinality cap for " +
+					"count_in_window conditions. Alert when non-zero to detect dimension-space DoS " +
+					"or misconfigured max_dimensions. Labels: rule_id only (no dimension label — " +
+					"adding the dimension value would itself cause Prometheus cardinality blowup).",
+			}, []string{"rule_id"}),
+
+			// count_in_window per-key count cap — label: rule_id ONLY.
+			// Tracks how often the oldest bucket is dropped to enforce the
+			// per-window count cap. Expected to be silent in normal operation;
+			// non-zero suggests the threshold or window is too permissive.
+			windowTruncation: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "window_truncation_total",
+				Help: "Oldest bucket dropped to enforce the per-window count cap for " +
+					"count_in_window conditions. Non-zero suggests max_per_window is too low " +
+					"or the rule fires against extremely high-traffic dimensions.",
+			}, []string{"rule_id"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -148,6 +177,8 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.stateTransitionsTotal,
 			ruleMetrics.debounceDelaysTotal,
 			ruleMetrics.shadowFires,
+			ruleMetrics.windowDimCapHit,
+			ruleMetrics.windowTruncation,
 		)
 	})
 

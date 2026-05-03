@@ -32,6 +32,9 @@ func NewExpressionEvaluator() *Evaluator {
 
 	// Note: OpTransition is handled specially in evaluateConditionWithState
 	// because it needs access to $prev.* state fields, not just fieldValue/compareValue.
+	// Note: OpCountInWindow is handled specially in evaluateConditionWithState
+	// because it needs access to a WindowStateReader and the ruleID; it is
+	// registered only when NewExpressionEvaluatorWithWindowReader is used.
 
 	// Register string operators
 	evaluator.operators[OpContains] = operatorContains
@@ -42,15 +45,60 @@ func NewExpressionEvaluator() *Evaluator {
 	return evaluator
 }
 
+// NewExpressionEvaluatorWithWindowReader creates an evaluator that supports
+// the count_in_window operator for the given rule. The reader provides
+// KV-backed sliding-window state; the ruleID namespaces per-dimension
+// counters so concurrent rules don't share counts.
+//
+// All other operators behave identically to NewExpressionEvaluator.
+// Using this constructor for rules without count_in_window conditions is
+// harmless — the operator is only dispatched when the condition specifies it.
+func NewExpressionEvaluatorWithWindowReader(reader WindowStateReader, ruleID string) *Evaluator {
+	ev := NewExpressionEvaluator()
+	ev.windowReader = reader
+	ev.windowRuleID = ruleID
+	// count_in_window is dispatched via the dedicated branch in
+	// evaluateConditionWithState, not via the operator map, because it needs
+	// the ruleID at evaluation time. No entry in ev.operators is needed.
+	return ev
+}
+
 // Evaluate evaluates a logical expression against an entity state
 func (e *Evaluator) Evaluate(entityState *gtypes.EntityState, expr LogicalExpression) (bool, error) {
 	return e.EvaluateWithStateFields(entityState, nil, expr)
+}
+
+// EvaluateForRule evaluates a logical expression for a specific rule, injecting
+// the ruleID and WindowStateReader for the duration of the evaluation. This is
+// the preferred call site for the StatefulEvaluator, which shares one Evaluator
+// instance across many rules and needs to set the window context per-call without
+// mutating the shared evaluator's stored fields.
+//
+// A temporary child evaluator is constructed that inherits all operators and type
+// detection from the parent but overrides the window context. This is allocation-
+// free compared to constructing a full new Evaluator because the operator map is
+// shared by reference.
+func (e *Evaluator) EvaluateForRule(entityState *gtypes.EntityState, stateFields StateFields, expr LogicalExpression, reader WindowStateReader, ruleID string) (bool, error) {
+	// Create a lightweight call-scoped evaluator that shares the operator map
+	// and type detector but carries the per-call window context.
+	child := &Evaluator{
+		operators:    e.operators,
+		typeDetector: e.typeDetector,
+		windowReader: reader,
+		windowRuleID: ruleID,
+	}
+	return child.EvaluateWithStateFields(entityState, stateFields, expr)
 }
 
 // EvaluateWithStateFields evaluates a logical expression against entity state and optional
 // match state fields. The stateFields parameter provides $state.* pseudo-field values
 // (e.g., "$state.iteration", "$state.max_iterations") for conditions that reference
 // rule execution state rather than entity triples.
+//
+// For rules that use the count_in_window operator, prefer EvaluateForRule which accepts
+// an explicit ruleID so the window counter is correctly namespaced. Using this method
+// with an evaluator constructed via NewExpressionEvaluatorWithWindowReader is safe but
+// uses the ruleID baked in at construction time.
 func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, stateFields StateFields, expr LogicalExpression) (bool, error) {
 	if len(expr.Conditions) == 0 {
 		return true, nil // Empty condition list passes
@@ -122,6 +170,16 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 // negate:true on the transition operator at load time; the branch here will
 // never be reached for transition+negate in production.
 func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, stateFields StateFields, condition ConditionExpression) (bool, error) {
+	// count_in_window is intercepted first — before field-prefix branching —
+	// because it uses a custom dispatch path (evaluateCountInWindow) that
+	// resolves the dimension value itself from either stateFields or entity
+	// triples. Routing it through the $caller.* or $state.* branches would
+	// require count_in_window to be in e.operators (it is not) and would
+	// lose the ruleID context needed for KV key namespacing.
+	if condition.Operator == OpCountInWindow {
+		return e.evaluateCountInWindow(entityState, stateFields, condition)
+	}
+
 	// Check for $state.* pseudo-fields first
 	if strings.HasPrefix(condition.Field, "$state.") {
 		fieldValue, exists := stateFields[condition.Field]
@@ -270,6 +328,67 @@ func (e *Evaluator) evaluateCondition(entityState *gtypes.EntityState, condition
 		}
 	}
 
+	if condition.Negate {
+		result = !result
+	}
+	return result, nil
+}
+
+// evaluateCountInWindow evaluates a count_in_window condition. It resolves
+// the dimension value from either stateFields (for $state.* / $caller.*
+// pseudo-fields) or entity triples (for ordinary predicate fields), then
+// calls the WindowStateReader to record the occurrence and compare the
+// rolling count against the threshold.
+//
+// Returns false when:
+//   - no WindowStateReader is configured on the evaluator
+//   - the dimension field resolves to nil/empty (absent-field semantic)
+//   - the reader returns -1 (cardinality cap hit)
+//
+// The Negate flag is honoured the same as all other operators (applied to
+// the comparison result, NOT to absent-field exits).
+func (e *Evaluator) evaluateCountInWindow(entityState *gtypes.EntityState, stateFields StateFields, condition ConditionExpression) (bool, error) {
+	if e.windowReader == nil {
+		return false, &EvaluationError{
+			Field:    condition.Field,
+			Operator: OpCountInWindow,
+			Message:  "count_in_window operator requires a WindowStateReader — use NewExpressionEvaluatorWithWindowReader",
+		}
+	}
+
+	// Resolve the dimension value from stateFields (pseudo-fields like $caller.id)
+	// or entity triples (ordinary predicate fields).
+	var fieldValue interface{}
+	if strings.HasPrefix(condition.Field, "$state.") || strings.HasPrefix(condition.Field, "$caller.") {
+		v, exists := stateFields[condition.Field]
+		if !exists {
+			return false, nil // absent-field semantic: no increment, no match
+		}
+		fieldValue = v
+	} else if entityState != nil {
+		v, exists, err := e.typeDetector.GetFieldValue(entityState, condition.Field)
+		if err != nil {
+			return false, &EvaluationError{
+				Field:    condition.Field,
+				Operator: OpCountInWindow,
+				Message:  "failed to get field value",
+				Err:      err,
+			}
+		}
+		if !exists {
+			return false, nil // absent-field semantic
+		}
+		fieldValue = v
+	} else {
+		return false, nil // no entity state available
+	}
+
+	// Delegate to the operator function constructed with the injected reader.
+	opFunc := makeCountInWindowOperator(e.windowReader, e.windowRuleID)
+	result, err := opFunc(fieldValue, condition.Value)
+	if err != nil {
+		return false, err
+	}
 	if condition.Negate {
 		result = !result
 	}

@@ -367,6 +367,7 @@ func isValidOperator(op string) bool {
 		"in", "not_in", "between",
 		"length_eq", "length_gt", "length_lt", "array_contains",
 		"transition",
+		"count_in_window",
 	}
 	for _, valid := range validOps {
 		if op == valid {

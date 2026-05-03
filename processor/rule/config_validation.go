@@ -3,6 +3,7 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -182,6 +183,13 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 				}
 			}
 		}
+
+		// Validate count_in_window value config
+		if operator == expression.OpCountInWindow {
+			if err := rp.validateCountInWindowValue(ruleID, i, condMap["value"]); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Validate logic field if present
@@ -226,6 +234,116 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 	}
 
 	return nil
+}
+
+// validateCountInWindowValue validates the value config for a count_in_window condition:
+//
+//   - "window" must be a parseable positive duration string
+//   - exactly one of gt/gte/lt/lte/eq/ne must be present and numeric
+//   - max_dimensions (optional) must be ≤ DefaultMaxDistinctDimensionsPerRule
+//   - max_per_window (optional) must be ≤ DefaultMaxCountsPerWindow
+func (rp *Processor) validateCountInWindowValue(ruleID string, condIdx int, value interface{}) error {
+	m, ok := value.(map[string]interface{})
+	if !ok {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s condition[%d]: count_in_window value must be an object, got %T", ruleID, condIdx, value),
+			"RuleProcessor", "validateCountInWindowValue", "check value type")
+	}
+
+	// Validate window duration
+	windowRaw, ok := m["window"]
+	if !ok {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s condition[%d]: count_in_window value missing required 'window' field", ruleID, condIdx),
+			"RuleProcessor", "validateCountInWindowValue", "check window field")
+	}
+	windowStr, ok := windowRaw.(string)
+	if !ok {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s condition[%d]: count_in_window window must be a string, got %T", ruleID, condIdx, windowRaw),
+			"RuleProcessor", "validateCountInWindowValue", "check window type")
+	}
+	window, err := time.ParseDuration(windowStr)
+	if err != nil || window <= 0 {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s condition[%d]: count_in_window window %q is not a valid positive duration", ruleID, condIdx, windowStr),
+			"RuleProcessor", "validateCountInWindowValue", "parse window duration")
+	}
+
+	// Validate that exactly one comparison operator is present
+	comparators := []string{"gt", "gte", "lt", "lte", "eq", "ne"}
+	found := ""
+	for _, cmp := range comparators {
+		if raw, exists := m[cmp]; exists {
+			if found != "" {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s condition[%d]: count_in_window has conflicting comparators %q and %q — use exactly one", ruleID, condIdx, found, cmp),
+					"RuleProcessor", "validateCountInWindowValue", "check comparators")
+			}
+			if _, isNum := toFloat64Validation(raw); !isNum {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s condition[%d]: count_in_window %s threshold must be numeric, got %T", ruleID, condIdx, cmp, raw),
+					"RuleProcessor", "validateCountInWindowValue", "check threshold type")
+			}
+			found = cmp
+		}
+	}
+	if found == "" {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s condition[%d]: count_in_window value missing comparison operator (one of: gt, gte, lt, lte, eq, ne)", ruleID, condIdx),
+			"RuleProcessor", "validateCountInWindowValue", "check comparator present")
+	}
+
+	// Validate optional cardinality caps — may only LOWER the framework default
+	if raw, ok := m["max_dimensions"]; ok {
+		v, isNum := toFloat64Validation(raw)
+		if !isNum {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d]: count_in_window max_dimensions must be numeric, got %T", ruleID, condIdx, raw),
+				"RuleProcessor", "validateCountInWindowValue", "check max_dimensions type")
+		}
+		if int(v) > DefaultMaxDistinctDimensionsPerRule {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d]: count_in_window max_dimensions %d exceeds framework cap %d — rule-level overrides may only lower the cap", ruleID, condIdx, int(v), DefaultMaxDistinctDimensionsPerRule),
+				"RuleProcessor", "validateCountInWindowValue", "check max_dimensions cap")
+		}
+	}
+	if raw, ok := m["max_per_window"]; ok {
+		v, isNum := toFloat64Validation(raw)
+		if !isNum {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d]: count_in_window max_per_window must be numeric, got %T", ruleID, condIdx, raw),
+				"RuleProcessor", "validateCountInWindowValue", "check max_per_window type")
+		}
+		if int(v) > DefaultMaxCountsPerWindow {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d]: count_in_window max_per_window %d exceeds framework cap %d — rule-level overrides may only lower the cap", ruleID, condIdx, int(v), DefaultMaxCountsPerWindow),
+				"RuleProcessor", "validateCountInWindowValue", "check max_per_window cap")
+		}
+	}
+
+	return nil
+}
+
+// toFloat64Validation converts numeric JSON types to float64. Same logic as
+// expression.toFloat64 but scoped to the validation package to avoid a
+// cross-package call (expression pkg is a sub-package with no upward deps).
+func toFloat64Validation(v interface{}) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case float32:
+		return float64(val), true
+	case int:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	case json.Number:
+		f, err := val.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // isKnownRuleType checks if a rule type is supported. Cron is a built-in

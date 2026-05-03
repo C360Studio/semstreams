@@ -25,6 +25,11 @@ type StatefulEvaluator struct {
 	exprEvaluator  *expression.Evaluator
 	logger         *slog.Logger
 	metrics        *Metrics
+	// windowTracker provides KV-backed sliding-window state for
+	// count_in_window conditions. Nil when bucket creation failed at
+	// startup — count_in_window conditions return false (conservative
+	// non-match) rather than panicking. Set via setWindowTracker.
+	windowTracker expression.WindowStateReader
 }
 
 // ActionExecutorInterface defines the interface for action execution.
@@ -52,6 +57,14 @@ func NewStatefulEvaluator(stateTracker *StateTracker, actionExecutor ActionExecu
 // Processor after NewStatefulEvaluator so the evaluator can record
 // shadow-mode suppression without requiring metrics at construction time.
 func (e *StatefulEvaluator) setMetrics(m *Metrics) { e.metrics = m }
+
+// setWindowTracker wires in the WindowTracker for count_in_window conditions.
+// Called by Processor after NewStatefulEvaluator and after initializeWindowTracker
+// so the evaluator can delegate window-state reads without knowing KV details.
+// A nil tracker is tolerated — count_in_window conditions return false.
+func (e *StatefulEvaluator) setWindowTracker(wt expression.WindowStateReader) {
+	e.windowTracker = wt
+}
 
 // Evaluation groups the inputs to a single stateful rule evaluation.
 // Zero values are meaningful: Revision=0 means "no KV revision available"
@@ -151,8 +164,29 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	// into stateFields, and the absent-field semantic in the expression evaluator
 	// returns false for ALL operators — the correct "no identity" outcome for
 	// cron and KV-watch fires.
+	//
+	// callerFields is captured here so the window re-evaluation pass can carry
+	// $caller.* values through for combined count_in_window + $caller.* rules.
+	callerFields := expression.StateFields{}
 	if hasCallerConditions(ev.Rule) {
+		if ev.Caller != nil {
+			callerFields["$caller.id"] = ev.Caller.ID
+			callerFields["$caller.role"] = ev.Caller.Role
+			callerFields["$caller.org"] = ev.Caller.Org
+		}
 		currentlyMatching = e.reEvaluateWithCallerFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Caller, currentlyMatching)
+	}
+
+	// Re-evaluate conditions that use the count_in_window operator. The upstream
+	// ExpressionRule.EvaluateEntityState constructs its evaluator without a
+	// WindowStateReader, so count_in_window conditions always return an error
+	// there (swallowed as false). We correct that here with the wired tracker.
+	//
+	// This pass runs unconditionally when the rule has window conditions — there
+	// is no "counter != nil" gate on the outer branch because reEvaluateWithWindowReader
+	// itself handles the nil-tracker case conservatively (returns false).
+	if hasWindowConditions(ev.Rule) {
+		currentlyMatching = e.reEvaluateWithWindowReader(ev.Rule, ev.EntityID, ev.Entity, prevState, callerFields, currentlyMatching)
 	}
 
 	transition := DetectTransition(wasMatching, currentlyMatching)
@@ -255,7 +289,7 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 	if expr.Logic == "" {
 		expr.Logic = expression.LogicAnd
 	}
-	match, err := e.exprEvaluator.EvaluateWithStateFields(entity, prevFields, expr)
+	match, err := e.exprEvaluator.EvaluateForRule(entity, prevFields, expr, e.windowTracker, ruleDef.ID)
 	if err != nil {
 		e.logger.Warn("Failed to re-evaluate transition conditions",
 			"rule_id", ruleDef.ID,
@@ -422,6 +456,18 @@ func hasCallerConditions(ruleDef Definition) bool {
 	return false
 }
 
+// hasWindowConditions returns true if any top-level condition in the rule uses
+// the count_in_window operator. Used to gate the re-evaluation pass in Evaluate
+// so that rules without window conditions skip the extra EvaluateForRule call.
+func hasWindowConditions(ruleDef Definition) bool {
+	for _, cond := range ruleDef.Conditions {
+		if cond.Operator == expression.OpCountInWindow {
+			return true
+		}
+	}
+	return false
+}
+
 // reEvaluateWithCallerFields re-evaluates all rule conditions with $caller.* and $prev.*
 // fields populated. This corrects the match result for rules whose top-level conditions
 // reference $caller.* pseudo-fields: the upstream Rule.Evaluate(messages) call cannot
@@ -463,9 +509,69 @@ func (e *StatefulEvaluator) reEvaluateWithCallerFields(
 		expr.Logic = expression.LogicAnd
 	}
 
-	match, err := e.exprEvaluator.EvaluateWithStateFields(entity, callerFields, expr)
+	match, err := e.exprEvaluator.EvaluateForRule(entity, callerFields, expr, e.windowTracker, ruleDef.ID)
 	if err != nil {
 		e.logger.Warn("Failed to re-evaluate caller conditions",
+			"rule_id", ruleDef.ID,
+			"entity_id", entityID,
+			"error", err)
+		return currentlyMatching
+	}
+	return match
+}
+
+// reEvaluateWithWindowReader re-evaluates all rule conditions with a window-aware
+// evaluator so that count_in_window conditions are correctly exercised on the
+// KV-watch path.
+//
+// The upstream ExpressionRule.EvaluateEntityState constructs its evaluator with
+// expression.NewExpressionEvaluator() — no WindowStateReader — so count_in_window
+// conditions always return an EvaluationError there, which EvaluateEntityState
+// swallows and converts to false. This method corrects that by constructing a
+// child evaluator with the injected WindowStateReader and re-running the full
+// condition set with the same stateFields already accumulated by Evaluate.
+//
+// Pattern mirrors reEvaluateWithCallerFields (chunk 5): a new per-call evaluator
+// is constructed via EvaluateForRule so the shared e.exprEvaluator's stored
+// windowReader/windowRuleID are not mutated.
+func (e *StatefulEvaluator) reEvaluateWithWindowReader(
+	ruleDef Definition,
+	entityID string,
+	entity *gtypes.EntityState,
+	prevState MatchState,
+	callerFields expression.StateFields,
+	currentlyMatching bool,
+) bool {
+	// If no WindowStateReader is wired, conservative non-match: a count_in_window
+	// rule that cannot be evaluated should not silently fire.
+	if e.windowTracker == nil {
+		return false
+	}
+
+	// Build the same stateFields that Evaluate assembles before calling runActions,
+	// so that any $state.* or $prev.* references in the rule conditions resolve
+	// correctly during re-evaluation.
+	stateFields := expression.StateFields{}
+	for field, prevValue := range prevState.FieldValues {
+		stateFields["$prev."+field] = prevValue
+	}
+	// Carry caller fields through so that combined count_in_window + $caller.*
+	// rules (e.g. rate-limit per authenticated caller) also work correctly.
+	for k, v := range callerFields {
+		stateFields[k] = v
+	}
+
+	expr := expression.LogicalExpression{
+		Conditions: ruleDef.Conditions,
+		Logic:      ruleDef.Logic,
+	}
+	if expr.Logic == "" {
+		expr.Logic = expression.LogicAnd
+	}
+
+	match, err := e.exprEvaluator.EvaluateForRule(entity, stateFields, expr, e.windowTracker, ruleDef.ID)
+	if err != nil {
+		e.logger.Warn("Failed to re-evaluate window conditions",
 			"rule_id", ruleDef.ID,
 			"entity_id", entityID,
 			"error", err)
@@ -528,5 +634,9 @@ func (e *StatefulEvaluator) evaluateWhen(
 		Conditions: conditions,
 		Logic:      expression.LogicAnd,
 	}
+	// evaluateWhen does not have rule context (called from runActions which
+	// knows the rule ID). When this method grows a ruleID param in a future
+	// refactor, switch to EvaluateForRule. For now, EvaluateWithStateFields
+	// uses the evaluator's stored window context (nil unless set explicitly).
 	return e.exprEvaluator.EvaluateWithStateFields(entity, stateFields, expr)
 }

@@ -31,6 +31,15 @@ type LogicalExpression struct {
 type Evaluator struct {
 	operators    map[string]OperatorFunc
 	typeDetector TypeDetector
+	// windowReader provides KV-backed sliding-window state for the
+	// count_in_window operator. Nil when no window reader is configured
+	// (the operator returns an error when invoked without one, rather
+	// than silently ignoring it). Set via NewExpressionEvaluatorWithWindowReader.
+	windowReader WindowStateReader
+	// windowRuleID is the rule ID passed to windowReader.Increment.
+	// It is set alongside windowReader and identifies which rule's
+	// dimension namespace the counter belongs to. Empty when windowReader is nil.
+	windowRuleID string
 }
 
 // OperatorFunc defines the signature for operator implementations
@@ -123,6 +132,13 @@ const (
 
 	// State transition operator
 	OpTransition = "transition"
+
+	// Count-in-window operator: counts occurrences of a dimension over a
+	// rolling time window. Value is a config object:
+	//   {"window": "5m", "gt": 100, "max_dimensions": 1000, "max_per_window": 5000}
+	// The nested comparator (gt/gte/lt/lte/eq/ne) applies to the rolling count.
+	// Requires a WindowStateReader injected via NewExpressionEvaluatorWithWindowReader.
+	OpCountInWindow = "count_in_window"
 )
 
 // Logic operators
