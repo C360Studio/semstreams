@@ -214,7 +214,18 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 			callerFields["$caller.role"] = ev.Caller.Role
 			callerFields["$caller.org"] = ev.Caller.Org
 		}
-		currentlyMatching = e.reEvaluateWithCallerFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Caller, currentlyMatching)
+		// Pass ev.Message so that combined AND rules ($message.* + $caller.*)
+		// have both pseudo-field namespaces in the same stateFields map.
+		currentlyMatching = e.reEvaluateWithCallerFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Caller, ev.Message, currentlyMatching)
+	}
+
+	// Re-evaluate conditions that reference $message.* pseudo-fields when
+	// the rule has NO $caller.* conditions. When both are present, the caller
+	// pass above already populates $message.* (unified-stateFields approach),
+	// so running this pass too would be redundant work. The !hasCallerConditions
+	// guard makes the two passes mutually exclusive for combined rules.
+	if hasMessageConditions(ev.Rule) && !hasCallerConditions(ev.Rule) {
+		currentlyMatching = e.reEvaluateWithMessageFields(ev.Rule, ev.EntityID, ev.Entity, prevState, ev.Message, currentlyMatching)
 	}
 
 	// Re-evaluate conditions that use the count_in_window operator. The upstream
@@ -514,18 +525,38 @@ func hasWindowConditions(ruleDef Definition) bool {
 	return false
 }
 
-// reEvaluateWithCallerFields re-evaluates all rule conditions with $caller.* and $prev.*
-// fields populated. This corrects the match result for rules whose top-level conditions
-// reference $caller.* pseudo-fields: the upstream Rule.Evaluate(messages) call cannot
-// inject caller context (the Rule interface is identity-agnostic), so those conditions
-// always return false from the initial evaluation. We fix the result here, inside the
-// stateful evaluator that owns the caller-aware Evaluation struct.
+// hasMessageConditions returns true if any top-level condition in the rule
+// references a $message.* pseudo-field. Mirrors hasCallerConditions shape.
+// Used to gate the re-evaluation pass in Evaluate so that rules without
+// message conditions skip the extra EvaluateForRule call.
+func hasMessageConditions(ruleDef Definition) bool {
+	for _, cond := range ruleDef.Conditions {
+		if strings.HasPrefix(cond.Field, "$message.") {
+			return true
+		}
+	}
+	return false
+}
+
+// reEvaluateWithCallerFields re-evaluates all rule conditions with $caller.*,
+// $message.*, and $prev.* fields populated. This corrects the match result for
+// rules whose top-level conditions reference $caller.* pseudo-fields: the
+// upstream Rule.Evaluate(messages) call cannot inject caller context (the Rule
+// interface is identity-agnostic), so those conditions always return false from
+// the initial evaluation. We fix the result here, inside the stateful evaluator
+// that owns the caller-aware Evaluation struct.
+//
+// $message.* fields are also populated here (unified-stateFields approach) so
+// that combined AND rules ($message.* + $caller.*) work correctly: both pseudo-
+// field namespaces must be present in the same stateFields map for the AND
+// short-circuit to resolve correctly.
 func (e *StatefulEvaluator) reEvaluateWithCallerFields(
 	ruleDef Definition,
 	entityID string,
 	entity *gtypes.EntityState,
 	prevState MatchState,
 	caller *CallerContext,
+	msgCtx *MessageContext,
 	currentlyMatching bool,
 ) bool {
 	// Populate $caller.* keys only when a caller is present. A nil caller
@@ -546,6 +577,12 @@ func (e *StatefulEvaluator) reEvaluateWithCallerFields(
 	for field, prevValue := range prevState.FieldValues {
 		callerFields["$prev."+field] = prevValue
 	}
+	// Populate $message.* keys alongside $caller.* so that combined AND rules
+	// (e.g. $message.violations.has_pii=true AND $caller.role != "admin") have
+	// all pseudo-field namespaces in the same stateFields map. Without this,
+	// the AND logic sees a missing $message.* key and short-circuits to false.
+	// populateMessageStateFields is a no-op when msgCtx is nil.
+	populateMessageStateFields(callerFields, msgCtx)
 
 	expr := expression.LogicalExpression{
 		Conditions: ruleDef.Conditions,
@@ -558,6 +595,50 @@ func (e *StatefulEvaluator) reEvaluateWithCallerFields(
 	match, err := e.exprEvaluator.EvaluateForRule(entity, callerFields, expr, e.windowTracker, ruleDef.ID)
 	if err != nil {
 		e.logger.Warn("Failed to re-evaluate caller conditions",
+			"rule_id", ruleDef.ID,
+			"entity_id", entityID,
+			"error", err)
+		return currentlyMatching
+	}
+	return match
+}
+
+// reEvaluateWithMessageFields re-evaluates all rule conditions with $message.*
+// and $prev.* fields populated. This corrects the match result for rules whose
+// top-level conditions reference ONLY $message.* pseudo-fields (no $caller.*):
+// the upstream Rule.Evaluate(messages) call refuses $-prefixed fields in
+// extractNestedValue, so those conditions always return false there. This pass
+// fires only when hasMessageConditions is true AND hasCallerConditions is false —
+// when both are true, reEvaluateWithCallerFields already populates $message.*
+// alongside $caller.* (unified-stateFields approach).
+func (e *StatefulEvaluator) reEvaluateWithMessageFields(
+	ruleDef Definition,
+	entityID string,
+	entity *gtypes.EntityState,
+	prevState MatchState,
+	msgCtx *MessageContext,
+	currentlyMatching bool,
+) bool {
+	msgFields := expression.StateFields{}
+	// populateMessageStateFields is a no-op when msgCtx is nil, which means
+	// every $message.* condition returns false — the correct "no governance in
+	// scope" semantic for cron and KV-watch fires.
+	populateMessageStateFields(msgFields, msgCtx)
+	for field, prevValue := range prevState.FieldValues {
+		msgFields["$prev."+field] = prevValue
+	}
+
+	expr := expression.LogicalExpression{
+		Conditions: ruleDef.Conditions,
+		Logic:      ruleDef.Logic,
+	}
+	if expr.Logic == "" {
+		expr.Logic = expression.LogicAnd
+	}
+
+	match, err := e.exprEvaluator.EvaluateForRule(entity, msgFields, expr, e.windowTracker, ruleDef.ID)
+	if err != nil {
+		e.logger.Warn("Failed to re-evaluate message conditions",
 			"rule_id", ruleDef.ID,
 			"entity_id", entityID,
 			"error", err)
