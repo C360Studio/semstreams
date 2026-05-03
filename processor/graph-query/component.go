@@ -386,11 +386,13 @@ func (c *Component) initLLMClassifier() {
 		return
 	}
 	c.llmClient = client
-	adapter := query.NewLLMClientAdapter(client)
+	timeout := resolveCapabilityLLMTimeout(c.modelRegistry, model.CapabilityQueryClassification, query.DefaultClassificationTimeout, c.logger)
+	adapter := query.NewLLMClientAdapter(client, timeout)
 	llmClassifier := query.NewLLMClassifier(adapter, nil)
 	c.classifier = query.NewClassifierChain(query.NewKeywordClassifier(), nil, llmClassifier)
 	c.logger.Info("LLM query classifier enabled",
-		slog.String("model", resolved.Model))
+		slog.String("model", resolved.Model),
+		slog.Duration("timeout", timeout))
 }
 
 // initAnswerSynthesizer wires the LLM answer synthesizer if the model registry
@@ -419,9 +421,75 @@ func (c *Component) initAnswerSynthesizer() {
 			slog.Any("error", err))
 		return
 	}
-	c.answerSynthesizer = NewLLMAnswerSynthesizer(client, resolved.Model, c.logger)
+	timeout := resolveCapabilityLLMTimeout(c.modelRegistry, model.CapabilityAnswerSynthesis, DefaultAnswerSynthesisTimeout, c.logger)
+	c.answerSynthesizer = NewLLMAnswerSynthesizer(client, resolved.Model, c.logger, timeout)
 	c.logger.Info("LLM answer synthesis enabled",
-		slog.String("model", resolved.Model))
+		slog.String("model", resolved.Model),
+		slog.Duration("timeout", timeout))
+}
+
+// resolveCapabilityLLMTimeout reads the per-call LLM timeout for any
+// synchronous-gateway graph-query capability (answer_synthesis,
+// query_classification) from the model registry, in this precedence
+// order:
+//
+//  1. endpoint.request_timeout — applies to the resolved endpoint;
+//     most-specific-wins.
+//  2. capability.timeout — per-capability cap covering anything routed
+//     to this capability that doesn't have a per-endpoint override.
+//  3. defaultTimeout — the per-capability framework default the caller
+//     supplies. Synthesis and classification each pick their own bound
+//     (synthesis takes longer than classification's small JSON output),
+//     so there's no single global default.
+//
+// Order matches processor/agentic-model/component.go:resolveTimeout
+// (per-task → endpoint → capability → component → fallback) so an
+// operator who sets endpoint.request_timeout to give a slow endpoint
+// headroom sees consistent behaviour across the framework. graph-query
+// has no per-task LLM call (no equivalent of req.Timeout), so the
+// chain starts at endpoint.
+//
+// Invalid duration strings at either level log a warning and fall
+// through to the next level — a malformed config never blocks startup
+// or silently disables the bound.
+//
+// The bound matters because graph-query's LLM calls sit inside
+// handleGlobalSearch (synchronous request-reply path); without an
+// inner sub-timeout, a slow upstream model can consume the gateway's
+// entire HTTP request budget and the template/keyword-fallback path
+// runs after the gateway has already returned an error to the client.
+// The bounded sub-timeout reserves margin for the rest of the
+// response path so the fallback stays transparent to the HTTP layer.
+func resolveCapabilityLLMTimeout(reg model.RegistryReader, capability string, defaultTimeout time.Duration, logger *slog.Logger) time.Duration {
+	tryParse := func(value, source string) (time.Duration, bool) {
+		if value == "" {
+			return 0, false
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			logger.Warn("Invalid LLM capability timeout; falling through",
+				"capability", capability,
+				"source", source,
+				"value", value,
+				"error", err)
+			return 0, false
+		}
+		return d, true
+	}
+
+	if name := reg.Resolve(capability); name != "" {
+		if ep := reg.GetEndpoint(name); ep != nil {
+			if d, ok := tryParse(ep.RequestTimeout, "endpoint"); ok {
+				return d
+			}
+		}
+	}
+	if capCfg := reg.GetCapability(capability); capCfg != nil {
+		if d, ok := tryParse(capCfg.Timeout, "capability"); ok {
+			return d
+		}
+	}
+	return defaultTimeout
 }
 
 // Start starts the component

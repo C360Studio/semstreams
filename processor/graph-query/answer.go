@@ -5,9 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/c360studio/semstreams/graph/llm"
 )
+
+// DefaultAnswerSynthesisTimeout caps a single answer-synthesis LLM call
+// when no operator-configured timeout is supplied. Sized to leave
+// substantial budget for the rest of the response path under typical
+// graph-gateway request deadlines (30-60s); slow upstream models that
+// need longer should configure capability.timeout or endpoint.request_timeout
+// explicitly. The bounded sub-timeout is what makes the
+// template-fallback path transparent to the HTTP layer — without it, a
+// slow LLM can eat the entire request ctx and the fallback runs after
+// the gateway has already returned an error to the HTTP client.
+const DefaultAnswerSynthesisTimeout = 15 * time.Second
 
 // AnswerSynthesizer produces a natural language answer from community summaries
 // in response to a globalSearch query.
@@ -28,19 +40,34 @@ Each cluster summary describes a group of related entities in the knowledge grap
 Be direct and factual. If the clusters don't contain enough information to fully answer the query, say what is known and what is missing. Do not speculate beyond the provided data.`
 
 // LLMAnswerSynthesizer uses an LLM to produce query-focused answers from
-// community summaries. Falls back to template synthesis on LLM error.
+// community summaries. Falls back to template synthesis on LLM error or
+// timeout — see Synthesize for the bounded-timeout contract.
 type LLMAnswerSynthesizer struct {
 	client    llm.Client
 	modelName string
 	logger    *slog.Logger
+	// timeout caps each Synthesize call's LLM round-trip independently
+	// of the parent ctx's deadline. Zero means use DefaultAnswerSynthesisTimeout;
+	// any positive value is honoured as-is. Operators set this via
+	// capability.timeout or endpoint.request_timeout in the model
+	// registry; the component reads those at construction time.
+	timeout time.Duration
 }
 
-// NewLLMAnswerSynthesizer creates an LLM-backed answer synthesizer.
-func NewLLMAnswerSynthesizer(client llm.Client, modelName string, logger *slog.Logger) *LLMAnswerSynthesizer {
+// NewLLMAnswerSynthesizer creates an LLM-backed answer synthesizer with a
+// bounded per-call LLM timeout. timeout=0 selects DefaultAnswerSynthesisTimeout
+// (15s). Operators configure the value via capability.timeout (preferred,
+// applies to every endpoint that handles the capability) or endpoint.request_timeout
+// (applies only to the configured endpoint); see component.initAnswerSynthesizer
+// for the resolution order.
+func NewLLMAnswerSynthesizer(client llm.Client, modelName string, logger *slog.Logger, timeout time.Duration) *LLMAnswerSynthesizer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LLMAnswerSynthesizer{client: client, modelName: modelName, logger: logger}
+	if timeout <= 0 {
+		timeout = DefaultAnswerSynthesisTimeout
+	}
+	return &LLMAnswerSynthesizer{client: client, modelName: modelName, logger: logger, timeout: timeout}
 }
 
 // Close releases the LLM client resources.
@@ -58,7 +85,23 @@ const answerSynthesisMaxTokens = 500
 var answerSynthesisTemperature = 0.3
 
 // Synthesize produces a query-focused answer by sending community summaries to the LLM.
-// On LLM failure, falls back to template synthesis and logs the error internally.
+// On LLM failure OR sub-timeout, falls back to template synthesis and logs
+// the error internally — the fallback path is transparent to the HTTP
+// layer and never propagates an error.
+//
+// The LLM call runs under a sub-context bounded by s.timeout, NOT under
+// the parent ctx directly. This is the load-bearing detail: a slow
+// upstream model (semspec hit this with seminstruct as
+// answer_synthesis) can otherwise consume the entire gateway HTTP
+// request budget; the fallback then runs after the gateway has already
+// returned an error to the client. Bounding here leaves margin for the
+// rest of the response path (response marshalling, NATS reply) so the
+// template fallback actually reaches the HTTP layer.
+//
+// If the parent ctx has less budget than s.timeout, the parent's
+// deadline wins (context.WithTimeout uses the earlier of the two). If
+// the parent ctx is already cancelled, the LLM call returns immediately
+// with the inherited error and we still fall back to template.
 func (s *LLMAnswerSynthesizer) Synthesize(ctx context.Context, query string, summaries []CommunitySummary, totalEntities int) (string, string, error) {
 	if len(summaries) == 0 {
 		return "", "", nil
@@ -66,7 +109,9 @@ func (s *LLMAnswerSynthesizer) Synthesize(ctx context.Context, query string, sum
 
 	userPrompt := buildAnswerPrompt(query, summaries, totalEntities)
 
-	resp, err := s.client.ChatCompletion(ctx, llm.ChatRequest{
+	llmCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	resp, err := s.client.ChatCompletion(llmCtx, llm.ChatRequest{
 		SystemPrompt: answerSynthesisSystemPrompt,
 		UserPrompt:   userPrompt,
 		MaxTokens:    answerSynthesisMaxTokens,
@@ -75,6 +120,7 @@ func (s *LLMAnswerSynthesizer) Synthesize(ctx context.Context, query string, sum
 	if err != nil {
 		s.logger.Warn("LLM answer synthesis failed, using template fallback",
 			slog.String("query", query),
+			slog.Duration("timeout", s.timeout),
 			slog.Any("error", err))
 		return synthesizeAnswer(summaries, totalEntities), "", nil
 	}

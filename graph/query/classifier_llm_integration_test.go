@@ -52,7 +52,7 @@ func newOllamaClient(t *testing.T) llm.Client {
 
 func newIntegrationClassifier(t *testing.T) *LLMClassifier {
 	t.Helper()
-	adapter := NewLLMClientAdapter(newOllamaClient(t))
+	adapter := NewLLMClientAdapter(newOllamaClient(t), 0)
 
 	domains := []*DomainExamples{
 		{
@@ -168,7 +168,7 @@ func TestLLMClassifier_Integration_AmbiguousQuery(t *testing.T) {
 func TestLLMClassifier_Integration_ChainWithLLMFallback(t *testing.T) {
 	// Test the full chain: T0 keyword → T1/T2 embedding → T3 LLM
 	// An ambiguous query with no keyword cues and no embedding match should reach T3.
-	adapter := NewLLMClientAdapter(newOllamaClient(t))
+	adapter := NewLLMClientAdapter(newOllamaClient(t), 0)
 	llmClassifier := NewLLMClassifier(adapter, nil)
 
 	chain := NewClassifierChain(nil, nil, llmClassifier)
