@@ -298,7 +298,7 @@ func (wt *WindowTracker) incrementOnce(ctx context.Context, key string, now time
 		rec.Buckets = rec.Buckets[1:]
 		wt.logger.Warn("Window tracker: per-window count cap hit, dropped oldest bucket",
 			"key", key)
-		// Extract ruleID from key for metric labelling (key is "ruleID:dimension")
+		// Extract ruleID from key for metric labelling (key is "ruleID.dimension")
 		if wt.metrics != nil && wt.metrics.windowTruncation != nil {
 			if idx := strings.Index(key, "."); idx > 0 {
 				wt.metrics.windowTruncation.WithLabelValues(key[:idx]).Inc()

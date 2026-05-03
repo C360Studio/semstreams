@@ -43,7 +43,7 @@ func NewExpressionRule(def Definition) (*ExpressionRule, error) {
 	// Default logic to "and" if not specified
 	logic := def.Logic
 	if logic == "" {
-		logic = "and"
+		logic = expression.LogicAnd
 	}
 
 	// Determine subscription subjects
@@ -183,20 +183,20 @@ func (r *ExpressionRule) evaluateConditions(data map[string]interface{}) bool {
 
 	// Apply logic operator
 	switch r.logic {
-	case "or":
+	case expression.LogicOr:
 		for _, result := range results {
 			if result {
 				return true
 			}
 		}
 		return false
-	case "not":
+	case expression.LogicNot:
 		// Config validation ensures exactly one condition; defensive guard here.
 		if len(results) != 1 {
 			return false
 		}
 		return !results[0]
-	case "and":
+	case expression.LogicAnd:
 		fallthrough
 	default:
 		for _, result := range results {
@@ -422,7 +422,7 @@ func (f *ExpressionRuleFactory) Validate(def Definition) error {
 	}
 
 	// Validate logic operator
-	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" && def.Logic != expression.LogicNot {
+	if def.Logic != "" && def.Logic != expression.LogicAnd && def.Logic != expression.LogicOr && def.Logic != expression.LogicNot {
 		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and', 'or', or 'not')", def.ID, def.Logic)
 	}
 

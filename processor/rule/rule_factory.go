@@ -345,8 +345,8 @@ func (f *BaseRuleFactory) ValidateExpression(def Definition) error {
 	}
 
 	// Validate logic operator
-	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" {
-		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and' or 'or')", def.ID, def.Logic)
+	if def.Logic != "" && def.Logic != "and" && def.Logic != "or" && def.Logic != "not" {
+		return fmt.Errorf("rule %s invalid logic operator: %s (must be 'and', 'or', or 'not')", def.ID, def.Logic)
 	}
 
 	// Bootstrap recovery opt-ins must have actions to re-fire. RerunOnRecovery

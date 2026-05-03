@@ -34,7 +34,7 @@ import (
 // unresolved-template warning in execution_context.go (= author error:
 // message-only token in a rule that never has a MessageContext).
 func applyMessageSubstitutions(template string, mc *MessageContext) string {
-	if mc == nil {
+	if mc == nil || !strings.Contains(template, "$message.") {
 		return template
 	}
 	result := template

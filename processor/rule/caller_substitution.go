@@ -59,7 +59,7 @@ type CallerContext struct {
 // unresolved-template warning in execution_context.go (= author error:
 // caller-only token in a rule that never has a CallerContext).
 func applyCallerSubstitutions(template string, cc *CallerContext) string {
-	if cc == nil {
+	if cc == nil || !strings.Contains(template, "$caller.") {
 		return template
 	}
 	result := template

@@ -72,7 +72,7 @@ type ScheduleContext struct {
 // surprising and would push the burden of checking onto every
 // downstream template.
 func applyScheduleSubstitutions(template string, sc *ScheduleContext) string {
-	if sc == nil {
+	if sc == nil || !strings.Contains(template, "$schedule.") {
 		return template
 	}
 	result := template
