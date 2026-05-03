@@ -1,0 +1,10 @@
+{
+  "id": "system-window-janitor",
+  "name": "RULE_WINDOWS Bucket Janitor",
+  "description": "Sweeps fully-expired keys from the RULE_WINDOWS KV bucket. REQUIRED if any rule uses count_in_window operator — otherwise the bucket grows unboundedly with stale dimensions that received traffic once and then went silent. The janitor fires Sweep() on the WindowTracker, which deletes keys whose most-recent bucket is older than 24 hours. Keys with live traffic are never deleted.",
+  "type": "cron",
+  "schedule": "@every 10m",
+  "actions": [
+    {"type": "sweep_windows"}
+  ]
+}

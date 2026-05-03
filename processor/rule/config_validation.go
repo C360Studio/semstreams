@@ -3,6 +3,7 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -344,6 +345,74 @@ func toFloat64Validation(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// validateActionFields performs action-type-specific field validation. Currently
+// enforces that sweep_windows actions carry no content fields — those fields
+// have no meaning and their presence almost always indicates a copy-paste error
+// from another action type.
+//
+// Called from validateCronDefinition and can be extended to other action types
+// that have "empty fields required" constraints.
+func validateActionFields(ruleID string, actionIdx int, a Action) error {
+	if a.Type != ActionTypeSweepWindows {
+		return nil
+	}
+	// sweep_windows carries no fields. Validate the most likely copy-paste
+	// accidents — the full Action struct field list.
+	type fieldCheck struct {
+		name  string
+		empty bool
+	}
+	checks := []fieldCheck{
+		{"subject", a.Subject == ""},
+		{"predicate", a.Predicate == ""},
+		{"object", a.Object == ""},
+		{"ttl", a.TTL == ""},
+		{"role", a.Role == ""},
+		{"model", a.Model == ""},
+		{"prompt", a.Prompt == ""},
+		{"workflow_id", a.WorkflowID == ""},
+		{"bucket", a.Bucket == ""},
+		{"key", a.Key == ""},
+		{"reason", a.Reason == ""},
+		{"boid_signal_type", a.BoidSignalType == ""},
+	}
+	var extra []string
+	for _, c := range checks {
+		if !c.empty {
+			extra = append(extra, c.name)
+		}
+	}
+	if len(a.Properties) > 0 {
+		extra = append(extra, "properties")
+	}
+	if len(a.Tools) > 0 {
+		extra = append(extra, "tools")
+	}
+	if len(a.ContextData) > 0 {
+		extra = append(extra, "context_data")
+	}
+	if len(a.Payload) > 0 {
+		extra = append(extra, "payload")
+	}
+	if len(a.When) > 0 {
+		extra = append(extra, "when")
+	}
+	if a.BoidStrength != 0 {
+		extra = append(extra, "boid_strength")
+	}
+	if a.Merge {
+		extra = append(extra, "merge")
+	}
+	if len(extra) > 0 {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s action[%d] (sweep_windows): extraneous fields not allowed: %s "+
+				"(sweep_windows takes no fields — remove them or use a different action type)",
+				ruleID, actionIdx, strings.Join(extra, ", ")),
+			"RuleProcessor", "validateActionFields", "check sweep_windows fields")
+	}
+	return nil
 }
 
 // isKnownRuleType checks if a rule type is supported. Cron is a built-in

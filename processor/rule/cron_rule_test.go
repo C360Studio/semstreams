@@ -1,11 +1,17 @@
 package rule
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func validCronDef() Definition {
@@ -235,4 +241,40 @@ func TestCronRuleType_Constant(t *testing.T) {
 	if CronRuleType != "cron" {
 		t.Errorf("CronRuleType = %q, want %q", CronRuleType, "cron")
 	}
+}
+
+// TestLoader_WindowJanitorExample_ParsesAndValidates loads the canonical
+// window-janitor example config from configs/rules/system/window-janitor.json,
+// parses it as a Definition, and confirms it round-trips through NewCronRule
+// without error. This is the minimal contract check: the file is syntactically
+// valid, has the correct type, schedule, and a single sweep_windows action with
+// no extraneous fields.
+func TestLoader_WindowJanitorExample_ParsesAndValidates(t *testing.T) {
+	t.Parallel()
+
+	// Locate the example file relative to this test file.
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller failed")
+	// processor/rule/ → repo root → configs/rules/system/
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	examplePath := filepath.Join(repoRoot, "configs", "rules", "system", "window-janitor.json")
+
+	data, err := os.ReadFile(examplePath)
+	require.NoError(t, err, "window-janitor.json must be readable at %s", examplePath)
+
+	var def Definition
+	require.NoError(t, json.Unmarshal(data, &def),
+		"window-janitor.json must be valid JSON that parses into a Definition")
+
+	assert.Equal(t, "system-window-janitor", def.ID)
+	assert.Equal(t, CronRuleType, def.Type)
+	assert.NotEmpty(t, def.Schedule, "schedule must be set")
+	require.Len(t, def.Actions, 1, "must have exactly one action")
+	assert.Equal(t, ActionTypeSweepWindows, def.Actions[0].Type)
+
+	// Round-trip through NewCronRule to validate schedule parsing and field checks
+	r, err := NewCronRule(def)
+	require.NoError(t, err, "window-janitor.json must pass NewCronRule validation")
+	assert.Equal(t, "system-window-janitor", r.ID())
+	assert.NotNil(t, r.Schedule(), "schedule must be parseable")
 }

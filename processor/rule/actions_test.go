@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2059,6 +2063,151 @@ func TestExecuteDeny_WritesAuditTriple(t *testing.T) {
 		"audit triple predicate must be %q", PredicateRuleDeny)
 	assert.Equal(t, "blocked by policy", triple.Object,
 		"audit triple object must be the reason string")
+}
+
+// ----- sweep_windows action tests -----
+
+// mockWindowSweeper is a test-only WindowSweeperInterface that counts Sweep
+// calls and returns a configurable (deleted, err) pair.
+type mockWindowSweeper struct {
+	mu      sync.Mutex
+	calls   int
+	deleted int
+	err     error
+}
+
+func (m *mockWindowSweeper) Sweep(_ context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	return m.deleted, m.err
+}
+
+func (m *mockWindowSweeper) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// TestExecuteSweepWindows_CallsTrackerSweep verifies that sweep_windows
+// delegates to WindowTracker.Sweep and emits rule_window_keys_swept_total.
+func TestExecuteSweepWindows_CallsTrackerSweep(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sweeper := &mockWindowSweeper{deleted: 7}
+
+	sweepCounter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "test_rule_window_keys_swept_total",
+	}, []string{"rule_id"})
+	m := &Metrics{windowKeysSwept: sweepCounter}
+
+	executor := NewActionExecutor(slog.Default())
+	executor.SetWindowTracker(sweeper)
+	executor.setMetrics(m)
+
+	ec := &ExecutionContext{State: &MatchState{RuleID: "system-window-janitor"}}
+	action := Action{Type: ActionTypeSweepWindows}
+
+	err := executor.Execute(ctx, action, ec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, sweeper.callCount(), "Sweep must be called once")
+
+	// Verify metric was emitted with the correct rule_id label and value
+	got := testutil.ToFloat64(sweepCounter.WithLabelValues("system-window-janitor"))
+	assert.Equal(t, float64(7), got,
+		"windowKeysSwept counter should equal the number of keys deleted")
+}
+
+// TestExecuteSweepWindows_NoTracker_NoError verifies that when no window
+// tracker is installed, sweep_windows returns nil (not an error) and logs
+// at Debug. Matches the nil-tracker posture of other optional dependencies.
+func TestExecuteSweepWindows_NoTracker_NoError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	executor := NewActionExecutor(slog.Default())
+	// No window tracker installed
+
+	ec := &ExecutionContext{State: &MatchState{RuleID: "system-window-janitor"}}
+	action := Action{Type: ActionTypeSweepWindows}
+
+	err := executor.Execute(ctx, action, ec)
+	require.NoError(t, err, "missing window tracker must not return an error")
+}
+
+// TestExecuteSweepWindows_TrackerError_Propagates verifies that errors from
+// Sweep are wrapped and returned to the caller.
+func TestExecuteSweepWindows_TrackerError_Propagates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	sweeper := &mockWindowSweeper{err: errors.New("KV gone")}
+
+	executor := NewActionExecutor(slog.Default())
+	executor.SetWindowTracker(sweeper)
+
+	ec := &ExecutionContext{State: &MatchState{RuleID: "system-window-janitor"}}
+	action := Action{Type: ActionTypeSweepWindows}
+
+	err := executor.Execute(ctx, action, ec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sweep_windows",
+		"error must be wrapped with sweep_windows prefix")
+	assert.Contains(t, err.Error(), "KV gone")
+}
+
+// TestValidate_SweepWindowsAction_RejectsExtraneousFields verifies that
+// config validation rejects sweep_windows actions that set content fields —
+// the most likely paste-edit accident when authoring new cron rules.
+func TestValidate_SweepWindowsAction_RejectsExtraneousFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		action Action
+	}{
+		{
+			name:   "subject set",
+			action: Action{Type: ActionTypeSweepWindows, Subject: "some.subject"},
+		},
+		{
+			name:   "predicate set",
+			action: Action{Type: ActionTypeSweepWindows, Predicate: "my.predicate"},
+		},
+		{
+			name:   "bucket set",
+			action: Action{Type: ActionTypeSweepWindows, Bucket: "MY_BUCKET"},
+		},
+		{
+			name:   "payload set",
+			action: Action{Type: ActionTypeSweepWindows, Payload: map[string]any{"k": "v"}},
+		},
+		{
+			name:   "when guard set",
+			action: Action{Type: ActionTypeSweepWindows, When: []expression.ConditionExpression{{Field: "f", Operator: "eq", Value: "v"}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateActionFields("test-rule", 0, tt.action)
+			require.Error(t, err,
+				"sweep_windows with %s set must fail validation", tt.name)
+			assert.Contains(t, strings.ToLower(err.Error()), "extraneous",
+				"error must mention extraneous fields")
+		})
+	}
+}
+
+// TestValidate_SweepWindowsAction_AcceptsEmptyAction verifies that a bare
+// sweep_windows action with no fields passes validation.
+func TestValidate_SweepWindowsAction_AcceptsEmptyAction(t *testing.T) {
+	t.Parallel()
+	action := Action{Type: ActionTypeSweepWindows}
+	err := validateActionFields("test-rule", 0, action)
+	require.NoError(t, err, "bare sweep_windows action must pass validation")
 }
 
 // TestExecuteDeny_VariableSubstitutionInReason verifies that $caller.role and

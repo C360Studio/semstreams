@@ -469,3 +469,144 @@ func TestWindowTracker_NilBucket_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrWindowBucketNil)
 }
+
+// ----- Sweep tests -----
+
+// TestWindowTracker_Sweep_DeletesExpiredKeys verifies that Sweep removes keys
+// whose buckets are all stale (older than maxSweepBucketAge) and preserves
+// keys that still have live buckets.
+func TestWindowTracker_Sweep_DeletesExpiredKeys(t *testing.T) {
+	t.Parallel()
+	wt, bucket := newWindowTrackerForTest()
+	ctx := context.Background()
+
+	// Expired timestamp: well beyond maxSweepBucketAge
+	expiredStart := time.Now().Add(-maxSweepBucketAge - time.Hour).Unix()
+	expiredRec, _ := json.Marshal(WindowRecord{Buckets: []WindowBucket{
+		{WindowStart: expiredStart, Count: 5},
+	}})
+
+	// Live timestamp: recently
+	liveStart := time.Now().Add(-time.Minute).Unix()
+	liveRec, _ := json.Marshal(WindowRecord{Buckets: []WindowBucket{
+		{WindowStart: liveStart, Count: 3},
+	}})
+
+	// Seed 3 expired keys and 2 live keys
+	expiredKeys := []string{
+		"rule-sweep.dim-a",
+		"rule-sweep.dim-b",
+		"rule-sweep.dim-c",
+	}
+	liveKeys := []string{
+		"rule-sweep.dim-d",
+		"rule-sweep.dim-e",
+	}
+	for _, k := range expiredKeys {
+		_, err := bucket.Put(ctx, k, expiredRec)
+		require.NoError(t, err)
+	}
+	for _, k := range liveKeys {
+		_, err := bucket.Put(ctx, k, liveRec)
+		require.NoError(t, err)
+	}
+
+	deleted, err := wt.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, deleted, "all 3 expired keys should be deleted")
+
+	// Verify expired keys are gone
+	for _, k := range expiredKeys {
+		_, err := bucket.Get(ctx, k)
+		assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "expired key %q should be deleted", k)
+	}
+	// Verify live keys survive
+	for _, k := range liveKeys {
+		_, err := bucket.Get(ctx, k)
+		assert.NoError(t, err, "live key %q should still exist", k)
+	}
+}
+
+// TestWindowTracker_Sweep_PreservesKeysWithCurrentBuckets verifies explicitly
+// that a key with at least one live bucket is never deleted by Sweep, even if
+// older buckets in the same record are expired.
+func TestWindowTracker_Sweep_PreservesKeysWithCurrentBuckets(t *testing.T) {
+	t.Parallel()
+	wt, bucket := newWindowTrackerForTest()
+	ctx := context.Background()
+
+	// Mixed record: one very old bucket + one recent bucket
+	mixedRec, _ := json.Marshal(WindowRecord{Buckets: []WindowBucket{
+		{WindowStart: time.Now().Add(-maxSweepBucketAge - 2*time.Hour).Unix(), Count: 10},
+		{WindowStart: time.Now().Add(-5 * time.Minute).Unix(), Count: 2},
+	}})
+	_, err := bucket.Put(ctx, "rule-mixed.user-x", mixedRec)
+	require.NoError(t, err)
+
+	deleted, err := wt.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted, "key with a live bucket must not be deleted")
+
+	// Key must still exist
+	_, err = bucket.Get(ctx, "rule-mixed.user-x")
+	assert.NoError(t, err, "key with a live bucket must survive Sweep")
+}
+
+// TestWindowTracker_Sweep_CtxCancelled_StopsEarly verifies that Sweep
+// respects context cancellation. When the context is already cancelled,
+// Sweep must return ctx.Err() promptly without deleting all keys.
+func TestWindowTracker_Sweep_CtxCancelled_StopsEarly(t *testing.T) {
+	t.Parallel()
+	wt, bucket := newWindowTrackerForTest()
+	ctx := context.Background()
+
+	// Populate 20 expired keys
+	expiredStart := time.Now().Add(-maxSweepBucketAge - time.Hour).Unix()
+	expiredRec, _ := json.Marshal(WindowRecord{Buckets: []WindowBucket{
+		{WindowStart: expiredStart, Count: 1},
+	}})
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("rule-cancel.dim-%d", i)
+		_, err := bucket.Put(ctx, key, expiredRec)
+		require.NoError(t, err)
+	}
+
+	// Cancel context before sweeping
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel() // already cancelled
+
+	deleted, err := wt.Sweep(cancelledCtx)
+	// Sweep must return the context error. It may have deleted some keys
+	// (the ctx check is per-iteration) but must not return nil error.
+	assert.ErrorIs(t, err, context.Canceled,
+		"Sweep should return context.Canceled when ctx is already cancelled")
+	// It should not have deleted all keys (the cancel fires before the loop body)
+	// We assert deleted < total to verify it stopped early. If the implementation
+	// is allowed to see the error only on the first iteration check, deleted could
+	// be 0 or more. Accept any value < 20.
+	assert.Less(t, deleted, 20,
+		"cancelled sweep should not have processed all keys: deleted=%d", deleted)
+}
+
+// TestWindowTracker_Sweep_EmptyBucket_NoOp verifies that Sweep on a fresh,
+// empty bucket returns 0 deleted and no error.
+func TestWindowTracker_Sweep_EmptyBucket_NoOp(t *testing.T) {
+	t.Parallel()
+	wt, _ := newWindowTrackerForTest()
+	ctx := context.Background()
+
+	deleted, err := wt.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted, "empty bucket sweep must return 0 deleted")
+}
+
+// TestWindowTracker_Sweep_NilBucket_ReturnsError verifies that Sweep on a nil-
+// bucket tracker returns ErrWindowBucketNil rather than panicking, matching
+// the nil-bucket posture of Increment.
+func TestWindowTracker_Sweep_NilBucket_ReturnsError(t *testing.T) {
+	t.Parallel()
+	wt := NewWindowTracker(nil, nil)
+	_, err := wt.Sweep(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrWindowBucketNil)
+}

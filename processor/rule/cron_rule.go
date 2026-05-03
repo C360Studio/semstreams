@@ -159,6 +159,9 @@ func validateCronDefinition(def Definition) error {
 		if strings.TrimSpace(a.Type) == "" {
 			return fmt.Errorf("cron rule %s: action[%d] missing type", def.ID, i)
 		}
+		if err := validateActionFields(def.ID, i, a); err != nil {
+			return err
+		}
 	}
 
 	// Reject expression-rule fields that have no meaning under a clock-only

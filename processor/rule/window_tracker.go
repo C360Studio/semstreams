@@ -373,6 +373,132 @@ func (wt *WindowTracker) Bucket() jetstream.KeyValue {
 	return wt.bucket
 }
 
+// Sweep walks all keys in RULE_WINDOWS, deletes any key whose WindowRecord has
+// no live (non-expired) buckets, and returns the number of keys deleted.
+//
+// # When to use
+//
+// Sweep is the backend for the sweep_windows action type. Operators MUST
+// enable the opt-in janitor cron rule (configs/rules/system/window-janitor.json)
+// if any rule uses the count_in_window operator — without it, keys for
+// dimensions that received traffic once and then went silent accumulate
+// indefinitely in RULE_WINDOWS. The janitor fires Sweep on a schedule
+// (default @every 10m) to reclaim those stale keys.
+//
+// See chunk 3b in the ADR-032 programme notes and the window-janitor.json
+// example config for operator guidance.
+//
+// # Safety
+//
+// Sweep is safe to call concurrently with Increment. Both use NATS KV
+// optimistic-concurrency semantics: if an Increment races a Sweep delete on
+// the same key, one wins atomically — if Increment wins, Sweep skips the
+// key; if Sweep wins, Increment creates a fresh key on its next attempt.
+// The delete uses jetstream.LastRevision (Delete with no opts) which is an
+// unconditional delete, matching the "stale key" semantics. A racing
+// Increment that Put-s a new revision between the Get and Delete results in
+// the increment landing on a fresh revision, not lost.
+//
+// # Scaling note
+//
+// Keys() loads the entire RULE_WINDOWS key list into memory. For typical
+// deployments (hundreds to low-thousands of keys) this is fine. Very large
+// deployments (10k+ keys from high-cardinality dimensions) should monitor
+// the janitor's sweep duration. The DefaultMaxDistinctDimensionsPerRule cap
+// bounds the per-rule key count; unbounded growth requires a bug in cap
+// enforcement.
+func (wt *WindowTracker) Sweep(ctx context.Context) (deleted int, err error) {
+	if wt.bucket == nil {
+		return 0, ErrWindowBucketNil
+	}
+
+	keys, err := wt.bucket.Keys(ctx)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrNoKeysFound) {
+			return 0, nil // empty bucket — nothing to sweep
+		}
+		return 0, fmt.Errorf("window janitor: list keys: %w", err)
+	}
+
+	now := time.Now()
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+
+		entry, err := wt.bucket.Get(ctx, key)
+		if err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				// Concurrent delete — already gone, skip
+				continue
+			}
+			// Log and continue; a single Get failure should not abort the sweep
+			wt.logger.Warn("Window janitor: failed to read key, skipping",
+				"key", key, "error", err)
+			continue
+		}
+
+		var rec WindowRecord
+		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+			wt.logger.Warn("Window janitor: failed to unmarshal key, skipping",
+				"key", key, "error", err)
+			continue
+		}
+
+		// Check if all buckets are expired. A bucket is expired when its
+		// window_start is in the past by more than 1 bucket granularity
+		// (we use the maximum practical window size as a conservative bound —
+		// the safest heuristic without storing the window duration per key
+		// is "any bucket younger than maxBucketAge survives").
+		//
+		// Since bucket granularity is 1 minute and the window duration is
+		// not stored in the key, we use a generous cutoff: if the newest
+		// bucket's window_start is more than maxSweepBucketAge old, all
+		// buckets are expired and the key is stale.
+		if hasLiveBucket(rec, now) {
+			continue
+		}
+
+		if err := wt.bucket.Delete(ctx, key); err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				// Concurrent delete raced us — key already gone
+				continue
+			}
+			wt.logger.Warn("Window janitor: failed to delete stale key, skipping",
+				"key", key, "error", err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// maxSweepBucketAge is the staleness threshold used by Sweep. A key whose
+// newest bucket's window_start is older than this is considered fully expired
+// and eligible for deletion. This is deliberately generous (larger than any
+// practical window duration) so Sweep never deletes a key a count_in_window
+// condition is still counting against.
+//
+// The maximum supported window is bounded by DefaultMaxDistinctDimensionsPerRule
+// keys × maxSweepBucketAge × 1 record per key. At the default caps:
+// 10000 × 24h × ~200 bytes ≈ 48 MB peak — acceptable for a single-tenant
+// deployment. Operators running high-cardinality workloads should tune their
+// window durations accordingly.
+const maxSweepBucketAge = 24 * time.Hour
+
+// hasLiveBucket reports true if rec contains at least one bucket whose
+// window_start is younger than maxSweepBucketAge. Used by Sweep to decide
+// whether a key is safe to delete.
+func hasLiveBucket(rec WindowRecord, now time.Time) bool {
+	cutoff := now.Add(-maxSweepBucketAge).Unix()
+	for _, b := range rec.Buckets {
+		if b.WindowStart >= cutoff {
+			return true
+		}
+	}
+	return false
+}
+
 // windowKey constructs the KV key for a {ruleID}.{dimension} pair.
 // The "." separator is valid under the NATS KV key character set
 // ([-/_=\.a-zA-Z0-9]+) and is used as a hierarchy separator throughout

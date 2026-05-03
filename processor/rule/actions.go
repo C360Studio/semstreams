@@ -38,6 +38,15 @@ const (
 	// and surfaces as *DenyVerdict to the caller. The deny is always the terminal
 	// outcome: no later action in the same evaluation cycle runs once a deny fires.
 	ActionTypeDeny = "deny"
+	// ActionTypeSweepWindows sweeps fully-expired keys from the RULE_WINDOWS KV
+	// bucket. Intended for use in the opt-in janitor cron rule
+	// (configs/rules/system/window-janitor.json). Operators MUST enable that rule
+	// if any rule uses count_in_window — without it, silent-dimension keys
+	// accumulate indefinitely. See WindowTracker.Sweep for concurrency guarantees.
+	//
+	// This action takes no fields (subject, predicate, etc.); the config validator
+	// rejects sweep_windows actions that set any of those fields.
+	ActionTypeSweepWindows = "sweep_windows"
 )
 
 // PredicateRuleDeny is the audit-triple predicate written by deny actions.
@@ -168,6 +177,16 @@ type TripleMutator interface {
 	RemoveTriple(ctx context.Context, ruleID, subject, predicate string) (uint64, error)
 }
 
+// WindowSweeperInterface is the subset of WindowTracker that ActionExecutor
+// needs for sweep_windows action execution. Defined as an interface so tests
+// can inject a mock without constructing a real NATS-backed tracker.
+type WindowSweeperInterface interface {
+	// Sweep deletes stale keys from the RULE_WINDOWS bucket and returns
+	// the number of keys deleted. Implementations must be safe for
+	// concurrent use alongside WindowTracker.Increment.
+	Sweep(ctx context.Context) (deleted int, err error)
+}
+
 // Publisher handles publishing messages to NATS subjects.
 // It abstracts the decision between core NATS and JetStream publishing.
 type Publisher interface {
@@ -185,7 +204,14 @@ type ActionExecutor struct {
 	publisher     Publisher                    // Optional: if nil, publish actions are logged but not sent
 	kvWriter      KVWriter                     // Optional: if nil, update_kv actions are logged but not executed
 	toolRegistry  component.ToolRegistryReader // Optional: if nil, publish_agent default_tools resolution returns empty
+	windowTracker WindowSweeperInterface       // Optional: if nil, sweep_windows is logged but not executed
+	metrics       *Metrics                     // Optional: nil-safe; rule_window_keys_swept_total emitted when non-nil
 }
+
+// setMetrics wires the shared Metrics singleton into the executor. Called by
+// Processor after initializeWindowTracker so sweep_windows can emit
+// rule_window_keys_swept_total.
+func (e *ActionExecutor) setMetrics(m *Metrics) { e.metrics = m }
 
 // SetToolRegistry installs the shared tool registry used by
 // resolveToolNames during publish_agent action execution. nil-valued
@@ -194,6 +220,15 @@ type ActionExecutor struct {
 // processor when it has access to deps.ToolRegistry.
 func (e *ActionExecutor) SetToolRegistry(r component.ToolRegistryReader) {
 	e.toolRegistry = r
+}
+
+// SetWindowTracker installs the window tracker used by sweep_windows action
+// execution. nil-valued arg disables sweeping — the action logs at Debug that
+// no tracker is configured. Called by the rule processor after
+// initializeWindowTracker so the same tracker instance the expression evaluator
+// uses is also available to the action executor's janitor path.
+func (e *ActionExecutor) SetWindowTracker(wt WindowSweeperInterface) {
+	e.windowTracker = wt
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -269,6 +304,8 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executeUpdateKV(ctx, action, ec)
 	case ActionTypeDeny:
 		return e.executeDeny(ctx, action, ec)
+	case ActionTypeSweepWindows:
+		return e.executeSweepWindows(ctx, action, ec)
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
@@ -934,6 +971,49 @@ func (e *ActionExecutor) executeUpdateKV(ctx context.Context, action Action, ec 
 			"entity_id", ec.EntityID)
 	}
 
+	return nil
+}
+
+// executeSweepWindows sweeps fully-expired keys from the RULE_WINDOWS KV bucket.
+// It delegates to WindowTracker.Sweep and emits a per-cron-rule Prometheus counter
+// (rule_window_keys_swept_total{rule_id}) with the total deleted count.
+//
+// The sweep_windows action takes no fields — if any are set (subject, predicate,
+// bucket, etc.) the config validator rejects the rule at load time. This guard
+// is belt-and-suspenders here: ExecuteSweepWindows is only reachable after
+// config validation passes.
+//
+// When windowTracker is nil (NATS unavailable, degraded startup) the method
+// logs at Debug and returns nil — a missing tracker should not fail the cron
+// rule that calls it.
+func (e *ActionExecutor) executeSweepWindows(ctx context.Context, _ Action, ec *ExecutionContext) error {
+	ruleID := ec.RuleID()
+
+	if e.windowTracker == nil {
+		if e.logger != nil {
+			e.logger.Debug("sweep_windows: no window tracker configured; skipping",
+				"rule_id", ruleID)
+		}
+		return nil
+	}
+
+	deleted, err := e.windowTracker.Sweep(ctx)
+	if err != nil {
+		return fmt.Errorf("sweep_windows: %w", err)
+	}
+
+	// Emit aggregate swept-key counter regardless of whether any keys were
+	// deleted — this lets operators distinguish "janitor ran but nothing to
+	// clean" (counter flat, value 0) from "janitor didn't run" (counter absent).
+	if e.metrics != nil && e.metrics.windowKeysSwept != nil {
+		e.metrics.windowKeysSwept.WithLabelValues(ruleID).Add(float64(deleted))
+	}
+
+	if e.logger != nil {
+		e.logger.Info("sweep_windows: completed",
+			"rule_id", ruleID,
+			"keys_deleted", deleted)
+	}
 	return nil
 }
 

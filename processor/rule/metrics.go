@@ -24,6 +24,7 @@ type Metrics struct {
 	shadowFires           *prometheus.CounterVec // Shadow-mode action suppression counter
 	windowDimCapHit       *prometheus.CounterVec // count_in_window cardinality cap rejections
 	windowTruncation      *prometheus.CounterVec // count_in_window per-key count cap truncations
+	windowKeysSwept       *prometheus.CounterVec // sweep_windows keys deleted per janitor cron-rule fire
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -161,6 +162,22 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 					"count_in_window conditions. Non-zero suggests max_per_window is too low " +
 					"or the rule fires against extremely high-traffic dimensions.",
 			}, []string{"rule_id"}),
+
+			// sweep_windows janitor metric — label: rule_id (the cron rule ID).
+			// Counts keys deleted per Sweep call. Zero = nothing to clean (healthy).
+			// Non-zero = stale silent-dimension keys were found and removed. Alert
+			// when this counter grows unboundedly without a corresponding decrease
+			// in RULE_WINDOWS key count — that indicates new dimensions are arriving
+			// faster than the janitor can sweep, which is a DoS signal.
+			windowKeysSwept: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "window_keys_swept_total",
+				Help: "Keys deleted from RULE_WINDOWS by the sweep_windows janitor action. " +
+					"Label rule_id is the cron rule that fired the sweep (e.g. " +
+					"\"system-window-janitor\"). Zero is normal (no stale keys). " +
+					"Rising values indicate silent-dimension cleanup is working as intended.",
+			}, []string{"rule_id"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -179,6 +196,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.shadowFires,
 			ruleMetrics.windowDimCapHit,
 			ruleMetrics.windowTruncation,
+			ruleMetrics.windowKeysSwept,
 		)
 	})
 

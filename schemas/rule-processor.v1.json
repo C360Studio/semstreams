@@ -143,6 +143,10 @@
                         "type": "string",
                         "description": "from"
                       },
+                      "negate": {
+                        "type": "boolean",
+                        "description": "negate"
+                      },
                       "operator": {
                         "type": "string",
                         "description": "operator"
@@ -186,6 +190,10 @@
                 "from": {
                   "type": "string",
                   "description": "from"
+                },
+                "negate": {
+                  "type": "boolean",
+                  "description": "negate"
                 },
                 "operator": {
                   "type": "string",
@@ -350,6 +358,10 @@
                         "type": "string",
                         "description": "from"
                       },
+                      "negate": {
+                        "type": "boolean",
+                        "description": "negate"
+                      },
                       "operator": {
                         "type": "string",
                         "description": "operator"
@@ -475,6 +487,10 @@
                         "type": "string",
                         "description": "from"
                       },
+                      "negate": {
+                        "type": "boolean",
+                        "description": "negate"
+                      },
                       "operator": {
                         "type": "string",
                         "description": "operator"
@@ -599,6 +615,10 @@
                       "from": {
                         "type": "string",
                         "description": "from"
+                      },
+                      "negate": {
+                        "type": "boolean",
+                        "description": "negate"
                       },
                       "operator": {
                         "type": "string",
@@ -743,6 +763,10 @@
                       "from": {
                         "type": "string",
                         "description": "from"
+                      },
+                      "negate": {
+                        "type": "boolean",
+                        "description": "negate"
                       },
                       "operator": {
                         "type": "string",

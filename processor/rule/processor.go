@@ -544,6 +544,18 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		setter.SetToolRegistry(rp.toolRegistry)
 	}
 
+	// Wire metrics into the action executor so sweep_windows can emit
+	// rule_window_keys_swept_total. WindowTracker is injected later
+	// (in initializeWindowTracker) since the window tracker is created
+	// after the action executor. Both injections use type-assertion on
+	// the concrete *ActionExecutor so ActionExecutorInterface (test
+	// double surface) stays minimal.
+	if metricSetter, ok := actionExecutor.(interface {
+		setMetrics(*Metrics)
+	}); ok {
+		metricSetter.setMetrics(rp.metrics)
+	}
+
 	// Persist the executor on the processor so the cron scheduler
 	// (initializeCronScheduler) can dispatch through the same instance
 	// the StatefulEvaluator uses. Single shared executor keeps publishing
@@ -653,6 +665,19 @@ func (rp *Processor) initializeWindowTracker(ctx context.Context) error {
 	// (degraded path); the nil-check avoids a panic in that case.
 	if rp.statefulEvaluator != nil {
 		rp.statefulEvaluator.setWindowTracker(rp.windowTracker)
+	}
+
+	// Wire the tracker into the action executor so sweep_windows can call
+	// Sweep. Type-assert on the concrete *ActionExecutor because
+	// ActionExecutorInterface is the minimal test-double surface; nil
+	// actionExecutor or a non-concrete executor leaves sweep_windows as
+	// a no-op (logged at Debug).
+	if rp.actionExecutor != nil {
+		if wt, ok := rp.actionExecutor.(interface {
+			SetWindowTracker(WindowSweeperInterface)
+		}); ok {
+			wt.SetWindowTracker(rp.windowTracker)
+		}
 	}
 	return nil
 }
