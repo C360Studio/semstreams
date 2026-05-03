@@ -66,6 +66,41 @@ func (e *StatefulEvaluator) setWindowTracker(wt expression.WindowStateReader) {
 	e.windowTracker = wt
 }
 
+// MessageContext carries the governance filter chain's output summary for the
+// message that triggered this rule evaluation. Populated by the message-path
+// when the inbound NATS message carries X-Gov-* headers (injected by
+// natsclient.Publish after agentic-governance runs). Nil for KV-watch and
+// cron fires which have no governance context in scope.
+//
+// Fields mirror governance.Context exactly so the adapter (governance_adapter.go)
+// is a straight field-for-field copy. Keeping a rule-package-local type rather
+// than importing governance.Context directly preserves the one-way dependency:
+// governance/ knows nothing about rules.
+type MessageContext struct {
+	// HasPii is true when the pii_redaction filter detected PII in the message.
+	HasPii bool
+
+	// HasInjection is true when the injection_detection filter flagged the message.
+	HasInjection bool
+
+	// HasContentModeration is true when the content_moderation filter triggered.
+	HasContentModeration bool
+
+	// HasRateLimiting is true when the rate_limiting filter was hit.
+	HasRateLimiting bool
+
+	// ViolationCount is the total number of violations detected by the chain.
+	ViolationCount int
+
+	// MaxSeverity is the highest-severity violation level ("none", "low", "medium",
+	// "high", "critical"). Empty string when ViolationCount == 0.
+	MaxSeverity string
+
+	// Allowed mirrors ChainResult.Allowed: true when the governance chain permitted
+	// the message, false when it was blocked.
+	Allowed bool
+}
+
 // Evaluation groups the inputs to a single stateful rule evaluation.
 // Zero values are meaningful: Revision=0 means "no KV revision available"
 // (message-path rules), Bootstrap=false means live traffic (not startup replay),
@@ -85,6 +120,11 @@ type Evaluation struct {
 	// X-Caller-* headers extracted by natsclient.Subscribe). Nil for KV-watch
 	// and cron fires which have no caller in scope.
 	Caller *CallerContext
+	// Message carries the governance filter chain summary for the inbound message
+	// that triggered this evaluation (X-Gov-* headers extracted by
+	// natsclient.Subscribe / ConsumeStreamWithConfig). Nil for KV-watch and cron
+	// fires which carry no governance context.
+	Message *MessageContext
 }
 
 // entityKey returns the state-tracker key (single entity or canonical pair).
@@ -226,6 +266,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 		Related:   ev.Related,
 		State:     matchState,
 		Caller:    ev.Caller,
+		Message:   ev.Message,
 	}
 
 	stateFields := expression.StateFields{
@@ -245,6 +286,11 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 		stateFields["$caller.role"] = ev.Caller.Role
 		stateFields["$caller.org"] = ev.Caller.Org
 	}
+
+	// Populate $message.* pseudo-fields from the governance context when present.
+	// Absent (nil) Message leaves stateFields without $message.* keys — see
+	// populateMessageStateFields for full rationale.
+	populateMessageStateFields(stateFields, ev.Message)
 
 	actions := e.selectActions(ev.Rule, transition, currentlyMatching, recovering, ev.EntityID, ev.RelatedID, iteration)
 	e.runActions(ctx, ev.Rule, ec, actions, ev.Entity, stateFields, ev.EntityID, ev.RelatedID)
@@ -618,6 +664,28 @@ func captureTransitionFields(ruleDef Definition, entity *gtypes.EntityState) map
 		}
 	}
 	return values
+}
+
+// populateMessageStateFields injects $message.* pseudo-fields into stateFields
+// from the MessageContext. Absent (nil) mc is the no-op path — rules fired
+// without a governance context (cron fires, pure KV-watch matches, tests without
+// governance) leave stateFields without $message.* keys, which causes
+// evaluateConditionWithState to return false for any $message.* condition —
+// the correct "no governance evaluation in scope" semantic.
+// Mirroring the $caller.* pattern: DO NOT populate empty/zero values for nil
+// MessageContext — that would incorrectly make boolean conditions ($message.allowed)
+// match on the zero value (false) when no governance ran.
+func populateMessageStateFields(stateFields expression.StateFields, mc *MessageContext) {
+	if mc == nil {
+		return
+	}
+	stateFields["$message.violations.has_pii"] = mc.HasPii
+	stateFields["$message.violations.has_injection"] = mc.HasInjection
+	stateFields["$message.violations.has_content_moderation"] = mc.HasContentModeration
+	stateFields["$message.violations.has_rate_limiting"] = mc.HasRateLimiting
+	stateFields["$message.violations.count"] = mc.ViolationCount
+	stateFields["$message.max_severity"] = mc.MaxSeverity
+	stateFields["$message.allowed"] = mc.Allowed
 }
 
 // evaluateWhen evaluates a When clause (action-level guard conditions).

@@ -260,6 +260,12 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 		return result, nil
 	}
 
+	// Check for $message.* pseudo-fields. Absent keys return false (field-absent
+	// semantic) — see evaluateMessageField for full rationale.
+	if strings.HasPrefix(condition.Field, "$message.") {
+		return e.evaluateMessageField(stateFields, condition)
+	}
+
 	// Handle transition operator (needs previous value from state).
 	// Config validation rejects negate:true on transition at load time, so
 	// condition.Negate is always false here in production. The check below is
@@ -280,6 +286,49 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 	}
 
 	return e.evaluateCondition(entityState, condition)
+}
+
+// evaluateMessageField evaluates a single $message.* condition against stateFields.
+// Keys are injected by the stateful evaluator from the governance.Context attached to
+// the inbound message (e.g. "$message.violations.has_pii", "$message.allowed").
+// Absent keys — whether because Message was nil (cron/KV-watch) or the specific
+// sub-field is unknown — always return false (field-absent semantic, same as
+// $caller.* and $state.*). This ensures cron and KV-watch triggers never
+// accidentally satisfy a $message.* guard designed for governed messages.
+func (e *Evaluator) evaluateMessageField(stateFields StateFields, condition ConditionExpression) (bool, error) {
+	fieldValue, exists := stateFields[condition.Field]
+	if !exists {
+		if condition.Required {
+			return false, &EvaluationError{
+				Field:   condition.Field,
+				Message: "required message field not found",
+			}
+		}
+		return false, nil
+	}
+
+	opFunc, opExists := e.operators[condition.Operator]
+	if !opExists {
+		return false, &EvaluationError{
+			Field:    condition.Field,
+			Operator: condition.Operator,
+			Message:  "unsupported operator",
+		}
+	}
+
+	result, err := opFunc(fieldValue, condition.Value)
+	if err != nil {
+		return false, &EvaluationError{
+			Field:    condition.Field,
+			Operator: condition.Operator,
+			Message:  "operator execution failed",
+			Err:      err,
+		}
+	}
+	if condition.Negate {
+		result = !result
+	}
+	return result, nil
 }
 
 // evaluateCondition evaluates a single condition against entity state

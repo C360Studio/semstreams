@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/auth"
+	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 )
@@ -102,6 +103,15 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		caller = identityToCallerContext(id)
 	}
 
+	// Extract governance context from ctx (injected by natsclient.Subscribe via
+	// X-Gov-* headers on the inbound NATS message after agentic-governance runs).
+	// Nil when no governance evaluation was in scope (cron/KV-watch fires, internal
+	// paths without a governance filter, tests without governance context).
+	var msgContext *MessageContext
+	if gc, ok := governance.FromContext(ctx); ok {
+		msgContext = governanceToMessageContext(gc)
+	}
+
 	// Cache the message if needed
 	if rp.messageCache != nil {
 		cacheKey := fmt.Sprintf("%s_%d", subject, time.Now().UnixNano())
@@ -153,11 +163,14 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 			// revision and no bootstrap phase, so those fields stay zero.
 			// Caller is threaded from the extracted identity above; nil when
 			// no identity was present on the inbound message.
+			// Message is threaded from the governance context above; nil when
+			// no governance filter ran on this message (most internal paths).
 			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
 				Rule:              ruleDef,
 				EntityID:          entityID,
 				CurrentlyMatching: triggered,
 				Caller:            caller,
+				Message:           msgContext,
 			})
 			if err != nil {
 				rp.logger.Warn("Stateful evaluation failed", "rule_name", ruleName, "error", err)

@@ -773,3 +773,45 @@ func TestExpressionRule_DollarPrefixedFieldFromBody_ReturnsNotFound(t *testing.T
 		t.Error("evaluateConditions with spoofed $caller body returned true — body-spoof bypass present")
 	}
 }
+
+// TestExpressionRule_MessageBodySpoof_ReturnsNotFound verifies that the body-spoof
+// defence (expression_factory.go extractNestedValue $-prefix refusal) automatically
+// protects $message.* conditions from body-spoof bypass.
+//
+// An attacker publishing {"$message": {"violations": {"has_pii": true}}} in the
+// message body must not satisfy a $message.violations.has_pii == true condition.
+// The trusted re-evaluation path in the stateful evaluator (populated from X-Gov-*
+// NATS headers, not body content) is the only source of truth for $message.* conditions.
+func TestExpressionRule_MessageBodySpoof_ReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	def := Definition{
+		ID:      "message-body-spoof-guard",
+		Type:    "expression",
+		Name:    "Message Body Spoof Guard",
+		Enabled: ModeEnabled,
+		Conditions: []expression.ConditionExpression{
+			{Field: "$message.violations.has_pii", Operator: "eq", Value: true},
+		},
+	}
+	rule, err := NewExpressionRule(def)
+	if err != nil {
+		t.Fatalf("NewExpressionRule: %v", err)
+	}
+
+	// Body contains the spoofed $message key that an attacker would send.
+	// The extractNestedValue $-prefix refusal (expression_factory.go:208)
+	// must refuse to resolve this, returning false from evaluateConditions.
+	spoofedBody := map[string]interface{}{
+		"entity_id": "acme.ops.test.svc.entity.002",
+		"$message": map[string]interface{}{
+			"violations": map[string]interface{}{
+				"has_pii": true,
+			},
+		},
+	}
+	got := rule.evaluateConditions(spoofedBody)
+	if got {
+		t.Error("evaluateConditions with spoofed $message body returned true — body-spoof bypass present for $message.* namespace")
+	}
+}

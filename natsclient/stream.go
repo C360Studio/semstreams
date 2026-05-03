@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/auth"
+	"github.com/c360studio/semstreams/governance"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -223,6 +224,9 @@ func (c *Client) ConsumeStreamWithConfig(
 		}
 		if id := auth.ExtractIdentityFromJetStream(msg.Headers()); id != nil {
 			msgCtx = auth.WithIdentity(msgCtx, id)
+		}
+		if gc := governance.ExtractGovernanceFromJetStream(msg.Headers()); gc != nil {
+			msgCtx = governance.WithContext(msgCtx, gc)
 		}
 
 		// Create per-message context with configurable timeout

@@ -24,7 +24,7 @@ import (
 // match deep predicate paths like $entity.triple.agent.loop.role. We stop
 // at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
 // doesn't over-match.
-var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller)\.\w[\w.]*`)
+var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller|message)\.\w[\w.]*`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -61,6 +61,14 @@ type ExecutionContext struct {
 	// substitution layer reads this; see caller_substitution.go for the
 	// namespace contract.
 	Caller *CallerContext
+
+	// Message carries the governance filter chain summary for the inbound
+	// message that triggered rule evaluation (X-Gov-* headers extracted by
+	// natsclient.Subscribe / ConsumeStreamWithConfig after agentic-governance
+	// runs). Nil for cron-fired and pure KV-watch rules that carry no
+	// governance context. The `$message.*` substitution layer reads this;
+	// see message_substitution.go for the namespace contract.
+	Message *MessageContext
 }
 
 // RuleID returns the originating rule's identifier, or an empty string if the
@@ -95,6 +103,13 @@ func (ec *ExecutionContext) RuleID() string {
 //   - $caller.id: Caller identity ID (caller-aware rules only)
 //   - $caller.role: Caller role claim (caller-aware rules only)
 //   - $caller.org: Caller organization claim (caller-aware rules only)
+//   - $message.violations.has_pii: "true"/"false" — PII detected (governance-aware rules only)
+//   - $message.violations.has_injection: "true"/"false" — injection detected
+//   - $message.violations.has_content_moderation: "true"/"false" — content moderation triggered
+//   - $message.violations.has_rate_limiting: "true"/"false" — rate limit hit
+//   - $message.violations.count: decimal string — total violation count
+//   - $message.max_severity: severity string ("none", "low", "medium", "high", "critical")
+//   - $message.allowed: "true"/"false" — governance chain permitted the message
 //
 // Entity triple values can be accessed via $entity.triple.<predicate> syntax.
 //
@@ -144,6 +159,11 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	// $caller.* tokens will then trip the unresolved-template warning
 	// below.
 	result = applyCallerSubstitutions(result, ec.Caller)
+
+	// Message substitutions (governance context). No-op when ec.Message is nil;
+	// unknown $message.* tokens will then trip the unresolved-template warning
+	// below.
+	result = applyMessageSubstitutions(result, ec.Message)
 
 	ec.warnUnresolvedTemplateVars(template, result)
 

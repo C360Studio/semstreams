@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/governance"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -276,6 +277,13 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 	// Add governance metadata
 	result.AddGovernanceMetadata()
 
+	// Build a governance.Context from the ChainResult and attach it to ctx
+	// so natsclient.Publish auto-injects X-Gov-* headers onto the outbound message.
+	// The filter-name → bool mapping uses governance.FilterName* constants (stable
+	// wire-format identifiers matching Filter.Name() return values).
+	gc := chainResultToGovernanceContext(result)
+	ctx = governance.WithContext(ctx, gc)
+
 	// Publish validated message
 	if c.natsClient != nil {
 		outputMsg := result.ModifiedMessage
@@ -301,6 +309,47 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 			atomic.AddInt64(&c.errors, 1)
 		}
 	}
+}
+
+// chainResultToGovernanceContext converts a filter chain ChainResult into the
+// top-level governance.Context that gets propagated on NATS message headers.
+//
+// Filter-name → bool field mapping uses governance.FilterName* constants
+// (stable wire-format identifiers that match each Filter.Name() return value).
+// MaxSeverity is derived from ChainResult.HighestSeverity; the agentic-governance
+// Severity type is a string alias, so the cast to string is safe and avoids an
+// import cycle (agentic-governance imports governance, not the reverse).
+// Allowed mirrors ChainResult.Allowed so downstream rules can gate on
+// $message.allowed without re-inspecting individual violation flags.
+func chainResultToGovernanceContext(result *ChainResult) *governance.Context {
+	gc := &governance.Context{
+		Allowed:        result.Allowed,
+		ViolationCount: len(result.Violations),
+	}
+
+	// Map per-filter outcomes to boolean fields via stable FilterName* constants.
+	for _, v := range result.Violations {
+		switch v.FilterName {
+		case governance.FilterNamePii:
+			gc.HasPii = true
+		case governance.FilterNameInjection:
+			gc.HasInjection = true
+		case governance.FilterNameContentModeration:
+			gc.HasContentModeration = true
+		case governance.FilterNameRateLimiting:
+			gc.HasRateLimiting = true
+		}
+	}
+
+	// MaxSeverity: derive from HighestSeverity() rather than walking violations
+	// again. Severity is a string-based type, so string() cast is safe.
+	if s := result.HighestSeverity(); s != "" {
+		gc.MaxSeverity = string(s)
+	} else {
+		gc.MaxSeverity = governance.SeverityNone
+	}
+
+	return gc
 }
 
 // setupConsumer sets up a JetStream consumer for an input port

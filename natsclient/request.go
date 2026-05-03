@@ -8,6 +8,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/c360studio/semstreams/auth"
+	"github.com/c360studio/semstreams/governance"
 )
 
 // DefaultRequestTimeout is the default timeout for request/reply operations.
@@ -301,6 +302,7 @@ func (c *Client) RequestWithRetry(
 		msg.Data = data
 		InjectTrace(ctx, msg)
 		auth.InjectIdentity(ctx, msg)
+		governance.InjectGovernance(ctx, msg)
 
 		reply, err := conn.RequestMsgWithContext(reqCtx, msg)
 		cancel()
