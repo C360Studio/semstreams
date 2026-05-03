@@ -111,11 +111,30 @@ func (c *Client) Exec(ctx context.Context, taskID, command string, timeoutMs int
 // Worktree lifecycle
 // ---------------------------------------------------------------------------
 
+// CreateWorktreeOptions carries optional metadata to attach to a worktree
+// at create-time. Zero value is valid and equivalent to "no extras."
+//
+// Fields here are wire-level metadata the client transmits to the sandbox
+// server; enforcement (if any) is the server's responsibility. The client
+// does not interpret these fields except to serialize them in the
+// CreateWorktree request body.
+type CreateWorktreeOptions struct {
+	// ReadOnlyPaths declares paths within the worktree that the sandbox
+	// server should refuse to mutate for the lifetime of the worktree.
+	// Each entry is a path relative to the worktree root; matching is
+	// the server's responsibility. The bash tool uses the same shape
+	// for its per-call verify_clean precondition (see executors/bash.go).
+	ReadOnlyPaths []string `json:"read_only_paths,omitempty"`
+}
+
 // CreateWorktree asks the sandbox server to create an isolated git worktree.
-func (c *Client) CreateWorktree(ctx context.Context, taskID string) (*WorktreeInfo, error) {
+// opts carries metadata applied at create-time; pass a zero value when no
+// extras are needed.
+func (c *Client) CreateWorktree(ctx context.Context, taskID string, opts CreateWorktreeOptions) (*WorktreeInfo, error) {
 	body := struct {
-		TaskID string `json:"task_id"`
-	}{TaskID: taskID}
+		TaskID        string   `json:"task_id"`
+		ReadOnlyPaths []string `json:"read_only_paths,omitempty"`
+	}{TaskID: taskID, ReadOnlyPaths: opts.ReadOnlyPaths}
 	var info WorktreeInfo
 	if err := c.doJSON(ctx, http.MethodPost, "/worktree", body, &info); err != nil {
 		return nil, fmt.Errorf("create worktree: %w", err)

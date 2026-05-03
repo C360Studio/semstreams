@@ -10,6 +10,7 @@ package executors
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -82,6 +83,15 @@ func (e *BashExecutor) ListTools() []agentic.ToolDefinition {
 						"type":        "string",
 						"description": "Shell command to execute",
 					},
+					"read_only_paths": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Paths (files or directories, relative to the worktree root) that should not be modified. Used by verify_clean to filter the dirty-tree check; an entry like \"src/\" matches anything under src/.",
+					},
+					"verify_clean": map[string]any{
+						"type":        "boolean",
+						"description": "If true, run `git status -z --porcelain --untracked-files=all` before the real command and refuse to run if any dirty path matches read_only_paths (or any dirty path at all when read_only_paths is empty). Use to keep a command sequence from clobbering off-limits files.",
+					},
 				},
 				"required": []string{"command"},
 			},
@@ -99,6 +109,9 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 		}, nil
 	}
 
+	readOnlyPaths := stringSliceArg(call.Arguments["read_only_paths"])
+	verifyClean, _ := call.Arguments["verify_clean"].(bool)
+
 	if e.sandbox != nil {
 		taskID := "default"
 		if m := call.Metadata; m != nil {
@@ -108,9 +121,168 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 				taskID = lid
 			}
 		}
+		if verifyClean {
+			if violation, err := e.verifyCleanSandbox(ctx, taskID, readOnlyPaths); err != nil {
+				return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("verify_clean precondition failed: %v", err)}, nil
+			} else if violation != "" {
+				return agentic.ToolResult{CallID: call.ID, Error: violation}, nil
+			}
+		}
 		return e.execSandbox(ctx, call.ID, command, taskID)
 	}
+
+	if verifyClean {
+		if violation, err := e.verifyCleanLocal(ctx, readOnlyPaths); err != nil {
+			return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("verify_clean precondition failed: %v", err)}, nil
+		} else if violation != "" {
+			return agentic.ToolResult{CallID: call.ID, Error: violation}, nil
+		}
+	}
 	return e.execLocal(ctx, call.ID, command)
+}
+
+// stringSliceArg coerces a tool-call argument into []string. Tool arguments
+// arrive as map[string]any after JSON decode; arrays land as []any with
+// element types per the JSON spec. Anything that isn't a list of strings
+// returns nil — callers treat that as "no paths specified," which for
+// verify_clean's filter means "any dirty file is a violation."
+func stringSliceArg(raw any) []string {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// verifyCleanSandbox runs `git status -z --porcelain --untracked-files=all` inside the sandbox and
+// returns a non-empty violation message if any dirty path matches
+// readOnlyPaths (or, when readOnlyPaths is empty, if any path is dirty).
+// Returns ("", nil) when the precondition passes; (msg, nil) when it
+// fails; ("", err) when the precondition itself errored (network,
+// non-zero exit from git status, malformed output).
+func (e *BashExecutor) verifyCleanSandbox(ctx context.Context, taskID string, readOnlyPaths []string) (string, error) {
+	res, err := e.sandbox.Exec(ctx, taskID, "git status -z --porcelain --untracked-files=all", int(e.effectiveTimeout().Milliseconds()))
+	if err != nil {
+		return "", err
+	}
+	if res.TimedOut {
+		return "", fmt.Errorf("git status -z --porcelain --untracked-files=all timed out")
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("git status -z --porcelain --untracked-files=all exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return formatVerifyCleanViolation(res.Stdout, readOnlyPaths), nil
+}
+
+// verifyCleanLocal runs the same precondition against the local workdir.
+// Mirrors verifyCleanSandbox; kept separate so each path remains
+// straightforward to read.
+func (e *BashExecutor) verifyCleanLocal(ctx context.Context, readOnlyPaths []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "status", "-z", "--porcelain", "--untracked-files=all")
+	cmd.Dir = e.workDir
+	cmd.Env = filterEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("git status -z --porcelain --untracked-files=all exited %d: %s", exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", err
+	}
+	return formatVerifyCleanViolation(string(out), readOnlyPaths), nil
+}
+
+// formatVerifyCleanViolation parses `git status -z --porcelain
+// --untracked-files=all` output and returns a non-empty violation
+// message if any dirty path matches readOnlyPaths (prefix-or-exact).
+// When readOnlyPaths is empty, any dirty path is a violation —
+// verify_clean then acts as a general clean-tree gate. Returns "" when
+// the tree is clean (or no violating path matches).
+//
+// `-z` format is NUL-terminated `XY <path>\x00` records, with no
+// quoting regardless of git's `core.quotePath` setting — paths with
+// spaces, tabs, double-quotes, backslashes, or non-ASCII bytes survive
+// the wire intact. This matters because git's default porcelain v1
+// QUOTES such paths (`?? "src/has space.go"`), and a naive parser would
+// then prefix-match the literal-quote-included string against
+// readOnlyPaths and silently let the dirty file slip through. Using
+// `-z` is the cleanest defence; we never have to know which quoting
+// rules are in effect.
+//
+// Rename and copy rows (`R` / `C` status, in either index or worktree
+// stage) emit TWO records: destination first, then source. We score the
+// destination — that's what the next command would touch — and skip the
+// source record by tracking pending.
+func formatVerifyCleanViolation(porcelainZ string, readOnlyPaths []string) string {
+	var dirty []string
+	skipNext := false
+	for record := range strings.SplitSeq(porcelainZ, "\x00") {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		// `XY <path>` — minimum 4 chars (status + space + at least one
+		// path char). Empty trailing record from the final NUL is dropped
+		// by the length check.
+		if len(record) < 4 {
+			continue
+		}
+		path := record[3:]
+		if path == "" {
+			continue
+		}
+		// R/C in either stage byte means a source-record follows. Skip
+		// it; we only score the destination (the path the next command
+		// would touch).
+		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
+			skipNext = true
+		}
+		if pathMatchesAny(path, readOnlyPaths) {
+			dirty = append(dirty, path)
+		}
+	}
+	if len(dirty) == 0 {
+		return ""
+	}
+	scope := "any path"
+	if len(readOnlyPaths) > 0 {
+		scope = "read_only_paths"
+	}
+	return fmt.Sprintf("verify_clean: tree has uncommitted changes in %s — refusing to run command. Dirty paths: %s",
+		scope, strings.Join(dirty, ", "))
+}
+
+// pathMatchesAny returns true when path equals one of patterns or sits
+// under a directory pattern. A trailing slash in the pattern is treated
+// as a directory hint (and trimmed for the comparison); patterns without
+// trailing slashes still match contents via the "<path>/" check, so
+// callers don't have to be picky about format. When patterns is empty,
+// every non-empty path matches — verify_clean degenerates to a "tree
+// must be clean" check.
+func pathMatchesAny(path string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pat := range patterns {
+		pat = strings.TrimRight(pat, "/")
+		if pat == "" {
+			continue
+		}
+		if path == pat || strings.HasPrefix(path, pat+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // execSandbox routes the command to the sandbox container.
