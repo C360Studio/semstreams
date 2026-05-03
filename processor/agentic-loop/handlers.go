@@ -871,6 +871,13 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 	// to resolve the originating loop entity; without it the tool returns
 	// an invalid-args error at execute time. Metadata is flow-specific
 	// context the dispatcher attached to the task.
+	//
+	// Metadata["loop_id"] is intentionally NOT stamped here — the
+	// canonical stamp lives in dispatchToolCall so every dispatch path
+	// (this main path, approval re-dispatch, and queue dequeue) gets
+	// it consistently. Stamping in two places would risk drift; only
+	// the typed LoopID field is written upstream so the cached domain
+	// metadata stays untouched until dispatch.
 	metadata := h.loopManager.GetCachedMetadata(loopID)
 	for i := range approved {
 		if len(metadata) > 0 && len(approved[i].Metadata) == 0 {
@@ -1062,6 +1069,24 @@ func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID strin
 
 // dispatchToolCall publishes a single tool call for execution and registers
 // all tracking metadata (pending tools, call-to-loop mapping, timing).
+//
+// Stamps loopID onto the published ToolCall in two places before
+// marshalling so downstream executors can route per-loop:
+//
+//   - tc.LoopID — typed top-level field, the canonical contract.
+//   - tc.Metadata["loop_id"] — the legacy soft-fallback the
+//     processor/agentic-tools/executors/bash.go sandbox path reads to
+//     map a call to a worktree taskID. Without this, every sandbox-
+//     routed bash call landed on taskID="default", causing concurrent
+//     chains to collide on a single workspace and verify_clean to
+//     report cross-chain pollution. semteams reproduced the wedge
+//     against beta.37; cmd/semteams/sandbox/integration_test.go had
+//     to manually populate Metadata["task_id"] to get past 404s.
+//
+// Both writes are conditional ("don't clobber") so an LLM or upstream
+// caller that explicitly set either field keeps its value. New
+// callers should not need to set either — dispatch propagates loopID
+// naturally.
 func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, tc agentic.ToolCall) error {
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
@@ -1070,6 +1095,16 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	h.loopManager.TrackToolName(tc.ID, tc.Name)
 	h.loopManager.TrackToolArguments(tc.ID, tc.Arguments)
 	h.loopManager.TrackToolStart(tc.ID)
+
+	if tc.LoopID == "" {
+		tc.LoopID = loopID
+	}
+	if tc.Metadata == nil {
+		tc.Metadata = map[string]any{}
+	}
+	if _, ok := tc.Metadata["loop_id"]; !ok {
+		tc.Metadata["loop_id"] = loopID
+	}
 
 	toolMsg := message.NewBaseMessage(tc.Schema(), &tc, "agentic-loop")
 	toolData, err := json.Marshal(toolMsg)
