@@ -9,26 +9,40 @@ import (
 	"time"
 )
 
-func TestNewHTTPClient_ZeroOptionsPreservesGoDefaults(t *testing.T) {
+// TestNewHTTPClient_ZeroOptionsAppliesFrameworkDefaults pins the
+// beta.43 reframe: zero opts now select FRAMEWORK defaults (tighter
+// than Go's net/http defaults) — IdleConnTimeout 30s,
+// MaxIdleConnsPerHost 1. ResponseHeaderTimeout still defaults to 0
+// (no timeout) because non-streaming LLM calls legitimately take
+// minutes for slow models; capping there would false-positive.
+func TestNewHTTPClient_ZeroOptionsAppliesFrameworkDefaults(t *testing.T) {
 	c := NewHTTPClient(HTTPClientOptions{})
 	if c == nil {
 		t.Fatal("NewHTTPClient returned nil")
 	}
 	if c.Timeout != 0 {
-		t.Errorf("Timeout = %v, want 0 (Go default)", c.Timeout)
+		t.Errorf("Timeout = %v, want 0 (caller manages ctx)", c.Timeout)
 	}
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("Transport type = %T, want *http.Transport", c.Transport)
 	}
-	if tr.IdleConnTimeout != 90*time.Second {
-		t.Errorf("IdleConnTimeout = %v, want 90s (Go default)", tr.IdleConnTimeout)
+	if tr.IdleConnTimeout != FrameworkDefaultIdleConnTimeout {
+		t.Errorf("IdleConnTimeout = %v, want FrameworkDefaultIdleConnTimeout (%v) — beta.43 tightened from 90s",
+			tr.IdleConnTimeout, FrameworkDefaultIdleConnTimeout)
+	}
+	if tr.MaxIdleConnsPerHost != FrameworkDefaultMaxIdleConnsPerHost {
+		t.Errorf("MaxIdleConnsPerHost = %d, want FrameworkDefaultMaxIdleConnsPerHost (%d) — beta.43 tightened from 2",
+			tr.MaxIdleConnsPerHost, FrameworkDefaultMaxIdleConnsPerHost)
 	}
 	if tr.ResponseHeaderTimeout != 0 {
-		t.Errorf("ResponseHeaderTimeout = %v, want 0 (Go default)", tr.ResponseHeaderTimeout)
+		t.Errorf("ResponseHeaderTimeout = %v, want 0 (slow non-streaming models legitimately take longer)", tr.ResponseHeaderTimeout)
 	}
 	if tr.DisableKeepAlives {
-		t.Error("DisableKeepAlives = true, want false")
+		t.Error("DisableKeepAlives = true, want false (only set when explicitly opted in)")
+	}
+	if !tr.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 = false, want true (HTTP/2 PINGs need h2 negotiation)")
 	}
 }
 
@@ -58,14 +72,14 @@ func TestNewHTTPClient_HonoursAllFields(t *testing.T) {
 	}
 }
 
-func TestNewHTTPClient_InvalidDurationsFallToDefaults(t *testing.T) {
+func TestNewHTTPClient_InvalidDurationsFallToFrameworkDefaults(t *testing.T) {
 	c := NewHTTPClient(HTTPClientOptions{
 		IdleConnTimeout:       "not-a-duration",
 		ResponseHeaderTimeout: "thirty seconds",
 	})
 	tr := c.Transport.(*http.Transport)
-	if tr.IdleConnTimeout != 90*time.Second {
-		t.Errorf("IdleConnTimeout = %v, want 90s default after invalid string", tr.IdleConnTimeout)
+	if tr.IdleConnTimeout != FrameworkDefaultIdleConnTimeout {
+		t.Errorf("IdleConnTimeout = %v, want framework default after invalid string", tr.IdleConnTimeout)
 	}
 	if tr.ResponseHeaderTimeout != 0 {
 		t.Errorf("ResponseHeaderTimeout = %v, want 0 default after invalid string", tr.ResponseHeaderTimeout)

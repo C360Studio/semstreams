@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
+	"github.com/c360studio/semstreams/model"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -57,6 +57,15 @@ type HTTPConfig struct {
 
 	// Logger for error logging (optional, defaults to slog.Default()).
 	Logger *slog.Logger
+
+	// IdleConnTimeout, ResponseHeaderTimeout, and DisableKeepAlives
+	// mirror the same fields on model.EndpointConfig and graph/llm's
+	// OpenAIConfig — operator overrides for connection-hygiene
+	// behaviour. Empty/false selects the framework default (see
+	// model.NewHTTPClient).
+	IdleConnTimeout       string
+	ResponseHeaderTimeout string
+	DisableKeepAlives     bool
 }
 
 // NewHTTPEmbedder creates a new HTTP-based embedder.
@@ -81,9 +90,17 @@ func NewHTTPEmbedder(cfg HTTPConfig) (*HTTPEmbedder, error) {
 
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = cfg.BaseURL
-	config.HTTPClient = &http.Client{
-		Timeout: timeout,
-	}
+	// Route through the framework's canonical HTTP client builder so
+	// embedding traffic gets the same connection-hygiene defaults
+	// (HTTP/2 PINGs, tightened idle pool, etc.) as agentic-model and
+	// graph/llm. Beta.43 architectural invariant: every LLM-class
+	// HTTP client routes through model.NewHTTPClient.
+	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptions{
+		Timeout:               timeout,
+		IdleConnTimeout:       cfg.IdleConnTimeout,
+		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
+		DisableKeepAlives:     cfg.DisableKeepAlives,
+	})
 
 	client := openai.NewClientWithConfig(config)
 
