@@ -247,4 +247,4 @@ migration doc, it must cover:
 
 ## Tracking
 
-GitHub issue: TBD (created at pause time; link to be added after `gh issue create`).
+GitHub issue: [#26](https://github.com/C360Studio/semstreams/issues/26) — opened at pause (2026-05-05). Use the issue's checklist to mark progress on resume.
