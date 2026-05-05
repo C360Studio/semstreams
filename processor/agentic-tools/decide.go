@@ -65,13 +65,19 @@ func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta) *
 // predicate.
 //
 // Description must NOT pre-load example action names. Real-LLM models
-// (claude-sonnet-4-6 observed in semteams smoke #7, 2026-05-04) treat
-// tool descriptions as more authoritative than persona prose. Naming
-// "fan_out" / "synthesize" / "retry" / "done" in the description biased
-// the planner persona's terminal action away from the persona's
-// enumerated `"planned"` toward `"fan_out"`, wedging the chain at an
-// unhandled coordinator.next_action triple. The action vocabulary lives
-// strictly in the role's system prompt.
+// (claude-sonnet-class observed against a downstream product flow,
+// 2026-05) treat tool descriptions as more authoritative than persona
+// prose. When the description named a handful of example actions,
+// models biased their terminal choice toward those examples,
+// overriding the persona's enumerated value and wedging chains at an
+// unhandled coordinator.next_action triple. The action vocabulary
+// lives strictly in the role's system prompt; flows that want
+// structural enforcement use the per-spawn allowlist threaded through
+// TaskMessage.Metadata under MetadataKeyDecideActionAllowlist (see
+// agentic/tools.go).
+//
+// TestDecideExecutor_DescriptionDoesNotPreloadActions guards the
+// regression — see its pattern checks for the leak shapes.
 func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{

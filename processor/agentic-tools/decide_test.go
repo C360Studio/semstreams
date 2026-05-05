@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -54,18 +55,27 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 	}
 }
 
-// TestDecideExecutor_DescriptionDoesNotPreloadActions guards against
-// regressing the smoke-#7 wedge: if the tool Description mentions
-// specific action names, real-LLM models read them as authoritative
-// over persona prose and bias their terminal choice toward whichever
-// the description names. The action vocabulary belongs strictly in the
-// role's system prompt — see the comment block above ListTools().
+// TestDecideExecutor_DescriptionDoesNotPreloadActions guards the
+// shape of the leak that motivated this slice: tool descriptions
+// MUST NOT enumerate example action names. Real-LLM models read tool
+// descriptions as authoritative and bias their terminal choice toward
+// whichever the description names — overriding the persona's enumerated
+// vocabulary. The action vocabulary belongs strictly in each role's
+// system prompt.
 //
-// The test covers the four action names that previously appeared in
-// the description, plus a few common drifts. If a future flow legitimately
-// adds a new action name, that's a persona/system-prompt concern; it
-// must NOT be mentioned here or in the tool descriptions returned by
-// ListTools.
+// The test is product-agnostic. It does NOT enumerate specific action
+// names (those are downstream-flow concerns). Instead it pattern-matches
+// the SHAPES that leak example vocabulary into the LLM's context:
+//
+//   1. `e\.g\.` followed by identifier-shaped tokens — the
+//      "give the LLM a worked example" anti-pattern.
+//   2. `action=<identifier>` style references in property
+//      descriptions — the "tell the LLM when to populate this field"
+//      anti-pattern that embeds specific action names.
+//
+// Future flows that need new action names enumerate them in the
+// persona/system prompt. Adding examples here re-opens the smoke-#7
+// drift class regardless of which specific names get leaked.
 func TestDecideExecutor_DescriptionDoesNotPreloadActions(t *testing.T) {
 	e := newDecideExecutor(&recordingPublisher{})
 	tools := e.ListTools()
@@ -74,65 +84,56 @@ func TestDecideExecutor_DescriptionDoesNotPreloadActions(t *testing.T) {
 	}
 
 	// The full text the LLM sees: top-level Description + every nested
-	// `description` field on properties. All of these contribute to the
-	// LLM's understanding of when to pick which action.
-	var llmVisibleText []string
-	llmVisibleText = append(llmVisibleText, tools[0].Description)
+	// `description` field on properties. All contribute to the LLM's
+	// understanding of when to pick which action.
+	type labelled struct {
+		label string
+		text  string
+	}
+	var llmVisibleText []labelled
+	llmVisibleText = append(llmVisibleText, labelled{"Description", tools[0].Description})
 	if props, ok := tools[0].Parameters["properties"].(map[string]any); ok {
-		for _, prop := range props {
+		for name, prop := range props {
 			if propMap, ok := prop.(map[string]any); ok {
 				if desc, ok := propMap["description"].(string); ok {
-					llmVisibleText = append(llmVisibleText, desc)
+					llmVisibleText = append(llmVisibleText, labelled{"properties." + name + ".description", desc})
 				}
 			}
 		}
 	}
 
-	bannedActions := []string{
-		"fan_out", "synthesize", "retry", "done",
-		"planned", "approved", "rejected", "accept", "reject",
-		"insufficient", "needs_clarification",
-		"tests_passing", "tests_failing",
-		"seed_requirements_emitted",
+	// Anti-pattern 1: "e.g." followed by identifier-shaped tokens
+	// (lowercase or snake_case words). Matches the original leak
+	// `(e.g. fan_out, synthesize, retry, done)` regardless of which
+	// specific names appear.
+	exampleListPattern := regexp.MustCompile(`(?i)e\.g\.\s+[a-z][a-z0-9_]*`)
+
+	// Anti-pattern 2: `action=<identifier>` references (the
+	// "when action=X" shape that embedded specific values into the
+	// subtopics/retry_hint property descriptions).
+	actionEqPattern := regexp.MustCompile(`(?i)action\s*=\s*[a-z][a-z0-9_]*`)
+
+	// snippet returns a bounded slice of text starting at idx for
+	// inclusion in the failure message — bounded so a multi-paragraph
+	// description doesn't dump 500 chars into the test output.
+	snippet := func(text string, start, end int) string {
+		stop := end + 30
+		if stop > len(text) {
+			stop = len(text)
+		}
+		return text[start:stop]
 	}
 
-	for _, text := range llmVisibleText {
-		for _, action := range bannedActions {
-			// Use a word-boundary check so legitimate prose like
-			// "the action your role names" doesn't match "action".
-			if containsWord(text, action) {
-				t.Errorf("LLM-visible decide tool text leaks action name %q (text: %q). Action vocabulary belongs in the role's system prompt, not the tool description — see ListTools comment for the smoke #7 rationale.", action, text)
-			}
+	for _, lt := range llmVisibleText {
+		if loc := exampleListPattern.FindStringIndex(lt.text); loc != nil {
+			t.Errorf("decide tool %s leaks an example-action list at %q. The action vocabulary belongs in the role's system prompt, not in framework tool text. See ListTools comment for the smoke-#7 rationale.",
+				lt.label, snippet(lt.text, loc[0], loc[1]))
+		}
+		if loc := actionEqPattern.FindStringIndex(lt.text); loc != nil {
+			t.Errorf("decide tool %s embeds action=<identifier> at %q. Property descriptions must not name specific actions — describe the field's purpose flow-agnostically.",
+				lt.label, snippet(lt.text, loc[0], loc[1]))
 		}
 	}
-}
-
-// containsWord returns true if s contains word as a whole token (bounded
-// by start/end of string or non-word characters). Tighter than
-// strings.Contains so that "satisfaction" doesn't trigger on "action".
-func containsWord(s, word string) bool {
-	for i := 0; i+len(word) <= len(s); i++ {
-		if s[i:i+len(word)] != word {
-			continue
-		}
-		// Check left boundary
-		if i > 0 {
-			c := s[i-1]
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-				continue
-			}
-		}
-		// Check right boundary
-		j := i + len(word)
-		if j < len(s) {
-			c := s[j]
-			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-				continue
-			}
-		}
-		return true
-	}
-	return false
 }
 
 // TestDecideExecutor_HappyPath verifies a valid decide call emits the two
