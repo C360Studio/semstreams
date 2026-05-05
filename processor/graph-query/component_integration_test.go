@@ -579,17 +579,22 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 		assert.Greater(t, cs.MemberCount, 0, "MemberCount should be populated after enrichment")
 	}
 
-	// Test synthesizeQueryAnswer — uses the template fallback (no LLM endpoint)
-	answer, answerModel := graphQuery.synthesizeQueryAnswer(ctx, "drone sensor operations", enriched, 5)
-	assert.NotEmpty(t, answer, "Answer should be populated from community summaries")
-	assert.Contains(t, answer, "knowledge cluster", "Answer should contain cluster header")
-	assert.Contains(t, answer, "5 entities", "Answer should mention entity count")
-	assert.Empty(t, answerModel, "AnswerModel should be empty for template fallback")
+	// Test synthesizeQueryAnswer — uses the template path (no LLM endpoint
+	// configured for this integration test). Returns SynthesisOutcome
+	// with Degraded=false because pure-template deployments don't lie
+	// about being degraded — template IS canonical when no LLM was
+	// ever configured (see beta.45 SynthesisOutcome doc).
+	synth := graphQuery.synthesizeQueryAnswer(ctx, "drone sensor operations", enriched, 5)
+	assert.NotEmpty(t, synth.Answer, "Answer should be populated from community summaries")
+	assert.Contains(t, synth.Answer, "knowledge cluster", "Answer should contain cluster header")
+	assert.Contains(t, synth.Answer, "5 entities", "Answer should mention entity count")
+	assert.Empty(t, synth.Model, "Model should be empty for template path")
+	assert.False(t, synth.Degraded, "Degraded should be false for pure-template (no LLM ever configured)")
 
 	// Verify the answer includes community narrative content
 	assert.True(t,
-		assert.ObjectsAreEqual(true, len(answer) > 100),
-		"Answer should be substantial (>100 chars), got %d chars", len(answer))
+		assert.ObjectsAreEqual(true, len(synth.Answer) > 100),
+		"Answer should be substantial (>100 chars), got %d chars", len(synth.Answer))
 }
 
 // TestIntegration_EnrichGlobalResponse verifies the enrichment pipeline end-to-end:
