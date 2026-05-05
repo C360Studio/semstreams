@@ -145,6 +145,39 @@ type Action struct {
 	// false = overwrite entire document (last writer wins)
 	Merge bool `json:"merge,omitempty"`
 
+	// ID is an optional, author-supplied stable identifier used by the
+	// per-action firing-cap state tracker to key MatchState.ActionIterations.
+	// Empty leaves the framework to derive a deterministic auto-generated
+	// fingerprint via actionFingerprint (rule_id, action_type,
+	// subject_or_predicate, role) — works for the 95% case where one
+	// publish_agent per rule branch suffices. Authors set ID explicitly when
+	// they need stable counters across action renames or want multiple
+	// distinct actions to share a counter.
+	ID string `json:"id,omitempty"`
+
+	// MaxIterations is the per-action firing cap: the action fires at most
+	// this many times for a given rule+entity match-cycle, regardless of
+	// how many times the rule itself fires. Cross-loop bound for the
+	// structured-output ping-pong shape (action_allowlist rejects → loop
+	// iterates → LLM drifts → rule re-fires).
+	//
+	// Sentinel values:
+	//   - nil / JSON field omitted → framework default (DefaultActionMaxIterations = 3)
+	//   - pointer to 0 / `"max_iterations": 0` in JSON → unlimited (operator opts out)
+	//   - pointer to N>0 → explicit cap of N
+	//
+	// Default-on-cap reflects the "structured output retries are the rule,
+	// not the exception" reality semspec/semteams confirmed 2026-05-05. If
+	// an operator hits the cap repeatedly, the model/persona is wrong for
+	// the role — raising the cap papers over the underlying problem; fix
+	// the persona prompt or model choice instead.
+	//
+	// Pointer (rather than int + sentinel) is required to distinguish
+	// "unset" from "explicit 0" on the JSON wire. Direct field reads will
+	// crash on nil; use the helper effectiveMaxIterations to resolve
+	// correctly.
+	MaxIterations *int `json:"max_iterations,omitempty"`
+
 	// Reason is the human-readable denial message for deny actions.
 	// It travels with the *DenyVerdict error so callers can record it
 	// without a side-channel lookup. Variable substitution is applied

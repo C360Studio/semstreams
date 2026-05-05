@@ -213,6 +213,45 @@ func ValidateDefinition(def Definition) error {
 			fmt.Errorf("rule %s fire_every_n_events must be >= 0, got %d", def.ID, def.FireEveryNEvents),
 			"RuleProcessor", "ValidateDefinition", "validate fire_every_n_events")
 	}
+	return validateActionLists(def)
+}
+
+// validateActionLists walks every action slice on the Definition
+// (OnEnter, OnExit, WhileTrue, OnRecovery) and checks per-action
+// invariants. Currently enforces:
+//
+//   - Action.MaxIterations, when set, must be non-negative. Sentinel
+//     0 is valid (operator's explicit unlimited opt-out); negative
+//     values are config errors.
+func validateActionLists(def Definition) error {
+	check := func(label string, actions []Action) error {
+		for i, a := range actions {
+			if a.MaxIterations != nil && *a.MaxIterations < 0 {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] max_iterations must be >= 0 (0 = unlimited), got %d",
+						def.ID, label, i, *a.MaxIterations),
+					"RuleProcessor", "ValidateDefinition", "validate action max_iterations")
+			}
+		}
+		return nil
+	}
+	// Walk every list of Actions on the Definition. Note `def.Actions`
+	// is the cron-rule action list (cron_rule.go uses Definition.Actions
+	// rather than the OnEnter/OnExit/WhileTrue/OnRecovery transition
+	// shape). Validation MUST cover it too, even though the runtime cap
+	// gate doesn't yet apply to cron-fired actions — see migration
+	// guide for the deferred-runtime caveat.
+	for label, actions := range map[string][]Action{
+		"on_enter":    def.OnEnter,
+		"on_exit":     def.OnExit,
+		"while_true":  def.WhileTrue,
+		"on_recovery": def.OnRecovery,
+		"actions":     def.Actions,
+	} {
+		if err := check(label, actions); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

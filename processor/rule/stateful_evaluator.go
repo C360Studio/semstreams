@@ -139,16 +139,26 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 		iteration++
 	}
 
+	// Carry per-action firing counts forward across evaluations. Counts
+	// persist through both transitions and steady-state re-evaluations
+	// so the per-action cap covers the full match-cycle for an entity,
+	// not just one transition.
+	actionIterations := prevState.ActionIterations
+	if actionIterations == nil {
+		actionIterations = map[string]int{}
+	}
+
 	matchState := &MatchState{
-		RuleID:         ev.Rule.ID,
-		EntityKey:      entityKey,
-		IsMatching:     currentlyMatching,
-		LastTransition: string(transition),
-		TransitionAt:   time.Now(),
-		LastChecked:    time.Now(),
-		Iteration:      iteration,
-		MaxIterations:  ev.Rule.MaxIterations,
-		SourceRevision: ev.Revision,
+		RuleID:           ev.Rule.ID,
+		EntityKey:        entityKey,
+		IsMatching:       currentlyMatching,
+		LastTransition:   string(transition),
+		TransitionAt:     time.Now(),
+		LastChecked:      time.Now(),
+		Iteration:        iteration,
+		MaxIterations:    ev.Rule.MaxIterations,
+		SourceRevision:   ev.Revision,
+		ActionIterations: actionIterations,
 	}
 
 	ec := &ExecutionContext{
@@ -306,6 +316,34 @@ func (e *StatefulEvaluator) runActions(
 			}
 		}
 
+		// Per-action firing-cap gate. Look up the action's stable
+		// identifier (author-supplied Action.ID or deterministic hash),
+		// compare against the resolved cap (effective default 3 when
+		// unset; 0 = unlimited per operator opt-out), and skip the
+		// action when it has already fired up to its cap. Counter
+		// state lives on ec.State.ActionIterations and is persisted
+		// to the StateTracker after runActions returns.
+		if ec.State != nil {
+			actionID := action.effectiveID(ruleDef.ID)
+			maxIter, fromDefault := action.effectiveMaxIterations()
+			fired := ec.State.ActionIterations[actionID]
+			if !isUnlimited(maxIter) && fired >= maxIter {
+				e.logger.Warn("Action firing cap reached, skipping",
+					"rule_id", ruleDef.ID,
+					"entity_id", entityID,
+					"action_type", action.Type,
+					"action_id", actionID,
+					"fired", fired,
+					"cap", maxIter,
+					"cap_source", capSource(fromDefault))
+				continue
+			}
+			if ec.State.ActionIterations == nil {
+				ec.State.ActionIterations = map[string]int{}
+			}
+			ec.State.ActionIterations[actionID] = fired + 1
+		}
+
 		if err := e.actionExecutor.Execute(ctx, action, ec); err != nil {
 			if errors.Is(err, ErrDenyVerdict) {
 				// Deny is terminal: subsequent actions in this evaluation cycle do not
@@ -325,6 +363,17 @@ func (e *StatefulEvaluator) runActions(
 				"error", err)
 		}
 	}
+}
+
+// capSource returns the human-readable source label for a resolved
+// firing cap — used in the cap-reached log line so operators can
+// distinguish framework-default fires from explicit-config fires
+// without cross-referencing the rule definition.
+func capSource(fromDefault bool) string {
+	if fromDefault {
+		return "framework_default"
+	}
+	return "rule_config"
 }
 
 // shouldFireOnRecovery reports whether a rule should re-fire its entry actions

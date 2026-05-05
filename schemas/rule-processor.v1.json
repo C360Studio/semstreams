@@ -77,9 +77,17 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "id"
+                },
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "max_iterations": {
+                  "type": "integer",
+                  "description": "max_iterations"
                 },
                 "merge": {
                   "type": "boolean",
@@ -291,9 +299,17 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "id"
+                },
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "max_iterations": {
+                  "type": "integer",
+                  "description": "max_iterations"
                 },
                 "merge": {
                   "type": "boolean",
@@ -423,9 +439,17 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "id"
+                },
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "max_iterations": {
+                  "type": "integer",
+                  "description": "max_iterations"
                 },
                 "merge": {
                   "type": "boolean",
@@ -555,9 +579,17 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "id"
+                },
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "max_iterations": {
+                  "type": "integer",
+                  "description": "max_iterations"
                 },
                 "merge": {
                   "type": "boolean",
@@ -706,9 +738,17 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "id"
+                },
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "max_iterations": {
+                  "type": "integer",
+                  "description": "max_iterations"
                 },
                 "merge": {
                   "type": "boolean",

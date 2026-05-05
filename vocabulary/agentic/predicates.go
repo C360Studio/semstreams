@@ -607,6 +607,23 @@ const (
 	// separate investigation"
 	// DataType: string
 	CoordinatorDecisionReason = "coordinator.decision_reason"
+
+	// CoordinatorDecideSAPCoerced is an audit triple emitted by the
+	// decide tool's SAP (schema-aligned-parsing) layer when it normalises
+	// an LLM-emitted action_allowlist drift to the allowlist's canonical
+	// form. Object is "{raw}|{canonical}" so a single predicate captures
+	// the drift shape — ops-agent / dashboards can group by Object to
+	// find recurring patterns (e.g. "fan-out|fan_out" appearing
+	// repeatedly indicates a model that consistently hyphenates).
+	//
+	// High prevalence of this triple for a given role is a model/persona
+	// fit problem, not a feature. The 2026-05-05 design constraint:
+	// SAP exists because clean structured-output runs are unicorns, but
+	// every coercion is impossible to miss in the graph so operators
+	// can act on the signal rather than raise MaxIterations.
+	// Example: "fan-out|fan_out"
+	// DataType: string
+	CoordinatorDecideSAPCoerced = "coordinator.decide_sap_coerced"
 )
 
 // Ops Predicates

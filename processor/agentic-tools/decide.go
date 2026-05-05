@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
@@ -14,6 +18,27 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+)
+
+// decideSAPCoercedTotal counts every action_allowlist SAP coercion the
+// decide tool performs, broken down by from→to action pair. Operators
+// alert on rate-of-change here: a sudden uptick (or sustained
+// non-zero) signals a model/persona fit problem for the role producing
+// the drift. Auto-registered with the default registerer so dashboards
+// pick it up without component-level wiring.
+//
+// Cardinality bound: from_action and to_action are drawn from the
+// declared allowlist values plus whatever the LLM emitted that
+// normalised to one of them. Practical cardinality stays small under
+// any sane allowlist.
+var decideSAPCoercedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "semstreams",
+		Subsystem: "decide_tool",
+		Name:      "action_allowlist_sap_coerced_total",
+		Help:      "Number of action_allowlist matches resolved via SAP normalisation rather than exact match. High rate signals model/persona drift; fix the persona prompt or model choice rather than raising MaxIterations.",
+	},
+	[]string{"from_action", "to_action"},
 )
 
 // DecideToolName is the name agents use to invoke the coordinator's
@@ -51,12 +76,24 @@ type TriplePublisher interface {
 type DecideExecutor struct {
 	publisher TriplePublisher
 	platform  types.PlatformMeta
+	logger    *slog.Logger
 }
 
 // NewDecideExecutor constructs the executor given a triple publisher and
 // the platform identity used to build the coordinator's loop entity ID.
+// Logger defaults to slog.Default(); set explicitly via SetLogger when
+// the caller has a structured logger handy (the registration path does
+// — see executors/register_decide.go).
 func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta) *DecideExecutor {
-	return &DecideExecutor{publisher: publisher, platform: platform}
+	return &DecideExecutor{publisher: publisher, platform: platform, logger: slog.Default()}
+}
+
+// SetLogger replaces the default logger. nil-safe — a nil argument
+// preserves whatever logger the executor already has.
+func (e *DecideExecutor) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		e.logger = logger
+	}
 }
 
 // ListTools describes the decide tool. The action string is NOT enumerated
@@ -144,15 +181,45 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 
 	// Per-spawn action allowlist (set by rule.executePublishAgent via
 	// TaskMessage.Metadata, propagated onto ToolCall.Metadata by the
-	// agentic-loop). When present, validate args.Action against it and
-	// return InvalidArgs with the valid set in the error message so the
-	// LLM can correct on retry. Empty/missing leaves decide free-form.
-	if msg := validateActionAllowlist(call.Metadata, args.Action); msg != "" {
+	// agentic-loop). When present, validate args.Action against it.
+	//
+	// Beta.44 adds an SAP (schema-aligned-parsing) coercion layer on
+	// the allowlist. Common drift shapes (lowercase, hyphenation, leading
+	// whitespace) are normalised to the allowlist's canonical form
+	// instead of producing an InvalidArgs rejection. semspec/semteams
+	// confirmed structured-output drift is the rule, not the exception.
+	//
+	// Coercion fires the five LOUD signals below — the user's explicit
+	// design constraint 2026-05-05: SAP can mask model/persona
+	// mismatches, so every coercion must be impossible to miss in
+	// operator dashboards. High coercion rate is a signal to fix model
+	// fit / persona prompt, not a feature to celebrate.
+	allowlist := resolveActionAllowlist(call.Metadata, args.Action)
+	if allowlist.errMsg != "" {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     msg,
+			Error:     allowlist.errMsg,
 			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
+	}
+	sapCoerced := allowlist.coerced
+	if sapCoerced {
+		// Signal 1: slog.Warn — fires per coercion. Warn level so it
+		// shows up in default operator dashboards. e.logger is
+		// guaranteed non-nil by NewDecideExecutor, so no defensive
+		// check needed.
+		e.logger.Warn("decide tool SAP-coerced action",
+			"loop_id", call.LoopID,
+			"from_action", allowlist.rawAction,
+			"to_action", allowlist.canonicalAction,
+			"hint", "high coercion rate signals model/persona mismatch — fix the persona prompt or model choice rather than raising MaxIterations")
+		// Signal 2: Prometheus counter — joinable in Grafana for
+		// alert-rate-on-coercion.
+		decideSAPCoercedTotal.WithLabelValues(allowlist.rawAction, allowlist.canonicalAction).Inc()
+		// Signal 3 (audit triple) and Signal 4 (ToolResult metadata)
+		// fire below alongside the canonical decision triples — they
+		// share the publisher and result-metadata code path.
+		args.Action = allowlist.canonicalAction
 	}
 
 	if call.LoopID == "" {
@@ -184,6 +251,21 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 			Confidence: 1.0,
 		},
 	}
+	// Signal 3: audit triple on the loop entity, queryable alongside
+	// the trajectory. Object is "{raw}|{canonical}" so a single triple
+	// captures the LLM's drift shape — ops-agent can group by Object
+	// to find recurring drift patterns ("everyone's saying fan-out
+	// when the allowlist names fan_out") without graph-side surgery.
+	if sapCoerced {
+		triples = append(triples, message.Triple{
+			Subject:    loopEntityID,
+			Predicate:  agvocab.CoordinatorDecideSAPCoerced,
+			Object:     allowlist.rawAction + "|" + allowlist.canonicalAction,
+			Source:     decideToolSource,
+			Timestamp:  now,
+			Confidence: 1.0,
+		})
+	}
 
 	for _, triple := range triples {
 		if err := e.publisher.AddTriple(ctx, triple); err != nil {
@@ -207,54 +289,133 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 		}, errs.WrapInvalid(err, "DecideExecutor", "decide", "marshal payload")
 	}
 
+	resultMetadata := map[string]any{
+		"action":         args.Action,
+		"reason":         args.Reason,
+		"loop_entity_id": loopEntityID,
+		"subtopic_count": len(args.Subtopics),
+		"has_retry_hint": args.RetryHint != "",
+	}
+	// Signal 4: ToolResult metadata. Downstream consumers reading the
+	// raw tool result (tracing, replay, dashboards) see the SAP fact
+	// without joining against the audit triple.
+	if sapCoerced {
+		resultMetadata["sap_coerced"] = true
+		resultMetadata["sap_raw_action"] = allowlist.rawAction
+	}
+
 	return agentic.ToolResult{
 		CallID:   call.ID,
 		Content:  string(payload),
 		StopLoop: true,
-		Metadata: map[string]any{
-			"action":         args.Action,
-			"reason":         args.Reason,
-			"loop_entity_id": loopEntityID,
-			"subtopic_count": len(args.Subtopics),
-			"has_retry_hint": args.RetryHint != "",
-		},
+		Metadata: resultMetadata,
 	}, nil
 }
 
-// validateActionAllowlist returns "" when the action is permitted (no
-// allowlist set, or allowlist contains it). Returns a non-empty error
-// message when the allowlist is set AND the action is not in it. The
-// message names the valid set so the LLM can correct on retry.
+// allowlistResult captures the outcome of action_allowlist resolution
+// when SAP (schema-aligned-parsing) is in scope. Three terminal shapes:
 //
-// Reads from ToolCall.Metadata under
-// agentic.MetadataKeyDecideActionAllowlist. The value flows through the
-// JSON wire as []any (TaskMessage.Metadata → ToolCall.Metadata round
-// trip); coerce to []string at validation time. Other shapes
-// (missing key, nil, non-array) are treated as "no allowlist set" —
-// no compatibility hazard for unenforced flows.
-func validateActionAllowlist(metadata map[string]any, action string) string {
+//   - errMsg != ""               → rejection. Caller returns
+//     ToolErrorInvalidArgs with errMsg.
+//   - coerced == true            → SAP fired. canonicalAction holds
+//     the allowlist-form (e.g. "fan_out"
+//     for input "fan-out"); rawAction
+//     holds the LLM's original input.
+//     Caller MUST emit the five LOUD
+//     signals before proceeding.
+//   - errMsg == "" && !coerced   → exact match, free-form, or
+//     no-allowlist-set. Use args.Action
+//     as-is.
+type allowlistResult struct {
+	canonicalAction string
+	coerced         bool
+	rawAction       string
+	errMsg          string
+}
+
+// resolveActionAllowlist enforces the per-spawn action_allowlist gate
+// from beta.41 with the beta.44 SAP layer applied.
+//
+// Algorithm:
+//  1. No allowlist set → free-form (back-compat).
+//  2. Exact match against allowlist → accepted as-is.
+//  3. Normalised match (lowercase + hyphen→underscore + trim against
+//     normalised-allowlist) → SAP coercion. canonicalAction is the
+//     allowlist member; coerced=true so the caller emits LOUD signals.
+//  4. No exact OR normalised match → rejected with InvalidArgs.
+//
+// SAP is intentionally conservative: V1 does NOT do edit-distance /
+// Levenshtein matching. The user's explicit constraint 2026-05-05:
+// SAP is a runtime safety net for *expected* drift, not a
+// fuzzy-matching layer that hides genuinely broken outputs. Operators
+// reading the SAP coercion metric should see "you have model fit
+// problems," not "the framework is silently fixing things."
+func resolveActionAllowlist(metadata map[string]any, action string) allowlistResult {
 	if metadata == nil {
-		return ""
+		return allowlistResult{canonicalAction: action}
 	}
 	raw, ok := metadata[agentic.MetadataKeyDecideActionAllowlist]
 	if !ok || raw == nil {
-		return ""
+		return allowlistResult{canonicalAction: action}
 	}
 	allowlist := coerceAllowlist(raw)
 	if len(allowlist) == 0 {
-		return ""
+		return allowlistResult{canonicalAction: action}
 	}
+
+	// Pass 1: exact match. Hot path.
 	for _, a := range allowlist {
 		if a == action {
-			return ""
+			return allowlistResult{canonicalAction: action}
 		}
 	}
-	return fmt.Sprintf(
-		"action %q is not in the allowed set for this role: [%s]. "+
-			"The action vocabulary your role accepts is closed; pick one of these and re-emit.",
-		action,
-		strings.Join(allowlist, ", "),
-	)
+
+	// Pass 2: SAP — normalise both sides and re-test. The first
+	// allowlist member whose normalised form matches the input's
+	// normalised form is the canonical coercion target. Order of
+	// allowlist entries determines tiebreaks if two members
+	// normalise to the same string (rare; typically a config error).
+	normalisedInput := normaliseActionForSAP(action)
+	for _, a := range allowlist {
+		if normaliseActionForSAP(a) == normalisedInput {
+			return allowlistResult{
+				canonicalAction: a,
+				coerced:         true,
+				rawAction:       action,
+			}
+		}
+	}
+
+	return allowlistResult{
+		errMsg: fmt.Sprintf(
+			"action %q is not in the allowed set for this role: [%s]. "+
+				"The action vocabulary your role accepts is closed; pick one of these and re-emit.",
+			action,
+			strings.Join(allowlist, ", "),
+		),
+	}
+}
+
+// normaliseActionForSAP applies the V1 normalisation rules: lowercase,
+// hyphen-to-underscore, trim. Pure function so both the input and
+// allowlist members can run through the same shape.
+//
+// The normalisation set is deliberately small. Adding fuzzy-matching
+// here (Levenshtein distance, plural stripping, prefix elision) starts
+// to mask real model/persona problems and is explicitly out of scope
+// per the 2026-05-05 design discussion.
+//
+// Order constraint for future contributors: case-preserving rules
+// MUST run before ToLower. Today's rules (TrimSpace, ToLower,
+// ReplaceAll) are case-independent so the order doesn't matter, but
+// a hypothetical camelCase→snake_case rule would need to fire before
+// the input is lowercased (otherwise `fanOut` collapses to `fanout`,
+// not `fan_out`). Pin the order if you add such a rule.
+func normaliseActionForSAP(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "-", "_")
+	return s
 }
 
 // coerceAllowlist accepts the JSON-unmarshalled metadata value and

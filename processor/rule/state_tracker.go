@@ -49,6 +49,17 @@ type MatchState struct {
 	// representation of the last observed value. Used by the transition operator
 	// to detect field-level state changes across evaluations.
 	FieldValues map[string]string `json:"field_values,omitempty"`
+
+	// ActionIterations tracks per-action firing counts for the
+	// Action.MaxIterations cap. Keys are Action.effectiveID(rule_id) —
+	// either the author's explicit Action.ID or the deterministic hash
+	// of (rule_id, action_type, subject_or_predicate, role). Counts
+	// persist across rule entries/exits so the cap covers the entire
+	// match-cycle for an entity, not just one transition.
+	//
+	// When an action's effectiveID isn't yet a key in this map, its
+	// count is treated as 0 (unfired). The first fire writes the entry.
+	ActionIterations map[string]int `json:"action_iterations,omitempty"`
 }
 
 // StateTracker manages rule match state persistence in NATS KV.
