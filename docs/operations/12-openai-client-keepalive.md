@@ -92,6 +92,37 @@ endpoints:
     disable_keepalives: true   # belt-and-suspenders for known-wedgy gateways
 ```
 
+### Local inference servers (sparky, vLLM, llama.cpp)
+
+```yaml
+endpoints:
+  sparky-qwen:
+    provider: openai            # OpenAI-compatible /v1 endpoint
+    url: http://sparky:8080/v1
+    model: qwen3-coder:30b
+    disable_keepalives: true    # see below
+```
+
+Local inference servers (sparky, vLLM, llama.cpp's HTTP server) are
+not industrial-grade HTTP daemons. They idle-kill connections
+aggressively and often silently — without sending the FIN packet that
+would let Go's connection pool know the conn is dead. The semspec
+team observed agent loops wedging after ~8 turns against these
+backends; the wedge is the same shape as the OpenRouter case but
+the trigger is per-call connection accumulation rather than gateway
+idle-kill.
+
+`disable_keepalives: true` is the right default for these endpoints.
+TLS handshake cost doesn't apply (HTTP, not HTTPS, on the loopback or
+private-network path), and the connection-setup cost on a local
+loopback is sub-millisecond. The wedge class disappears entirely
+because every request gets a fresh connection.
+
+Operators who want to preserve keepalive (e.g., HTTP/2-supporting
+local backends with proper FIN handling) can leave the field unset
+and tune `idle_conn_timeout` instead — a 5-10s value is typically
+short enough to dodge the upstream's idle-kill window.
+
 ### Streaming endpoints (any provider)
 
 ```yaml

@@ -369,16 +369,19 @@ func (c *Component) initLLMClassifier() {
 	if c.modelRegistry == nil {
 		return
 	}
-	resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityQueryClassification)
+	resolved, ep, err := resolveEndpointWithConfig(c.modelRegistry, model.CapabilityQueryClassification)
 	if err != nil {
 		// No query_classification capability configured — keyword-only is fine
 		return
 	}
 	client, err := llm.NewOpenAIClient(llm.OpenAIConfig{
-		BaseURL: resolved.URL,
-		Model:   resolved.Model,
-		APIKey:  resolved.APIKey,
-		Logger:  c.logger,
+		BaseURL:               resolved.URL,
+		Model:                 resolved.Model,
+		APIKey:                resolved.APIKey,
+		Logger:                c.logger,
+		IdleConnTimeout:       ep.IdleConnTimeout,
+		ResponseHeaderTimeout: ep.ResponseHeaderTimeout,
+		DisableKeepAlives:     ep.DisableKeepAlives,
 	})
 	if err != nil {
 		c.logger.Warn("failed to create LLM query classifier, using keyword-only",
@@ -405,16 +408,19 @@ func (c *Component) initAnswerSynthesizer() {
 	if c.modelRegistry == nil {
 		return
 	}
-	resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityAnswerSynthesis)
+	resolved, ep, err := resolveEndpointWithConfig(c.modelRegistry, model.CapabilityAnswerSynthesis)
 	if err != nil {
 		c.logger.Debug("no answer_synthesis endpoint configured, using template fallback")
 		return
 	}
 	client, err := llm.NewOpenAIClient(llm.OpenAIConfig{
-		BaseURL: resolved.URL,
-		Model:   resolved.Model,
-		APIKey:  resolved.APIKey,
-		Logger:  c.logger,
+		BaseURL:               resolved.URL,
+		Model:                 resolved.Model,
+		APIKey:                resolved.APIKey,
+		Logger:                c.logger,
+		IdleConnTimeout:       ep.IdleConnTimeout,
+		ResponseHeaderTimeout: ep.ResponseHeaderTimeout,
+		DisableKeepAlives:     ep.DisableKeepAlives,
 	})
 	if err != nil {
 		c.logger.Warn("failed to create answer synthesis LLM client, using template fallback",
@@ -426,6 +432,47 @@ func (c *Component) initAnswerSynthesizer() {
 	c.logger.Info("LLM answer synthesis enabled",
 		slog.String("model", resolved.Model),
 		slog.Duration("timeout", timeout))
+}
+
+// resolveEndpointWithConfig returns both the resolved
+// URL/Model/APIKey trio (with API key read from the configured env)
+// AND the full *EndpointConfig the LLM client builder needs for
+// connection-hygiene fields (DisableKeepAlives, IdleConnTimeout,
+// ResponseHeaderTimeout).
+//
+// model.ResolveEndpoint's *ResolvedEndpoint return value is
+// intentionally minimal — three fields, suitable for callers that
+// don't care about transport tuning. graph-query's LLM clients DO
+// care: without DisableKeepAlives, sustained-load runs against
+// keepalive-hostile gateways stack stale-pooled-connection wedges
+// (semspec smoke-#10). The legacy ResolveEndpoint path silently
+// stripped those fields; this helper plumbs them through without
+// re-implementing the env-key resolution that lives in
+// model.ResolveEndpoint.
+//
+// If ResolveEndpoint succeeds the resolved name maps to a non-nil
+// EndpointConfig — the resolution chain guarantees this. We don't
+// defend against a future divergence between the two lookups here:
+// a nil EndpointConfig under a successful ResolveEndpoint indicates
+// a registry-internal invariant violation, and a silent fallback
+// would mask it. nil-deref on the next field access surfaces it
+// loudly instead.
+//
+// TODO(beta.43): subsume into the unified `model.NewHTTPClient`
+// builder pattern. graph/llm and processor/agentic-model already go
+// through `model.HTTPClientOptionsFromEndpoint(ep)` — this helper
+// exists because graph-query historically used `model.ResolveEndpoint`
+// directly. Beta.43's "one client builder" architectural pass will
+// converge all four call sites onto a single resolution path and
+// retire this local helper.
+func resolveEndpointWithConfig(reg model.RegistryReader, capability string) (*model.ResolvedEndpoint, *model.EndpointConfig, error) {
+	resolved, err := model.ResolveEndpoint(reg, capability)
+	if err != nil {
+		return nil, nil, err
+	}
+	name := reg.Resolve(capability)
+	ep := reg.GetEndpoint(name)
+	return resolved, ep, nil
 }
 
 // resolveCapabilityLLMTimeout reads the per-call LLM timeout for any

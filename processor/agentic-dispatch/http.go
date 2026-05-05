@@ -308,6 +308,11 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		ContextRequestID: msg.ContextRequestID,
 	}
 
+	// Propagate inbound trace_id onto TaskMessage.Metadata so the
+	// downstream LoopEntity.Metadata surfaces it for wedge investigation.
+	// See stampTraceIDFromCtx in component.go.
+	stampTraceIDFromCtx(ctx, &task)
+
 	// Track the loop
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           loopID,

@@ -701,6 +701,11 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		ContextRequestID: msg.ContextRequestID,
 	}
 
+	// Propagate inbound trace_id onto TaskMessage.Metadata so the
+	// downstream LoopEntity.Metadata surfaces it for wedge investigation
+	// (curl /loops/<id> → metadata.trace_id → message-logger lookup).
+	stampTraceIDFromCtx(ctx, &task)
+
 	// Scope the initial agent's tools to DefaultTools when configured.
 	// Nil DefaultTools leaves task.Tools unset so the spawned loop falls
 	// back to global discovery (pre-existing behaviour). An explicit empty
