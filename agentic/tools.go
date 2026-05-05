@@ -94,8 +94,9 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 // Empty/missing leaves decide free-form (back-compat).
 //
 // Set by rule.executePublishAgent from rule.Action.ActionAllowlist.
-// See semteams smoke #7 (project_smoke7_findings.md F2 slice) for
-// the planner-wedge incident this enforces against.
+// Belt-and-suspenders for persona prose: the persona enumerates the
+// vocabulary in the LLM's system prompt; this allowlist enforces it
+// structurally on the wire.
 const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 
 // agent.step.error_category graph predicate for queryable failure analysis.

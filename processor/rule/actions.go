@@ -100,9 +100,10 @@ type Action struct {
 	//
 	// Empty/nil disables the gate (back-compat: action stays free-form).
 	// Belt-and-suspenders for persona prose: the persona enumerates the
-	// vocabulary, this field enforces it. See semteams smoke #7
-	// (project_smoke7_findings.md F2 slice) for the incident that
-	// motivated landing this on the rule rather than as a wrapper tool.
+	// vocabulary in the LLM's system prompt; this field enforces it
+	// structurally on the wire. Putting the gate on the rule (rather
+	// than introducing a wrapper tool) keeps role→action decisions in
+	// the workflow config that already owns role/model/prompt/tools.
 	ActionAllowlist []string `json:"action_allowlist,omitempty"`
 
 	// WorkflowID is the workflow identifier for trigger_workflow actions
