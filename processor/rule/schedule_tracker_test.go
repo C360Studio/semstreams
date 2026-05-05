@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 func newScheduleTrackerForTest() (*ScheduleTracker, *mockKVBucket) {
@@ -358,15 +358,15 @@ func TestScheduleTracker_LastFiredAt_PassesThroughUnexpectedErr(t *testing.T) {
 }
 
 // flakyKVBucket overrides Get on a real mockKVBucket to return a custom
-// error for every key. Embedding the real mock keeps the rest of the
-// jetstream.KeyValue surface satisfied without re-stubbing each method.
+// error for every key. Embedding the real mock keeps all other KVBucket
+// methods working without re-stubbing them.
 type flakyKVBucket struct {
 	*mockKVBucket
 	err error
 }
 
-func (f *flakyKVBucket) Get(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
-	return nil, f.err
+func (f *flakyKVBucket) Get(_ context.Context, _ string) (natsclient.KVEntry, error) {
+	return natsclient.KVEntry{}, f.err
 }
 
 // Regression: rule removal must purge the schedule record. The reviewer

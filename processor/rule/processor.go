@@ -511,7 +511,7 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	}
 
 	// Create StateTracker
-	rp.stateTracker = NewStateTracker(bucket, rp.logger)
+	rp.stateTracker = NewStateTracker(natsclient.WrapKV(bucket), rp.logger)
 
 	// Create ActionExecutor with triple mutation support
 	// The tripleMutator uses NATS request/response to persist triples and tracks
@@ -614,7 +614,7 @@ func (rp *Processor) initializeScheduleTracker(ctx context.Context) error {
 		rp.logger.Info("Using existing RULE_SCHEDULES KV bucket")
 	}
 
-	rp.scheduleTracker = NewScheduleTracker(bucket, rp.logger)
+	rp.scheduleTracker = NewScheduleTracker(natsclient.WrapKV(bucket), rp.logger)
 	return nil
 }
 
@@ -656,7 +656,7 @@ func (rp *Processor) initializeWindowTracker(ctx context.Context) error {
 		rp.logger.Info("Using existing RULE_WINDOWS KV bucket")
 	}
 
-	rp.windowTracker = NewWindowTracker(bucket, rp.logger)
+	rp.windowTracker = NewWindowTracker(natsclient.WrapKV(bucket), rp.logger)
 	rp.windowTracker.setMetrics(rp.metrics)
 
 	// Wire the tracker into the stateful evaluator so count_in_window

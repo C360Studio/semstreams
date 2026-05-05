@@ -42,7 +42,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // ScheduleBucketName is the canonical NATS KV bucket name for per-rule
@@ -85,7 +85,7 @@ var ErrScheduleRecordNotFound = errors.New("schedule record not found")
 // Methods are safe for concurrent use; the underlying NATS KV client
 // already serialises writes.
 type ScheduleTracker struct {
-	bucket jetstream.KeyValue
+	bucket natsclient.KVBucket
 	logger *slog.Logger
 }
 
@@ -94,7 +94,7 @@ type ScheduleTracker struct {
 // when bucket creation fails on startup — every method returns an error
 // when bucket is nil rather than panicking, mirroring StateTracker's
 // nil-tolerant behaviour.
-func NewScheduleTracker(bucket jetstream.KeyValue, logger *slog.Logger) *ScheduleTracker {
+func NewScheduleTracker(bucket natsclient.KVBucket, logger *slog.Logger) *ScheduleTracker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -122,14 +122,14 @@ func (st *ScheduleTracker) LastFiredAt(ctx context.Context, ruleID string) (Last
 
 	entry, err := st.bucket.Get(ctx, scheduleKey(ruleID))
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
+		if errors.Is(err, natsclient.ErrKeyNotFound) {
 			return LastFireRecord{}, ErrScheduleRecordNotFound
 		}
 		return LastFireRecord{}, fmt.Errorf("get schedule record: %w", err)
 	}
 
 	var rec LastFireRecord
-	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+	if err := json.Unmarshal(entry.Value, &rec); err != nil {
 		return LastFireRecord{}, fmt.Errorf("unmarshal schedule record: %w", err)
 	}
 	return rec, nil
@@ -166,14 +166,13 @@ func (st *ScheduleTracker) RecordFire(ctx context.Context, ruleID, scheduleSpec 
 	return nil
 }
 
-// Bucket returns the underlying jetstream.KeyValue handle. Exposed so
-// in-process callers (governance startup hooks, ops dashboards in the
-// same binary) can use the full KV API — Watch for live updates,
-// ListKeys for filtered scans — without re-resolving the bucket via
+// Bucket returns the underlying KVBucket handle. Exposed so in-process
+// callers (governance startup hooks, ops dashboards in the same binary)
+// can access the bucket for Watch or Keys without re-resolving it via
 // js.KeyValue. The returned handle may be nil if the tracker was
 // constructed in nil-bucket mode (degraded startup); callers must
 // nil-check.
-func (st *ScheduleTracker) Bucket() jetstream.KeyValue {
+func (st *ScheduleTracker) Bucket() natsclient.KVBucket {
 	return st.bucket
 }
 
@@ -185,7 +184,7 @@ func (st *ScheduleTracker) Delete(ctx context.Context, ruleID string) error {
 		return fmt.Errorf("schedule tracker bucket is nil")
 	}
 	err := st.bucket.Delete(ctx, scheduleKey(ruleID))
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, natsclient.ErrKeyNotFound) {
 		return fmt.Errorf("delete schedule record: %w", err)
 	}
 	return nil
@@ -208,7 +207,7 @@ func (st *ScheduleTracker) List(ctx context.Context) ([]LastFireRecord, error) {
 		// empty rather than an error to keep the caller's branch count
 		// low (the on-startup walk runs against a clean bucket on first
 		// deploy).
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
+		if errors.Is(err, natsclient.ErrNoKeysFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("list schedule keys: %w", err)
@@ -220,7 +219,7 @@ func (st *ScheduleTracker) List(ctx context.Context) ([]LastFireRecord, error) {
 		if err != nil {
 			// Skip records that disappeared between Keys and Get — the
 			// scheduler treats missing records as "never fired" anyway.
-			if errors.Is(err, jetstream.ErrKeyNotFound) {
+			if errors.Is(err, natsclient.ErrKeyNotFound) {
 				continue
 			}
 			st.logger.Warn("Failed to read schedule record",
@@ -229,7 +228,7 @@ func (st *ScheduleTracker) List(ctx context.Context) ([]LastFireRecord, error) {
 			continue
 		}
 		var rec LastFireRecord
-		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		if err := json.Unmarshal(entry.Value, &rec); err != nil {
 			st.logger.Warn("Skipping malformed schedule record",
 				"key", k,
 				"error", err)

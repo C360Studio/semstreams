@@ -9,13 +9,13 @@ package rule
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/natsclient/kvbuckettest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +82,7 @@ func TestWindowTracker_ConcurrentCAS_AllIncrementsAccountedFor(t *testing.T) {
 		entry, err := wt.bucket.Get(ctx, key)
 		require.NoError(t, err, "key %q not found", key)
 		var rec WindowRecord
-		require.NoError(t, json.Unmarshal(entry.Value(), &rec), "unmarshal %q", key)
+		require.NoError(t, json.Unmarshal(entry.Value, &rec), "unmarshal %q", key)
 		for _, b := range rec.Buckets {
 			total += b.Count
 		}
@@ -151,7 +151,7 @@ func TestWindowTracker_ConcurrentCAS_ConflictRetry(t *testing.T) {
 	entry, err := wt.bucket.Get(ctx, windowKey("rule-conflict", "alice"))
 	require.NoError(t, err)
 	var rec WindowRecord
-	require.NoError(t, json.Unmarshal(entry.Value(), &rec))
+	require.NoError(t, json.Unmarshal(entry.Value, &rec))
 
 	total := 0
 	for _, b := range rec.Buckets {
@@ -164,129 +164,17 @@ func TestWindowTracker_ConcurrentCAS_ConflictRetry(t *testing.T) {
 
 // ----- CAS-capable KV mock -----
 
-// casKVBucket is an in-memory KV bucket that implements optimistic concurrency
-// (Update checks the expected revision and returns ErrKeyExists on
-// mismatch). This is required for WindowTracker's CAS loop to work in tests.
-type casKVBucket struct {
-	mu       sync.Mutex
-	data     map[string][]byte
-	revision map[string]uint64
-	nextRev  uint64
-}
+// casKVBucket is a thin shim around kvbuckettest.MockKVBucket.
+//
+// The previous 127-line type re-implemented the full jetstream.KeyValue
+// interface (15+ methods, ~10 of them "not implemented" stubs) solely to
+// support CAS conflict simulation. MockKVBucket implements natsclient.KVBucket
+// — the narrow interface WindowTracker actually uses — and exposes CAS
+// conflict injection via SetUpdateHook, eliminating all the stubs.
+type casKVBucket = kvbuckettest.MockKVBucket
 
 func newCASKVBucket() *casKVBucket {
-	return &casKVBucket{
-		data:     make(map[string][]byte),
-		revision: make(map[string]uint64),
-		nextRev:  1,
-	}
-}
-
-func (c *casKVBucket) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	val, ok := c.data[key]
-	if !ok {
-		return nil, jetstream.ErrKeyNotFound
-	}
-	valCopy := make([]byte, len(val))
-	copy(valCopy, val)
-	return &mockKVEntry{key: key, value: valCopy, revision: c.revision[key]}, nil
-}
-
-func (c *casKVBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	valCopy := make([]byte, len(value))
-	copy(valCopy, value)
-	c.data[key] = valCopy
-	rev := c.nextRev
-	c.revision[key] = rev
-	c.nextRev++
-	return rev, nil
-}
-
-// Update performs an optimistic write: if current revision != lastRevision,
-// it returns jetstream.ErrKeyExists (JSErrCodeStreamWrongLastSequence) so the
-// caller knows to retry. This mirrors the real NATS KV Update behaviour on a
-// revision mismatch — the tracker treats any Update error as a CAS conflict.
-func (c *casKVBucket) Update(_ context.Context, key string, value []byte, lastRevision uint64) (uint64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cur, ok := c.revision[key]
-	if !ok || cur != lastRevision {
-		return 0, jetstream.ErrKeyExists
-	}
-	valCopy := make([]byte, len(value))
-	copy(valCopy, value)
-	c.data[key] = valCopy
-	rev := c.nextRev
-	c.revision[key] = rev
-	c.nextRev++
-	return rev, nil
-}
-
-func (c *casKVBucket) Delete(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.data[key]; !ok {
-		return jetstream.ErrKeyNotFound
-	}
-	delete(c.data, key)
-	delete(c.revision, key)
-	return nil
-}
-
-func (c *casKVBucket) Keys(_ context.Context, _ ...jetstream.WatchOpt) ([]string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.data) == 0 {
-		return nil, jetstream.ErrNoKeysFound
-	}
-	keys := make([]string, 0, len(c.data))
-	for k := range c.data {
-		keys = append(keys, k)
-	}
-	return keys, nil
-}
-
-// Stub out the remaining jetstream.KeyValue interface methods.
-func (c *casKVBucket) GetRevision(_ context.Context, _ string, _ uint64) (jetstream.KeyValueEntry, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) PutString(ctx context.Context, key string, value string) (uint64, error) {
-	return c.Put(ctx, key, []byte(value))
-}
-func (c *casKVBucket) Create(_ context.Context, _ string, _ []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
-	return 0, errors.New("not implemented")
-}
-func (c *casKVBucket) Purge(_ context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {
-	return errors.New("not implemented")
-}
-func (c *casKVBucket) Watch(_ context.Context, _ string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) WatchAll(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) WatchFiltered(_ context.Context, _ []string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) History(_ context.Context, _ string, _ ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) Bucket() string { return "cas-mock" }
-func (c *casKVBucket) PurgeDeletes(_ context.Context, _ ...jetstream.KVPurgeOpt) error {
-	return errors.New("not implemented")
-}
-func (c *casKVBucket) Status(_ context.Context) (jetstream.KeyValueStatus, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) ListKeys(_ context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *casKVBucket) ListKeysFiltered(_ context.Context, _ ...string) (jetstream.KeyLister, error) {
-	return nil, errors.New("not implemented")
+	return kvbuckettest.NewMockKVBucketNamed("cas-mock")
 }
 
 // ----- Helper -----
@@ -319,7 +207,7 @@ func TestWindowTracker_BucketedCounter_Stores(t *testing.T) {
 	entry, err := wt.bucket.Get(ctx, windowKey("rule-a", "alice"))
 	require.NoError(t, err)
 	var rec WindowRecord
-	require.NoError(t, json.Unmarshal(entry.Value(), &rec))
+	require.NoError(t, json.Unmarshal(entry.Value, &rec))
 	assert.Len(t, rec.Buckets, 1, "both increments should land in the same 1-minute bucket")
 	assert.Equal(t, 2, rec.Buckets[0].Count)
 }
@@ -344,7 +232,7 @@ func TestWindowTracker_BucketRotation_OnWindowAdvance(t *testing.T) {
 	entry, err := wt.bucket.Get(ctx, windowKey("rule-b", "bob"))
 	require.NoError(t, err)
 	var rec WindowRecord
-	require.NoError(t, json.Unmarshal(entry.Value(), &rec))
+	require.NoError(t, json.Unmarshal(entry.Value, &rec))
 	assert.Len(t, rec.Buckets, 2, "increments in different minutes should produce two buckets")
 }
 
@@ -433,7 +321,7 @@ func TestWindowTracker_TimestampCapHit_TruncatesOldestBuckets(t *testing.T) {
 	entry, err := bucket.Get(ctx, windowKey(ruleID, dimension))
 	require.NoError(t, err)
 	var stored WindowRecord
-	require.NoError(t, json.Unmarshal(entry.Value(), &stored))
+	require.NoError(t, json.Unmarshal(entry.Value, &stored))
 
 	// Before Increment: 3 buckets at cap. After: 4 buckets (new one added), then
 	// oldest dropped → 3 remaining. Verify the result is ≤ 3 (truncation occurred).
@@ -518,7 +406,7 @@ func TestWindowTracker_Sweep_DeletesExpiredKeys(t *testing.T) {
 	// Verify expired keys are gone
 	for _, k := range expiredKeys {
 		_, err := bucket.Get(ctx, k)
-		assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "expired key %q should be deleted", k)
+		assert.ErrorIs(t, err, natsclient.ErrKeyNotFound, "expired key %q should be deleted", k)
 	}
 	// Verify live keys survive
 	for _, k := range liveKeys {

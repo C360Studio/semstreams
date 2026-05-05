@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule"
 )
 
@@ -52,7 +53,7 @@ func TestIntegration_CountInWindow_RealKV(t *testing.T) {
 	now := time.Now()
 
 	// Phase 1: first tracker lifetime — 10 increments.
-	wt1 := rule.NewWindowTracker(bucket, nil)
+	wt1 := rule.NewWindowTracker(natsclient.WrapKV(bucket), nil)
 	for i := 0; i < 10; i++ {
 		count, err := wt1.Increment(ctx, ruleID, dimension, now, window)
 		require.NoError(t, err, "increment %d failed", i+1)
@@ -61,7 +62,7 @@ func TestIntegration_CountInWindow_RealKV(t *testing.T) {
 
 	// Phase 2: simulate restart — discard wt1 and construct a new tracker
 	// against the same bucket. All previously-written state must survive.
-	wt2 := rule.NewWindowTracker(bucket, nil)
+	wt2 := rule.NewWindowTracker(natsclient.WrapKV(bucket), nil)
 	count, err := wt2.Increment(ctx, ruleID, dimension, now.Add(30*time.Second), window)
 	require.NoError(t, err, "post-restart increment failed")
 

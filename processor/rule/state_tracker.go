@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // Transition represents the type of state change detected
@@ -55,7 +55,7 @@ type MatchState struct {
 // It tracks which rules are currently matching for which entities
 // to enable proper transition detection for stateful ECA rules.
 type StateTracker struct {
-	bucket jetstream.KeyValue
+	bucket natsclient.KVBucket
 	logger *slog.Logger
 }
 
@@ -63,7 +63,7 @@ type StateTracker struct {
 var ErrStateNotFound = errors.New("rule state not found")
 
 // NewStateTracker creates a new StateTracker with the given KV bucket.
-func NewStateTracker(bucket jetstream.KeyValue, logger *slog.Logger) *StateTracker {
+func NewStateTracker(bucket natsclient.KVBucket, logger *slog.Logger) *StateTracker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -107,14 +107,14 @@ func (st *StateTracker) Get(ctx context.Context, ruleID, entityKey string) (Matc
 
 	entry, err := st.bucket.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
+		if errors.Is(err, natsclient.ErrKeyNotFound) {
 			return MatchState{}, ErrStateNotFound
 		}
 		return MatchState{}, fmt.Errorf("get rule state: %w", err)
 	}
 
 	var state MatchState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+	if err := json.Unmarshal(entry.Value, &state); err != nil {
 		return MatchState{}, fmt.Errorf("unmarshal rule state: %w", err)
 	}
 
@@ -161,7 +161,7 @@ func (st *StateTracker) Delete(ctx context.Context, ruleID, entityKey string) er
 	key := buildStateKey(ruleID, entityKey)
 
 	err := st.bucket.Delete(ctx, key)
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, natsclient.ErrKeyNotFound) {
 		return fmt.Errorf("delete rule state: %w", err)
 	}
 
@@ -185,7 +185,7 @@ func (st *StateTracker) DeleteAllForEntity(ctx context.Context, entityID string)
 	for _, key := range keys {
 		// Check if key contains the entityID (either as single entity or in pair)
 		if containsEntityID(key, entityID) {
-			if err := st.bucket.Delete(ctx, key); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+			if err := st.bucket.Delete(ctx, key); err != nil && !errors.Is(err, natsclient.ErrKeyNotFound) {
 				st.logger.Warn("Failed to delete rule state",
 					"key", key,
 					"entity_id", entityID,

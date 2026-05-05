@@ -64,7 +64,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // WindowsBucketName is the canonical NATS KV bucket name for per-rule
@@ -142,7 +142,7 @@ var ErrWindowBucketNil = errors.New("window tracker bucket is nil")
 // Increments to the same key; the dimension-count check uses a package-level
 // mutex to avoid TOCTOU races on the cardinality cap.
 type WindowTracker struct {
-	bucket  jetstream.KeyValue
+	bucket  natsclient.KVBucket
 	logger  *slog.Logger
 	metrics *Metrics // nil-safe; incremented when non-nil
 	// dimMu guards the cardinality cap check-then-write path.
@@ -155,7 +155,7 @@ type WindowTracker struct {
 // bucket is permitted — every method returns ErrWindowBucketNil so the rule
 // processor can degrade gracefully (no window counting) without refusing to
 // start, matching the ScheduleTracker nil-bucket posture.
-func NewWindowTracker(bucket jetstream.KeyValue, logger *slog.Logger) *WindowTracker {
+func NewWindowTracker(bucket natsclient.KVBucket, logger *slog.Logger) *WindowTracker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -237,14 +237,14 @@ func (wt *WindowTracker) needsNewKey(ctx context.Context, key, prefix string) (i
 	// Fast path: key already exists
 	if _, err := wt.bucket.Get(ctx, key); err == nil {
 		return 1, nil
-	} else if !errors.Is(err, jetstream.ErrKeyNotFound) {
+	} else if !errors.Is(err, natsclient.ErrKeyNotFound) {
 		return 0, err
 	}
 
 	// Count existing keys for this rule
 	keys, err := wt.bucket.Keys(ctx)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
+		if errors.Is(err, natsclient.ErrNoKeysFound) {
 			return 0, nil // empty bucket, safe to create
 		}
 		return 0, err
@@ -277,15 +277,15 @@ func (wt *WindowTracker) incrementOnce(ctx context.Context, key string, now time
 	// Read current record (or start from empty if absent)
 	entry, err := wt.bucket.Get(ctx, key)
 	if err != nil {
-		if !errors.Is(err, jetstream.ErrKeyNotFound) {
+		if !errors.Is(err, natsclient.ErrKeyNotFound) {
 			return 0, false, fmt.Errorf("window tracker: get %q: %w", key, err)
 		}
 		// Key absent — create fresh record
 		rec = WindowRecord{}
 		revision = 0
 	} else {
-		revision = entry.Revision()
-		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		revision = entry.Revision
+		if err := json.Unmarshal(entry.Value, &rec); err != nil {
 			return 0, false, fmt.Errorf("window tracker: unmarshal %q: %w", key, err)
 		}
 	}
@@ -319,7 +319,7 @@ func (wt *WindowTracker) incrementOnce(ctx context.Context, key string, now time
 	if revision == 0 {
 		// Key was absent — use Put (NATS KV Put is idempotent for first write)
 		if _, err := wt.bucket.Put(ctx, key, data); err != nil {
-			if errors.Is(err, jetstream.ErrKeyExists) {
+			if errors.Is(err, natsclient.ErrKeyExists) {
 				// Another goroutine created the key between our Get and Put — retry
 				return 0, true, nil
 			}
@@ -327,7 +327,7 @@ func (wt *WindowTracker) incrementOnce(ctx context.Context, key string, now time
 		}
 	} else {
 		if _, err := wt.bucket.Update(ctx, key, data, revision); err != nil {
-			if errors.Is(err, jetstream.ErrKeyExists) {
+			if errors.Is(err, natsclient.ErrKeyExists) {
 				// Optimistic concurrency conflict — another writer changed the revision
 				return 0, true, nil
 			}
@@ -366,10 +366,10 @@ func (wt *WindowTracker) applyIncrement(rec WindowRecord, now time.Time, window 
 	return WindowRecord{Buckets: live}
 }
 
-// Bucket returns the underlying jetstream.KeyValue handle for in-process
-// readers that need full KV API access (Watch, ListKeys). May be nil when
-// the tracker was constructed in degraded mode.
-func (wt *WindowTracker) Bucket() jetstream.KeyValue {
+// Bucket returns the underlying KVBucket handle for in-process readers that
+// need Watch or Keys access. May be nil when the tracker was constructed in
+// degraded mode (nil-bucket startup path).
+func (wt *WindowTracker) Bucket() natsclient.KVBucket {
 	return wt.bucket
 }
 
@@ -414,7 +414,7 @@ func (wt *WindowTracker) Sweep(ctx context.Context) (deleted int, err error) {
 
 	keys, err := wt.bucket.Keys(ctx)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrNoKeysFound) {
+		if errors.Is(err, natsclient.ErrNoKeysFound) {
 			return 0, nil // empty bucket — nothing to sweep
 		}
 		return 0, fmt.Errorf("window janitor: list keys: %w", err)
@@ -428,7 +428,7 @@ func (wt *WindowTracker) Sweep(ctx context.Context) (deleted int, err error) {
 
 		entry, err := wt.bucket.Get(ctx, key)
 		if err != nil {
-			if errors.Is(err, jetstream.ErrKeyNotFound) {
+			if errors.Is(err, natsclient.ErrKeyNotFound) {
 				// Concurrent delete — already gone, skip
 				continue
 			}
@@ -439,7 +439,7 @@ func (wt *WindowTracker) Sweep(ctx context.Context) (deleted int, err error) {
 		}
 
 		var rec WindowRecord
-		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		if err := json.Unmarshal(entry.Value, &rec); err != nil {
 			wt.logger.Warn("Window janitor: failed to unmarshal key, skipping",
 				"key", key, "error", err)
 			continue
@@ -460,7 +460,7 @@ func (wt *WindowTracker) Sweep(ctx context.Context) (deleted int, err error) {
 		}
 
 		if err := wt.bucket.Delete(ctx, key); err != nil {
-			if errors.Is(err, jetstream.ErrKeyNotFound) {
+			if errors.Is(err, natsclient.ErrKeyNotFound) {
 				// Concurrent delete raced us — key already gone
 				continue
 			}
