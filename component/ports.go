@@ -10,20 +10,49 @@ import "strings"
 //
 // Falls back to portName + "." + suffix when no matching port is found,
 // preserving backward compatibility for configs that omit the port.
+//
+// Equivalent to ResolveSubjectForOrg(ports, portName, suffix, "").
+// Existing callers continue to work; tag 4 chunk 4 migrates internal
+// callers to ResolveSubjectForOrg.
 func ResolveSubject(ports []PortDefinition, portName, suffix string) string {
+	return ResolveSubjectForOrg(ports, portName, suffix, "")
+}
+
+// ResolveSubjectForOrg resolves the subject for a port and prepends org
+// as the leftmost token when org is non-empty. When org is empty the
+// returned subject is identical to ResolveSubject's output — zero
+// behavior change for existing callers.
+//
+// Examples (org="acme"):
+//
+//	port "agent.task" with suffix "loop-123" → "acme.agent.task.loop-123"
+//	unmapped port, fallback path             → "acme.<portName>.<suffix>"
+//
+// org is assumed validated by config.Validate (NATS-subject-safe lowercase
+// alphanumeric + hyphen only). Empty org skips the prefix entirely.
+func ResolveSubjectForOrg(ports []PortDefinition, portName, suffix, org string) string {
+	var base string
 	for _, p := range ports {
 		if p.Name == portName {
 			switch {
 			case strings.HasSuffix(p.Subject, ".*"):
-				return strings.TrimSuffix(p.Subject, "*") + suffix
+				base = strings.TrimSuffix(p.Subject, "*") + suffix
 			case strings.HasSuffix(p.Subject, ".>"):
-				return strings.TrimSuffix(p.Subject, ">") + suffix
+				base = strings.TrimSuffix(p.Subject, ">") + suffix
 			default:
-				return p.Subject + "." + suffix
+				base = p.Subject + "." + suffix
 			}
+			if org == "" {
+				return base
+			}
+			return org + "." + base
 		}
 	}
-	return portName + "." + suffix
+	base = portName + "." + suffix
+	if org == "" {
+		return base
+	}
+	return org + "." + base
 }
 
 // PortDefinition represents a port configuration from JSON
