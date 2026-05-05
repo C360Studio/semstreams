@@ -63,11 +63,20 @@ func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta) *
 // coordinator's system prompt enumerates valid values per flow; downstream
 // rules match on specific action values via the CoordinatorNextAction
 // predicate.
+//
+// Description must NOT pre-load example action names. Real-LLM models
+// (claude-sonnet-4-6 observed in semteams smoke #7, 2026-05-04) treat
+// tool descriptions as more authoritative than persona prose. Naming
+// "fan_out" / "synthesize" / "retry" / "done" in the description biased
+// the planner persona's terminal action away from the persona's
+// enumerated `"planned"` toward `"fan_out"`, wedging the chain at an
+// unhandled coordinator.next_action triple. The action vocabulary lives
+// strictly in the role's system prompt.
 func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
 			Name:        DecideToolName,
-			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your flow's coordinator persona enumerates (e.g. fan_out, synthesize, retry, done). Emits a coordinator.next_action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data (subtopics, retry_hint).",
+			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your role's system prompt enumerates. Emits a coordinator.next_action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -82,11 +91,11 @@ func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 					"subtopics": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
-						"description": "Optional. When action=fan_out, the list of subtopics to investigate.",
+						"description": "Optional. List of sub-targets when the chosen action represents a multi-target investigation; populate only when your role's contract names this field.",
 					},
 					"retry_hint": map[string]any{
 						"type":        "string",
-						"description": "Optional. When action=retry, a hint describing how the retry should differ from the previous attempt.",
+						"description": "Optional. Free-form guidance for a downstream pass; populate only when your role's contract names this field.",
 					},
 				},
 				"required": []string{"action", "reason"},

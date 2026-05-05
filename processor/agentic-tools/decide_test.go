@@ -54,6 +54,87 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 	}
 }
 
+// TestDecideExecutor_DescriptionDoesNotPreloadActions guards against
+// regressing the smoke-#7 wedge: if the tool Description mentions
+// specific action names, real-LLM models read them as authoritative
+// over persona prose and bias their terminal choice toward whichever
+// the description names. The action vocabulary belongs strictly in the
+// role's system prompt — see the comment block above ListTools().
+//
+// The test covers the four action names that previously appeared in
+// the description, plus a few common drifts. If a future flow legitimately
+// adds a new action name, that's a persona/system-prompt concern; it
+// must NOT be mentioned here or in the tool descriptions returned by
+// ListTools.
+func TestDecideExecutor_DescriptionDoesNotPreloadActions(t *testing.T) {
+	e := newDecideExecutor(&recordingPublisher{})
+	tools := e.ListTools()
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	// The full text the LLM sees: top-level Description + every nested
+	// `description` field on properties. All of these contribute to the
+	// LLM's understanding of when to pick which action.
+	var llmVisibleText []string
+	llmVisibleText = append(llmVisibleText, tools[0].Description)
+	if props, ok := tools[0].Parameters["properties"].(map[string]any); ok {
+		for _, prop := range props {
+			if propMap, ok := prop.(map[string]any); ok {
+				if desc, ok := propMap["description"].(string); ok {
+					llmVisibleText = append(llmVisibleText, desc)
+				}
+			}
+		}
+	}
+
+	bannedActions := []string{
+		"fan_out", "synthesize", "retry", "done",
+		"planned", "approved", "rejected", "accept", "reject",
+		"insufficient", "needs_clarification",
+		"tests_passing", "tests_failing",
+		"seed_requirements_emitted",
+	}
+
+	for _, text := range llmVisibleText {
+		for _, action := range bannedActions {
+			// Use a word-boundary check so legitimate prose like
+			// "the action your role names" doesn't match "action".
+			if containsWord(text, action) {
+				t.Errorf("LLM-visible decide tool text leaks action name %q (text: %q). Action vocabulary belongs in the role's system prompt, not the tool description — see ListTools comment for the smoke #7 rationale.", action, text)
+			}
+		}
+	}
+}
+
+// containsWord returns true if s contains word as a whole token (bounded
+// by start/end of string or non-word characters). Tighter than
+// strings.Contains so that "satisfaction" doesn't trigger on "action".
+func containsWord(s, word string) bool {
+	for i := 0; i+len(word) <= len(s); i++ {
+		if s[i:i+len(word)] != word {
+			continue
+		}
+		// Check left boundary
+		if i > 0 {
+			c := s[i-1]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+				continue
+			}
+		}
+		// Check right boundary
+		j := i + len(word)
+		if j < len(s) {
+			c := s[j]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // TestDecideExecutor_HappyPath verifies a valid decide call emits the two
 // expected triples on the coordinator's loop entity, returns StopLoop=true,
 // and puts the full args in the tool result Content so downstream agents
