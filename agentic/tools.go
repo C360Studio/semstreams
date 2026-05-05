@@ -80,8 +80,6 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(t))
 }
 
-// ToolErrorKind classifies the source or nature of a tool execution failure.
-// It is the structured counterpart to ToolResult.Error and feeds the
 // MetadataKeyDecideActionAllowlist is the TaskMessage.Metadata /
 // ToolCall.Metadata key under which a closed action vocabulary for
 // the decide tool flows from the spawning rule down to the executor.
@@ -99,6 +97,8 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 // structurally on the wire.
 const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 
+// ToolErrorKind classifies the source or nature of a tool execution failure.
+// It is the structured counterpart to ToolResult.Error and feeds the
 // agent.step.error_category graph predicate for queryable failure analysis.
 type ToolErrorKind string
 

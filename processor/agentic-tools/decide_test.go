@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -201,7 +202,7 @@ func TestDecideExecutor_ActionAllowlist_Rejects(t *testing.T) {
 		t.Errorf("expected non-empty Error message naming the valid action set")
 	}
 	for _, want := range []string{"fan_out", "planned"} {
-		if !contains(res.Error, want) {
+		if !strings.Contains(res.Error, want) {
 			t.Errorf("expected Error message to mention %q for LLM convergence; got %q", want, res.Error)
 		}
 	}
@@ -263,21 +264,6 @@ func TestDecideExecutor_ActionAllowlist_EmptyAllowlistMeansFreeform(t *testing.T
 	if res.Error != "" {
 		t.Errorf("empty-allowlist mode rejected: %q", res.Error)
 	}
-}
-
-// contains is a tiny substring-presence check — kept here rather than
-// reaching for strings.Contains to keep test imports minimal.
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || (len(haystack) >= len(needle) && stringIndex(haystack, needle) >= 0)
-}
-
-func stringIndex(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }
 
 // TestDecideExecutor_HappyPath verifies a valid decide call emits the two
