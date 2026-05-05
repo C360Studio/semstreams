@@ -67,11 +67,11 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 // names (those are downstream-flow concerns). Instead it pattern-matches
 // the SHAPES that leak example vocabulary into the LLM's context:
 //
-//   1. `e\.g\.` followed by identifier-shaped tokens — the
-//      "give the LLM a worked example" anti-pattern.
-//   2. `action=<identifier>` style references in property
-//      descriptions — the "tell the LLM when to populate this field"
-//      anti-pattern that embeds specific action names.
+//  1. `e\.g\.` followed by identifier-shaped tokens — the
+//     "give the LLM a worked example" anti-pattern.
+//  2. `action=<identifier>` style references in property
+//     descriptions — the "tell the LLM when to populate this field"
+//     anti-pattern that embeds specific action names.
 //
 // Future flows that need new action names enumerate them in the
 // persona/system prompt. Adding examples here re-opens the smoke-#7
