@@ -1006,6 +1006,87 @@ func TestAction_PublishAgent_EmptyToolsLeavesUnset(t *testing.T) {
 	assert.Empty(t, task.Tools, "empty action.Tools should leave TaskMessage.Tools unset")
 }
 
+// TestAction_PublishAgent_ActionAllowlist verifies that
+// action.ActionAllowlist threads onto TaskMessage.Metadata under
+// agentic.MetadataKeyDecideActionAllowlist as a []any (the JSON wire
+// shape). Empty/nil leaves Metadata unset for that key.
+//
+// The smoke-#7 wedge motivated this: a planner LLM hallucinated an
+// out-of-vocabulary action ("fan_out" instead of the persona's
+// "planned"). With this allowlist plumbed through, the decide
+// executor will reject and let the LLM correct.
+func TestAction_PublishAgent_ActionAllowlist(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:            ActionTypePublishAgent,
+		Subject:         "agent.task.test",
+		Role:            "dev-via-spec-planner",
+		Model:           "mock-model",
+		Prompt:          "p",
+		ActionAllowlist: []string{"planned", "needs_clarification"},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.Metadata, "Metadata should be initialised when ActionAllowlist is set")
+	rawAllowlist, ok := task.Metadata[agentic.MetadataKeyDecideActionAllowlist]
+	require.True(t, ok, "MetadataKeyDecideActionAllowlist should be set")
+
+	// The metadata round-trips through JSON as []any (the BaseMessage
+	// wire shape). The decide executor's coerceAllowlist handles the
+	// type-erasure on the read side. We assert the wire shape here so
+	// future refactors don't accidentally break the producer/consumer
+	// contract.
+	allowlist, ok := rawAllowlist.([]any)
+	require.True(t, ok, "expected []any after JSON round-trip; got %T", rawAllowlist)
+	require.Len(t, allowlist, 2)
+	assert.Equal(t, "planned", allowlist[0])
+	assert.Equal(t, "needs_clarification", allowlist[1])
+}
+
+// TestAction_PublishAgent_EmptyActionAllowlist verifies that an unset
+// ActionAllowlist leaves Metadata's allowlist key unset (back-compat:
+// existing flows that don't opt in keep their pre-F2 free-form decide
+// behaviour).
+func TestAction_PublishAgent_EmptyActionAllowlist(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// ActionAllowlist omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	if task.Metadata != nil {
+		_, has := task.Metadata[agentic.MetadataKeyDecideActionAllowlist]
+		assert.False(t, has, "no allowlist field should be set on Metadata when ActionAllowlist is empty")
+	}
+}
+
 // stubToolExecutor is a minimal ToolExecutor for the global-registry test.
 // It does no work; resolveToolNames only reads the ToolDefinition it exposes.
 type stubToolExecutor struct{ name string }

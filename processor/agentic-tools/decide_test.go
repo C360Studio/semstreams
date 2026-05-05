@@ -136,6 +136,150 @@ func TestDecideExecutor_DescriptionDoesNotPreloadActions(t *testing.T) {
 	}
 }
 
+// TestDecideExecutor_ActionAllowlist_Accepts verifies that a decide call
+// with action in the allowlist (passed via ToolCall.Metadata under
+// MetadataKeyDecideActionAllowlist) executes normally — triples are
+// published, StopLoop=true, payload returned. Allowlist enforcement is
+// silent on the happy path; only rejections produce error responses.
+func TestDecideExecutor_ActionAllowlist_Accepts(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Metadata: map[string]any{
+			agentic.MetadataKeyDecideActionAllowlist: []any{"planned", "needs_clarification"},
+		},
+		Arguments: map[string]any{
+			"action": "planned",
+			"reason": "plan emitted",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Error != "" {
+		t.Errorf("tool error on allowed action: %q", res.Error)
+	}
+	if !res.StopLoop {
+		t.Errorf("expected StopLoop=true on allowed action")
+	}
+	if len(pub.triples) != 2 {
+		t.Errorf("expected 2 triples published on allowed action, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_ActionAllowlist_Rejects verifies that a decide call
+// with action OUTSIDE the allowlist returns ToolErrorInvalidArgs (so the
+// LLM gets a chance to retry with a valid name) and does NOT publish
+// triples. Error message names the valid set so the LLM can converge
+// without a third-party hint. This is the smoke-#7 fan_out scenario:
+// the planner persona enumerates "planned" but the LLM hallucinated
+// "fan_out"; allowlist gate rejects, LLM corrects.
+func TestDecideExecutor_ActionAllowlist_Rejects(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Metadata: map[string]any{
+			agentic.MetadataKeyDecideActionAllowlist: []any{"planned"},
+		},
+		Arguments: map[string]any{
+			"action": "fan_out",
+			"reason": "<plan body>",
+		},
+	})
+	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (allowlist gate)", res.ErrorKind)
+	}
+	if res.Error == "" {
+		t.Errorf("expected non-empty Error message naming the valid action set")
+	}
+	for _, want := range []string{"fan_out", "planned"} {
+		if !contains(res.Error, want) {
+			t.Errorf("expected Error message to mention %q for LLM convergence; got %q", want, res.Error)
+		}
+	}
+	if res.StopLoop {
+		t.Errorf("StopLoop should be false on allowlist rejection — let the loop iterate")
+	}
+	if len(pub.triples) != 0 {
+		t.Errorf("no triples should be published on allowlist rejection, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_ActionAllowlist_NoAllowlistMeansFreeform verifies
+// that a decide call without MetadataKeyDecideActionAllowlist (the
+// pre-F2 wire shape) accepts any action — back-compat for flows that
+// haven't adopted the allowlist field on their publish_agent rules.
+func TestDecideExecutor_ActionAllowlist_NoAllowlistMeansFreeform(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		// No Metadata at all.
+		Arguments: map[string]any{
+			"action": "completely_made_up",
+			"reason": "no allowlist set",
+		},
+	})
+	if res.Error != "" {
+		t.Errorf("free-form mode rejected an action: %q", res.Error)
+	}
+	if !res.StopLoop {
+		t.Errorf("expected StopLoop=true in free-form mode")
+	}
+}
+
+// TestDecideExecutor_ActionAllowlist_EmptyAllowlistMeansFreeform
+// verifies that an explicitly-empty allowlist is also free-form (rule
+// authors who set an empty array shouldn't be silently locked out of
+// every action). Symmetric with how task.Tools handles its nil-vs-empty
+// distinction.
+func TestDecideExecutor_ActionAllowlist_EmptyAllowlistMeansFreeform(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Metadata: map[string]any{
+			agentic.MetadataKeyDecideActionAllowlist: []any{},
+		},
+		Arguments: map[string]any{
+			"action": "anything",
+			"reason": "empty allowlist",
+		},
+	})
+	if res.Error != "" {
+		t.Errorf("empty-allowlist mode rejected: %q", res.Error)
+	}
+}
+
+// contains is a tiny substring-presence check — kept here rather than
+// reaching for strings.Contains to keep test imports minimal.
+func contains(haystack, needle string) bool {
+	return len(needle) == 0 || (len(haystack) >= len(needle) && stringIndex(haystack, needle) >= 0)
+}
+
+func stringIndex(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
 // TestDecideExecutor_HappyPath verifies a valid decide call emits the two
 // expected triples on the coordinator's loop entity, returns StopLoop=true,
 // and puts the full args in the tool result Content so downstream agents

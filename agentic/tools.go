@@ -82,6 +82,22 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 
 // ToolErrorKind classifies the source or nature of a tool execution failure.
 // It is the structured counterpart to ToolResult.Error and feeds the
+// MetadataKeyDecideActionAllowlist is the TaskMessage.Metadata /
+// ToolCall.Metadata key under which a closed action vocabulary for
+// the decide tool flows from the spawning rule down to the executor.
+//
+// When set, the decide executor validates its `action` argument
+// against the contained []string and rejects non-members with
+// ToolErrorInvalidArgs (the message names the valid set so the LLM
+// can correct on retry).
+//
+// Empty/missing leaves decide free-form (back-compat).
+//
+// Set by rule.executePublishAgent from rule.Action.ActionAllowlist.
+// See semteams smoke #7 (project_smoke7_findings.md F2 slice) for
+// the planner-wedge incident this enforces against.
+const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
+
 // agent.step.error_category graph predicate for queryable failure analysis.
 type ToolErrorKind string
 
