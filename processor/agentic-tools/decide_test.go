@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -51,6 +52,87 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 	}
 	if len(want) > 0 {
 		t.Errorf("missing required fields: %v", want)
+	}
+}
+
+// TestDecideExecutor_DescriptionDoesNotPreloadActions guards the
+// shape of the leak that motivated this slice: tool descriptions
+// MUST NOT enumerate example action names. Real-LLM models read tool
+// descriptions as authoritative and bias their terminal choice toward
+// whichever the description names — overriding the persona's enumerated
+// vocabulary. The action vocabulary belongs strictly in each role's
+// system prompt.
+//
+// The test is product-agnostic. It does NOT enumerate specific action
+// names (those are downstream-flow concerns). Instead it pattern-matches
+// the SHAPES that leak example vocabulary into the LLM's context:
+//
+//  1. `e\.g\.` followed by identifier-shaped tokens — the
+//     "give the LLM a worked example" anti-pattern.
+//  2. `action=<identifier>` style references in property
+//     descriptions — the "tell the LLM when to populate this field"
+//     anti-pattern that embeds specific action names.
+//
+// Future flows that need new action names enumerate them in the
+// persona/system prompt. Adding examples here re-opens the smoke-#7
+// drift class regardless of which specific names get leaked.
+func TestDecideExecutor_DescriptionDoesNotPreloadActions(t *testing.T) {
+	e := newDecideExecutor(&recordingPublisher{})
+	tools := e.ListTools()
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	// The full text the LLM sees: top-level Description + every nested
+	// `description` field on properties. All contribute to the LLM's
+	// understanding of when to pick which action.
+	type labelled struct {
+		label string
+		text  string
+	}
+	var llmVisibleText []labelled
+	llmVisibleText = append(llmVisibleText, labelled{"Description", tools[0].Description})
+	if props, ok := tools[0].Parameters["properties"].(map[string]any); ok {
+		for name, prop := range props {
+			if propMap, ok := prop.(map[string]any); ok {
+				if desc, ok := propMap["description"].(string); ok {
+					llmVisibleText = append(llmVisibleText, labelled{"properties." + name + ".description", desc})
+				}
+			}
+		}
+	}
+
+	// Anti-pattern 1: "e.g." followed by identifier-shaped tokens
+	// (lowercase or snake_case words). Matches the original leak
+	// `(e.g. fan_out, synthesize, retry, done)` regardless of which
+	// specific names appear.
+	exampleListPattern := regexp.MustCompile(`(?i)e\.g\.\s+[a-z][a-z0-9_]*`)
+
+	// Anti-pattern 2: `action=<identifier>` references (the
+	// "when action=X" shape that embedded specific values into the
+	// subtopics/retry_hint property descriptions).
+	actionEqPattern := regexp.MustCompile(`(?i)action\s*=\s*[a-z][a-z0-9_]*`)
+
+	// snippet returns a bounded slice of text starting at idx for
+	// inclusion in the failure message — bounded so a multi-paragraph
+	// description doesn't dump 500 chars into the test output.
+	snippet := func(text string, start, end int) string {
+		stop := end + 30
+		if stop > len(text) {
+			stop = len(text)
+		}
+		return text[start:stop]
+	}
+
+	for _, lt := range llmVisibleText {
+		if loc := exampleListPattern.FindStringIndex(lt.text); loc != nil {
+			t.Errorf("decide tool %s leaks an example-action list at %q. The action vocabulary belongs in the role's system prompt, not in framework tool text. See ListTools comment for the smoke-#7 rationale.",
+				lt.label, snippet(lt.text, loc[0], loc[1]))
+		}
+		if loc := actionEqPattern.FindStringIndex(lt.text); loc != nil {
+			t.Errorf("decide tool %s embeds action=<identifier> at %q. Property descriptions must not name specific actions — describe the field's purpose flow-agnostically.",
+				lt.label, snippet(lt.text, loc[0], loc[1]))
+		}
 	}
 }
 
