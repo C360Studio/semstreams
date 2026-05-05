@@ -80,6 +80,23 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(t))
 }
 
+// MetadataKeyDecideActionAllowlist is the TaskMessage.Metadata /
+// ToolCall.Metadata key under which a closed action vocabulary for
+// the decide tool flows from the spawning rule down to the executor.
+//
+// When set, the decide executor validates its `action` argument
+// against the contained []string and rejects non-members with
+// ToolErrorInvalidArgs (the message names the valid set so the LLM
+// can correct on retry).
+//
+// Empty/missing leaves decide free-form (back-compat).
+//
+// Set by rule.executePublishAgent from rule.Action.ActionAllowlist.
+// Belt-and-suspenders for persona prose: the persona enumerates the
+// vocabulary in the LLM's system prompt; this allowlist enforces it
+// structurally on the wire.
+const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
+
 // ToolErrorKind classifies the source or nature of a tool execution failure.
 // It is the structured counterpart to ToolResult.Error and feeds the
 // agent.step.error_category graph predicate for queryable failure analysis.

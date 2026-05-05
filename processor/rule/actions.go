@@ -89,6 +89,23 @@ type Action struct {
 	// role name, model, and prompt for the spawned agent.
 	Tools []string `json:"tools,omitempty"`
 
+	// ActionAllowlist is the closed set of action values the spawned
+	// loop's `decide` tool will accept. When non-nil, executePublishAgent
+	// stamps it onto the TaskMessage's Metadata under
+	// MetadataKeyDecideActionAllowlist; the agentic-loop propagates that
+	// onto each ToolCall's Metadata; the decide tool's executor
+	// validates the action argument against this list and returns
+	// ToolErrorInvalidArgs (with the valid set in the message) if the
+	// model picks a name outside it.
+	//
+	// Empty/nil disables the gate (back-compat: action stays free-form).
+	// Belt-and-suspenders for persona prose: the persona enumerates the
+	// vocabulary in the LLM's system prompt; this field enforces it
+	// structurally on the wire. Putting the gate on the rule (rather
+	// than introducing a wrapper tool) keeps role→action decisions in
+	// the workflow config that already owns role/model/prompt/tools.
+	ActionAllowlist []string `json:"action_allowlist,omitempty"`
+
 	// WorkflowID is the workflow identifier for trigger_workflow actions
 	WorkflowID string `json:"workflow_id,omitempty"`
 
@@ -607,6 +624,27 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 			resolved = []agentic.ToolDefinition{}
 		}
 		task.Tools = resolved
+	}
+
+	// Per-spawn action_allowlist for the decide tool. The agentic-loop
+	// propagates TaskMessage.Metadata onto each ToolCall.Metadata; the
+	// decide tool's executor reads this key, validates the action
+	// argument, and returns ToolErrorInvalidArgs (with the valid set in
+	// the message) if the model picks a name outside the allowlist.
+	// Belt-and-suspenders for persona prose.
+	//
+	// The slice is stored as []any (not []string) so the JSON round-trip
+	// through TaskMessage→agent.task→ToolCall preserves shape; decide's
+	// validator coerces back at read time. Nil/empty leaves the gate off.
+	if len(action.ActionAllowlist) > 0 {
+		if task.Metadata == nil {
+			task.Metadata = map[string]any{}
+		}
+		allowlist := make([]any, 0, len(action.ActionAllowlist))
+		for _, a := range action.ActionAllowlist {
+			allowlist = append(allowlist, a)
+		}
+		task.Metadata[agentic.MetadataKeyDecideActionAllowlist] = allowlist
 	}
 
 	if e.logger != nil {

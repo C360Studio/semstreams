@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -141,6 +142,19 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 		}, nil
 	}
 
+	// Per-spawn action allowlist (set by rule.executePublishAgent via
+	// TaskMessage.Metadata, propagated onto ToolCall.Metadata by the
+	// agentic-loop). When present, validate args.Action against it and
+	// return InvalidArgs with the valid set in the error message so the
+	// LLM can correct on retry. Empty/missing leaves decide free-form.
+	if msg := validateActionAllowlist(call.Metadata, args.Action); msg != "" {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     msg,
+			ErrorKind: agentic.ToolErrorInvalidArgs,
+		}, nil
+	}
+
 	if call.LoopID == "" {
 		return agentic.ToolResult{
 			CallID:    call.ID,
@@ -205,6 +219,62 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 			"has_retry_hint": args.RetryHint != "",
 		},
 	}, nil
+}
+
+// validateActionAllowlist returns "" when the action is permitted (no
+// allowlist set, or allowlist contains it). Returns a non-empty error
+// message when the allowlist is set AND the action is not in it. The
+// message names the valid set so the LLM can correct on retry.
+//
+// Reads from ToolCall.Metadata under
+// agentic.MetadataKeyDecideActionAllowlist. The value flows through the
+// JSON wire as []any (TaskMessage.Metadata → ToolCall.Metadata round
+// trip); coerce to []string at validation time. Other shapes
+// (missing key, nil, non-array) are treated as "no allowlist set" —
+// no compatibility hazard for unenforced flows.
+func validateActionAllowlist(metadata map[string]any, action string) string {
+	if metadata == nil {
+		return ""
+	}
+	raw, ok := metadata[agentic.MetadataKeyDecideActionAllowlist]
+	if !ok || raw == nil {
+		return ""
+	}
+	allowlist := coerceAllowlist(raw)
+	if len(allowlist) == 0 {
+		return ""
+	}
+	for _, a := range allowlist {
+		if a == action {
+			return ""
+		}
+	}
+	return fmt.Sprintf(
+		"action %q is not in the allowed set for this role: [%s]. "+
+			"The action vocabulary your role accepts is closed; pick one of these and re-emit.",
+		action,
+		strings.Join(allowlist, ", "),
+	)
+}
+
+// coerceAllowlist accepts the JSON-unmarshalled metadata value and
+// returns the contained string slice. Handles []any (the round-trip
+// shape from BaseMessage), []string (in-process callers), and nil/other
+// (treated as empty).
+func coerceAllowlist(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // parseDecideArgs reads the untyped tool arguments into decideArgs and
