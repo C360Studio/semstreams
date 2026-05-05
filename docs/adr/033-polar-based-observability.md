@@ -2,7 +2,65 @@
 
 ## Status
 
-**Proposed (2026-05-04).** Awaiting SemTeams review as first consumer.
+**Proposed (2026-05-04).** Revised 2026-05-05 from SemTeams review;
+now incorporating their accept-with-revisions verdict.
+
+### SemTeams review (2026-05-05) — accept with revisions
+
+SemTeams confirmed the framing, the framework/product cut, and
+ownership of detector implementations + ops-agent diagnosis persona
+(matches their existing ADR-029 product-shell discipline; new
+detectors land in `cmd/semteams/observability/detectors/`). Three
+structural revisions integrated below:
+
+1. **Phase 1 framework primitives decoupled from ADR-032.**
+   Original sequencing tied Phase 1 to ADR-032 governance gates
+   landing. SemTeams correctly noted that the day-one slice (Q3 + G3)
+   has **enforcement that already exists** —
+   `xUserIDIdentityMiddleware` for G3, tool-call parse paths for Q3 —
+   independent of ADR-032's pending gates. Phase 1 primitives can
+   ship without waiting. Specific G2/G4/G8 axes that depend on
+   ADR-032 enforcement gates remain sequenced after that work
+   resumes; they are not Phase 1 prerequisites.
+2. **Sweep → polar pipeline scoped explicitly to a later phase.**
+   The ADR establishes that polars are curves (not points) and that
+   sweeps across reasoning_effort / model tier / persona-fragment
+   variants / max_iteration produce them. *How* a sweep becomes a
+   stored polar — the harness side, not the data side — is product-
+   flavored tooling that lives in Phase 4 alongside coordinator-
+   driven adjustment, not in the framework primitives.
+3. **Policy-surface concern reframed as diagnosis-only-default,
+   tuning-per-axis-opt-in.** Original "Negative" entry monitored
+   coordinator policy-surface growth as a complexity budget.
+   Cleaner commitment matching D3: diagnosis is the default
+   posture; tuning is per-axis opt-in via objective-spec. The
+   coordinator's rule set only grows when an axis is opted into
+   tuning — the budget is bounded by adopter choice, not
+   monitored after the fact.
+
+Day-one slice tightened to **Q3 (tool-call three-state fallback
+rate) + G3 (identity header-vs-body fallback)** — both reuse signals
+the system already structurally emits; metric-emission is additive,
+not new enforcement. Q1 (substance vs. ceremony) earns its slot
+when ADR-032 R3.6.3's structural validator lands. Q2/Q4/Q5 + G1/G5–
+G7/G9/G10 deferred until prerequisites land.
+
+Sentinel cadence committed: **weekly minimum, on-trigger always**
+(model upgrade, persona-fragment commit, capability-surface change).
+Daily sentinel runs are a cost-budget decision deferred until the
+$/week sentinel-spend number is measured.
+
+Sentinel prompt curation is **product work to be budgeted** in
+SemTeams' Phase 2 adoption — no current set exists; mock-LLM e2e
+fixtures and Playwright journey YAML are not sentinels.
+
+Objective-spec authoring schema is **lean template, not expressive**
+(per ADR-030 allowlist precedent and the structural-over-LLM-
+judgment posture). Pre-vetted bound/predicate templates first;
+expressive schemas only after template-shaped use cases earn it.
+
+Type hoist (`semspec/pkg/health` → SemStreams) gated on this ADR
+flipping Status: Proposed → Accepted.
 
 The conceptual foundation lives in
 [docs/concepts/19-observability-as-polars.md](../concepts/19-observability-as-polars.md).
@@ -227,9 +285,12 @@ underpinnings. This ADR formalises:
 
 - **Curated set, not full corpus.** Single-digit count of prompts
   per flow class, chosen for diagnostic clarity (per framing doc §5).
-- **Schedule via cron rule (ADR-031).** Daily for fast-moving axes
-  (cost, latency); weekly for slower axes (validator pass rate); on
-  trigger for explicit regime shifts.
+- **Schedule via cron rule (ADR-031).** **Weekly minimum,
+  on-trigger always** — model upgrade, persona-fragment commit,
+  capability-surface change. Daily for fast-moving axes (cost,
+  latency) is a cost-budget decision deferred until $/week sentinel
+  spend is measured against measured-traffic spend. On-trigger
+  catches the highest-value drift events regardless of cadence.
 - **Mechanical comparison.** Stationarity check is a pure function
   over the polar's variance envelope. No LLM judgment.
 - **LLM judgment for diagnosis only.** When a sentinel falls off the
@@ -287,12 +348,20 @@ hiding it.
   Mitigated by fixture-controlled prompts and regime annotations,
   but never fully eliminated within a single deployment.
 - **Polar storage cost.** Regime-indexed curves accumulate over time.
-  Retention policy (when does an expired polar get archived?) is a
-  Phase 1 decision deferred from this ADR.
-- **Coordinator's policy surface grows.** Each new signal predicate
-  family is one more thing the coordinator's rule set may fire on.
-  Mitigated by the three families being stable and enumerable;
-  monitored as a complexity budget.
+  Storage layout committed (see Phase 1): polars in ObjectStore,
+  regime annotations in KV. Retention policy (when does an expired
+  polar get archived?) is a Phase 1 implementation decision; default
+  is "never auto-archive" until a real ObjectStore-volume problem
+  surfaces.
+- **Coordinator's policy surface grows only on opt-in.** The
+  ops-agent emits `ops.polar_departure` / `ops.threshold_crossed` /
+  `ops.regime_expired` regardless of whether any axis has been
+  opted into tuning. *Diagnosis is the default; tuning is per-axis
+  opt-in via objective-spec.* The coordinator's rule set only grows
+  when a product author declares a tunable axis with bounds + gating
+  predicate. Adopters who never opt in get drift detection without
+  any coordinator policy growth at all. The complexity budget is
+  bounded by adopter choice, not monitored after the fact.
 
 ### Neutral
 
@@ -354,42 +423,56 @@ grounds. This is exactly the failure mode the separation principle
 exists to foreclose. Tuning happens in coordinator land under
 objective-spec bounds, or it does not happen.
 
-## Open questions for SemTeams (first consumer)
+## SemTeams answers (2026-05-05)
 
-1. **Which axes from §4 are highest-leverage to instrument first?**
-   Working hypothesis: Q1 (substance vs. ceremony) and Q3 (fallback
-   rate) — both reuse triples we mostly already have. G2/G3/G4/G8 are
-   next because the enforcement already exists and only metric
-   emission is missing. Q4 (role efficacy) requires the persona-
-   contract change ("cite-what-you-challenge"). **Validate or
-   redirect.**
+The framing-doc carry-forward questions, resolved by SemTeams in
+their accept-with-revisions review. Answers commit to the day-one
+slice and are now load-bearing for sequencing.
 
-2. **Are SemTeams comfortable owning the detector implementations
-   and ops-agent diagnosis persona?** This is the framework/product
-   cut in concrete form. If SemTeams pushes back ("we want the
-   framework to ship our axis catalog"), the cut moves and the ADR
-   needs revision before implementation.
+1. **Highest-leverage axes day-one.** **Q3 (tool-call three-state
+   fallback rate) + G3 (identity header-vs-body fallback)**, no
+   others. Both reuse signals the system already structurally emits;
+   metric emission is additive, not new enforcement. Q1 (substance
+   vs. ceremony) earns its slot when ADR-032 R3.6.3's structural
+   validator lands. Q2/Q4/Q5 + G1/G5–G7/G9/G10 deferred until
+   prerequisites land. The ADR's Working hypothesis (Q1 + Q3 +
+   G2/G3/G4/G8) was too broad; SemTeams correctly narrowed it.
 
-3. **What does the objective-spec authoring surface look like
-   today, and what bounds/predicates would you declare?** Sizes the
-   schema for the §7.5 framing-doc question (template-vs-expressive).
-   Template is safer; expressive is more powerful. ADR-030's
-   allowlist machinery is closer to template — worth understanding
-   why before deciding.
+2. **Detector + persona ownership.** Confirmed. New detectors land
+   in `cmd/semteams/observability/detectors/` (mirror of
+   `cmd/semteams/tools/`); ops-agent persona lives at
+   `configs/personas/fragments/ops/*.md` (already a SemTeams
+   directory). Same product-shell discipline as ADR-029.
 
-4. **Do you have a sentinel prompt set, even informally?** If yes:
-   we have an empirical data point on curation size. If no: that's
-   product work that has to land before sentinels mean anything.
+3. **Objective-spec authoring surface.** One spec exists today:
+   `docs/objectives/deep-research.md` — declares primary metric,
+   secondaries with regression budgets (prose-encoded, not
+   machine-readable), immutable guardrails, failure-mode predictions,
+   evaluation window. Schema for tunable-axis declarations + gating
+   predicates + bound-id is **new work**. **Lean template, not
+   expressive** — pre-vetted bound/predicate templates first;
+   expressive predicate-policy schemas defer until template-shaped
+   use cases earn the upgrade. Per ADR-030 allowlist precedent and
+   the structural-over-LLM-judgment posture.
 
-5. **What's your tolerance for the "structural validator must ship
-   first" dependency?** Q1 / Q2 / G5 / G9 all wait on it. If you're
-   willing to instrument without those four axes initially, framework
-   primitives can ship and those axes earn their slots over time.
+4. **Sentinel prompt set.** **None today.** Mock-LLM e2e fixtures
+   (`test/e2e/mock/`) and Playwright journey YAML
+   (`test/fixtures/journeys/`) exist but are not real-LLM sentinels
+   with diagnostic-clarity curation. **Sentinel curation is product
+   work to be budgeted** in SemTeams' Phase 2 adoption — not free.
 
-6. **Stationarity sentinel cadence — daily for cost/latency, weekly
-   for validation?** Or different? The cron rule (ADR-031) handles
-   any cadence; the question is what's worth the operational cost
-   given your tolerance for drift.
+5. **Validator dependency tolerance.** **Acceptable** to ship
+   without Q1/Q2/G5/G9 initially. Q3 + G3 day-one is enough to
+   validate framework primitives end-to-end. Q1 earns its slot
+   when ADR-032 R3.6.3 lands. Don't block Phase 1 on the validator.
+
+6. **Sentinel cadence.** **Weekly minimum, on-trigger always.**
+   Daily on cost/latency only makes sense once sentinel spend is
+   bounded to single-digit percent of measured-traffic spend; the
+   number isn't yet measured. On-trigger (model upgrade,
+   persona-fragment commit detected via git hook,
+   capability-surface change) catches the highest-value drift
+   events regardless of cadence.
 
 ## Implementation sequencing
 
@@ -405,37 +488,72 @@ phases below are the proposed sequence.
 - ADR moves Status: Proposed → Accepted.
 - Memory entries updated to reflect any cut adjustments.
 
-### Phase 1 — framework primitives (gated on Phase 0 + ADR-032 governance gates landing)
+### Phase 1 — framework primitives (gated on Phase 0 only)
+
+**Decoupled from ADR-032 per SemTeams review.** The day-one slice
+(Q3 + G3) has enforcement that already exists — `tool-call parse
+paths` for Q3, `xUserIDIdentityMiddleware` (per ADR-030 / beta.22)
+for G3 — independent of ADR-032's pending governance gates. Phase 1
+ships when Phase 0 (this ADR) flips Accepted; ADR-032 is not a
+blocker.
 
 - Hoist `Detector`, `Diagnosis`, `EvidenceRef`, `Bundle` types from
   `semspec/pkg/health` into a new SemStreams package
-  (`pkg/observability` is the working name; finalised at hoist time).
-- Add `Polar`, `RegimeAnnotation`, `SentinelRun` data shapes.
+  (`pkg/observability` is the working name; finalised at hoist time;
+  see Appendix A for proposed shapes).
+- Add `Polar`, `RegimeAnnotation`, `SentinelRun` data shapes
+  (Appendix A).
+- **Storage layout** (committed):
+  - **Polars in ObjectStore** — dense numerical sample sets; large;
+    revision-immutable; well-suited to bucket-keyed blob storage.
+    Bucket: `OBSERVABILITY_POLARS`.
+  - **Regime annotations in KV** — small, structured, fast-lookup,
+    KV-Twofer-eligible (state + change-fanout in one write). Bucket:
+    `OBSERVABILITY_REGIMES`.
+  - **Sentinel-run records in KV** — small per-run metadata
+    (timestamp, prompt-set ID, regime ID, result polar refs).
+    Bucket: `OBSERVABILITY_SENTINELS`. The actual per-run sample
+    data references its parent polar in ObjectStore.
 - Wire the three signal predicate families
   (`ops.polar_departure.*`, `ops.threshold_crossed.*`,
   `ops.regime_expired.*`) into the agvocab constants.
 - Wire the `ops.adjustment` record schema.
 - Sentinel-run scheduler: a thin shim over ADR-031 cron rule that
-  also tags results with regime metadata.
-- Stationarity-check primitive: pure function over `Polar` + sample.
+  tags results with regime metadata, writes the run record to
+  `OBSERVABILITY_SENTINELS`, and triggers the stationarity-check
+  primitive against the parent polar.
+- Stationarity-check primitive: pure function over `Polar` + sample,
+  emits `ops.polar_departure` when variance envelope is breached.
 - Migration guide: how SemSpec converges its watcher onto upstream
   primitives without breaking its existing detectors.
 
-Sequenced **after** ADR-032 governance work resumes. The framing
-doc's §4.3 "existing enforcement, missing metric" claim depends on
-ADR-032's enforcement gates existing for G2/G3/G4/G8/G9.
+**ADR-032 axes (G2/G4/G8) sequenced after that work resumes** — the
+"existing enforcement, missing metric" claim for those specific axes
+depends on ADR-032 enforcement gates landing first. Q3 and G3 do
+not.
 
-### Phase 2 — SemTeams adopts as first consumer
+### Phase 2 — SemTeams adopts (Q3 + G3 day-one slice)
 
-- SemTeams writes detector implementations for Q1, Q3, and the
-  G-axes whose enforcement is already in place.
-- SemTeams declares objective specs per flow with tunable axes,
-  bounds, and gating predicates.
-- SemTeams ships the ops-agent diagnosis persona.
-- One sentinel prompt set wired up; one sentinel cadence configured
-  via cron rule.
-- This is the first real test of whether the Phase 1 primitives
-  are sufficient. If they're not, this ADR is back open.
+- **Q3 detector** — three-state classifier on tool-call outcomes
+  (parsed-clean / fallback-rescued / failed) per beta.41 + beta.44
+  SAP work. Triples already structurally emitted; detector lifts
+  them into the polar pair.
+- **G3 detector** — header-vs-body identity-source classifier per
+  `xUserIDIdentityMiddleware` already-emitted structural signal.
+  Metric emission is additive.
+- SemTeams declares the **first objective spec** with tunable-axis
+  schema (lean template). `docs/objectives/deep-research.md` is the
+  upgrade target — convert prose-encoded regression budgets into
+  machine-readable form.
+- Ops-agent diagnosis persona lands at
+  `configs/personas/fragments/ops/*.md`.
+- **Sentinel prompt curation** — product work, budgeted; no current
+  set exists. Single-digit count per flow class, chosen for
+  diagnostic clarity.
+- One sentinel cadence wired up via ADR-031 cron rule (weekly
+  minimum, on-trigger via git hook for persona-fragment edits).
+- This is the first real test of whether Phase 1 primitives are
+  sufficient. If they're not, this ADR is back open.
 
 ### Phase 3 — SemSpec converges and a second adopter validates
 
@@ -446,7 +564,11 @@ ADR-032's enforcement gates existing for G2/G3/G4/G8/G9.
 - A second adopter (TBD) authors their own catalog from scratch. If
   they can do it without touching framework code, the cut held.
 
-### Phase 4 — coordinator-driven tuning (deepest deferral)
+### Phase 4 — coordinator-driven tuning + sweep → polar pipeline
+
+Two related workstreams ship together here, both opt-in per axis.
+
+**Coordinator-driven tuning:**
 
 - Coordinator gains a rule that fires on `ops.polar_departure` /
   `ops.threshold_crossed` / `ops.regime_expired` and, when an
@@ -456,8 +578,272 @@ ADR-032's enforcement gates existing for G2/G3/G4/G8/G9.
 - Rollback symmetric: post-adjustment polar departure → coordinator
   rule → reverse adjustment within the same bounds.
 
+**Sweep → polar pipeline:**
+
+The framing doc (§2.3) describes polars as curves produced by
+sweeps across reasoning_effort / model tier / persona-fragment
+variants / max_iteration. *How* a sweep is authored, executed, and
+collated into a stored polar is **product-flavored harness work**,
+not framework primitive — different products will sweep different
+axis grids over different flows. Phase 4 establishes:
+
+- The framework-side **sweep-result write API** that lands sample
+  points in an existing or new polar in ObjectStore with regime
+  annotation in KV.
+- A **reference sweep tool** (product-side, in `cmd/semteams/...`)
+  that drives a sweep across declared axis points and writes
+  results via the framework API.
+- The coordinator's **sweep-trigger rule** — when an
+  `ops.regime_expired` signal fires, the coordinator may trigger
+  a re-sweep against the new regime to repopulate the polar.
+
 Phase 4 can ship incrementally per axis. Not all axes need
-coordinator-driven tuning; some stay diagnosis-only.
+coordinator-driven tuning *or* sweep automation; some stay
+diagnosis-only and others stay manual-sweep-only.
+
+## Appendix A — Proposed data shapes
+
+Concrete shapes for the three new framework primitives. Anchor for
+the type hoist; final names and field tags get reviewed at
+implementation time. Storage layout (Phase 1) is given alongside.
+
+### A.1 Polar — stored in ObjectStore
+
+A polar is a curve, not a single sample: a set of `(x, y)` points
+collected by sweeping an input axis (the "x") against a measured
+axis (the "y") under a fixed regime. The shape carries enough
+metadata to compute stationarity-check variance envelopes and to
+plot the curve for human review.
+
+```go
+// Polar — one curve in the polar library. Stored in ObjectStore
+// keyed by ID; the bucket is OBSERVABILITY_POLARS.
+type Polar struct {
+    // ID is stable across sweeps; new sweeps under the same regime
+    // append samples to the existing polar.
+    ID         string
+
+    // AxisX/AxisY name what's plotted. AxisX is typically the
+    // input being swept (model_tier, reasoning_effort,
+    // max_iteration, persona_fragment_variant); AxisY is the
+    // measured quantity (cost_usd, p95_latency_ms,
+    // structural_validator_pass_rate, fallback_rate).
+    AxisX      string
+    AxisY      string
+
+    // RegimeID is the foreign key into OBSERVABILITY_REGIMES KV.
+    // A regime change spawns a new sub-curve under the same
+    // PolarID, distinguished by its RegimeID. Pre-/post-adjustment
+    // data are tagged distinctly via RegimeID, never mixed.
+    RegimeID   string
+
+    // Samples is the curve itself. Order is insertion order;
+    // (x, y) need not be monotonic. Sweeps append; nothing
+    // mutates existing samples in place.
+    Samples    []PolarSample
+
+    // Variance envelope is computed lazily over Samples; cached
+    // here for the stationarity-check primitive.
+    Envelope   VarianceEnvelope
+
+    // Provenance — when written, by which sweep/sentinel run.
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+    SweepRefs  []string // SentinelRun.ID values that contributed samples
+}
+
+type PolarSample struct {
+    X         float64
+    Y         float64
+    Timestamp time.Time
+    SourceRef EvidenceRef // points at the loop/message/metric that produced this point
+}
+
+type VarianceEnvelope struct {
+    // Method is mechanical (rolling mean ± k·stddev, or similar).
+    // Specific algorithm finalised at implementation; the shape
+    // here is what the stationarity-check primitive consumes.
+    Method        string
+    UpperBound    []float64 // per-X-bucket
+    LowerBound    []float64
+    BucketCount   int
+    LastComputed  time.Time
+}
+```
+
+### A.2 RegimeAnnotation — stored in KV
+
+A regime annotation captures the underlying invariants under which
+a polar's samples were collected. When any invariant changes
+(model upgrade, persona-fragment commit, capability-surface change,
+coordinator-driven adjustment), a new RegimeAnnotation is written
+and the polar's RegimeID flips — pre-adjustment data stays
+queryable under the prior RegimeID.
+
+```go
+// RegimeAnnotation — invariants under which a polar's samples
+// are valid. Stored in KV under bucket OBSERVABILITY_REGIMES,
+// keyed by ID. KV-Twofer-eligible: state plus change-fanout to
+// any subscriber that needs to know "regime changed."
+type RegimeAnnotation struct {
+    ID                string
+
+    // The invariants. These are the things that, when they change,
+    // invalidate the polar.
+    ModelEndpoint     string  // capability+endpoint resolution
+    PersonaFragments  []FragmentRef // ID + content hash
+    CapabilitySurface string  // hash of model registry + tool registry snapshot
+    FlowConfigHash    string  // hash of the flow config the samples came from
+
+    // AdjustmentRef is non-empty when this regime was created by a
+    // coordinator-driven adjustment per ADR-033 §"Adjustment record
+    // schema". Points at the ops.adjustment.id that opened the regime.
+    AdjustmentRef     string
+
+    // Lineage — what regime this superseded, if any.
+    PriorRegimeID     string
+
+    // Provenance.
+    CreatedAt         time.Time
+    CreatedCause      string  // "model_upgrade" | "persona_edit" | "capability_change" | "coordinator_adjustment" | "manual"
+}
+
+type FragmentRef struct {
+    ID          string
+    ContentHash string
+}
+```
+
+### A.3 SentinelRun — stored in KV
+
+A sentinel run is one execution of the curated prompt set against
+the live system, plus the result-classification metadata that
+downstream stationarity-check consumes. The actual per-sample
+points land in the relevant polar's `Samples`; the SentinelRun
+record is the run's metadata.
+
+```go
+// SentinelRun — one execution of a curated prompt set against the
+// live system. Stored in KV under bucket OBSERVABILITY_SENTINELS,
+// keyed by ID.
+type SentinelRun struct {
+    ID            string
+
+    // What was executed.
+    PromptSetID   string  // identifier for the curated prompt set
+    PromptCount   int
+
+    // Under what regime.
+    RegimeID      string
+
+    // When.
+    StartedAt     time.Time
+    CompletedAt   time.Time
+
+    // What polars received samples from this run.
+    PolarRefs     []string
+
+    // Stationarity-check outcome — emitted as ops.polar_departure
+    // when at least one polar's Samples-from-this-run breach the
+    // variance envelope.
+    StationaryAxes    []string  // axes where samples sat on the curve
+    DeparturesFound   []DepartureRef // axes where they didn't
+
+    // Trigger — what caused this run.
+    TriggerCause  string  // "scheduled_weekly" | "model_upgrade" | "persona_commit" | "capability_change" | "manual"
+    TriggerRef    string  // git commit hash, model version, etc.
+}
+
+type DepartureRef struct {
+    PolarID    string
+    Magnitude  float64
+    Direction  string  // "above" | "below"
+    SampleRefs []EvidenceRef
+}
+```
+
+### A.4 Detector / Diagnosis / Bundle / EvidenceRef — hoisted from semspec/pkg/health
+
+The four primitives below already exist in `semspec/pkg/health/
+detector.go` and are hoisted as-is (subject to package rename and
+field-tag review at hoist time). Reproduced here for reference;
+they are not invented by this ADR.
+
+```go
+// Detector — pure, deterministic, no I/O, no clock. Implementations
+// live in product (cmd/semteams/observability/detectors/, semspec/
+// pkg/health/detectors/). Framework only owns the interface.
+type Detector interface {
+    Name() string
+    Run(*Bundle) []Diagnosis
+}
+
+// Bundle — captured snapshot of the system being measured. Scope
+// is broad enough that any product's detectors can find what they
+// need without per-bundle field negotiation.
+type Bundle struct {
+    Loops         []LoopSnapshot
+    Messages      []MessageSnapshot
+    Trajectories  []TrajectorySnapshot
+    Metrics       []MetricSample
+    Triples       []TripleSnapshot
+    Diagnoses     []Diagnosis  // populated by RunAll
+    CapturedAt    time.Time
+    RegimeID      string       // the regime under which this bundle was captured
+}
+
+// Diagnosis — a detector's structured finding. EvidenceRefs point
+// at the underlying data so a human (or LLM ops-agent persona) can
+// audit the call.
+type Diagnosis struct {
+    Shape       string  // detector name + failure mode
+    Severity    string  // "info" | "warn" | "error" | "critical"
+    Evidence    []EvidenceRef
+    Remediation string
+    MemoryRef   string  // pointer into ops-agent memory if the detector wants to thread continuity
+}
+
+// EvidenceRef — minimal pointer into the bundle (or external store).
+type EvidenceRef struct {
+    Kind  EvidenceKind
+    ID    string
+    Field string
+    Value string
+}
+
+type EvidenceKind string
+
+const (
+    EvidenceAgentResponse EvidenceKind = "agent_response"
+    EvidenceAgentRequest  EvidenceKind = "agent_request"
+    EvidenceMetricSample  EvidenceKind = "metric_sample"
+    EvidenceLoopEntry     EvidenceKind = "loop_entry"
+    EvidenceLogLine       EvidenceKind = "log_line"
+    EvidencePlanState     EvidenceKind = "plan_state"
+)
+```
+
+### A.5 Cross-referencing
+
+The relationships between the shapes:
+
+```
+SentinelRun.RegimeID  ─────► RegimeAnnotation.ID
+                              │
+                              └─► used by Polar to tag samples
+SentinelRun.PolarRefs ─────► Polar.ID (many)
+Polar.RegimeID        ─────► RegimeAnnotation.ID
+Polar.SweepRefs       ─────► SentinelRun.ID (many)
+Polar.Samples[].SourceRef ► EvidenceRef (any kind)
+
+ops.adjustment.regime ─────► RegimeAnnotation.ID
+RegimeAnnotation.AdjustmentRef ► ops.adjustment.id (when created by adjustment)
+```
+
+Pre- / post-adjustment query is `Polar(ID=X).Samples WHERE RegimeID
+= prior` vs. `WHERE RegimeID = post`. Same machinery answers
+"what did this polar look like before the model upgrade" and "what
+did it look like before the coordinator's tuning action."
 
 ## Related decisions
 
