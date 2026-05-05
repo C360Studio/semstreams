@@ -191,6 +191,12 @@ type Processor struct {
 	// short enough to bound memory on a busy processor.
 	revisionTTL time.Duration
 
+	// org is the Platform.Org value from component.Dependencies. When non-empty,
+	// every framework-managed KV bucket this processor owns is suffixed with
+	// "_<org>" (e.g. RULE_STATE → RULE_STATE_acme) per ADR-032 tag 4.
+	// Empty string preserves the single-org default (back-compat).
+	org string
+
 	// Logger
 	logger *slog.Logger
 
@@ -480,8 +486,9 @@ func (rp *Processor) drainCronScheduler() {
 // initializeStateTracker creates the RULE_STATE KV bucket and initializes state tracking components.
 // This enables stateful ECA rules with OnEnter/OnExit/WhileTrue actions.
 func (rp *Processor) initializeStateTracker(ctx context.Context) error {
-	// Get or create the RULE_STATE KV bucket
-	const bucketName = "RULE_STATE"
+	// Get or create the RULE_STATE KV bucket.
+	// Suffixed with "_<org>" per ADR-032 tag 4 when Platform.Org is non-empty.
+	bucketName := component.BucketName(component.RuleStateBucketName, rp.org)
 
 	js, err := rp.natsClient.JetStream()
 	if err != nil {
@@ -502,12 +509,12 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 
 		bucket, err = js.CreateKeyValue(ctx, kvConfig)
 		if err != nil {
-			return fmt.Errorf("create RULE_STATE bucket: %w", err)
+			return fmt.Errorf("create %s bucket: %w", bucketName, err)
 		}
 
-		rp.logger.Info("Created RULE_STATE KV bucket for stateful rules")
+		rp.logger.Info("Created RULE_STATE KV bucket for stateful rules", "bucket", bucketName)
 	} else {
-		rp.logger.Info("Using existing RULE_STATE KV bucket")
+		rp.logger.Info("Using existing RULE_STATE KV bucket", "bucket", bucketName)
 	}
 
 	// Create StateTracker
@@ -597,21 +604,24 @@ func (rp *Processor) initializeScheduleTracker(ctx context.Context) error {
 		return fmt.Errorf("get JetStream context: %w", err)
 	}
 
-	bucket, err := js.KeyValue(ctx, ScheduleBucketName)
+	// Suffixed with "_<org>" per ADR-032 tag 4 when Platform.Org is non-empty.
+	scheduleBucket := component.BucketName(component.RuleSchedulesBucketName, rp.org)
+
+	bucket, err := js.KeyValue(ctx, scheduleBucket)
 	if err != nil {
 		bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-			Bucket:      ScheduleBucketName,
+			Bucket:      scheduleBucket,
 			Description: "Per-rule last-fired timestamps for cron rule missed-fire detection",
 			TTL:         0,  // Records persist for the rule's lifecycle.
 			MaxBytes:    -1, // No size cap; one small record per cron rule.
 			History:     1,  // Only the most recent fire matters.
 		})
 		if err != nil {
-			return fmt.Errorf("create %s bucket: %w", ScheduleBucketName, err)
+			return fmt.Errorf("create %s bucket: %w", scheduleBucket, err)
 		}
-		rp.logger.Info("Created RULE_SCHEDULES KV bucket for cron rule fire tracking")
+		rp.logger.Info("Created RULE_SCHEDULES KV bucket for cron rule fire tracking", "bucket", scheduleBucket)
 	} else {
-		rp.logger.Info("Using existing RULE_SCHEDULES KV bucket")
+		rp.logger.Info("Using existing RULE_SCHEDULES KV bucket", "bucket", scheduleBucket)
 	}
 
 	rp.scheduleTracker = NewScheduleTracker(natsclient.WrapKV(bucket), rp.logger)
@@ -639,21 +649,24 @@ func (rp *Processor) initializeWindowTracker(ctx context.Context) error {
 		return fmt.Errorf("get JetStream context: %w", err)
 	}
 
-	bucket, err := js.KeyValue(ctx, WindowsBucketName)
+	// Suffixed with "_<org>" per ADR-032 tag 4 when Platform.Org is non-empty.
+	windowBucket := component.BucketName(component.RuleWindowsBucketName, rp.org)
+
+	bucket, err := js.KeyValue(ctx, windowBucket)
 	if err != nil {
 		bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-			Bucket:      WindowsBucketName,
+			Bucket:      windowBucket,
 			Description: "Per-rule sliding-window counters for count_in_window conditions",
 			TTL:         0,  // Keys swept by opt-in janitor cron rule (see chunk 3b).
 			MaxBytes:    -1, // Bounded by DefaultMaxDistinctDimensionsPerRule × record size.
 			History:     1,  // Only current state matters; previous revisions unused.
 		})
 		if err != nil {
-			return fmt.Errorf("create %s bucket: %w", WindowsBucketName, err)
+			return fmt.Errorf("create %s bucket: %w", windowBucket, err)
 		}
-		rp.logger.Info("Created RULE_WINDOWS KV bucket for count_in_window conditions")
+		rp.logger.Info("Created RULE_WINDOWS KV bucket for count_in_window conditions", "bucket", windowBucket)
 	} else {
-		rp.logger.Info("Using existing RULE_WINDOWS KV bucket")
+		rp.logger.Info("Using existing RULE_WINDOWS KV bucket", "bucket", windowBucket)
 	}
 
 	rp.windowTracker = NewWindowTracker(natsclient.WrapKV(bucket), rp.logger)
@@ -786,9 +799,10 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// to avoid race between Start() setting it and watcher goroutines reading it
 
 	// Initialize lifecycle reporter for observability
+	// Suffixed with "_<org>" per ADR-032 tag 4 when Platform.Org is non-empty.
 	if rp.natsClient != nil {
 		statusBucket, err := rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-			Bucket:      "COMPONENT_STATUS",
+			Bucket:      component.BucketName(component.ComponentStatusBucketName, rp.org),
 			Description: "Component lifecycle status tracking",
 		})
 		if err != nil {

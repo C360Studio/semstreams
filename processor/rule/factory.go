@@ -86,6 +86,11 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 	// unmarshal incoming envelopes against the shared payload registry.
 	processor.SetDecoder(message.NewDecoder(deps.PayloadRegistry))
 
+	// Thread org so framework-managed KV buckets (RULE_STATE, RULE_SCHEDULES,
+	// RULE_WINDOWS, ENTITY_STATES, semstreams_config, COMPONENT_STATUS) are
+	// suffixed with "_<org>" per ADR-032 tag 4. Empty org → back-compat.
+	processor.org = deps.Platform.Org
+
 	// Set logger from dependencies
 	logger := deps.Logger
 	if logger == nil {

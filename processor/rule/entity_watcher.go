@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -52,10 +53,11 @@ func (rp *Processor) getEffectiveBucketPatterns() map[string][]string {
 		return rp.config.EntityWatchBuckets
 	}
 
-	// Backwards compatibility: use EntityWatchPatterns for ENTITY_STATES
+	// Backwards compatibility: use EntityWatchPatterns for ENTITY_STATES.
+	// Apply org suffix per ADR-032 tag 4 so the watcher reads the right bucket.
 	if len(rp.config.EntityWatchPatterns) > 0 {
 		return map[string][]string{
-			"ENTITY_STATES": rp.config.EntityWatchPatterns,
+			component.BucketName(component.EntityStatesBucketName, rp.org): rp.config.EntityWatchPatterns,
 		}
 	}
 
@@ -71,8 +73,11 @@ func (rp *Processor) getOrCreateBucket(ctx context.Context, bucketName string) (
 		return bucket, nil
 	}
 
-	// Bucket doesn't exist - only create ENTITY_STATES (others should exist)
-	if bucketName == "ENTITY_STATES" {
+	// Bucket doesn't exist — only create the entity-states bucket (others should exist).
+	// Compare against the org-suffixed name so that ENTITY_STATES_acme is also created
+	// when the watcher resolves the suffixed name at startup.
+	entityStatesBucket := component.BucketName(component.EntityStatesBucketName, rp.org)
+	if bucketName == entityStatesBucket {
 		return rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 			Bucket:      bucketName,
 			Description: "Entity state storage",
@@ -87,16 +92,16 @@ func (rp *Processor) getOrCreateBucket(ctx context.Context, bucketName string) (
 	return nil, errs.WrapTransient(err, "Processor", "getOrCreateBucket", fmt.Sprintf("bucket %s not found", bucketName))
 }
 
-// getOrCreateEntityBucket gets or creates the ENTITY_STATES KV bucket
-// DEPRECATED: Use getOrCreateBucket for multi-bucket support
+// getOrCreateEntityBucket gets or creates the ENTITY_STATES KV bucket.
+// DEPRECATED: Use getOrCreateBucket for multi-bucket support.
 func (rp *Processor) getOrCreateEntityBucket(ctx context.Context) (jetstream.KeyValue, error) {
-	return rp.getOrCreateBucket(ctx, "ENTITY_STATES")
+	return rp.getOrCreateBucket(ctx, component.BucketName(component.EntityStatesBucketName, rp.org))
 }
 
 // startWatcherForPattern starts a KV watcher for a specific pattern on ENTITY_STATES.
 // DEPRECATED: Use startWatcherForBucketPattern for multi-bucket support.
 func (rp *Processor) startWatcherForPattern(ctx context.Context, pattern string) error {
-	return rp.startWatcherForBucketPattern(ctx, "ENTITY_STATES", pattern)
+	return rp.startWatcherForBucketPattern(ctx, component.BucketName(component.EntityStatesBucketName, rp.org), pattern)
 }
 
 // startWatcherForBucketPattern starts a KV watcher for a specific bucket and pattern.
