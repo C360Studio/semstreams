@@ -78,6 +78,19 @@ type LocalSearchResponse struct {
 	EntityDigests    []EntityDigest        `json:"entity_digests,omitempty"`
 	Answer           string                `json:"answer,omitempty"`
 	AnswerModel      string                `json:"answer_model,omitempty"`
+	// Degraded is true when an LLM-configured answer synthesizer fell
+	// back to template synthesis (LLM error or timeout). The Answer
+	// field still carries useful text (template summary of entity
+	// hits + community keyword/summary already in COMMUNITY_INDEX);
+	// the flag tells the caller "this is a degraded response — the
+	// rich LLM-synthesized answer didn't materialize." Pure-template
+	// deployments (no LLM ever configured) return Degraded=false.
+	Degraded bool `json:"degraded,omitempty"`
+	// DegradedReason classifies WHY synthesis was degraded, populated
+	// only when Degraded=true. Operators group dashboards by Reason.
+	// Concrete values: "answer_synthesis_timeout",
+	// "answer_synthesis_error". Empty when not degraded.
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 // GlobalSearchRequest is the request format for global search
@@ -123,6 +136,16 @@ type GlobalSearchResponse struct {
 	DurationMs         int64                 `json:"duration_ms"`
 	Answer             string                `json:"answer,omitempty"`
 	AnswerModel        string                `json:"answer_model,omitempty"`
+	// Degraded is true when an LLM-configured answer synthesizer fell
+	// back to template synthesis. See LocalSearchResponse.Degraded for
+	// the contract. The agent / human consumer should surface this
+	// flag — Answer + Entities + CommunitySummaries are still useful,
+	// but the rich LLM synthesis the operator paid for didn't
+	// materialize (likely due to LLM timeout or error under load).
+	Degraded bool `json:"degraded,omitempty"`
+	// DegradedReason classifies why synthesis was degraded.
+	// "answer_synthesis_timeout" | "answer_synthesis_error" | "".
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 // Relationship represents a relationship between two entities in search results
@@ -268,7 +291,7 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 		Keywords:    community.Keywords,
 		MemberCount: len(community.Members),
 	}}
-	answer, answerModel := c.synthesizeQueryAnswer(ctx, req.Query, cs, len(matchedEntities))
+	synth := c.synthesizeQueryAnswer(ctx, req.Query, cs, len(matchedEntities))
 
 	// Build response
 	response := LocalSearchResponse{
@@ -280,8 +303,10 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 		Keywords:         community.Keywords,
 		MemberCount:      len(community.Members),
 		EntityDigests:    buildEntityDigestsFromEntities(matchedEntities),
-		Answer:           answer,
-		AnswerModel:      answerModel,
+		Answer:           synth.Answer,
+		AnswerModel:      synth.Model,
+		Degraded:         synth.Degraded,
+		DegradedReason:   synth.Reason,
 	}
 
 	c.recordSuccess(len(data), 0)
@@ -563,15 +588,17 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				}
 			}
 
-			answer, answerModel := c.synthesizeQueryAnswer(ctx, searchQuery, enriched, len(entityIDs))
+			synth := c.synthesizeQueryAnswer(ctx, searchQuery, enriched, len(entityIDs))
 			response := GlobalSearchResponse{
 				Summarized:         true,
 				EntityIDs:          entityIDs,
 				EntityDigests:      buildEntityDigests(entityIDs, semanticScores, labels),
 				Count:              len(entityIDs),
 				CommunitySummaries: enriched,
-				Answer:             answer,
-				AnswerModel:        answerModel,
+				Answer:             synth.Answer,
+				AnswerModel:        synth.Model,
+				Degraded:           synth.Degraded,
+				DegradedReason:     synth.Reason,
 				DurationMs:         time.Since(startTime).Milliseconds(),
 			}
 			c.recordSuccess(requestSize, 0)
@@ -951,9 +978,11 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 	if req.shouldIncludeSummaries() {
 		enriched := c.enrichCommunitySummaries(ctx, summaries)
 		response.CommunitySummaries = enriched
-		answer, answerModel := c.synthesizeQueryAnswer(ctx, req.Query, enriched, len(matchedEntities))
-		response.Answer = answer
-		response.AnswerModel = answerModel
+		synth := c.synthesizeQueryAnswer(ctx, req.Query, enriched, len(matchedEntities))
+		response.Answer = synth.Answer
+		response.AnswerModel = synth.Model
+		response.Degraded = synth.Degraded
+		response.DegradedReason = synth.Reason
 	}
 
 	// Conditionally extract relationships (opt-in)
@@ -1275,16 +1304,35 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 }
 
 // synthesizeQueryAnswer delegates to the component's answer synthesizer (LLM or template).
-// Returns the answer text and the model name used (empty for template fallback).
-func (c *Component) synthesizeQueryAnswer(ctx context.Context, query string, summaries []CommunitySummary, totalEntities int) (string, string) {
+// Returns the SynthesisOutcome carrying answer text, model name, and
+// the Degraded flag the caller propagates onto GlobalSearchResponse
+// for the agent to surface.
+//
+// When the synthesizer returns a non-nil error (programmer-error-shape
+// — distinct from the "LLM failed, fall back to template" path that
+// the synthesizer absorbs internally), this function ALSO falls back
+// to template synthesis with Degraded=true. Without this defensive
+// fallback, a synthesizer-error path returns the zero SynthesisOutcome
+// and the response carries an empty Answer with no Degraded flag —
+// silently worse than the explicit fallback path. The whole point of
+// beta.45 is that callers never see a less-useful response than
+// template, so we synthesize template here as the floor.
+func (c *Component) synthesizeQueryAnswer(ctx context.Context, query string, summaries []CommunitySummary, totalEntities int) SynthesisOutcome {
 	if c.answerSynthesizer == nil {
-		return synthesizeAnswer(summaries, totalEntities), ""
+		return SynthesisOutcome{Answer: synthesizeAnswer(summaries, totalEntities)}
 	}
-	answer, modelName, err := c.answerSynthesizer.Synthesize(ctx, query, summaries, totalEntities)
+	outcome, err := c.answerSynthesizer.Synthesize(ctx, query, summaries, totalEntities)
 	if err != nil {
-		c.logger.Debug("answer synthesis error, using fallback", "error", err)
+		c.logger.Warn("answer synthesizer returned error; using template floor",
+			"error", err,
+			"reason", classifyDegradedReason(err))
+		return SynthesisOutcome{
+			Answer:   synthesizeAnswer(summaries, totalEntities),
+			Degraded: true,
+			Reason:   classifyDegradedReason(err),
+		}
 	}
-	return answer, modelName
+	return outcome
 }
 
 // enrichGlobalResponse adds community context and answer synthesis to a
@@ -1301,9 +1349,11 @@ func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearch
 	}
 	enriched := c.enrichCommunitySummaries(ctx, communityMatches)
 	resp.CommunitySummaries = enriched
-	answer, answerModel := c.synthesizeQueryAnswer(ctx, queryText, enriched, resp.Count)
-	resp.Answer = answer
-	resp.AnswerModel = answerModel
+	synth := c.synthesizeQueryAnswer(ctx, queryText, enriched, resp.Count)
+	resp.Answer = synth.Answer
+	resp.AnswerModel = synth.Model
+	resp.Degraded = synth.Degraded
+	resp.DegradedReason = synth.Reason
 }
 
 // synthesizeAnswer produces a template-based natural language answer from

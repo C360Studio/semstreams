@@ -1689,7 +1689,7 @@ func TestBuildIntrospectionSchema_GlobalSearchResult(t *testing.T) {
 		fieldNames = append(fieldNames, f["name"].(string))
 	}
 
-	expectedFields := []string{"entities", "community_summaries", "relationships", "sources", "count", "duration_ms", "answer", "answer_model"}
+	expectedFields := []string{"entities", "community_summaries", "relationships", "sources", "count", "duration_ms", "answer", "answer_model", "degraded", "degraded_reason"}
 	for _, expected := range expectedFields {
 		assert.Contains(t, fieldNames, expected, "GlobalSearchResult should contain field %q", expected)
 	}
@@ -1721,7 +1721,7 @@ func TestBuildIntrospectionSchema_LocalSearchResult(t *testing.T) {
 		fieldNames = append(fieldNames, f["name"].(string))
 	}
 
-	expectedFields := []string{"entities", "communityId", "count", "durationMs"}
+	expectedFields := []string{"entities", "communityId", "count", "durationMs", "degraded", "degraded_reason"}
 	for _, expected := range expectedFields {
 		assert.Contains(t, fieldNames, expected, "LocalSearchResult should contain field %q", expected)
 	}

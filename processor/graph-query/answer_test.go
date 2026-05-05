@@ -15,15 +15,18 @@ func TestTemplateAnswerSynthesizer_Synthesize(t *testing.T) {
 	s := &TemplateAnswerSynthesizer{}
 
 	t.Run("empty summaries", func(t *testing.T) {
-		answer, model, err := s.Synthesize(context.Background(), "test query", nil, 0)
+		out, err := s.Synthesize(context.Background(), "test query", nil, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if answer != "" {
-			t.Errorf("expected empty answer, got %q", answer)
+		if out.Answer != "" {
+			t.Errorf("expected empty answer, got %q", out.Answer)
 		}
-		if model != "" {
-			t.Errorf("expected empty model, got %q", model)
+		if out.Model != "" {
+			t.Errorf("expected empty model, got %q", out.Model)
+		}
+		if out.Degraded {
+			t.Error("template synthesizer should NOT report Degraded — template is canonical, not fallback")
 		}
 	})
 
@@ -31,15 +34,18 @@ func TestTemplateAnswerSynthesizer_Synthesize(t *testing.T) {
 		summaries := []CommunitySummary{
 			{Summary: "Game quest entities.", MemberCount: 10, Relevance: 0.9},
 		}
-		answer, model, err := s.Synthesize(context.Background(), "show quests", summaries, 10)
+		out, err := s.Synthesize(context.Background(), "show quests", summaries, 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(answer, "10 entities") {
-			t.Errorf("answer missing entity count: %s", answer)
+		if !strings.Contains(out.Answer, "10 entities") {
+			t.Errorf("answer missing entity count: %s", out.Answer)
 		}
-		if model != "" {
-			t.Errorf("template synthesizer should return empty model, got %q", model)
+		if out.Model != "" {
+			t.Errorf("template synthesizer should return empty model, got %q", out.Model)
+		}
+		if out.Degraded {
+			t.Error("template synthesizer should NOT report Degraded")
 		}
 	})
 }
@@ -54,15 +60,18 @@ func TestLLMAnswerSynthesizer_Synthesize(t *testing.T) {
 		summaries := []CommunitySummary{
 			{Summary: "Quest entities on board1.", MemberCount: 10, Relevance: 0.9},
 		}
-		answer, model, err := s.Synthesize(context.Background(), "what quests exist?", summaries, 10)
+		out, err := s.Synthesize(context.Background(), "what quests exist?", summaries, 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if answer != "The quests involve dragon slaying and merchant routes." {
-			t.Errorf("unexpected answer: %q", answer)
+		if out.Answer != "The quests involve dragon slaying and merchant routes." {
+			t.Errorf("unexpected answer: %q", out.Answer)
 		}
-		if model != "gemini-flash" {
-			t.Errorf("model = %q, want gemini-flash", model)
+		if out.Model != "gemini-flash" {
+			t.Errorf("model = %q, want gemini-flash", out.Model)
+		}
+		if out.Degraded {
+			t.Error("Degraded should be false on LLM success")
 		}
 
 		// Verify the prompt was constructed correctly
@@ -77,7 +86,7 @@ func TestLLMAnswerSynthesizer_Synthesize(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back on error", func(t *testing.T) {
+	t.Run("falls back on error with Degraded flag", func(t *testing.T) {
 		client := &mockLLMClient{
 			err: fmt.Errorf("connection refused"),
 		}
@@ -86,18 +95,74 @@ func TestLLMAnswerSynthesizer_Synthesize(t *testing.T) {
 		summaries := []CommunitySummary{
 			{Summary: "Quest entities.", MemberCount: 5, Relevance: 0.8},
 		}
-		answer, model, err := s.Synthesize(context.Background(), "test", summaries, 5)
-		// Error is logged internally, not returned — fallback is transparent
+		out, err := s.Synthesize(context.Background(), "test", summaries, 5)
+		// Error is logged internally, not returned — fallback is transparent.
 		if err != nil {
 			t.Fatalf("expected nil error on fallback, got %v", err)
 		}
-		// Should fall back to template answer
-		if !strings.Contains(answer, "5 entities") {
-			t.Errorf("fallback answer missing entity count: %s", answer)
+		// Should fall back to template answer with Degraded=true.
+		if !strings.Contains(out.Answer, "5 entities") {
+			t.Errorf("fallback answer missing entity count: %s", out.Answer)
 		}
-		// Model should be empty on fallback
-		if model != "" {
-			t.Errorf("model should be empty on fallback, got %q", model)
+		if out.Model != "" {
+			t.Errorf("model should be empty on fallback, got %q", out.Model)
+		}
+		if !out.Degraded {
+			t.Error("Degraded should be true on LLM error fallback")
+		}
+		if out.Reason != "answer_synthesis_error" {
+			t.Errorf("Reason = %q, want answer_synthesis_error (non-timeout LLM error)", out.Reason)
+		}
+	})
+
+	t.Run("falls back on timeout with Degraded + timeout reason", func(t *testing.T) {
+		// Slow client + 50ms sub-timeout → DeadlineExceeded → degraded
+		// path with reason=answer_synthesis_timeout.
+		client := &mockLLMClient{delay: 5 * time.Second}
+		s := NewLLMAnswerSynthesizer(client, "slow-model", nil, 50*time.Millisecond)
+
+		summaries := []CommunitySummary{
+			{Summary: "Quest entities.", MemberCount: 5, Relevance: 0.8},
+		}
+		out, err := s.Synthesize(context.Background(), "test", summaries, 5)
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if !out.Degraded {
+			t.Error("Degraded should be true on sub-timeout")
+		}
+		if out.Reason != ReasonAnswerSynthesisTimeout {
+			t.Errorf("Reason = %q, want %q", out.Reason, ReasonAnswerSynthesisTimeout)
+		}
+		if !strings.Contains(out.Answer, "5 entities") {
+			t.Errorf("fallback answer missing entity count: %s", out.Answer)
+		}
+	})
+
+	t.Run("parent-cancel classifies as Cancelled, not generic error", func(t *testing.T) {
+		// Pre-cancel the parent ctx so the LLM call returns
+		// context.Canceled. The doc-comment on Synthesize calls
+		// out this path explicitly; classification must distinguish
+		// it from generic errors so dashboards can separate
+		// upstream-pressure timeouts from request-side abandonment.
+		client := &mockLLMClient{delay: 5 * time.Second}
+		s := NewLLMAnswerSynthesizer(client, "model", nil, 5*time.Second)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // cancelled before Synthesize even starts
+
+		summaries := []CommunitySummary{
+			{Summary: "Quest entities.", MemberCount: 3, Relevance: 0.8},
+		}
+		out, err := s.Synthesize(ctx, "test", summaries, 3)
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if !out.Degraded {
+			t.Error("Degraded should be true on parent cancel")
+		}
+		if out.Reason != ReasonAnswerSynthesisCancelled {
+			t.Errorf("Reason = %q, want %q (parent ctx cancelled)", out.Reason, ReasonAnswerSynthesisCancelled)
 		}
 	})
 }
@@ -121,17 +186,20 @@ func TestLLMAnswerSynthesizer_SubTimeout_FallsBackTransparently(t *testing.T) {
 	}
 
 	start := time.Now()
-	answer, model, err := s.Synthesize(parentCtx, "what quests exist?", summaries, 7)
+	out, err := s.Synthesize(parentCtx, "what quests exist?", summaries, 7)
 	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Fatalf("expected nil error on sub-timeout fallback (transparent to caller), got %v", err)
 	}
-	if !strings.Contains(answer, "7 entities") {
-		t.Errorf("fallback answer missing entity count: %q", answer)
+	if !strings.Contains(out.Answer, "7 entities") {
+		t.Errorf("fallback answer missing entity count: %q", out.Answer)
 	}
-	if model != "" {
-		t.Errorf("model should be empty on fallback, got %q", model)
+	if out.Model != "" {
+		t.Errorf("model should be empty on fallback, got %q", out.Model)
+	}
+	if !out.Degraded {
+		t.Error("Degraded should be true on sub-timeout fallback")
 	}
 	// Bound elapsed at well under the 5s mock delay — proves the
 	// sub-timeout fired rather than the call running to completion.
