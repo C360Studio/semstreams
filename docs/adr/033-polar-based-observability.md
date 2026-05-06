@@ -2,8 +2,23 @@
 
 ## Status
 
-**Proposed (2026-05-04).** Revised 2026-05-05 from SemTeams review;
-now incorporating their accept-with-revisions verdict.
+**Accepted (2026-05-05).** Originally proposed 2026-05-04; revised
+2026-05-05 incorporating SemTeams accept-with-revisions feedback;
+SemTeams second-pass sign-off received same day with verdict
+"Accept. The ADR is now in shape to flip Status: Proposed →
+Accepted, which unblocks the semspec/pkg/health type hoist and
+SemTeams' Phase 2 adoption work."
+
+This unblocks:
+
+- **Type hoist** — `semspec/pkg/health` types (`Detector`,
+  `Diagnosis`, `EvidenceRef`, `Bundle`) hoist into SemStreams as
+  framework primitives. New SemStreams package (working name
+  `pkg/observability`) added alongside in the same workstream.
+- **SemTeams Phase 2 adoption** — Q3 + G3 detector implementations
+  in `cmd/semteams/observability/detectors/`, objective-spec template
+  schema authoring, sentinel prompt curation as budgeted product
+  work.
 
 ### SemTeams review (2026-05-05) — accept with revisions
 
