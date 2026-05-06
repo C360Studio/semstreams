@@ -24,9 +24,14 @@ func TestAdapterFor_OpenAI(t *testing.T) {
 }
 
 func TestAdapterFor_Unknown(t *testing.T) {
-	a := agenticmodel.AdapterFor("ollama")
+	// Use "anthropic" as the unknown example; it is intentionally not in
+	// the AdapterFor switch and falls through to GenericAdapter (the ADR-034
+	// audit flagged this — Anthropic structured-output translation is
+	// deferred). "ollama" was the previous example string here but is now
+	// a known provider with its own adapter.
+	a := agenticmodel.AdapterFor("anthropic")
 	if a.Name() != "generic" {
-		t.Errorf("AdapterFor(ollama).Name() = %q, want generic", a.Name())
+		t.Errorf("AdapterFor(anthropic).Name() = %q, want generic", a.Name())
 	}
 }
 

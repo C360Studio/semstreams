@@ -33,12 +33,20 @@ var defaultAdapter ProviderAdapter = &GenericAdapter{}
 
 // AdapterFor returns the appropriate adapter for the given provider name.
 // Falls back to GenericAdapter for unknown providers.
+//
+// Note: "openai" is the umbrella for any OpenAI-API-compatible runtime
+// (vLLM, sparky, OpenRouter, LocalAI, llama.cpp server) — operators set
+// `provider: "openai"` plus the appropriate URL. The two genuine outliers
+// are "gemini" (distinct API surface) and "ollama" (separate adapter for
+// future /api/chat native-format-field path; see ADR-034).
 func AdapterFor(provider string) ProviderAdapter {
 	switch provider {
 	case "gemini":
 		return &GeminiAdapter{}
 	case "openai":
 		return &OpenAIAdapter{}
+	case "ollama":
+		return &OllamaAdapter{}
 	default:
 		return &GenericAdapter{}
 	}

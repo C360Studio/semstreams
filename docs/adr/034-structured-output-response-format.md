@@ -175,12 +175,12 @@ strict structured output) opt in.
 
 ### 3. Per-adapter v1 behavior
 
-| Adapter | v1 behavior | Notes |
+| Adapter | v1 behavior (as shipped) | Notes |
 |---|---|---|
-| `OpenAIAdapter` | Plumb `ResponseFormat` directly into `response_format` on the wire | Single hook in `NormalizeRequest`. Covers OpenAI proper, vLLM, OpenRouter, sparky. **The principal value of this ADR.** |
-| `OllamaAdapter` (NEW) | Translate `ResponseFormat.Schema` into Ollama's native `format` field | Bypasses Ollama's buggy `/v1/chat/completions` response_format translation. Single new file. |
-| `GeminiAdapter` | No-op for v1 with warn-once log. Translation to `responseSchema` deferred until we have a Gemini native client (today we hit Gemini's OpenAI-compat endpoint, which doesn't honor `response_format`). | Stretch goal acknowledged; not v1 scope. |
-| `GenericAdapter` | No-op for v1 with warn-once log | Anthropic and unknown providers fall here. |
+| `OpenAIAdapter` | Stays a no-op for `ResponseFormat`. Plumbing happens provider-agnostically in `client.go:applyResponseFormat` and the SDK's native `ResponseFormat *ChatCompletionResponseFormat` field serializes to OpenAI's wire shape correctly. | Covers OpenAI proper, vLLM, OpenRouter, sparky. **The principal value of this ADR.** |
+| `OllamaAdapter` (NEW, chunk 3a) | Embeds `GenericAdapter` for cross-provider message normalizations. `NormalizeRequest` is a no-op for `ResponseFormat`; `/v1` accepts the OpenAI shape and is Ollama's documented workaround. | Chunk 3b (native `/api/chat` `format` field) deferred — see "What's deferred". |
+| `GeminiAdapter` | No-op for `ResponseFormat`. Translation to `responseSchema` deferred until we have a Gemini native client (today we hit Gemini's OpenAI-compat endpoint, which doesn't honor `response_format`). | Stretch goal acknowledged; not v1 scope. |
+| `GenericAdapter` | No-op for `ResponseFormat`. | Anthropic and unknown providers fall here. |
 
 ### 4. SDK plumbing
 
@@ -246,6 +246,23 @@ needs that doesn't pay back the small-model deployment.
 
 ### What's deferred
 
+- **Ollama native `/api/chat` `format` field (chunk 3b).** Chunk 3a
+  ships `OllamaAdapter` as an embedding of `GenericAdapter` with a
+  no-op `NormalizeRequest` for `ResponseFormat` — the field flows
+  through Ollama's `/v1/chat/completions` endpoint, which is the
+  documented structured-output workaround. gh#10001 reports `/v1` is
+  partial / model-dependent (gemma3 ignores it); the more reliable
+  path is Ollama's native `/api/chat` with a top-level `format` field.
+  That path doesn't fit the SDK adapter pattern — it requires a
+  separate HTTP client, request shape, and response decoder. Chunk 5
+  (integration test against real Ollama with the models semspec
+  actually deploys — qwen, deepseek) gates whether chunk 3b ever
+  ships:
+  - If `/v1` + `response_format` is reliable for those models, chunk
+    3b is unnecessary.
+  - If integration shows wedge classes the OpenAI shape can't address,
+    chunk 3b becomes a separate ADR (likely an `EndpointConfig.Mode`
+    flag toggling between `openai-compat` and `ollama-native` clients).
 - **Anthropic structured-output translation.** Not added; tool-calling
   remains the recommended primitive for Anthropic. If a future need
   emerges, the translation shim lives at adapter level
