@@ -2,13 +2,19 @@
 
 ## Status
 
-**Proposed — 2026-05-06.** Sign-off pending from semspec (the consuming
-product). Implementation deferred to a follow-up session; this ADR
-captures the design call so the next picker-up has the context.
+**Accepted — 2026-05-06.** Internal sign-off: this ADR originated as
+an external proposal addressing a general framework reliability gap on
+small-model deployments (Ollama, vLLM, sparky-hosted Qwen/DeepSeek),
+not as a feature request from a specific consuming product. Adding a
+better structured-output primitive than tool-calling alone benefits
+semspec, semteams, and any future product hitting the same wedge —
+external semspec sign-off is not a prerequisite for framework-level
+acceptance.
 
-Audit findings, web research, and architectural decisions documented
-below. Implementation landed nowhere yet — last shipped tag is
-`v1.0.0-beta.47` (graph-clustering capability timeout).
+Implementation queued per the seven-chunk plan in
+[Implementation notes](#implementation-notes-for-the-next-session).
+Last shipped tag is `v1.0.0-beta.47` (graph-clustering capability
+timeout).
 
 ## Context
 
