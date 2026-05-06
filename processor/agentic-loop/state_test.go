@@ -568,6 +568,70 @@ func TestLoopManager_ConcurrentAccess(t *testing.T) {
 	// Final state may vary due to concurrent updates (that's expected)
 }
 
+func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
+	manager := agenticloop.NewLoopManager()
+	loopID, err := manager.CreateLoop("task-001", "general", "qwen-32b")
+	if err != nil {
+		t.Fatalf("CreateLoop() error = %v", err)
+	}
+
+	// Simulate dispatch: register A and B as in-flight tool calls plus their
+	// metadata (mirrors what dispatchToolCall populates).
+	manager.TrackToolCall("call-A", loopID)
+	manager.TrackToolName("call-A", "graph_search")
+	manager.TrackToolCall("call-B", loopID)
+	manager.TrackToolName("call-B", "http_request")
+
+	// Both results land.
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-A", Name: "graph_search", Content: "a"}); err != nil {
+		t.Fatalf("StoreToolResult(A) error = %v", err)
+	}
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-B", Name: "http_request", Content: "b"}); err != nil {
+		t.Fatalf("StoreToolResult(B) error = %v", err)
+	}
+
+	// Drain at the turn boundary.
+	results := manager.GetAndClearToolResults(loopID)
+	if len(results) != 2 {
+		t.Fatalf("GetAndClearToolResults() returned %d results, want 2", len(results))
+	}
+
+	// Routing must be evicted so a late re-delivery has no loop to attach to —
+	// findLoopIDForToolCall reads this map and a non-empty result would let
+	// the duplicate flow through HandleToolResult into the next turn's drain.
+	if _, ok := manager.GetLoopForToolCall("call-A"); ok {
+		t.Errorf("GetLoopForToolCall(call-A) still resolves after drain — a re-delivered result would leak into the next turn")
+	}
+	if _, ok := manager.GetLoopForToolCall("call-B"); ok {
+		t.Errorf("GetLoopForToolCall(call-B) still resolves after drain — a re-delivered result would leak into the next turn")
+	}
+
+	// Metadata maps must survive the drain — buildToolMessages's empty-name
+	// fallback and the trajectory step builder both read them after drain.
+	if name := manager.GetToolName("call-A"); name != "graph_search" {
+		t.Errorf("GetToolName(call-A) = %q, want graph_search — eviction must not touch metadata maps", name)
+	}
+	if name := manager.GetToolName("call-B"); name != "http_request" {
+		t.Errorf("GetToolName(call-B) = %q, want http_request — eviction must not touch metadata maps", name)
+	}
+
+	// A second drain on a now-empty PendingToolResults must still be a clean
+	// no-op (idempotent on the post-bug path; relied on by any future caller
+	// that drains defensively).
+	if results := manager.GetAndClearToolResults(loopID); len(results) != 0 {
+		t.Errorf("second GetAndClearToolResults() returned %d results, want 0", len(results))
+	}
+
+	// Re-tracking after eviction must restore the routing — this is the
+	// approval-approve flow, where dispatchApprovedCall re-issues the same
+	// CallID via dispatchToolCall after the human says yes. If eviction
+	// blocked re-track, approval-after-drain would silently lose the result.
+	manager.TrackToolCall("call-A", loopID)
+	if got, ok := manager.GetLoopForToolCall("call-A"); !ok || got != loopID {
+		t.Errorf("GetLoopForToolCall(call-A) after re-track = (%q, %v), want (%q, true)", got, ok, loopID)
+	}
+}
+
 func TestLoopManager_ConcurrentPendingTools(t *testing.T) {
 	manager := agenticloop.NewLoopManager()
 

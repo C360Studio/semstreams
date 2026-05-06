@@ -30,6 +30,7 @@ type loopMetrics struct {
 	// Tool calls
 	toolCallsDispatched *prometheus.CounterVec
 	toolResultsReceived *prometheus.CounterVec
+	toolResultsDropped  *prometheus.CounterVec
 
 	// Token usage per LLM request
 	requestTokensIn  prometheus.Histogram
@@ -139,6 +140,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tool results received by status",
 			}, []string{"status"}),
 
+			toolResultsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "tool_results_dropped_total",
+				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID. Sustained non-zero rate points at NATS redelivery or executor double-publish.",
+			}, []string{"reason"}),
+
 			boidSignalsReceived: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
@@ -226,6 +234,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "trajectory_steps_total", metrics.trajectorySteps)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_calls_dispatched_total", metrics.toolCallsDispatched)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_received_total", metrics.toolResultsReceived)
+			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
 			_ = registry.RegisterCounterVec("agentic-loop", "boid_signals_received_total", metrics.boidSignalsReceived)
 			_ = registry.RegisterCounter("agentic-loop", "boid_position_updates_total", metrics.boidPositionUpdates)
 			_ = registry.RegisterCounter("agentic-loop", "boid_entities_filtered_total", metrics.boidEntitiesFiltered)
@@ -249,6 +258,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.trajectorySteps)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolCallsDispatched)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsReceived)
+			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidSignalsReceived)
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidPositionUpdates)
 			_ = prometheus.DefaultRegisterer.Register(metrics.boidEntitiesFiltered)
@@ -316,6 +326,15 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 		status = "error"
 	}
 	m.toolResultsReceived.WithLabelValues(status).Inc()
+}
+
+// recordToolResultDropped records a tool result that arrived with no loop
+// mapping for its CallID. Reason "stale_callid" is the dominant case after
+// GetAndClearToolResults eviction — a re-delivered result for an already-
+// drained call. A sustained non-zero rate points at NATS redelivery or an
+// executor double-publishing.
+func (m *loopMetrics) recordToolResultDropped(reason string) {
+	m.toolResultsDropped.WithLabelValues(reason).Inc()
 }
 
 // recordBoidSignalReceived records a Boid steering signal received.

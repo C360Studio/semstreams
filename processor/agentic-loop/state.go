@@ -672,7 +672,24 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 	return nil
 }
 
-// GetAndClearToolResults retrieves all accumulated tool results and clears them
+// GetAndClearToolResults retrieves all accumulated tool results and clears them.
+// Also evicts the CallID→loop routing entry for each drained result so a late
+// re-delivery (NATS redelivery, executor retry) lands on an empty mapping at
+// handleToolResultMessage and is dropped at the wire instead of leaking into
+// the next turn's PendingToolResults — which would otherwise produce a
+// duplicate tool message in the message array sent to the model.
+//
+// Eviction effectiveness depends on GetLoopForToolCallWithRecovery NOT
+// resolving an evicted CallID via ExtractLoopIDFromToolCall — true today
+// because model-issued CallIDs (toolu_, call_) don't carry the structured
+// {loopID}:tool:{short} form and GenerateToolCallID is not wired to dispatch.
+// If structured CallIDs ever become the dispatch default, this needs an
+// evicted-set check inside the recovery path or it silently regresses.
+//
+// Metadata maps (callIDToName, callIDToArguments, toolStartTimes) are
+// preserved — buildToolMessages's empty-name fallback and the trajectory step
+// builder still read them. They grow O(total-tool-calls-in-loop) and are
+// cleaned up at DeleteLoop along with the rest of the loop's bookkeeping.
 func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -683,8 +700,9 @@ func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult
 	}
 
 	results := make([]agentic.ToolResult, 0, len(entity.PendingToolResults))
-	for _, r := range entity.PendingToolResults {
+	for callID, r := range entity.PendingToolResults {
 		results = append(results, r)
+		delete(m.toolCallToLoop, callID)
 	}
 	entity.PendingToolResults = nil
 	return results

@@ -1038,10 +1038,18 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	}
 	toolResult := *toolResultPtr
 
-	// Find loop ID for this tool call
+	// Find loop ID for this tool call. Empty here means either we drained the
+	// CallID at the previous turn boundary (GetAndClearToolResults evicts the
+	// routing entry to drop late re-deliveries) or we never tracked it.
+	// Returning here is load-bearing — proceeding would land the late result
+	// in PendingToolResults and surface as a duplicate tool message in the
+	// next turn's request.
 	loopID := c.findLoopIDForToolCall(toolResult.CallID)
 	if loopID == "" {
 		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		if c.metrics != nil {
+			c.metrics.recordToolResultDropped("stale_callid")
+		}
 		return
 	}
 
