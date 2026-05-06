@@ -254,15 +254,19 @@ needs that doesn't pay back the small-model deployment.
   partial / model-dependent (gemma3 ignores it); the more reliable
   path is Ollama's native `/api/chat` with a top-level `format` field.
   That path doesn't fit the SDK adapter pattern — it requires a
-  separate HTTP client, request shape, and response decoder. Chunk 5
-  (integration test against real Ollama with the models semspec
-  actually deploys — qwen, deepseek) gates whether chunk 3b ever
-  ships:
-  - If `/v1` + `response_format` is reliable for those models, chunk
-    3b is unnecessary.
-  - If integration shows wedge classes the OpenAI shape can't address,
-    chunk 3b becomes a separate ADR (likely an `EndpointConfig.Mode`
-    flag toggling between `openai-compat` and `ollama-native` clients).
+  separate HTTP client, request shape, and response decoder.
+
+  **Chunk 5 gate result (2026-05-07): chunk 3b not needed for
+  qwen3:1.7b.** Live integration test against local Ollama at
+  `localhost:11434` confirmed `/v1` + `response_format` returns
+  schema-conformant JSON reliably for qwen3:1.7b across multiple
+  runs. The remaining open question is whether other models semspec
+  deploys (qwen3 14B/30B variants, deepseek-r1 series) hit the same
+  wedge class as gemma3 reportedly does — extending the integration
+  test to those models is cheap (`OLLAMA_TEST_MODEL=...` env var).
+  Until evidence emerges of `/v1` failing, chunk 3b stays deferred;
+  it would only re-open as a separate ADR with an `EndpointConfig.Mode`
+  flag toggling between `openai-compat` and `ollama-native` clients.
 - **Anthropic structured-output translation.** Not added; tool-calling
   remains the recommended primitive for Anthropic. If a future need
   emerges, the translation shim lives at adapter level
