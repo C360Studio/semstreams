@@ -172,6 +172,20 @@ func ResolveCapabilityTimeout(reg RegistryReader, capability string, defaultTime
 // EndpointConfig defines an available model endpoint.
 type EndpointConfig struct {
 	// Provider identifies the API type: "anthropic", "ollama", "openai", "openrouter".
+	//
+	// "openai" is the umbrella for any OpenAI-API-compatible runtime —
+	// OpenAI proper, vLLM, sparky-hosted Qwen/DeepSeek, LocalAI,
+	// llama.cpp server, LiteLLM. Operators routing to those set
+	// `provider: "openai"` plus the appropriate URL; we deliberately do
+	// not fragment this enum by adding vllm/sparky/localai as distinct
+	// providers (every OpenAI-compat runtime takes the same wire shape).
+	// See ADR-034.
+	//
+	// The two genuine outliers worth keeping distinct from "openai" are
+	// "ollama" (Ollama-native quirks; future /api/chat path tracked under
+	// ADR-034 chunk 3b) and "anthropic" (different API surface, not
+	// OpenAI-compat). "openrouter" is OpenAI-compat but kept distinct
+	// for the multi-model proxy routing semantics.
 	Provider string `json:"provider"`
 	// URL is the API endpoint. Required for ollama/openai/openrouter, optional for anthropic.
 	URL string `json:"url,omitempty"`
