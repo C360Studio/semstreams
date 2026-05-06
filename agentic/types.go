@@ -30,6 +30,80 @@ func (tc ToolChoice) Validate() error {
 	}
 }
 
+// ResponseFormat constrains the model's output to a JSON object or
+// JSON-schema-conformant structure. Maps to OpenAI's response_format on
+// OpenAI-compatible providers; translated to provider-specific
+// equivalents on others (Ollama: native format field; Gemini: stubbed
+// for v1; Anthropic: stubbed for v1, future translation to forced
+// single-tool-call). See ADR-034.
+//
+// Nil on AgentRequest means no structuring constraint — current behavior;
+// tool-calling remains the structured-output primitive for personas that
+// work fine on cloud providers without response_format.
+type ResponseFormat struct {
+	// Type: ResponseFormatJSONObject (legacy, bare JSON validity) or
+	// ResponseFormatJSONSchema (current standard, strict-mode schema
+	// adherence). Empty is invalid; callers must set one.
+	Type string `json:"type"`
+
+	// Schema is the JSON Schema document. Required when Type ==
+	// ResponseFormatJSONSchema; ignored when Type ==
+	// ResponseFormatJSONObject. Must be a valid OpenAI Structured Outputs
+	// schema (subset of JSON Schema — no $ref to external schemas, no
+	// anyOf at root, every property in required, additionalProperties:
+	// false). Adapters do not validate locally; trust the caller.
+	Schema map[string]any `json:"schema,omitempty"`
+
+	// Name is required by OpenAI when Type == ResponseFormatJSONSchema.
+	// Should describe the output (e.g. "decide_action_args"). Adapters
+	// that don't need a name ignore it.
+	Name string `json:"name,omitempty"`
+
+	// Strict enables OpenAI's strict mode (response is guaranteed
+	// schema-conformant; sampling is constrained). Defaults true via
+	// NewJSONSchemaFormat. Set false to opt into permissive mode (rare;
+	// mostly for compat testing).
+	Strict bool `json:"strict"`
+}
+
+// NewJSONSchemaFormat constructs a strict-mode JSON-schema ResponseFormat.
+// Strict defaults to true — the OpenAI Structured Outputs guarantee. Pass
+// the schema directly; do not wrap in an outer json_schema envelope (the
+// adapter layer handles wire-shape translation per provider).
+func NewJSONSchemaFormat(name string, schema map[string]any) *ResponseFormat {
+	return &ResponseFormat{
+		Type:   ResponseFormatJSONSchema,
+		Name:   name,
+		Schema: schema,
+		Strict: true,
+	}
+}
+
+// NewJSONObjectFormat constructs a ResponseFormat that requires valid JSON
+// output without imposing a schema. Less reliable than JSON-schema mode on
+// small models; prefer NewJSONSchemaFormat when a schema is available.
+func NewJSONObjectFormat() *ResponseFormat {
+	return &ResponseFormat{Type: ResponseFormatJSONObject}
+}
+
+// Validate checks if the ResponseFormat has a valid type and required fields.
+func (rf *ResponseFormat) Validate() error {
+	switch rf.Type {
+	case ResponseFormatJSONObject:
+		return nil
+	case ResponseFormatJSONSchema:
+		if rf.Name == "" {
+			return fmt.Errorf("name required when response_format type is %q", ResponseFormatJSONSchema)
+		}
+		if len(rf.Schema) == 0 {
+			return fmt.Errorf("schema required when response_format type is %q", ResponseFormatJSONSchema)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid response_format type: %q (must be %q or %q)", rf.Type, ResponseFormatJSONObject, ResponseFormatJSONSchema)
+	}
+}
+
 // AgentRequest represents a request to an agentic service
 type AgentRequest struct {
 	RequestID   string           `json:"request_id"`
@@ -41,6 +115,12 @@ type AgentRequest struct {
 	Temperature float64          `json:"temperature,omitempty"`
 	Tools       []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice  *ToolChoice      `json:"tool_choice,omitempty"`
+	// ResponseFormat constrains output to JSON or JSON-schema-conformant
+	// structure. Optional; nil means no structuring constraint (current
+	// behavior; tool-calling remains the structured-output primitive when
+	// nil). Honored on OpenAI-compat providers and Ollama; stubbed
+	// (warn-once log) on Gemini and generic adapters for v1. See ADR-034.
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 	// Timeout caps this specific request. Go duration string (e.g. "30s").
 	// Empty means fall through to endpoint, capability, or component-level
 	// timeout. Takes precedence over all other timeout sources when set.
@@ -57,6 +137,11 @@ func (r AgentRequest) Validate() error {
 	}
 	if r.ToolChoice != nil {
 		if err := r.ToolChoice.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.ResponseFormat != nil {
+		if err := r.ResponseFormat.Validate(); err != nil {
 			return err
 		}
 	}

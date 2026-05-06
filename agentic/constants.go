@@ -77,3 +77,11 @@ const (
 	RoleDeveloper = "developer"
 	RoleReviewer  = "reviewer"
 )
+
+// Response format type values for AgentRequest.ResponseFormat. See ADR-034.
+const (
+	// ResponseFormatJSONObject — legacy bare JSON validity (no schema).
+	ResponseFormatJSONObject = "json_object"
+	// ResponseFormatJSONSchema — strict-mode schema-constrained output (current standard).
+	ResponseFormatJSONSchema = "json_schema"
+)
