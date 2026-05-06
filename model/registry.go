@@ -4,6 +4,7 @@ package model
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
@@ -64,6 +65,96 @@ func ResolveEndpoint(reg RegistryReader, capability string) (*ResolvedEndpoint, 
 		apiKey = os.Getenv(ep.APIKeyEnv)
 	}
 	return &ResolvedEndpoint{URL: ep.URL, Model: ep.Model, APIKey: apiKey}, nil
+}
+
+// ResolveEndpointWithConfig resolves a capability to its connection trio
+// (URL/Model/APIKey, with API key read from the configured env) AND returns
+// the full *EndpointConfig. The trio satisfies callers that don't tune
+// transport; the EndpointConfig carries connection-hygiene fields
+// (DisableKeepAlives, IdleConnTimeout, ResponseHeaderTimeout) and per-endpoint
+// policy (RequestTimeout, rate limits) that LLM client builders need.
+//
+// Use this helper when constructing an HTTP client that should respect
+// EndpointConfig's transport tuning. ResolveEndpoint's intentionally minimal
+// return shape silently strips those fields — direct callers of
+// ResolveEndpoint historically dropped per-endpoint keepalive/timeout config
+// (semspec smoke-#10 keepalive bug, community_summary 300s dead config).
+//
+// If ResolveEndpoint succeeds the resolved name maps to a non-nil
+// EndpointConfig — the resolution chain guarantees this. A nil EndpointConfig
+// under a successful ResolveEndpoint indicates a registry-internal invariant
+// violation; we surface it as a nil-deref on the next field access rather
+// than silently masking it.
+func ResolveEndpointWithConfig(reg RegistryReader, capability string) (*ResolvedEndpoint, *EndpointConfig, error) {
+	resolved, err := ResolveEndpoint(reg, capability)
+	if err != nil {
+		return nil, nil, err
+	}
+	name := reg.Resolve(capability)
+	ep := reg.GetEndpoint(name)
+	return resolved, ep, nil
+}
+
+// ResolveCapabilityTimeout reads the per-call LLM timeout for a capability
+// in this precedence order:
+//
+//  1. endpoint.request_timeout — applies to the resolved endpoint;
+//     most-specific-wins.
+//  2. capability.timeout — per-capability cap covering anything routed
+//     to this capability without a per-endpoint override.
+//  3. defaultTimeout — the per-capability framework default the caller
+//     supplies. Each capability picks its own bound (community_summary
+//     and answer_synthesis take longer than query_classification's small
+//     JSON output) so there's no single global default.
+//
+// Order matches processor/agentic-model/component.go:resolveTimeout
+// (per-task → endpoint → capability → component → fallback) so an operator
+// who sets endpoint.request_timeout to give a slow endpoint headroom sees
+// consistent behaviour across the framework. Synchronous-gateway capabilities
+// (graph-query) and worker-loop capabilities (graph-clustering) have no
+// equivalent of req.Timeout, so the chain starts at endpoint.
+//
+// Invalid duration strings at either level log a warning and fall through
+// to the next level — a malformed config never blocks startup or silently
+// disables the bound.
+//
+// A nil registry returns defaultTimeout. A nil logger uses slog.Default().
+func ResolveCapabilityTimeout(reg RegistryReader, capability string, defaultTimeout time.Duration, logger *slog.Logger) time.Duration {
+	if reg == nil {
+		return defaultTimeout
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	tryParse := func(value, source string) (time.Duration, bool) {
+		if value == "" {
+			return 0, false
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			logger.Warn("Invalid LLM capability timeout; falling through",
+				"capability", capability,
+				"source", source,
+				"value", value,
+				"error", err)
+			return 0, false
+		}
+		return d, true
+	}
+
+	if name := reg.Resolve(capability); name != "" {
+		if ep := reg.GetEndpoint(name); ep != nil {
+			if d, ok := tryParse(ep.RequestTimeout, "endpoint"); ok {
+				return d
+			}
+		}
+	}
+	if capCfg := reg.GetCapability(capability); capCfg != nil {
+		if d, ok := tryParse(capCfg.Timeout, "capability"); ok {
+			return d
+		}
+	}
+	return defaultTimeout
 }
 
 // EndpointConfig defines an available model endpoint.

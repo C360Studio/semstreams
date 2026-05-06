@@ -75,6 +75,37 @@ type OpenAIConfig struct {
 	DisableKeepAlives     bool
 }
 
+// OpenAIConfigFromEndpoint builds an OpenAIConfig from a resolved capability
+// endpoint, plumbing the connection-hygiene fields that mirror EndpointConfig
+// (IdleConnTimeout, ResponseHeaderTimeout, DisableKeepAlives). Timeout is
+// intentionally NOT set here — callers pick it via
+// model.ResolveCapabilityTimeout (or their own precedence chain) and assign
+// the result on the returned config before passing to NewOpenAIClient.
+//
+// This is the canonical translator from model.* to OpenAIConfig — every
+// graph-query / graph-clustering site that constructs an LLM client off a
+// resolved capability should use it. Hand-rolling the field plumbing has
+// historically dropped fields silently (semspec smoke-#10 keepalive bug;
+// community_summary 300s dead config).
+//
+// A nil ep skips the connection-hygiene fields and returns a config with
+// just the resolved trio plus the logger — matches the behaviour of a
+// pre-EndpointConfig caller.
+func OpenAIConfigFromEndpoint(resolved *model.ResolvedEndpoint, ep *model.EndpointConfig, logger *slog.Logger) OpenAIConfig {
+	cfg := OpenAIConfig{
+		BaseURL: resolved.URL,
+		Model:   resolved.Model,
+		APIKey:  resolved.APIKey,
+		Logger:  logger,
+	}
+	if ep != nil {
+		cfg.IdleConnTimeout = ep.IdleConnTimeout
+		cfg.ResponseHeaderTimeout = ep.ResponseHeaderTimeout
+		cfg.DisableKeepAlives = ep.DisableKeepAlives
+	}
+	return cfg
+}
+
 // NewOpenAIClient creates a new OpenAI-compatible LLM client.
 func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 	if cfg.BaseURL == "" {

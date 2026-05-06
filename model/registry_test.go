@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func testRegistry() *Registry {
@@ -1014,4 +1015,180 @@ func TestCapabilityConstants_Values(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveEndpointWithConfig_KeepalivePlumbing pins the field-by-field
+// plumbing contract: an EndpointConfig with DisableKeepAlives /
+// IdleConnTimeout / ResponseHeaderTimeout set must survive
+// ResolveEndpointWithConfig and reach the LLM client builder unchanged.
+// The historical bug (semspec smoke-#10) had the fields silently stripped
+// on the way through ResolveEndpoint; this guards the regression class
+// at the framework level.
+func TestResolveEndpointWithConfig_KeepalivePlumbing(t *testing.T) {
+	reg := &Registry{
+		Endpoints: map[string]*EndpointConfig{
+			"sparky-qwen": {
+				Provider:              "openai",
+				URL:                   "http://sparky:8080/v1",
+				Model:                 "qwen3-coder:30b",
+				DisableKeepAlives:     true,
+				IdleConnTimeout:       "10s",
+				ResponseHeaderTimeout: "30s",
+				MaxTokens:             32000,
+			},
+		},
+		Capabilities: map[string]*CapabilityConfig{
+			CapabilityAnswerSynthesis: {
+				Preferred: []string{"sparky-qwen"},
+			},
+		},
+		Defaults: DefaultsConfig{Model: "sparky-qwen"},
+	}
+
+	resolved, ep, err := ResolveEndpointWithConfig(reg, CapabilityAnswerSynthesis)
+	if err != nil {
+		t.Fatalf("ResolveEndpointWithConfig: %v", err)
+	}
+
+	// The minimal trio still resolves correctly.
+	if resolved.URL != "http://sparky:8080/v1" {
+		t.Errorf("URL = %q, want sparky URL", resolved.URL)
+	}
+	if resolved.Model != "qwen3-coder:30b" {
+		t.Errorf("Model = %q, want qwen3-coder:30b", resolved.Model)
+	}
+
+	// And the full EndpointConfig carries the keepalive fields the LLM
+	// client builder needs. These were the bug.
+	if !ep.DisableKeepAlives {
+		t.Errorf("DisableKeepAlives = false, want true (semspec smoke-#10 regression)")
+	}
+	if ep.IdleConnTimeout != "10s" {
+		t.Errorf("IdleConnTimeout = %q, want 10s", ep.IdleConnTimeout)
+	}
+	if ep.ResponseHeaderTimeout != "30s" {
+		t.Errorf("ResponseHeaderTimeout = %q, want 30s", ep.ResponseHeaderTimeout)
+	}
+}
+
+// TestResolveEndpointWithConfig_NoEndpointsAtAll covers the registry-empty
+// branch: ResolveEndpoint returns an error and ResolveEndpointWithConfig
+// propagates it without panicking on the downstream lookup.
+func TestResolveEndpointWithConfig_NoEndpointsAtAll(t *testing.T) {
+	reg := &Registry{
+		Endpoints: map[string]*EndpointConfig{},
+	}
+
+	_, _, err := ResolveEndpointWithConfig(reg, CapabilityAnswerSynthesis)
+	if err == nil {
+		t.Fatal("expected error when no endpoints configured, got nil")
+	}
+}
+
+// TestResolveCapabilityTimeout pins the precedence chain
+// (endpoint > capability > default) — load-bearing for capability config
+// to actually reach the wire. The community_summary 300s dead-config bug
+// surfaced when graph-clustering bypassed this chain entirely, but the
+// chain itself is also a separate failure surface that warrants direct
+// coverage.
+func TestResolveCapabilityTimeout(t *testing.T) {
+	const dflt = 60 * time.Second
+
+	tests := []struct {
+		name    string
+		reg     *Registry
+		want    time.Duration
+		comment string
+	}{
+		{
+			name: "endpoint_request_timeout_wins",
+			reg: &Registry{
+				Endpoints: map[string]*EndpointConfig{
+					"e": {URL: "http://e", Model: "m", RequestTimeout: "120s"},
+				},
+				Capabilities: map[string]*CapabilityConfig{
+					CapabilityCommunitySummary: {Preferred: []string{"e"}, Timeout: "240s"},
+				},
+				Defaults: DefaultsConfig{Model: "e"},
+			},
+			want:    120 * time.Second,
+			comment: "endpoint.request_timeout is most-specific, beats capability.timeout",
+		},
+		{
+			name: "capability_timeout_when_endpoint_empty",
+			reg: &Registry{
+				Endpoints: map[string]*EndpointConfig{
+					"e": {URL: "http://e", Model: "m"},
+				},
+				Capabilities: map[string]*CapabilityConfig{
+					CapabilityCommunitySummary: {Preferred: []string{"e"}, Timeout: "300s"},
+				},
+				Defaults: DefaultsConfig{Model: "e"},
+			},
+			want:    300 * time.Second,
+			comment: "the bug: capability.timeout=300s must reach the wire when endpoint omits its own",
+		},
+		{
+			name: "default_when_both_empty",
+			reg: &Registry{
+				Endpoints: map[string]*EndpointConfig{
+					"e": {URL: "http://e", Model: "m"},
+				},
+				Capabilities: map[string]*CapabilityConfig{
+					CapabilityCommunitySummary: {Preferred: []string{"e"}},
+				},
+				Defaults: DefaultsConfig{Model: "e"},
+			},
+			want:    dflt,
+			comment: "fully unconfigured falls through to caller default",
+		},
+		{
+			name: "invalid_endpoint_timeout_falls_through",
+			reg: &Registry{
+				Endpoints: map[string]*EndpointConfig{
+					"e": {URL: "http://e", Model: "m", RequestTimeout: "garbage"},
+				},
+				Capabilities: map[string]*CapabilityConfig{
+					CapabilityCommunitySummary: {Preferred: []string{"e"}, Timeout: "300s"},
+				},
+				Defaults: DefaultsConfig{Model: "e"},
+			},
+			want:    300 * time.Second,
+			comment: "malformed endpoint.request_timeout warns and falls through to capability — never silently disables",
+		},
+		{
+			name: "invalid_capability_timeout_falls_through_to_default",
+			reg: &Registry{
+				Endpoints: map[string]*EndpointConfig{
+					"e": {URL: "http://e", Model: "m"},
+				},
+				Capabilities: map[string]*CapabilityConfig{
+					CapabilityCommunitySummary: {Preferred: []string{"e"}, Timeout: "garbage"},
+				},
+				Defaults: DefaultsConfig{Model: "e"},
+			},
+			want:    dflt,
+			comment: "malformed capability.timeout warns and falls through to default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveCapabilityTimeout(tt.reg, CapabilityCommunitySummary, dflt, nil)
+			if got != tt.want {
+				t.Errorf("got %v, want %v (%s)", got, tt.want, tt.comment)
+			}
+		})
+	}
+
+	// Nil interface (not a typed-nil *Registry) returns default. Callers
+	// that haven't configured a registry at all hit this path; the guard
+	// is defensive against a future caller that forgets the upstream nil
+	// check (graph-query / graph-clustering already guard).
+	t.Run("nil_registry_returns_default", func(t *testing.T) {
+		got := ResolveCapabilityTimeout(nil, CapabilityCommunitySummary, dflt, nil)
+		if got != dflt {
+			t.Errorf("got %v, want %v", got, dflt)
+		}
+	})
 }

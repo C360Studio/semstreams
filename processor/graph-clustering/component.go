@@ -33,6 +33,18 @@ var (
 	_ component.LifecycleComponent = (*Component)(nil)
 )
 
+// Per-capability LLM-call timeout defaults applied when neither
+// endpoint.request_timeout nor capability.timeout is configured. Sized to
+// the implicit 60s fallback that NewOpenAIClient previously applied — kept
+// short so an unconfigured deployment doesn't silently extend its
+// per-community blocking window. Operators that need 300s+ set
+// capability.timeout explicitly; the precedence chain in
+// model.ResolveCapabilityTimeout picks it up.
+const (
+	defaultCommunitySummaryTimeout = 60 * time.Second
+	defaultAnomalyReviewTimeout    = 60 * time.Second
+)
+
 // Config holds configuration for graph-clustering component
 type Config struct {
 	Ports                *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -1079,14 +1091,17 @@ func (p *kvProvider) GetEdgeWeight(_ context.Context, _, _ string) (float64, err
 
 // startEnhancementWorker initializes and starts the LLM enhancement worker
 func (c *Component) startEnhancementWorker(ctx context.Context, provider clustering.Provider) error {
-	// Resolve endpoint from model registry
-	resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityCommunitySummary)
+	// Resolve endpoint AND full config — direct ResolveEndpoint silently strips
+	// the connection-hygiene fields (DisableKeepAlives, IdleConnTimeout,
+	// ResponseHeaderTimeout) and per-endpoint RequestTimeout that the LLM
+	// client builder needs to honour the operator's capability config.
+	resolved, ep, err := model.ResolveEndpointWithConfig(c.modelRegistry, model.CapabilityCommunitySummary)
 	if err != nil {
 		return errs.Wrap(err, "Component", "startEnhancementWorker", "resolve community_summary endpoint")
 	}
 
 	// Probe LLM endpoint before committing workers — a fast health check
-	// prevents 60s blocking per community when the endpoint is unreachable
+	// prevents per-community blocking when the endpoint is unreachable
 	// (e.g., shimmy unhealthy, LLM disabled in deployment).
 	probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := probeLLMEndpoint(probeCtx, resolved.URL); err != nil {
@@ -1096,13 +1111,12 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 	}
 	probeCancel()
 
-	// Create LLM client — uses the resolved endpoint for inference
-	llmClient, err := llm.NewOpenAIClient(llm.OpenAIConfig{
-		BaseURL: resolved.URL,
-		Model:   resolved.Model,
-		APIKey:  resolved.APIKey,
-		Logger:  c.logger,
-	})
+	// Create LLM client. OpenAIConfigFromEndpoint plumbs connection-hygiene
+	// fields; ResolveCapabilityTimeout applies the endpoint > capability >
+	// default precedence chain so configured 300s reaches the HTTP client.
+	cfg := llm.OpenAIConfigFromEndpoint(resolved, ep, c.logger)
+	cfg.Timeout = model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityCommunitySummary, defaultCommunitySummaryTimeout, c.logger)
+	llmClient, err := llm.NewOpenAIClient(cfg)
 	if err != nil {
 		return errs.Wrap(err, "Component", "startEnhancementWorker", "create LLM client")
 	}
@@ -1275,18 +1289,15 @@ func (c *Component) resolveReviewLLMClient() llm.Client {
 		// Capability not explicitly bound — preserve legacy piggyback.
 		return c.llmClient
 	}
-	resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityAnomalyReview)
+	resolved, ep, err := model.ResolveEndpointWithConfig(c.modelRegistry, model.CapabilityAnomalyReview)
 	if err != nil {
 		c.logger.Warn("anomaly_review capability bound but endpoint resolution failed; falling back to community_summary client",
 			slog.Any("error", err))
 		return c.llmClient
 	}
-	client, err := llm.NewOpenAIClient(llm.OpenAIConfig{
-		BaseURL: resolved.URL,
-		Model:   resolved.Model,
-		APIKey:  resolved.APIKey,
-		Logger:  c.logger,
-	})
+	cfg := llm.OpenAIConfigFromEndpoint(resolved, ep, c.logger)
+	cfg.Timeout = model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityAnomalyReview, defaultAnomalyReviewTimeout, c.logger)
+	client, err := llm.NewOpenAIClient(cfg)
 	if err != nil {
 		c.logger.Warn("failed to create dedicated anomaly review LLM client; falling back to community_summary client",
 			slog.Any("error", err),
