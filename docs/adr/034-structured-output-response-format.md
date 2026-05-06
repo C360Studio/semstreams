@@ -184,20 +184,21 @@ strict structured output) opt in.
 
 ### 4. SDK plumbing
 
-The `sashabaranov/go-openai` SDK's `ChatCompletionRequest` does not
-expose `response_format` as a typed field directly. v1 plumbing
-strategies, in preference order:
+**Audit-time assumption (incorrect):** the audit found that
+`sashabaranov/go-openai`'s `ChatCompletionRequest` did not expose
+`response_format` as a typed field, and proposed an SDK-composition
+shim as the lowest-blast-radius path.
 
-1. **Extend the SDK via composition.** Wrap `openai.ChatCompletionRequest`
-   with a thin shim type that adds `ResponseFormat any`, marshal via
-   custom `MarshalJSON`. Lowest blast radius.
-2. **Patch the SDK fork.** Heavier; only justified if the SDK becomes
-   load-bearing to several open features.
-3. **Bypass the SDK for the request build path.** Marshal raw JSON to
-   the upstream URL ourselves. Highest cost; only justified if the SDK
-   is fundamentally unable to express a needed shape.
-
-v1 picks (1).
+**Implementation reality (chunk 2):** the SDK we pin (`v1.41.2`) already
+exposes `ResponseFormat *ChatCompletionResponseFormat` natively, with
+`Schema json.Marshaler`. We bridge our `map[string]any` to the SDK's
+`json.Marshaler` field via `json.RawMessage` (one-shot pre-marshal in
+`toOpenAIResponseFormat`). No shim type needed. The OpenAIAdapter
+stays a deliberate no-op for `ResponseFormat` — provider-agnostic
+plumbing happens in `buildChatRequest` and the SDK serializes the
+field correctly to OpenAI's wire shape without adapter help. Future
+readers grepping `adapter_openai.go` will find nothing about
+`ResponseFormat`; the action is in `client.go:toOpenAIResponseFormat`.
 
 ### 5. Defer the registry hygiene fix
 

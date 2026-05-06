@@ -125,6 +125,78 @@ func (c *Client) getAdapter() ProviderAdapter {
 	return defaultAdapter
 }
 
+// applyResponseFormat plumbs req.ResponseFormat onto chatReq (provider-agnostic;
+// SDK exposes response_format natively on v1.41+) and logs the outcome. Adapters
+// can rewrite or clear chatReq.ResponseFormat in NormalizeRequest for providers
+// whose wire shape diverges (e.g. Ollama's native /api/chat format field).
+// See ADR-034.
+func (c *Client) applyResponseFormat(chatReq *openai.ChatCompletionRequest, req agentic.AgentRequest) {
+	if req.ResponseFormat == nil {
+		return
+	}
+	sdkRF, marshalErr := toOpenAIResponseFormat(req.ResponseFormat)
+	chatReq.ResponseFormat = sdkRF
+	if c.logger == nil {
+		return
+	}
+	attrs := []any{
+		slog.String("request_id", req.RequestID),
+		slog.String("type", req.ResponseFormat.Type),
+		slog.String("name", req.ResponseFormat.Name),
+	}
+	if marshalErr != nil {
+		attrs = append(attrs, slog.Any("err", marshalErr))
+		c.logger.Warn("response_format schema failed to marshal; upstream will reject with a generic schema error", attrs...)
+		return
+	}
+	c.logger.Debug("response_format plumbed to outgoing request", attrs...)
+}
+
+// toOpenAIResponseFormat translates an agentic.ResponseFormat to the OpenAI
+// SDK's ChatCompletionResponseFormat. Returns nil when rf is nil.
+//
+// Schema is wrapped in json.RawMessage to satisfy the SDK's json.Marshaler
+// contract — we marshal the caller's map[string]any once here and pass the
+// raw bytes through. A non-nil marshal error means the caller's schema map
+// contained an unmarshalable value (channel, func, cyclic struct); the
+// returned format still has JSONSchema allocated (so SDK serialization
+// proceeds) but Schema is nil and the caller is expected to log Warn.
+// Without that signal the upstream 400 surfaces a generic "schema must be
+// object" rather than the real root cause.
+func toOpenAIResponseFormat(rf *agentic.ResponseFormat) (*openai.ChatCompletionResponseFormat, error) {
+	if rf == nil {
+		return nil, nil
+	}
+	out := &openai.ChatCompletionResponseFormat{
+		Type: openai.ChatCompletionResponseFormatType(rf.Type),
+	}
+	if rf.Type != agentic.ResponseFormatJSONSchema {
+		return out, nil
+	}
+	var (
+		schemaPayload json.Marshaler
+		marshalErr    error
+	)
+	if len(rf.Schema) > 0 {
+		schemaBytes, err := json.Marshal(rf.Schema)
+		if err != nil {
+			marshalErr = err
+		} else {
+			schemaPayload = json.RawMessage(schemaBytes)
+		}
+	}
+	// JSONSchema is allocated even when schemaPayload is nil — the SDK
+	// will serialize "schema": null and OpenAI returns a generic schema
+	// error. The non-nil marshalErr is the operator-facing signal that
+	// the actual root cause is the caller's schema map, not the upstream.
+	out.JSONSchema = &openai.ChatCompletionResponseFormatJSONSchema{
+		Name:   rf.Name,
+		Schema: schemaPayload,
+		Strict: rf.Strict,
+	}
+	return out, marshalErr
+}
+
 // buildChatRequest converts an AgentRequest into an OpenAI ChatCompletionRequest.
 func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletionRequest {
 	if len(req.Messages) == 0 {
@@ -205,6 +277,8 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 	if c.endpoint.ReasoningEffort != "" {
 		chatReq.ReasoningEffort = c.endpoint.ReasoningEffort
 	}
+
+	c.applyResponseFormat(&chatReq, req)
 
 	// Apply provider-specific request normalization.
 	adapter.NormalizeRequest(&chatReq)
