@@ -145,15 +145,27 @@ func ResolveCapabilityTimeout(reg RegistryReader, capability string, defaultTime
 	if name := reg.Resolve(capability); name != "" {
 		if ep := reg.GetEndpoint(name); ep != nil {
 			if d, ok := tryParse(ep.RequestTimeout, "endpoint"); ok {
+				logger.Debug("Resolved capability LLM timeout",
+					"capability", capability,
+					"timeout_source", "endpoint",
+					"timeout", d)
 				return d
 			}
 		}
 	}
 	if capCfg := reg.GetCapability(capability); capCfg != nil {
 		if d, ok := tryParse(capCfg.Timeout, "capability"); ok {
+			logger.Debug("Resolved capability LLM timeout",
+				"capability", capability,
+				"timeout_source", "capability",
+				"timeout", d)
 			return d
 		}
 	}
+	logger.Debug("Resolved capability LLM timeout",
+		"capability", capability,
+		"timeout_source", "default",
+		"timeout", defaultTimeout)
 	return defaultTimeout
 }
 

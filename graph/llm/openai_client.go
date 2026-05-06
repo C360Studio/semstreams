@@ -88,10 +88,15 @@ type OpenAIConfig struct {
 // historically dropped fields silently (semspec smoke-#10 keepalive bug;
 // community_summary 300s dead config).
 //
-// A nil ep skips the connection-hygiene fields and returns a config with
-// just the resolved trio plus the logger — matches the behaviour of a
-// pre-EndpointConfig caller.
+// A nil resolved returns an empty config with only the logger set — caller
+// must check for that and avoid passing the result to NewOpenAIClient (which
+// will reject the missing BaseURL/Model). A nil ep skips the
+// connection-hygiene fields and returns a config with just the resolved
+// trio plus the logger — matches the behaviour of a pre-EndpointConfig caller.
 func OpenAIConfigFromEndpoint(resolved *model.ResolvedEndpoint, ep *model.EndpointConfig, logger *slog.Logger) OpenAIConfig {
+	if resolved == nil {
+		return OpenAIConfig{Logger: logger}
+	}
 	cfg := OpenAIConfig{
 		BaseURL: resolved.URL,
 		Model:   resolved.Model,

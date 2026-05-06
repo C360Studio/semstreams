@@ -619,6 +619,15 @@ func (c *Component) createEmbedder() error {
 		c.logger.Info("using BM25 embedder", slog.Int("dimensions", 384))
 
 	case "http":
+		// TODO: align with graph-clustering / graph-query — use
+		// model.ResolveEndpointWithConfig + model.ResolveCapabilityTimeout
+		// so embedding.timeout / endpoint.request_timeout reach the wire,
+		// and plumb the EndpointConfig connection-hygiene fields
+		// (DisableKeepAlives, IdleConnTimeout, ResponseHeaderTimeout) into
+		// embedding.HTTPConfig (those fields exist on HTTPConfig but the
+		// call site ignores them). Same shape as the
+		// fix/graph-clustering-capability-timeout work; deferred because
+		// embedding's per-call latency budget differs from LLM inference.
 		resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityEmbedding)
 		if err != nil {
 			return errs.Wrap(err, "Component", "createEmbedder", "resolve embedding endpoint")

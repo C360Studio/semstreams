@@ -1135,7 +1135,10 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 	// Create entity querier from entity bucket
 	querier := newKVEntityQuerier(c.entityBucket, c.logger)
 
-	// Create enhancement worker
+	// Create enhancement worker. LLMTimeout matches cfg.Timeout so the
+	// inner ctx.WithTimeout that wraps each LLM round-trip respects the
+	// resolved capability timeout — without this the inner default (30s)
+	// caps the effective ceiling regardless of HTTP-client configuration.
 	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 		LLMSummarizer:   llmSummarizer,
 		Storage:         c.storage,
@@ -1143,6 +1146,7 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 		Querier:         querier,
 		CommunityBucket: c.communityBucket,
 		Logger:          c.logger,
+		LLMTimeout:      cfg.Timeout,
 	})
 	if err != nil {
 		llmClient.Close()
@@ -1240,13 +1244,25 @@ func (c *Component) startReviewWorker(ctx context.Context) error {
 
 	reviewClient := c.resolveReviewLLMClient()
 
+	// Resolve the capability timeout into ReviewConfig.ReviewTimeout so the
+	// inner ctx.WithTimeout that wraps each review LLM call respects the
+	// model-registry config. AnomalyConfig.Review.ReviewTimeout becomes the
+	// fall-through default — endpoint.request_timeout > capability.timeout >
+	// AnomalyConfig.Review.ReviewTimeout. Operators previously had to set
+	// the inference-config knob; now anomaly_review.timeout in the model
+	// registry suffices.
+	reviewConfig := c.config.AnomalyConfig.Review
+	if c.modelRegistry != nil && c.modelRegistry.GetCapability(model.CapabilityAnomalyReview) != nil {
+		reviewConfig.ReviewTimeout = model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityAnomalyReview, reviewConfig.ReviewTimeout, c.logger)
+	}
+
 	// Create review worker - reviewClient may be nil for human-only mode
 	reviewWorker, err := inference.NewReviewWorker(&inference.ReviewWorkerConfig{
 		AnomalyBucket: c.anomalyBucket,
 		Storage:       c.anomalyStorage,
 		LLMClient:     reviewClient,
 		Applier:       applier,
-		Config:        c.config.AnomalyConfig.Review,
+		Config:        reviewConfig,
 		Logger:        c.logger,
 	})
 	if err != nil {

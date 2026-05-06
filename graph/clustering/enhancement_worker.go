@@ -81,6 +81,13 @@ type EnhancementWorkerConfig struct {
 	CommunityBucket jetstream.KeyValue
 	Logger          *slog.Logger
 	Registry        *metric.MetricsRegistry // Optional: for LLM enhancement metrics
+	// LLMTimeout caps the per-call inner sub-context that wraps each LLM
+	// summarization round-trip. Zero means use the 30s default. The HTTP
+	// client's transport-level timeout (set via the OpenAIClient) is the
+	// outer ceiling; this is the inner ctx.WithTimeout that fires first
+	// for slow upstreams. Both must be at least the operator-intended
+	// ceiling — see processor/graph-clustering for the wiring.
+	LLMTimeout time.Duration
 }
 
 // NewEnhancementWorker creates a new enhancement worker
@@ -117,14 +124,19 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 		metrics = NewEnhancementMetrics("enhancement_worker", config.Registry)
 	}
 
+	llmTimeout := config.LLMTimeout
+	if llmTimeout <= 0 {
+		llmTimeout = 30 * time.Second
+	}
+
 	return &EnhancementWorker{
 		storage:         config.Storage,
 		llm:             config.LLMSummarizer,
 		provider:        config.Provider,
 		querier:         config.Querier,
 		communityBucket: config.CommunityBucket,
-		workers:         3,                // Default concurrent workers
-		llmTimeout:      30 * time.Second, // Default per-request LLM timeout
+		workers:         3, // Default concurrent workers
+		llmTimeout:      llmTimeout,
 		metrics:         metrics,
 		logger:          logger,
 	}, nil
