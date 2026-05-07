@@ -119,6 +119,43 @@ go test ./test/contract/...  # Contract tests
 - Race conditions detected in tests
 - Unformatted code (`go fmt` not run)
 
+## Breaking changes — E2E required before merge (HARD RULE)
+
+Any commit/tag marked **BREAKING** in the changelog or commit message
+MUST have at least one relevant e2e tier green BEFORE the breaking
+commit lands on main. Unit + integration tests do not exercise the
+full ingest → entity → graph store → query path; registry singleton
+retirements and similar migrations can leave a sister binary
+half-migrated and silently break every flow that uses it.
+
+Concrete case (2026-05-07): beta.18 retired the payload-registry
+singleton. `cmd/e2e-semstreams/main.go` got the migration;
+`cmd/semstreams/main.go` did not. Three months of beta releases
+shipped on top of a silently broken Docker semantic stack because no
+one ran `task e2e:semantic` on main between the migration and the
+forensic discovery.
+
+Before tagging anything labeled BREAKING:
+
+```bash
+task e2e:semantic            # Or whichever tier covers the touched path
+# Confirm green. If the tier doesn't cover the path, that's a coverage
+# gap — file it before tagging.
+```
+
+After landing a registry-retirement-style migration (singletons,
+init() shims, factory + payload split), grep for every binary that
+imports the migrated package and verify each has the explicit
+registration call:
+
+```bash
+grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
+```
+
+If only `cmd/e2e-semstreams` has it, the framework binary is
+half-migrated. See `feedback_e2e_required_for_breaking_changes.md`
+for the full case study.
+
 ## Architectural Identity (Not an Event Bus)
 
 SemStreams is NOT a simple event bus or pub/sub framework. It is a knowledge graph engine where the communication model is a consequence of the data model.

@@ -133,10 +133,11 @@ func run() error {
 	// BEFORE the tools registry so any boot path that needs payload
 	// resolution (e.g., a stateful tool unmarshaling stored messages)
 	// has the registry available. Mirrors the tools-registry shape
-	// shipped in beta.16.
-	payloadReg := payloadregistry.New()
-	if err := payloadbuiltins.Register(payloadReg); err != nil {
-		return fmt.Errorf("register builtin payloads: %w", err)
+	// shipped in beta.16. See registerPayloads for the example-processor
+	// migration (post-beta.18 payload-registry singleton retirement).
+	payloadReg, err := registerPayloads()
+	if err != nil {
+		return err
 	}
 
 	// 9b. Build the shared tool registry and register builtins. Done
@@ -615,6 +616,27 @@ func registerExampleComponents(registry *component.Registry) error {
 		return fmt.Errorf("register document: %w", err)
 	}
 	return nil
+}
+
+// registerPayloads builds the payload registry, registers framework
+// builtins, then registers payload types for every example processor
+// imported by this binary. Mirrors cmd/e2e-semstreams/main.go's
+// equivalent block. Post-beta.18 payload-registry singleton retirement,
+// every binary that uses example payload types must call this — missing
+// the registration silently breaks every flow that produces those types
+// (BaseMessage.UnmarshalJSON returns "unregistered payload type: X").
+func registerPayloads() (*payloadregistry.Registry, error) {
+	reg := payloadregistry.New()
+	if err := payloadbuiltins.Register(reg); err != nil {
+		return nil, fmt.Errorf("register builtin payloads: %w", err)
+	}
+	if err := iotsensor.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register iot_sensor payloads: %w", err)
+	}
+	if err := document.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register document payloads: %w", err)
+	}
+	return reg, nil
 }
 
 // startPProfServer starts the pprof HTTP server for profiling.
