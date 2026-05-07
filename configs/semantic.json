@@ -735,7 +735,8 @@
         },
         "graphql_path": "/graphql",
         "mcp_path": "/mcp",
-        "enable_playground": true
+        "enable_playground": true,
+        "query_timeout": "60s"
       }
     },
     "file": {
