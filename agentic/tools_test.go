@@ -6,6 +6,7 @@ package agentic_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -660,6 +661,36 @@ func TestToolCall_Metadata_JSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Metadata["domain"] != "robotics" {
 		t.Errorf("Metadata[domain] = %v, want robotics", decoded.Metadata["domain"])
+	}
+}
+
+// TestLineageTriplePredicate verifies the helper concatenation. The
+// predicate format is contractual: ops-agent (ADR-027) and the
+// operating-curve observability primitives (ADR-033) aggregate
+// cross-arc lineage by predicate-prefix scan, so any drift here
+// would break consumer queries silently.
+func TestLineageTriplePredicate(t *testing.T) {
+	tests := []struct {
+		roleKey string
+		want    string
+	}{
+		{"researcher", "lineage.researcher"},
+		{"planner", "lineage.planner"},
+		{"", "lineage."}, // edge case — caller's responsibility to pass a non-empty key
+		{"deeply.dotted.label", "lineage.deeply.dotted.label"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.roleKey, func(t *testing.T) {
+			got := agentic.LineageTriplePredicate(tc.roleKey)
+			if got != tc.want {
+				t.Errorf("LineageTriplePredicate(%q) = %q, want %q", tc.roleKey, got, tc.want)
+			}
+		})
+	}
+
+	// Defence-in-depth: the helper must use the published prefix.
+	if !strings.HasPrefix(agentic.LineageTriplePredicate("x"), agentic.LineageTriplePrefix) {
+		t.Errorf("helper must use LineageTriplePrefix")
 	}
 }
 

@@ -995,3 +995,125 @@ func TestComputeCost(t *testing.T) {
 		})
 	}
 }
+
+// --- buildLineageTriples ---
+
+// TestBuildLineageTriples_StampsLineagePredicates verifies that each
+// entry in the RelatedLoops map (typed map[string]any after JSON
+// round-trip through BaseMessage) becomes one triple of the form
+// <loopEntityID> lineage.<roleKey> <upstream loop ID>.
+func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.architect-loop-001"
+	related := map[string]any{
+		"researcher": "loop-research-abc",
+		"planner":    "loop-plan-xyz",
+	}
+
+	triples := buildLineageTriples(loopEntityID, related)
+
+	if len(triples) != 2 {
+		t.Fatalf("expected 2 triples, got %d", len(triples))
+	}
+
+	for _, tr := range triples {
+		if tr.Subject != loopEntityID {
+			t.Errorf("subject = %q, want %q", tr.Subject, loopEntityID)
+		}
+		if tr.Source != graphWriterSource {
+			t.Errorf("source = %q, want %q", tr.Source, graphWriterSource)
+		}
+		if tr.Confidence != 1.0 {
+			t.Errorf("confidence = %v, want 1.0", tr.Confidence)
+		}
+	}
+
+	predicates := predicateSet(triples)
+	wantPredicates := []string{
+		agentic.LineageTriplePredicate("researcher"),
+		agentic.LineageTriplePredicate("planner"),
+	}
+	for _, want := range wantPredicates {
+		if !predicates[want] {
+			t.Errorf("missing expected predicate %q in %v", want, predicates)
+		}
+	}
+
+	// Object pairings — predicate→object must round-trip.
+	for _, tr := range triples {
+		switch tr.Predicate {
+		case agentic.LineageTriplePredicate("researcher"):
+			if tr.Object != "loop-research-abc" {
+				t.Errorf("researcher object = %v, want loop-research-abc", tr.Object)
+			}
+		case agentic.LineageTriplePredicate("planner"):
+			if tr.Object != "loop-plan-xyz" {
+				t.Errorf("planner object = %v, want loop-plan-xyz", tr.Object)
+			}
+		default:
+			t.Errorf("unexpected predicate: %q", tr.Predicate)
+		}
+	}
+}
+
+// TestBuildLineageTriples_EmptyAndNilNoops verifies that nil and
+// empty maps produce no triples (back-compat: products that don't
+// opt into RelatedLoops see no graph mutation).
+func TestBuildLineageTriples_EmptyAndNilNoops(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+
+	if got := buildLineageTriples(loopEntityID, nil); got != nil {
+		t.Errorf("nil related: got %d triples, want 0 (nil)", len(got))
+	}
+	if got := buildLineageTriples(loopEntityID, map[string]any{}); got != nil {
+		t.Errorf("empty related: got %d triples, want 0 (nil)", len(got))
+	}
+}
+
+// TestBuildLineageTriples_NonStringValuesSkipped verifies defensive
+// dropping of malformed entries. The producer-side type is
+// map[string]string so non-strings should never appear, but defensive
+// skipping keeps a malformed product / future schema bug from
+// polluting the graph with garbage triples.
+func TestBuildLineageTriples_NonStringValuesSkipped(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+	related := map[string]any{
+		"researcher": "loop-research-abc",
+		"planner":    42, // wrong type — should be skipped
+		"reviewer":   "", // empty string — should be skipped
+		"architect":  nil,
+	}
+
+	triples := buildLineageTriples(loopEntityID, related)
+
+	if len(triples) != 1 {
+		t.Fatalf("expected 1 triple (only valid string entry survives), got %d", len(triples))
+	}
+	if triples[0].Predicate != agentic.LineageTriplePredicate("researcher") {
+		t.Errorf("predicate = %q, want %q",
+			triples[0].Predicate, agentic.LineageTriplePredicate("researcher"))
+	}
+	if triples[0].Object != "loop-research-abc" {
+		t.Errorf("object = %v, want loop-research-abc", triples[0].Object)
+	}
+}
+
+// TestBuildLineageTriples_PredicatePrefix verifies that all generated
+// predicates use the LineageTriplePrefix exposed in agentic/tools.go.
+// This is the contract ops-agent (ADR-027) and the operating-curve
+// observability primitives (ADR-033) rely on for cross-arc / cross-
+// run aggregation. Drift here breaks consumer aggregation queries.
+func TestBuildLineageTriples_PredicatePrefix(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
+	related := map[string]any{
+		"researcher":             "loop-research",
+		"some.dotted.role.label": "loop-other",
+	}
+
+	triples := buildLineageTriples(loopEntityID, related)
+
+	for _, tr := range triples {
+		if !strings.HasPrefix(tr.Predicate, agentic.LineageTriplePrefix) {
+			t.Errorf("predicate %q missing prefix %q", tr.Predicate, agentic.LineageTriplePrefix)
+		}
+	}
+}

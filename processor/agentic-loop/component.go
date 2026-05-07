@@ -847,6 +847,18 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
 
+	// Stamp cross-arc lineage triples on the spawned loop's entity.
+	// Each entry in task.Metadata[MetadataKeyRelatedLoops] (set by
+	// rule.executePublishAgent from rule.Action.RelatedLoops) becomes
+	// a lineage.<key> triple. Downstream rules read via the existing
+	// $entity.triple.<predicate> substitution. No-op when the producer
+	// didn't set RelatedLoops (back-compat).
+	if c.graphWriter != nil {
+		if rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops].(map[string]any); ok {
+			c.graphWriter.WriteLineageTriples(ctx, result.LoopID, rawLineage)
+		}
+	}
+
 	// Publish output messages
 	c.publishResults(ctx, result)
 
