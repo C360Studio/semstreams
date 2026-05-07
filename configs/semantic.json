@@ -16,7 +16,7 @@
       "seminstruct": {
         "provider": "openai",
         "url": "http://seminstruct:8083/v1",
-        "model": "qwen2.5-0.5b-instruct-q4-k-m",
+        "model": "qwen3-0.6b",
         "max_tokens": 4096
       },
       "semembed": {

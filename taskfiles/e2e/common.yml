@@ -31,7 +31,6 @@ tasks:
       - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15 2>/dev/null || true
       - docker volume ls -q --filter name=semstreams | xargs -r docker volume rm 2>/dev/null || true
       - docker volume ls -q --filter name=semembed | xargs -r docker volume rm 2>/dev/null || true
-      - docker volume ls -q --filter name=shimmy | xargs -r docker volume rm 2>/dev/null || true
       - docker volume ls -q --filter name=nats-semstreams | xargs -r docker volume rm 2>/dev/null || true
       - echo "[OK] E2E environment cleaned"
 

@@ -25,9 +25,9 @@ const (
 // OpenAIClient implements Client using the OpenAI SDK.
 //
 // This implementation works with:
-//   - shimmy (local inference server) - recommended
+//   - seminstruct (local llama.cpp inference server) - recommended
 //   - OpenAI (cloud)
-//   - Any OpenAI-compatible API (Ollama, LocalAI, vLLM, etc.)
+//   - Any OpenAI-compatible API (Ollama, vLLM, LocalAI, etc.)
 //
 // Uses the standard OpenAI SDK for consistency with the embedding package.
 type OpenAIClient struct {
@@ -41,20 +41,20 @@ type OpenAIClient struct {
 type OpenAIConfig struct {
 	// BaseURL is the base URL of the LLM service.
 	// Examples:
-	//   - "http://shimmy:8080/v1" (shimmy local inference)
-	//   - "http://localhost:8080/v1" (local development)
+	//   - "http://seminstruct:8083/v1" (seminstruct local inference)
+	//   - "http://localhost:8083/v1" (local development)
 	//   - "https://api.openai.com/v1" (OpenAI cloud)
 	BaseURL string
 
 	// Model is the model to use for chat completions.
 	// Examples:
-	//   - "mistral-7b-instruct" (shimmy with Mistral)
+	//   - "qwen3-0.6b" (seminstruct hot tier)
 	//   - "gpt-4" (OpenAI)
 	//   - "llama2" (Ollama)
 	Model string
 
 	// APIKey for authentication (optional for local services).
-	// Required for OpenAI, optional for shimmy/Ollama.
+	// Required for OpenAI, optional for seminstruct/Ollama.
 	APIKey string
 
 	// Timeout for HTTP requests (default: 60s for LLM inference).

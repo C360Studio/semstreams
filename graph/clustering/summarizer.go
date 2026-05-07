@@ -435,7 +435,7 @@ func extractTerms(text string) []string {
 // This summarizer calls an external LLM service for higher quality natural language summaries.
 //
 // It works with any OpenAI-compatible backend:
-//   - shimmy (recommended for local inference)
+//   - seminstruct (recommended for local llama.cpp inference)
 //   - OpenAI cloud
 //   - Ollama, vLLM, etc.
 type LLMSummarizer struct {

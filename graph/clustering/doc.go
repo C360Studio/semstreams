@@ -89,7 +89,7 @@
 //
 // LLMSummarizer:
 //   - OpenAI-compatible LLM for natural language summaries
-//   - Works with shimmy, OpenAI, Ollama, vLLM, etc.
+//   - Works with seminstruct, OpenAI, Ollama, vLLM, etc.
 //   - Falls back to statistical on service unavailability
 //
 // ProgressiveSummarizer:

@@ -14,13 +14,13 @@ type Config struct {
 
 	// BaseURL is the base URL of the LLM service.
 	// Examples:
-	//   - "http://shimmy:8080/v1" (local shimmy)
+	//   - "http://seminstruct:8083/v1" (local seminstruct, llama.cpp)
 	//   - "https://api.openai.com/v1" (OpenAI cloud)
 	BaseURL string `json:"base_url"`
 
 	// Model is the model identifier to use.
 	// Examples:
-	//   - "mistral-7b-instruct" (shimmy)
+	//   - "qwen3-0.6b" (seminstruct hot tier)
 	//   - "gpt-4" (OpenAI)
 	Model string `json:"model"`
 

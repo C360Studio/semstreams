@@ -27,7 +27,7 @@ const DefaultClassificationTimeout = 5 * time.Second
 // LLMClientAdapter adapts a graph/llm.Client to the query.LLMClient interface.
 //
 // This allows the existing OpenAI-compatible LLM infrastructure (ollama, seminstruct,
-// shimmy, OpenAI) to be used as the T3 classifier backend.
+// vLLM, OpenAI) to be used as the T3 classifier backend.
 //
 // Each ClassifyQuery call is bounded by an internal timeout (see
 // timeout field) so a slow upstream model cannot consume the parent

@@ -58,32 +58,21 @@ services:
           memory: 512M
           cpus: "0.5"
 
-  # Shimmy - Inference backend (model loading, heavy compute)
-  # Downloads and runs Mistral-7B-Instruct for LLM inference
-  # Provides: Raw model inference endpoint
-  shimmy:
-    profiles: ["inference", "all"]
-    image: ghcr.io/michael-a-kuykendall/shimmy:latest
-    container_name: semstreams-shimmy
-    environment:
-      - RUST_LOG=info
-    volumes:
-      # Model cache persistence (~4GB first run for Mistral-7B)
-      - shimmy-cache:/root/.cache/huggingface
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 120s # Model download takes time
-    networks:
-      - semstreams-services
-    restart: unless-stopped
-
-  # SemInstruct - OpenAI-compatible proxy to shimmy
-  # Optional: LLM-based community summarization (automatic statistical fallback if unavailable)
-  # Provides: OpenAI-compatible /v1/chat/completions endpoint
-  # Uses: Lightweight proxy with retry logic and metrics
+  # SemInstruct - OpenAI-compatible inference (llama.cpp self-hosted)
+  # Optional: LLM-based community summarization (automatic statistical
+  # fallback if unavailable)
+  # Provides: OpenAI-compatible /v1/chat/completions on :8083
+  #
+  # Image variants (CI publishes by Qwen3 model size):
+  #   :latest    → :qwen3-0.6b (hot tier, classification, ~440MB)
+  #   :qwen3-1.7b (mid tier, answer synthesis)
+  #   :qwen3-8b   (quality tier, community summarization)
+  #
+  # Concurrency: -np 4 -cb baked in (4 parallel slots, continuous
+  # batching). MODEL_CONTEXT is divided across MODEL_PARALLEL — the
+  # 16384/4 default = 4096 tokens per slot.
+  #
+  # Replaces the retired shimmy + seminstruct-proxy pair.
   seminstruct:
     profiles: ["inference", "all"]
     image: ghcr.io/c360studio/seminstruct:latest
@@ -91,21 +80,33 @@ services:
     ports:
       - "8083:8083" # OpenAI-compatible /v1/chat/completions endpoint
     environment:
-      - SEMINSTRUCT_SHIMMY_URL=http://shimmy:8080
-      - SEMINSTRUCT_PORT=8083
-      - RUST_LOG=info
-    depends_on:
-      shimmy:
-        condition: service_healthy
+      - MODEL_ALIAS=qwen3-0.6b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=16384
+      - MODEL_PARALLEL=4
+      # MODEL_THREADS: empty = auto. Set explicitly on shared hosts to
+      # prevent CPU oversubscription (llama.cpp's OpenMP grabs all cores
+      # by default).
+      # - MODEL_THREADS=
+      # MODEL_API_KEY: empty = no auth. Set to require Bearer token.
+      # - MODEL_API_KEY=
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s # llama.cpp model load
     networks:
       - semstreams-services
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "4.0"
+        reservations:
+          memory: 1G
+          cpus: "1.0"
 
   # Step-CA Certificate Authority (Tier 3 ACME)
   # Required by: TLS-enabled components when using automated cert management
@@ -235,8 +236,6 @@ networks:
 
 volumes:
   semembed-cache:
-    driver: local
-  shimmy-cache:
     driver: local
   step-ca-data:
     driver: local

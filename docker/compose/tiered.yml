@@ -11,7 +11,7 @@
 # Profiles:
 #   - structural: NATS + semstreams (rules-only, no ML dependencies)
 #   - statistical: NATS + semstreams (BM25 fallback, no ML dependencies)
-#   - semantic: NATS + semembed + seminstruct + shimmy + semstreams-ml (full ML)
+#   - semantic: NATS + semembed + seminstruct + semstreams-ml (full ML)
 #
 # Usage:
 #   docker compose -f docker/compose/tiered.yml --profile structural up -d
@@ -51,30 +51,16 @@ services:
       retries: 3
       start_period: 30s
 
-  # Shimmy - Inference backend (model loading, heavy compute)
-  # Downloads and runs Mistral-7B-Instruct for LLM inference
+  # SemInstruct - OpenAI-compatible inference (llama.cpp self-hosted)
   # PROFILE: semantic - Only started when --profile semantic is specified
-  shimmy:
-    image: ghcr.io/c360studio/semshimmy:latest
-    container_name: semstreams-tiered-shimmy
-    profiles:
-      - semantic
-    environment:
-      - RUST_LOG=info
-    volumes:
-      - shimmy-tiered-cache:/root/.cache/huggingface
-    networks:
-      - semstreams-tiered-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11435/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 120s # Model download takes time (~4GB first run)
-
-  # SemInstruct - OpenAI-compatible proxy to shimmy
-  # Lightweight proxy with retry logic and metrics
-  # PROFILE: semantic - Only started when --profile semantic is specified
+  #
+  # Image variants (CI publishes by Qwen3 model size):
+  #   :latest    → :qwen3-0.6b (hot tier, classification, ~440MB)
+  #   :qwen3-1.7b (mid tier, answer synthesis)
+  #   :qwen3-8b   (quality tier, community summarization)
+  #
+  # Concurrency: -np 4 -cb baked in (4 parallel slots, continuous
+  # batching). Replaces the retired shimmy + seminstruct-proxy pair.
   seminstruct:
     image: ghcr.io/c360studio/seminstruct:latest
     container_name: semstreams-tiered-seminstruct
@@ -83,20 +69,21 @@ services:
     ports:
       - "38084:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
     environment:
-      - SEMINSTRUCT_SHIMMY_URL=http://shimmy:11435
-      - SEMINSTRUCT_PORT=8083
-      - RUST_LOG=info
-    depends_on:
-      shimmy:
-        condition: service_healthy
+      - MODEL_ALIAS=qwen3-0.6b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=16384
+      - MODEL_PARALLEL=4
+      # MODEL_THREADS: empty = auto. Set explicitly when sharing CPU
+      # with other services (llama.cpp's OpenMP grabs all cores).
+      # - MODEL_THREADS=
     networks:
       - semstreams-tiered-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s # llama.cpp model load
 
   # NATS Server with JetStream
   nats:
@@ -277,6 +264,4 @@ volumes:
   nats-semstreams-tiered-data:
     driver: local
   semembed-tiered-cache:
-    driver: local
-  shimmy-tiered-cache:
     driver: local
