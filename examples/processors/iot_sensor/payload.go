@@ -81,12 +81,18 @@ func buildSensorReading(fields map[string]any) (any, error) {
 	return msg, nil
 }
 
-// RegisterPayloads registers the SensorReading payload type
-// (iot.sensor.v1) with the supplied registry. Called by binaries that
-// want to load this example processor's payload — typically
-// cmd/e2e-semstreams/main.go.
+// RegisterPayloads registers the SensorReading (iot.sensor.v1) and
+// Zone (facility.zone.v1) payload types with the supplied registry.
+// Called by binaries that want to load this example processor's
+// payloads — cmd/semstreams and cmd/e2e-semstreams.
+//
+// Both types must register: SensorReading triples reference Zone
+// entity IDs, and graph-ingest needs to deserialize both payload
+// shapes. Registering only iot.sensor.v1 leaves facility.zone.v1
+// messages unrouteable, which silently breaks every flow that
+// produces zone entities.
 func RegisterPayloads(reg *payloadregistry.Registry) error {
-	return reg.Register(&payloadregistry.Registration{
+	if err := reg.Register(&payloadregistry.Registration{
 		Domain:      "iot",
 		Category:    "sensor",
 		Version:     "v1",
@@ -102,6 +108,24 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			"Unit":       "celsius",
 			"OrgID":      "acme",
 			"Platform":   "logistics",
+		},
+	}); err != nil {
+		return err
+	}
+	return reg.Register(&payloadregistry.Registration{
+		Domain:      "facility",
+		Category:    "zone",
+		Version:     "v1",
+		Description: "Facility zone entity referenced by IoT sensor triples",
+		Factory: func() any {
+			return &Zone{}
+		},
+		Example: map[string]any{
+			"ZoneID":   "warehouse-7",
+			"ZoneType": "warehouse",
+			"Name":     "Main Warehouse",
+			"OrgID":    "acme",
+			"Platform": "logistics",
 		},
 	})
 }

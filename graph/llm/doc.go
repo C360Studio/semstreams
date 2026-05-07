@@ -9,7 +9,7 @@
 // # Supported Backends
 //
 // The package uses the OpenAI SDK, so it works with any compatible backend:
-//   - semshimmy + seminstruct (recommended for local inference)
+//   - seminstruct (recommended for local llama.cpp inference)
 //   - OpenAI cloud
 //   - Ollama
 //   - vLLM
@@ -20,8 +20,8 @@
 // Create a client:
 //
 //	cfg := llm.OpenAIConfig{
-//	    BaseURL: "http://shimmy:8080/v1",
-//	    Model:   "mistral-7b-instruct",
+//	    BaseURL: "http://seminstruct:8083/v1",
+//	    Model:   "qwen3-0.6b",
 //	}
 //	client, err := llm.NewOpenAIClient(cfg)
 //
@@ -55,8 +55,8 @@
 //	{
 //	    "llm": {
 //	        "provider": "openai",
-//	        "base_url": "http://shimmy:8080/v1",
-//	        "model": "mistral-7b-instruct"
+//	        "base_url": "http://seminstruct:8083/v1",
+//	        "model": "qwen3-0.6b"
 //	    }
 //	}
 package llm

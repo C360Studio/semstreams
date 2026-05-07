@@ -1102,7 +1102,7 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 
 	// Probe LLM endpoint before committing workers — a fast health check
 	// prevents per-community blocking when the endpoint is unreachable
-	// (e.g., shimmy unhealthy, LLM disabled in deployment).
+	// (e.g., seminstruct unhealthy, LLM disabled in deployment).
 	probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := probeLLMEndpoint(probeCtx, resolved.URL); err != nil {
 		probeCancel()

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -398,24 +400,123 @@ func (c *Component) classifyQuery(ctx context.Context, queryText string) *query.
 	return c.classifier.ClassifyQuery(ctx, queryText)
 }
 
+// classifierTemplatePattern matches template-placeholder strings that small
+// classifier models (e.g. qwen3-0.6b) sometimes emit verbatim from their
+// response template instead of resolving — `<entity_type>`, `{type}`,
+// `$placeholder`. When seen in a type_filters slot, the literal placeholder
+// reaches filterEntityIDsByType where it matches no real entity and silently
+// drops every hit. See semspec Meshtastic report (2026-05-07).
+var classifierTemplatePattern = regexp.MustCompile(`^[<{$].*[>}]?$`)
+
 // extractSearchRefinements pulls query reformulation and type filters from a
 // classification result. Returns the raw query unchanged when no hints are available.
+//
+// Hardening (post-Meshtastic incident, 2026-05-07):
+//
+//  1. Single-token rawQuery (no spaces) bypasses classifier query refinement —
+//     small models tend to replace proper-noun queries with generic example
+//     templates ("Meshtastic" → "find paths between entities") that lose the
+//     original intent.
+//  2. Type filters that look like template placeholders (`<...>`, `{...}`,
+//     `$...`) are dropped with a WARN — the classifier emitted its template
+//     verbatim instead of resolving. Better to send the request without
+//     filtering than to drop every hit silently.
 func (c *Component) extractSearchRefinements(cr *query.ClassificationResult, rawQuery string) (string, []string) {
 	searchQuery := rawQuery
 	var typeFilters []string
 	if cr == nil {
 		return searchQuery, typeFilters
 	}
+	singleToken := !strings.ContainsAny(strings.TrimSpace(rawQuery), " \t\n")
 	if q, ok := cr.Options["query"].(string); ok && q != "" {
-		searchQuery = q
-		c.logger.Debug("using classifier-refined query",
-			"original", rawQuery,
-			"refined", searchQuery)
+		switch {
+		case singleToken && !strings.Contains(strings.ToLower(q), strings.ToLower(rawQuery)):
+			c.logger.Warn("classifier-refined query dropped — single-token original not preserved",
+				"original", rawQuery,
+				"refined", q)
+			if c.promMetrics != nil {
+				c.promMetrics.recordClassifierGarbage("query_dropped")
+			}
+		default:
+			searchQuery = q
+			c.logger.Debug("using classifier-refined query",
+				"original", rawQuery,
+				"refined", searchQuery)
+		}
 	}
 	if t, ok := cr.Options["types"].([]string); ok && len(t) > 0 {
-		typeFilters = t
+		typeFilters = filterClassifierTemplates(t, c.logger, c.promMetrics)
 	}
 	return searchQuery, typeFilters
+}
+
+// filterClassifierTemplates removes template-shaped placeholder strings from
+// a list of classifier-emitted type filters, logs a WARN per dropped value,
+// and increments the classifier-garbage counter. Returns the filtered list.
+func filterClassifierTemplates(types []string, logger *slog.Logger, m *queryMetrics) []string {
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		if classifierTemplatePattern.MatchString(strings.TrimSpace(t)) {
+			if logger != nil {
+				logger.Warn("classifier-emitted type filter dropped — template placeholder",
+					"value", t)
+			}
+			if m != nil {
+				m.recordClassifierGarbage("template_filter")
+			}
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// recordGlobalSearchOutcome records the Prometheus signals for a globalSearch
+// response: the entity-count histogram, the empty-with-reason counter (when
+// Count is zero and a non-empty reason is supplied), and the degraded counter
+// (when Degraded is true). Single helper keeps the strategy bodies under the
+// revive function-length cap.
+func (c *Component) recordGlobalSearchOutcome(strategy string, resp *GlobalSearchResponse, emptyReason string) {
+	if c.promMetrics == nil {
+		return
+	}
+	c.promMetrics.observeGlobalSearchResponseCount(resp.Count)
+	if resp.Count == 0 && emptyReason != "" {
+		c.promMetrics.recordGlobalSearchEmpty(strategy, emptyReason)
+	}
+	if resp.Degraded {
+		c.promMetrics.recordGlobalSearchDegraded(resp.DegradedReason)
+	}
+}
+
+// minScore returns the smallest Score in hits, or 0 when hits is empty.
+// Used only for diagnostic logs in the globalSearch paths.
+func minScore(hits []SemanticHit) float64 {
+	if len(hits) == 0 {
+		return 0
+	}
+	m := hits[0].Score
+	for _, h := range hits[1:] {
+		if h.Score < m {
+			m = h.Score
+		}
+	}
+	return m
+}
+
+// maxScore returns the largest Score in hits, or 0 when hits is empty.
+// Used only for diagnostic logs in the globalSearch paths.
+func maxScore(hits []SemanticHit) float64 {
+	if len(hits) == 0 {
+		return 0
+	}
+	m := hits[0].Score
+	for _, h := range hits[1:] {
+		if h.Score > m {
+			m = h.Score
+		}
+	}
+	return m
 }
 
 // MinSemanticRelevancePure is the minimum similarity score for pure semantic strategy
@@ -504,9 +605,16 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 	searchQuery, typeFilters := c.extractSearchRefinements(classResult, req.Query)
 
 	strategy := c.resolveStrategy(classResult)
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchStrategy(strategy)
+	}
 	c.logger.Debug("globalSearch strategy resolved",
 		"query", req.Query,
-		"strategy", strategy)
+		"refined_query", searchQuery,
+		"strategy", strategy,
+		"type_filters", typeFilters,
+		"req_level", req.Level,
+		"req_max_communities", req.MaxCommunities)
 
 	switch strategy {
 	case "entity_lookup":
@@ -535,6 +643,12 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 	// Tier 1: Try semantic search first (via graph-embedding).
 	// Semantic search works independently of the community cache.
 	semanticHits, err := c.searchEntitiesSemantic(ctx, searchQuery, 100)
+	c.logger.Debug("graphrag tier-1 semantic call",
+		"query", searchQuery,
+		"err", err,
+		"hits", len(semanticHits),
+		"min_score", minScore(semanticHits),
+		"max_score", maxScore(semanticHits))
 	if err == nil && len(semanticHits) > 0 {
 		c.logger.Debug("using semantic search results",
 			"query", searchQuery,
@@ -626,6 +740,7 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 			if req.IncludeSources {
 				response.Sources = c.buildSources(entities, semanticHits, communityMatches)
 			}
+			c.recordGlobalSearchOutcome("graphrag", &response, "")
 			c.recordSuccess(requestSize, 0)
 			return json.Marshal(response)
 		}
@@ -635,6 +750,21 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 	}
 
 	// Tier 2: Fall back to text-based community scoring.
+	return c.graphRAGTier2Fallback(ctx, req, startTime, requestSize, err)
+}
+
+// graphRAGTier2Fallback handles the graphrag fall-through when tier-1 semantic
+// search is empty or errored. Records the tier transition Prometheus signal
+// and either returns an empty response (community cache unavailable) or
+// delegates to the text-based community search.
+func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearchRequest, startTime time.Time, requestSize int, semanticErr error) ([]byte, error) {
+	tierReason := "empty_hits"
+	if semanticErr != nil {
+		tierReason = "err"
+	}
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchTierTransition("semantic", "community_text", tierReason)
+	}
 	// Return an empty result instead of an error when the community cache
 	// is unavailable — callers should not receive a hard error just because
 	// clustering hasn't run yet.
@@ -649,9 +779,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 		if req.shouldIncludeSummaries() {
 			response.CommunitySummaries = []CommunitySummary{}
 		}
+		c.recordGlobalSearchOutcome("graphrag", &response, "no_community_cache")
 		return json.Marshal(response)
 	}
-
 	return c.globalSearchTextBased(ctx, *req, startTime, requestSize)
 }
 
@@ -723,6 +853,10 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		c.logger.Debug("semantic strategy: search unavailable",
 			"query", searchQuery,
 			"error", err)
+		if c.promMetrics != nil {
+			c.promMetrics.recordGlobalSearchEmpty("semantic", "semantic_unavailable")
+			c.promMetrics.observeGlobalSearchResponseCount(0)
+		}
 		// Graceful degradation: return empty rather than hard error.
 		return json.Marshal(GlobalSearchResponse{
 			Entities:   []*gtypes.EntityState{},
@@ -730,6 +864,13 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 			DurationMs: time.Since(startTime).Milliseconds(),
 		})
 	}
+
+	c.logger.Debug("semantic strategy: raw hits",
+		"query", searchQuery,
+		"hits", len(semanticHits),
+		"min_score", minScore(semanticHits),
+		"max_score", maxScore(semanticHits),
+		"threshold", MinSemanticRelevancePure)
 
 	// Apply higher relevance threshold for pure semantic queries.
 	filtered := make([]SemanticHit, 0, len(semanticHits))
@@ -739,13 +880,29 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		}
 	}
 
+	c.logger.Debug("semantic strategy: after threshold filter",
+		"query", searchQuery,
+		"survived", len(filtered),
+		"dropped", len(semanticHits)-len(filtered))
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchHitsDropped("threshold", len(semanticHits)-len(filtered))
+	}
+
 	entityIDs := make([]string, len(filtered))
 	for i, h := range filtered {
 		entityIDs[i] = h.EntityID
 	}
 
 	if len(typeFilters) > 0 {
+		before := len(entityIDs)
 		entityIDs = filterEntityIDsByType(entityIDs, typeFilters)
+		c.logger.Debug("semantic strategy: after type filter",
+			"types", typeFilters,
+			"before", before,
+			"after", len(entityIDs))
+		if c.promMetrics != nil {
+			c.promMetrics.recordGlobalSearchHitsDropped("type_filter", before-len(entityIDs))
+		}
 	}
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
@@ -760,6 +917,16 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 	}
 
 	c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs)
+
+	if c.promMetrics != nil {
+		c.promMetrics.observeGlobalSearchResponseCount(response.Count)
+		if response.Count == 0 {
+			// Pure semantic strategy + non-empty pipeline + zero entities → either
+			// threshold or type filter wiped them; the per-stage drop counters
+			// pin which one. The empty counter aggregates the total class.
+			c.promMetrics.recordGlobalSearchEmpty("semantic", "filtered_to_empty")
+		}
+	}
 
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
@@ -894,6 +1061,14 @@ func parseEntityIDsFromResults(data []byte) ([]string, error) {
 func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
 	// Get all communities at the specified level from cache
 	communities := c.communityCache.GetCommunitiesByLevel(req.Level)
+	stats := c.communityCache.Stats()
+	c.logger.Debug("globalSearchTextBased: cache fetch",
+		"req_level", req.Level,
+		"communities_at_level", len(communities),
+		"cache_total_communities", stats.TotalCommunities,
+		"cache_total_entities", stats.TotalEntities,
+		"cache_by_level", stats.ByLevel,
+		"cache_ready", stats.Ready)
 	if len(communities) == 0 {
 		response := GlobalSearchResponse{
 			Entities:   []*gtypes.EntityState{},
@@ -904,6 +1079,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		if req.shouldIncludeSummaries() {
 			response.CommunitySummaries = []CommunitySummary{}
 		}
+		c.recordGlobalSearchOutcome("graphrag", &response, "no_communities")
 		return json.Marshal(response)
 	}
 
@@ -995,6 +1171,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		response.Sources = c.buildSources(matchedEntities, nil, summaries)
 	}
 
+	c.recordGlobalSearchOutcome("graphrag", &response, "relevance_filter")
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }

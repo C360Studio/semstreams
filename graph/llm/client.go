@@ -1,7 +1,7 @@
 // Package llm provides LLM client abstractions for OpenAI-compatible APIs.
 //
 // This package enables semstreams to use any OpenAI-compatible LLM service
-// (shimmy, OpenAI, Anthropic via proxy, Ollama, etc.) for:
+// (seminstruct, OpenAI, vLLM, Ollama, etc.) for:
 //   - Community summarization
 //   - Search answer generation
 //   - General inference tasks
