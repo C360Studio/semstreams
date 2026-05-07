@@ -24,6 +24,7 @@ type LoopManager struct {
 	cachedToolChoice     map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
 	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
 	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
+	cachedResponseFormat map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
 	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
 	requestToLoop        map[string]string                   // requestID -> loopID
 	toolCallToLoop       map[string]string                   // callID -> loopID
@@ -74,6 +75,7 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
 		cachedMetadata:          make(map[string]map[string]any),
 		cachedRequestTimeout:    make(map[string]string),
+		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
@@ -102,6 +104,7 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
 		cachedMetadata:          make(map[string]map[string]any),
 		cachedRequestTimeout:    make(map[string]string),
+		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
@@ -412,6 +415,26 @@ func (m *LoopManager) GetCachedRequestTimeout(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.cachedRequestTimeout[loopID]
+}
+
+// CacheResponseFormat stores the per-task response_format for a loop (from
+// TaskMessage.ResponseFormat). Reused for all continuation iterations so the
+// structured-output constraint persists across LLM calls in the same loop.
+// ADR-034.
+func (m *LoopManager) CacheResponseFormat(loopID string, rf *agentic.ResponseFormat) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cachedResponseFormat[loopID] = rf
+}
+
+// GetCachedResponseFormat retrieves the cached response_format for a loop.
+// Returns nil when no task-level response_format was set, in which case
+// AgentRequest.ResponseFormat stays nil and tool-calling behaviour is
+// preserved.
+func (m *LoopManager) GetCachedResponseFormat(loopID string) *agentic.ResponseFormat {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cachedResponseFormat[loopID]
 }
 
 // CacheTaskPrompt stores the original task prompt for context recovery.

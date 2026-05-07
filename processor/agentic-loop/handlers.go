@@ -609,6 +609,13 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		h.loopManager.CacheRequestTimeout(loopID, task.Timeout)
 	}
 
+	// Cache per-task response_format (ADR-034) so continuation iterations
+	// reuse the structured-output constraint. Nil leaves tool-calling
+	// behaviour unchanged across the loop.
+	if task.ResponseFormat != nil {
+		h.loopManager.CacheResponseFormat(loopID, task.ResponseFormat)
+	}
+
 	return h.buildTaskRequest(loopID, task, entity, messages, tools)
 }
 
@@ -616,14 +623,15 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 // event, returning the assembled HandlerResult.
 func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entity agentic.LoopEntity, messages []agentic.ChatMessage, tools []agentic.ToolDefinition) (HandlerResult, error) {
 	request := agentic.AgentRequest{
-		RequestID:  h.loopManager.GenerateRequestID(loopID),
-		LoopID:     loopID,
-		Role:       task.Role,
-		Model:      task.Model,
-		Messages:   messages,
-		Tools:      tools,
-		ToolChoice: task.ToolChoice,
-		Timeout:    task.Timeout,
+		RequestID:      h.loopManager.GenerateRequestID(loopID),
+		LoopID:         loopID,
+		Role:           task.Role,
+		Model:          task.Model,
+		Messages:       messages,
+		Tools:          tools,
+		ToolChoice:     task.ToolChoice,
+		Timeout:        task.Timeout,
+		ResponseFormat: task.ResponseFormat,
 	}
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
@@ -1256,14 +1264,15 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 	toolChoice := h.loopManager.GetCachedToolChoice(loopID)
 
 	request := agentic.AgentRequest{
-		RequestID:  h.loopManager.GenerateRequestID(loopID),
-		LoopID:     loopID,
-		Role:       entity.Role,
-		Model:      entity.Model,
-		Messages:   messages,
-		Tools:      tools,
-		ToolChoice: toolChoice,
-		Timeout:    h.loopManager.GetCachedRequestTimeout(loopID),
+		RequestID:      h.loopManager.GenerateRequestID(loopID),
+		LoopID:         loopID,
+		Role:           entity.Role,
+		Model:          entity.Model,
+		Messages:       messages,
+		Tools:          tools,
+		ToolChoice:     toolChoice,
+		Timeout:        h.loopManager.GetCachedRequestTimeout(loopID),
+		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
@@ -1717,14 +1726,15 @@ func (h *MessageHandler) handleToolsComplete(
 
 	// All tools complete - send next agent request with full conversation
 	request := agentic.AgentRequest{
-		RequestID:  h.loopManager.GenerateRequestID(loopID),
-		LoopID:     loopID,
-		Role:       entity.Role,
-		Model:      entity.Model,
-		Messages:   messages,
-		Tools:      tools,
-		ToolChoice: toolChoice,
-		Timeout:    h.loopManager.GetCachedRequestTimeout(loopID),
+		RequestID:      h.loopManager.GenerateRequestID(loopID),
+		LoopID:         loopID,
+		Role:           entity.Role,
+		Model:          entity.Model,
+		Messages:       messages,
+		Tools:          tools,
+		ToolChoice:     toolChoice,
+		Timeout:        h.loopManager.GetCachedRequestTimeout(loopID),
+		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
 	// Track request ID to loop ID mapping (cache for fast lookup)

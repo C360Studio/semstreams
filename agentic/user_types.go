@@ -291,6 +291,14 @@ type TaskMessage struct {
 	// (e.g. "30s"). Empty means fall through to endpoint, capability, or
 	// component-level timeout. Highest precedence when set.
 	Timeout string `json:"timeout,omitempty"`
+
+	// ResponseFormat constrains the model's output to a JSON object or
+	// JSON-schema-conformant JSON for this task. ADR-034. The agentic-loop
+	// caches it on initial build and threads it onto every AgentRequest in
+	// the loop. Nil means tool-calling behaviour is unchanged. Set this
+	// from a rule.Action (publish_agent path) or from a dispatcher when
+	// the task needs structured output.
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 
 // ConstructedContext is an alias for types.ConstructedContext.
@@ -321,6 +329,11 @@ func (t TaskMessage) Validate() error {
 	}
 	if t.ToolChoice != nil {
 		if err := t.ToolChoice.Validate(); err != nil {
+			return err
+		}
+	}
+	if t.ResponseFormat != nil {
+		if err := t.ResponseFormat.Validate(); err != nil {
 			return err
 		}
 	}
