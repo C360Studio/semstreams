@@ -117,7 +117,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	// Parse timeout for message processing
-	messageTimeout := 120 * time.Second // default
+	messageTimeout := 110 * time.Second // default — kept 10s below consumer AckWait 120s so context.Done propagates before NATS redelivery (see resolveTimeout precedence and feedback_class_of_bugs_to_invariant.md)
 	if config.Timeout != "" {
 		var err error
 		messageTimeout, err = time.ParseDuration(config.Timeout)
@@ -151,7 +151,7 @@ func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependenc
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Component", "NewComponentWithOptions", "model registry is required")
 	}
 
-	messageTimeout := 120 * time.Second
+	messageTimeout := 110 * time.Second
 	if config.Timeout != "" {
 		var err error
 		messageTimeout, err = time.ParseDuration(config.Timeout)
@@ -739,13 +739,21 @@ func (c *Component) executeRequest(
 //  2. endpoint.RequestTimeout
 //  3. capability.Timeout (looked up via registry when capability is non-empty)
 //  4. component messageTimeout (cached from config.Timeout at construction)
-//  5. hardcoded 120s safety default
+//  5. hardcoded 110s safety default
+//
+// The 110s fallback sits 10s below the agentic-model consumer AckWait
+// (120s, component.go:269). When every override is unset, we still want
+// the LLM call to cancel cleanly — context.Done propagating to the SDK's
+// in-flight HTTP request — before NATS would otherwise redeliver. The
+// dedup short-circuit catches the redelivery if it happens, but a
+// strictly-less-than budget means redelivery doesn't fire on a healthy
+// long-tail call. See docs/operations/14-timeout-chain.md.
 //
 // Invalid duration strings at levels 1-3 log a warning and fall through to the
 // next level, so a malformed per-message override never blocks a task. The
 // selected source is logged at debug level as timeout_source.
 func (c *Component) resolveTimeout(req agentic.AgentRequest, endpoint *model.EndpointConfig, capability string) time.Duration {
-	const fallback = 120 * time.Second
+	const fallback = 110 * time.Second
 
 	tryParse := func(value, source string) (time.Duration, bool) {
 		if value == "" {

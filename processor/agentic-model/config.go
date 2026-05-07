@@ -15,7 +15,7 @@ type Config struct {
 	StreamName           string                `json:"stream_name"          schema:"type:string,description:JetStream stream name for agentic messages,category:basic,default:AGENT"`
 	ConsumerNameSuffix   string                `json:"consumer_name_suffix" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
 	DeleteConsumerOnStop bool                  `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
-	Timeout              string                `json:"timeout"              schema:"type:string,description:Request timeout,category:advanced,default:120s"`
+	Timeout              string                `json:"timeout"              schema:"type:string,description:Per-request LLM call timeout. Sized 10s below the agentic-model JetStream consumer AckWait (120s) so the LLM context.Done propagates and the call closes cleanly before NATS would otherwise redeliver. Operators raising this past ~115s should also raise the consumer AckWait in lockstep.,category:advanced,default:110s"`
 	Retry                RetryConfig           `json:"retry"                schema:"type:object,description:Retry configuration,category:advanced"`
 }
 
@@ -159,7 +159,7 @@ func DefaultConfig() Config {
 			Outputs: outputDefs,
 		},
 		StreamName: "AGENT",
-		Timeout:    "120s",
+		Timeout:    "110s",
 		Retry: RetryConfig{
 			MaxAttempts:         3,
 			MaxRateLimitRetries: 5,

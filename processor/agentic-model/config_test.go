@@ -142,9 +142,12 @@ func TestRetryConfig_Validate(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := agenticmodel.DefaultConfig()
 
-	// Verify default timeout
-	if cfg.Timeout != "120s" {
-		t.Errorf("DefaultConfig() timeout = %s, want 120s", cfg.Timeout)
+	// Verify default timeout. 110s sits 10s below the agentic-model
+	// consumer AckWait (120s, component.go:269) so context.Done propagates
+	// and the LLM call closes cleanly before NATS would otherwise redeliver.
+	// See docs/operations/14-timeout-chain.md.
+	if cfg.Timeout != "110s" {
+		t.Errorf("DefaultConfig() timeout = %s, want 110s", cfg.Timeout)
 	}
 
 	// Verify default retry config

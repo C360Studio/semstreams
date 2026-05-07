@@ -110,7 +110,15 @@ Respond with JSON: {"type": "<intent_type>", "loop_id": "<if applicable>", "sign
 	client.SetAdapter(agenticmodel.AdapterFor(ep.Provider))
 	client.SetLogger(c.logger)
 
-	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	// Resolve per-call LLM timeout via the model registry's capability ladder
+	// (endpoint.request_timeout → capability.timeout → fallback). 15s mirrors
+	// the historical hardcoded value and remains the right ceiling for a
+	// single-token-budget JSON classifier; operators running the classifier
+	// against a slower local model raise it via capability.timeout. See
+	// docs/operations/14-timeout-chain.md for the full chain.
+	const intentClassificationTimeoutDefault = 15 * time.Second
+	classifyTimeout := model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityIntentClassification, intentClassificationTimeoutDefault, c.logger)
+	reqCtx, cancel := context.WithTimeout(ctx, classifyTimeout)
 	defer cancel()
 
 	resp, err := client.ChatCompletion(reqCtx, agentic.AgentRequest{

@@ -619,26 +619,31 @@ func (c *Component) createEmbedder() error {
 		c.logger.Info("using BM25 embedder", slog.Int("dimensions", 384))
 
 	case "http":
-		// TODO: align with graph-clustering / graph-query — use
-		// model.ResolveEndpointWithConfig + model.ResolveCapabilityTimeout
-		// so embedding.timeout / endpoint.request_timeout reach the wire,
-		// and plumb the EndpointConfig connection-hygiene fields
-		// (DisableKeepAlives, IdleConnTimeout, ResponseHeaderTimeout) into
-		// embedding.HTTPConfig (those fields exist on HTTPConfig but the
-		// call site ignores them). Same shape as the
-		// fix/graph-clustering-capability-timeout work; deferred because
-		// embedding's per-call latency budget differs from LLM inference.
-		resolved, err := model.ResolveEndpoint(c.modelRegistry, model.CapabilityEmbedding)
+		// Aligned with graph-clustering / graph-query (beta.47) — capability
+		// timeout via model.ResolveCapabilityTimeout, endpoint connection-
+		// hygiene via ResolveEndpointWithConfig. Embedding's per-call budget
+		// is distinct from inference (no token streaming, fixed-size body),
+		// hence its own DefaultEmbeddingTimeout constant rather than reusing
+		// the synthesis or summary defaults.
+		resolved, epCfg, err := model.ResolveEndpointWithConfig(c.modelRegistry, model.CapabilityEmbedding)
 		if err != nil {
 			return errs.Wrap(err, "Component", "createEmbedder", "resolve embedding endpoint")
 		}
-		httpEmbedder, err := embedding.NewHTTPEmbedder(embedding.HTTPConfig{
+		const defaultEmbeddingTimeout = 30 * time.Second
+		embedTimeout := model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityEmbedding, defaultEmbeddingTimeout, c.logger)
+		httpCfg := embedding.HTTPConfig{
 			BaseURL: resolved.URL,
 			Model:   resolved.Model,
 			APIKey:  resolved.APIKey,
-			Timeout: 30 * time.Second,
+			Timeout: embedTimeout,
 			Logger:  c.logger,
-		})
+		}
+		if epCfg != nil {
+			httpCfg.IdleConnTimeout = epCfg.IdleConnTimeout
+			httpCfg.ResponseHeaderTimeout = epCfg.ResponseHeaderTimeout
+			httpCfg.DisableKeepAlives = epCfg.DisableKeepAlives
+		}
+		httpEmbedder, err := embedding.NewHTTPEmbedder(httpCfg)
 		if err != nil {
 			return errs.Wrap(err, "Component", "createEmbedder", "HTTP embedder creation")
 		}
