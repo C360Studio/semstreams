@@ -418,6 +418,36 @@ func (c *Component) extractSearchRefinements(cr *query.ClassificationResult, raw
 	return searchQuery, typeFilters
 }
 
+// minScore returns the smallest Score in hits, or 0 when hits is empty.
+// Used only for diagnostic logs in the globalSearch paths.
+func minScore(hits []SemanticHit) float64 {
+	if len(hits) == 0 {
+		return 0
+	}
+	m := hits[0].Score
+	for _, h := range hits[1:] {
+		if h.Score < m {
+			m = h.Score
+		}
+	}
+	return m
+}
+
+// maxScore returns the largest Score in hits, or 0 when hits is empty.
+// Used only for diagnostic logs in the globalSearch paths.
+func maxScore(hits []SemanticHit) float64 {
+	if len(hits) == 0 {
+		return 0
+	}
+	m := hits[0].Score
+	for _, h := range hits[1:] {
+		if h.Score > m {
+			m = h.Score
+		}
+	}
+	return m
+}
+
 // MinSemanticRelevancePure is the minimum similarity score for pure semantic strategy
 // queries (e.g. "find similar to X"). Higher than MinSemanticRelevance because pure
 // semantic queries should only return genuinely similar entities.
@@ -506,7 +536,11 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 	strategy := c.resolveStrategy(classResult)
 	c.logger.Debug("globalSearch strategy resolved",
 		"query", req.Query,
-		"strategy", strategy)
+		"refined_query", searchQuery,
+		"strategy", strategy,
+		"type_filters", typeFilters,
+		"req_level", req.Level,
+		"req_max_communities", req.MaxCommunities)
 
 	switch strategy {
 	case "entity_lookup":
@@ -535,6 +569,12 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 	// Tier 1: Try semantic search first (via graph-embedding).
 	// Semantic search works independently of the community cache.
 	semanticHits, err := c.searchEntitiesSemantic(ctx, searchQuery, 100)
+	c.logger.Debug("graphrag tier-1 semantic call",
+		"query", searchQuery,
+		"err", err,
+		"hits", len(semanticHits),
+		"min_score", minScore(semanticHits),
+		"max_score", maxScore(semanticHits))
 	if err == nil && len(semanticHits) > 0 {
 		c.logger.Debug("using semantic search results",
 			"query", searchQuery,
@@ -731,6 +771,13 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		})
 	}
 
+	c.logger.Debug("semantic strategy: raw hits",
+		"query", searchQuery,
+		"hits", len(semanticHits),
+		"min_score", minScore(semanticHits),
+		"max_score", maxScore(semanticHits),
+		"threshold", MinSemanticRelevancePure)
+
 	// Apply higher relevance threshold for pure semantic queries.
 	filtered := make([]SemanticHit, 0, len(semanticHits))
 	for _, h := range semanticHits {
@@ -739,13 +786,23 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		}
 	}
 
+	c.logger.Debug("semantic strategy: after threshold filter",
+		"query", searchQuery,
+		"survived", len(filtered),
+		"dropped", len(semanticHits)-len(filtered))
+
 	entityIDs := make([]string, len(filtered))
 	for i, h := range filtered {
 		entityIDs[i] = h.EntityID
 	}
 
 	if len(typeFilters) > 0 {
+		before := len(entityIDs)
 		entityIDs = filterEntityIDsByType(entityIDs, typeFilters)
+		c.logger.Debug("semantic strategy: after type filter",
+			"types", typeFilters,
+			"before", before,
+			"after", len(entityIDs))
 	}
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
@@ -894,6 +951,14 @@ func parseEntityIDsFromResults(data []byte) ([]string, error) {
 func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
 	// Get all communities at the specified level from cache
 	communities := c.communityCache.GetCommunitiesByLevel(req.Level)
+	stats := c.communityCache.Stats()
+	c.logger.Debug("globalSearchTextBased: cache fetch",
+		"req_level", req.Level,
+		"communities_at_level", len(communities),
+		"cache_total_communities", stats.TotalCommunities,
+		"cache_total_entities", stats.TotalEntities,
+		"cache_by_level", stats.ByLevel,
+		"cache_ready", stats.Ready)
 	if len(communities) == 0 {
 		response := GlobalSearchResponse{
 			Entities:   []*gtypes.EntityState{},
