@@ -119,7 +119,10 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 	detail := map[string]any{
 		"term":           ka.term,
 		"count":          gs.Count,
+		"summarized":     gs.Summarized,
 		"entities":       len(gs.Entities),
+		"entity_ids":     len(gs.EntityIDs),
+		"entity_digests": len(gs.EntityDigests),
 		"communities":    len(gs.CommunitySummaries),
 		"latency_ms":     latency.Milliseconds(),
 		"matched_substr": matched.substring,
@@ -128,14 +131,16 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 
 	if gs.Count == 0 {
 		return knownAnswerProbeResult{
-			detail:  detail,
-			failure: fmt.Sprintf("term %q: count=0 at level=%d (entities=%d communities=%d)", ka.term, level, len(gs.Entities), len(gs.CommunitySummaries)),
+			detail: detail,
+			failure: fmt.Sprintf("term %q: count=0 at level=%d (entities=%d ids=%d digests=%d communities=%d)",
+				ka.term, level, len(gs.Entities), len(gs.EntityIDs), len(gs.EntityDigests), len(gs.CommunitySummaries)),
 		}
 	}
 	if matched.substring == "" {
 		return knownAnswerProbeResult{
-			detail:  detail,
-			failure: fmt.Sprintf("term %q: count=%d but no entity ID or community summary contained any of %v", ka.term, gs.Count, ka.substrAny),
+			detail: detail,
+			failure: fmt.Sprintf("term %q: count=%d (summarized=%v ids=%d digests=%d communities=%d) — none of %v in any surface",
+				ka.term, gs.Count, gs.Summarized, len(gs.EntityIDs), len(gs.EntityDigests), len(gs.CommunitySummaries), ka.substrAny),
 		}
 	}
 	return knownAnswerProbeResult{detail: detail}
@@ -144,56 +149,99 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 // knownAnswerMatch records WHERE a substring was found (for diagnostics).
 type knownAnswerMatch struct {
 	substring string
-	location  string // "entity_id" | "community_summary" | "community_keywords"
+	// location is one of: "entity", "entity_id", "entity_digest",
+	// "community_summary", "community_keywords".
+	location string
 }
 
-// matchKnownAnswerTerm scans a globalSearch response for any of ka.substrAny
-// in entity IDs, community summaries, or community keywords. Case-insensitive.
-// Returns the first match (substring + location) or zero value when no match.
+// matchKnownAnswerTerm scans a globalSearch response for any of ka.substrAny.
+// Case-insensitive. globalSearch returns two distinct response shapes:
+//
+//   - Non-summarized (count ≤ summarize_threshold): `entities` populated with
+//     id/type/label tuples; `entity_ids`, `entity_digests` empty.
+//   - Summarized (count > threshold, default 50): `entities` is null;
+//     `entity_ids` and `entity_digests` carry the result set, with
+//     `entity_digests` providing labels (often the human-readable surface,
+//     e.g. "Forklift Hydraulic System Repair").
+//
+// Both shapes may include `community_summaries`. The matcher scans every
+// surface globalSearch actually exposes — looking only at `entities` made
+// the test silently miss every summarized response (the 2026-05-07
+// known-answer regression).
 func matchKnownAnswerTerm(ka knownAnswerTerm, gs globalSearchPayload) knownAnswerMatch {
-	for _, e := range gs.Entities {
-		idLower := strings.ToLower(e.ID)
+	containsAny := func(haystack string) string {
+		hl := strings.ToLower(haystack)
 		for _, sub := range ka.substrAny {
-			if strings.Contains(idLower, sub) {
-				return knownAnswerMatch{substring: sub, location: "entity_id"}
+			if strings.Contains(hl, sub) {
+				return sub
 			}
+		}
+		return ""
+	}
+
+	for _, e := range gs.Entities {
+		if m := containsAny(e.ID); m != "" {
+			return knownAnswerMatch{substring: m, location: "entity"}
+		}
+		if m := containsAny(e.Label); m != "" {
+			return knownAnswerMatch{substring: m, location: "entity"}
+		}
+	}
+	for _, id := range gs.EntityIDs {
+		if m := containsAny(id); m != "" {
+			return knownAnswerMatch{substring: m, location: "entity_id"}
+		}
+	}
+	for _, d := range gs.EntityDigests {
+		if m := containsAny(d.ID); m != "" {
+			return knownAnswerMatch{substring: m, location: "entity_digest"}
+		}
+		if m := containsAny(d.Label); m != "" {
+			return knownAnswerMatch{substring: m, location: "entity_digest"}
 		}
 	}
 	for _, cs := range gs.CommunitySummaries {
-		summaryLower := strings.ToLower(cs.Summary)
-		for _, sub := range ka.substrAny {
-			if strings.Contains(summaryLower, sub) {
-				return knownAnswerMatch{substring: sub, location: "community_summary"}
-			}
+		if m := containsAny(cs.Summary); m != "" {
+			return knownAnswerMatch{substring: m, location: "community_summary"}
 		}
 		for _, kw := range cs.Keywords {
-			kwLower := strings.ToLower(kw)
-			for _, sub := range ka.substrAny {
-				if strings.Contains(kwLower, sub) {
-					return knownAnswerMatch{substring: sub, location: "community_keywords"}
-				}
+			if m := containsAny(kw); m != "" {
+				return knownAnswerMatch{substring: m, location: "community_keywords"}
 			}
 		}
 	}
 	return knownAnswerMatch{}
 }
 
-// globalSearchPayload is the shape of GraphQL globalSearch we depend on for
-// known-answer assertions. Subset of graphRAGGlobalResponse.Data.GlobalSearch
-// in tiered_statistical.go — kept distinct so changes here don't affect the
-// existing graphrag-global stage.
+// globalSearchPayload mirrors the wire format graph-query emits for
+// globalSearch. The component speaks snake_case JSON (Go struct tags) and
+// the gateway forwards that wire format directly — GraphQL response shaping
+// at this gateway is bypass-style, so query-side aliases don't apply.
+// Both summarized and non-summarized response shapes are covered here so the
+// matcher above can scan whichever fields the server populated.
 type globalSearchPayload struct {
+	// Non-summarized response: full entities list.
 	Entities []struct {
-		ID   string `json:"id"`
-		Type string `json:"type"`
+		ID    string `json:"id"`
+		Type  string `json:"type"`
+		Label string `json:"label"`
 	} `json:"entities"`
+	// Summarized response: entities is null; ids + digests populated.
+	EntityIDs     []string `json:"entity_ids"`
+	EntityDigests []struct {
+		ID    string `json:"id"`
+		Type  string `json:"type"`
+		Label string `json:"label"`
+	} `json:"entity_digests"`
+	// Community summaries surface in both shapes when available.
 	CommunitySummaries []struct {
-		CommunityID string   `json:"communityId"`
+		CommunityID string   `json:"community_id"`
 		Summary     string   `json:"summary"`
 		Keywords    []string `json:"keywords"`
 		Level       int      `json:"level"`
-	} `json:"communitySummaries"`
-	Count int `json:"count"`
+	} `json:"community_summaries"`
+	Count      int  `json:"count"`
+	Summarized bool `json:"summarized"`
 }
 
 // knownAnswerResponse is the GraphQL envelope for the globalSearch query.
@@ -211,12 +259,20 @@ type knownAnswerResponse struct {
 // sendGraphRAGGlobalRequest but with explicit level (the existing helper
 // hard-codes level=1).
 func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL, query string, level int) (*knownAnswerResponse, time.Duration, error) {
+	// Note: the gateway forwards the graph-query JSON wire format (snake_case)
+	// directly, so response field names are snake_case regardless of the
+	// camelCase used in this query. The struct tags on globalSearchPayload
+	// match the wire format. Request both summarized and non-summarized
+	// surfaces so the matcher can scan whichever the server populated.
 	graphqlQuery := map[string]any{
 		"query": `query($query: String!, $level: Int, $maxCommunities: Int) {
 			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities) {
-				entities { id type }
+				entities { id type label }
+				entity_ids
+				entity_digests { id type label }
 				communitySummaries { communityId summary keywords level }
 				count
+				summarized
 			}}`,
 		"variables": map[string]any{
 			"query":          query,

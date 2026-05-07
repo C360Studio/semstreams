@@ -276,6 +276,25 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 	// Build communities from labels
 	communities := d.buildCommunities(labels, level, parentID)
 
+	// Pre-compute corpus-wide document frequency once for the level so the
+	// statistical summarizer's keyword extraction can weight by IDF instead
+	// of TF only. Without this, predicates ("location") and entity-type
+	// parts ("sensor") that appear on nearly every entity dominate the
+	// top-N keyword cap and crowd out distinctive low-frequency terms
+	// like "hydraulic" — the surface globalSearch's known-answer probes
+	// depend on. See StatisticalSummarizer.corpusDF doc + 2026-05-07 bug.
+	if d.summarizer != nil && d.entityProvider != nil {
+		if dfBuilder, ok := d.summarizer.(corpusDFBuilder); ok {
+			allEntities, err := d.entityProvider.GetEntities(ctx, entityIDs)
+			if err != nil {
+				d.logger.Warn("Failed to fetch entities for corpus DF — falling back to TF-only keywords",
+					"level", level, "error", err)
+			} else {
+				dfBuilder.BuildCorpusDF(allEntities)
+			}
+		}
+	}
+
 	// Persist communities (with optional summarization and event publishing)
 	for _, community := range communities {
 		// Generate summary if summarizer is configured
