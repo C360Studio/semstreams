@@ -2,12 +2,14 @@ package clustering
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 )
 
 func TestStatisticalSummarizer_SummarizeCommunity(t *testing.T) {
@@ -246,4 +248,89 @@ func TestExtractTerms(t *testing.T) {
 			assert.ElementsMatch(t, tt.expected, result)
 		})
 	}
+}
+
+// TestStatisticalSummarizer_IDFLiftsRareTerms is the regression guard for
+// the 2026-05-07 globalSearch known-answer bug: niche query-relevant nouns
+// (e.g. "hydraulic" sourced from a sensor's location property) were being
+// crowded out of community.Keywords by universal predicates ("location",
+// "unit") because keyword scoring was TF-only with no IDF. After the fix,
+// BuildCorpusDF computes corpus-wide document frequency once per pass and
+// extractKeywords scores by TF*IDF when DF is set, de-weighting universal
+// terms and surfacing distinctive ones.
+func TestStatisticalSummarizer_IDFLiftsRareTerms(t *testing.T) {
+	mkSensor := func(id, locationValue string) *gtypes.EntityState {
+		return &gtypes.EntityState{
+			ID: id,
+			Triples: []message.Triple{
+				{Subject: id, Predicate: "location", Object: locationValue},
+				{Subject: id, Predicate: "unit", Object: "percent"},
+			},
+		}
+	}
+
+	// Three communities of 5 sensors each. Each community has a distinctive
+	// location term; the predicates "location" and "unit" + the value
+	// "percent" are universal across all 15 entities.
+	mkCommunity := func(typePart, locationValue string) []*gtypes.EntityState {
+		out := make([]*gtypes.EntityState, 5)
+		for i := range out {
+			out[i] = mkSensor(
+				fmt.Sprintf("c360.facility.warehouse.zone.%s.%d", typePart, i),
+				locationValue,
+			)
+		}
+		return out
+	}
+	communityA := mkCommunity("level", "hydraulic-reservoir")
+	communityB := mkCommunity("temperature", "cold-storage")
+	communityC := mkCommunity("pressure", "dock-bay")
+
+	allEntities := append(append(append([]*gtypes.EntityState{},
+		communityA...), communityB...), communityC...)
+
+	summarizer := NewStatisticalSummarizer()
+	summarizer.MaxKeywords = 5
+
+	tfOnly := summarizer.extractKeywords(communityA)
+	t.Logf("TF-only keywords for community A: %v", tfOnly)
+
+	summarizer.BuildCorpusDF(allEntities)
+	withIDF := summarizer.extractKeywords(communityA)
+	t.Logf("TF*IDF keywords for community A: %v", withIDF)
+
+	idfSet := make(map[string]bool, len(withIDF))
+	for _, kw := range withIDF {
+		idfSet[kw] = true
+	}
+
+	// "hydraulic" appears in 5 of 15 entities (rare). With IDF=log(15/5)≈1.10
+	// it should clear the top-5 cap. Without IDF it competes against
+	// universal predicates each at TF=5/5=1.0 and tends to lose to
+	// log(1+freq)-weighted "location"/"unit" with their high raw counts.
+	assert.True(t, idfSet["hydraulic"],
+		"corpus-wide DF should lift 'hydraulic' (rare) into top-5; got %v", withIDF)
+
+	// Universal predicates ("location", "unit") have DF=15, IDF=log(1)=0
+	// (smoothed to 0.01 in the impl). They must NOT win the top slot.
+	assert.NotEqual(t, "location", withIDF[0],
+		"universal predicate 'location' should not be top keyword under IDF")
+	assert.NotEqual(t, "unit", withIDF[0],
+		"universal predicate 'unit' should not be top keyword under IDF")
+}
+
+// TestStatisticalSummarizer_BuildCorpusDF_Resets verifies that calling
+// BuildCorpusDF with an empty slice clears prior state — guards against
+// stale DF leaking across clustering passes.
+func TestStatisticalSummarizer_BuildCorpusDF_Resets(t *testing.T) {
+	s := NewStatisticalSummarizer()
+	s.BuildCorpusDF([]*gtypes.EntityState{
+		{ID: "c360.facility.warehouse.zone.level.1"},
+	})
+	require.NotNil(t, s.corpusDF)
+	require.Equal(t, 1, s.corpusN)
+
+	s.BuildCorpusDF(nil)
+	assert.Nil(t, s.corpusDF, "BuildCorpusDF(nil) should clear the map")
+	assert.Zero(t, s.corpusN, "BuildCorpusDF(nil) should reset corpusN")
 }

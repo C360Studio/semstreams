@@ -37,6 +37,15 @@ type StatisticalSummarizer struct {
 
 	// MaxRepEntities limits the number of representative entities
 	MaxRepEntities int
+
+	// corpusDF is the corpus-wide document-frequency map: term → number of
+	// entities containing the term at least once. When non-nil and corpusN > 0,
+	// extractKeywords uses TF*IDF scoring instead of TF*log(1+freq), which
+	// promotes distinctive low-frequency terms over community-dominant common
+	// ones (e.g. "hydraulic" over "sensor" in a sensor community). Populated
+	// once per clustering pass via BuildCorpusDF.
+	corpusDF map[string]int
+	corpusN  int
 }
 
 // NewStatisticalSummarizer creates a statistical summarizer with default settings
@@ -45,6 +54,36 @@ func NewStatisticalSummarizer() *StatisticalSummarizer {
 		MaxKeywords:    10,
 		MaxRepEntities: 5,
 	}
+}
+
+// corpusDFBuilder is implemented by summarizers that benefit from corpus-wide
+// document-frequency hints. The clustering orchestrator type-asserts on this
+// interface and calls BuildCorpusDF once per pass before per-community
+// summarization. Wrappers (LLM, Progressive) forward to the underlying
+// statistical summarizer they delegate keyword extraction to.
+type corpusDFBuilder interface {
+	BuildCorpusDF(entities []*gtypes.EntityState)
+}
+
+// BuildCorpusDF populates the corpus-wide document-frequency map from the
+// given entity slice. DF[T] counts entities containing term T at least once
+// (set semantics, not occurrence count). Term extraction matches
+// extractKeywords via the shared termOccurrencesForEntity helper. Empty input
+// clears the map. Safe to call multiple times.
+func (s *StatisticalSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
+	if len(entities) == 0 {
+		s.corpusDF = nil
+		s.corpusN = 0
+		return
+	}
+	df := make(map[string]int)
+	for _, entity := range entities {
+		for term := range termOccurrencesForEntity(entity) {
+			df[term]++
+		}
+	}
+	s.corpusDF = df
+	s.corpusN = len(entities)
 }
 
 // SummarizeCommunity generates a statistical summary of the community
@@ -88,39 +127,48 @@ func (s *StatisticalSummarizer) SummarizeCommunity(
 	return community, nil
 }
 
-// extractKeywords extracts key terms from entity types and properties
-func (s *StatisticalSummarizer) extractKeywords(entities []*gtypes.EntityState) []string {
-	termFreq := make(map[string]int)
+// termOccurrencesForEntity returns term → occurrence count for one entity,
+// using the same extraction rules as extractKeywords (type parts, triple
+// predicates, string-value terms). Shared between extractKeywords (TF
+// counting) and BuildCorpusDF (DF counting via the keyset) so the two stay
+// in lockstep — divergence here would silently break IDF weighting.
+func termOccurrencesForEntity(entity *gtypes.EntityState) map[string]int {
+	terms := make(map[string]int)
 
-	for _, entity := range entities {
-		// Extract terms from entity type
-		// e.g., "robotics.drone" -> ["robotics", "drone"]
-		typeParts := strings.Split(extractEntityType(entity.ID), ".")
-		for _, part := range typeParts {
-			if part != "" {
-				termFreq[part]++
-			}
+	// Entity type parts: "robotics.drone" → ["robotics", "drone"].
+	for _, part := range strings.Split(extractEntityType(entity.ID), ".") {
+		if part != "" {
+			terms[part]++
 		}
+	}
 
-		// Extract terms from property triples (string values only)
-		for _, triple := range entity.Triples {
-			if !triple.IsRelationship() {
-				// Add predicate as a term
-				termFreq[triple.Predicate]++
-
-				// If value is string, extract terms
-				if strVal, ok := triple.Object.(string); ok {
-					// Split on common delimiters and extract terms
-					terms := extractTerms(strVal)
-					for _, term := range terms {
-						termFreq[term]++
-					}
-				}
+	// Property triples: predicate name + extracted terms from string values.
+	for _, triple := range entity.Triples {
+		if triple.IsRelationship() {
+			continue
+		}
+		terms[triple.Predicate]++
+		if strVal, ok := triple.Object.(string); ok {
+			for _, t := range extractTerms(strVal) {
+				terms[t]++
 			}
 		}
 	}
 
-	// Sort terms by frequency
+	return terms
+}
+
+// extractKeywords extracts key terms from entity types and properties.
+// Scores are TF*IDF when corpusDF has been populated (via BuildCorpusDF),
+// else TF*log(1+freq) — see corpusDF doc on the struct for why this matters.
+func (s *StatisticalSummarizer) extractKeywords(entities []*gtypes.EntityState) []string {
+	termFreq := make(map[string]int)
+	for _, entity := range entities {
+		for term, count := range termOccurrencesForEntity(entity) {
+			termFreq[term] += count
+		}
+	}
+
 	type termScore struct {
 		term  string
 		score float64
@@ -128,26 +176,35 @@ func (s *StatisticalSummarizer) extractKeywords(entities []*gtypes.EntityState) 
 
 	scores := make([]termScore, 0, len(termFreq))
 	totalEntities := float64(len(entities))
+	useIDF := s.corpusDF != nil && s.corpusN > 0
+	corpusN := float64(s.corpusN)
 
 	for term, freq := range termFreq {
-		// Calculate TF-IDF-like score
-		// TF: term frequency normalized by total entities
-		// We don't have document frequency, so we use frequency as importance
 		tf := float64(freq) / totalEntities
-		score := tf * math.Log(1.0+float64(freq))
-
-		scores = append(scores, termScore{
-			term:  term,
-			score: score,
-		})
+		var weight float64
+		if useIDF {
+			// DF[term] is at least 1 here (the term is present in this
+			// community, so it's present in ≥1 corpus entity). Guard with max(1)
+			// anyway so a stale DF map never produces division-by-zero or a
+			// negative log. IDF = log(N/DF); rare terms get the high score.
+			df := max(s.corpusDF[term], 1)
+			weight = math.Log(corpusN / float64(df))
+			// Smooth: a term whose DF equals corpus size gets log(1)=0,
+			// which would zero its score outright. Add a small floor so
+			// near-universal terms still have a tie-breakable score.
+			if weight <= 0 {
+				weight = 0.01
+			}
+		} else {
+			weight = math.Log(1.0 + float64(freq))
+		}
+		scores = append(scores, termScore{term: term, score: tf * weight})
 	}
 
-	// Sort by score descending
 	sort.Slice(scores, func(i, j int) bool {
 		return scores[i].score > scores[j].score
 	})
 
-	// Take top N keywords
 	maxKeywords := s.MaxKeywords
 	if len(scores) < maxKeywords {
 		maxKeywords = len(scores)
@@ -601,6 +658,14 @@ func (s *LLMSummarizer) SummarizeCommunity(
 	return community, nil
 }
 
+// BuildCorpusDF forwards to the fallback statistical summarizer so IDF
+// scoring applies to the keyword path that LLMSummarizer reuses.
+func (s *LLMSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
+	if s.FallbackSummarizer != nil {
+		s.FallbackSummarizer.BuildCorpusDF(entities)
+	}
+}
+
 // parseEntityID extracts the 6 parts from a federated entity ID.
 // Entity ID format: {org}.{platform}.{domain}.{system}.{type}.{instance}
 func parseEntityID(entityID string) llm.EntityParts {
@@ -767,6 +832,13 @@ func (s *ProgressiveSummarizer) SummarizeCommunity(
 	community.LLMSummary = ""
 
 	return community, nil
+}
+
+// BuildCorpusDF forwards to the wrapped statistical summarizer.
+func (s *ProgressiveSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
+	if s.statistical != nil {
+		s.statistical.BuildCorpusDF(entities)
+	}
 }
 
 // min returns the smaller of two integers
