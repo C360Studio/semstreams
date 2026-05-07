@@ -124,6 +124,36 @@ const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 // a Go string) — readers coerce on access.
 const MetadataKeyRelatedLoops = "agent.related_loops"
 
+// LineageTriplePrefix is the predicate prefix for cross-arc loop-ID
+// lineage triples stamped on a spawned loop's entity at loop-creation
+// time. Each entry in TaskMessage.Metadata[MetadataKeyRelatedLoops]
+// becomes a triple of the form:
+//
+//	subject:   <spawned loop entity ID>
+//	predicate: lineage.<roleKey>          // e.g. lineage.researcher
+//	object:    <upstream loop ID string>
+//
+// Downstream rules that fire on the spawned entity read these via the
+// existing $entity.triple.<predicate> substitution, e.g.
+// $entity.triple.lineage.researcher resolves to the upstream loop ID
+// without any new substitution-token, tool, or persona-driven echo
+// forwarding.
+//
+// Stable namespace: ops-agent (ADR-027) and the operating-curve
+// observability primitives (ADR-033) aggregate cross-arc lineage by
+// scanning predicates with this prefix. Codifying as a public constant
+// keeps producers and consumers aligned without string-literal drift.
+const LineageTriplePrefix = "lineage."
+
+// LineageTriplePredicate returns the canonical predicate for a
+// RelatedLoops role key. Centralises the prefix join so producers
+// (rule.executePublishAgent / agentic-loop loop-creation path) and
+// consumers (rule authors using $entity.triple.lineage.<key>,
+// ops-agent aggregations) cannot drift on the format.
+func LineageTriplePredicate(roleKey string) string {
+	return LineageTriplePrefix + roleKey
+}
+
 // ToolErrorKind classifies the source or nature of a tool execution failure.
 // It is the structured counterpart to ToolResult.Error and feeds the
 // agent.step.error_category graph predicate for queryable failure analysis.

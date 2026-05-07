@@ -48,3 +48,6 @@ func (g *GraphWriterForTest) WriteLoopCancellation(ctx context.Context, e *agent
 func (g *GraphWriterForTest) WriteTrajectorySteps(ctx context.Context, loopID string, trajectory *agentic.Trajectory) {
 	g.w.WriteTrajectorySteps(ctx, loopID, trajectory)
 }
+func (g *GraphWriterForTest) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) {
+	g.w.WriteLineageTriples(ctx, loopID, related)
+}
