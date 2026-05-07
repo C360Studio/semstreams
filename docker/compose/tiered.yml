@@ -11,7 +11,7 @@
 # Profiles:
 #   - structural: NATS + semstreams (rules-only, no ML dependencies)
 #   - statistical: NATS + semstreams (BM25 fallback, no ML dependencies)
-#   - semantic: NATS + semembed + seminstruct + semstreams-ml (full ML)
+#   - semantic: NATS + semembed + seminstruct-fast/-mid-answer/-mid-summary + semstreams-ml (full ML)
 #
 # Usage:
 #   docker compose -f docker/compose/tiered.yml --profile structural up -d
@@ -51,19 +51,13 @@ services:
       retries: 3
       start_period: 30s
 
-  # SemInstruct - OpenAI-compatible inference (llama.cpp self-hosted)
-  # PROFILE: semantic - Only started when --profile semantic is specified
-  #
-  # Image variants (CI publishes by Qwen3 model size):
-  #   :latest    → :qwen3-0.6b (hot tier, classification, ~440MB)
-  #   :qwen3-1.7b (mid tier, answer synthesis)
-  #   :qwen3-8b   (quality tier, community summarization)
-  #
-  # Concurrency: -np 4 -cb baked in (4 parallel slots, continuous
-  # batching). Replaces the retired shimmy + seminstruct-proxy pair.
-  seminstruct:
-    image: ghcr.io/c360studio/seminstruct:latest
-    container_name: semstreams-tiered-seminstruct
+  # SemInstruct (fast tier) - qwen3-0.6b for classification only.
+  # Small input/output, latency-sensitive. CPU-capped to prevent llama.cpp's
+  # OpenMP from grabbing all host cores under contention with the two
+  # 1.7b mid-tier containers (semspec iso-test 2026-05-05).
+  seminstruct-fast:
+    image: ghcr.io/c360studio/seminstruct:qwen3-0.6b
+    container_name: semstreams-tiered-seminstruct-fast
     profiles:
       - semantic
     ports:
@@ -72,10 +66,8 @@ services:
       - MODEL_ALIAS=qwen3-0.6b
       - MODEL_REASONING=off
       - MODEL_CONTEXT=16384
-      - MODEL_PARALLEL=4
-      # MODEL_THREADS: empty = auto. Set explicitly when sharing CPU
-      # with other services (llama.cpp's OpenMP grabs all cores).
-      # - MODEL_THREADS=
+      - MODEL_THREADS=1
+      - MODEL_PARALLEL=2
     networks:
       - semstreams-tiered-net
     healthcheck:
@@ -83,7 +75,78 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s # llama.cpp model load
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+
+  # SemInstruct (answer tier) - qwen3-1.7b dedicated to answer_synthesis.
+  # Bounded sub-timeout 15s (beta.38). Iso-tested 2026-05-05 in semspec:
+  # 1.5-2.2s warm per call, 6.1-8.4s at 5-concurrent — within the 30s
+  # graph-gateway QueryTimeout. Splitting answer + summary into separate
+  # containers eliminates head-of-line blocking that was forcing forklift
+  # queries past the gateway timeout (2026-05-07 globalSearch debug).
+  seminstruct-mid-answer:
+    image: ghcr.io/c360studio/seminstruct:qwen3-1.7b
+    container_name: semstreams-tiered-seminstruct-mid-answer
+    profiles:
+      - semantic
+    ports:
+      - "38085:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
+    environment:
+      - MODEL_ALIAS=qwen3-1.7b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=16384
+      - MODEL_THREADS=2
+      - MODEL_PARALLEL=2
+    networks:
+      - semstreams-tiered-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 6G
+
+  # SemInstruct (summary tier) - qwen3-1.7b dedicated to community_summary +
+  # anomaly_review + layer_normalization. Background batch work that should
+  # NOT contend with synthesis on the search hot path. 1.7b is a quality
+  # compromise vs the 8b GraphRAG canonical — for the known-answer e2e
+  # surface (literal substring match) it suffices; for prod use cases
+  # demanding richer narratives, swap this image for :qwen3-8b.
+  seminstruct-mid-summary:
+    image: ghcr.io/c360studio/seminstruct:qwen3-1.7b
+    container_name: semstreams-tiered-seminstruct-mid-summary
+    profiles:
+      - semantic
+    ports:
+      - "38086:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
+    environment:
+      - MODEL_ALIAS=qwen3-1.7b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=16384
+      - MODEL_THREADS=2
+      - MODEL_PARALLEL=2
+    networks:
+      - semstreams-tiered-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 6G
 
   # NATS Server with JetStream
   nats:
@@ -223,7 +286,11 @@ services:
         condition: service_healthy
       semembed:
         condition: service_healthy
-      seminstruct:
+      seminstruct-fast:
+        condition: service_healthy
+      seminstruct-mid-answer:
+        condition: service_healthy
+      seminstruct-mid-summary:
         condition: service_healthy
     environment:
       - SEMSTREAMS_NATS_URLS=nats://nats:4222

@@ -13,10 +13,22 @@
   },
   "model_registry": {
     "endpoints": {
-      "seminstruct": {
+      "seminstruct-fast": {
         "provider": "openai",
-        "url": "http://seminstruct:8083/v1",
+        "url": "http://seminstruct-fast:8083/v1",
         "model": "qwen3-0.6b",
+        "max_tokens": 4096
+      },
+      "seminstruct-mid-answer": {
+        "provider": "openai",
+        "url": "http://seminstruct-mid-answer:8083/v1",
+        "model": "qwen3-1.7b",
+        "max_tokens": 4096
+      },
+      "seminstruct-mid-summary": {
+        "provider": "openai",
+        "url": "http://seminstruct-mid-summary:8083/v1",
+        "model": "qwen3-1.7b",
         "max_tokens": 4096
       },
       "semembed": {
@@ -27,11 +39,15 @@
       }
     },
     "capabilities": {
-      "community_summary": { "preferred": ["seminstruct"] },
-      "embedding": { "preferred": ["semembed"] }
+      "intent_classification": { "preferred": ["seminstruct-fast"] },
+      "answer_synthesis":      { "preferred": ["seminstruct-mid-answer"] },
+      "community_summary":     { "preferred": ["seminstruct-mid-summary"] },
+      "anomaly_review":        { "preferred": ["seminstruct-mid-summary"] },
+      "layer_normalization":   { "preferred": ["seminstruct-mid-summary"] },
+      "embedding":             { "preferred": ["semembed"] }
     },
     "defaults": {
-      "model": "seminstruct"
+      "model": "seminstruct-mid-answer"
     }
   },
   "services": {
@@ -719,7 +735,8 @@
         },
         "graphql_path": "/graphql",
         "mcp_path": "/mcp",
-        "enable_playground": true
+        "enable_playground": true,
+        "query_timeout": 60000000000
       }
     },
     "file": {
