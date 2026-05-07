@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -398,24 +400,75 @@ func (c *Component) classifyQuery(ctx context.Context, queryText string) *query.
 	return c.classifier.ClassifyQuery(ctx, queryText)
 }
 
+// classifierTemplatePattern matches template-placeholder strings that small
+// classifier models (e.g. qwen3-0.6b) sometimes emit verbatim from their
+// response template instead of resolving — `<entity_type>`, `{type}`,
+// `$placeholder`. When seen in a type_filters slot, the literal placeholder
+// reaches filterEntityIDsByType where it matches no real entity and silently
+// drops every hit. See semspec Meshtastic report (2026-05-07).
+var classifierTemplatePattern = regexp.MustCompile(`^[<{$].*[>}]?$`)
+
 // extractSearchRefinements pulls query reformulation and type filters from a
 // classification result. Returns the raw query unchanged when no hints are available.
+//
+// Hardening (post-Meshtastic incident, 2026-05-07):
+//
+//  1. Single-token rawQuery (no spaces) bypasses classifier query refinement —
+//     small models tend to replace proper-noun queries with generic example
+//     templates ("Meshtastic" → "find paths between entities") that lose the
+//     original intent.
+//  2. Type filters that look like template placeholders (`<...>`, `{...}`,
+//     `$...`) are dropped with a WARN — the classifier emitted its template
+//     verbatim instead of resolving. Better to send the request without
+//     filtering than to drop every hit silently.
 func (c *Component) extractSearchRefinements(cr *query.ClassificationResult, rawQuery string) (string, []string) {
 	searchQuery := rawQuery
 	var typeFilters []string
 	if cr == nil {
 		return searchQuery, typeFilters
 	}
+	singleToken := !strings.ContainsAny(strings.TrimSpace(rawQuery), " \t\n")
 	if q, ok := cr.Options["query"].(string); ok && q != "" {
-		searchQuery = q
-		c.logger.Debug("using classifier-refined query",
-			"original", rawQuery,
-			"refined", searchQuery)
+		switch {
+		case singleToken && !strings.Contains(strings.ToLower(q), strings.ToLower(rawQuery)):
+			c.logger.Warn("classifier-refined query dropped — single-token original not preserved",
+				"original", rawQuery,
+				"refined", q)
+			if c.promMetrics != nil {
+				c.promMetrics.recordClassifierGarbage("query_dropped")
+			}
+		default:
+			searchQuery = q
+			c.logger.Debug("using classifier-refined query",
+				"original", rawQuery,
+				"refined", searchQuery)
+		}
 	}
 	if t, ok := cr.Options["types"].([]string); ok && len(t) > 0 {
-		typeFilters = t
+		typeFilters = filterClassifierTemplates(t, c.logger, c.promMetrics)
 	}
 	return searchQuery, typeFilters
+}
+
+// filterClassifierTemplates removes template-shaped placeholder strings from
+// a list of classifier-emitted type filters, logs a WARN per dropped value,
+// and increments the classifier-garbage counter. Returns the filtered list.
+func filterClassifierTemplates(types []string, logger *slog.Logger, m *queryMetrics) []string {
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		if classifierTemplatePattern.MatchString(strings.TrimSpace(t)) {
+			if logger != nil {
+				logger.Warn("classifier-emitted type filter dropped — template placeholder",
+					"value", t)
+			}
+			if m != nil {
+				m.recordClassifierGarbage("template_filter")
+			}
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // recordGlobalSearchOutcome records the Prometheus signals for a globalSearch

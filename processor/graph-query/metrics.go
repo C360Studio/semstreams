@@ -28,6 +28,14 @@ type queryMetrics struct {
 	globalSearchTierTransition *prometheus.CounterVec // labels: from, to, reason
 	globalSearchHitsDropped    *prometheus.CounterVec // labels: stage (threshold|type_filter)
 	globalSearchDegraded       *prometheus.CounterVec // labels: reason — closes beta.45 debt
+
+	// classifierGarbage tracks defenses firing against classifier output
+	// emitted verbatim from a response template (e.g. qwen3-0.6b returning
+	// `<entity_type>` as a literal type filter, or replacing a proper-noun
+	// query with a generic example string). High rate indicates the
+	// classifier model is too thin for the workload — operators should
+	// upsize or relax single-token-bypass thresholds.
+	classifierGarbage *prometheus.CounterVec // labels: type (template_filter|query_dropped)
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -131,6 +139,13 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 				Name:      "global_search_degraded_total",
 				Help:      "Global search responses returned with Degraded=true, by reason (answer_synthesis_timeout|answer_synthesis_cancelled|answer_synthesis_error). Closes beta.45's flag-without-counter gap.",
 			}, []string{"reason"}),
+
+			classifierGarbage: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "classifier_garbage_total",
+				Help:      "Defenses triggered against malformed classifier output: template_filter (literal placeholder in type_filters) or query_dropped (single-token original query replaced by classifier-emitted template). High rate = classifier model too thin for workload.",
+			}, []string{"type"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -148,6 +163,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = registry.RegisterCounterVec("graph-query", "global_search_tier_transition_total", metrics.globalSearchTierTransition)
 			_ = registry.RegisterCounterVec("graph-query", "global_search_hits_dropped_total", metrics.globalSearchHitsDropped)
 			_ = registry.RegisterCounterVec("graph-query", "global_search_degraded_total", metrics.globalSearchDegraded)
+			_ = registry.RegisterCounterVec("graph-query", "classifier_garbage_total", metrics.classifierGarbage)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.communityCacheHits)
@@ -163,6 +179,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchTierTransition)
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchHitsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchDegraded)
+			_ = prometheus.DefaultRegisterer.Register(metrics.classifierGarbage)
 		}
 	})
 	return metrics
@@ -239,4 +256,12 @@ func (m *queryMetrics) recordGlobalSearchHitsDropped(stage string, n int) {
 // _cancelled, _error). Closes the flag-without-counter gap.
 func (m *queryMetrics) recordGlobalSearchDegraded(reason string) {
 	m.globalSearchDegraded.WithLabelValues(reason).Inc()
+}
+
+// recordClassifierGarbage records a defense firing against malformed classifier
+// output. Type is "template_filter" (literal `<...>` etc. in type_filters) or
+// "query_dropped" (single-token original replaced by classifier template).
+// LOUD signal — paired with a Warn log at the call site.
+func (m *queryMetrics) recordClassifierGarbage(garbageType string) {
+	m.classifierGarbage.WithLabelValues(garbageType).Inc()
 }
