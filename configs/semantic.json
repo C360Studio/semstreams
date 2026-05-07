@@ -13,10 +13,22 @@
   },
   "model_registry": {
     "endpoints": {
-      "seminstruct": {
+      "seminstruct-fast": {
         "provider": "openai",
-        "url": "http://seminstruct:8083/v1",
+        "url": "http://seminstruct-fast:8083/v1",
         "model": "qwen3-0.6b",
+        "max_tokens": 4096
+      },
+      "seminstruct-mid": {
+        "provider": "openai",
+        "url": "http://seminstruct-mid:8083/v1",
+        "model": "qwen3-1.7b",
+        "max_tokens": 4096
+      },
+      "seminstruct-quality": {
+        "provider": "openai",
+        "url": "http://seminstruct-quality:8083/v1",
+        "model": "qwen3-8b",
         "max_tokens": 4096
       },
       "semembed": {
@@ -27,11 +39,15 @@
       }
     },
     "capabilities": {
-      "community_summary": { "preferred": ["seminstruct"] },
-      "embedding": { "preferred": ["semembed"] }
+      "intent_classification": { "preferred": ["seminstruct-fast"] },
+      "community_summary":     { "preferred": ["seminstruct-quality"] },
+      "answer_synthesis":      { "preferred": ["seminstruct-mid"] },
+      "anomaly_review":        { "preferred": ["seminstruct-mid"] },
+      "layer_normalization":   { "preferred": ["seminstruct-mid"] },
+      "embedding":             { "preferred": ["semembed"] }
     },
     "defaults": {
-      "model": "seminstruct"
+      "model": "seminstruct-mid"
     }
   },
   "services": {
