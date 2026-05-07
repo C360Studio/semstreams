@@ -705,6 +705,21 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		WorkflowStep: ec.SubstituteVariables(action.WorkflowStep),
 	}
 
+	// Inherit ParentLoopID when the trigger entity is a loop execution. Without
+	// this, rule-fanned chains carry no parent linkage natively — only the
+	// depth-tracked architect→editor subagent path that sets ParentLoopID
+	// at TaskMessage construction time gets the agent.loop.parent triple
+	// stamped at completion (handlers.go:264 → SetParentLoopID → state.go).
+	// With this wired in, every rule-fanned spawn from a loop entity has a
+	// walkable agent.loop.parent ancestry, so product code (semteams chain,
+	// future chain consumers) can derive chain_id by walking parent without
+	// per-rule lineage threading. Required for semteams ADR-038's chain
+	// entity pattern; preserves backward-compat for rule-fanned spawns
+	// triggered by non-loop entities (no ParentLoopID set, current behavior).
+	if parentLoopID, ok := agentic.LoopIDFromExecutionEntityID(entityID); ok {
+		task.ParentLoopID = parentLoopID
+	}
+
 	// Resolve per-agent tool allowlist from the global registry. Nil
 	// action.Tools leaves task.Tools unset (loop falls back to global
 	// discovery). An explicit empty slice produces non-nil empty

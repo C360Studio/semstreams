@@ -1245,6 +1245,85 @@ func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
 	}
 }
 
+// TestAction_PublishAgent_ParentLoopIDFromLoopEntity asserts that when a
+// publish_agent action fires on a loop-execution-shaped trigger entity, the
+// resulting TaskMessage carries task.ParentLoopID extracted from the
+// trigger entity's loop_id segment. This gives rule-fanned spawns the
+// same parent linkage that depth-tracked subagent spawns already have via
+// the SetParentLoopID path, so product code (semteams chain consumers per
+// ADR-038, future cross-arc personas) can derive chain anchors by walking
+// agent.loop.parent without per-rule lineage threading.
+func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.architect",
+		Role:    "architect",
+		Model:   "mock-model",
+		Prompt:  "p",
+	}
+
+	// Trigger entity is a loop execution — parent linkage should appear.
+	loopEntityID := "c360.ops.agent.agentic-loop.execution.loop-research-abc"
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+	assert.Equal(t, "loop-research-abc", task.ParentLoopID,
+		"ParentLoopID should be set to the trigger loop's UUID when the entity matches LoopExecutionEntityID shape")
+}
+
+// TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset asserts the
+// negative case: a publish_agent action triggered by a non-loop entity
+// (telemetry, ops finding, chain entity, model endpoint) leaves
+// ParentLoopID empty. Back-compat for every rule today that fires on
+// non-loop triggers — they continue to spawn root-of-chain loops.
+func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		entityID string
+	}{
+		{"telemetry entity", "c360.ops.robotics.gcs.drone.001"},
+		{"model endpoint", "c360.ops.agent.model-registry.endpoint.claude-sonnet"},
+		{"trajectory step", "c360.ops.agent.agentic-loop.step.loop-1-0"},
+		{"chain execution", "c360.ops.agent.chain.execution.chain-abc"},
+		{"non-canonical entity ID", "e.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockPublisher{}
+			executor := NewActionExecutorFull(nil, nil, mock)
+			action := Action{
+				Type:    ActionTypePublishAgent,
+				Subject: "agent.task.test",
+				Role:    "general",
+				Model:   "mock-model",
+				Prompt:  "p",
+			}
+			require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: tt.entityID}))
+			require.Len(t, mock.published, 1)
+
+			baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+			require.NoError(t, err)
+			task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+			require.True(t, ok)
+			assert.Equal(t, "", task.ParentLoopID,
+				"ParentLoopID should remain unset when trigger entity is not a loop execution (got entity %q)", tt.entityID)
+		})
+	}
+}
+
 // TestAction_PublishAgent_EmptyActionAllowlist verifies that an unset
 // ActionAllowlist leaves Metadata's allowlist key unset (back-compat:
 // existing flows that don't opt in keep their pre-F2 free-form decide
