@@ -36,6 +36,12 @@ type HandlerResult struct {
 	ContextEvents        []agentic.ContextEvent
 	RetryScheduled       bool
 	MaxIterationsReached bool
+	// Created is true only when HandleTask actually created a new loop.
+	// False on the dedup short-circuit path (TaskMessage redelivered for
+	// an already-active task). Component uses this to gate
+	// recordLoopCreated so the active_loops gauge does not drift on
+	// JetStream redelivery.
+	Created bool
 	// CompletionState contains enriched completion data for KV persistence.
 	// This is populated when a loop completes and is used by component.go
 	// to write to the loops bucket with key pattern COMPLETE_{loopID}.
@@ -651,8 +657,9 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	}
 
 	return HandlerResult{
-		LoopID: loopID,
-		State:  entity.State,
+		LoopID:  loopID,
+		State:   entity.State,
+		Created: true,
 		PublishedMessages: []PublishedMessage{
 			{
 				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
