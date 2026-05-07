@@ -236,7 +236,12 @@ func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	// 60s budget covers classifier → embedding search → community scoring →
+	// answer synthesis on local llama.cpp models (qwen3-0.6b throughput
+	// ~25 tok/s warm). The existing test-graphrag-global stage uses 10s
+	// and silently times out on every probe — don't replicate that. If the
+	// real query path is slow enough to need >60s, that itself is a bug.
+	httpClient := &http.Client{Timeout: 60 * time.Second}
 	start := time.Now()
 	resp, err := httpClient.Do(req)
 	latency := time.Since(start)
