@@ -1725,6 +1725,107 @@ func TestHandleTask_PropagatesTimeoutToAgentRequest(t *testing.T) {
 	t.Error("HandleTask() should publish agent.request message")
 }
 
+// TestHandleTask_PropagatesResponseFormatToAgentRequest verifies the
+// ADR-034 threading path: TaskMessage.ResponseFormat → cached on
+// LoopManager → set on the AgentRequest published to agent.request.*.
+// Continuation iterations re-use the cached value (covered separately
+// by integration tests that exercise multi-iteration loops).
+func TestHandleTask_PropagatesResponseFormatToAgentRequest(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	rf := agentic.NewJSONSchemaFormat("decision", map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"action": map[string]any{"type": "string"},
+		},
+		"required": []any{"action"},
+	})
+
+	task := agenticloop.TaskMessage{
+		TaskID:         "task-response-format",
+		Role:           "planner",
+		Model:          "test-model",
+		Prompt:         "Decide",
+		ResponseFormat: rf,
+	}
+
+	ctx := context.Background()
+	result, err := handler.HandleTask(ctx, task)
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+
+	for _, msg := range result.PublishedMessages {
+		if !containsIgnoreCase(msg.Subject, "agent.request") {
+			continue
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("Failed to unmarshal envelope: %v", err)
+		}
+		payload, ok := envelope["payload"].(map[string]any)
+		if !ok {
+			t.Fatal("Expected payload in BaseMessage envelope")
+		}
+		got, ok := payload["response_format"].(map[string]any)
+		if !ok {
+			t.Fatalf("AgentRequest.response_format missing or wrong type: %T", payload["response_format"])
+		}
+		if got["type"] != agentic.ResponseFormatJSONSchema {
+			t.Errorf("AgentRequest.response_format.type = %q, want %q", got["type"], agentic.ResponseFormatJSONSchema)
+		}
+		if got["name"] != "decision" {
+			t.Errorf("AgentRequest.response_format.name = %q, want %q", got["name"], "decision")
+		}
+		if got["strict"] != true {
+			t.Errorf("AgentRequest.response_format.strict = %v, want true", got["strict"])
+		}
+		return
+	}
+	t.Error("HandleTask() should publish agent.request message")
+}
+
+// TestHandleTask_NoResponseFormatPreservesNil verifies that omitting
+// ResponseFormat on TaskMessage leaves AgentRequest.response_format
+// absent — back-compat for every caller that doesn't opt into ADR-034.
+func TestHandleTask_NoResponseFormatPreservesNil(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	task := agenticloop.TaskMessage{
+		TaskID: "task-no-rf",
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "no constraint",
+	}
+
+	ctx := context.Background()
+	result, err := handler.HandleTask(context.Background(), task)
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	_ = ctx
+
+	for _, msg := range result.PublishedMessages {
+		if !containsIgnoreCase(msg.Subject, "agent.request") {
+			continue
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("Failed to unmarshal envelope: %v", err)
+		}
+		payload, ok := envelope["payload"].(map[string]any)
+		if !ok {
+			t.Fatal("Expected payload in BaseMessage envelope")
+		}
+		if _, present := payload["response_format"]; present {
+			t.Errorf("response_format should be absent when not set on TaskMessage; got %v", payload["response_format"])
+		}
+		return
+	}
+	t.Error("HandleTask() should publish agent.request message")
+}
+
 // --- ToolCallFilter tests ---
 
 // mockFilter implements agentic.ToolCallFilter for testing

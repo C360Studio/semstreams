@@ -1054,6 +1054,80 @@ func TestAction_PublishAgent_ActionAllowlist(t *testing.T) {
 	assert.Equal(t, "needs_clarification", allowlist[1])
 }
 
+// TestAction_PublishAgent_ResponseFormat verifies that
+// action.ResponseFormat threads onto TaskMessage.ResponseFormat as a
+// pointer pass-through. ADR-034. Both helpers (NewJSONSchemaFormat,
+// NewJSONObjectFormat) round-trip through the BaseMessage envelope.
+func TestAction_PublishAgent_ResponseFormat(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	rf := agentic.NewJSONSchemaFormat("decision", map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"action": map[string]any{"type": "string"},
+		},
+		"required": []any{"action"},
+	})
+
+	action := Action{
+		Type:           ActionTypePublishAgent,
+		Subject:        "agent.task.test",
+		Role:           "planner",
+		Model:          "mock-model",
+		Prompt:         "p",
+		ResponseFormat: rf,
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.ResponseFormat, "ResponseFormat should round-trip onto TaskMessage")
+	assert.Equal(t, agentic.ResponseFormatJSONSchema, task.ResponseFormat.Type)
+	assert.Equal(t, "decision", task.ResponseFormat.Name)
+	assert.True(t, task.ResponseFormat.Strict, "NewJSONSchemaFormat should produce strict-mode")
+	require.NotNil(t, task.ResponseFormat.Schema)
+	assert.Equal(t, "object", task.ResponseFormat.Schema["type"])
+}
+
+// TestAction_PublishAgent_EmptyResponseFormat verifies that an unset
+// ResponseFormat leaves TaskMessage.ResponseFormat nil (back-compat:
+// existing flows that don't opt in keep their pre-ADR-034 tool-calling
+// behaviour).
+func TestAction_PublishAgent_EmptyResponseFormat(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// ResponseFormat omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Nil(t, task.ResponseFormat, "ResponseFormat should remain nil when action.ResponseFormat unset")
+}
+
 // TestAction_PublishAgent_EmptyActionAllowlist verifies that an unset
 // ActionAllowlist leaves Metadata's allowlist key unset (back-compat:
 // existing flows that don't opt in keep their pre-F2 free-form decide

@@ -605,6 +605,108 @@ func TestTaskMessage_Tools_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, "ops", decoded.Metadata["org"])
 }
 
+// TestTaskMessage_ResponseFormat_JSONRoundTrip verifies that
+// ResponseFormat threads through JSON serialization on TaskMessage.
+// ADR-034. Both helpers (NewJSONSchemaFormat, NewJSONObjectFormat)
+// must round-trip with the Type / Schema / Name / Strict fields intact.
+func TestTaskMessage_ResponseFormat_JSONRoundTrip(t *testing.T) {
+	t.Run("JSONSchema strict mode", func(t *testing.T) {
+		rf := NewJSONSchemaFormat("decision", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action": map[string]any{"type": "string"},
+			},
+			"required": []any{"action"},
+		})
+		original := TaskMessage{
+			TaskID:         "task-rf-schema",
+			Role:           "planner",
+			Model:          "qwen3:7b",
+			Prompt:         "decide",
+			ResponseFormat: rf,
+		}
+
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+
+		var decoded TaskMessage
+		require.NoError(t, json.Unmarshal(data, &decoded))
+
+		require.NotNil(t, decoded.ResponseFormat)
+		assert.Equal(t, ResponseFormatJSONSchema, decoded.ResponseFormat.Type)
+		assert.Equal(t, "decision", decoded.ResponseFormat.Name)
+		assert.True(t, decoded.ResponseFormat.Strict)
+		require.NotNil(t, decoded.ResponseFormat.Schema)
+		assert.Equal(t, "object", decoded.ResponseFormat.Schema["type"])
+	})
+
+	t.Run("JSONObject bare mode", func(t *testing.T) {
+		original := TaskMessage{
+			TaskID:         "task-rf-object",
+			Role:           "general",
+			Model:          "qwen3:7b",
+			Prompt:         "respond as JSON",
+			ResponseFormat: NewJSONObjectFormat(),
+		}
+
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+
+		var decoded TaskMessage
+		require.NoError(t, json.Unmarshal(data, &decoded))
+
+		require.NotNil(t, decoded.ResponseFormat)
+		assert.Equal(t, ResponseFormatJSONObject, decoded.ResponseFormat.Type)
+		assert.Empty(t, decoded.ResponseFormat.Name)
+		assert.False(t, decoded.ResponseFormat.Strict)
+	})
+
+	t.Run("nil omits field via omitempty", func(t *testing.T) {
+		original := TaskMessage{
+			TaskID: "task-rf-nil",
+			Role:   "general",
+			Model:  "fast",
+			Prompt: "no constraint",
+			// ResponseFormat omitted
+		}
+
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+
+		// `omitempty` on a pointer means absent JSON key when nil.
+		// The receiver sees a nil ResponseFormat after unmarshal — back-compat
+		// for every caller that doesn't opt in.
+		assert.NotContains(t, string(data), "response_format",
+			"nil ResponseFormat should be omitted from JSON entirely")
+
+		var decoded TaskMessage
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		assert.Nil(t, decoded.ResponseFormat)
+	})
+}
+
+// TestTaskMessage_ResponseFormat_ValidatePropagates verifies that an
+// invalid ResponseFormat surfaces from TaskMessage.Validate (e.g., a
+// json_schema type without a name field). ADR-034 invariant: validation
+// at the TaskMessage boundary catches malformed schemas before they hit
+// the LLM client and produce confusing 400s.
+func TestTaskMessage_ResponseFormat_ValidatePropagates(t *testing.T) {
+	task := TaskMessage{
+		TaskID: "task-bad-rf",
+		Role:   "general",
+		Model:  "fast",
+		Prompt: "x",
+		ResponseFormat: &ResponseFormat{
+			Type: ResponseFormatJSONSchema,
+			// Missing Name and Schema — both required when Type == JSONSchema
+		},
+	}
+	err := task.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name required",
+		"TaskMessage.Validate should propagate ResponseFormat.Validate failures")
+}
+
 // TestTaskMessage_Tools_NilVsEmptyPreserved verifies that Tools serialises
 // faithfully for both nil and explicit empty slices. The distinction is
 // load-bearing: the spawner uses nil to mean "no override, discover tools"

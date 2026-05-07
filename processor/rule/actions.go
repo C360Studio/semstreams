@@ -106,6 +106,20 @@ type Action struct {
 	// the workflow config that already owns role/model/prompt/tools.
 	ActionAllowlist []string `json:"action_allowlist,omitempty"`
 
+	// ResponseFormat constrains the spawned loop's model output to a
+	// JSON object or JSON-schema-conformant JSON. ADR-034. When non-nil,
+	// executePublishAgent stamps it onto the TaskMessage.ResponseFormat;
+	// the agentic-loop caches it and threads it onto every AgentRequest
+	// in the loop. Nil leaves tool-calling behaviour unchanged.
+	//
+	// Use the agentic.NewJSONSchemaFormat / agentic.NewJSONObjectFormat
+	// helpers to construct. See ADR-034 + docs/operations/13-structured-output.md
+	// for provider support; small/local models (qwen3, deepseek-r1, gemma3,
+	// sub-30B) are the primary use case. Frontier-cloud models keep
+	// preferring tool-calling — set this only when the loop is bound to a
+	// model that honours response_format.
+	ResponseFormat *agentic.ResponseFormat `json:"response_format,omitempty"`
+
 	// WorkflowID is the workflow identifier for trigger_workflow actions
 	WorkflowID string `json:"workflow_id,omitempty"`
 
@@ -678,6 +692,16 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 			allowlist = append(allowlist, a)
 		}
 		task.Metadata[agentic.MetadataKeyDecideActionAllowlist] = allowlist
+	}
+
+	// Per-spawn structured-output constraint. ADR-034. Pass-through:
+	// rule.Action.ResponseFormat → TaskMessage.ResponseFormat. The
+	// agentic-loop caches it on initial build and threads it onto every
+	// AgentRequest in the loop. Nil leaves tool-calling behaviour
+	// unchanged. No substitution applied — the schema body is structured
+	// JSON, not a template.
+	if action.ResponseFormat != nil {
+		task.ResponseFormat = action.ResponseFormat
 	}
 
 	if e.logger != nil {
