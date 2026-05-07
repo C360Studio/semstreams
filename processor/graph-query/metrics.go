@@ -17,6 +17,17 @@ type queryMetrics struct {
 	communityLookups       *prometheus.CounterVec
 	localSearchRequests    prometheus.Counter
 	globalSearchRequests   prometheus.Counter
+
+	// globalSearch path observability — added to surface the bug class where
+	// queries silently route to a dead-end strategy / get filtered to empty.
+	// Without these, "globalSearch returned count=0" is only visible via user
+	// reports.
+	globalSearchStrategy       *prometheus.CounterVec // labels: strategy
+	globalSearchResponseCount  prometheus.Histogram   // distribution of returned entity counts
+	globalSearchEmpty          *prometheus.CounterVec // labels: strategy, reason
+	globalSearchTierTransition *prometheus.CounterVec // labels: from, to, reason
+	globalSearchHitsDropped    *prometheus.CounterVec // labels: stage (threshold|type_filter)
+	globalSearchDegraded       *prometheus.CounterVec // labels: reason — closes beta.45 debt
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -77,6 +88,49 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 				Name:      "global_search_requests_total",
 				Help:      "Total GraphRAG global search requests",
 			}),
+
+			globalSearchStrategy: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_strategy_total",
+				Help:      "Global search requests by resolved strategy (entity_lookup|pathrag|semantic|temporal|spatial|graphrag)",
+			}, []string{"strategy"}),
+
+			globalSearchResponseCount: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_response_count",
+				Help:      "Distribution of entity counts returned by globalSearch responses (0 bucket flags 'returned nothing')",
+				Buckets:   []float64{0, 1, 5, 10, 25, 50, 100, 250, 500, 1000},
+			}),
+
+			globalSearchEmpty: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_empty_total",
+				Help:      "Global search requests that returned zero entities, by strategy and reason (no_communities|no_semantic_hits|threshold_filter|type_filter|relevance_filter|semantic_unavailable)",
+			}, []string{"strategy", "reason"}),
+
+			globalSearchTierTransition: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_tier_transition_total",
+				Help:      "Tier transitions inside graphrag/path strategies, from=tier1 to=tier2 reason=(empty_hits|err)",
+			}, []string{"from", "to", "reason"}),
+
+			globalSearchHitsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_hits_dropped_total",
+				Help:      "Semantic hits dropped during globalSearch processing, labelled by the stage that dropped them (threshold|type_filter)",
+			}, []string{"stage"}),
+
+			globalSearchDegraded: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "global_search_degraded_total",
+				Help:      "Global search responses returned with Degraded=true, by reason (answer_synthesis_timeout|answer_synthesis_cancelled|answer_synthesis_error). Closes beta.45's flag-without-counter gap.",
+			}, []string{"reason"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -88,6 +142,12 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = registry.RegisterCounterVec("graph-query", "community_lookups_total", metrics.communityLookups)
 			_ = registry.RegisterCounter("graph-query", "local_search_requests_total", metrics.localSearchRequests)
 			_ = registry.RegisterCounter("graph-query", "global_search_requests_total", metrics.globalSearchRequests)
+			_ = registry.RegisterCounterVec("graph-query", "global_search_strategy_total", metrics.globalSearchStrategy)
+			_ = registry.RegisterHistogram("graph-query", "global_search_response_count", metrics.globalSearchResponseCount)
+			_ = registry.RegisterCounterVec("graph-query", "global_search_empty_total", metrics.globalSearchEmpty)
+			_ = registry.RegisterCounterVec("graph-query", "global_search_tier_transition_total", metrics.globalSearchTierTransition)
+			_ = registry.RegisterCounterVec("graph-query", "global_search_hits_dropped_total", metrics.globalSearchHitsDropped)
+			_ = registry.RegisterCounterVec("graph-query", "global_search_degraded_total", metrics.globalSearchDegraded)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.communityCacheHits)
@@ -97,6 +157,12 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.communityLookups)
 			_ = prometheus.DefaultRegisterer.Register(metrics.localSearchRequests)
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchRequests)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchStrategy)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchResponseCount)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchEmpty)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchTierTransition)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchHitsDropped)
+			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchDegraded)
 		}
 	})
 	return metrics
@@ -133,4 +199,44 @@ func (m *queryMetrics) recordLocalSearch() {
 // recordGlobalSearch records a global search request.
 func (m *queryMetrics) recordGlobalSearch() {
 	m.globalSearchRequests.Inc()
+}
+
+// recordGlobalSearchStrategy records the resolved dispatch strategy for a globalSearch request.
+func (m *queryMetrics) recordGlobalSearchStrategy(strategy string) {
+	m.globalSearchStrategy.WithLabelValues(strategy).Inc()
+}
+
+// observeGlobalSearchResponseCount records the entity count returned in a globalSearch response.
+// The 0 bucket flags "returned nothing" — sudden ratio shifts toward 0 indicate the bug class
+// where queries silently route to a dead-end strategy or get filtered to empty.
+func (m *queryMetrics) observeGlobalSearchResponseCount(count int) {
+	m.globalSearchResponseCount.Observe(float64(count))
+}
+
+// recordGlobalSearchEmpty records a globalSearch response with zero entities, with the strategy
+// that produced it and the proximate reason (no_communities, no_semantic_hits, threshold_filter,
+// type_filter, relevance_filter, semantic_unavailable).
+func (m *queryMetrics) recordGlobalSearchEmpty(strategy, reason string) {
+	m.globalSearchEmpty.WithLabelValues(strategy, reason).Inc()
+}
+
+// recordGlobalSearchTierTransition records a fall-through inside graphrag/path strategies, e.g.
+// from semantic to community-text-based when semantic returns empty.
+func (m *queryMetrics) recordGlobalSearchTierTransition(from, to, reason string) {
+	m.globalSearchTierTransition.WithLabelValues(from, to, reason).Inc()
+}
+
+// recordGlobalSearchHitsDropped records semantic hits dropped by an internal filter stage,
+// labelled by the stage that dropped them (threshold or type_filter). Use Add(N) for the count.
+func (m *queryMetrics) recordGlobalSearchHitsDropped(stage string, n int) {
+	if n > 0 {
+		m.globalSearchHitsDropped.WithLabelValues(stage).Add(float64(n))
+	}
+}
+
+// recordGlobalSearchDegraded records a globalSearch response returned with Degraded=true.
+// Reasons match SynthesisOutcome.DegradedReason classes from beta.45 (answer_synthesis_timeout,
+// _cancelled, _error). Closes the flag-without-counter gap.
+func (m *queryMetrics) recordGlobalSearchDegraded(reason string) {
+	m.globalSearchDegraded.WithLabelValues(reason).Inc()
 }

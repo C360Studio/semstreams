@@ -418,6 +418,24 @@ func (c *Component) extractSearchRefinements(cr *query.ClassificationResult, raw
 	return searchQuery, typeFilters
 }
 
+// recordGlobalSearchOutcome records the Prometheus signals for a globalSearch
+// response: the entity-count histogram, the empty-with-reason counter (when
+// Count is zero and a non-empty reason is supplied), and the degraded counter
+// (when Degraded is true). Single helper keeps the strategy bodies under the
+// revive function-length cap.
+func (c *Component) recordGlobalSearchOutcome(strategy string, resp *GlobalSearchResponse, emptyReason string) {
+	if c.promMetrics == nil {
+		return
+	}
+	c.promMetrics.observeGlobalSearchResponseCount(resp.Count)
+	if resp.Count == 0 && emptyReason != "" {
+		c.promMetrics.recordGlobalSearchEmpty(strategy, emptyReason)
+	}
+	if resp.Degraded {
+		c.promMetrics.recordGlobalSearchDegraded(resp.DegradedReason)
+	}
+}
+
 // minScore returns the smallest Score in hits, or 0 when hits is empty.
 // Used only for diagnostic logs in the globalSearch paths.
 func minScore(hits []SemanticHit) float64 {
@@ -534,6 +552,9 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 	searchQuery, typeFilters := c.extractSearchRefinements(classResult, req.Query)
 
 	strategy := c.resolveStrategy(classResult)
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchStrategy(strategy)
+	}
 	c.logger.Debug("globalSearch strategy resolved",
 		"query", req.Query,
 		"refined_query", searchQuery,
@@ -666,6 +687,7 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 			if req.IncludeSources {
 				response.Sources = c.buildSources(entities, semanticHits, communityMatches)
 			}
+			c.recordGlobalSearchOutcome("graphrag", &response, "")
 			c.recordSuccess(requestSize, 0)
 			return json.Marshal(response)
 		}
@@ -675,6 +697,21 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 	}
 
 	// Tier 2: Fall back to text-based community scoring.
+	return c.graphRAGTier2Fallback(ctx, req, startTime, requestSize, err)
+}
+
+// graphRAGTier2Fallback handles the graphrag fall-through when tier-1 semantic
+// search is empty or errored. Records the tier transition Prometheus signal
+// and either returns an empty response (community cache unavailable) or
+// delegates to the text-based community search.
+func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearchRequest, startTime time.Time, requestSize int, semanticErr error) ([]byte, error) {
+	tierReason := "empty_hits"
+	if semanticErr != nil {
+		tierReason = "err"
+	}
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchTierTransition("semantic", "community_text", tierReason)
+	}
 	// Return an empty result instead of an error when the community cache
 	// is unavailable — callers should not receive a hard error just because
 	// clustering hasn't run yet.
@@ -689,9 +726,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 		if req.shouldIncludeSummaries() {
 			response.CommunitySummaries = []CommunitySummary{}
 		}
+		c.recordGlobalSearchOutcome("graphrag", &response, "no_community_cache")
 		return json.Marshal(response)
 	}
-
 	return c.globalSearchTextBased(ctx, *req, startTime, requestSize)
 }
 
@@ -763,6 +800,10 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		c.logger.Debug("semantic strategy: search unavailable",
 			"query", searchQuery,
 			"error", err)
+		if c.promMetrics != nil {
+			c.promMetrics.recordGlobalSearchEmpty("semantic", "semantic_unavailable")
+			c.promMetrics.observeGlobalSearchResponseCount(0)
+		}
 		// Graceful degradation: return empty rather than hard error.
 		return json.Marshal(GlobalSearchResponse{
 			Entities:   []*gtypes.EntityState{},
@@ -790,6 +831,9 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		"query", searchQuery,
 		"survived", len(filtered),
 		"dropped", len(semanticHits)-len(filtered))
+	if c.promMetrics != nil {
+		c.promMetrics.recordGlobalSearchHitsDropped("threshold", len(semanticHits)-len(filtered))
+	}
 
 	entityIDs := make([]string, len(filtered))
 	for i, h := range filtered {
@@ -803,6 +847,9 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 			"types", typeFilters,
 			"before", before,
 			"after", len(entityIDs))
+		if c.promMetrics != nil {
+			c.promMetrics.recordGlobalSearchHitsDropped("type_filter", before-len(entityIDs))
+		}
 	}
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
@@ -817,6 +864,16 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 	}
 
 	c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs)
+
+	if c.promMetrics != nil {
+		c.promMetrics.observeGlobalSearchResponseCount(response.Count)
+		if response.Count == 0 {
+			// Pure semantic strategy + non-empty pipeline + zero entities → either
+			// threshold or type filter wiped them; the per-stage drop counters
+			// pin which one. The empty counter aggregates the total class.
+			c.promMetrics.recordGlobalSearchEmpty("semantic", "filtered_to_empty")
+		}
+	}
 
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
@@ -969,6 +1026,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		if req.shouldIncludeSummaries() {
 			response.CommunitySummaries = []CommunitySummary{}
 		}
+		c.recordGlobalSearchOutcome("graphrag", &response, "no_communities")
 		return json.Marshal(response)
 	}
 
@@ -1060,6 +1118,7 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		response.Sources = c.buildSources(matchedEntities, nil, summaries)
 	}
 
+	c.recordGlobalSearchOutcome("graphrag", &response, "relevance_filter")
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
 }
