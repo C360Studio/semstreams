@@ -937,8 +937,8 @@ func (m *Manager) completeHTTPSetup() error {
 			}
 			return context.Background()
 		},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  m.config.ResolvedHTTPReadTimeout(),
+		WriteTimeout: m.config.ResolvedHTTPWriteTimeout(),
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -988,8 +988,8 @@ func (m *Manager) startHTTPServer() error {
 			}
 			return context.Background()
 		},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  m.config.ResolvedHTTPReadTimeout(),
+		WriteTimeout: m.config.ResolvedHTTPWriteTimeout(),
 		IdleTimeout:  60 * time.Second,
 	}
 
