@@ -1128,6 +1128,123 @@ func TestAction_PublishAgent_EmptyResponseFormat(t *testing.T) {
 	assert.Nil(t, task.ResponseFormat, "ResponseFormat should remain nil when action.ResponseFormat unset")
 }
 
+// TestAction_PublishAgent_RelatedLoops verifies that
+// action.RelatedLoops threads onto TaskMessage.Metadata under
+// agentic.MetadataKeyRelatedLoops as a map[string]any (the JSON wire
+// shape after BaseMessage round-trip). String-to-string by design.
+//
+// Use case: dev-via-spec architect needs the researcher's loop ID
+// for harness selection (semteams smoke #8 run-2); challenger
+// cross-grounding back to planner; ops-agent / ADR-033 chain_id
+// stability.
+func TestAction_PublishAgent_RelatedLoops(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.architect",
+		Role:    "architect",
+		Model:   "mock-model",
+		Prompt:  "p",
+		RelatedLoops: map[string]string{
+			"researcher": "loop-research-abc",
+			"planner":    "loop-plan-xyz",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.Metadata, "Metadata should be initialised when RelatedLoops is set")
+	rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops]
+	require.True(t, ok, "MetadataKeyRelatedLoops should be set")
+
+	// JSON round-trip turns map[string]string into map[string]any.
+	// Each value is a Go string, just typed as any — readers coerce.
+	lineage, ok := rawLineage.(map[string]any)
+	require.True(t, ok, "expected map[string]any after JSON round-trip; got %T", rawLineage)
+	assert.Equal(t, "loop-research-abc", lineage["researcher"])
+	assert.Equal(t, "loop-plan-xyz", lineage["planner"])
+}
+
+// TestAction_PublishAgent_RelatedLoops_VariableSubstitution verifies
+// that substitution tokens in RelatedLoops values resolve at execute
+// time. The load-bearing case: rule configs declare
+// `"researcher": "$entity.triple.research_loop_id"` (or any
+// supported substitution token) and the resolved ID flows onto the
+// Metadata.
+func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.architect",
+		Role:    "architect",
+		Model:   "mock-model",
+		Prompt:  "p",
+		RelatedLoops: map[string]string{
+			"researcher": "$entity.id",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "loop-research-from-entity"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	rawLineage := task.Metadata[agentic.MetadataKeyRelatedLoops]
+	lineage, ok := rawLineage.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "loop-research-from-entity", lineage["researcher"],
+		"$entity.id should substitute to ExecutionContext.EntityID")
+}
+
+// TestAction_PublishAgent_EmptyRelatedLoops verifies that an unset
+// RelatedLoops leaves Metadata's lineage key unset (back-compat:
+// existing flows that don't opt in see no Metadata change).
+func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// RelatedLoops omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	if task.Metadata != nil {
+		_, has := task.Metadata[agentic.MetadataKeyRelatedLoops]
+		assert.False(t, has, "no related_loops field should be set on Metadata when RelatedLoops is empty")
+	}
+}
+
 // TestAction_PublishAgent_EmptyActionAllowlist verifies that an unset
 // ActionAllowlist leaves Metadata's allowlist key unset (back-compat:
 // existing flows that don't opt in keep their pre-F2 free-form decide

@@ -120,6 +120,29 @@ type Action struct {
 	// model that honours response_format.
 	ResponseFormat *agentic.ResponseFormat `json:"response_format,omitempty"`
 
+	// RelatedLoops is cross-arc loop-ID lineage threaded onto the
+	// spawned task so a downstream role can read_loop_result against
+	// upstream loops without the IDs being baked into the prompt. Map
+	// keys are role names (or product-specific lineage labels);
+	// values are loop ID strings. When non-empty, executePublishAgent
+	// substitutes variables in each value and stamps the resolved map
+	// onto TaskMessage.Metadata under MetadataKeyRelatedLoops; the
+	// agentic-loop propagates that onto each ToolCall.Metadata.
+	//
+	// String-to-string only by design. The use case is loop-ID
+	// forwarding; non-string values are out of scope and would earn
+	// a dedicated typed field (Tools / ToolChoice / Timeout
+	// precedent) rather than nesting structured data here.
+	//
+	// Variable substitution applies to values, so rule authors can
+	// write `"researcher": "$entity.triple.research_loop_id"` and
+	// the resolved loop ID flows through. Substitution is NOT
+	// applied to keys (they are role/lineage labels, not data).
+	//
+	// Empty/nil leaves no lineage threaded (back-compat: pre-existing
+	// flows that don't opt in see no Metadata change).
+	RelatedLoops map[string]string `json:"related_loops,omitempty"`
+
 	// WorkflowID is the workflow identifier for trigger_workflow actions
 	WorkflowID string `json:"workflow_id,omitempty"`
 
@@ -625,6 +648,28 @@ func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefiniti
 	return resolved
 }
 
+// stampRelatedLoops writes the cross-arc loop-ID lineage map onto
+// the TaskMessage.Metadata under agentic.MetadataKeyRelatedLoops.
+// Each value goes through ec.SubstituteVariables so rule authors can
+// declare `"researcher": "$entity.triple.research_loop_id"` and the
+// resolved loop ID flows through. String-to-string by design — see
+// agentic.MetadataKeyRelatedLoops. Empty/nil RelatedLoops is a no-op
+// (back-compat: pre-existing flows that don't opt in see no
+// Metadata change).
+func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext) {
+	if len(related) == 0 {
+		return
+	}
+	if task.Metadata == nil {
+		task.Metadata = map[string]any{}
+	}
+	resolved := make(map[string]any, len(related))
+	for label, loopID := range related {
+		resolved[label] = ec.SubstituteVariables(loopID)
+	}
+	task.Metadata[agentic.MetadataKeyRelatedLoops] = resolved
+}
+
 // executePublishAgent executes a publish_agent action, triggering an agentic loop.
 // It publishes a TaskMessage to the specified NATS subject.
 func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action, ec *ExecutionContext) error {
@@ -703,6 +748,10 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 	if action.ResponseFormat != nil {
 		task.ResponseFormat = action.ResponseFormat
 	}
+
+	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
+	// Metadata stamping pattern. See stampRelatedLoops for the why.
+	stampRelatedLoops(&task, action.RelatedLoops, ec)
 
 	if e.logger != nil {
 		e.logger.Debug("Triggering agent task",

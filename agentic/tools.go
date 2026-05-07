@@ -97,6 +97,33 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 // structurally on the wire.
 const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 
+// MetadataKeyRelatedLoops is the TaskMessage.Metadata /
+// ToolCall.Metadata key under which cross-arc loop-ID lineage flows
+// from a spawning rule down to the spawned loop and into its tool
+// calls. The value is a map[string]string keyed by role name (or any
+// product-specific lineage label) where the value is the related
+// loop ID.
+//
+// Use case: a downstream role needs to read_loop_result against an
+// upstream loop without the loop ID being baked into the spawn
+// prompt. Architect needing the researcher's loop ID for harness
+// selection (semteams smoke #8 run-2 wedge cause); challenger
+// cross-grounding back to planner; ops-agent / ADR-033 chain_id
+// stability.
+//
+// String-to-string only by design. Non-string values are out of
+// scope: if a future case needs structured data, it earns a
+// dedicated typed field (the Tools / ToolChoice / Timeout
+// precedent), not a generalized escape hatch through this map.
+//
+// Empty/missing leaves no lineage threaded (back-compat).
+//
+// Set by rule.executePublishAgent from rule.Action.RelatedLoops.
+// JSON round-trip note: like ActionAllowlist, the value comes back
+// from BaseMessage decode as map[string]any (with each value still
+// a Go string) — readers coerce on access.
+const MetadataKeyRelatedLoops = "agent.related_loops"
+
 // ToolErrorKind classifies the source or nature of a tool execution failure.
 // It is the structured counterpart to ToolResult.Error and feeds the
 // agent.step.error_category graph predicate for queryable failure analysis.
