@@ -283,7 +283,9 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 	// Apply provider-specific request normalization.
 	adapter.NormalizeRequest(&chatReq)
 
-	// Convert tools if present
+	// Convert tools if present. Strict is forwarded to the SDK's native
+	// FunctionDefinition.Strict field (go-openai v1.41+); adapters that
+	// run on no-op providers clear it in NormalizeRequest. See ADR-035.
 	if len(req.Tools) > 0 {
 		tools := make([]openai.Tool, len(req.Tools))
 		for i, tool := range req.Tools {
@@ -293,6 +295,7 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 					Name:        tool.Name,
 					Description: tool.Description,
 					Parameters:  tool.Parameters,
+					Strict:      tool.Strict,
 				},
 			}
 		}

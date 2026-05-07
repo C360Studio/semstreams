@@ -23,6 +23,22 @@ type ToolDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
+
+	// Strict enables OpenAI's strict-mode tool calling: the model is
+	// constrained to emit tool_calls[].function.arguments that conform to
+	// Parameters. Symmetric to ResponseFormat.Strict — same provider table
+	// applies (see ADR-034): honored on OpenAI proper / vLLM / OpenRouter /
+	// sparky / any OpenAI-compat runtime under provider:"openai"; silently
+	// ignored on Anthropic and Gemini OpenAI-compat (adapters clear it +
+	// Warn). Best-effort on Ollama /v1 (model-dependent — gemma3 ignores
+	// per ADR-034 §gh#10001).
+	//
+	// Requires Parameters to satisfy OpenAI's strict-mode subset:
+	// additionalProperties:false at every object level, every property
+	// listed in required, no $ref/anyOf at the root, max nesting 5. A
+	// non-conforming schema returns 400 from the upstream — caller bug,
+	// not a framework concern.
+	Strict bool `json:"strict,omitempty"`
 }
 
 // Validate checks if the ToolDefinition is valid
