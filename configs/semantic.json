@@ -19,16 +19,16 @@
         "model": "qwen3-0.6b",
         "max_tokens": 4096
       },
-      "seminstruct-mid": {
+      "seminstruct-mid-answer": {
         "provider": "openai",
-        "url": "http://seminstruct-mid:8083/v1",
+        "url": "http://seminstruct-mid-answer:8083/v1",
         "model": "qwen3-1.7b",
         "max_tokens": 4096
       },
-      "seminstruct-quality": {
+      "seminstruct-mid-summary": {
         "provider": "openai",
-        "url": "http://seminstruct-quality:8083/v1",
-        "model": "qwen3-8b",
+        "url": "http://seminstruct-mid-summary:8083/v1",
+        "model": "qwen3-1.7b",
         "max_tokens": 4096
       },
       "semembed": {
@@ -40,14 +40,14 @@
     },
     "capabilities": {
       "intent_classification": { "preferred": ["seminstruct-fast"] },
-      "community_summary":     { "preferred": ["seminstruct-quality"] },
-      "answer_synthesis":      { "preferred": ["seminstruct-mid"] },
-      "anomaly_review":        { "preferred": ["seminstruct-mid"] },
-      "layer_normalization":   { "preferred": ["seminstruct-mid"] },
+      "answer_synthesis":      { "preferred": ["seminstruct-mid-answer"] },
+      "community_summary":     { "preferred": ["seminstruct-mid-summary"] },
+      "anomaly_review":        { "preferred": ["seminstruct-mid-summary"] },
+      "layer_normalization":   { "preferred": ["seminstruct-mid-summary"] },
       "embedding":             { "preferred": ["semembed"] }
     },
     "defaults": {
-      "model": "seminstruct-mid"
+      "model": "seminstruct-mid-answer"
     }
   },
   "services": {
