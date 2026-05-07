@@ -586,9 +586,17 @@ func (s *LLMSummarizer) SummarizeCommunity(
 	default:
 	}
 
-	// Use statistical summarizer for keywords and rep entities
-	// (LLM will generate the narrative summary)
-	keywords := s.FallbackSummarizer.extractKeywords(entities)
+	// Reuse LPA-computed keywords when present (set during community detection
+	// with corpus-DF weighting). Recomputing here would lose the corpus-wide
+	// IDF context — the worker only sees this one community's entities, not
+	// the full corpus, so a fresh extraction reverts to TF-only ranking and
+	// re-introduces the universal-predicate dominance the IDF fix corrected.
+	// Fall back to fresh extraction only when Keywords is unset (direct
+	// callers that bypass the LPA pipeline).
+	keywords := community.Keywords
+	if len(keywords) == 0 {
+		keywords = s.FallbackSummarizer.extractKeywords(entities)
+	}
 	repEntities := s.FallbackSummarizer.findRepresentativeEntities(ctx, entities)
 
 	// Fetch entity content internally if ContentFetcher is configured
