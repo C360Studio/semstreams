@@ -1,17 +1,29 @@
-# Observability as Polars: Framing for the Ops Agent and Governance
+# Observability as Operating Curves: Framing for the Ops Agent and Governance
 
 **Status:** Concept doc — the conceptual foundation for
-[ADR-033](../adr/033-polar-based-observability.md) (Polar-Based
-Observability). Sections 1–3 are framing; section 4 is the working
-axis catalog and is expected to grow as new failure modes are
-observed.
+[ADR-033](../adr/033-operating-curve-based-observability.md)
+(Operating-Curve-Based Observability). Sections 1–3 are framing;
+section 4 is the working axis catalog and is expected to grow as
+new failure modes are observed.
 
-ADR-033 distills the structural commitments and resolves the §7.4
-ops-agent → coordinator signal contract that this doc deferred. This
-concept doc remains the durable home for the full reasoning behind
-the polar/coefficient/stationarity/separation framing.
+ADR-033 distills the structural commitments and resolves the §7
+ops-agent → coordinator signal contract that this doc deferred.
+This concept doc remains the durable home for the full reasoning
+behind the operating-curve / coefficient / stationarity / separation
+framing.
 
-**Date:** 2026-05-04
+**Terminology note (2026-05-07):** Earlier drafts of this doc and
+ADR-033 used the aerodynamics term *polar* for what we now call
+*operating curves*. The aero term is historical (Eiffel ran early
+lift/drag experiments in polar coordinates; the name stuck even
+after the field switched to Cartesian L/D plots) and confused
+readers without aero fluency. *Operating curve* carries the same
+discipline — measure these systematically across regimes, treat
+them as engineering artifacts — without the historical baggage.
+Where this doc needs the original aero term for clarity (drag
+polar, lift polar), it uses it explicitly with the aero qualifier.
+
+**Date:** 2026-05-04 (terminology revised 2026-05-07)
 
 ## 1. Why this doc exists
 
@@ -43,7 +55,7 @@ ops-agent is built so that the ops-agent's design can be evaluated
 *against* the frame, rather than the frame being reverse-engineered
 from whatever the ops-agent ends up doing.
 
-## 2. The framing: coefficients, polars, and stationarity
+## 2. The framing: coefficients, operating curves, and stationarity
 
 ### 2.1 Why this is empirical, not derivational
 
@@ -108,15 +120,33 @@ over this by demanding a number. They are right to demand it —
 without one you can't optimise — but the number they get is often a
 Goodhart loader for the actual goal.
 
-### 2.3 Polars as the reframe
+### 2.3 Operating curves as the reframe
 
-A polar in aerodynamics is not a number. It is a curve — typically
-lift coefficient plotted against drag coefficient across angle of
-attack. The interesting engineering knowledge is not any single
-point on it. It is the curve's *shape*: where lift is linear, where
-it rolls off, where stall happens, how stall behaves (gentle vs.
-abrupt), what the L/D maximum is and at what angle. Different
-missions select different operating points on the same polar.
+A *polar* in aerodynamics is not a number. It is a curve —
+typically lift coefficient plotted against drag coefficient across
+angle of attack. The term is historical: Eiffel ran his early
+lift/drag experiments at Champ-de-Mars using polar coordinates, and
+the name stuck through Lilienthal and into NACA's systematic
+airfoil studies even after the field switched to Cartesian L/D
+plots. So today's "drag polar" is polar-only-by-history; the
+geometry isn't polar in any meaningful sense. The discipline the
+term carries — *measure these curves systematically across regimes
+and treat them as engineering artifacts* — is what we want. The
+historical name itself confuses readers outside aerospace.
+
+We'll call them **operating curves**. Same engineering discipline,
+less historical baggage, parses correctly for software and
+governance audiences without aero fluency. Where this doc needs
+the original aerospace term for clarity (drag polar, lift polar),
+it uses it explicitly with the aero qualifier; everywhere else,
+operating curves.
+
+The interesting engineering knowledge in any operating curve is
+not a single point on it. It is the curve's *shape*: where the
+relationship is linear, where it rolls off, where it stalls, how
+stall behaves (gentle vs. abrupt), what the optimum trade-off is
+and at what operating condition. Different missions select
+different operating points on the same curve.
 
 The agentic analog: don't ask *what's the quality of this flow.*
 Ask *what does the quality-vs-cost curve look like, and where do
@@ -126,19 +156,19 @@ variants, max_iteration caps produces a *curve*, not a point. The
 adopter who wants throughput operates at one point; the adopter who
 wants maximum spec fidelity operates at another.
 
-Polars don't solve the single-measure problem. They reframe it.
-The field still has to commit to *which axes to plot*. The honest
-gain is narrower:
+Operating curves don't solve the single-measure problem. They
+reframe it. The field still has to commit to *which axes to plot.*
+The honest gain is narrower:
 
-> Polars push the unsolved part to a place where it's visible
-> rather than hidden, and visibility is most of what you need to
-> maintain a system over time.
+> Operating curves push the unsolved part to a place where it's
+> visible rather than hidden, and visibility is most of what you
+> need to maintain a system over time.
 
-Single-scalar approaches blind you to axis divergence. Polar-based
-approaches at least *show you* the loader as it forms. When two
-metrics that historically tracked stop tracking, that is the early
-signal that one of them has become a Goodhart proxy for the other.
-That visibility is what the ops-agent is for.
+Single-scalar approaches blind you to axis divergence.
+Curve-based approaches at least *show you* the loader as it forms.
+When two metrics that historically tracked stop tracking, that is
+the early signal that one of them has become a Goodhart proxy for
+the other. That visibility is what the ops-agent is for.
 
 ### 2.4 Stationarity is the meta-axis
 
@@ -146,23 +176,24 @@ There is one disanalogy with aerodynamics that we have to take
 seriously. Aerodynamic polars are stationary. The lift curve of a
 NACA 0012 airfoil at Re=6M is the same today as it was in 1947.
 
-Agentic system polars are not stationary. The curve for *claude-
-sonnet-4-6 with this persona on this flow* will be a different
-curve when 4-7 ships, when a persona fragment is edited, when an
-underlying tool-execution path changes its retry behaviour. Polars
-have shelf life.
+Agentic system operating curves are not stationary. The curve for
+*claude-sonnet-4-6 with this persona on this flow* will be a
+different curve when 4-7 ships, when a persona fragment is edited,
+when an underlying tool-execution path changes its retry behaviour.
+Operating curves have shelf life.
 
 This is the deepest job of the ops-agent, and the place where most
 of its long-term value sits: **maintain a living, regime-indexed
-polar library that knows when it is stale.** Aerospace doesn't have
-to do this because air doesn't change. We do, because models do.
+operating-curve library that knows when it is stale.** Aerospace
+doesn't have to do this because air doesn't change. We do, because
+models do.
 
 The mechanism is sentinel runs. A curated, fixed set of prompts
 re-executed on schedule against the live system, with their results
-compared against the established polar. Stationary regime: results
+compared against the established curve. Stationary regime: results
 sit on the curve within variance. Regime shift: a step. Drift: a
 slope. The stationarity check itself is mechanical and requires no
-LLM judgment. The diagnosis of *why* a polar drifted is where LLM
+LLM judgment. The diagnosis of *why* a curve drifted is where LLM
 reasoning earns its keep, but only after the mechanical detector
 has flagged that something drifted.
 
@@ -189,10 +220,10 @@ judgment; tester-from-builder collapse rejected on the same
 grounds): **separate the measurer from the measured.** The
 ops-agent should be a stateless reader of the predicate stream. It
 proposes sweeps, identifies inflection points, flags stationarity
-drift. The agents running the actual flows do not see the polar
-library, do not optimise against accumulated XP, do not "level up."
-They do the job. A separate observer infrastructure builds polars
-from outside.
+drift. The agents running the actual flows do not see the
+operating-curve library, do not optimise against accumulated XP,
+do not "level up." They do the job. A separate observer
+infrastructure builds operating curves from outside.
 
 This is also why the objective-spec model is structurally better
 than any intrinsic evidence-accumulation model. The spec is
@@ -214,9 +245,9 @@ cross the gate.*
 
 This is the classic IDS-vs-IPS distinction from network security.
 AGT is largely an IPS — it blocks the action. The ops-agent +
-polar library this doc proposes is largely an IDS — it watches for
-patterns suggesting a previously-good system is degrading. They
-answer different questions:
+operating-curve library this doc proposes is largely an IDS — it
+watches for patterns suggesting a previously-good system is
+degrading. They answer different questions:
 
 - AGT: *is this specific action allowed right now?*
 - Ops-agent: *is this system's behaviour pattern stable, or is it
@@ -226,17 +257,17 @@ A system with AGT and not the second is well-defended against
 known threats and blind to novel drift. A system with the second
 and not AGT detects drift but lets bad actions through while it's
 diagnosing them. **You want both, and they compose.** AGT is the
-policy floor; the polar library is the observability ceiling. The
-OWASP/ASI catalog is the bridge — it gives both layers a shared
-vocabulary for what "known bad" means.
+policy floor; the operating-curve library is the observability
+ceiling. The OWASP/ASI catalog is the bridge — it gives both
+layers a shared vocabulary for what "known bad" means.
 
 The structural claim this doc makes: **governance is not a
 separate concern; it is a curated set of axes within the existing
 observability discipline.** Quality axes (the failure modes we have
 directly observed in our own smoke runs) and governance axes (the
 externally-curated failure catalog we adopt) feed the same
-predicate stream, the same polar library, the same ops-agent
-diagnoses. The split exists for traceability and for the
+predicate stream, the same operating-curve library, the same
+ops-agent diagnoses. The split exists for traceability and for the
 conversation with auditors and adopters. Internally, it is the
 same machinery.
 
@@ -251,12 +282,13 @@ no longer matters under the current regime.
 
 The catalog is split into *quality axes* and *governance axes* for
 traceability. The split is documentary, not structural — both
-classes feed the same predicate stream and the same polar library.
+classes feed the same predicate stream and the same operating-curve
+library.
 
 ### 4.1 Quality axes
 
 Failure modes observed directly in SemTeams smoke runs and
-code-review pivots, with the polar pair that surfaces each one and
+code-review pivots, with the axis pair that surfaces each one and
 the triples required to compute it.
 
 **Q1. Substance vs. ceremony**
@@ -264,7 +296,7 @@ the triples required to compute it.
 - Failure history: R3.4a (22 loops, $8, no terminal artifact)
   vs. R3.4b (6 loops, $1.50, terminal artifact). ADR-031
   §addendum 2026-05-02.
-- Polar pair: cumulative cost (or loops) vs. terminal-artifact
+- Axis pair: cumulative cost (or loops) vs. terminal-artifact
   structural-validator pass rate.
 - Healthy regime: cost and validation rate track. More cost buys
   more validated artifacts.
@@ -274,7 +306,7 @@ the triples required to compute it.
   terminal-artifact validator result keyed to chain ID. The third
   is the structural validator from ADR-031 §addendum 2026-05-02
   final note — *not yet shipped.* Shipping it is partly motivated
-  by needing it as a polar y-axis.
+  by needing it as a curve y-axis.
 
 **Q2. Self-grounding vs. real grounding**
 
@@ -282,7 +314,7 @@ the triples required to compute it.
   authored against builder-authored mock; "tests pass" satisfied
   without exercising any real integration boundary. The Goodhart
   case study that motivated the test-harness-as-flow conversation.
-- Polar pair: tests-passing claims vs. integration-point coverage
+- Axis pair: tests-passing claims vs. integration-point coverage
   against non-builder-authored fixtures.
 - Healthy regime: claims and coverage track.
 - Failure signature: tests-passing high, integration-point coverage
@@ -298,7 +330,7 @@ the triples required to compute it.
   parse rate degrading silently until Semantic Aligned Parsers
   were added with loud triggering. Not directly a SemTeams
   failure, but the pattern transfers.
-- Polar pair: tool calls attempted vs. tool calls successfully
+- Axis pair: tool calls attempted vs. tool calls successfully
   parsed without fallback intervention.
 - Healthy regime: parse-clean rate stable near 1.0.
 - Failure signature: parse-clean rate falls, fallback-rescue rate
@@ -320,7 +352,7 @@ the triples required to compute it.
 - Failure history: not yet observed; this is the axis that will
   settle the challenger-earns-its-keep question raised in the
   early-adopter / BMAD conversation.
-- Polar pair: per-role invocations vs. role-induced revisions
+- Axis pair: per-role invocations vs. role-induced revisions
   citing concerns the predecessor role didn't catch.
 - Healthy regime for an earning-its-keep role: a non-trivial
   fraction of `concerns_raised` (or `insufficient`) outcomes cite
@@ -344,7 +376,7 @@ the triples required to compute it.
   observed when claude-sonnet-4-7 ships, when persona fragments
   are edited at scale, or when underlying capability behaviour
   changes.
-- Polar pair: time vs. sentinel-run results on any other axis the
+- Axis pair: time vs. sentinel-run results on any other axis the
   catalog tracks.
 - Healthy regime: flat line within variance.
 - Failure signatures: step function (regime shift), gradual slope
@@ -353,20 +385,20 @@ the triples required to compute it.
   predicate-stream replay capability. This is observability
   *infrastructure* — not metric emission. The flows don't need to
   know they're sentinels; the ops-agent does.
-- This is the axis that protects the polar library from itself.
+- This is the axis that protects the operating-curve library from itself.
   Without it, the library accumulates evidence that silently mixes
   across regimes.
 
 ### 4.2 Governance axes
 
 Adopted from OWASP Agentic Top 10 / ASI 2026 taxonomy. Each is
-mapped to the polar pair that surfaces it, the triples needed, and
+mapped to the axis pair that surfaces it, the triples needed, and
 the relationship to existing SemTeams enforcement (so we know
 where we already have the gate but lack the metric).
 
 **G1. Goal hijacking (ASI01) — prompt injection in tool results**
 
-- Polar pair: instructions-from-user acted upon vs. instructions-
+- Axis pair: instructions-from-user acted upon vs. instructions-
   from-tool-results acted upon.
 - Failure signature: actions-on-tool-result-instructions rate rises
   above baseline.
@@ -378,7 +410,7 @@ where we already have the gate but lack the metric).
 
 **G2. Tool misuse (ASI02)**
 
-- Polar pair: persona-allowed tool calls vs. allowlist denials.
+- Axis pair: persona-allowed tool calls vs. allowlist denials.
 - Failure signature: denial rate rising trend.
 - Triples: per-tool-call, persona at call time, allowlist outcome.
 - Existing enforcement: `agentic-governance.enable_tool_governance`
@@ -387,7 +419,7 @@ where we already have the gate but lack the metric).
 
 **G3. Identity abuse (ASI03)**
 
-- Polar pair: header-verified identity rate vs. body-fallback
+- Axis pair: header-verified identity rate vs. body-fallback
   identity rate.
 - Failure signature: body-fallback rate rising — identical pattern
   to Q3's fallback-rate-as-early-warning.
@@ -398,7 +430,7 @@ where we already have the gate but lack the metric).
 
 **G4. Supply chain (ASI04)**
 
-- Polar pair: source ingestion from approved namespaces vs.
+- Axis pair: source ingestion from approved namespaces vs.
   ingestion attempts blocked.
 - Failure signature: blocked-ingestion rate rising; sources from
   unfamiliar namespaces appearing in the trusted-source set.
@@ -410,16 +442,16 @@ where we already have the gate but lack the metric).
 
 **G5. Cascading failures (ASI05)**
 
-- Polar pair: chain depth vs. terminal-artifact validator pass rate.
+- Axis pair: chain depth vs. terminal-artifact validator pass rate.
 - Failure signature: long chains with falling validation rate —
   cascading retry without convergence.
-- Triples: same as Q1; this is the same machinery, different polar
+- Triples: same as Q1; this is the same machinery, different axis
   pair.
 - Existing enforcement: `max_iterations` caps on rules.
 
 **G6. Memory poisoning (ASI06)**
 
-- Polar pair: predicates from trusted sources vs. predicates with
+- Axis pair: predicates from trusted sources vs. predicates with
   provenance to ingested external content acted upon downstream.
 - Failure signature: cross-grounding rate against untrusted sources
   rising; downstream artifacts citing predicates whose lineage
@@ -433,7 +465,7 @@ where we already have the gate but lack the metric).
 
 **G7. Insecure communication (ASI07)**
 
-- Polar pair: inter-agent messages signed vs. unsigned.
+- Axis pair: inter-agent messages signed vs. unsigned.
 - Failure signature: any unsigned message in a signed-only
   pathway.
 - Triples: per-message, signature presence.
@@ -444,7 +476,7 @@ where we already have the gate but lack the metric).
 
 **G8. Code execution (ASI08)**
 
-- Polar pair: sandboxed-bash invocations within default capability
+- Axis pair: sandboxed-bash invocations within default capability
   set vs. invocations with non-default capabilities.
 - Failure signature: non-default-capability rate rising.
 - Triples: per-bash-execution, capability set, sandbox profile.
@@ -454,7 +486,7 @@ where we already have the gate but lack the metric).
 
 **G9. Human-agent trust exploitation (ASI09)**
 
-- Polar pair: approvals granted vs. approval outcomes correlated
+- Axis pair: approvals granted vs. approval outcomes correlated
   with downstream artifact validity.
 - Failure signature: high approval rate, low correlation between
   approved actions and validated downstream artifacts —
@@ -467,7 +499,7 @@ where we already have the gate but lack the metric).
 
 **G10. Rogue agents (ASI10)**
 
-- Polar pair: loops spawned by user/rule vs. loops with anomalous
+- Axis pair: loops spawned by user/rule vs. loops with anomalous
   spawn provenance (no rule trigger, no user message, no
   recognised parent).
 - Failure signature: any non-zero rate of anomalous spawn
@@ -512,7 +544,7 @@ A few patterns worth naming once rather than repeating per-axis:
 
 ## 5. Stationarity discipline
 
-Sentinel runs are how the polar library survives non-stationary
+Sentinel runs are how the operating-curve library survives non-stationary
 underpinnings. The discipline:
 
 - **Curated set, not full corpus.** A handful (single-digit) of
@@ -524,28 +556,28 @@ underpinnings. The discipline:
   trigger for explicit regime shifts (model upgrade, persona
   fragment edit, capability surface change).
 - **Compare against established curve.** Mechanical: did the
-  result sit on the polar within established variance? This check
+  result sit on the curve within established variance? This check
   uses no LLM judgment.
 - **LLM judgment only for diagnosis.** When a sentinel falls off
   the curve, *why* is the question that earns LLM reasoning. The
   detection is mechanical; the diagnosis is interpretive. Keep
   the boundary clean.
-- **Polars expire; mark them.** Every polar in the library has a
-  regime annotation: which model, which prompt, which persona
-  versions, which capability surface. When any of those change,
-  the polar is suspect until re-validated. The ops-agent's
-  invariant: *no polar is consulted past its regime boundary
-  without flagging.*
+- **Operating curves expire; mark them.** Every curve in the
+  library has a regime annotation: which model, which prompt,
+  which persona versions, which capability surface. When any of
+  those change, the curve is suspect until re-validated. The
+  ops-agent's invariant: *no curve is consulted past its regime
+  boundary without flagging.*
 - **Coordinator-driven adjustments are regime annotations too.**
   When the coordinator acts on an ops-agent signal to tune a
   parameter within objective-spec bounds (§6), the adjustment is
-  recorded on the affected polars exactly the same way a model
+  recorded on the affected curves exactly the same way a model
   upgrade is. Pre-adjustment data is preserved and tagged;
   post-adjustment data starts a new sub-curve. This is what
   prevents successful adjustment from masking underlying drift —
   the symptom may be compensated, but the regime boundary is
-  visible in the polar library, and the next sentinel pass reads
-  the post-adjustment curve on its own terms.
+  visible in the operating-curve library, and the next sentinel
+  pass reads the post-adjustment curve on its own terms.
 
 ## 6. What this is not
 
@@ -577,18 +609,19 @@ nearby attractors that this design deliberately rejects:
   on signals the measurer emits within bounds something else
   authored.
 - **Not an autoresearcher.** The ops-agent does not optimise
-  against a single scalar. It maintains polars and respects the
-  unsolved-ness of single-measure as documented in §2.2.
-- **Not a tester.** Tests gate; polars observe. The structural
-  validators that already exist (and the ones ADR-031 §addendum
-  proposes shipping) are the gating layer. The ops-agent reads
-  the predicates the validators emit, but it does not replace
-  them.
+  against a single scalar. It maintains operating curves and
+  respects the unsolved-ness of single-measure as documented in
+  §2.2.
+- **Not a tester.** Tests gate; operating curves observe. The
+  structural validators that already exist (and the ones ADR-031
+  §addendum proposes shipping) are the gating layer. The ops-agent
+  reads the predicates the validators emit, but it does not
+  replace them.
 - **Not a replacement for AGT-style policy enforcement.** §3
-  argues the layered position. The polar library complements
+  argues the layered position. The operating-curve library complements
   policy enforcement; it does not substitute.
 - **Not intrinsic to the flows.** The separation principle (§2.5)
-  means flows do not see the polar library and do not optimise
+  means flows do not see the operating-curve library and do not optimise
   against it. Any design that violates this is reverting to
   semdragon's XP coupling and inherits its survivorship-bias
   failure mode.
@@ -606,7 +639,7 @@ nearby attractors that this design deliberately rejects:
 
 - **What is the right schedule for sentinel runs?** Daily seems
   cheap for cost/latency; weekly for validation; the model-upgrade
-  trigger is what keeps the polar library current. Open: whether
+  trigger is what keeps the operating-curve library current. Open: whether
   to run sentinels in a dedicated environment vs. piggybacking on
   the live system. Aerospace runs in a dedicated wind tunnel for a
   reason — measurement environment matters. Equivalent here may
@@ -614,10 +647,10 @@ nearby attractors that this design deliberately rejects:
 
 - **How does this interact with ADR-027 Phase 1's ops-agent
   scope?** The objective-spec README is shaped for per-flow specs.
-  This doc proposes a meta-layer above per-flow specs (the polar
-  library, regime-indexed). They compose, but the relationship
-  needs to be explicit in whatever ADR formalises the ops-agent
-  design.
+  This doc proposes a meta-layer above per-flow specs (the
+  operating-curve library, regime-indexed). They compose, but the
+  relationship needs to be explicit in whatever ADR formalises the
+  ops-agent design.
 
 - **What does the ops-agent → coordinator signal/action contract
   look like?** §6 establishes that ops-agent emits signals and
@@ -626,9 +659,9 @@ nearby attractors that this design deliberately rejects:
   pieces:
 
   - *Signal taxonomy.* What predicates does ops-agent emit? Working
-    list: polar-departure (axis, magnitude, duration), threshold-
+    list: curve-departure (axis, magnitude, duration), threshold-
     crossed (metric, direction, sustained-for), regime-expired
-    (polar identity, expiration cause). These need to be enumerable
+    (curve identity, expiration cause). These need to be enumerable
     and stable because the coordinator's rules will fire on them.
   - *Adjustment record schema.* Probably a typed payload the
     coordinator emits per ADR-031's `emit_*_artifact` pattern —
@@ -655,6 +688,77 @@ nearby attractors that this design deliberately rejects:
   powerful. ADR-030's allowlist machinery is closer to template;
   worth understanding why before deciding.
 
+- **Does the operating-curve library become a topology with
+  enough data?** Volume alone doesn't drive this. What would drive
+  it is systematic sweep coverage across the *design choices*
+  themselves — persona-set variants, role decompositions,
+  rule-gating shapes — not just sweeps of continuous knobs
+  (reasoning_effort, model tier, max_iterations) within a fixed
+  design choice.
+
+  The shape this points at: each design choice is a *node*.
+  Inside a node, the continuous knobs trace out a *surface* of
+  curves — vary reasoning_effort smoothly, the curve moves
+  smoothly. Between nodes, the transitions are *discrete* — you
+  either have the challenger role or you don't; there is no
+  smooth path between four-role and three-role chains. So the
+  right object isn't a single connected manifold; it's a graph
+  of design-choice nodes with a surface attached at each node.
+
+  Some §4 observations already gesture at this. Q1 and G5
+  sharing machinery is two slices that are *the same slice* —
+  same surface, different label. Fallback-rate-as-universal-
+  early-warning (§4.3) is a *structural pattern* that recurs
+  across multiple surfaces (Q3, G3, future graceful-degradation
+  paths) — the same local shape appearing at different nodes of
+  the design graph. These are the kinds of regularities a
+  topology view makes legible that a flat list of curves doesn't.
+
+  Three sub-questions before this earns its keep:
+
+  - *At what coverage threshold does the graph-of-surfaces
+    framing pay off over independent curves?* Probably when we've
+    actually run sweeps that vary discrete design choices (not
+    just continuous knobs) — and we mostly haven't yet. The
+    R3.4a → R3.4b pivot is one such sweep; we need more before
+    the topology view is anything other than aspirational.
+  - *How does the non-stationarity from §2.4 propagate?* A model
+    upgrade doesn't just shift one curve; it potentially deforms
+    every surface at every node. The operating-curve library
+    going stale becomes "the whole graph going stale."
+    Stationarity discipline scales, but the bookkeeping gets
+    harder and the sentinel-run schedule may need to be node-
+    aware rather than curve-aware.
+  - *How do we distinguish measured shape from fitted-and-
+    therefore-asserted shape?* Reaching for topology too early
+    is its own Goodhart trap — an asserted surface implies
+    relationships between points that might not be real, and
+    decisions made against the asserted surface optimise against
+    something the measurements don't actually support. Same
+    discipline as §6's "not an autoresearcher" — the framing
+    must stay descriptive of what was measured, not predictive
+    of what would happen at points not yet measured.
+
+  Probably premature to commit on any of these before the per-
+  curve discipline has shipped and stabilised. *But:* every
+  smoke run should already record its full design-point
+  coordinates — not just measured outcomes — so future topology
+  assembly is possible without re-running. That's a small
+  instrumentation discipline that costs nothing now and preserves
+  the option. Worth flagging in whatever ADR formalises predicate
+  emission.
+
+  The deeper reason to hold this open question even while
+  deferring it: the topology framing is what would let governance
+  arguments become structural rather than per-axis. *"This region
+  of the design space satisfies these governance bounds; this
+  region doesn't; the boundary between them has these
+  properties"* is a different kind of argument than *"axis G3
+  looks healthy."* Auditors and policy reviewers will eventually
+  want the structural argument. Knowing that's the destination
+  affects what data we collect now in ways that make the
+  topology recoverable later.
+
 - **At what point does this become an ADR?** Probably when §4
   has been validated against two or three real failure-mode
   observations rather than the one (R3.4a→b) it currently rests
@@ -678,7 +782,7 @@ nearby attractors that this design deliberately rejects:
 - Stanford Meta-Harness, Lee et al. — referenced in
   `docs/objectives/README.md`.
 - Karpathy autoresearch lineage — single-scalar optimisation
-  framing this doc reframes via polars.
+  framing this doc reframes via operating curves.
 - Conversational lineage: 2026-05-04 framing conversation
   (aerodynamics analogy, polar/coefficient distinction,
   separation principle from semdragon).

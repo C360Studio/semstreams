@@ -1,4 +1,4 @@
-# ADR-033: Polar-Based Observability — Drift Detection Primitives for Agentic Systems
+# ADR-033: Operating-Curve-Based Observability — Drift Detection Primitives for Agentic Systems
 
 ## Status
 
@@ -8,6 +8,24 @@ SemTeams second-pass sign-off received same day with verdict
 "Accept. The ADR is now in shape to flip Status: Proposed →
 Accepted, which unblocks the semspec/pkg/health type hoist and
 SemTeams' Phase 2 adoption work."
+
+**Terminology revision (2026-05-07):** Earlier drafts of this ADR
+and the concept doc used the aerodynamics term *polar* for what is
+now called *operating curve*. The aero term is historical (Eiffel's
+early lift/drag experiments at Champ-de-Mars used polar coordinates;
+the name stuck through Lilienthal and NACA even after the field
+switched to Cartesian L/D plots) and parsed badly outside aerospace
+contexts. *Operating curve* carries the same engineering discipline
+without the historical baggage. Substantive content unchanged; type
+names, agvocab predicates, storage bucket names, and prose all
+updated. Affected identifiers: `OperatingCurve` (was `Polar`),
+`CurveSample` (was `PolarSample`), `CurveID` / `CurveRefs` (was
+`PolarID` / `PolarRefs`), `ops.curve_departure.*` (was
+`ops.polar_departure.*`), `OBSERVABILITY_CURVES` (was
+`OBSERVABILITY_POLARS`). Filename also renamed:
+`033-polar-based-observability.md` →
+`033-operating-curve-based-observability.md`. No code-level
+migration needed since the type hoist had not yet started.
 
 This unblocks:
 
@@ -37,11 +55,11 @@ structural revisions integrated below:
    ship without waiting. Specific G2/G4/G8 axes that depend on
    ADR-032 enforcement gates remain sequenced after that work
    resumes; they are not Phase 1 prerequisites.
-2. **Sweep → polar pipeline scoped explicitly to a later phase.**
-   The ADR establishes that polars are curves (not points) and that
+2. **Sweep → operating-curve pipeline scoped explicitly to a later phase.**
+   The ADR establishes that operating curves are curves (not points) and that
    sweeps across reasoning_effort / model tier / persona-fragment
    variants / max_iteration produce them. *How* a sweep becomes a
-   stored polar — the harness side, not the data side — is product-
+   stored operating curve — the harness side, not the data side — is product-
    flavored tooling that lives in Phase 4 alongside coordinator-
    driven adjustment, not in the framework primitives.
 3. **Policy-surface concern reframed as diagnosis-only-default,
@@ -78,7 +96,7 @@ Type hoist (`semspec/pkg/health` → SemStreams) gated on this ADR
 flipping Status: Proposed → Accepted.
 
 The conceptual foundation lives in
-[docs/concepts/19-observability-as-polars.md](../concepts/19-observability-as-polars.md).
+[docs/concepts/19-observability-as-operating-curves.md](../concepts/19-observability-as-operating-curves.md).
 This ADR distills that framing into the structural commitments
 SemStreams takes on, the framework/product boundary, and the
 ops-agent → coordinator signal contract that the framing doc
@@ -89,7 +107,7 @@ When this ADR is accepted:
 - ADR-027 (ops-agent meta-harness) is **refined**, not superseded.
   Phase 1 (read-only diagnosis via `emit_diagnosis`) stays. The
   per-axis Pareto-frontier framing in ADR-027 Phase 3 is reframed
-  here as polar-library curves with regime annotations. The seven
+  here as operating-curve-library curves with regime annotations. The seven
   tunable harness axes from ADR-027 §"Tunable harness elements" stay
   valid; this ADR adds the discipline that bounds *how* the ops-agent
   reasons over them.
@@ -149,16 +167,16 @@ left for a later ADR. This ADR resolves it.
 SemStreams commits to **four structural decisions** that scope the
 ops-agent and shape the framework/product boundary.
 
-### D1. Polars are the observability frame; single scalars live inside regimes
+### D1. Operating curves are the observability frame; single scalars live inside regimes
 
 The objective-spec README's single-scalar discipline is correct
 *within a regime*. Across regimes (model upgrade, persona-fragment
 edit, capability-surface change), single scalars hide axis
-divergence and load Goodhart proxies. Polars — curves indexed by
+divergence and load Goodhart proxies. Operating curves — curves indexed by
 operating point and tagged with regime — are the discipline above
 the per-flow objective spec.
 
-**Polars do not solve the single-measure problem; they make it
+**Operating curves do not solve the single-measure problem; they make it
 visible.** That visibility is what the ops-agent earns its keep on.
 This is layered on top of objective specs, not in competition with
 them.
@@ -168,7 +186,7 @@ them.
 The ops-agent is a **stateless reader of the predicate stream.**
 It proposes sweeps, identifies inflection points, flags drift, emits
 structured signals. It does not write into flow configuration. It
-cannot rewrite its own scope. Flows do not see the polar library
+cannot rewrite its own scope. Flows do not see the operating-curve library
 and do not optimise against it.
 
 This forecloses semdragon's character-XP failure mode (closed-loop
@@ -193,10 +211,10 @@ allowed and necessary.
 
 The OWASP ASI 2026 catalog and Microsoft AGT enforcement set the
 governance vocabulary. That vocabulary feeds the same predicate
-stream and the same polar library as quality axes. The split exists
+stream and the same operating-curve library as quality axes. The split exists
 for traceability and for conversations with auditors. Internally,
 quality axes (Q1–Q5 in the catalog) and governance axes (G1–G10)
-share the same Detector / Diagnosis / Polar machinery.
+share the same Detector / Diagnosis / operating-curve machinery.
 
 ADR-032 is the IPS (block at the gate). This ADR is the IDS (watch
 for drift toward the gate). They compose. The framing doc's §3 is
@@ -212,14 +230,14 @@ cut. SemStreams ships **opinion-free machinery**. Products ship
 | Concern | Lives in | Why |
 |---|---|---|
 | `Detector` interface, `Diagnosis` shape, `EvidenceRef` shape, `Bundle` shape | SemStreams (framework) | Pure, deterministic, no product knowledge. Working precedent in `semspec/pkg/health`. |
-| `Polar`, `RegimeAnnotation`, `SentinelRun` data shapes | SemStreams (framework) | Mechanical observability infrastructure. Storage layout for the polar library. |
+| `OperatingCurve`, `RegimeAnnotation`, `SentinelRun` data shapes | SemStreams (framework) | Mechanical observability infrastructure. Storage layout for the operating-curve library. |
 | Sentinel-run scheduler | SemStreams (framework, reusing ADR-031 cron rule) | A sentinel run is a cron rule with a fixture-controlled prompt set and a regime-tagged result write-back. No new scheduler. |
-| Stationarity-check primitive (variance comparison vs. established curve) | SemStreams (framework) | Mechanical, no LLM judgment. Pure function over `Polar` + new sample. |
-| Signal taxonomy as agvocab predicates: `ops.polar_departure.*`, `ops.threshold_crossed.*`, `ops.regime_expired.*` | SemStreams (framework) | Vocabulary, not opinion. Same shape as `coordinator.next_action`. |
+| Stationarity-check primitive (variance comparison vs. established curve) | SemStreams (framework) | Mechanical, no LLM judgment. Pure function over `OperatingCurve` + new sample. |
+| Signal taxonomy as agvocab predicates: `ops.curve_departure.*`, `ops.threshold_crossed.*`, `ops.regime_expired.*` | SemStreams (framework) | Vocabulary, not opinion. Same shape as `coordinator.next_action`. |
 | Ops-agent state machine (read predicate stream → mechanical detect → emit signal) | SemStreams (framework) | Generic orchestration loop. Reuses `agentic-loop`. |
 | The axis catalog itself (Q1–Q5, G1–G10, future axes) | Product (semteams, semspec) | Curated against this product's failure modes. Different products care about different axes. |
 | Detector implementations (`ThinkingSpiral`, `RapidShallowToolCalls`, `EmptyStopAfterToolCalls`, terminal-artifact validators, etc.) | Product | Each detects a failure mode specific to product flows. |
-| Ops-agent diagnosis persona (LLM prompt for "why did this polar drift") | Product | Voice, tone, evidence framing — product-shaped. SemTeams ≠ SemSpec here. |
+| Ops-agent diagnosis persona (LLM prompt for "why did this operating curve drift") | Product | Voice, tone, evidence framing — product-shaped. SemTeams ≠ SemSpec here. |
 | Objective spec (per-flow declarations) | Product | Per-flow product authoring. |
 | Sentinel prompt curation (which N prompts represent the system) | Product | Product-specific calibration set. |
 
@@ -241,9 +259,9 @@ The ops-agent emits three families of typed agvocab predicates:
 
 | Predicate family | Fields | Emitted when |
 |---|---|---|
-| `ops.polar_departure` | `axis`, `magnitude`, `duration`, `polar_id`, `evidence_refs[]` | A new sample sits off the established polar by more than the configured variance, sustained across N consecutive runs |
-| `ops.threshold_crossed` | `metric`, `direction`, `sustained_for`, `threshold_value`, `evidence_refs[]` | A scalar metric tracked alongside polars (cost, latency, fallback rate) crosses a declared threshold |
-| `ops.regime_expired` | `polar_id`, `expiration_cause`, `last_validated`, `evidence_refs[]` | A regime-annotated polar's underlying regime invariants change (model upgrade, persona-fragment edit, tool-execution-path change) |
+| `ops.curve_departure` | `axis`, `magnitude`, `duration`, `curve_id`, `evidence_refs[]` | A new sample sits off the established operating curve by more than the configured variance, sustained across N consecutive runs |
+| `ops.threshold_crossed` | `metric`, `direction`, `sustained_for`, `threshold_value`, `evidence_refs[]` | A scalar metric tracked alongside operating curves (cost, latency, fallback rate) crosses a declared threshold |
+| `ops.regime_expired` | `curve_id`, `expiration_cause`, `last_validated`, `evidence_refs[]` | A regime-annotated operating-curve underlying regime invariants change (model upgrade, persona-fragment edit, tool-execution-path change) |
 
 These predicates are **stable and enumerable** — coordinator rules
 fire on them via the existing rule-DSL pattern (ADR-028 Layer 2).
@@ -274,16 +292,16 @@ ops.adjustment.regime     — regime annotation snapshot (model, persona version
 
 This record is diff-able, audit-friendly, and **becomes the regime
 annotation** that §5 of the framing doc requires. Pre-adjustment
-data on the affected polar is preserved and tagged with the prior
+data on the affected operating curve is preserved and tagged with the prior
 regime; post-adjustment data starts a new sub-curve. Successful
 adjustment cannot mask underlying drift because the regime boundary
-is visible in the polar library.
+is visible in the operating-curve library.
 
 ### Rollback
 
 Rollback is **a separate signal**, not an automatic property. If a
 post-adjustment sentinel run shows the adjustment made things worse
-on the same axis, the ops-agent emits `ops.polar_departure` against
+on the same axis, the ops-agent emits `ops.curve_departure` against
 the new sub-curve. The coordinator's rule for that axis decides
 whether to roll back, subject to the same objective-spec bounds.
 Rollback is symmetric to forward adjustment — same machinery, same
@@ -295,7 +313,7 @@ lives (ADR-026, ADR-028 Layer 3), not in the ops-agent.
 
 ## Stationarity discipline
 
-Sentinel runs are how the polar library survives non-stationary
+Sentinel runs are how the operating-curve library survives non-stationary
 underpinnings. This ADR formalises:
 
 - **Curated set, not full corpus.** Single-digit count of prompts
@@ -307,12 +325,12 @@ underpinnings. This ADR formalises:
   spend is measured against measured-traffic spend. On-trigger
   catches the highest-value drift events regardless of cadence.
 - **Mechanical comparison.** Stationarity check is a pure function
-  over the polar's variance envelope. No LLM judgment.
+  over the operating curves variance envelope. No LLM judgment.
 - **LLM judgment for diagnosis only.** When a sentinel falls off the
   curve, the *why* earns LLM reasoning — but only after the
   mechanical detector flagged.
-- **Polars expire; mark them.** Every polar carries a regime
-  annotation. The ops-agent invariant: *no polar is consulted past
+- **Operating curves expire; mark them.** Every operating curve carries a regime
+  annotation. The ops-agent invariant: *no operating curve is consulted past
   its regime boundary without flagging.*
 - **Coordinator-driven adjustments are regime annotations.** The
   `ops.adjustment` record above is the regime annotation. Pre- and
@@ -335,8 +353,8 @@ hiding it.
 - **No new scheduler.** Sentinel runs ride on ADR-031's cron rule
   type. The substrate already exists; the discipline is what's new.
 - **ADR-027 Phase 1 stays valid.** `emit_diagnosis` and
-  `ops.diagnosis.*` predicates remain. This ADR adds the polar-
-  library substrate they live within. No code retracted.
+  `ops.diagnosis.*` predicates remain. This ADR adds the
+  operating-curve-library substrate they live within. No code retracted.
 - **OWASP ASI 2026 / Microsoft AGT integration is structural, not
   bolted-on.** Governance is a curated axis class within the same
   machinery, not a parallel subsystem.
@@ -362,14 +380,14 @@ hiding it.
   with measured runs. Aerospace doesn't have this problem; we do.
   Mitigated by fixture-controlled prompts and regime annotations,
   but never fully eliminated within a single deployment.
-- **Polar storage cost.** Regime-indexed curves accumulate over time.
-  Storage layout committed (see Phase 1): polars in ObjectStore,
+- **Operating-curve storage cost.** Regime-indexed curves accumulate over time.
+  Storage layout committed (see Phase 1): operating curves in ObjectStore,
   regime annotations in KV. Retention policy (when does an expired
-  polar get archived?) is a Phase 1 implementation decision; default
+  operating curve get archived?) is a Phase 1 implementation decision; default
   is "never auto-archive" until a real ObjectStore-volume problem
   surfaces.
 - **Coordinator's policy surface grows only on opt-in.** The
-  ops-agent emits `ops.polar_departure` / `ops.threshold_crossed` /
+  ops-agent emits `ops.curve_departure` / `ops.threshold_crossed` /
   `ops.regime_expired` regardless of whether any axis has been
   opted into tuning. *Diagnosis is the default; tuning is per-axis
   opt-in via objective-spec.* The coordinator's rule set only grows
@@ -398,18 +416,18 @@ hiding it.
 Optimise the harness against one declared scalar, single-axis Pareto
 tracking. **Rejected** as the overall posture (§2.2 of framing
 doc). Right inside a regime, wrong as the system-level discipline.
-The framing doc's polar reframe is the point of departure from this
+The framing doc's operating-curve reframe is the point of departure from this
 lineage — it does not optimise; it observes.
 
 This ADR's signal taxonomy is structurally incompatible with a
-scalar autoresearcher: `ops.polar_departure` requires a curve; a
+scalar autoresearcher: `ops.curve_departure` requires a curve; a
 single scalar cannot depart from a curve.
 
 ### B. Move ops-agent out of SemStreams (sidecar pattern, semspec watcher writ large)
 
-Ship the polar library as a separate `semops` binary that polls live
+Ship the operating-curve library as a separate `semops` binary that polls live
 systems from outside. **Rejected:** every product ends up
-reinventing the polar machinery, sentinel scheduler, and
+reinventing the operating-curve machinery, sentinel scheduler, and
 stationarity-check primitive. Worse: framework-level integration
 points (predicate stream consumption, regime annotation write-back)
 become external API surface, harder to evolve.
@@ -516,29 +534,29 @@ blocker.
   `semspec/pkg/health` into a new SemStreams package
   (`pkg/observability` is the working name; finalised at hoist time;
   see Appendix A for proposed shapes).
-- Add `Polar`, `RegimeAnnotation`, `SentinelRun` data shapes
+- Add `OperatingCurve`, `RegimeAnnotation`, `SentinelRun` data shapes
   (Appendix A).
 - **Storage layout** (committed):
-  - **Polars in ObjectStore** — dense numerical sample sets; large;
+  - **Operating curves in ObjectStore** — dense numerical sample sets; large;
     revision-immutable; well-suited to bucket-keyed blob storage.
-    Bucket: `OBSERVABILITY_POLARS`.
+    Bucket: `OBSERVABILITY_CURVES`.
   - **Regime annotations in KV** — small, structured, fast-lookup,
     KV-Twofer-eligible (state + change-fanout in one write). Bucket:
     `OBSERVABILITY_REGIMES`.
   - **Sentinel-run records in KV** — small per-run metadata
-    (timestamp, prompt-set ID, regime ID, result polar refs).
+    (timestamp, prompt-set ID, regime ID, result curve refs).
     Bucket: `OBSERVABILITY_SENTINELS`. The actual per-run sample
-    data references its parent polar in ObjectStore.
+    data references its parent operating curve in ObjectStore.
 - Wire the three signal predicate families
-  (`ops.polar_departure.*`, `ops.threshold_crossed.*`,
+  (`ops.curve_departure.*`, `ops.threshold_crossed.*`,
   `ops.regime_expired.*`) into the agvocab constants.
 - Wire the `ops.adjustment` record schema.
 - Sentinel-run scheduler: a thin shim over ADR-031 cron rule that
   tags results with regime metadata, writes the run record to
   `OBSERVABILITY_SENTINELS`, and triggers the stationarity-check
-  primitive against the parent polar.
-- Stationarity-check primitive: pure function over `Polar` + sample,
-  emits `ops.polar_departure` when variance envelope is breached.
+  primitive against the parent operating curve.
+- Stationarity-check primitive: pure function over `OperatingCurve` + sample,
+  emits `ops.curve_departure` when variance envelope is breached.
 - Migration guide: how SemSpec converges its watcher onto upstream
   primitives without breaking its existing detectors.
 
@@ -552,7 +570,7 @@ not.
 - **Q3 detector** — three-state classifier on tool-call outcomes
   (parsed-clean / fallback-rescued / failed) per beta.41 + beta.44
   SAP work. Triples already structurally emitted; detector lifts
-  them into the polar pair.
+  them into the axis pair.
 - **G3 detector** — header-vs-body identity-source classifier per
   `xUserIDIdentityMiddleware` already-emitted structural signal.
   Metric emission is additive.
@@ -579,38 +597,38 @@ not.
 - A second adopter (TBD) authors their own catalog from scratch. If
   they can do it without touching framework code, the cut held.
 
-### Phase 4 — coordinator-driven tuning + sweep → polar pipeline
+### Phase 4 — coordinator-driven tuning + sweep → operating-curve pipeline
 
 Two related workstreams ship together here, both opt-in per axis.
 
 **Coordinator-driven tuning:**
 
-- Coordinator gains a rule that fires on `ops.polar_departure` /
+- Coordinator gains a rule that fires on `ops.curve_departure` /
   `ops.threshold_crossed` / `ops.regime_expired` and, when an
   objective-spec bound permits, emits `ops.adjustment`.
 - Adjustment apply path uses the existing ADR-026 runtime
   composition tools — same approval gates, same audit trail.
-- Rollback symmetric: post-adjustment polar departure → coordinator
+- Rollback symmetric: post-adjustment curve departure → coordinator
   rule → reverse adjustment within the same bounds.
 
-**Sweep → polar pipeline:**
+**Sweep → operating-curve pipeline:**
 
-The framing doc (§2.3) describes polars as curves produced by
+The framing doc (§2.3) describes operating curves as curves produced by
 sweeps across reasoning_effort / model tier / persona-fragment
 variants / max_iteration. *How* a sweep is authored, executed, and
-collated into a stored polar is **product-flavored harness work**,
+collated into a stored operating curve is **product-flavored harness work**,
 not framework primitive — different products will sweep different
 axis grids over different flows. Phase 4 establishes:
 
 - The framework-side **sweep-result write API** that lands sample
-  points in an existing or new polar in ObjectStore with regime
+  points in an existing or new operating curve in ObjectStore with regime
   annotation in KV.
 - A **reference sweep tool** (product-side, in `cmd/semteams/...`)
   that drives a sweep across declared axis points and writes
   results via the framework API.
 - The coordinator's **sweep-trigger rule** — when an
   `ops.regime_expired` signal fires, the coordinator may trigger
-  a re-sweep against the new regime to repopulate the polar.
+  a re-sweep against the new regime to repopulate the operating curve.
 
 Phase 4 can ship incrementally per axis. Not all axes need
 coordinator-driven tuning *or* sweep automation; some stay
@@ -622,20 +640,20 @@ Concrete shapes for the three new framework primitives. Anchor for
 the type hoist; final names and field tags get reviewed at
 implementation time. Storage layout (Phase 1) is given alongside.
 
-### A.1 Polar — stored in ObjectStore
+### A.1 OperatingCurve — stored in ObjectStore
 
-A polar is a curve, not a single sample: a set of `(x, y)` points
+An operating curve is a sequence, not a single sample: a set of `(x, y)` points
 collected by sweeping an input axis (the "x") against a measured
 axis (the "y") under a fixed regime. The shape carries enough
 metadata to compute stationarity-check variance envelopes and to
 plot the curve for human review.
 
 ```go
-// Polar — one curve in the polar library. Stored in ObjectStore
-// keyed by ID; the bucket is OBSERVABILITY_POLARS.
-type Polar struct {
+// OperatingCurve — one curve in the operating-curve library. Stored in ObjectStore
+// keyed by ID; the bucket is OBSERVABILITY_CURVES.
+type OperatingCurve struct {
     // ID is stable across sweeps; new sweeps under the same regime
-    // append samples to the existing polar.
+    // append samples to the existing operating curve.
     ID         string
 
     // AxisX/AxisY name what's plotted. AxisX is typically the
@@ -648,14 +666,14 @@ type Polar struct {
 
     // RegimeID is the foreign key into OBSERVABILITY_REGIMES KV.
     // A regime change spawns a new sub-curve under the same
-    // PolarID, distinguished by its RegimeID. Pre-/post-adjustment
+    // CurveID, distinguished by its RegimeID. Pre-/post-adjustment
     // data are tagged distinctly via RegimeID, never mixed.
     RegimeID   string
 
     // Samples is the curve itself. Order is insertion order;
     // (x, y) need not be monotonic. Sweeps append; nothing
     // mutates existing samples in place.
-    Samples    []PolarSample
+    Samples    []CurveSample
 
     // Variance envelope is computed lazily over Samples; cached
     // here for the stationarity-check primitive.
@@ -667,7 +685,7 @@ type Polar struct {
     SweepRefs  []string // SentinelRun.ID values that contributed samples
 }
 
-type PolarSample struct {
+type CurveSample struct {
     X         float64
     Y         float64
     Timestamp time.Time
@@ -689,14 +707,14 @@ type VarianceEnvelope struct {
 ### A.2 RegimeAnnotation — stored in KV
 
 A regime annotation captures the underlying invariants under which
-a polar's samples were collected. When any invariant changes
+an operating curves samples were collected. When any invariant changes
 (model upgrade, persona-fragment commit, capability-surface change,
 coordinator-driven adjustment), a new RegimeAnnotation is written
-and the polar's RegimeID flips — pre-adjustment data stays
+and the operating curves RegimeID flips — pre-adjustment data stays
 queryable under the prior RegimeID.
 
 ```go
-// RegimeAnnotation — invariants under which a polar's samples
+// RegimeAnnotation — invariants under which an operating curves samples
 // are valid. Stored in KV under bucket OBSERVABILITY_REGIMES,
 // keyed by ID. KV-Twofer-eligible: state plus change-fanout to
 // any subscriber that needs to know "regime changed."
@@ -704,7 +722,7 @@ type RegimeAnnotation struct {
     ID                string
 
     // The invariants. These are the things that, when they change,
-    // invalidate the polar.
+    // invalidate the operating curve.
     ModelEndpoint     string  // capability+endpoint resolution
     PersonaFragments  []FragmentRef // ID + content hash
     CapabilitySurface string  // hash of model registry + tool registry snapshot
@@ -734,7 +752,7 @@ type FragmentRef struct {
 A sentinel run is one execution of the curated prompt set against
 the live system, plus the result-classification metadata that
 downstream stationarity-check consumes. The actual per-sample
-points land in the relevant polar's `Samples`; the SentinelRun
+points land in the relevant operating curves `Samples`; the SentinelRun
 record is the run's metadata.
 
 ```go
@@ -755,11 +773,11 @@ type SentinelRun struct {
     StartedAt     time.Time
     CompletedAt   time.Time
 
-    // What polars received samples from this run.
-    PolarRefs     []string
+    // What operating curves received samples from this run.
+    CurveRefs     []string
 
-    // Stationarity-check outcome — emitted as ops.polar_departure
-    // when at least one polar's Samples-from-this-run breach the
+    // Stationarity-check outcome — emitted as ops.curve_departure
+    // when at least one operating curves Samples-from-this-run breach the
     // variance envelope.
     StationaryAxes    []string  // axes where samples sat on the curve
     DeparturesFound   []DepartureRef // axes where they didn't
@@ -770,7 +788,7 @@ type SentinelRun struct {
 }
 
 type DepartureRef struct {
-    PolarID    string
+    CurveID    string
     Magnitude  float64
     Direction  string  // "above" | "below"
     SampleRefs []EvidenceRef
@@ -845,26 +863,26 @@ The relationships between the shapes:
 ```
 SentinelRun.RegimeID  ─────► RegimeAnnotation.ID
                               │
-                              └─► used by Polar to tag samples
-SentinelRun.PolarRefs ─────► Polar.ID (many)
-Polar.RegimeID        ─────► RegimeAnnotation.ID
-Polar.SweepRefs       ─────► SentinelRun.ID (many)
-Polar.Samples[].SourceRef ► EvidenceRef (any kind)
+                              └─► used by OperatingCurve to tag samples
+SentinelRun.CurveRefs ─────► OperatingCurve.ID (many)
+OperatingCurve.RegimeID        ─────► RegimeAnnotation.ID
+OperatingCurve.SweepRefs       ─────► SentinelRun.ID (many)
+OperatingCurve.Samples[].SourceRef ► EvidenceRef (any kind)
 
 ops.adjustment.regime ─────► RegimeAnnotation.ID
 RegimeAnnotation.AdjustmentRef ► ops.adjustment.id (when created by adjustment)
 ```
 
-Pre- / post-adjustment query is `Polar(ID=X).Samples WHERE RegimeID
+Pre- / post-adjustment query is `OperatingCurve(ID=X).Samples WHERE RegimeID
 = prior` vs. `WHERE RegimeID = post`. Same machinery answers
-"what did this polar look like before the model upgrade" and "what
+"what did this operating curve look like before the model upgrade" and "what
 did it look like before the coordinator's tuning action."
 
 ## Related decisions
 
 - [ADR-027](027-ops-agent-meta-harness.md) — refined by this ADR.
   Phase 1 (`emit_diagnosis`, `ops.diagnosis.*` predicates) stays;
-  the polar-library substrate is added underneath.
+  the operating-curve-library substrate is added underneath.
 - [ADR-028](028-orchestration-architecture.md) — names the ops-agent
   as Layer 4. This ADR scopes Layer 4's reasoning discipline.
 - [ADR-026](026-coordinator-agent-dynamic-flow-composition.md) — the
@@ -878,11 +896,11 @@ did it look like before the coordinator's tuning action."
 - [ADR-030](030-http-middleware-and-identity-pattern.md) — provides
   G3 (identity-abuse) and G9 (human-agent trust) enforcement; this
   ADR adds the metric emission layer.
-- [docs/concepts/19-observability-as-polars.md](../concepts/19-observability-as-polars.md)
+- [docs/concepts/19-observability-as-operating-curves.md](../concepts/19-observability-as-operating-curves.md)
   — the conceptual foundation. This ADR distills the structural
   commitments; the concept doc holds the full reasoning.
 - [docs/objectives/README.md](../objectives/README.md) — per-flow
-  objective spec discipline that polars layer on top of, not replace.
+  objective spec discipline that operating curves layer on top of, not replace.
 
 ## References
 
@@ -890,7 +908,7 @@ did it look like before the coordinator's tuning action."
 - Microsoft Agent Governance Toolkit (April 2026),
   `github.com/microsoft/agent-governance-toolkit`.
 - Stanford Meta-Harness, Lee et al. — single-scalar lineage this
-  ADR's polar discipline reframes.
+  ADR's operating-curve discipline reframes.
 - `semspec/pkg/health/detector.go` — working prototype of the
   detector primitives this ADR proposes hoisting.
 - `semspec/cmd/semspec/watch.go`, `watch_live.go` — operator-facing
