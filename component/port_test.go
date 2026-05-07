@@ -1009,6 +1009,166 @@ func TestConsumerConfigDefaults(t *testing.T) {
 	}
 }
 
+// TestPortDefinition_UnmarshalJSON_JetStreamConfig is the load-bearing
+// regression test for the beta.55 hotfix: a JSON-loaded PortDefinition
+// must place a JetStreamPort struct into Config (not a map[string]any),
+// otherwise every consumer-config field declared in YAML/JSON is
+// silently dropped at the type assertion in BuildPortFromDefinition
+// and applyJetStreamConsumerConfig.
+//
+// The semspec repro (2026-05-07) showed AckWait/HeartbeatInterval/
+// MaxDeliver/DeliverPolicy all reaching zero values at runtime even
+// though they were declared in the port's `config` block.
+func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
+	raw := []byte(`{
+		"name": "agent.request",
+		"type": "jetstream",
+		"subject": "agent.request.>",
+		"config": {
+			"deliver_policy": "all",
+			"ack_policy": "explicit",
+			"max_deliver": 1,
+			"consumer_name": "model-consumer",
+			"ack_wait": "300s",
+			"heartbeat_interval": "60s"
+		}
+	}`)
+
+	var pd PortDefinition
+	if err := json.Unmarshal(raw, &pd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if pd.Name != "agent.request" || pd.Type != "jetstream" || pd.Subject != "agent.request.>" {
+		t.Errorf("top-level fields lost: %+v", pd)
+	}
+
+	js, ok := pd.Config.(JetStreamPort)
+	if !ok {
+		t.Fatalf("Config = %T, want JetStreamPort (the bug semspec repro'd)", pd.Config)
+	}
+	if js.DeliverPolicy != "all" {
+		t.Errorf("DeliverPolicy = %q, want %q", js.DeliverPolicy, "all")
+	}
+	if js.AckPolicy != "explicit" {
+		t.Errorf("AckPolicy = %q, want %q", js.AckPolicy, "explicit")
+	}
+	if js.MaxDeliver != 1 {
+		t.Errorf("MaxDeliver = %d, want 1", js.MaxDeliver)
+	}
+	if js.ConsumerName != "model-consumer" {
+		t.Errorf("ConsumerName = %q, want %q", js.ConsumerName, "model-consumer")
+	}
+	if js.AckWait != "300s" {
+		t.Errorf("AckWait = %q, want %q", js.AckWait, "300s")
+	}
+	if js.HeartbeatInterval != "60s" {
+		t.Errorf("HeartbeatInterval = %q, want %q", js.HeartbeatInterval, "60s")
+	}
+}
+
+// TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig closes the
+// loop by going JSON → PortDefinition → ConsumerConfig — the path every
+// agentic-model / agentic-tools consumer uses at runtime. This is the
+// end-to-end test that would have caught the beta.54 ship-to-runtime gap.
+func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
+	raw := []byte(`{
+		"name": "agent.request",
+		"type": "jetstream",
+		"subject": "agent.request.>",
+		"config": {
+			"max_deliver": 1,
+			"ack_wait": "5m",
+			"heartbeat_interval": "2m"
+		}
+	}`)
+
+	var pd PortDefinition
+	if err := json.Unmarshal(raw, &pd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	cfg := GetConsumerConfigFromDefinition(pd)
+	if cfg.MaxDeliver != 1 {
+		t.Errorf("MaxDeliver = %d, want 1 (Posture B fail-loud-once value must reach the consumer)", cfg.MaxDeliver)
+	}
+	if cfg.AckWait != 5*time.Minute {
+		t.Errorf("AckWait = %v, want 5m", cfg.AckWait)
+	}
+	if cfg.HeartbeatInterval != 2*time.Minute {
+		t.Errorf("HeartbeatInterval = %v, want 2m", cfg.HeartbeatInterval)
+	}
+}
+
+// TestPortDefinition_UnmarshalJSON_NoConfig asserts an entry with no
+// `config` block round-trips cleanly (no panic, Config stays nil).
+func TestPortDefinition_UnmarshalJSON_NoConfig(t *testing.T) {
+	raw := []byte(`{"name":"x","type":"jetstream","subject":"x.>"}`)
+
+	var pd PortDefinition
+	if err := json.Unmarshal(raw, &pd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if pd.Config != nil {
+		t.Errorf("Config = %v, want nil when JSON had no config block", pd.Config)
+	}
+}
+
+// TestPortDefinition_UnmarshalJSON_UnknownType falls back to map[string]any
+// so custom port types not yet known to the framework are forward-compat.
+func TestPortDefinition_UnmarshalJSON_UnknownType(t *testing.T) {
+	raw := []byte(`{"name":"x","type":"custom-future-type","config":{"key":"value"}}`)
+
+	var pd PortDefinition
+	if err := json.Unmarshal(raw, &pd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	m, ok := pd.Config.(map[string]any)
+	if !ok {
+		t.Fatalf("Config = %T, want map[string]any for unknown types", pd.Config)
+	}
+	if m["key"] != "value" {
+		t.Errorf("map missing key/value: %v", m)
+	}
+}
+
+// TestBuildPortFromDefinition_CopiesAckWaitAndHeartbeat asserts the second
+// half of the beta.55 fix: even with a Go-constructed PortDefinition
+// (not JSON-loaded), BuildPortFromDefinition's jetstream case must copy
+// AckWait + HeartbeatInterval into the resulting Port's JetStreamPort.
+// Beta.54 added these fields to the struct but didn't add the merge
+// branch.
+func TestBuildPortFromDefinition_CopiesAckWaitAndHeartbeat(t *testing.T) {
+	pd := PortDefinition{
+		Name:    "agent.request",
+		Type:    "jetstream",
+		Subject: "agent.request.>",
+		Config: JetStreamPort{
+			AckWait:           "300s",
+			HeartbeatInterval: "60s",
+			MaxDeliver:        1,
+			DeliverPolicy:     "all",
+		},
+	}
+	port := BuildPortFromDefinition(pd, DirectionInput)
+	js, ok := port.Config.(JetStreamPort)
+	if !ok {
+		t.Fatalf("Config = %T, want JetStreamPort", port.Config)
+	}
+	if js.AckWait != "300s" {
+		t.Errorf("AckWait = %q, want %q", js.AckWait, "300s")
+	}
+	if js.HeartbeatInterval != "60s" {
+		t.Errorf("HeartbeatInterval = %q, want %q", js.HeartbeatInterval, "60s")
+	}
+	if js.MaxDeliver != 1 {
+		t.Errorf("MaxDeliver = %d, want 1", js.MaxDeliver)
+	}
+	if js.DeliverPolicy != "all" {
+		t.Errorf("DeliverPolicy = %q, want %q", js.DeliverPolicy, "all")
+	}
+}
+
 // TestGetConsumerConfig_AckWaitAndHeartbeat verifies the per-port AckWait
 // and HeartbeatInterval fields parse from string ("90s", "2m") into a
 // time.Duration on ConsumerConfig, and that empty/invalid values produce

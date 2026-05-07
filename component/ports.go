@@ -1,7 +1,13 @@
 // Package component provides port configuration and management for component connections.
 package component
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/c360studio/semstreams/pkg/errs"
+)
 
 // ResolveSubject returns the configured subject for the named port,
 // replacing the trailing wildcard (`*` or `>`) with suffix. This lets
@@ -40,6 +46,104 @@ type PortDefinition struct {
 
 	// Config holds type-specific port configuration (e.g., JetStreamPort for consumer settings)
 	Config any `json:"config,omitempty" schema:"editable,type:object,description:Type-specific port configuration"`
+}
+
+// UnmarshalJSON populates PortDefinition.Config with the typed struct
+// matching p.Type, instead of leaving it as a generic map[string]any from
+// the default decoder. Without this, every type assertion against
+// def.Config (e.g. def.Config.(JetStreamPort) at BuildPortFromDefinition
+// and applyJetStreamConsumerConfig) silently fails on JSON-loaded port
+// configs — meaning per-port consumer fields (DeliverPolicy, AckPolicy,
+// MaxDeliver, AckWait, HeartbeatInterval, ConsumerName) never reach the
+// consumer at runtime even though they were declared in the YAML/JSON.
+//
+// Symmetric with Port.UnmarshalJSON's type-discriminated path
+// (component/port.go:78). The wire shape differs: Port wraps its config
+// in a `{"type":"...","data":{...}}` envelope, whereas PortDefinition
+// uses the top-level `type` field as the discriminator and the `config`
+// object holds the typed payload directly:
+//
+//	{"name":"agent.request","type":"jetstream","config":{"ack_wait":"5m"}}
+//
+// Unknown types fall through to map[string]any (matches pre-fix
+// behaviour for forward-compat with custom port types).
+func (p *PortDefinition) UnmarshalJSON(data []byte) error {
+	type Alias PortDefinition
+	aux := &struct {
+		Config json.RawMessage `json:"config,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(p),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	if len(aux.Config) == 0 || string(aux.Config) == "null" {
+		return nil
+	}
+
+	switch p.Type {
+	case "jetstream":
+		var js JetStreamPort
+		if err := json.Unmarshal(aux.Config, &js); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "jetstream config")
+		}
+		p.Config = js
+	case "nats":
+		var n NATSPort
+		if err := json.Unmarshal(aux.Config, &n); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "nats config")
+		}
+		p.Config = n
+	case "nats-request":
+		var nr NATSRequestPort
+		if err := json.Unmarshal(aux.Config, &nr); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "nats-request config")
+		}
+		p.Config = nr
+	case "kvwatch", "kv-watch":
+		var kv KVWatchPort
+		if err := json.Unmarshal(aux.Config, &kv); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "kvwatch config")
+		}
+		p.Config = kv
+	case "kv", "kv-write", "kvwrite":
+		var kv KVWritePort
+		if err := json.Unmarshal(aux.Config, &kv); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "kvwrite config")
+		}
+		p.Config = kv
+	case "timer":
+		var t TimerPort
+		if err := json.Unmarshal(aux.Config, &t); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "timer config")
+		}
+		p.Config = t
+	case "network", "http", "grpc", "websocket-server":
+		var n NetworkPort
+		if err := json.Unmarshal(aux.Config, &n); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "network config")
+		}
+		p.Config = n
+	case "file":
+		var f FilePort
+		if err := json.Unmarshal(aux.Config, &f); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "file config")
+		}
+		p.Config = f
+	default:
+		// Unknown port type — preserve pre-fix behaviour by decoding the
+		// raw config into a generic map. Forward-compat for custom port
+		// types not yet known to the framework.
+		var m map[string]any
+		if err := json.Unmarshal(aux.Config, &m); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON",
+				fmt.Sprintf("unknown port type %q config", p.Type))
+		}
+		p.Config = m
+	}
+	return nil
 }
 
 // PortConfig represents port configuration in component config
@@ -108,7 +212,11 @@ func BuildPortFromDefinition(def PortDefinition, direction Direction) Port {
 			StreamName: def.StreamName,
 			Subjects:   []string{def.Subject}, // Convert single subject to array
 		}
-		// Merge additional config if provided
+		// Merge additional config if provided. PortDefinition.UnmarshalJSON
+		// guarantees def.Config is a JetStreamPort struct (not a generic
+		// map[string]any) when the raw JSON had `"type":"jetstream"`, so
+		// the type assertion succeeds for both Go-constructed and JSON-
+		// loaded definitions.
 		if configPort, ok := def.Config.(JetStreamPort); ok {
 			if configPort.DeliverPolicy != "" {
 				jsPort.DeliverPolicy = configPort.DeliverPolicy
@@ -121,6 +229,12 @@ func BuildPortFromDefinition(def PortDefinition, direction Direction) Port {
 			}
 			if configPort.ConsumerName != "" {
 				jsPort.ConsumerName = configPort.ConsumerName
+			}
+			if configPort.AckWait != "" {
+				jsPort.AckWait = configPort.AckWait
+			}
+			if configPort.HeartbeatInterval != "" {
+				jsPort.HeartbeatInterval = configPort.HeartbeatInterval
 			}
 		}
 		port.Config = jsPort
