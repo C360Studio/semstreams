@@ -106,7 +106,7 @@ func (c *Config) ApplyDefaults() {
 		c.BindAddress = "localhost:8080"
 	}
 	if c.QueryTimeout == 0 {
-		c.QueryTimeout = 30 * time.Second
+		c.QueryTimeout = 60 * time.Second
 	}
 	if c.Ports == nil {
 		// Apply full default port config
@@ -188,7 +188,7 @@ func DefaultConfig() Config {
 		MCPPath:          "/mcp",
 		BindAddress:      "localhost:8080",
 		EnablePlayground: false,
-		QueryTimeout:     30 * time.Second,
+		QueryTimeout:     60 * time.Second,
 	}
 }
 

@@ -84,7 +84,11 @@ func TestResolveTimeout_PrecedenceChain(t *testing.T) {
 			endpoint:   endpointNoTimeout,
 			capability: "",
 			componentT: 0,
-			want:       120 * time.Second,
+			// 110s sits 10s below the agentic-model consumer AckWait (120s,
+			// component.go:269) so context.Done propagates and the LLM call
+			// closes cleanly before NATS would otherwise redeliver. See
+			// docs/operations/14-timeout-chain.md for the full chain.
+			want: 110 * time.Second,
 		},
 		{
 			name:       "invalid task timeout falls through to endpoint",

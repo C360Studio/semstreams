@@ -76,8 +76,8 @@
     },
     "timeout": {
       "type": "string",
-      "description": "Request timeout",
-      "default": "120s",
+      "description": "Per-request LLM call timeout. Sized 10s below the agentic-model JetStream consumer AckWait (120s) so the LLM context.Done propagates and the call closes cleanly before NATS would otherwise redeliver. Operators raising this past ~115s should also raise the consumer AckWait in lockstep.",
+      "default": "110s",
       "category": "advanced"
     }
   },

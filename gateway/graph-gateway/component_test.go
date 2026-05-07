@@ -238,6 +238,12 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	assert.Equal(t, "/mcp", config.MCPPath, "MCPPath should default to /mcp")
 	assert.Equal(t, "localhost:8080", config.BindAddress, "BindAddress should default to localhost:8080")
 	assert.False(t, config.EnablePlayground, "EnablePlayground should default to false")
+	// QueryTimeout 60s gives synthesis (15s) + classification (5s) + headroom
+	// for semantic search + enrichment + serialization on commodity-CPU LLM
+	// runtimes. Beta.51 bumped the e2e config to 60s; beta.52 brings the
+	// in-binary default in line so deployments without explicit config don't
+	// 504 on long-tail globalSearch queries.
+	assert.Equal(t, 60*time.Second, config.QueryTimeout, "QueryTimeout should default to 60s — keeps gateway above LLM-backed query budget without explicit config")
 }
 
 func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
@@ -255,6 +261,7 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.Equal(t, "/mcp", config.MCPPath)
 	assert.Equal(t, "localhost:8080", config.BindAddress)
 	assert.False(t, config.EnablePlayground)
+	assert.Equal(t, 60*time.Second, config.QueryTimeout)
 }
 
 // ====================================================================================
