@@ -838,9 +838,21 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 		return
 	}
 
-	// Record loop creation
-	if c.metrics != nil {
+	// Record loop creation only when HandleTask actually created a new loop.
+	// The dedup short-circuit (handlers.go HandleTask) returns Created=false
+	// for redelivered TaskMessages whose task_id already has an active loop.
+	// Gating here prevents the active_loops gauge from drifting upward on
+	// every JetStream redelivery — the original loop's eventual completion
+	// only fires one Dec(), so each ungated redelivery would leak +1.
+	if c.metrics != nil && result.Created {
 		c.metrics.recordLoopCreated()
+	}
+
+	if !result.Created {
+		c.logger.Debug("Task deduplicated — loop already active",
+			slog.String("loop_id", result.LoopID),
+			slog.String("task_id", task.TaskID))
+		return
 	}
 
 	c.logger.Debug("Loop created",
@@ -984,12 +996,30 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 		}
 	}
 
-	// Record terminal state metrics
-	if entity.ID == "" {
+	var failureReason string
+	switch response.Status {
+	case agentic.StatusError:
+		failureReason = "model_error"
+	case agentic.StatusLengthTruncated:
+		failureReason = "length_truncated"
+	default:
+		failureReason = "unknown"
+	}
+	c.recordTerminalState(result, entity, failureReason)
+}
+
+// recordTerminalState fires the active_loops decrement and the matching
+// terminal counter for a loop that has just transitioned to LoopStateComplete
+// or LoopStateFailed. No-op for non-terminal states. Pulled out of
+// recordResponseMetrics so the tool-result path (handleToolResultMessage)
+// can decrement the gauge when handleToolsComplete transitions a loop to
+// LoopStateFailed (max iterations) without going through a model response —
+// without this, every max-iterations failure leaks one unit on the gauge.
+func (c *Component) recordTerminalState(result HandlerResult, entity agentic.LoopEntity, failureReason string) {
+	if c.metrics == nil || entity.ID == "" {
 		return
 	}
 	duration := time.Since(entity.StartedAt).Seconds()
-
 	switch result.State {
 	case agentic.LoopStateComplete:
 		c.metrics.recordLoopCompleted(entity.Iterations, duration)
@@ -997,19 +1027,11 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 			slog.String("loop_id", result.LoopID),
 			slog.Int("iterations", entity.Iterations))
 	case agentic.LoopStateFailed:
-		var reason string
-		switch response.Status {
-		case agentic.StatusError:
-			reason = "model_error"
-		case agentic.StatusLengthTruncated:
-			reason = "length_truncated"
-		default:
-			reason = "unknown"
-		}
-		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
+		c.metrics.recordLoopFailed(failureReason, entity.Iterations, duration)
 		c.logger.Warn("Loop failed",
 			slog.String("loop_id", result.LoopID),
-			slog.Int("iterations", entity.Iterations))
+			slog.Int("iterations", entity.Iterations),
+			slog.String("reason", failureReason))
 	}
 }
 
@@ -1095,12 +1117,27 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// Update Boid position if enabled
 	c.updateBoidPositionFromToolResult(ctx, loopID, toolResult)
 
+	// Decrement active_loops if HandleToolResult drove the loop to a terminal
+	// state. handleToolsComplete (handlers.go) transitions to LoopStateFailed
+	// when max_iterations trips while tools were in flight; without this
+	// recording the gauge would not be decremented for that path. The
+	// model-response path (handleResponseMessage) records via
+	// recordResponseMetrics and is unchanged.
+	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
+		failureReason := "unknown"
+		if result.MaxIterationsReached {
+			failureReason = "max_iterations"
+		}
+		if entity, entErr := c.handler.GetLoop(loopID); entErr == nil {
+			c.recordTerminalState(result, entity, failureReason)
+		}
+	}
+
 	// Publish results, persist state, and handle terminal states (StopLoop).
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
 	// plus finalizeTrajectory, persistCompletionState, and writeTrajectoryToGraph
 	// when the loop reaches a terminal state.
 	c.persistHandlerResult(ctx, result)
-
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.

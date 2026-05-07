@@ -1826,6 +1826,52 @@ func TestHandleTask_NoResponseFormatPreservesNil(t *testing.T) {
 	t.Error("HandleTask() should publish agent.request message")
 }
 
+// TestHandleTask_DuplicateTaskID_DedupReturnsCreatedFalse asserts the
+// dedup short-circuit reports Created=false when a TaskMessage arrives
+// for a task_id that already has an active loop. This is the load-bearing
+// signal that gates recordLoopCreated() in handleTaskMessage so the
+// active_loops gauge does not drift on JetStream redelivery — without
+// the gate, every redelivered TaskMessage adds +1 to the gauge while
+// the original loop's eventual completion only fires one matching Dec().
+func TestHandleTask_DuplicateTaskID_DedupReturnsCreatedFalse(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	task := agenticloop.TaskMessage{
+		TaskID: "task-dedup-001",
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "first dispatch",
+	}
+
+	ctx := context.Background()
+	first, err := handler.HandleTask(ctx, task)
+	if err != nil {
+		t.Fatalf("first HandleTask() error = %v", err)
+	}
+	if !first.Created {
+		t.Fatal("first HandleTask() Created = false, want true")
+	}
+	if first.LoopID == "" {
+		t.Fatal("first HandleTask() LoopID empty")
+	}
+
+	// Second dispatch with same task_id simulates a JetStream redelivery
+	// (transient heartbeat failure, consumer ack delay, etc.).
+	second, err := handler.HandleTask(ctx, task)
+	if err != nil {
+		t.Fatalf("second HandleTask() error = %v", err)
+	}
+	if second.Created {
+		t.Error("second HandleTask() Created = true, want false (dedup short-circuit)")
+	}
+	if second.LoopID != first.LoopID {
+		t.Errorf("second HandleTask() LoopID = %s, want %s (existing loop_id should be returned)", second.LoopID, first.LoopID)
+	}
+	if len(second.PublishedMessages) != 0 {
+		t.Errorf("dedup result should not publish messages, got %d", len(second.PublishedMessages))
+	}
+}
+
 // --- ToolCallFilter tests ---
 
 // mockFilter implements agentic.ToolCallFilter for testing
