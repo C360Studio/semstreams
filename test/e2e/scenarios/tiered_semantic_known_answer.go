@@ -131,7 +131,7 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 
 	if gs.Count == 0 {
 		return knownAnswerProbeResult{
-			detail:  detail,
+			detail: detail,
 			failure: fmt.Sprintf("term %q: count=0 at level=%d (entities=%d ids=%d digests=%d communities=%d)",
 				ka.term, level, len(gs.Entities), len(gs.EntityIDs), len(gs.EntityDigests), len(gs.CommunitySummaries)),
 		}
