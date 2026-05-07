@@ -1,6 +1,10 @@
 package component
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+	"time"
+)
 
 // JetStreamPort - NATS JetStream for durable, at-least-once messaging
 type JetStreamPort struct {
@@ -18,6 +22,24 @@ type JetStreamPort struct {
 	DeliverPolicy string `json:"deliver_policy,omitempty"` // "all", "last", "new", default "new"
 	AckPolicy     string `json:"ack_policy,omitempty"`     // "explicit", "none", "all", default "explicit"
 	MaxDeliver    int    `json:"max_deliver,omitempty"`    // Max redelivery attempts, default 3
+	// AckWait is the duration the JetStream server waits for an ack before
+	// redelivering. Strings are parsed via time.ParseDuration ("90s",
+	// "2m", "5m"). Empty falls through to a per-component default. The
+	// component-level default is a starting point; this port-level field
+	// lets operators tune ack_wait for long-running consumers (LLM model
+	// calls, slow tool execution) without forking the component. Per
+	// docs/operations/14-timeout-chain.md: ack_wait must comfortably
+	// exceed the longest legitimate per-task wallclock budget so that
+	// healthy long-tail work isn't reaped before it can ack.
+	AckWait string `json:"ack_wait,omitempty"`
+	// HeartbeatInterval is the cadence at which the consumer goroutine
+	// fires msg.InProgress() to reset the ack clock. Strings are parsed
+	// via time.ParseDuration ("60s", "90s"). Empty falls through to a
+	// per-component default. Should be sized comfortably below ack_wait
+	// (typical 1.5x margin) so a single missed heartbeat doesn't trigger
+	// redelivery. Only honored on consumers that wrap their handler in
+	// natsclient.ConsumeWithHeartbeat — pure-ack consumers ignore it.
+	HeartbeatInterval string `json:"heartbeat_interval,omitempty"`
 
 	// Interface contract
 	Interface *InterfaceContract `json:"interface,omitempty"`
@@ -46,10 +68,18 @@ func (j JetStreamPort) Type() string {
 }
 
 // ConsumerConfig holds extracted JetStream consumer configuration.
+//
+// Duration fields (AckWait, HeartbeatInterval) are zero-valued when the
+// port-level string was empty or unparseable; consumers should test
+// against zero and apply their per-component default in that case.
+// Parse errors are logged once at extraction time so a malformed config
+// surfaces loudly without blocking startup.
 type ConsumerConfig struct {
-	DeliverPolicy string
-	AckPolicy     string
-	MaxDeliver    int
+	DeliverPolicy     string
+	AckPolicy         string
+	MaxDeliver        int
+	AckWait           time.Duration
+	HeartbeatInterval time.Duration
 }
 
 // GetConsumerConfig extracts JetStream consumer configuration from a port.
@@ -57,6 +87,7 @@ type ConsumerConfig struct {
 // - DeliverPolicy: "new" (safe default - don't replay historical messages)
 // - AckPolicy: "explicit"
 // - MaxDeliver: 3
+// - AckWait, HeartbeatInterval: zero (caller applies per-component default)
 func GetConsumerConfig(port Port) ConsumerConfig {
 	cfg := ConsumerConfig{
 		DeliverPolicy: "new", // Safe default
@@ -65,15 +96,7 @@ func GetConsumerConfig(port Port) ConsumerConfig {
 	}
 
 	if jsPort, ok := port.Config.(JetStreamPort); ok {
-		if jsPort.DeliverPolicy != "" {
-			cfg.DeliverPolicy = jsPort.DeliverPolicy
-		}
-		if jsPort.AckPolicy != "" {
-			cfg.AckPolicy = jsPort.AckPolicy
-		}
-		if jsPort.MaxDeliver > 0 {
-			cfg.MaxDeliver = jsPort.MaxDeliver
-		}
+		applyJetStreamConsumerConfig(&cfg, jsPort)
 	}
 	return cfg
 }
@@ -88,15 +111,41 @@ func GetConsumerConfigFromDefinition(portDef PortDefinition) ConsumerConfig {
 	}
 
 	if jsPort, ok := portDef.Config.(JetStreamPort); ok {
-		if jsPort.DeliverPolicy != "" {
-			cfg.DeliverPolicy = jsPort.DeliverPolicy
-		}
-		if jsPort.AckPolicy != "" {
-			cfg.AckPolicy = jsPort.AckPolicy
-		}
-		if jsPort.MaxDeliver > 0 {
-			cfg.MaxDeliver = jsPort.MaxDeliver
-		}
+		applyJetStreamConsumerConfig(&cfg, jsPort)
 	}
 	return cfg
+}
+
+// applyJetStreamConsumerConfig copies non-zero JetStreamPort consumer fields
+// into the supplied ConsumerConfig. Centralised so both extractors stay in
+// lockstep — adding a field only needs editing one place. Duration fields
+// log a warning and stay zero (caller-default) on parse error.
+func applyJetStreamConsumerConfig(cfg *ConsumerConfig, jsPort JetStreamPort) {
+	if jsPort.DeliverPolicy != "" {
+		cfg.DeliverPolicy = jsPort.DeliverPolicy
+	}
+	if jsPort.AckPolicy != "" {
+		cfg.AckPolicy = jsPort.AckPolicy
+	}
+	if jsPort.MaxDeliver > 0 {
+		cfg.MaxDeliver = jsPort.MaxDeliver
+	}
+	if jsPort.AckWait != "" {
+		if d, err := time.ParseDuration(jsPort.AckWait); err == nil {
+			cfg.AckWait = d
+		} else {
+			slog.Warn("Invalid JetStreamPort.AckWait; falling through to component default",
+				"value", jsPort.AckWait,
+				"error", err)
+		}
+	}
+	if jsPort.HeartbeatInterval != "" {
+		if d, err := time.ParseDuration(jsPort.HeartbeatInterval); err == nil {
+			cfg.HeartbeatInterval = d
+		} else {
+			slog.Warn("Invalid JetStreamPort.HeartbeatInterval; falling through to component default",
+				"value", jsPort.HeartbeatInterval,
+				"error", err)
+		}
+	}
 }

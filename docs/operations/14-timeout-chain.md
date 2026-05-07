@@ -10,12 +10,14 @@ recipe for tuning each layer in lockstep.
 ## The chain
 
 ```
-┌─ NATS JetStream consumer (per subject) ──────────────────────────────┐
-│  ack_wait      // server reaps unacked work after this                │
-│  heartbeat     // client InProgress() interval — must fit inside      │
-│                // ack_wait with comfortable margin                    │
-│  max_deliver   // cap on redelivery attempts                          │
-│  max_ack_pending // per-consumer in-flight cap                        │
+┌─ NATS JetStream consumer (per port — JetStreamPort) ─────────────────┐
+│  ack_wait              // server reaps unacked work after this        │
+│  heartbeat_interval    // client InProgress() interval — must fit     │
+│                        // inside ack_wait with comfortable margin     │
+│  max_deliver           // cap on redelivery attempts                  │
+│  deliver_policy        // "new" / "all" / "last"                      │
+│  ack_policy            // "explicit" / "none" / "all"                 │
+│  // max_ack_pending is per-component (not on JetStreamPort yet)       │
 └──────────────────────────────────────────────────────────────────────┘
             ↓ work goroutine receives workCtx (cancel on heartbeat fail)
 ┌─ Per-task LLM call wallclock budget ─────────────────────────────────┐
@@ -92,6 +94,7 @@ config-shape implications across the chain, not just one knob.
 
 ```yaml
 # agentic-loop consumer (agent.task / response / tool.result)
+# component-level ConsumerConfig (legacy surface, still supported)
 ack_wait: 90s
 max_deliver: 2
 max_ack_pending: 1
@@ -100,8 +103,11 @@ backoff: [30s, 2m]
 
 # agentic-model
 timeout: 110s          # framework default
-# consumer (hardcoded today)
-# ack_wait: 120s, max_deliver: 2, heartbeat: 90s
+
+# agentic-model + agentic-tools per-port consumer config (preferred surface)
+# ports[].config.ack_wait, .heartbeat_interval, .max_deliver, .deliver_policy,
+# .ack_policy. When unset on the port, components fall back to their
+# historical hardcoded values (agentic-model 120s/90s/3, agentic-tools 5m/2m/3).
 ```
 
 A transient consumer hiccup or sidecar pause that exceeds `ack_wait`
@@ -113,7 +119,7 @@ correct since beta.52.
 ### Posture B — fail-loud-once (cost-sensitive paid LLM)
 
 ```yaml
-# agentic-loop consumer
+# agentic-loop consumer (component-level ConsumerConfig — legacy surface)
 ack_wait: 300s          # exceed worst-case request budget; never reap working tasks
 max_deliver: 1          # no redelivery, ever
 max_ack_pending: 1
@@ -123,6 +129,16 @@ backoff: []             # empty — no retry-after-Nak schedule
 # agentic-model
 timeout: 270s           # strictly less than ack_wait, leaves 30s for
                         # cancellation propagation + failure publish + KV write
+# agent.request port — port-level consumer config (preferred surface)
+ports:
+  inputs:
+    - name: agent.request
+      type: jetstream
+      subject: "agent.request.>"
+      config:
+        ack_wait: 300s
+        heartbeat_interval: 60s
+        max_deliver: 1
 
 # Required downstream contract
 # - Wire a DLQ or surface failures via a dedicated agent.failed.* counter;
@@ -168,6 +184,45 @@ controls:
 **Streaming is the cost-sensitive lever** orthogonal to redelivery —
 even with perfect cancellation, a non-streaming cancel may bill for
 the full response the upstream finished generating.
+
+## Two surfaces for consumer tuning
+
+The framework exposes consumer config at two levels. Both work; the
+per-port surface is preferred for new code because it generalizes to
+any JetStream consumer without per-component plumbing.
+
+### Per-port (preferred — `JetStreamPort`)
+
+`AckWait`, `HeartbeatInterval`, `MaxDeliver`, `DeliverPolicy`,
+`AckPolicy` live on the port struct. Operators tune them per-port
+in component config:
+
+```yaml
+ports:
+  inputs:
+    - name: agent.request
+      type: jetstream
+      subject: "agent.request.>"
+      config:
+        ack_wait: 300s             # parsed via time.ParseDuration
+        heartbeat_interval: 60s
+        max_deliver: 1
+        deliver_policy: new
+        ack_policy: explicit
+```
+
+`component.GetConsumerConfigFromDefinition(portDef)` extracts the
+parsed values. Empty strings or invalid durations log a warning and
+fall through to component-level defaults — malformed config never
+blocks startup. agentic-model and agentic-tools both use this path.
+
+### Component-level (legacy — `agentic-loop.Config.Consumer`)
+
+agentic-loop predates per-port consumer config and exposes
+`ack_wait` / `heartbeat_interval` / `max_deliver` directly on its
+component config. Backward compat is preserved; existing deployments
+don't need to migrate. New components should NOT add this surface —
+use the per-port fields instead.
 
 ## Default values reference
 

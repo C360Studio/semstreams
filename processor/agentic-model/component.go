@@ -259,20 +259,46 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	// Defaults to "new" - only process new requests, don't replay old ones
 	consumerCfg := component.GetConsumerConfigFromDefinition(port)
 
+	// Per-component defaults for tunables that were previously hardcoded.
+	// Operators tune via JetStreamPort.AckWait / .HeartbeatInterval; the
+	// fallbacks here are the historical hardcoded values, preserved so a
+	// zero-config deployment behaves identically to pre-port-config builds.
+	// AckWait must comfortably exceed the longest legitimate per-task
+	// LLM wallclock budget — see docs/operations/14-timeout-chain.md and
+	// resolveTimeout's 110s fallback (10s strictly below the 120s default
+	// here).
+	const (
+		defaultModelAckWait           = 2 * time.Minute
+		defaultModelHeartbeatInterval = 90 * time.Second
+	)
+	ackWait := consumerCfg.AckWait
+	if ackWait == 0 {
+		ackWait = defaultModelAckWait
+	}
+	heartbeatInterval := consumerCfg.HeartbeatInterval
+	if heartbeatInterval == 0 {
+		heartbeatInterval = defaultModelHeartbeatInterval
+	}
+
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:     streamName,
-		ConsumerName:   consumerName,
-		FilterSubject:  port.Subject,
-		DeliverPolicy:  consumerCfg.DeliverPolicy,
-		AckPolicy:      consumerCfg.AckPolicy,
-		MaxDeliver:     2,
-		AckWait:        2 * time.Minute,
+		StreamName:    streamName,
+		ConsumerName:  consumerName,
+		FilterSubject: port.Subject,
+		DeliverPolicy: consumerCfg.DeliverPolicy,
+		AckPolicy:     consumerCfg.AckPolicy,
+		// Honor consumerCfg.MaxDeliver (port-level tunable, default 3).
+		// The previous hardcoded MaxDeliver: 2 was reading consumerCfg
+		// three lines above and discarding the value — operators trying
+		// to set MaxDeliver=1 (Posture B / fail-loud-once for paid LLMs
+		// per docs/operations/14-timeout-chain.md) had no path to the
+		// setting until now.
+		MaxDeliver:     consumerCfg.MaxDeliver,
+		AckWait:        ackWait,
 		MaxAckPending:  1,
 		AutoCreate:     false,
 		MessageTimeout: 30 * time.Minute,
 	}
 
-	heartbeatInterval := 90 * time.Second
 	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
