@@ -3,6 +3,7 @@ package component
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestDirection(t *testing.T) {
@@ -1005,5 +1006,105 @@ func TestConsumerConfigDefaults(t *testing.T) {
 	// 3 retries is a reasonable default
 	if cfg.MaxDeliver != 3 {
 		t.Errorf("Default MaxDeliver should be 3, got %d", cfg.MaxDeliver)
+	}
+}
+
+// TestGetConsumerConfig_AckWaitAndHeartbeat verifies the per-port AckWait
+// and HeartbeatInterval fields parse from string ("90s", "2m") into a
+// time.Duration on ConsumerConfig, and that empty/invalid values produce
+// the zero duration so callers can apply their per-component default.
+//
+// This is the load-bearing surface for semspec ADR-? — a single AckWait
+// per consumer/port lets paid-LLM deployments tune ack_wait above their
+// longest endpoint.RequestTimeout without forking the agentic-model
+// component (semstreams beta.53 audit identified this gap).
+func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
+	tests := []struct {
+		name              string
+		ackWait           string
+		heartbeatInterval string
+		wantAckWait       time.Duration
+		wantHeartbeat     time.Duration
+	}{
+		{
+			name:              "both set with valid durations",
+			ackWait:           "300s",
+			heartbeatInterval: "60s",
+			wantAckWait:       300 * time.Second,
+			wantHeartbeat:     60 * time.Second,
+		},
+		{
+			name:              "minute units accepted",
+			ackWait:           "5m",
+			heartbeatInterval: "2m",
+			wantAckWait:       5 * time.Minute,
+			wantHeartbeat:     2 * time.Minute,
+		},
+		{
+			name:              "both empty falls through to zero (caller default)",
+			ackWait:           "",
+			heartbeatInterval: "",
+			wantAckWait:       0,
+			wantHeartbeat:     0,
+		},
+		{
+			name:              "invalid AckWait stays zero (caller default)",
+			ackWait:           "not-a-duration",
+			heartbeatInterval: "60s",
+			wantAckWait:       0,
+			wantHeartbeat:     60 * time.Second,
+		},
+		{
+			name:              "invalid HeartbeatInterval stays zero (caller default)",
+			ackWait:           "90s",
+			heartbeatInterval: "garbage",
+			wantAckWait:       90 * time.Second,
+			wantHeartbeat:     0,
+		},
+		{
+			name:              "only AckWait set",
+			ackWait:           "120s",
+			heartbeatInterval: "",
+			wantAckWait:       120 * time.Second,
+			wantHeartbeat:     0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port := Port{
+				Name:      "test_input",
+				Direction: DirectionInput,
+				Config: JetStreamPort{
+					AckWait:           tt.ackWait,
+					HeartbeatInterval: tt.heartbeatInterval,
+				},
+			}
+			cfg := GetConsumerConfig(port)
+			if cfg.AckWait != tt.wantAckWait {
+				t.Errorf("AckWait = %v, want %v", cfg.AckWait, tt.wantAckWait)
+			}
+			if cfg.HeartbeatInterval != tt.wantHeartbeat {
+				t.Errorf("HeartbeatInterval = %v, want %v", cfg.HeartbeatInterval, tt.wantHeartbeat)
+			}
+
+			// Same surface via PortDefinition path
+			portDef := PortDefinition{
+				Name:    "test_input",
+				Type:    "jetstream",
+				Subject: "test.>",
+				Config: JetStreamPort{
+					AckWait:           tt.ackWait,
+					HeartbeatInterval: tt.heartbeatInterval,
+				},
+			}
+			cfgDef := GetConsumerConfigFromDefinition(portDef)
+			if cfgDef.AckWait != tt.wantAckWait {
+				t.Errorf("FromDefinition AckWait = %v, want %v", cfgDef.AckWait, tt.wantAckWait)
+			}
+			if cfgDef.HeartbeatInterval != tt.wantHeartbeat {
+				t.Errorf("FromDefinition HeartbeatInterval = %v, want %v", cfgDef.HeartbeatInterval, tt.wantHeartbeat)
+			}
+		})
 	}
 }

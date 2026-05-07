@@ -217,24 +217,58 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	// Defaults to "new" - only process new tool calls, don't replay old ones
 	consumerCfg := component.GetConsumerConfigFromDefinition(port)
 
+	// Per-component defaults preserved as fallbacks so zero-config
+	// deployments behave identically to pre-port-config builds. The 5m
+	// AckWait tolerates long-running tools (sandbox bash, deep_research);
+	// HeartbeatInterval new in this PR — without it, a tool taking longer
+	// than AckWait would be redelivered even on a healthy execution.
+	const (
+		defaultToolsAckWait           = 5 * time.Minute
+		defaultToolsHeartbeatInterval = 2 * time.Minute
+	)
+	ackWait := consumerCfg.AckWait
+	if ackWait == 0 {
+		ackWait = defaultToolsAckWait
+	}
+	heartbeatInterval := consumerCfg.HeartbeatInterval
+	if heartbeatInterval == 0 {
+		heartbeatInterval = defaultToolsHeartbeatInterval
+	}
+
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:     streamName,
-		ConsumerName:   consumerName,
-		FilterSubject:  port.Subject,
-		DeliverPolicy:  consumerCfg.DeliverPolicy,
-		AckPolicy:      consumerCfg.AckPolicy,
-		MaxDeliver:     3,
-		AckWait:        5 * time.Minute,
+		StreamName:    streamName,
+		ConsumerName:  consumerName,
+		FilterSubject: port.Subject,
+		DeliverPolicy: consumerCfg.DeliverPolicy,
+		AckPolicy:     consumerCfg.AckPolicy,
+		// Honor consumerCfg.MaxDeliver — was hardcoded to 3 even when
+		// operators set max_deliver via the port config (already-read
+		// consumerCfg.MaxDeliver was discarded).
+		MaxDeliver:     consumerCfg.MaxDeliver,
+		AckWait:        ackWait,
 		MaxAckPending:  3,
 		BackOff:        []time.Duration{15 * time.Second, 60 * time.Second},
 		AutoCreate:     false,
 		MessageTimeout: 10 * time.Minute,
 	}
 
+	// Wrap handler in ConsumeWithHeartbeat so long-running tools fire
+	// msg.InProgress() at heartbeatInterval and reset the AckWait clock.
+	// Without heartbeat, any tool exceeding AckWait gets redelivered
+	// while the original handler is still working — duplicate work +
+	// potential duplicate publishes. ConsumeWithHeartbeat owns ack/nak;
+	// returning nil from the work closure preserves the prior
+	// "always ack on completion" semantics. A future PR can differentiate
+	// success/failure semantics by returning err on tool-execution
+	// failure, but that's a behaviour change beyond this PR's scope.
 	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleToolCall(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack JetStream message", "error", ackErr)
+		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
+			func(workCtx context.Context) error {
+				c.handleToolCall(workCtx, msg.Data())
+				return nil
+			},
+		); hbErr != nil {
+			c.logger.Error("Tool handler error", "error", hbErr)
 		}
 	})
 	if err != nil {
