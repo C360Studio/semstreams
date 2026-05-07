@@ -121,6 +121,10 @@
                   "type": "string",
                   "description": "reason"
                 },
+                "related_loops": {
+                  "type": "object",
+                  "description": "related_loops"
+                },
                 "response_format": {
                   "type": "object",
                   "description": "response_format",
@@ -365,6 +369,10 @@
                   "type": "string",
                   "description": "reason"
                 },
+                "related_loops": {
+                  "type": "object",
+                  "description": "related_loops"
+                },
                 "response_format": {
                   "type": "object",
                   "description": "response_format",
@@ -527,6 +535,10 @@
                   "type": "string",
                   "description": "reason"
                 },
+                "related_loops": {
+                  "type": "object",
+                  "description": "related_loops"
+                },
                 "response_format": {
                   "type": "object",
                   "description": "response_format",
@@ -688,6 +700,10 @@
                 "reason": {
                   "type": "string",
                   "description": "reason"
+                },
+                "related_loops": {
+                  "type": "object",
+                  "description": "related_loops"
                 },
                 "response_format": {
                   "type": "object",
@@ -869,6 +885,10 @@
                 "reason": {
                   "type": "string",
                   "description": "reason"
+                },
+                "related_loops": {
+                  "type": "object",
+                  "description": "related_loops"
                 },
                 "response_format": {
                   "type": "object",
