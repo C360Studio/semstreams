@@ -314,6 +314,11 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// === Tier 2: Semantic capabilities (semantic only) ===
 		{"test-graphrag-local", s.executeTestGraphRAGLocal, []string{"semantic"}},
 		{"test-graphrag-global", s.executeTestGraphRAGGlobal, []string{"semantic"}},
+		// validate-globalsearch-known-answer is the load-bearing guard against
+		// the "globalSearch returns count=0 for content that exists" bug class
+		// (see semspec Meshtastic report). Probes deterministic single-word
+		// terms and HARD-FAILs when the response is empty or unrelated.
+		{"validate-globalsearch-known-answer", s.executeValidateGlobalSearchKnownAnswer, []string{"semantic"}},
 		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		{"validate-anomaly-detection", s.executeValidateAnomalyDetection, []string{"statistical", "semantic"}},
 		{"validate-virtual-edges", s.executeValidateVirtualEdges, []string{"semantic"}},
