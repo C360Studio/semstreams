@@ -49,6 +49,9 @@ type loopMetrics struct {
 	boidSignalsReceived  *prometheus.CounterVec
 	boidPositionUpdates  prometheus.Counter
 	boidEntitiesFiltered prometheus.Counter
+
+	// Graph-write-before-publish ordering
+	graphWritePublishTimeouts *prometheus.CounterVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -219,6 +222,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Name:      "boid_entities_filtered_total",
 				Help:      "Total times entities were reordered by Boid steering",
 			}),
+
+			graphWritePublishTimeouts: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "graph_write_publish_timeout_total",
+				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
+			}, []string{"state"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -245,6 +255,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounter("agentic-loop", "context_compactions_total", metrics.contextCompactionsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "context_compaction_tokens_saved", metrics.contextCompactionTokensSaved)
 			_ = registry.RegisterGauge("agentic-loop", "context_compacted_region_tokens", metrics.contextCompactedRegionTokens)
+			_ = registry.RegisterCounterVec("agentic-loop", "graph_write_publish_timeout_total", metrics.graphWritePublishTimeouts)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCreated)
@@ -269,9 +280,18 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionTokensSaved)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactedRegionTokens)
+			_ = prometheus.DefaultRegisterer.Register(metrics.graphWritePublishTimeouts)
 		}
 	})
 	return metrics
+}
+
+// recordGraphWritePublishTimeout increments the counter when the
+// graph-write-before-publish budget expired before WriteLoopCompletion
+// or WriteLoopFailure returned. State is "complete" or "failure" to
+// match persistHandlerResult's terminal-state branches.
+func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
+	m.graphWritePublishTimeouts.WithLabelValues(state).Inc()
 }
 
 // recordLoopCreated increments the loops created counter and active gauge.
