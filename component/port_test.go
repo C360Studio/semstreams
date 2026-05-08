@@ -1009,6 +1009,106 @@ func TestConsumerConfigDefaults(t *testing.T) {
 	}
 }
 
+// TestResolveSubject covers the four behavioral branches in
+// component.ResolveSubject. The function is load-bearing for every
+// component that needs to publish to an output port: it returns the
+// configured subject pattern with the wildcard replaced, falling back
+// to "portName.<suffix>" when no matching port is configured. This
+// fallback is what makes a component robust against operator configs
+// that override Ports without listing every default — without it,
+// components like agentic-tools (publishResult) silently drop messages
+// when their output port isn't in the user's config (regression
+// surfaced 2026-05-08; agentic-model dodged the same shape because it
+// was already using ResolveSubject).
+func TestResolveSubject(t *testing.T) {
+	tests := []struct {
+		name     string
+		ports    []PortDefinition
+		portName string
+		suffix   string
+		want     string
+	}{
+		{
+			name:     "no ports falls back to portName.suffix",
+			ports:    nil,
+			portName: "tool.result",
+			suffix:   "call-abc",
+			want:     "tool.result.call-abc",
+		},
+		{
+			name:     "empty slice falls back to portName.suffix",
+			ports:    []PortDefinition{},
+			portName: "tool.result",
+			suffix:   "call-xyz",
+			want:     "tool.result.call-xyz",
+		},
+		{
+			name: "non-matching port falls back to portName.suffix",
+			ports: []PortDefinition{
+				{Name: "other.port", Subject: "some.other.subject.>"},
+			},
+			portName: "tool.result",
+			suffix:   "call-123",
+			want:     "tool.result.call-123",
+		},
+		{
+			name: "trailing-star wildcard replaced with suffix",
+			ports: []PortDefinition{
+				{Name: "tool.result", Subject: "tool.result.*"},
+			},
+			portName: "tool.result",
+			suffix:   "call-abc",
+			want:     "tool.result.call-abc",
+		},
+		{
+			name: "trailing-arrow wildcard replaced with suffix",
+			ports: []PortDefinition{
+				{Name: "agent.response", Subject: "agent.response.>"},
+			},
+			portName: "agent.response",
+			suffix:   "req-123",
+			want:     "agent.response.req-123",
+		},
+		{
+			name: "no wildcard appends suffix with separator",
+			ports: []PortDefinition{
+				{Name: "events", Subject: "events.graph"},
+			},
+			portName: "events",
+			suffix:   "entity",
+			want:     "events.graph.entity",
+		},
+		{
+			name: "operator-overridden subject prefix honored",
+			ports: []PortDefinition{
+				{Name: "tool.result", Subject: "custom.tool.results.*"},
+			},
+			portName: "tool.result",
+			suffix:   "call-99",
+			want:     "custom.tool.results.call-99",
+		},
+		{
+			name: "first matching port wins on duplicate names",
+			ports: []PortDefinition{
+				{Name: "tool.result", Subject: "first.subject.>"},
+				{Name: "tool.result", Subject: "second.subject.>"},
+			},
+			portName: "tool.result",
+			suffix:   "tail",
+			want:     "first.subject.tail",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveSubject(tt.ports, tt.portName, tt.suffix)
+			if got != tt.want {
+				t.Errorf("ResolveSubject(%v, %q, %q) = %q, want %q", tt.ports, tt.portName, tt.suffix, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestPortDefinition_UnmarshalJSON_JetStreamConfig is the load-bearing
 // regression test for the beta.55 hotfix: a JSON-loaded PortDefinition
 // must place a JetStreamPort struct into Config (not a map[string]any),

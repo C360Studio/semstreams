@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,7 +77,7 @@ func TestEntityIRI(t *testing.T) {
 	tests := []struct {
 		name        string
 		domainType  string
-		platform    config.PlatformConfig
+		platform    platform.Config
 		localID     string
 		expected    string
 		expectError bool
@@ -85,7 +85,7 @@ func TestEntityIRI(t *testing.T) {
 		{
 			name:       "valid device entity with region",
 			domainType: "system.device", // INPUT: Dotted notation
-			platform: config.PlatformConfig{
+			platform: platform.Config{
 				ID:     "us-west-prod",
 				Region: "gulf_mexico",
 			},
@@ -95,7 +95,7 @@ func TestEntityIRI(t *testing.T) {
 		{
 			name:       "valid entity without region",
 			domainType: "system.component",
-			platform: config.PlatformConfig{
+			platform: platform.Config{
 				ID: "standalone",
 			},
 			localID:  "component_main",
@@ -104,7 +104,7 @@ func TestEntityIRI(t *testing.T) {
 		{
 			name:       "empty platform ID returns empty",
 			domainType: "system.device",
-			platform: config.PlatformConfig{
+			platform: platform.Config{
 				ID:     "",
 				Region: "gulf_mexico",
 			},
@@ -114,7 +114,7 @@ func TestEntityIRI(t *testing.T) {
 		{
 			name:       "empty local ID returns empty",
 			domainType: "system.device",
-			platform: config.PlatformConfig{
+			platform: platform.Config{
 				ID:     "us-west-prod",
 				Region: "gulf_mexico",
 			},
@@ -124,7 +124,7 @@ func TestEntityIRI(t *testing.T) {
 		{
 			name:       "invalid domain type returns empty",
 			domainType: "invalid",
-			platform: config.PlatformConfig{
+			platform: platform.Config{
 				ID:     "us-west-prod",
 				Region: "gulf_mexico",
 			},
@@ -289,7 +289,7 @@ func BenchmarkEntityTypeIRI(b *testing.B) {
 }
 
 func BenchmarkEntityIRI(b *testing.B) {
-	platform := config.PlatformConfig{
+	platform := platform.Config{
 		ID:     "us-west-prod",
 		Region: "gulf_mexico",
 	}
