@@ -71,8 +71,53 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("timeout must be positive"), "Config", "Validate", "check timeout value")
 	}
 
+	// When the operator supplied a Ports block, enforce that Inputs and
+	// Outputs are non-empty whenever DefaultConfig declares ports in
+	// those directions. Pre-fix, an operator config that overrode Ports
+	// without any Inputs (or set inputs:[]) started the component
+	// running and healthy with zero JetStream consumers — silent
+	// dispatch death. Symmetric to the publishResult silent-drop bug
+	// closed in beta.57. Audit finding 2026-05-08.
+	//
+	// Validation is by-presence-of-any-port, not by-canonical-name:
+	// operators can rename ports freely, override subjects, etc., as
+	// long as they don't omit the entire direction. Subject coherence
+	// across components is an operator concern; per-component validation
+	// only catches structural emptiness.
+	if c.Ports != nil {
+		if err := c.validatePortsNonEmpty(); err != nil {
+			return err
+		}
+	}
+
 	// AllowedTools can be nil or empty (both mean allow all tools)
 	// No validation needed for allowed_tools
+
+	return nil
+}
+
+// validatePortsNonEmpty enforces that when the operator supplied a Ports
+// block, neither Inputs nor Outputs is empty (provided DefaultConfig
+// declares ports in those directions). Catches the silent-broken case
+// where Ports is overridden but a direction is forgotten.
+func (c *Config) validatePortsNonEmpty() error {
+	defaults := DefaultConfig()
+	if defaults.Ports == nil {
+		return nil
+	}
+
+	if len(defaults.Ports.Inputs) > 0 && len(c.Ports.Inputs) == 0 {
+		return errs.WrapInvalid(
+			fmt.Errorf("Ports.Inputs is empty but DefaultConfig declares %d input port(s); agentic-tools cannot run without consumers — supply at least one input port or omit the Ports block to use canonical defaults", len(defaults.Ports.Inputs)),
+			"Config", "validatePortsNonEmpty", "input port presence",
+		)
+	}
+	if len(defaults.Ports.Outputs) > 0 && len(c.Ports.Outputs) == 0 {
+		return errs.WrapInvalid(
+			fmt.Errorf("Ports.Outputs is empty but DefaultConfig declares %d output port(s); tool.result publishes will silently drop — supply at least one output port or omit the Ports block to use canonical defaults", len(defaults.Ports.Outputs)),
+			"Config", "validatePortsNonEmpty", "output port presence",
+		)
+	}
 
 	return nil
 }
