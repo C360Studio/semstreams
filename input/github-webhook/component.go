@@ -78,7 +78,14 @@ func NewInput(name string, natsClient *natsclient.Client, cfg Config, logger *sl
 		logger = slog.Default()
 	}
 
-	// Resolve output subjects from port config.
+	// Resolve output subjects from port config. The publish call sites
+	// (dispatch func) index this map by the canonical port names below;
+	// an operator-renamed port (e.g. Name:"issues" instead of
+	// "github.event.issue") would silently land in the map under the
+	// rename while publish lookups by canonical key returned the default
+	// subject — events publish to the default while operator's intended
+	// subscribers see nothing. Validate up front and fail loud on
+	// unknown names. Audit finding 2026-05-08.
 	subjects := map[string]string{
 		"github.event.issue":   "github.event.issue",
 		"github.event.pr":      "github.event.pr",
@@ -87,6 +94,12 @@ func NewInput(name string, natsClient *natsclient.Client, cfg Config, logger *sl
 	}
 	if cfg.Ports != nil {
 		for _, p := range cfg.Ports.Outputs {
+			if _, canonical := subjects[p.Name]; !canonical {
+				return nil, errs.WrapInvalid(
+					fmt.Errorf("unknown output port name %q (must be one of: github.event.issue, github.event.pr, github.event.review, github.event.comment)", p.Name),
+					"github_webhook", "NewInput", "port name validation",
+				)
+			}
 			if p.Subject != "" {
 				subjects[p.Name] = p.Subject
 			}

@@ -950,6 +950,20 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 }
 
 // publishFailureEvents publishes failure events including workflow callback.
+//
+// Same write-before-publish ordering as persistHandlerResult (post-beta.57):
+// KV state and graph triples are stamped BEFORE the JetStream publish so any
+// subscriber consuming the failure event and immediately reading
+// COMPLETE_{loopID} from the loops KV bucket — rules engine, execution-manager,
+// future ops/analytics — finds the state already there. Pre-fix order had
+// publish first, KV write last, leaving the same race that beta.57 closed for
+// the success path. Audit finding 2026-05-08 (project_audit_findings_2026_05_08.md).
+//
+// Graph write goes through stampLoopFailureWithBudget so a degraded
+// graph-gateway never holds the publish indefinitely (mirrors the beta.57
+// stampLoopCompletionWithBudget pattern). KV write is a single fast Put;
+// the existing errorCtx 5s detached timeout already bounds the whole
+// function so no separate budget is needed.
 func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string) {
 	errorCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
 	defer cancel()
@@ -960,22 +974,26 @@ func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, er
 		return
 	}
 
-	// Emit failure entity to graph (non-fatal)
-	if c.graphWriter != nil && failure != nil {
-		c.graphWriter.WriteLoopFailure(errorCtx, failure)
+	// Persist failure to KV first so watchers (rules engine,
+	// execution-manager) see COMPLETE_{loopID} when they react to the
+	// failure event below.
+	if failure != nil {
+		c.persistFailureState(errorCtx, loopID, failure)
 	}
 
+	// Stamp graph triples second (under budget). The reorder is the
+	// load-bearing change vs pre-fix; the budget cap mirrors the success
+	// path's stampLoopCompletionWithBudget so a slow graph-gateway can't
+	// stall the publish.
+	if failure != nil {
+		c.stampLoopFailureWithBudget(errorCtx, loopID, failure)
+	}
+
+	// Publish last — every observable side effect is now in place.
 	for _, msg := range failMsgs {
 		if pubErr := c.natsClient.PublishToStream(errorCtx, msg.Subject, msg.Data); pubErr != nil {
 			c.logger.Error("Failed to publish failure event", "error", pubErr, "loop_id", loopID)
 		}
-	}
-
-	// Persist failure to KV so watchers (rules engine, execution-manager) can detect it.
-	// Without this, loops that fail (max iterations, handler_error) silently disappear
-	// from the KV watch perspective — only the NATS stream gets the failure event.
-	if failure != nil {
-		c.persistFailureState(errorCtx, loopID, failure)
 	}
 }
 
