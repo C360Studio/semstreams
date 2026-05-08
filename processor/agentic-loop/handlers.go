@@ -1844,6 +1844,7 @@ func (h *MessageHandler) buildFailureEvent(loopID, reason, errorMsg string) (*ag
 		Prompt:       h.loopManager.GetTaskPrompt(loopID),
 		Model:        entity.Model,
 		Iterations:   entity.Iterations,
+		ParentLoopID: entity.ParentLoopID,
 		WorkflowSlug: entity.WorkflowSlug,
 		WorkflowStep: entity.WorkflowStep,
 		FailedAt:     time.Now(),

@@ -96,7 +96,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 				Iterations: r.iterations,
 				FailedAt:   time.Now(),
 			}
-			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0)...)
+			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0, "acme", "ops")...)
 		}
 	}
 

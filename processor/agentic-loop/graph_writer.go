@@ -182,7 +182,7 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 
 	cost := computeCost(w.modelRegistry, event.Model, event.TokensIn, event.TokensOut)
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, w.platform.Org, w.platform.Platform)
 	for _, t := range triples {
 		if err := w.writeTriple(ctx, t); err != nil {
 			w.logger.Warn("graph_writer: failed to write loop failure triple",
@@ -438,11 +438,15 @@ func buildLoopCompletionTriples(
 
 // buildLoopFailureTriples constructs triples for a loop that terminated with an error.
 // cost should be pre-computed via computeCost; pass 0.0 to omit the cost triple.
+// org and platform are required to construct the parent loop's 6-part entity ID
+// when event.ParentLoopID is set — required for ancestry walks from failed loops
+// (semteams ADR-038 chainpause).
 func buildLoopFailureTriples(
 	loopEntityID string,
 	event *agentic.LoopFailedEvent,
 	modelEntityID string,
 	cost float64,
+	org, platform string,
 ) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -471,6 +475,15 @@ func buildLoopFailureTriples(
 	}
 	if cost > 0 {
 		triples = append(triples, triple(agvocab.LoopCostUSD, cost))
+	}
+	if event.ParentLoopID != "" {
+		// Mirrors buildLoopCompletionTriples — ancestry walks need the
+		// agent.loop.parent triple on failed loops too. Without this,
+		// chain-aware failure handlers (chainpause writing chain.paused.*
+		// to the canonical chain entity) terminate the walk at the
+		// failure and stamp triples on the wrong entity. ADR-038.
+		parentEntityID := agentic.LoopExecutionEntityID(org, platform, event.ParentLoopID)
+		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
 	}
 	if event.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, event.WorkflowSlug))

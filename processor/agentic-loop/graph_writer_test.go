@@ -334,7 +334,7 @@ func TestBuildLoopFailureTriples_PromptEmittedAsDescription(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
 
 	if got := objectFor(triples, agvocab.LoopDescription); got != prompt {
 		t.Errorf("%s: got %v, want %q", agvocab.LoopDescription, got, prompt)
@@ -454,7 +454,7 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
 	predicates := predicateSet(triples)
 
 	required := []string{
@@ -496,14 +496,60 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
 	predicates := predicateSet(triples)
 
-	optional := []string{agvocab.LoopWorkflow, agvocab.LoopWorkflowStep, agvocab.LoopUser}
+	// ParentLoopID belongs to the optional set — when empty (failure on a
+	// chain root or a non-chain-fanned spawn), no agent.loop.parent triple
+	// should be emitted.
+	optional := []string{agvocab.LoopWorkflow, agvocab.LoopWorkflowStep, agvocab.LoopUser, agvocab.LoopParent}
 	for _, pred := range optional {
 		if predicates[pred] {
 			t.Errorf("expected predicate %s to be omitted when empty", pred)
 		}
+	}
+}
+
+// TestBuildLoopFailureTriples_StampsParentLoopID closes the ancestry-walk
+// gap from semteams ADR-038 PR B: chain-aware failure handlers
+// (chainpause writing chain.paused.* to the canonical chain entity) need
+// agent.loop.parent stamped on failed loops to walk ancestry from the
+// failure to the chain root. Mirrors
+// TestBuildLoopCompletionTriples_OptionalFieldsPresentWhenSet's parent
+// assertion. Without this, the walk terminates at the failure and stamps
+// chain triples to the wrong entity.
+func TestBuildLoopFailureTriples_StampsParentLoopID(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFailChild"
+	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
+
+	event := &agentic.LoopFailedEvent{
+		LoopID:       "loopFailChild",
+		TaskID:       "task-fail-child",
+		Outcome:      "failed",
+		Role:         "researcher",
+		Model:        "claude",
+		Iterations:   3,
+		ParentLoopID: "loopParentXYZ",
+		FailedAt:     time.Now(),
+	}
+
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	if !predicates[agvocab.LoopParent] {
+		t.Fatalf("expected agent.loop.parent triple on failure path; got predicates: %v", predicates)
+	}
+
+	parent, ok := objectFor(triples, agvocab.LoopParent).(string)
+	if !ok {
+		t.Fatal("LoopParent object is not a string")
+	}
+	want := "acme.ops.agent.agentic-loop.execution.loopParentXYZ"
+	if parent != want {
+		t.Errorf("LoopParent = %q, want %q", parent, want)
+	}
+	if !message.IsValidEntityID(parent) {
+		t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
 	}
 }
 
@@ -527,7 +573,7 @@ func TestBuildLoopFailureTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 	}
 
 	cost := 0.005
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, "acme", "ops")
 	predicates := predicateSet(triples)
 
 	optional := []string{
@@ -569,7 +615,7 @@ func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, "", 0)
+	triples := buildLoopFailureTriples(loopEntityID, event, "", 0, "acme", "ops")
 	predicates := predicateSet(triples)
 
 	if predicates[agvocab.LoopModelUsed] {
