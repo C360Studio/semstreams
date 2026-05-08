@@ -1268,3 +1268,198 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 		})
 	}
 }
+
+// TestPort_UnmarshalJSON_RoundTripsToTypedConfig closes the audit-discovered
+// test gap on Port (component/port.go:78). The pre-existing
+// TestPortJSONSerialization marshals a Go-constructed Port to JSON and
+// inspects via map[string]any — it never asserts that
+// `json.Unmarshal(raw, &Port{})` produces a Port whose Config field
+// satisfies the typed assertion `port.Config.(SpecificPortType)`. That's
+// exactly the assertion shape that would catch a beta.54-class regression
+// (Port.UnmarshalJSON breaking type-discrimination silently). Mirrors the
+// PortDefinition coverage from PR #42 / beta.55.
+//
+// Wire shape under test is Port's `{"type":"...","data":{...}}` envelope
+// (component/port.go:50-71), distinct from PortDefinition's flat shape.
+func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		original Port
+		assert   func(t *testing.T, decoded Port)
+	}{
+		{
+			name: "JetStream",
+			original: Port{
+				Name:        "agent.request",
+				Direction:   DirectionInput,
+				Required:    true,
+				Description: "Agent request input",
+				Config: JetStreamPort{
+					StreamName:        "AGENT",
+					Subjects:          []string{"agent.request.>"},
+					DeliverPolicy:     "all",
+					AckPolicy:         "explicit",
+					MaxDeliver:        1,
+					AckWait:           "300s",
+					HeartbeatInterval: "60s",
+					ConsumerName:      "agent-consumer",
+				},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				js, ok := decoded.Config.(JetStreamPort)
+				if !ok {
+					t.Fatalf("Config = %T, want JetStreamPort (drift in Port.UnmarshalJSON jetstream case)", decoded.Config)
+				}
+				if js.StreamName != "AGENT" {
+					t.Errorf("StreamName = %q, want %q", js.StreamName, "AGENT")
+				}
+				if js.MaxDeliver != 1 {
+					t.Errorf("MaxDeliver = %d, want 1", js.MaxDeliver)
+				}
+				if js.AckWait != "300s" {
+					t.Errorf("AckWait = %q, want %q", js.AckWait, "300s")
+				}
+				if js.HeartbeatInterval != "60s" {
+					t.Errorf("HeartbeatInterval = %q, want %q", js.HeartbeatInterval, "60s")
+				}
+			},
+		},
+		{
+			name: "NATS",
+			original: Port{
+				Name:        "nats_output",
+				Direction:   DirectionOutput,
+				Required:    false,
+				Description: "NATS message output",
+				Config:      NATSPort{Subject: "messages.output", Queue: "processors"},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				n, ok := decoded.Config.(NATSPort)
+				if !ok {
+					t.Fatalf("Config = %T, want NATSPort", decoded.Config)
+				}
+				if n.Subject != "messages.output" {
+					t.Errorf("Subject = %q, want %q", n.Subject, "messages.output")
+				}
+				if n.Queue != "processors" {
+					t.Errorf("Queue = %q, want %q", n.Queue, "processors")
+				}
+			},
+		},
+		{
+			name: "NATSRequest",
+			original: Port{
+				Name:        "storage_api",
+				Direction:   DirectionInput,
+				Required:    false,
+				Description: "Storage API request/response",
+				Config:      NATSRequestPort{Subject: "storage.api", Timeout: "1s", Retries: 3},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				nr, ok := decoded.Config.(NATSRequestPort)
+				if !ok {
+					t.Fatalf("Config = %T, want NATSRequestPort", decoded.Config)
+				}
+				if nr.Subject != "storage.api" {
+					t.Errorf("Subject = %q, want %q", nr.Subject, "storage.api")
+				}
+				if nr.Retries != 3 {
+					t.Errorf("Retries = %d, want 3", nr.Retries)
+				}
+			},
+		},
+		{
+			name: "KVWatch",
+			original: Port{
+				Name:        "entity_watch",
+				Direction:   DirectionInput,
+				Required:    true,
+				Description: "Entity state watch",
+				Config:      KVWatchPort{Bucket: "ENTITIES"},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				kv, ok := decoded.Config.(KVWatchPort)
+				if !ok {
+					t.Fatalf("Config = %T, want KVWatchPort", decoded.Config)
+				}
+				if kv.Bucket != "ENTITIES" {
+					t.Errorf("Bucket = %q, want %q", kv.Bucket, "ENTITIES")
+				}
+			},
+		},
+		{
+			name: "Network",
+			original: Port{
+				Name:        "udp_input",
+				Direction:   DirectionInput,
+				Required:    true,
+				Description: "UDP MAVLink input",
+				Config:      NetworkPort{Protocol: "udp", Host: "0.0.0.0", Port: 14550},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				n, ok := decoded.Config.(NetworkPort)
+				if !ok {
+					t.Fatalf("Config = %T, want NetworkPort", decoded.Config)
+				}
+				if n.Protocol != "udp" {
+					t.Errorf("Protocol = %q, want udp", n.Protocol)
+				}
+				if n.Port != 14550 {
+					t.Errorf("Port = %d, want 14550", n.Port)
+				}
+			},
+		},
+		{
+			name: "File",
+			original: Port{
+				Name:        "log_input",
+				Direction:   DirectionInput,
+				Required:    true,
+				Description: "Log file input",
+				Config:      FilePort{Path: "/var/log/app.log", Pattern: "*.log"},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				f, ok := decoded.Config.(FilePort)
+				if !ok {
+					t.Fatalf("Config = %T, want FilePort", decoded.Config)
+				}
+				if f.Path != "/var/log/app.log" {
+					t.Errorf("Path = %q, want /var/log/app.log", f.Path)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.original)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			var decoded Port
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			// Top-level fields preserve through round-trip.
+			if decoded.Name != tt.original.Name {
+				t.Errorf("Name = %q, want %q", decoded.Name, tt.original.Name)
+			}
+			if decoded.Direction != tt.original.Direction {
+				t.Errorf("Direction = %q, want %q", decoded.Direction, tt.original.Direction)
+			}
+			if decoded.Required != tt.original.Required {
+				t.Errorf("Required = %v, want %v", decoded.Required, tt.original.Required)
+			}
+			if decoded.Description != tt.original.Description {
+				t.Errorf("Description = %q, want %q", decoded.Description, tt.original.Description)
+			}
+
+			// The load-bearing assertion: Config is the typed Portable
+			// implementation, not a map[string]any. This is what catches
+			// drift in Port.UnmarshalJSON's type-discrimination switch.
+			tt.assert(t, decoded)
+		})
+	}
+}
