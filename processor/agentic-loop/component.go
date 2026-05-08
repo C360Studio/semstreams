@@ -1035,25 +1035,122 @@ func (c *Component) recordTerminalState(result HandlerResult, entity agentic.Loo
 	}
 }
 
+// graphWritePublishBudget bounds how long persistHandlerResult delays
+// publishResults waiting for WriteLoopCompletion / WriteLoopFailure to
+// stamp the loop-execution entity in graph KV. Each writeTriple inside
+// the writer has its own 5s graphWriterTimeout with retry, so this
+// budget caps the total tail latency when retries cascade or the NATS
+// subscription hasn't propagated yet.
+//
+// 2s is generous for healthy graph-gateway (a typical completion stamps
+// ~10-15 triples in well under a second). When the budget expires we
+// publish anyway and emit a Prom counter so operators can dashboard
+// the tail. Tighten if production sees significant tail; widen only
+// after confirming the writer's retry budget is the actual bottleneck.
+const graphWritePublishBudget = 2 * time.Second
+
 // persistHandlerResult publishes messages and persists state from a handler result.
+//
+// The terminal-state branch reorders graph writes BEFORE publishResults
+// so any subscriber consuming agent.complete.<loop_id> from JetStream
+// can immediately walk loop-entity triples (agent.loop.parent etc.)
+// without racing the writer. Pre-fix order had publishResults first,
+// which meant a fast subscriber could resolve ancestry against a
+// missing parent triple. Concrete consumer was semteams ADR-038 PR B
+// chain.evidence.* (project_open_work_2026_05_08.md bug class 4).
+//
+// runWithBudget caps how long we delay the publish on a slow graph
+// write — graph-gateway hiccups must NOT silently swallow the
+// agent.complete.* event downstream rules wait on. On budget timeout,
+// publish proceeds with a loud log and Prom counter increment.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
-	c.publishResults(ctx, result)
 	c.persistLoopState(ctx, result.LoopID)
 
-	// Finalize terminal states
 	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
 		c.finalizeTrajectory(ctx, result.LoopID, result.State)
 		c.cleanupBoidPosition(ctx, result.LoopID)
 		if result.CompletionState != nil {
 			c.persistCompletionState(ctx, result.LoopID, result.CompletionState)
-			// Emit loop execution entity to graph (non-fatal)
-			if c.graphWriter != nil {
-				c.graphWriter.WriteLoopCompletion(ctx, result.CompletionState)
-			}
-		} else if result.FailureState != nil && c.graphWriter != nil {
-			c.graphWriter.WriteLoopFailure(ctx, result.FailureState)
+			c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
+		} else if result.FailureState != nil {
+			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
 		}
 		c.writeTrajectoryToGraph(ctx, result.LoopID)
+	}
+
+	c.publishResults(ctx, result)
+}
+
+// stampLoopCompletionWithBudget invokes WriteLoopCompletion under the
+// graphWritePublishBudget. Records a Prom timeout when the budget
+// expires before the writer returns; publish proceeds either way.
+func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) {
+	if c.graphWriter == nil {
+		return
+	}
+	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
+		c.graphWriter.WriteLoopCompletion(bctx, completion)
+	})
+	if timedOut {
+		c.logger.Warn("graph write budget expired before completion stamp returned; publishing agent.complete anyway",
+			"loop_id", loopID,
+			"budget", graphWritePublishBudget,
+			"state", "complete")
+		if c.metrics != nil {
+			c.metrics.recordGraphWritePublishTimeout("complete")
+		}
+	}
+}
+
+// stampLoopFailureWithBudget mirrors stampLoopCompletionWithBudget for
+// the failure branch. semteams smoke-#7 reproduced the race on
+// researcher-failure specifically (failed loops still need
+// agent.loop.parent visible for ancestry walks), so the failure path
+// gets the same budgeted-write treatment as completion.
+func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) {
+	if c.graphWriter == nil {
+		return
+	}
+	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
+		c.graphWriter.WriteLoopFailure(bctx, failure)
+	})
+	if timedOut {
+		c.logger.Warn("graph write budget expired before failure stamp returned; publishing agent.complete anyway",
+			"loop_id", loopID,
+			"budget", graphWritePublishBudget,
+			"state", "failure")
+		if c.metrics != nil {
+			c.metrics.recordGraphWritePublishTimeout("failure")
+		}
+	}
+}
+
+// runWithBudget runs fn in a goroutine and waits for it to return,
+// bounded by budget. Returns true if the budget expired before fn
+// returned (the goroutine continues running with a cancelled child
+// context; its inner NATS calls will see ctx.Done and abort cleanly).
+//
+// Extracted so the timeout-vs-completion contract is unit-testable
+// without mocking the natsclient or graphWriter. The function is
+// deliberately small: testing it covers the bounded-wait shape;
+// testing the reorder-before-publish behavior is left to e2e:agentic
+// where the full graph-stamp-then-publish path runs against real
+// NATS and subscribers can observe the ordering effect.
+func runWithBudget(ctx context.Context, budget time.Duration, fn func(context.Context)) (timedOut bool) {
+	bctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn(bctx)
+	}()
+
+	select {
+	case <-done:
+		return false
+	case <-bctx.Done():
+		return true
 	}
 }
 
