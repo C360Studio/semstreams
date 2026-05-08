@@ -103,17 +103,27 @@ func (e *LoopCompletedEvent) UnmarshalJSON(data []byte) error {
 
 // LoopFailedEvent is published when a loop fails.
 type LoopFailedEvent struct {
-	LoopID       string    `json:"loop_id"`
-	TaskID       string    `json:"task_id"`
-	Outcome      string    `json:"outcome"` // OutcomeFailed
-	Reason       string    `json:"reason"`
-	Error        string    `json:"error"`
-	Role         string    `json:"role"`
-	Prompt       string    `json:"prompt,omitempty"` // Original user task prompt; enables NL/BM25 search
-	Model        string    `json:"model"`
-	Iterations   int       `json:"iterations"`
-	TokensIn     int       `json:"tokens_in"`
-	TokensOut    int       `json:"tokens_out"`
+	LoopID     string `json:"loop_id"`
+	TaskID     string `json:"task_id"`
+	Outcome    string `json:"outcome"` // OutcomeFailed
+	Reason     string `json:"reason"`
+	Error      string `json:"error"`
+	Role       string `json:"role"`
+	Prompt     string `json:"prompt,omitempty"` // Original user task prompt; enables NL/BM25 search
+	Model      string `json:"model"`
+	Iterations int    `json:"iterations"`
+	TokensIn   int    `json:"tokens_in"`
+	TokensOut  int    `json:"tokens_out"`
+	// ParentLoopID enables ancestry walks from failed loops — required by
+	// chain-aware failure handlers (e.g. semteams chainpause writing
+	// chain.paused.* triples to the canonical chain entity per ADR-038).
+	// Without this, the agent.loop.parent triple wasn't stamped on the
+	// failed loop, so an ancestry walk terminated at the failure and
+	// returned chain_id == failed_loop_id even when the failed loop
+	// wasn't the chain root. Populated at construction the same way
+	// LoopCompletedEvent.ParentLoopID is — entity.ParentLoopID flows
+	// through.
+	ParentLoopID string    `json:"parent_loop,omitempty"`
 	WorkflowSlug string    `json:"workflow_slug,omitempty"`
 	WorkflowStep string    `json:"workflow_step,omitempty"`
 	FailedAt     time.Time `json:"failed_at"`
