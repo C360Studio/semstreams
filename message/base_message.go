@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/c360studio/semstreams/pkg/timestamp"
 	"github.com/google/uuid"
 )
@@ -78,20 +78,20 @@ func WithMeta(meta Meta) Option {
 
 // WithFederation enables federation support by using FederationMeta.
 // This adds global UIDs for cross-platform message correlation.
-func WithFederation(platform config.PlatformConfig) Option {
+func WithFederation(pcfg platform.Config) Option {
 	return func(m *BaseMessage) {
 		// Replace default meta with federation meta
 		if defaultMeta, ok := m.meta.(*DefaultMeta); ok {
-			m.meta = NewFederationMeta(defaultMeta.Source(), platform)
+			m.meta = NewFederationMeta(defaultMeta.Source(), pcfg)
 		}
 	}
 }
 
 // WithFederationAndTime combines federation support with a specific timestamp.
-func WithFederationAndTime(platform config.PlatformConfig, createdAt time.Time) Option {
+func WithFederationAndTime(pcfg platform.Config, createdAt time.Time) Option {
 	return func(m *BaseMessage) {
 		if defaultMeta, ok := m.meta.(*DefaultMeta); ok {
-			m.meta = NewFederationMetaWithTime(defaultMeta.Source(), platform, createdAt)
+			m.meta = NewFederationMetaWithTime(defaultMeta.Source(), pcfg, createdAt)
 		}
 	}
 }

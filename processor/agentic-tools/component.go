@@ -645,7 +645,21 @@ func backoffFor(attempt int, policy RetryPolicy) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// publishResult publishes a tool result to JetStream
+// publishResult publishes a tool result to JetStream.
+//
+// Uses component.ResolveSubject with a default-subject fallback so that an
+// empty Ports.Outputs slice (or a config that overrides Outputs without
+// specifying tool.result) still publishes to the canonical
+// "tool.result.<call_id>" subject instead of silently dropping the
+// message. Mirrors agentic-model's publishResponse pattern
+// (processor/agentic-model/component.go:854) — the framework precedent
+// is "outputs always go somewhere; defaults apply when unconfigured."
+//
+// Pre-fix bug: a config that overrode Ports without an Outputs entry
+// (or set outputs:[]) caused this loop's body to never execute, so
+// every tool result vanished with no log, no metric, no error. semspec
+// hit this 2026-05-08; agentic-model dodged the same shape because of
+// its ResolveSubject fallback.
 func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult) error {
 	resultMsg := message.NewBaseMessage(result.Schema(), &result, "agentic-tools")
 	data, err := json.Marshal(resultMsg)
@@ -653,25 +667,22 @@ func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult
 		return errs.Wrap(err, "Component", "publishResult", "marshal result")
 	}
 
-	// Publish to output subjects
-	for _, port := range c.config.Ports.Outputs {
-		if port.Subject == "" {
-			continue
-		}
-
-		// Replace wildcard with call ID for specific routing
-		subject := port.Subject
-		if len(subject) > 0 && subject[len(subject)-1] == '*' {
-			subject = subject[:len(subject)-1] + result.CallID
-		}
-
-		// Use JetStream for publishing to ensure delivery
-		if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
-			return errs.WrapTransient(err, "Component", "publishResult", fmt.Sprintf("publish to %s", subject))
-		}
+	subject := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.CallID)
+	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
+		return errs.WrapTransient(err, "Component", "publishResult", fmt.Sprintf("publish to %s", subject))
 	}
-
 	return nil
+}
+
+// outputPortDefs returns the configured output port definitions slice, or
+// nil when Ports is unset. Lets ResolveSubject fall back gracefully to
+// portName + "." + suffix for test configs without port wiring. Mirrors
+// the agentic-model helper of the same name.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	if c.config.Ports == nil {
+		return nil
+	}
+	return c.config.Ports.Outputs
 }
 
 // incrementErrors safely increments the error counter

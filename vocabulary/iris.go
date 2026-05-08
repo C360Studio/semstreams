@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/pkg/platform"
 )
 
 // Base IRI constants for the SemStreams vocabulary
@@ -82,8 +82,8 @@ func EntityTypeIRI(dottedType string) string {
 //
 //	entityType := message.EntityType{Domain: "robotics", Type: "drone"}
 //	iri := EntityIRI(entityType.Key(), platform, "drone_001")
-func EntityIRI(dottedType string, platform config.PlatformConfig, localID string) string {
-	if platform.ID == "" || localID == "" {
+func EntityIRI(dottedType string, pcfg platform.Config, localID string) string {
+	if pcfg.ID == "" || localID == "" {
 		return ""
 	}
 
@@ -101,13 +101,13 @@ func EntityIRI(dottedType string, platform config.PlatformConfig, localID string
 	}
 
 	// Build the IRI path (lowercase for consistency)
-	if platform.Region != "" {
+	if pcfg.Region != "" {
 		return fmt.Sprintf("%s/entities/%s/%s/%s/%s/%s",
-			SemStreamsBase, platform.ID, platform.Region, domain, entityType, localID)
+			SemStreamsBase, pcfg.ID, pcfg.Region, domain, entityType, localID)
 	}
 
 	return fmt.Sprintf("%s/entities/%s/%s/%s/%s",
-		SemStreamsBase, platform.ID, domain, entityType, localID)
+		SemStreamsBase, pcfg.ID, domain, entityType, localID)
 }
 
 // RelationshipIRI converts relationship types to IRI format.

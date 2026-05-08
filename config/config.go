@@ -12,9 +12,20 @@ import (
 	"unicode"
 
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
 )
+
+// PlatformConfig is an alias for platform.Config.
+//
+// PlatformConfig was promoted to its own leaf package so message/ (and
+// any future consumer of platform identity) can reference it without
+// importing all of config. Keeping the alias preserves config.PlatformConfig
+// usage at every call site that already had it. New code should prefer
+// platform.Config directly. Removing the alias would be a
+// mechanical rename across ~10 files; defer until there's a reason.
+type PlatformConfig = platform.Config
 
 // Storage mode constants
 const (
@@ -105,19 +116,6 @@ func (c *Config) Clone() *Config {
 	}
 
 	return &clone
-}
-
-// PlatformConfig defines platform identity and capabilities
-type PlatformConfig struct {
-	Org          string   `json:"org"`                    // Organization namespace (e.g., "c360", "noaa")
-	ID           string   `json:"id"`                     // Platform identifier (e.g., "platform1")
-	Type         string   `json:"type"`                   // vessel, shore, buoy, satellite
-	Region       string   `json:"region,omitempty"`       // gulf_mexico, atlantic, pacific
-	Capabilities []string `json:"capabilities,omitempty"` // radar, ctd, deployment, etc.
-
-	// Federation support for multi-platform deployments
-	InstanceID  string `json:"instance_id,omitempty"` // e.g., "west-1", "dev-local", "vessel-alpha"
-	Environment string `json:"environment,omitempty"` // "prod", "dev", "test"
 }
 
 // NATSConfig defines NATS connection settings

@@ -3,7 +3,7 @@ package message
 import (
 	"time"
 
-	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/google/uuid"
 )
 
@@ -28,7 +28,7 @@ type FederationMeta interface {
 
 	// Platform returns information about the originating platform.
 	// This identifies which SemStreams instance created this message.
-	Platform() config.PlatformConfig
+	Platform() platform.Config
 }
 
 // DefaultFederationMeta provides the standard implementation of FederationMeta.
@@ -36,22 +36,22 @@ type FederationMeta interface {
 type DefaultFederationMeta struct {
 	*DefaultMeta
 	uid      uuid.UUID
-	platform config.PlatformConfig
+	platform platform.Config
 }
 
 // NewFederationMeta creates a new DefaultFederationMeta with auto-generated UID.
 //
 // Parameters:
 //   - source: The service or component creating this message
-//   - platform: The platform configuration identifying the origin instance
+//   - pcfg: The platform configuration identifying the origin instance
 //
 // The UID is automatically generated as a new UUID, and timestamps are set
 // to the current time.
-func NewFederationMeta(source string, platform config.PlatformConfig) *DefaultFederationMeta {
+func NewFederationMeta(source string, pcfg platform.Config) *DefaultFederationMeta {
 	return &DefaultFederationMeta{
 		DefaultMeta: NewDefaultMeta(time.Now(), source),
 		uid:         uuid.New(),
-		platform:    platform,
+		platform:    pcfg,
 	}
 }
 
@@ -59,13 +59,13 @@ func NewFederationMeta(source string, platform config.PlatformConfig) *DefaultFe
 // Useful for historical data import or testing.
 func NewFederationMetaWithTime(
 	source string,
-	platform config.PlatformConfig,
+	pcfg platform.Config,
 	createdAt time.Time,
 ) *DefaultFederationMeta {
 	return &DefaultFederationMeta{
 		DefaultMeta: NewDefaultMeta(createdAt, source),
 		uid:         uuid.New(),
-		platform:    platform,
+		platform:    pcfg,
 	}
 }
 
@@ -75,7 +75,7 @@ func (m *DefaultFederationMeta) UID() uuid.UUID {
 }
 
 // Platform returns the originating platform configuration.
-func (m *DefaultFederationMeta) Platform() config.PlatformConfig {
+func (m *DefaultFederationMeta) Platform() platform.Config {
 	return m.platform
 }
 
@@ -92,11 +92,11 @@ func (m *DefaultFederationMeta) Platform() config.PlatformConfig {
 //	    // Handle non-federated message
 //	    localID := entityID
 //	}
-func GetPlatform(msg Message) (config.PlatformConfig, bool) {
+func GetPlatform(msg Message) (platform.Config, bool) {
 	if fedMeta, ok := msg.Meta().(FederationMeta); ok {
 		return fedMeta.Platform(), true
 	}
-	return config.PlatformConfig{}, false
+	return platform.Config{}, false
 }
 
 // GetUID is a helper function to extract the UID from any message.

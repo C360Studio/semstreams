@@ -11,6 +11,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -161,7 +162,23 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 				continue
 			}
 
-			streamName := DeriveStreamName(port.Subject)
+			// Honor explicit stream_name from the port definition before
+			// falling back to subject-derived naming. The canonical port
+			// type carries stream_name (e.g. agentic-tools' tool.result
+			// port declares stream_name: "AGENT" so its publishes land on
+			// the existing AGENT stream rather than spawning a derived
+			// TOOL stream that would collide with AGENT's "tool.>"
+			// capture). This relies on the shadow struct having been
+			// retired in favour of component.PortDefinition; a previous
+			// shadow stripped this field on JSON unmarshal and silently
+			// swallowed every tool.result publish in semspec
+			// (project_open_work_2026_05_08.md, bug class 3).
+			streamName := port.StreamName
+			subjects := []string{strings.ToLower(streamName) + ".>"}
+			if streamName == "" {
+				streamName = DeriveStreamName(port.Subject)
+				subjects = DeriveStreamSubjects(port.Subject)
+			}
 			if streamName == "" {
 				sm.logger.Warn("Could not derive stream name from subject",
 					"component", compName, "subject", port.Subject)
@@ -171,13 +188,14 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 			// Only add if not already explicitly configured
 			if _, exists := streams[streamName]; !exists {
 				streams[streamName] = StreamConfig{
-					Subjects: DeriveStreamSubjects(port.Subject),
+					Subjects: subjects,
 					// Defaults will be applied in createStream
 				}
 				sm.logger.Debug("Derived stream from component port",
 					"stream", streamName,
 					"component", compName,
-					"subject", port.Subject)
+					"subject", port.Subject,
+					"stream_name_explicit", port.StreamName != "")
 			}
 		}
 	}
@@ -193,18 +211,24 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 	return nil
 }
 
-// PortsConfig represents the ports section of a component config.
-type PortsConfig struct {
-	Inputs  []PortDefinition `json:"inputs,omitempty"`
-	Outputs []PortDefinition `json:"outputs,omitempty"`
-}
-
-// PortDefinition represents a single port definition.
-type PortDefinition struct {
-	Name    string `json:"name"`
-	Subject string `json:"subject"`
-	Type    string `json:"type"` // "nats", "jetstream", etc.
-}
+// PortsConfig and PortDefinition are aliases for the canonical
+// component-package types. They previously existed as a parallel shadow
+// inside this file because config could not import component (transitive
+// cycle through agentic/message). The cycle was broken in 2026-05-08 by
+// promoting PlatformConfig to its own pkg/platform leaf package; the
+// shadow types are now unnecessary and were a recurring source of
+// silent field-strip bugs (StreamName 2026-05-08, and any future field
+// added to component.PortDefinition before this fix landed).
+//
+// Keeping the alias names (PortsConfig, PortDefinition) preserves the
+// existing call sites inside this package without churn while making
+// the canonical type the single source of truth.
+type (
+	// PortsConfig is the canonical component port configuration.
+	PortsConfig = component.PortConfig
+	// PortDefinition is the canonical component port definition.
+	PortDefinition = component.PortDefinition
+)
 
 // extractPortsFromConfig parses port definitions from raw component config.
 func (sm *StreamsManager) extractPortsFromConfig(rawConfig json.RawMessage) (*PortsConfig, error) {
