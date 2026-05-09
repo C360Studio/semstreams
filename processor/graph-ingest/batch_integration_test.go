@@ -187,6 +187,58 @@ func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
 	assert.Empty(t, resp.FailedSubjects)
 }
 
+// TestIntegration_AddTriples_PreservesInputOrderWithinSubject pins the
+// invariant that ADR-036 Stage 4's prompt assembler depends on:
+// triples emitted in input order are stored in input order on the
+// entity. write_todos writes [id, content, status, position,
+// updated_at] interleaved per item; ReconstructTodos parses the
+// stored slice in stride-of-5 to recover items. If a future
+// graph-ingest change reorders, dedups, or sorts triples on write
+// (e.g. for query efficiency), this test fails loudly so the change
+// also needs an ADR-036 Stage 4 update.
+func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.batch.order.loop.001"
+	now := time.Now()
+
+	// Emit a known sequence: A, B, C, D, E across the same subject.
+	// The retrieved Triples slice must come back in this exact order.
+	want := []string{"A", "B", "C", "D", "E"}
+	triples := make([]message.Triple, 0, len(want))
+	for _, label := range want {
+		triples = append(triples, message.Triple{
+			Subject:    entityID,
+			Predicate:  "test.order.label",
+			Object:     label,
+			Timestamp:  now,
+			Confidence: 1.0,
+		})
+	}
+
+	written, failed, err := c.AddTriples(ctx, triples)
+	require.NoError(t, err)
+	require.Empty(t, failed)
+	assert.Equal(t, len(want), written)
+
+	entry, err := c.entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+
+	var entity graph.EntityState
+	require.NoError(t, json.Unmarshal(entry.Value, &entity))
+	require.Len(t, entity.Triples, len(want))
+
+	got := make([]string, len(entity.Triples))
+	for i, tr := range entity.Triples {
+		s, ok := tr.Object.(string)
+		if !ok {
+			t.Fatalf("triple[%d].Object expected string, got %T", i, tr.Object)
+		}
+		got[i] = s
+	}
+	assert.Equal(t, want, got, "ADR-036 Stage 4 ReconstructTodos parses by stride; input order must be preserved")
+}
+
 // TestIntegration_HandleTripleAddBatch_InvalidJSON pins the
 // malformed-envelope behaviour: handler returns Success=false with a
 // descriptive error, rather than crashing or silently dropping.

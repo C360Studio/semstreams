@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TaskMessage is an alias for agentic.TaskMessage for backward compatibility.
@@ -61,6 +62,17 @@ type MessageHandler struct {
 	modelRegistry     model.RegistryReader
 	toolRegistry      component.ToolRegistryReader
 	logger            *slog.Logger
+
+	// todoReader fetches the current write_todos list for a loop entity
+	// at iteration-build time (ADR-036 Stage 4). Nil disables the
+	// per-iteration todo block — fragments and trajectory still work.
+	// Set via SetTodoReader at component boot.
+	todoReader TodoReader
+
+	// platform identifies the org/platform pair used to construct loop
+	// entity IDs. Empty Org/Platform skips the todo read silently —
+	// the loop entity ID is unrecoverable without it.
+	platform types.PlatformMeta
 
 	// promptRegistry is the static fragment registry seeded with
 	// prompt.DefaultFragments at Component.Start. Nil means no assembler
@@ -150,6 +162,54 @@ func (h *MessageHandler) SetPromptRegistry(r *prompt.Registry) {
 // nil disables the per-task refresh; the registry is used as-is.
 func (h *MessageHandler) SetPersonaFragments(src PersonaFragmentSource) {
 	h.personaFragments = src
+}
+
+// SetTodoReader installs the reader the handler uses to fetch each
+// loop's write_todos list at iteration-build time (ADR-036 Stage 4).
+// Passing nil disables the per-iteration todo block.
+func (h *MessageHandler) SetTodoReader(r TodoReader) {
+	h.todoReader = r
+}
+
+// SetPlatform installs the org/platform pair used to construct loop
+// entity IDs for todo reads. The same identity is also used by other
+// graph paths in this package (graph_writer); typically wired once
+// from the same source at component boot.
+func (h *MessageHandler) SetPlatform(p types.PlatformMeta) {
+	h.platform = p
+}
+
+// maybeBuildTodoMessage reads the loop's current todo list and
+// formats it as a system message. Returns the zero ChatMessage on
+// disabled reader, missing platform, empty list, or read failure.
+// Read errors are logged at Debug level — the model just doesn't see
+// the block for this iteration; the next iteration retries.
+func (h *MessageHandler) maybeBuildTodoMessage(ctx context.Context, loopID string) agentic.ChatMessage {
+	if h.todoReader == nil || h.platform.Org == "" || h.platform.Platform == "" || loopID == "" {
+		return agentic.ChatMessage{}
+	}
+	loopEntityID := agentic.LoopExecutionEntityID(h.platform.Org, h.platform.Platform, loopID)
+	todos, err := h.todoReader.ReadTodos(ctx, loopEntityID)
+	if err != nil {
+		h.logger.Debug("todo read failed; iteration omits the todo block",
+			slog.String("loop_id", loopID),
+			slog.String("loop_entity_id", loopEntityID),
+			slog.Any("error", err))
+		return agentic.ChatMessage{}
+	}
+	return BuildTodoStateMessage(todos)
+}
+
+// prependIterationContext is the canonical prefix the loop attaches
+// to every iteration's message slice: the iteration-budget warning
+// (mandatory) followed by the optional working-list block. Both go
+// at the top so the model sees them before any prior conversation.
+func (h *MessageHandler) prependIterationContext(ctx context.Context, loopID string, iteration, maxIterations int, messages []agentic.ChatMessage) []agentic.ChatMessage {
+	prefix := []agentic.ChatMessage{BuildIterationBudgetMessage(iteration, maxIterations)}
+	if todoMsg := h.maybeBuildTodoMessage(ctx, loopID); todoMsg.Content != "" {
+		prefix = append(prefix, todoMsg)
+	}
+	return append(prefix, messages...)
 }
 
 // lookupLoopUserID resolves the owning user for a loop, returning "" when the
@@ -583,9 +643,10 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 
 	// Build messages for initial request with iteration budget. Pass the
 	// already-assembled system prompt so we avoid assembling a second time.
+	// prependIterationContext also injects the working-list block from
+	// write_todos when the loop has any todos (ADR-036 Stage 4).
 	messages := h.buildInitialMessagesWithPrompt(task, assembled)
-	budgetMsg := BuildIterationBudgetMessage(1, entity.MaxIterations)
-	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
+	messages = h.prependIterationContext(ctx, loopID, 1, entity.MaxIterations, messages)
 
 	// Per-task tools: if the spawner set task.Tools (including an explicit
 	// empty slice from e.g. `"default_tools": []`), respect it. Only fall
@@ -1264,8 +1325,7 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 		messages = h.recoverEmptyContext(loopID, cm, entity.Iterations, 0)
 	}
 
-	budgetMsg := BuildIterationBudgetMessage(entity.Iterations, entity.MaxIterations)
-	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
+	messages = h.prependIterationContext(ctx, loopID, entity.Iterations, entity.MaxIterations, messages)
 
 	tools := h.loopManager.GetCachedTools(loopID)
 	toolChoice := h.loopManager.GetCachedToolChoice(loopID)
@@ -1718,9 +1778,9 @@ func (h *MessageHandler) handleToolsComplete(
 		messages = h.recoverEmptyContext(loopID, cm, newIteration, 0)
 	}
 
-	// Prepend iteration budget so the model sees its budget early in context
-	budgetMsg := BuildIterationBudgetMessage(newIteration, entity.MaxIterations)
-	messages = append([]agentic.ChatMessage{budgetMsg}, messages...)
+	// Prepend iteration budget + working list so the model sees both
+	// at the top of context.
+	messages = h.prependIterationContext(ctx, loopID, newIteration, entity.MaxIterations, messages)
 
 	// Check for cancellation before building request
 	if err := ctx.Err(); err != nil {
