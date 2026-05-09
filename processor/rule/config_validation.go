@@ -220,13 +220,42 @@ func (rp *Processor) isValidOperator(operator string) bool {
 // ValidateDefinition validates a rule Definition for fields that are
 // processor-level concerns (not delegated to individual rule factories).
 // Call this before passing a Definition to CreateRuleFromDefinition.
+//
+// Both load paths converge here:
+//   - file-load → definitionFromMap → ValidateDefinition (this function)
+//   - hot-reload via KV → ValidateConfigUpdate → validateExpressionRule
+//
+// Discipline checks that apply to both paths (e.g. ADR-036's
+// rule-opaque field rejection) live here so a startup-time on-disk
+// rule cannot bypass what a hot-reload would catch.
 func ValidateDefinition(def Definition) error {
 	if def.FireEveryNEvents < 0 {
 		return errs.WrapInvalid(
 			fmt.Errorf("rule %s fire_every_n_events must be >= 0, got %d", def.ID, def.FireEveryNEvents),
 			"RuleProcessor", "ValidateDefinition", "validate fire_every_n_events")
 	}
+	if err := validateConditionFields(def); err != nil {
+		return err
+	}
 	return validateActionLists(def)
+}
+
+// validateConditionFields enforces ADR-036 Rule 1 on a parsed
+// Definition: no condition.field may name a vocabulary predicate
+// flagged RuleOpaque. Mirrors the check in validateExpressionRule's
+// hot-reload path so file-loaded rules see the same gate.
+func validateConditionFields(def Definition) error {
+	for i, c := range def.Conditions {
+		if c.Field == "" {
+			continue
+		}
+		if vocabulary.IsRuleOpaque(c.Field) {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d] predicates on rule-opaque field %q; rule-opaque predicates carry agent-private content and cannot be matched in rule conditions (see ADR-036)", def.ID, i, c.Field),
+				"RuleProcessor", "ValidateDefinition", "check rule-opaque field")
+		}
+	}
+	return nil
 }
 
 // validateActionLists walks every action slice on the Definition

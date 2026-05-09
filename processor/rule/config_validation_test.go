@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -178,6 +179,43 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 		})
 		if err != nil {
 			t.Errorf("structural field %q must remain rule-matchable: %v", structuralField, err)
+		}
+	})
+
+	t.Run("file-load path catches rule-opaque field via ValidateDefinition", func(t *testing.T) {
+		// Stage 1.5 — file-load (definitionFromMap → ValidateDefinition)
+		// must catch rule-opaque field references the same way the
+		// hot-reload path (ValidateConfigUpdate) does. ADR-036's
+		// discipline claim depends on both gates being equivalent.
+		def := Definition{
+			ID:   "file_load_opaque",
+			Type: "test_rule",
+			Conditions: []expression.ConditionExpression{
+				{Field: opaqueField, Operator: "eq", Value: "anything"},
+			},
+		}
+		err := ValidateDefinition(def)
+		if err == nil {
+			t.Fatal("expected ValidateDefinition to reject rule-opaque field on file-load path, got nil")
+		}
+		if !strings.Contains(err.Error(), "rule-opaque") {
+			t.Errorf("error %q should mention rule-opaque", err.Error())
+		}
+		if !errs.IsInvalid(err) {
+			t.Errorf("expected ErrorInvalid class, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("file-load path accepts structural sibling via ValidateDefinition", func(t *testing.T) {
+		def := Definition{
+			ID:   "file_load_structural",
+			Type: "test_rule",
+			Conditions: []expression.ConditionExpression{
+				{Field: structuralField, Operator: "eq", Value: "completed"},
+			},
+		}
+		if err := ValidateDefinition(def); err != nil {
+			t.Errorf("ValidateDefinition must accept structural field on file-load path: %v", err)
 		}
 	})
 
