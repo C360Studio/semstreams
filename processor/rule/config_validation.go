@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // ValidateConfigUpdate validates proposed configuration changes
@@ -167,6 +168,18 @@ func (rp *Processor) validateExpressionRule(ruleID string, ruleMap map[string]an
 			return errs.WrapInvalid(
 				fmt.Errorf("rule %s condition[%d] has invalid operator: %s", ruleID, i, operator),
 				"RuleProcessor", "validateExpressionRule", "check operator")
+		}
+
+		// Reject conditions that predicate on rule-opaque fields. Rule-opaque
+		// predicates carry free-form agent-private content (ADR-036); rules
+		// match structural facts only. Vocabulary marks the predicate
+		// rule-opaque via RuleOpaque metadata; unregistered predicates pass
+		// through (opacity is opt-in at registration time).
+		field, _ := condMap["field"].(string)
+		if field != "" && vocabulary.IsRuleOpaque(field) {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d] predicates on rule-opaque field %q; rule-opaque predicates carry agent-private content and cannot be matched in rule conditions (see ADR-036)", ruleID, i, field),
+				"RuleProcessor", "validateExpressionRule", "check rule-opaque field")
 		}
 	}
 

@@ -283,3 +283,46 @@ func TestSymmetricWithIRI(t *testing.T) {
 	// GetInversePredicate should return itself
 	assert.Equal(t, "test.rel.sibling", GetInversePredicate("test.rel.sibling"))
 }
+
+func TestRegisterWithRuleOpaque(t *testing.T) {
+	originalRegistry := make(map[string]PredicateMetadata)
+	registryMu.RLock()
+	for k, v := range predicateRegistry {
+		originalRegistry[k] = v
+	}
+	registryMu.RUnlock()
+	defer func() {
+		registryMu.Lock()
+		predicateRegistry = originalRegistry
+		registryMu.Unlock()
+	}()
+
+	ClearRegistry()
+
+	// Register an opaque predicate (free-form content, ADR-036)
+	Register("test.todo.content",
+		WithDescription("Free-form content"),
+		WithDataType("string"),
+		WithRuleOpaque(true))
+
+	// Register a structural predicate (rule-matchable)
+	Register("test.todo.status",
+		WithDescription("Status enum"),
+		WithDataType("string"))
+
+	meta := GetPredicateMetadata("test.todo.content")
+	require.NotNil(t, meta)
+	assert.True(t, meta.RuleOpaque)
+
+	meta2 := GetPredicateMetadata("test.todo.status")
+	require.NotNil(t, meta2)
+	assert.False(t, meta2.RuleOpaque)
+
+	// IsRuleOpaque convenience query
+	assert.True(t, IsRuleOpaque("test.todo.content"))
+	assert.False(t, IsRuleOpaque("test.todo.status"))
+
+	// Unregistered predicates default to non-opaque (opacity is opt-in
+	// at registration time per ADR-036)
+	assert.False(t, IsRuleOpaque("test.unknown.field"))
+}

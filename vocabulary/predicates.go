@@ -360,6 +360,19 @@ type PredicateMetadata struct {
 	//
 	// StandardIRI equivalent: owl:SymmetricProperty
 	IsSymmetric bool
+
+	// RuleOpaque marks the predicate as carrying free-form content that
+	// rules MUST NOT predicate on. The rule-validator rejects rule
+	// conditions whose `field` names a rule-opaque predicate at
+	// config-load time.
+	//
+	// Used for agent-private observable state (ADR-036): the owning
+	// agent is the sole writer and sole interpreter of content; rules
+	// may match structural facts (counts, status enums, transitions)
+	// but not the content itself. The asymmetric ownership pattern
+	// avoids LLM-on-LLM checklist Goodhart by keeping content out of
+	// the rule-engine's branching surface.
+	RuleOpaque bool
 }
 
 // IsValidPredicate checks if a predicate follows the three-level dotted notation

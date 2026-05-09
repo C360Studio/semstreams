@@ -255,8 +255,9 @@ func TestPredicateCount(t *testing.T) {
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
 	// Model: 8, Loop: 15 (core + LoopHasStep + LoopDescription)
 	// Step: 18 (15 core + tool_status + error_message + error_category), Identity: 6
-	// Total: 89 predicates
-	expectedMin := 89
+	// Todo: 5 (ADR-036 — id, content, status, position, updated_at)
+	// Total: 94 predicates
+	expectedMin := 94
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -402,6 +403,41 @@ func TestIdentityPredicatesRegistered(t *testing.T) {
 		}
 		if meta.DataType != tt.dataType {
 			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+	}
+}
+
+func TestTodoPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	todoPredicates := []struct {
+		name       string
+		predicate  string
+		dataType   string
+		ruleOpaque bool
+	}{
+		{"TodoID", agentic.TodoID, "string", false},
+		{"TodoContent", agentic.TodoContent, "string", true},
+		{"TodoStatus", agentic.TodoStatus, "string", false},
+		{"TodoPosition", agentic.TodoPosition, "int", false},
+		{"TodoUpdatedAt", agentic.TodoUpdatedAt, "time.Time", false},
+	}
+
+	for _, tt := range todoPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+		if meta.RuleOpaque != tt.ruleOpaque {
+			t.Errorf("%s: RuleOpaque = %v, want %v (ADR-036 §Decision Rule 1: rules MUST NOT predicate on opaque content)",
+				tt.name, meta.RuleOpaque, tt.ruleOpaque)
 		}
 	}
 }
