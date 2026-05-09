@@ -1,7 +1,14 @@
 package rule
 
 import (
+	"log/slog"
+	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // definitionFromMap is the hot-reload wire-format → Definition decoder.
@@ -95,4 +102,140 @@ func TestDefinitionFromMap_AbsentCooldownIsEmptyString(t *testing.T) {
 	if def.Cooldown != "" {
 		t.Errorf("Cooldown = %q, want empty string for absent field", def.Cooldown)
 	}
+}
+
+// TestValidateExpressionRule_RejectsRuleOpaqueField pins ADR-036's Rule 1:
+// rules MUST NOT predicate on fields the vocabulary marks RuleOpaque.
+// The validator catches this at config-load so a misconfigured rule
+// never starts; structural fields (status, position) on the same
+// predicate family stay rule-matchable.
+func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
+	// Snapshot the registry so test-registered predicates don't leak as
+	// stub entries to follow-on tests. SnapshotRegistry returns a closure
+	// that restores the pre-test state on defer.
+	defer vocabulary.SnapshotRegistry()()
+
+	const opaqueField = "test.todo.content"
+	const structuralField = "test.todo.status"
+
+	vocabulary.RegisterPredicate(vocabulary.PredicateMetadata{
+		Name:       opaqueField,
+		DataType:   "string",
+		RuleOpaque: true,
+	})
+	vocabulary.RegisterPredicate(vocabulary.PredicateMetadata{
+		Name:     structuralField,
+		DataType: "string",
+	})
+
+	processor := &Processor{
+		natsClient: &natsclient.Client{},
+		logger:     slog.Default(),
+		rules:      make(map[string]Rule),
+	}
+
+	t.Run("rejects condition on opaque field", func(t *testing.T) {
+		err := processor.ValidateConfigUpdate(map[string]any{
+			"rules": map[string]any{
+				"opaque_match": map[string]any{
+					"type": "test_rule",
+					"conditions": []any{
+						map[string]any{
+							"field":    opaqueField,
+							"operator": "eq",
+							"value":    "anything",
+						},
+					},
+				},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error rejecting rule-opaque field, got nil")
+		}
+		if got := err.Error(); !strings.Contains(got, "rule-opaque") {
+			t.Errorf("error %q should mention rule-opaque (ADR-036 Rule 1)", got)
+		}
+		// Pin the WrapInvalid choice — a future refactor that switches to
+		// plain fmt.Errorf would silently break callers using errs.IsInvalid.
+		if !errs.IsInvalid(err) {
+			t.Errorf("expected ErrorInvalid class for rule-opaque rejection, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("accepts condition on structural field of same family", func(t *testing.T) {
+		err := processor.ValidateConfigUpdate(map[string]any{
+			"rules": map[string]any{
+				"structural_match": map[string]any{
+					"type": "test_rule",
+					"conditions": []any{
+						map[string]any{
+							"field":    structuralField,
+							"operator": "eq",
+							"value":    "completed",
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Errorf("structural field %q must remain rule-matchable: %v", structuralField, err)
+		}
+	})
+
+	t.Run("file-load path catches rule-opaque field via ValidateDefinition", func(t *testing.T) {
+		// Stage 1.5 — file-load (definitionFromMap → ValidateDefinition)
+		// must catch rule-opaque field references the same way the
+		// hot-reload path (ValidateConfigUpdate) does. ADR-036's
+		// discipline claim depends on both gates being equivalent.
+		def := Definition{
+			ID:   "file_load_opaque",
+			Type: "test_rule",
+			Conditions: []expression.ConditionExpression{
+				{Field: opaqueField, Operator: "eq", Value: "anything"},
+			},
+		}
+		err := ValidateDefinition(def)
+		if err == nil {
+			t.Fatal("expected ValidateDefinition to reject rule-opaque field on file-load path, got nil")
+		}
+		if !strings.Contains(err.Error(), "rule-opaque") {
+			t.Errorf("error %q should mention rule-opaque", err.Error())
+		}
+		if !errs.IsInvalid(err) {
+			t.Errorf("expected ErrorInvalid class, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("file-load path accepts structural sibling via ValidateDefinition", func(t *testing.T) {
+		def := Definition{
+			ID:   "file_load_structural",
+			Type: "test_rule",
+			Conditions: []expression.ConditionExpression{
+				{Field: structuralField, Operator: "eq", Value: "completed"},
+			},
+		}
+		if err := ValidateDefinition(def); err != nil {
+			t.Errorf("ValidateDefinition must accept structural field on file-load path: %v", err)
+		}
+	})
+
+	t.Run("accepts condition on unregistered field (opacity is opt-in)", func(t *testing.T) {
+		err := processor.ValidateConfigUpdate(map[string]any{
+			"rules": map[string]any{
+				"unregistered_match": map[string]any{
+					"type": "test_rule",
+					"conditions": []any{
+						map[string]any{
+							"field":    "totally.new.field",
+							"operator": "eq",
+							"value":    "x",
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Errorf("unregistered fields must default to rule-matchable: %v", err)
+		}
+	})
 }

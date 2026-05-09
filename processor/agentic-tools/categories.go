@@ -35,6 +35,9 @@ var toolCategoryMu sync.RWMutex
 var toolCategories = map[string]ToolCategory{
 	// Core
 	"submit_work": CategoryCore,
+	// write_todos: agent-private observable state (ADR-036). Core
+	// because every role can use it; opacity is per-loop, not per-role.
+	"write_todos": CategoryCore,
 
 	// Knowledge
 	"graph_query":   CategoryKnowledge,

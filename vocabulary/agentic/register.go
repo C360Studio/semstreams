@@ -29,6 +29,33 @@ func Register() {
 	registerLoopPredicates()
 	registerStepPredicates()
 	registerIdentityPredicates()
+	registerTodoPredicates()
+}
+
+// registerTodoPredicates registers predicates for agent-private todo
+// state (ADR-036). TodoContent is flagged rule-opaque; the
+// rule-validator rejects any rule that predicates on it.
+func registerTodoPredicates() {
+	vocabulary.Register(TodoID,
+		vocabulary.WithDescription("Stable identifier for a todo item within an agent's loop"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(TodoContent,
+		vocabulary.WithDescription("Free-form description of a todo item; owner-interpretable only"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(TodoStatus,
+		vocabulary.WithDescription("Status of a todo item (pending|in_progress|completed)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(TodoPosition,
+		vocabulary.WithDescription("Zero-based ordinal of a todo item within its list"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(TodoUpdatedAt,
+		vocabulary.WithDescription("Wall-clock timestamp of the last write to a todo item"),
+		vocabulary.WithDataType("time.Time"))
 }
 
 // registerIntentPredicates registers predicates for agent intentions and goals.

@@ -682,6 +682,59 @@ const (
 	OpsDiagnosisSeverity = "ops.diagnosis.severity"
 )
 
+// Todo Predicates (ADR-036 — Agent-Private Observable State)
+//
+// Written by the write_todos tool onto the owning agent's loop entity.
+// Each todo item produces five triples on the loop entity, keyed by the
+// todo's stable ID, so the prompt assembler can reconstruct the full
+// list across iterations even after context compaction.
+//
+// Discipline (ADR-036 §Decision):
+//   - The owning agent is the sole writer and sole interpreter of
+//     content. Other readers (rules, ops agent, debug UI) may match
+//     structural facts (status enums, counts, transitions) but MUST
+//     NOT predicate on TodoContent. The rule-validator enforces this
+//     via the RuleOpaque metadata flag on TodoContent.
+//   - Each call to write_todos replaces the prior list (full-list
+//     replace, not delta-merge). The executor removes triples for
+//     todos no longer present and writes the new set in a single
+//     batch.
+const (
+	// TodoID is the stable identifier the agent assigned to a todo
+	// item. Used to correlate the five triples that describe one item.
+	// Example: "1", "2", "task-a"
+	// DataType: string
+	TodoID = "agent.todo.id"
+
+	// TodoContent is the free-form description of the todo item.
+	// Owner-interpretable only. Rule-opaque — rules MUST NOT predicate
+	// on this field; the rule-validator rejects any rule whose
+	// condition.field names this predicate. See ADR-036 Rule 1.
+	// Example: "Survey existing rules"
+	// DataType: string
+	TodoContent = "agent.todo.content"
+
+	// TodoStatus is the structural state of the todo item. Rule-matchable.
+	// Values: "pending" | "in_progress" | "completed".
+	// Example: "in_progress"
+	// DataType: string
+	TodoStatus = "agent.todo.status"
+
+	// TodoPosition is the zero-based ordinal of the todo within the list.
+	// The prompt assembler sorts by this field when reconstructing the
+	// list for re-injection.
+	// Example: 0, 1, 2
+	// DataType: int
+	TodoPosition = "agent.todo.position"
+
+	// TodoUpdatedAt is the wall-clock timestamp of the last write to
+	// this todo. Rule-matchable for stuck-detector predicates
+	// ("status=in_progress AND updated_at < now-30m").
+	// Example: "2026-05-09T14:22:00Z"
+	// DataType: time.Time
+	TodoUpdatedAt = "agent.todo.updated_at"
+)
+
 // Ops Config Predicates (Phase 3, reserved)
 //
 // These predicates are declared now to lock the ops.config.* namespace but

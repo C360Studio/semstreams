@@ -186,6 +186,23 @@ func WithInverseOf(inversePredicate string) Option {
 	}
 }
 
+// WithRuleOpaque marks the predicate as carrying free-form content
+// that rules must not predicate on. The rule-validator rejects rule
+// conditions whose `field` names a rule-opaque predicate at
+// config-load time. See ADR-036 for the asymmetric-ownership rationale.
+//
+// Example:
+//
+//	Register("agent.todo.content",
+//	    WithDescription("Free-form todo description"),
+//	    WithDataType("string"),
+//	    WithRuleOpaque(true))
+func WithRuleOpaque(opaque bool) Option {
+	return func(m *PredicateMetadata) {
+		m.RuleOpaque = opaque
+	}
+}
+
 // WithSymmetric marks the predicate as symmetric (its own inverse).
 // Symmetric predicates imply bidirectional relationships: if A relates to B,
 // then B relates to A with the same predicate.
@@ -363,6 +380,21 @@ func GetInversePredicate(predicate string) string {
 	return meta.InverseOf
 }
 
+// IsRuleOpaque reports whether a predicate is marked rule-opaque.
+// Returns false for unregistered predicates so that vocabulary
+// registration is the only path to opacity — undeclared predicates
+// stay rule-matchable by default. See ADR-036.
+func IsRuleOpaque(predicate string) bool {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	meta, exists := predicateRegistry[predicate]
+	if !exists {
+		return false
+	}
+	return meta.RuleOpaque
+}
+
 // IsSymmetricPredicate checks if a predicate is symmetric.
 // Symmetric predicates represent bidirectional relationships where
 // if A relates to B, then B also relates to A with the same predicate.
@@ -429,4 +461,28 @@ func ClearRegistry() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	predicateRegistry = make(map[string]PredicateMetadata)
+}
+
+// SnapshotRegistry captures the current registry state and returns a
+// restore function. Intended for tests that register predicates
+// transiently and need to undo without leaving stub entries behind.
+//
+// Example:
+//
+//	defer vocabulary.SnapshotRegistry()()
+//	vocabulary.Register("test.foo.bar", ...)
+//	// test runs; deferred restore reverts the registry to its pre-test state.
+func SnapshotRegistry() func() {
+	registryMu.RLock()
+	saved := make(map[string]PredicateMetadata, len(predicateRegistry))
+	for k, v := range predicateRegistry {
+		saved[k] = v
+	}
+	registryMu.RUnlock()
+
+	return func() {
+		registryMu.Lock()
+		predicateRegistry = saved
+		registryMu.Unlock()
+	}
 }

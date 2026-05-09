@@ -61,6 +61,32 @@ type AddTripleResponse struct {
 	Triple *message.Triple `json:"triple,omitempty"`
 }
 
+// AddTriplesBatchResponse response for batched triple addition.
+// Success is true iff all entities in the batch were updated. On
+// partial failure, FailedSubjects names the entity IDs that did not
+// commit, mapped to their error messages, so the caller can decide
+// whether to retry the failed subset, fall back to per-triple
+// AddTriple, or surface to the user. WrittenCount is the number of
+// triples that successfully committed across all entities.
+//
+// Discriminating rejection phases on Success=false:
+//
+//   - FailedSubjects empty/nil + WrittenCount=0 → pre-CAS validation
+//     rejected the whole batch (e.g. empty Subject/Predicate, malformed
+//     envelope). Nothing committed; safe to retry after fixing the
+//     input.
+//   - FailedSubjects non-empty → CAS phase reached. Per-entity
+//     atomicity means subjects NOT in FailedSubjects DID commit (their
+//     triples are durable); subjects in FailedSubjects rolled back. The
+//     caller can retry just the failed subset.
+//   - Success=true, FailedSubjects empty, WrittenCount>0 → all
+//     entities committed.
+type AddTriplesBatchResponse struct {
+	MutationResponse
+	WrittenCount   int               `json:"written_count"`
+	FailedSubjects map[string]string `json:"failed_subjects,omitempty"`
+}
+
 // RemoveTripleResponse response for triple removal
 type RemoveTripleResponse struct {
 	MutationResponse

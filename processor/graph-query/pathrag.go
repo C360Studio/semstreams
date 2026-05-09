@@ -2,6 +2,7 @@
 package graphquery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -193,12 +194,28 @@ func (p *PathSearcher) applyLimits(reqDepth, reqNodes int) (maxDepth, maxNodes i
 }
 
 // verifyEntityExists checks if an entity exists in the graph.
+//
+// Protocol note: graph-ingest's handleQueryEntityNATS returns a Go
+// error on missing-entity, but natsclient.SubscribeForRequests wraps
+// handler errors as a successful NATS response whose body starts with
+// "error: ". The previous implementation only branched on the Go err
+// return — which never fires on this protocol path — so a missing
+// entity silently passed verification. We detect the "error: " prefix
+// on the response payload to surface the not-found case correctly.
+// Same fix as ADR-036 Stage 4 H1 in processor/agentic-loop/todos.go.
 func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) error {
 	entityReq := map[string]string{"id": entityID}
 	entityReqData, _ := json.Marshal(entityReq)
-	_, err := p.nats.Request(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
+	respData, err := p.nats.Request(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
 	if err != nil {
-		return fmt.Errorf("entity not found: %w", err)
+		// Transport-layer failure (timeout, no responders).
+		return fmt.Errorf("query entity: %w", err)
+	}
+	// Handler-layer failure surfaces in the response body via
+	// natsclient's "error: <msg>" payload convention. The most
+	// common case is "error: not found: <id>" for missing entities.
+	if bytes.HasPrefix(respData, []byte("error: ")) {
+		return fmt.Errorf("entity not found: %s", string(respData))
 	}
 	return nil
 }

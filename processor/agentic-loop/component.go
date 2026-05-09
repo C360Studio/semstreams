@@ -155,6 +155,15 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 	}
 
+	// Wire the per-iteration write_todos reader (ADR-036 Stage 4) so
+	// every iteration's prompt prefix carries the current working
+	// list. NATS-less deployments (rare — most tests stub the client)
+	// silently skip the read.
+	if deps.NATSClient != nil {
+		handler.SetTodoReader(NewNATSTodoReader(deps.NATSClient))
+	}
+	handler.SetPlatform(deps.Platform)
+
 	comp := &Component{
 		config:         config,
 		handler:        handler,

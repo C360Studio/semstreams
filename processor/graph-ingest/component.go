@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1211,6 +1212,118 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 	}
 
 	return nil
+}
+
+// AddTriples adds many triples in one call, batching per entity. Triples
+// sharing the same Subject collapse to a single CAS read-modify-write on
+// that entity's KV record — N triples on the same loop entity become
+// 1 round-trip to graph-ingest, not N. Triples spanning multiple
+// entities issue one CAS per entity in deterministic subject order.
+//
+// Atomicity scope: per-entity, not cross-entity. If two entities are
+// in the batch and the first commits but the second exhausts CAS
+// retries, the first stays committed. This trade-off is acceptable
+// for the primary use case (write_todos, ADR-036) where every triple
+// shares one Subject (the loop entity). Multi-subject callers that
+// need cross-entity atomicity should use UpdateEntityWithTriples
+// instead.
+//
+// Returns nil on full success. On partial failure returns an error
+// whose message names the failing subjects; the per-subject error
+// detail surfaces via the handler's FailedSubjects response field.
+func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (writtenCount int, failedSubjects map[string]string, err error) {
+	if len(triples) == 0 {
+		return 0, nil, nil
+	}
+
+	// Validate before any write. Reject the whole batch on the first
+	// malformed triple — partial validation would be surprising.
+	for i, t := range triples {
+		if t.Subject == "" {
+			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", i))
+		}
+		if t.Predicate == "" {
+			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] predicate cannot be empty", i))
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return 0, nil, errs.Wrap(err, "Component", "AddTriples", "context cancelled")
+	}
+
+	// Group triples by Subject so each entity sees a single CAS.
+	// Map iteration is non-deterministic; we sort subject keys before
+	// committing so retries replay in stable order (helpful for tests
+	// and for any operator reading a partial-failure trace).
+	bySubject := make(map[string][]message.Triple, len(triples))
+	for _, t := range triples {
+		bySubject[t.Subject] = append(bySubject[t.Subject], t)
+	}
+	subjects := make([]string, 0, len(bySubject))
+	for s := range bySubject {
+		subjects = append(subjects, s)
+	}
+	sort.Strings(subjects)
+
+	failedSubjects = make(map[string]string)
+	for i, subject := range subjects {
+		// Short-circuit on context cancellation: don't burn the retry
+		// budget for every remaining subject when the caller has
+		// already given up. Mark the rest as failed-due-to-cancel so
+		// the response shape is honest about what didn't commit, but
+		// only count one operational error event for the cancellation
+		// rather than N (one per remaining subject).
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			for _, s := range subjects[i:] {
+				failedSubjects[s] = ctxErr.Error()
+			}
+			atomic.AddInt64(&c.errors, 1)
+			break
+		}
+		group := bySubject[subject]
+		casErr := c.entityBucket.UpdateWithRetry(ctx, subject, func(current []byte) ([]byte, error) {
+			var entity graph.EntityState
+
+			if len(current) > 0 {
+				if err := json.Unmarshal(current, &entity); err != nil {
+					return nil, err // Non-retryable
+				}
+			} else {
+				entity = graph.EntityState{
+					ID:        subject,
+					Version:   0,
+					UpdatedAt: time.Now(),
+				}
+			}
+
+			entity.Triples = append(entity.Triples, group...)
+			entity.Version++
+			entity.UpdatedAt = time.Now()
+
+			return json.Marshal(&entity)
+		})
+
+		if casErr != nil {
+			atomic.AddInt64(&c.errors, 1)
+			failedSubjects[subject] = casErr.Error()
+			continue
+		}
+		writtenCount += len(group)
+	}
+
+	if len(failedSubjects) == 0 {
+		return writtenCount, nil, nil
+	}
+
+	// Sort failed-subject names for stable error messages.
+	failed := make([]string, 0, len(failedSubjects))
+	for s := range failedSubjects {
+		failed = append(failed, s)
+	}
+	sort.Strings(failed)
+	return writtenCount, failedSubjects, errs.Wrap(
+		fmt.Errorf("CAS update failed for %d/%d subjects: %v", len(failedSubjects), len(subjects), failed),
+		"Component", "AddTriples", "batch CAS partial failure")
 }
 
 // RemoveTriple removes a triple from an entity using CAS for concurrency safety

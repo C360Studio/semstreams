@@ -177,7 +177,14 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 	// oklog/ulid is not in go.mod; uuid is equivalent for uniqueness purposes.
 	diagnosisID := uuid.New().String()
 	diagnosisEntityID := agentic.OpsDiagnosisEntityID(e.platform.Org, e.platform.Platform, diagnosisID)
-	loopEntityID := agentic.LoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	if err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
+		}, errs.WrapInvalid(err, "EmitDiagnosisExecutor", "emitDiagnosis", "construct loop entity ID")
+	}
 
 	now := time.Now()
 
