@@ -96,18 +96,36 @@ type WriteTodosExecutor struct {
 	writer   TodoWriter
 	platform types.PlatformMeta
 	logger   *slog.Logger
+	now      func() time.Time
 }
 
 // NewWriteTodosExecutor constructs the executor given a writer and
-// the platform identity used to resolve loop entity IDs.
+// the platform identity used to resolve loop entity IDs. The clock
+// defaults to time.Now; tests inject a frozen clock via SetClock.
 func NewWriteTodosExecutor(writer TodoWriter, platform types.PlatformMeta) *WriteTodosExecutor {
-	return &WriteTodosExecutor{writer: writer, platform: platform, logger: slog.Default()}
+	return &WriteTodosExecutor{
+		writer:   writer,
+		platform: platform,
+		logger:   slog.Default(),
+		now:      time.Now,
+	}
 }
 
 // SetLogger replaces the default logger. nil-safe.
 func (e *WriteTodosExecutor) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		e.logger = logger
+	}
+}
+
+// SetClock replaces the time source the executor stamps onto
+// triples (Triple.Timestamp and the agent.todo.updated_at value).
+// nil-safe — passing nil preserves the existing clock. Used by
+// tests for deterministic timestamp assertions; production should
+// not call this.
+func (e *WriteTodosExecutor) SetClock(now func() time.Time) {
+	if now != nil {
+		e.now = now
 	}
 }
 
@@ -219,7 +237,7 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 
 	// Step 2 — write the new set as a single batch (one CAS on the
 	// loop entity for all 5N triples thanks to ADR-036 Stage 2).
-	triples := buildTodoTriples(loopEntityID, args.Todos, time.Now())
+	triples := buildTodoTriples(loopEntityID, args.Todos, e.now())
 	if len(triples) > 0 {
 		if err := e.writer.AddTriplesBatch(ctx, triples); err != nil {
 			return agentic.ToolResult{

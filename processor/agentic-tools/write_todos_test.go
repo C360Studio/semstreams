@@ -6,11 +6,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/stretchr/testify/require"
 )
 
 // recordingTodoWriter implements TodoWriter in-process so tests can
@@ -367,6 +369,42 @@ func TestWriteTodosExecutor_UnknownToolNameIsRoutingBug(t *testing.T) {
 	}
 	if res.ErrorKind != agentic.ToolErrorNotFound {
 		t.Errorf("ErrorKind = %q, want %q", res.ErrorKind, agentic.ToolErrorNotFound)
+	}
+}
+
+// TestWriteTodosExecutor_DeterministicClock pins the SetClock contract
+// (Stage 3.7). Tests inject a frozen clock; the executor stamps that
+// time onto Triple.Timestamp and the agent.todo.updated_at value, so
+// assertions about timestamp equality become deterministic instead of
+// "today, ish" tolerances.
+func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
+	w := &recordingTodoWriter{}
+	e := newWriteTodosExecutor(w)
+	frozen := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	e.SetClock(func() time.Time { return frozen })
+
+	_, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c",
+		Name:   WriteTodosToolName,
+		LoopID: "loop-x",
+		Arguments: todosArg(
+			map[string]any{"id": "1", "content": "x", "status": "pending"},
+		),
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	require.Len(t, w.addedBatches, 1)
+	for i, tr := range w.addedBatches[0] {
+		if !tr.Timestamp.Equal(frozen) {
+			t.Errorf("triple[%d].Timestamp = %v, want %v", i, tr.Timestamp, frozen)
+		}
+		if tr.Predicate == agvocab.TodoUpdatedAt {
+			got, _ := tr.Object.(string)
+			if got != frozen.Format(time.RFC3339Nano) {
+				t.Errorf("TodoUpdatedAt object = %q, want %q", got, frozen.Format(time.RFC3339Nano))
+			}
+		}
 	}
 }
 
