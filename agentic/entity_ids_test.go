@@ -159,6 +159,47 @@ func TestLoopExecutionEntityID(t *testing.T) {
 	})
 }
 
+// TestTryLoopExecutionEntityID pins the error-returning variant
+// (ADR-036 Stage 3.8). Runtime tool executors call this so a
+// malformed loopID — the beta.36-class bug where a 6-part entity ID
+// gets stamped where a bare ID was expected — surfaces as a tool
+// error instead of crashing the dispatch goroutine.
+func TestTryLoopExecutionEntityID(t *testing.T) {
+	t.Run("happy path matches LoopExecutionEntityID", func(t *testing.T) {
+		got, err := agentic.TryLoopExecutionEntityID("c360", "ops", "abc123")
+		assert.NoError(t, err)
+		assert.Equal(t, "c360.ops.agent.agentic-loop.execution.abc123", got)
+	})
+
+	t.Run("returns error instead of panicking on bad input", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			org      string
+			platform string
+			loopID   string
+		}{
+			{"empty org", "", "ops", "abc"},
+			{"empty platform", "c360", "", "abc"},
+			{"empty loopID", "c360", "ops", ""},
+			{"dot in org", "c360.studio", "ops", "abc"},
+			{"dot in platform", "c360", "ops.prod", "abc"},
+			{"dot in loopID (beta.36 class)", "c360", "ops", "c360.ops.agent.agentic-loop.execution.abc"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got, err := agentic.TryLoopExecutionEntityID(tt.org, tt.platform, tt.loopID)
+				assert.Error(t, err)
+				assert.Equal(t, "", got)
+				// Sanity: the panicking sibling should panic on the
+				// same input — both paths must agree on what's invalid.
+				assert.Panics(t, func() {
+					agentic.LoopExecutionEntityID(tt.org, tt.platform, tt.loopID)
+				}, "panicking variant must reject the same inputs")
+			})
+		}
+	})
+}
+
 func TestTrajectoryStepEntityID(t *testing.T) {
 	t.Run("valid constructions", func(t *testing.T) {
 		tests := []struct {

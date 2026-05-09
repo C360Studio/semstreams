@@ -41,26 +41,51 @@ func ModelEndpointEntityID(org, platform, endpointName string) string {
 // Example: LoopExecutionEntityID("c360", "ops", "abc123")
 // Returns: "c360.ops.agent.agentic-loop.execution.abc123"
 //
-// Panics if any input part is empty or contains a dot, as these represent
-// programming errors — the caller is responsible for supplying well-formed identifiers.
+// Panics if any input part is empty or contains a dot. Suitable for
+// boot-time and post-completion paths where invalid input represents
+// a programming error that should fail loud (operator config check at
+// startup; framework bug in event-payload construction).
+//
+// Runtime tool executors (where a panic silently kills the dispatch
+// goroutine and the agent fails opaquely) should use
+// TryLoopExecutionEntityID and surface the error as ToolErrorInternal
+// instead. ADR-036 Stage 3.8 documents the panic-class concern; the
+// beta.36 read_loop_result wedge is the in-tree precedent.
 func LoopExecutionEntityID(org, platform, loopID string) string {
-	if err := validatePart("org", org); err != nil {
+	id, err := TryLoopExecutionEntityID(org, platform, loopID)
+	if err != nil {
 		panic(fmt.Sprintf("LoopExecutionEntityID: %s", err))
+	}
+	return id
+}
+
+// TryLoopExecutionEntityID is the error-returning variant of
+// LoopExecutionEntityID. Use this from runtime hot paths (tool
+// executors, per-iteration prompt assembly) where a panic would
+// silently crash the dispatch goroutine and the agent would fail
+// opaquely. Boot-time and post-completion callers can keep using the
+// panicking LoopExecutionEntityID.
+//
+// Returns ("", error) when any input part is empty or contains a dot,
+// or when the constructed ID fails IsValidEntityID.
+func TryLoopExecutionEntityID(org, platform, loopID string) (string, error) {
+	if err := validatePart("org", org); err != nil {
+		return "", fmt.Errorf("LoopExecutionEntityID: %w", err)
 	}
 	if err := validatePart("platform", platform); err != nil {
-		panic(fmt.Sprintf("LoopExecutionEntityID: %s", err))
+		return "", fmt.Errorf("LoopExecutionEntityID: %w", err)
 	}
 	if err := validatePart("loopID", loopID); err != nil {
-		panic(fmt.Sprintf("LoopExecutionEntityID: %s", err))
+		return "", fmt.Errorf("LoopExecutionEntityID: %w", err)
 	}
 
 	id := fmt.Sprintf("%s.%s.agent.agentic-loop.execution.%s", org, platform, loopID)
 
 	if !message.IsValidEntityID(id) {
-		panic(fmt.Sprintf("LoopExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id))
+		return "", fmt.Errorf("LoopExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id)
 	}
 
-	return id
+	return id, nil
 }
 
 // TrajectoryStepEntityID constructs a 6-part entity ID for a trajectory step.

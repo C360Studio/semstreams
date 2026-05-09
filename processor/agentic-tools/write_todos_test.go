@@ -408,6 +408,39 @@ func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
 	}
 }
 
+// TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal pins
+// ADR-036 Stage 3.8: a loop_id that contains dots (the beta.36-class
+// bug where an upstream stamps a 6-part entity ID into call.LoopID)
+// must surface as ToolErrorInternal with a descriptive Go error,
+// NOT crash the dispatch goroutine via panic from
+// LoopExecutionEntityID.
+func TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal(t *testing.T) {
+	w := &recordingTodoWriter{}
+	e := newWriteTodosExecutor(w)
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c",
+		Name:   WriteTodosToolName,
+		LoopID: "acme.test.agent.agentic-loop.execution.abc123", // 6-part ID, has dots
+		Arguments: todosArg(
+			map[string]any{"id": "1", "content": "x", "status": "pending"},
+		),
+	})
+	if err == nil {
+		t.Fatal("expected Go error for dotted loop_id (panic-class regression)")
+	}
+	if res.ErrorKind != agentic.ToolErrorInternal {
+		t.Errorf("ErrorKind = %q, want %q", res.ErrorKind, agentic.ToolErrorInternal)
+	}
+	if !strings.Contains(res.Error, "loop entity ID") {
+		t.Errorf("Error %q should reference the loop entity ID construction", res.Error)
+	}
+	if len(w.removes) != 0 || len(w.addedBatches) != 0 {
+		t.Errorf("malformed loop_id rejection must not touch writer; saw removes=%d batches=%d",
+			len(w.removes), len(w.addedBatches))
+	}
+}
+
 // TestWriteTodos_CategoryIsCore pins the per-loop-not-per-role
 // discipline from ADR-036: write_todos lives in CategoryCore so it's
 // available to every role; persona authors opt out per-deployment.

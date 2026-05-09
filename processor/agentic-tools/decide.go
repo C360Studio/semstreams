@@ -230,7 +230,14 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 		}, errs.WrapInvalid(fmt.Errorf("tool call missing loop_id"), "DecideExecutor", "decide", "resolve loop entity")
 	}
 
-	loopEntityID := agentic.LoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	if err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
+		}, errs.WrapInvalid(err, "DecideExecutor", "decide", "construct loop entity ID")
+	}
 
 	now := time.Now()
 	triples := []message.Triple{

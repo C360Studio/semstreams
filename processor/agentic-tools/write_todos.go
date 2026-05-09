@@ -218,7 +218,14 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 			ErrorKind: agentic.ToolErrorInternal,
 		}, errs.WrapInvalid(fmt.Errorf("tool call missing loop_id"), "WriteTodosExecutor", "write", "resolve loop entity")
 	}
-	loopEntityID := agentic.LoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	if err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
+		}, errs.WrapInvalid(err, "WriteTodosExecutor", "write", "construct loop entity ID")
+	}
 
 	// Step 1 — clear prior todo state. Each predicate is one CAS on the
 	// loop entity. A future Stage 3.5 may collapse these to a single
