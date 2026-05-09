@@ -59,6 +59,23 @@ type AddTripleRequest struct {
 	RequestID string         `json:"request_id,omitempty"`
 }
 
+// AddTriplesBatchRequest adds many triples in one request, atomically
+// per-entity (one CAS per distinct triple.Subject). Optimised for tools
+// that emit multiple triples in a single tool call (e.g. write_todos
+// per ADR-036 — 5 triples per todo × N todos all on the same loop
+// entity collapse to 1 CAS round-trip).
+//
+// The batch is NOT atomic across entities — if a write to entity A
+// succeeds but a CAS conflict on entity B exhausts retries, the
+// response surfaces the partial-failure shape and triples for A
+// remain written. Single-entity callers (the common case) see this
+// as fully atomic because there is only one CAS group.
+type AddTriplesBatchRequest struct {
+	Triples   []message.Triple `json:"triples"`
+	TraceID   string           `json:"trace_id,omitempty"`
+	RequestID string           `json:"request_id,omitempty"`
+}
+
 // RemoveTripleRequest removes a triple from an entity
 type RemoveTripleRequest struct {
 	Subject   string `json:"subject"`
