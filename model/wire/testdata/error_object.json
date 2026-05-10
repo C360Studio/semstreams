@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Invalid request: messages must be a non-empty array.",
+    "type": "invalid_request_error",
+    "param": "messages",
+    "code": "invalid_request"
+  }
+}
