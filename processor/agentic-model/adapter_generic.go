@@ -1,6 +1,6 @@
 package agenticmodel
 
-import openai "github.com/sashabaranov/go-openai"
+import "github.com/c360studio/semstreams/model/wire"
 
 // GenericAdapter applies cross-provider safe normalizations that are either
 // required by multiple providers or harmless for all known providers.
@@ -11,7 +11,7 @@ type GenericAdapter struct{}
 func (a *GenericAdapter) Name() string { return "generic" }
 
 // NormalizeRequest is a no-op for the generic adapter.
-func (a *GenericAdapter) NormalizeRequest(_ *openai.ChatCompletionRequest) {}
+func (a *GenericAdapter) NormalizeRequest(_ *wire.ChatCompletionRequest) {}
 
 // NormalizeMessages applies normalizations that are safe across all providers:
 //
@@ -31,14 +31,17 @@ func (a *GenericAdapter) NormalizeRequest(_ *openai.ChatCompletionRequest) {}
 //     be merged without breaking tool-pair invariants.
 //
 // reasoning_content omission is handled structurally during message conversion
-// (the field is never copied into the outgoing openai.ChatCompletionMessage).
-func (a *GenericAdapter) NormalizeMessages(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+// (the field is never copied into the outgoing wire.Message on the request path).
+func (a *GenericAdapter) NormalizeMessages(messages []wire.Message) []wire.Message {
 	for i := range messages {
 		if messages[i].Role == "tool" && messages[i].Name == "" {
 			messages[i].Name = "unknown_tool"
 		}
-		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 && messages[i].Content == "" {
-			messages[i].Content = " "
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			s, ok := messages[i].ContentString()
+			if !ok || s == "" {
+				_ = messages[i].SetContentString(" ")
+			}
 		}
 	}
 	return collapseConsecutiveSameRole(messages)
@@ -47,12 +50,15 @@ func (a *GenericAdapter) NormalizeMessages(messages []openai.ChatCompletionMessa
 // collapseConsecutiveSameRole merges adjacent messages with the same role by
 // joining their Content with "\n\n". Tool messages and any message carrying
 // tool_calls are excluded from merging because their identity-bearing fields
-// (ToolCallID, ToolCalls) would be lost.
-func collapseConsecutiveSameRole(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+// (ToolCallID, ToolCalls) would be lost. Messages with non-string (array)
+// Content also fall through unmerged — the SDK path never produces array
+// content, and the wire-native path (chunk 7+) will treat multi-content as
+// its own boundary class.
+func collapseConsecutiveSameRole(messages []wire.Message) []wire.Message {
 	if len(messages) < 2 {
 		return messages
 	}
-	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+	out := make([]wire.Message, 0, len(messages))
 	for _, m := range messages {
 		last := len(out) - 1
 		canMerge := last >= 0 &&
@@ -63,14 +69,35 @@ func collapseConsecutiveSameRole(messages []openai.ChatCompletionMessage) []open
 			out = append(out, m)
 			continue
 		}
+		prevContent, prevIsString := contentForMerge(out[last])
+		curContent, curIsString := contentForMerge(m)
+		// Array content (typed parts) on either side means the merge can't
+		// safely happen — "\n\n" concatenation would discard the typed
+		// semantics. Keep the boundary. Nil/missing content reads as the
+		// empty string, mirroring the SDK shape's `Content == ""` branch.
+		if !prevIsString || !curIsString {
+			out = append(out, m)
+			continue
+		}
 		switch {
-		case out[last].Content == "":
-			out[last].Content = m.Content
-		case m.Content != "":
-			out[last].Content = out[last].Content + "\n\n" + m.Content
+		case prevContent == "":
+			_ = out[last].SetContentString(curContent)
+		case curContent != "":
+			_ = out[last].SetContentString(prevContent + "\n\n" + curContent)
 		}
 	}
 	return out
+}
+
+// contentForMerge returns the message's content viewed as a mergeable
+// string. A nil/missing Content reads as ("", true) — empty but
+// mergeable, matching the SDK-side `Content == ""` semantics. Array
+// content reads as ("", false) — non-mergeable typed parts.
+func contentForMerge(m wire.Message) (string, bool) {
+	if len(m.Content) == 0 {
+		return "", true
+	}
+	return m.ContentString()
 }
 
 // NormalizeStreamDelta infers the tool call index when the provider omits it.
@@ -79,7 +106,7 @@ func collapseConsecutiveSameRole(messages []openai.ChatCompletionMessage) []open
 // allocates the next index), and an empty ID is an argument continuation
 // (reuse lastIndex). This matches the behavior required by Gemini and is
 // harmless for providers that always supply an explicit index.
-func (a *GenericAdapter) NormalizeStreamDelta(delta openai.ToolCall, lastIndex int) int {
+func (a *GenericAdapter) NormalizeStreamDelta(delta wire.ToolCall, lastIndex int) int {
 	if delta.Index != nil {
 		return *delta.Index
 	}
@@ -90,4 +117,4 @@ func (a *GenericAdapter) NormalizeStreamDelta(delta openai.ToolCall, lastIndex i
 }
 
 // NormalizeResponse is a no-op for the generic adapter.
-func (a *GenericAdapter) NormalizeResponse(_ *openai.ChatCompletionResponse) {}
+func (a *GenericAdapter) NormalizeResponse(_ *wire.ChatCompletionResponse) {}

@@ -281,6 +281,14 @@ type EndpointConfig struct {
 	// stale-pooled-connection class of wedge entirely. Use on known-wedgy
 	// gateways where shorter IdleConnTimeout has been insufficient.
 	DisableKeepAlives bool `json:"disable_keepalives,omitempty"`
+	// WireBackend selects the HTTP client implementation for this endpoint.
+	// "" or "sdk" (default) uses the sashabaranov/go-openai SDK client.
+	// "wire" uses the framework-owned model/wire client (ADR-037). The
+	// flag is per-endpoint to support calendar-soak rollouts: operators
+	// flip Gemini to "wire" first while other providers stay on SDK.
+	// Retired in Phase 3 once every adapter has soaked on "wire" for
+	// the calendar minimums in ADR-037.
+	WireBackend string `json:"wire_backend,omitempty"`
 }
 
 // CapabilityConfig defines model preferences for a capability.
@@ -452,6 +460,12 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 
 	validProviders := map[string]bool{
 		"anthropic": true, "ollama": true, "openai": true, "openrouter": true,
+		// "gemini" is the explicit-adapter route for Gemini endpoints —
+		// engages GeminiAdapter (ADR-037 chunk 8) for the 3.x preview
+		// thought_signature flow. Gemini 2.5 stable still works through
+		// the "openai" umbrella; pick "gemini" when you need the
+		// per-tool_call Extras translation.
+		"gemini": true,
 	}
 	if ep.Provider != "" && !validProviders[ep.Provider] {
 		return fmt.Errorf("endpoint %q: unknown provider %q", name, ep.Provider)
@@ -483,7 +497,13 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 	if err := validateDurationField(name, "response_header_timeout", ep.ResponseHeaderTimeout); err != nil {
 		return err
 	}
-	return validateDurationField(name, "request_timeout", ep.RequestTimeout)
+	if err := validateDurationField(name, "request_timeout", ep.RequestTimeout); err != nil {
+		return err
+	}
+	if ep.WireBackend != "" && ep.WireBackend != "sdk" && ep.WireBackend != "wire" {
+		return fmt.Errorf("endpoint %q: wire_backend must be \"\", \"sdk\", or \"wire\"", name)
+	}
+	return nil
 }
 
 func (r *Registry) validateCapability(name string, cap *CapabilityConfig) error {

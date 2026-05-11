@@ -41,3 +41,22 @@ tasks:
       - echo "[INTEGRATION] Running graph processor integration tests..."
       - go test -race -tags=integration -v ./processor/graph/...
       - echo "[OK] Graph processor integration tests complete"
+
+  live:
+    desc: Run all live_llm tests (real providers — needs .env keys / local Ollama)
+    cmds:
+      - echo "[LIVE] Running all live_llm-tagged tests. Tests skip cleanly when their required key/service is unset."
+      - go test -tags=live_llm -v ./...
+      - echo "[OK] Live LLM tests complete"
+
+  live:gemini:
+    desc: Live round-trip against Gemini 3.x preview (needs GEMINI_API_KEY in .env)
+    cmds:
+      - echo "[LIVE] Gemini 3.x thought_signature round-trip..."
+      - go test -tags=live_llm -v -timeout 240s -run TestGemini3x_ThoughtSignature_RoundTrip ./processor/agentic-model/...
+
+  live:ollama:
+    desc: Live response_format integration against local Ollama (needs Ollama at :11434)
+    cmds:
+      - echo "[LIVE] Ollama response_format integration..."
+      - go test -tags=live_llm -v -run TestResponseFormat_Integration ./processor/agentic-model/...

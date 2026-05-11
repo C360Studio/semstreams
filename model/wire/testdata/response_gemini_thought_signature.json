@@ -1,0 +1,31 @@
+{
+  "id": "chatcmpl-gemini-fixture",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "gemini-3-pro-preview",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "function-call-1",
+            "type": "function",
+            "function": {
+              "name": "check_flight",
+              "arguments": "{\"flight\":\"AA100\"}"
+            },
+            "extra_content": {
+              "google": {
+                "thought_signature": "BASE64_ENCODED_REASONING_BLOB_PLACEHOLDER"
+              }
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/model/wire"
 	"github.com/c360studio/semstreams/pkg/errs"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -21,6 +23,7 @@ import (
 // Client wraps OpenAI SDK for agentic model requests
 type Client struct {
 	client       *openai.Client
+	wireClient   *wire.Client // populated lazily when endpoint.WireBackend = "wire" (ADR-037)
 	endpoint     *model.EndpointConfig
 	chunkHandler ChunkHandler
 	metrics      *modelMetrics
@@ -73,15 +76,55 @@ func NewClient(endpoint *model.EndpointConfig) (*Client, error) {
 	// fields preserve Go's net/http defaults (backward compatible).
 	// See model/httpclient.go and operations/09-openai-client-keepalive.md
 	// for the failure modes this addresses.
-	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(endpoint))
+	httpClient := model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(endpoint))
+	config.HTTPClient = httpClient
 
 	client := openai.NewClientWithConfig(config)
 
-	return &Client{
+	out := &Client{
 		client:   client,
 		endpoint: endpoint,
 		retryCfg: defaultClientRetryConfig,
-	}, nil
+	}
+
+	// ADR-037: eager wire client construction when the endpoint opts in.
+	// Building lazily under sync.Mutex was the alternative; eager is
+	// simpler and removes the data race on c.wireClient writes between
+	// concurrent ChatCompletion calls (go-reviewer M1).
+	if endpoint.WireBackend == "wire" {
+		wc, err := buildWireClientForEndpoint(endpoint, httpClient)
+		if err != nil {
+			return nil, err
+		}
+		out.wireClient = wc
+	}
+
+	return out, nil
+}
+
+// buildWireClientForEndpoint constructs a *wire.Client for the given
+// endpoint, sharing the same HTTP transport as the SDK client (the
+// model.NewHTTPClient invariant from beta.43/47). Pulled out of
+// ensureWireClient (now retired) so construction happens once at
+// NewClient time, eliminating the concurrent-write race.
+func buildWireClientForEndpoint(endpoint *model.EndpointConfig, httpClient *http.Client) (*wire.Client, error) {
+	apiKey := ""
+	if endpoint.APIKeyEnv != "" {
+		apiKey = os.Getenv(endpoint.APIKeyEnv)
+	}
+	authHeader := ""
+	if apiKey != "" {
+		authHeader = "Bearer " + apiKey
+	}
+	wc, err := wire.NewClient(wire.ClientConfig{
+		BaseURL:    endpoint.URL,
+		HTTPClient: httpClient,
+		AuthHeader: authHeader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agentic-model: build wire client: %w", err)
+	}
+	return wc, nil
 }
 
 // SetChunkHandler sets the callback for receiving streaming deltas.
@@ -255,8 +298,11 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 
 	// Apply provider-specific message normalization (e.g., Gemini requires a
 	// non-empty name on tool results and non-empty content on assistant tool_call messages).
+	// ADR-037 chunk 6: the adapter speaks wire types; round-trip at this seam
+	// until the wire-native client path lands.
 	adapter := c.getAdapter()
-	messages = adapter.NormalizeMessages(messages)
+	wireMessages := adapter.NormalizeMessages(sdkMessagesToWire(messages))
+	messages = wireMessagesToSDK(wireMessages)
 
 	chatReq := openai.ChatCompletionRequest{
 		Model:    c.endpoint.Model,
@@ -280,8 +326,14 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 
 	c.applyResponseFormat(&chatReq, req)
 
-	// Apply provider-specific request normalization.
-	adapter.NormalizeRequest(&chatReq)
+	// Apply provider-specific request normalization. ADR-037 chunk 6:
+	// adapter operates on wire types; round-trip the relevant SDK fields
+	// for adapter inspection and copy back any mutations. Today all
+	// adapters are no-op on NormalizeRequest; chunk 8 wires the Gemini
+	// thought_signature Extras carrier through this seam.
+	wireReq := sdkRequestToWire(&chatReq)
+	adapter.NormalizeRequest(&wireReq)
+	applyWireRequestToSDK(wireReq, &chatReq)
 
 	// Convert tools if present. Strict is forwarded to the SDK's native
 	// FunctionDefinition.Strict field (go-openai v1.41+); adapters that
@@ -325,30 +377,51 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 //   - Rate limits (429): exponential from RateLimitDelay, up to MaxRateLimitRetries
 //
 // Both curves cap at MaxDelay and respect ctx cancellation at every wait point.
+//
+// When endpoint.WireBackend = "wire" (ADR-037), the call routes through
+// the wire-native path (chatCompletionWire); otherwise the SDK path runs.
 func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (agentic.AgentResponse, error) {
+	if c.useWireBackend() {
+		return c.chatCompletionWire(ctx, req)
+	}
 	c.runProviderStartupProbes(ctx)
 	chatReq := c.buildChatRequest(req)
-
-	// Log full request payload at debug level for wire-level diagnostics
-	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
-		if payload, err := json.Marshal(chatReq); err == nil {
-			c.logger.Debug("OpenAI API request payload",
-				slog.String("request_id", req.RequestID),
-				slog.String("model", chatReq.Model),
-				slog.Int("message_count", len(chatReq.Messages)),
-				slog.String("payload", string(payload)))
-		}
-	}
-
-	// Acquire throttle slot before any network attempt.
+	c.debugLogRequest(req.RequestID, chatReq.Model, len(chatReq.Messages), &chatReq)
 	if c.throttle != nil {
 		if err := c.throttle.Acquire(ctx); err != nil {
 			return errorResponse(req.RequestID, err.Error()), nil
 		}
 		defer c.throttle.Release()
 	}
+	return c.runRetryLoop(ctx, req.RequestID, chatReq.Model, func() (agentic.AgentResponse, error) {
+		return c.doSingleAttempt(ctx, chatReq, req.RequestID)
+	})
+}
 
-	// Resolve retry parameters
+// debugLogRequest emits a debug log of the outgoing chat completion
+// payload when logger debug is enabled. Generic across SDK and wire
+// payload shapes via json.Marshal.
+func (c *Client) debugLogRequest(requestID, model string, messageCount int, payload any) {
+	if c.logger == nil || !c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	c.logger.Debug("OpenAI API request payload",
+		slog.String("request_id", requestID),
+		slog.String("model", model),
+		slog.Int("message_count", messageCount),
+		slog.String("payload", string(body)))
+}
+
+// runRetryLoop drives the two-curve backoff for transient errors and
+// rate-limits. attemptFn is invoked once per attempt; it must return
+// (response, nil) on success or (_, err) for retry classification.
+// Backend-agnostic — works for both SDK and wire paths via
+// isRetryableAny / isRateLimitedAny.
+func (c *Client) runRetryLoop(ctx context.Context, requestID, model string, attemptFn func() (agentic.AgentResponse, error)) (agentic.AgentResponse, error) {
 	maxAttempts := c.retryCfg.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 3
@@ -359,70 +432,75 @@ func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (
 	maxDelay := c.retryCfg.maxDelayDuration(60 * time.Second)
 
 	genericAttempt, rlAttempt := 0, 0
-
 	for {
-		// Check context before each attempt
 		if ctx.Err() != nil {
-			return errorResponse(req.RequestID, ctx.Err().Error()), nil
+			return errorResponse(requestID, ctx.Err().Error()), nil
 		}
-
-		resp, err := c.doSingleAttempt(ctx, chatReq, req.RequestID)
+		resp, err := attemptFn()
 		if err == nil {
 			return c.withRetryCount(resp, genericAttempt+rlAttempt), nil
 		}
-
-		// Rate-limited (429) — separate backoff curve
-		if isRateLimited(err) {
-			rlAttempt++
-			if c.metrics != nil {
-				c.metrics.recordRateLimitHit(chatReq.Model)
+		switch {
+		case isRateLimitedAny(err):
+			done, newDelay, halt := c.handleRateLimit(ctx, requestID, model, err, &rlAttempt, maxRLRetries, rlDelay, maxDelay)
+			if halt {
+				return done, nil
 			}
-			if rlAttempt >= maxRLRetries {
-				c.logWarn("rate limit retries exhausted", req.RequestID, chatReq.Model,
-					slog.Int("attempts", rlAttempt), slog.Int("max_attempts", maxRLRetries))
-				return errorResponse(req.RequestID, err.Error()), nil
+			rlDelay = newDelay
+		case !isRetryableAny(err):
+			return errorResponse(requestID, err.Error()), nil
+		default:
+			done, newDelay, halt := c.handleTransient(ctx, requestID, model, err, &genericAttempt, maxAttempts, genericDelay, maxDelay)
+			if halt {
+				return done, nil
 			}
-
-			wait := addJitter(rlDelay)
-			c.logWarn("rate limited by provider, backing off", req.RequestID, chatReq.Model,
-				slog.Int("attempt", rlAttempt), slog.Int("max_attempts", maxRLRetries),
-				slog.Duration("wait", wait))
-			if c.metrics != nil {
-				c.metrics.recordRateLimitRetry(chatReq.Model)
-			}
-			if !sleepWithContext(ctx, wait) {
-				return errorResponse(req.RequestID, ctx.Err().Error()), nil
-			}
-			rlDelay = min(time.Duration(float64(rlDelay)*2), maxDelay)
-			continue
+			genericDelay = newDelay
 		}
-
-		// Non-retryable error — fail immediately
-		if !isRetryable(err) {
-			return errorResponse(req.RequestID, err.Error()), nil
-		}
-
-		// Transient error (5xx, network) — generic backoff curve
-		genericAttempt++
-		if genericAttempt >= maxAttempts {
-			c.logWarn("transient error retries exhausted", req.RequestID, chatReq.Model,
-				slog.Int("attempts", genericAttempt), slog.Int("max_attempts", maxAttempts),
-				slog.String("last_error", err.Error()))
-			return errorResponse(req.RequestID, err.Error()), nil
-		}
-
-		wait := addJitter(genericDelay)
-		if c.logger != nil {
-			c.logger.Debug("transient error, retrying",
-				slog.String("request_id", req.RequestID), slog.String("model", chatReq.Model),
-				slog.Int("attempt", genericAttempt), slog.Int("max_attempts", maxAttempts),
-				slog.Duration("wait", wait), slog.String("error", err.Error()))
-		}
-		if !sleepWithContext(ctx, wait) {
-			return errorResponse(req.RequestID, ctx.Err().Error()), nil
-		}
-		genericDelay = min(time.Duration(float64(genericDelay)*2), maxDelay)
 	}
+}
+
+func (c *Client) handleRateLimit(ctx context.Context, requestID, model string, err error, attempt *int, maxAttempts int, delay, maxDelay time.Duration) (agentic.AgentResponse, time.Duration, bool) {
+	*attempt++
+	if c.metrics != nil {
+		c.metrics.recordRateLimitHit(model)
+	}
+	if *attempt >= maxAttempts {
+		c.logWarn("rate limit retries exhausted", requestID, model,
+			slog.Int("attempts", *attempt), slog.Int("max_attempts", maxAttempts))
+		return errorResponse(requestID, err.Error()), delay, true
+	}
+	wait := addJitter(delay)
+	c.logWarn("rate limited by provider, backing off", requestID, model,
+		slog.Int("attempt", *attempt), slog.Int("max_attempts", maxAttempts),
+		slog.Duration("wait", wait))
+	if c.metrics != nil {
+		c.metrics.recordRateLimitRetry(model)
+	}
+	if !sleepWithContext(ctx, wait) {
+		return errorResponse(requestID, ctx.Err().Error()), delay, true
+	}
+	return agentic.AgentResponse{}, min(time.Duration(float64(delay)*2), maxDelay), false
+}
+
+func (c *Client) handleTransient(ctx context.Context, requestID, model string, err error, attempt *int, maxAttempts int, delay, maxDelay time.Duration) (agentic.AgentResponse, time.Duration, bool) {
+	*attempt++
+	if *attempt >= maxAttempts {
+		c.logWarn("transient error retries exhausted", requestID, model,
+			slog.Int("attempts", *attempt), slog.Int("max_attempts", maxAttempts),
+			slog.String("last_error", err.Error()))
+		return errorResponse(requestID, err.Error()), delay, true
+	}
+	wait := addJitter(delay)
+	if c.logger != nil {
+		c.logger.Debug("transient error, retrying",
+			slog.String("request_id", requestID), slog.String("model", model),
+			slog.Int("attempt", *attempt), slog.Int("max_attempts", maxAttempts),
+			slog.Duration("wait", wait), slog.String("error", err.Error()))
+	}
+	if !sleepWithContext(ctx, wait) {
+		return errorResponse(requestID, ctx.Err().Error()), delay, true
+	}
+	return agentic.AgentResponse{}, min(time.Duration(float64(delay)*2), maxDelay), false
 }
 
 // logWarn logs a warning if a logger is set. Reduces boilerplate in ChatCompletion.
@@ -607,7 +685,12 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 // model-family quirk, not a provider quirk — qwen3-via-Ollama (generic
 // adapter) and qwen3-via-OpenAI-compat (openai adapter) both emit it.
 func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID string) agentic.AgentResponse {
-	c.getAdapter().NormalizeResponse(&resp)
+	// ADR-037 chunk 6: NormalizeResponse operates on wire types; round-trip
+	// so adapters can begin extracting provider blobs (chunk 8 Gemini
+	// thought_signature is the first non-no-op consumer).
+	wireResp := sdkResponseToWire(&resp)
+	c.getAdapter().NormalizeResponse(&wireResp)
+	applyWireResponseToSDK(wireResp, &resp)
 	extractThinkBlocksFromResponse(&resp)
 
 	response := agentic.AgentResponse{
