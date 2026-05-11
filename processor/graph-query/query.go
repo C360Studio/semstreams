@@ -15,85 +15,47 @@ import (
 
 // setupQueryHandlers subscribes to all query request subjects
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
-	// Subscribe to entity query passthrough
-	sub, err := c.natsClient.SubscribeForRequests(ctx, "graph.query.entity", c.handleQueryEntity)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to entity query")
+	// Table-driven registration: each row is a NATS subject + its
+	// handler. Keeping this as a table rather than 12 inline blocks
+	// lets the function stay under the revive function-length cap
+	// AND makes the "what subjects this component owns" surface
+	// scannable at a glance. Order is preserved across iterations so
+	// the slog.Info call below reports subjects in declaration order.
+	type subRegistration struct {
+		subject string
+		handler func(ctx context.Context, data []byte) ([]byte, error)
 	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to entity by alias query (resolves alias then fetches entity)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.entityByAlias", c.handleQueryEntityByAlias)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to entityByAlias query")
+	registrations := []subRegistration{
+		{"graph.query.entity", c.handleQueryEntity},
+		{"graph.query.entityByAlias", c.handleQueryEntityByAlias},
+		{"graph.query.relationships", c.handleQueryRelationships},
+		{"graph.query.pathSearch", c.handlePathSearch},
+		{"graph.query.hierarchyStats", c.handleQueryHierarchyStats},
+		{"graph.query.prefix", c.handleQueryPrefix},
+		{"graph.query.spatial", c.handleQuerySpatial},
+		{"graph.query.temporal", c.handleQueryTemporal},
+		{"graph.query.semantic", c.handleQuerySemantic},
+		{"graph.query.similar", c.handleQuerySimilar},
+		{"graph.query.globalSearch", c.handleGlobalSearch},
+		// graphSummary — composite discovery resolver (fans out to
+		// graph.ingest.query.prefix + graph.index.query.predicateList).
+		{"graph.query.summary", c.handleQueryGraphSummary},
+		// searchGraph — wraps globalSearch with a semantic fallback
+		// when GraphRAG strategies return empty.
+		{"graph.query.searchGraph", c.handleSearchGraph},
 	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
 
-	// Subscribe to relationships query passthrough
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.relationships", c.handleQueryRelationships)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to relationships query")
+	subjects := make([]string, 0, len(registrations))
+	for _, r := range registrations {
+		sub, err := c.natsClient.SubscribeForRequests(ctx, r.subject, r.handler)
+		if err != nil {
+			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+r.subject)
+		}
+		c.querySubscriptions = append(c.querySubscriptions, sub)
+		subjects = append(subjects, r.subject)
 	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
 
-	// Subscribe to path search orchestration
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.pathSearch", c.handlePathSearch)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to path search")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to hierarchy stats (orchestrates prefix query to graph-ingest)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.hierarchyStats", c.handleQueryHierarchyStats)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to hierarchy stats")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to prefix query (passthrough to graph-ingest)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.prefix", c.handleQueryPrefix)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to prefix query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to spatial query passthrough
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.spatial", c.handleQuerySpatial)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to spatial query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to temporal query passthrough
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.temporal", c.handleQueryTemporal)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to temporal query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to semantic search (passthrough to graph-embedding)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.semantic", c.handleQuerySemantic)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to semantic query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to similar entity search (passthrough to graph-embedding)
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.similar", c.handleQuerySimilar)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to similar query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	// Subscribe to globalSearch - the main NL query handler with classifier routing
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.query.globalSearch", c.handleGlobalSearch)
-	if err != nil {
-		return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to globalSearch query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
-
-	c.logger.Info("query handlers registered",
-		"subjects", []string{"graph.query.entity", "graph.query.entityByAlias", "graph.query.relationships", "graph.query.pathSearch", "graph.query.hierarchyStats", "graph.query.prefix", "graph.query.spatial", "graph.query.temporal", "graph.query.semantic", "graph.query.similar", "graph.query.globalSearch"})
+	c.logger.Info("query handlers registered", "subjects", subjects)
 
 	return nil
 }
