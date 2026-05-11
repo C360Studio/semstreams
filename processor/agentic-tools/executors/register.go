@@ -105,6 +105,12 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		track(registerGraphQuery(ctx, reg, deps.NATSClient, logger))
 		track(registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger))
 		track(registerScratchpad(reg, deps.NATSClient, deps.Platform, logger))
+		// Gateway-first discovery tools (PR #54 step 2): thin wrappers
+		// over the new graph.query.summary + graph.query.searchGraph
+		// server-side resolvers. Read-only, no platform identity
+		// required. See project_graph_tools_gateway_first_plan memory.
+		track(registerSummarizeGraph(reg, deps.NATSClient, logger))
+		track(registerSearchGraph(reg, deps.NATSClient, logger))
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
