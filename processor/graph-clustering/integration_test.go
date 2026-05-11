@@ -5,6 +5,7 @@ package graphclustering
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -543,9 +544,11 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 	// min_community_size=3 prevents formation) flaked the test on
 	// CI. Local runs sometimes raced an unrelated entity-mapping
 	// write into the bucket before Keys was called, masking the
-	// bug. Audit-cleanup commit 2026-05-13.
+	// bug. Audit-cleanup commit 2026-05-13. errors.Is matches the
+	// canonical natsclient/kv.go:385 pattern in this codebase and
+	// also handles wrapped sentinels.
 	keys, err := communityBucket.Keys(ctx)
-	if err != nil && err != jetstream.ErrKeyNotFound && err != jetstream.ErrNoKeysFound {
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) && !errors.Is(err, jetstream.ErrNoKeysFound) {
 		require.NoError(t, err)
 	}
 
@@ -1137,10 +1140,14 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	// Note: Whether anomalies are detected depends on the graph structure
 	t.Log("Anomaly detection successfully initialized and ran")
 
-	// Verify we can access the bucket (it was created)
+	// Verify we can access the bucket (it was created).
+	// Sister sentinel-set to the community-bucket check above —
+	// Keys() on an empty bucket returns jetstream.ErrNoKeysFound,
+	// not ErrKeyNotFound. Pre-2026-05-13 only ErrKeyNotFound was
+	// accepted here too. errors.Is for wrapper resilience.
 	_, err = anomalyBucket.Keys(ctx)
-	if err != nil && err != jetstream.ErrKeyNotFound {
-		// Empty bucket is fine, but should be accessible
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) && !errors.Is(err, jetstream.ErrNoKeysFound) {
+		// Other errors mean the bucket is genuinely unreachable
 		t.Logf("ANOMALY_INDEX bucket accessible, keys error: %v", err)
 	}
 }
