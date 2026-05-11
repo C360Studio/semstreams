@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -96,6 +97,19 @@ func TestScratchpadExecutor_HappyPath_EmitsFourTriples(t *testing.T) {
 		t.Errorf("ScratchChars = %v, want 38", byPredicate[agvocab.ScratchChars])
 	}
 
+	// Co-emission invariant: all four triples for one call share the
+	// same Timestamp so downstream consumers can group by timestamp
+	// (alternative to grouping by ScratchID) when reconstructing entries.
+	// The eventual batch-publisher migration (reviewer's class-of-bug
+	// note) preserves this property; pinning it in a test makes the
+	// future change a visible delta.
+	want := pub.triples[0].Timestamp
+	for i, tr := range pub.triples {
+		if !tr.Timestamp.Equal(want) {
+			t.Errorf("triple %d timestamp = %v, want %v (co-emission invariant)", i, tr.Timestamp, want)
+		}
+	}
+
 	// Confirmation payload — semspec asked for "short fixed confirmation"
 	// rather than echo. Asserts the contract surface.
 	var confirm scratchpadResult
@@ -127,6 +141,19 @@ func TestScratchpadExecutor_AppendOnlyAcrossCalls(t *testing.T) {
 		idx++
 		return out
 	})
+	// Drive the clock forward between calls so the test exercises the
+	// "ordering recoverable via ScratchCreatedAt" claim. A frozen clock
+	// would pass even if the implementation cached e.now() at boot.
+	clocks := []time.Time{
+		time.Date(2026, 5, 12, 9, 15, 0, 0, time.UTC),
+		time.Date(2026, 5, 12, 9, 16, 30, 0, time.UTC),
+	}
+	clockIdx := 0
+	e.SetClock(func() time.Time {
+		t := clocks[clockIdx]
+		clockIdx++
+		return t
+	})
 
 	for _, text := range []string{"first thought", "second thought"} {
 		if _, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -139,13 +166,76 @@ func TestScratchpadExecutor_AppendOnlyAcrossCalls(t *testing.T) {
 		t.Errorf("triples after two calls = %d, want 8 (4 per call, append-only)", got)
 	}
 	scratchIDs := map[string]int{}
+	timestamps := map[time.Time]int{}
 	for _, tr := range pub.triples {
 		if tr.Predicate == agvocab.ScratchID {
 			scratchIDs[tr.Object.(string)]++
 		}
+		timestamps[tr.Timestamp]++
 	}
 	if len(scratchIDs) != 2 {
 		t.Errorf("distinct scratch IDs = %d, want 2", len(scratchIDs))
+	}
+	if len(timestamps) != 2 {
+		t.Errorf("distinct timestamps = %d, want 2 (each call advances the clock)", len(timestamps))
+	}
+}
+
+// scratchpadPartialFailurePublisher returns success for the first N
+// AddTriple calls then surfaces an error on the (N+1)th. Records every
+// triple it sees so tests can assert exactly which writes landed.
+// Lives here (not next to recordingPublisher) because the existing
+// shared recorder bails BEFORE recording on error and the partial-write
+// invariant needs the opposite.
+type scratchpadPartialFailurePublisher struct {
+	failAfter int
+	calls     int
+	triples   []message.Triple
+	failWith  error
+}
+
+func (p *scratchpadPartialFailurePublisher) AddTriple(_ context.Context, tr message.Triple) error {
+	p.calls++
+	if p.calls > p.failAfter {
+		return p.failWith
+	}
+	p.triples = append(p.triples, tr)
+	return nil
+}
+
+// TestScratchpadExecutor_PartialWrite_LeavesOrphanID locks in the
+// documented partial-write behavior: a publish failure on triple 3
+// leaves the first 2 triples in the graph (orphan ScratchID +
+// ScratchText with no companions). The tool returns ToolErrorNetwork
+// so the LLM sees the failure and retries with a fresh UUID; the
+// orphan is harmless (no duplication). The eventual batch-publisher
+// migration (go-reviewer follow-up) eliminates orphans entirely —
+// this test makes that change a visible delta.
+func TestScratchpadExecutor_PartialWrite_LeavesOrphanID(t *testing.T) {
+	pub := &scratchpadPartialFailurePublisher{failAfter: 2, failWith: errors.New("nats degraded")}
+	e := NewScratchpadExecutor(pub, types.PlatformMeta{Org: "acme", Platform: "ops"})
+	e.SetIDGenerator(func() string { return "orphan-id" })
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "c", Name: ScratchpadToolName, LoopID: "loop", Arguments: map[string]any{"text": "draft"},
+	})
+	if err == nil {
+		t.Fatalf("expected wrapped transient error")
+	}
+	if res.ErrorKind != agentic.ToolErrorNetwork {
+		t.Errorf("ErrorKind = %v, want network", res.ErrorKind)
+	}
+	if len(pub.triples) != 2 {
+		t.Errorf("recorded triples = %d, want 2 (first two land, third fails)", len(pub.triples))
+	}
+	// The first two predicates emitted are ScratchID and ScratchText
+	// (per scratchpad.go emission order). Locking that order in here
+	// makes any future reorder a visible test delta.
+	if pub.triples[0].Predicate != agvocab.ScratchID {
+		t.Errorf("first emitted predicate = %q, want %q", pub.triples[0].Predicate, agvocab.ScratchID)
+	}
+	if pub.triples[1].Predicate != agvocab.ScratchText {
+		t.Errorf("second emitted predicate = %q, want %q", pub.triples[1].Predicate, agvocab.ScratchText)
 	}
 }
 

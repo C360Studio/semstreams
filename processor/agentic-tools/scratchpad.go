@@ -68,14 +68,17 @@ func NewScratchpadExecutor(publisher TriplePublisher, platform types.PlatformMet
 	}
 }
 
-// SetLogger replaces the default logger. nil-safe.
+// SetLogger replaces the default logger. nil-safe. Boot-time wiring
+// only — NOT safe to call after Execute is in flight (no internal
+// locking; concurrent Execute readers would race the writer).
 func (e *ScratchpadExecutor) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		e.logger = logger
 	}
 }
 
-// SetClock replaces the time source. nil-safe. Tests use this for
+// SetClock replaces the time source. nil-safe. Boot-time wiring only —
+// NOT safe to call after Execute is in flight. Tests use this for
 // deterministic ScratchCreatedAt assertions; production should not.
 func (e *ScratchpadExecutor) SetClock(now func() time.Time) {
 	if now != nil {
@@ -83,8 +86,9 @@ func (e *ScratchpadExecutor) SetClock(now func() time.Time) {
 	}
 }
 
-// SetIDGenerator replaces the ID generator. nil-safe. Tests use this to
-// pin scratch IDs; production should not.
+// SetIDGenerator replaces the ID generator. nil-safe. Boot-time wiring
+// only — NOT safe to call after Execute is in flight. Tests use this
+// to pin scratch IDs; production should not.
 func (e *ScratchpadExecutor) SetIDGenerator(newID func() string) {
 	if newID != nil {
 		e.newID = newID
