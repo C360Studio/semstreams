@@ -197,6 +197,126 @@ func TestGateway_MapGraphQLToNATSSubject_Unknown(t *testing.T) {
 	}
 }
 
+// TestGateway_MapGraphQLToNATSSubject_GraphSummary covers the composite
+// discovery resolver added 2026-05-12. The mapping uses a "graphsummary"
+// substring match positioned BEFORE the generic "entity" / "predicates"
+// fallbacks so the dedicated subject wins.
+func TestGateway_MapGraphQLToNATSSubject_GraphSummary(t *testing.T) {
+	comp := createTestGateway(t)
+
+	tests := []struct {
+		name            string
+		query           string
+		expectedSubject string
+	}{
+		{
+			name:            "graphSummary no-args",
+			query:           `query { graphSummary { total_entities entity_types { type count } } }`,
+			expectedSubject: "graph.query.summary",
+		},
+		{
+			name:            "graphSummary with include_predicates arg",
+			query:           `query { graphSummary(include_predicates: false) { total_entities } }`,
+			expectedSubject: "graph.query.summary",
+		},
+		{
+			name:            "graphSummary lowercase variant",
+			query:           `{ graphsummary { total_entities } }`,
+			expectedSubject: "graph.query.summary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subject := comp.mapGraphQLQueryToNATSSubject(tt.query)
+			assert.Equal(t, tt.expectedSubject, subject)
+		})
+	}
+}
+
+// TestGateway_SubjectToGraphQLField_GraphSummary confirms the inverse
+// mapping — when graph-query responds to graph.query.summary, the
+// gateway wraps the payload under the "graphSummary" GraphQL field.
+func TestGateway_SubjectToGraphQLField_GraphSummary(t *testing.T) {
+	comp := createTestGateway(t)
+	assert.Equal(t, "graphSummary", comp.subjectToGraphQLField("graph.query.summary"))
+}
+
+// TestGateway_TransformVariables_GraphSummary verifies the three V1
+// fields land in the NATS payload (and unrelated variables are dropped
+// per the extractVars convention).
+func TestGateway_TransformVariables_GraphSummary(t *testing.T) {
+	comp := createTestGateway(t)
+	vars := map[string]any{
+		"include_predicates":  false,
+		"entity_sample_limit": 500,
+		"examples_per_type":   3,
+		"unrelated":           "ignored",
+	}
+	payload := comp.transformVariablesToNATSPayload(vars, "graph.query.summary")
+	assert.Equal(t, false, payload["include_predicates"])
+	assert.Equal(t, 500, payload["entity_sample_limit"])
+	assert.Equal(t, 3, payload["examples_per_type"])
+	_, hasUnrelated := payload["unrelated"]
+	assert.False(t, hasUnrelated, "extractVars should drop variables not in the allowlist")
+}
+
+// TestGateway_MapGraphQLToNATSSubject_SearchGraph covers the searchGraph
+// keyword routing. Important corner: "searchgraph" must match BEFORE
+// "globalsearch" so the dedicated subject wins when an agent's query
+// references both terms.
+func TestGateway_MapGraphQLToNATSSubject_SearchGraph(t *testing.T) {
+	comp := createTestGateway(t)
+	tests := []struct {
+		name            string
+		query           string
+		expectedSubject string
+	}{
+		{
+			name:            "searchGraph simple call",
+			query:           `query { searchGraph(query: "auth flow") { count entity_digests { id } } }`,
+			expectedSubject: "graph.query.searchGraph",
+		},
+		{
+			name:            "searchGraph alongside word globalsearch in comment",
+			query:           `# also try globalsearch later` + "\n" + `{ searchGraph(query: "x") { count } }`,
+			expectedSubject: "graph.query.searchGraph",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subject := comp.mapGraphQLQueryToNATSSubject(tt.query)
+			assert.Equal(t, tt.expectedSubject, subject)
+		})
+	}
+}
+
+// TestGateway_SubjectToGraphQLField_SearchGraph confirms the response
+// wraps under the GraphQL "searchGraph" field.
+func TestGateway_SubjectToGraphQLField_SearchGraph(t *testing.T) {
+	comp := createTestGateway(t)
+	assert.Equal(t, "searchGraph", comp.subjectToGraphQLField("graph.query.searchGraph"))
+}
+
+// TestGateway_TransformVariables_SearchGraph confirms searchGraph
+// reuses the globalSearch variable transformer so the arg surface
+// stays in sync — the server-side handler is a composite over
+// globalSearch and expects identical request shape.
+func TestGateway_TransformVariables_SearchGraph(t *testing.T) {
+	comp := createTestGateway(t)
+	vars := map[string]any{
+		"query":          "auth flow",
+		"level":          float64(2),
+		"maxCommunities": float64(5),
+	}
+	payload := comp.transformVariablesToNATSPayload(vars, "graph.query.searchGraph")
+	assert.Equal(t, "auth flow", payload["query"])
+	// Should match transformGlobalSearchVars output for the same input —
+	// any divergence indicates the searchGraph case stopped delegating.
+	expected := comp.transformVariablesToNATSPayload(vars, "graph.query.globalSearch")
+	assert.Equal(t, expected, payload)
+}
+
 // ====================================================================================
 // Request Forwarding Tests
 // ====================================================================================

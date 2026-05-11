@@ -850,6 +850,19 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 		return "graph.query.capabilities"
 	}
 
+	// Composite resolvers — match before their lower-level primitives
+	// so the dedicated subject wins. Convention: most specific first
+	// (mirrors the localsearch-before-globalsearch ordering below).
+	// graphSummary is a composite over predicates + prefix; searchGraph
+	// is a composite over globalSearch + semantic fallback. Both must
+	// match before the generic terms further down.
+	if strings.Contains(query, "graphsummary") {
+		return "graph.query.summary"
+	}
+	if strings.Contains(query, "searchgraph") {
+		return "graph.query.searchGraph"
+	}
+
 	// GraphRAG search patterns - must come before generic "entity" check
 	if strings.Contains(query, "localsearch") {
 		return "graph.query.localSearch"
@@ -909,6 +922,10 @@ func (c *Component) subjectToGraphQLField(subject string) string {
 		return "localSearch"
 	case "graph.query.globalSearch":
 		return "globalSearch"
+	case "graph.query.summary":
+		return "graphSummary"
+	case "graph.query.searchGraph":
+		return "searchGraph"
 	case "graph.index.query.predicate":
 		return "entitiesByPredicate"
 	case "graph.index.query.predicateList":
@@ -950,6 +967,13 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 	case "graph.query.localSearch":
 		return c.transformLocalSearchVars(variables)
 	case "graph.query.globalSearch":
+		return c.transformGlobalSearchVars(variables)
+	case "graph.query.summary":
+		return extractVars(variables, "include_predicates", "entity_sample_limit", "examples_per_type")
+	case "graph.query.searchGraph":
+		// Same arg shape as globalSearch — searchGraph is a server-side
+		// composite over it. Reuse the existing transformer to keep the
+		// arg surface in sync without code duplication.
 		return c.transformGlobalSearchVars(variables)
 	case "graph.index.query.predicate":
 		return extractVars(variables, "predicate", "value", "limit")
@@ -1508,6 +1532,10 @@ func buildIntrospectionSchema() map[string]interface{} {
 					fieldDef("predicates", "PredicateListResult"),
 					fieldDef("predicateStats", "PredicateStatsResult", argDef("predicate", "String!"), argDef("sampleLimit", "Int")),
 					fieldDef("compoundPredicateQuery", "CompoundPredicateResult", argDef("predicates", "[String!]!"), argDef("operator", "String!"), argDef("limit", "Int")),
+					// Composite discovery resolver — entity-type distribution + predicate counts + example IDs.
+					fieldDef("graphSummary", "GraphSummaryResult", argDef("include_predicates", "Boolean"), argDef("entity_sample_limit", "Int"), argDef("examples_per_type", "Int")),
+					// searchGraph — wraps globalSearch with a server-side semantic fallback when GraphRAG returns empty.
+					fieldDef("searchGraph", "GlobalSearchResult", argDef("query", "String!"), argDef("level", "Int"), argDef("maxCommunities", "Int"), argDef("summarizeThreshold", "Int"), argDef("includeSummaries", "Boolean"), argDef("includeRelationships", "Boolean"), argDef("includeSources", "Boolean")),
 				},
 			},
 			typeDef("OBJECT", "Entity", "id", "triples"),
@@ -1527,6 +1555,9 @@ func buildIntrospectionSchema() map[string]interface{} {
 			typeDef("OBJECT", "PredicateListResult", "predicates", "total"),
 			typeDef("OBJECT", "PredicateStatsResult", "predicate", "entityCount", "sampleEntities"),
 			typeDef("OBJECT", "CompoundPredicateResult", "entities", "operator", "matched"),
+			// Graph summary types
+			typeDef("OBJECT", "GraphSummaryResult", "total_entities", "entity_sample_truncated", "entity_types", "predicates", "predicate_total"),
+			typeDef("OBJECT", "EntityTypeSummary", "type", "count", "examples"),
 			// Agentic types
 			typeDef("OBJECT", "Trajectory", "loopId", "startTime", "endTime", "steps", "outcome", "totalTokensIn", "totalTokensOut", "duration"),
 			typeDef("OBJECT", "TrajectoryStep", "timestamp", "stepType", "requestId", "prompt", "response", "tokensIn", "tokensOut", "toolName", "toolResult", "duration"),
