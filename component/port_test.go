@@ -2,6 +2,7 @@ package component
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -1560,6 +1561,74 @@ func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 			// implementation, not a map[string]any. This is what catches
 			// drift in Port.UnmarshalJSON's type-discrimination switch.
 			tt.assert(t, decoded)
+		})
+	}
+}
+
+// TestPort_UnmarshalJSON_KVDashedAliases locks in audit-finding-5
+// (2026-05-08): Port.UnmarshalJSON must accept the dashed kv
+// spellings that PortDefinition.UnmarshalJSON already accepts.
+// Pre-fix, operator configs using "kv-watch" / "kv-write" / "kv"
+// parsed via the PortDefinition path but failed loudly if the same
+// Port struct was round-tripped through Port.UnmarshalJSON (e.g.
+// KV-stored Port descriptors or serialized flow definitions).
+//
+// Each case feeds a raw envelope-shaped Port JSON and asserts the
+// Config decodes to the expected typed Portable. Drift between this
+// switch and component/ports.go's PortDefinition.UnmarshalJSON
+// switch trips the test immediately.
+func TestPort_UnmarshalJSON_KVDashedAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeStr  string
+		wantImpl string // pretty-printed concrete type the Config should decode to
+	}{
+		{name: "kvwatch concatenated", typeStr: "kvwatch", wantImpl: "component.KVWatchPort"},
+		{name: "kv-watch dashed", typeStr: "kv-watch", wantImpl: "component.KVWatchPort"},
+		{name: "kvwrite concatenated", typeStr: "kvwrite", wantImpl: "component.KVWritePort"},
+		{name: "kv-write dashed", typeStr: "kv-write", wantImpl: "component.KVWritePort"},
+		{name: "kv shorthand", typeStr: "kv", wantImpl: "component.KVWritePort"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Wire-format mirror of how Port serializes: top-level
+			// name/direction/required/description, plus a config
+			// envelope with {type, data}.
+			var configData string
+			switch tt.wantImpl {
+			case "component.KVWatchPort":
+				configData = `{"bucket":"ENTITY_STATES"}`
+			case "component.KVWritePort":
+				configData = `{"bucket":"AGENT_LOOPS"}`
+			default:
+				t.Fatalf("test setup gap: no fixture for impl %q", tt.wantImpl)
+			}
+			raw := fmt.Sprintf(`{
+				"name": "test.port",
+				"direction": "output",
+				"required": false,
+				"description": "audit-finding-5 dashed-alias coverage",
+				"config": {"type": %q, "data": %s}
+			}`, tt.typeStr, configData)
+
+			var decoded Port
+			if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+				t.Fatalf("unmarshal %q: %v", tt.typeStr, err)
+			}
+
+			// Locate which typed Portable the Config decoded to.
+			var gotImpl string
+			switch decoded.Config.(type) {
+			case KVWatchPort:
+				gotImpl = "component.KVWatchPort"
+			case KVWritePort:
+				gotImpl = "component.KVWritePort"
+			default:
+				gotImpl = fmt.Sprintf("%T", decoded.Config)
+			}
+			if gotImpl != tt.wantImpl {
+				t.Errorf("Config = %s, want %s (spelling %q dropped to map or wrong type)", gotImpl, tt.wantImpl, tt.typeStr)
+			}
 		})
 	}
 }

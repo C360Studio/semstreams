@@ -531,13 +531,22 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 	// Wait for detection cycles
 	time.Sleep(3 * time.Second)
 
-	// Verify no community was formed (below threshold)
+	// Verify no community was formed (below threshold).
+	// Two distinct empty-bucket sentinels are both acceptable here:
+	//   - jetstream.ErrKeyNotFound is for missing single keys, not
+	//     empty Keys() listings.
+	//   - jetstream.ErrNoKeysFound ("nats: no keys found") is what
+	//     Keys() actually returns when the bucket is empty.
+	//
+	// Pre-2026-05-13 only ErrKeyNotFound was accepted, so a fully
+	// empty community bucket (the expected state when
+	// min_community_size=3 prevents formation) flaked the test on
+	// CI. Local runs sometimes raced an unrelated entity-mapping
+	// write into the bucket before Keys was called, masking the
+	// bug. Audit-cleanup commit 2026-05-13.
 	keys, err := communityBucket.Keys(ctx)
-	if err != nil {
-		// Empty bucket is acceptable
-		if err != jetstream.ErrKeyNotFound {
-			require.NoError(t, err)
-		}
+	if err != nil && err != jetstream.ErrKeyNotFound && err != jetstream.ErrNoKeysFound {
+		require.NoError(t, err)
 	}
 
 	// Count community keys (excluding entity mappings)
