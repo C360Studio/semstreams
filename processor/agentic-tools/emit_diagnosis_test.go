@@ -22,6 +22,23 @@ func newEmitDiagnosisExecutor(publisher TriplePublisher) *EmitDiagnosisExecutor 
 	)
 }
 
+// TestEmitDiagnosisExecutor_UsesBatchPath confirms emit_diagnosis
+// emits via AddTriplesBatch (not the legacy per-triple loop).
+// Atomicity is the documented contract — partial emission would
+// leave an incomplete finding whose consumers (ops-agent, rule
+// engine) can't tell apart from a complete one.
+func TestEmitDiagnosisExecutor_UsesBatchPath(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newEmitDiagnosisExecutor(pub)
+	_, err := e.Execute(context.Background(), validEmitDiagnosisCall())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if pub.batchCalls != 1 {
+		t.Errorf("AddTriplesBatch call count = %d, want 1 (single atomic batch)", pub.batchCalls)
+	}
+}
+
 func validEmitDiagnosisCall() agentic.ToolCall {
 	return agentic.ToolCall{
 		ID:     "c1",

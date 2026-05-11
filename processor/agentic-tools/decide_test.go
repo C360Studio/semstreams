@@ -16,10 +16,22 @@ import (
 )
 
 // recordingPublisher implements TriplePublisher in-process so tests can
-// assert exactly what triples the decide tool emitted.
+// assert exactly what triples the agent-tool emitted.
+//
+// Records via both AddTriple (single) and AddTriplesBatch (atomic).
+// On error BOTH methods bail before recording — atomic-failure mirror
+// of the production graph-ingest CAS path, where a failed batch
+// commits nothing for the shared Subject. Tests that need to inspect
+// "what triples WOULD have been emitted" can read the migrated tool's
+// constructed slice via other means (the executors build the slice
+// before calling the publisher).
 type recordingPublisher struct {
 	triples []message.Triple
-	err     error
+	// batchCalls records the number of AddTriplesBatch invocations so
+	// migrated callers can assert they made the single atomic call
+	// rather than N per-triple calls.
+	batchCalls int
+	err        error
 }
 
 func (p *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
@@ -27,6 +39,15 @@ func (p *recordingPublisher) AddTriple(_ context.Context, triple message.Triple)
 		return p.err
 	}
 	p.triples = append(p.triples, triple)
+	return nil
+}
+
+func (p *recordingPublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+	p.batchCalls++
+	if p.err != nil {
+		return p.err
+	}
+	p.triples = append(p.triples, triples...)
 	return nil
 }
 
@@ -53,6 +74,29 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 	}
 	if len(want) > 0 {
 		t.Errorf("missing required fields: %v", want)
+	}
+}
+
+// TestDecideExecutor_UsesBatchPath confirms decide emits via
+// AddTriplesBatch (not the legacy per-triple loop). Atomicity matters
+// here because downstream rules match on coordinator.decision.next_action
+// AND coordinator.decision.reason being co-present on the loop entity;
+// pre-2026-05-13 per-triple emission could leave one without the other
+// on graph-ingest degradation, breaking deterministic rule routing.
+func TestDecideExecutor_UsesBatchPath(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+	_, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "c",
+		Name:      DecideToolName,
+		LoopID:    "loop-batch",
+		Arguments: map[string]any{"action": "done", "reason": "test"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if pub.batchCalls != 1 {
+		t.Errorf("AddTriplesBatch call count = %d, want 1 (single atomic batch)", pub.batchCalls)
 	}
 }
 

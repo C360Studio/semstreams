@@ -16,7 +16,11 @@ import (
 
 // recordingPublisher captures every triple AddTriple is called with and
 // optionally fails on the Nth call so partial-failure tests can exercise
-// the log+continue path.
+// the log+continue path. web_search and http_request still use the
+// per-triple AddTriple path (NOT batch) because their emissions span
+// multiple Subjects per call — the per-Subject atomic batch surface
+// doesn't fit their cross-entity write pattern. See
+// project_addtriplebatch_migration_followup memory.
 type recordingPublisher struct {
 	triples  []message.Triple
 	failOn   int
@@ -29,6 +33,15 @@ func (p *recordingPublisher) AddTriple(_ context.Context, tr message.Triple) err
 		return p.failWith
 	}
 	return nil
+}
+
+// AddTriplesBatch satisfies the widened TriplePublisher interface but
+// web_search / http_request never call it (their emissions span
+// multiple Subjects per call so the atomic per-Subject batch doesn't
+// help). Present only for interface conformance — if a test hits it,
+// the migration model is broken.
+func (p *recordingPublisher) AddTriplesBatch(_ context.Context, _ []message.Triple) error {
+	panic("recordingPublisher: AddTriplesBatch unexpectedly called; web_search/http_request emit per-Subject via AddTriple")
 }
 
 func fixedClock(t time.Time) func() time.Time {
