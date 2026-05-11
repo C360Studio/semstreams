@@ -59,11 +59,33 @@ const decideMutationTimeout = 5 * time.Second
 // mutations at a glance in graph.
 const decideToolSource = "coordinator-decide"
 
-// TriplePublisher is the narrow surface DecideExecutor uses to write triples.
-// Production satisfies it with a natsclient.Client adapter; tests use an
-// in-memory recorder so they don't need a real NATS connection.
+// TriplePublisher is the narrow surface agent-private state tools use to
+// write triples. Production satisfies it with a natsclient.Client adapter;
+// tests use an in-memory recorder so they don't need a real NATS
+// connection.
+//
+// Two emission shapes:
+//
+//   - AddTriple — single-triple convenience. Used by callers that emit
+//     across multiple subjects per logical operation where per-subject
+//     atomicity is not required (web_search and http_request, where
+//     URL-entity triples and loop-back-link triples target distinct
+//     subjects and a partial write only loses the back-link
+//     observably).
+//
+//   - AddTriplesBatch — atomic per-Subject. The graph-ingest handler
+//     groups triples by Subject and CAS-applies them per entity, so a
+//     batch sharing one Subject is fully atomic. Used by decide /
+//     emit_diagnosis / scratchpad — each emits a co-emitted set on a
+//     single entity where partial-write orphans would corrupt the
+//     downstream rule-matching contract.
+//
+// See project_addtriplebatch_migration_followup memory for the
+// migration history; write_todos has used the batch path since
+// ADR-036 Stage 2 (2026-05-09).
 type TriplePublisher interface {
 	AddTriple(ctx context.Context, triple message.Triple) error
+	AddTriplesBatch(ctx context.Context, triples []message.Triple) error
 }
 
 // DecideExecutor is the coordinator's terminal tool. A coordinator agent
@@ -274,14 +296,18 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 		})
 	}
 
-	for _, triple := range triples {
-		if err := e.publisher.AddTriple(ctx, triple); err != nil {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("publish %s triple: %v", triple.Predicate, err),
-				ErrorKind: agentic.ToolErrorNetwork,
-			}, errs.WrapTransient(err, "DecideExecutor", "decide", "publish triple")
-		}
+	// Atomic batch publish: all triples share loopEntityID, so the
+	// graph-ingest per-Subject CAS handler applies them as one unit.
+	// Pre-2026-05-13 this was a per-triple loop that could leave the
+	// loop entity with the next_action triple but no decision_reason
+	// on graph-ingest degradation — downstream rules would match an
+	// inconsistent snapshot. The atomic batch eliminates that window.
+	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("publish decide triples: %v", err),
+			ErrorKind: agentic.ToolErrorNetwork,
+		}, errs.WrapTransient(err, "DecideExecutor", "decide", "publish triples batch")
 	}
 
 	// The tool's Content is the canonical decision payload. Downstream
@@ -487,14 +513,27 @@ func parseDecideArgs(raw map[string]any) (decideArgs, error) {
 	return args, nil
 }
 
-// natsTriplePublisher adapts natsclient.Client to TriplePublisher by
-// issuing a graph.mutation.triple.add request/reply per call. Kept local to
-// this file rather than shared because the only current caller is the
-// decide executor; other places that publish triples (rule actions, graph
-// writer) have their own adapters shaped to their needs.
+// natsTriplePublisher adapts natsclient.Client to TriplePublisher.
+// Routes single-triple writes through graph.mutation.triple.add and
+// batches through graph.mutation.triple.add_batch (the atomic per-
+// Subject CAS path landed in ADR-036 Stage 2). The two subjects
+// share the same retry policy — both mutation surfaces are
+// idempotent at graph-ingest (a triple is set-of, a batch is
+// deduplicated).
 type natsTriplePublisher struct {
 	client *natsclient.Client
 }
+
+// natsTriplesBatchSubject is the atomic per-Subject CAS path. Used
+// by AddTriplesBatch — co-located triples (all sharing one Subject)
+// land all-or-nothing, eliminating partial-write orphans on
+// graph-ingest degradation.
+const natsTriplesBatchSubject = "graph.mutation.triple.add_batch"
+
+// natsTriplesBatchTimeout is the round-trip budget for the batch
+// mutation. Matches write_todos's existing writeTodosTimeout (5s)
+// since both write through the same handler.
+const natsTriplesBatchTimeout = 5 * time.Second
 
 // NewNATSTriplePublisher builds a TriplePublisher backed by the shared
 // graph.mutation.triple.add NATS surface.
@@ -524,6 +563,38 @@ func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Trip
 	}
 	if !resp.Success {
 		return fmt.Errorf("graph-ingest rejected triple: %s", resp.Error)
+	}
+	return nil
+}
+
+// AddTriplesBatch routes through graph.mutation.triple.add_batch —
+// the atomic per-Subject CAS path. Callers that emit co-located
+// triples (all sharing one Subject — decide/emit_diagnosis/scratchpad)
+// rely on the all-or-nothing semantics to avoid partial-write
+// orphans when graph-ingest degrades. Same retry policy as AddTriple;
+// both mutation surfaces are idempotent at graph-ingest.
+func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []message.Triple) error {
+	if len(triples) == 0 {
+		// No-op: callers that conditionally accumulate triples may
+		// hand an empty slice rather than special-casing the gate.
+		return nil
+	}
+	req := graph.AddTriplesBatchRequest{Triples: triples}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal batch-add request: %w", err)
+	}
+	respData, err := p.client.RequestWithRetry(ctx, natsTriplesBatchSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig())
+	if err != nil {
+		return fmt.Errorf("request %s: %w", natsTriplesBatchSubject, err)
+	}
+	var resp graph.AddTriplesBatchResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("unmarshal batch response: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("graph-ingest rejected batch (written=%d, failed=%v): %s",
+			resp.WrittenCount, resp.FailedSubjects, resp.Error)
 	}
 	return nil
 }

@@ -198,20 +198,27 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 	// matches decide/write_todos discipline, NOT the web-tools
 	// log+continue discipline, because the trajectory alone is not
 	// durable across compaction.
+	// Atomic batch publish: all four triples share Subject=loopEntityID,
+	// so the graph-ingest per-Subject CAS handler applies them as one
+	// unit. Pre-2026-05-13 this was a per-triple loop that could leave
+	// an orphan ScratchID + ScratchText pair (the first two writes) in
+	// the graph on graph-ingest degradation — the orphan was harmless
+	// (no duplication, the retry minted a fresh UUID), but the atomic
+	// batch eliminates the window entirely. See
+	// TestScratchpadExecutor_PartialWrite_LeavesOrphanID test history
+	// for the explicit before-vs-after assertion.
 	triples := []message.Triple{
 		{Subject: loopEntityID, Predicate: agvocab.ScratchID, Object: scratchID, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
 		{Subject: loopEntityID, Predicate: agvocab.ScratchText, Object: args.Text, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
 		{Subject: loopEntityID, Predicate: agvocab.ScratchCreatedAt, Object: createdAt, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
 		{Subject: loopEntityID, Predicate: agvocab.ScratchChars, Object: chars, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
 	}
-	for _, tr := range triples {
-		if err := e.publisher.AddTriple(ctx, tr); err != nil {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("publish %s triple: %v", tr.Predicate, err),
-				ErrorKind: agentic.ToolErrorNetwork,
-			}, errs.WrapTransient(err, "ScratchpadExecutor", "scratchpad", "publish triple")
-		}
+	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("publish scratchpad triples: %v", err),
+			ErrorKind: agentic.ToolErrorNetwork,
+		}, errs.WrapTransient(err, "ScratchpadExecutor", "scratchpad", "publish triples batch")
 	}
 
 	payload, err := json.Marshal(scratchpadResult{

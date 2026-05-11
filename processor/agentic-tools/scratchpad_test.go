@@ -181,38 +181,66 @@ func TestScratchpadExecutor_AppendOnlyAcrossCalls(t *testing.T) {
 	}
 }
 
-// scratchpadPartialFailurePublisher returns success for the first N
-// AddTriple calls then surfaces an error on the (N+1)th. Records every
-// triple it sees so tests can assert exactly which writes landed.
-// Lives here (not next to recordingPublisher) because the existing
-// shared recorder bails BEFORE recording on error and the partial-write
-// invariant needs the opposite.
-type scratchpadPartialFailurePublisher struct {
-	failAfter int
-	calls     int
-	triples   []message.Triple
-	failWith  error
+// atomicBatchFailurePublisher fails the AddTriplesBatch call entirely
+// (records NOTHING on failure — atomic semantics). Models the post-
+// migration behavior where graph-ingest CAS rejects either all
+// triples or none. Pre-2026-05-13 this test used a per-triple
+// scratchpadPartialFailurePublisher that recorded the first N before
+// the failure; that mock and the orphan-leaving behavior it modeled
+// no longer apply.
+type atomicBatchFailurePublisher struct {
+	triples  []message.Triple
+	failWith error
 }
 
-func (p *scratchpadPartialFailurePublisher) AddTriple(_ context.Context, tr message.Triple) error {
-	p.calls++
-	if p.calls > p.failAfter {
+func (p *atomicBatchFailurePublisher) AddTriple(_ context.Context, _ message.Triple) error {
+	panic("atomicBatchFailurePublisher: AddTriple should not be called; scratchpad uses AddTriplesBatch")
+}
+
+func (p *atomicBatchFailurePublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+	if p.failWith != nil {
+		// Atomic semantics: record nothing on failure. The graph-
+		// ingest CAS path either commits all of `triples` for the
+		// shared Subject or none of them.
 		return p.failWith
 	}
-	p.triples = append(p.triples, tr)
+	p.triples = append(p.triples, triples...)
 	return nil
 }
 
-// TestScratchpadExecutor_PartialWrite_LeavesOrphanID locks in the
-// documented partial-write behavior: a publish failure on triple 3
-// leaves the first 2 triples in the graph (orphan ScratchID +
-// ScratchText with no companions). The tool returns ToolErrorNetwork
-// so the LLM sees the failure and retries with a fresh UUID; the
-// orphan is harmless (no duplication). The eventual batch-publisher
-// migration (go-reviewer follow-up) eliminates orphans entirely —
-// this test makes that change a visible delta.
-func TestScratchpadExecutor_PartialWrite_LeavesOrphanID(t *testing.T) {
-	pub := &scratchpadPartialFailurePublisher{failAfter: 2, failWith: errors.New("nats degraded")}
+// TestScratchpadExecutor_UsesBatchPath confirms scratchpad emits via
+// AddTriplesBatch (not the legacy per-triple AddTriple path). Locks
+// the migration in — if a future refactor accidentally reverts to
+// per-triple emission, this test catches it before the orphan
+// behavior reappears.
+func TestScratchpadExecutor_UsesBatchPath(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newScratchpadExecutor(pub)
+	_, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "c", Name: ScratchpadToolName, LoopID: "loop", Arguments: map[string]any{"text": "x"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if pub.batchCalls != 1 {
+		t.Errorf("AddTriplesBatch call count = %d, want 1 (single atomic batch)", pub.batchCalls)
+	}
+}
+
+// TestScratchpadExecutor_BatchFailure_LeavesNoOrphans is the inverted
+// assertion of the pre-batch TestScratchpadExecutor_PartialWrite_
+// LeavesOrphanID. Post-AddTriplesBatch-migration, a graph-ingest
+// failure rejects the entire batch atomically — no orphan ScratchID
+// + ScratchText pair, no orphan timestamp, nothing. The tool still
+// returns ToolErrorNetwork so the LLM retries with a fresh UUID; the
+// retry's batch either succeeds atomically or fails atomically.
+//
+// This test is the visible delta from the project memory
+// project_addtriplebatch_migration_followup. Before the migration it
+// asserted "first 2 triples land, third fails"; after the migration
+// it asserts "zero land, error surfaces."
+func TestScratchpadExecutor_BatchFailure_LeavesNoOrphans(t *testing.T) {
+	pub := &atomicBatchFailurePublisher{failWith: errors.New("nats degraded")}
 	e := NewScratchpadExecutor(pub, types.PlatformMeta{Org: "acme", Platform: "ops"})
 	e.SetIDGenerator(func() string { return "orphan-id" })
 
@@ -225,17 +253,8 @@ func TestScratchpadExecutor_PartialWrite_LeavesOrphanID(t *testing.T) {
 	if res.ErrorKind != agentic.ToolErrorNetwork {
 		t.Errorf("ErrorKind = %v, want network", res.ErrorKind)
 	}
-	if len(pub.triples) != 2 {
-		t.Errorf("recorded triples = %d, want 2 (first two land, third fails)", len(pub.triples))
-	}
-	// The first two predicates emitted are ScratchID and ScratchText
-	// (per scratchpad.go emission order). Locking that order in here
-	// makes any future reorder a visible test delta.
-	if pub.triples[0].Predicate != agvocab.ScratchID {
-		t.Errorf("first emitted predicate = %q, want %q", pub.triples[0].Predicate, agvocab.ScratchID)
-	}
-	if pub.triples[1].Predicate != agvocab.ScratchText {
-		t.Errorf("second emitted predicate = %q, want %q", pub.triples[1].Predicate, agvocab.ScratchText)
+	if len(pub.triples) != 0 {
+		t.Errorf("recorded triples = %d, want 0 (atomic batch: all-or-nothing)", len(pub.triples))
 	}
 }
 

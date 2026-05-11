@@ -188,21 +188,20 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 
 	now := time.Now()
 
-	// Build the triple set in deterministic order. Fail-fast on the first
-	// publisher error — partial emission would leave an incomplete finding in
-	// the graph with no way for the consumer to distinguish "all triples
-	// landed" from "some triples landed". The ops agent sees the error in the
-	// next iteration and can retry the full call.
+	// Build the triple set in deterministic order. All triples share
+	// Subject=diagnosisEntityID (including the agent.action.executed_by
+	// back-link FROM the diagnosis TO the loop), so the atomic batch
+	// applies them as one unit. Pre-2026-05-13 this was a per-triple
+	// loop that could leave an incomplete finding visible to downstream
+	// consumers — the comment cited that explicitly. Migrating to
+	// AddTriplesBatch eliminates the partial-emission window entirely.
 	triples := buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID, args, now)
-
-	for _, triple := range triples {
-		if err := e.publisher.AddTriple(ctx, triple); err != nil {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("publish %s triple: %v", triple.Predicate, err),
-				ErrorKind: agentic.ToolErrorNetwork,
-			}, errs.WrapTransient(err, "EmitDiagnosisExecutor", "emitDiagnosis", "publish triple")
-		}
+	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("publish diagnosis triples: %v", err),
+			ErrorKind: agentic.ToolErrorNetwork,
+		}, errs.WrapTransient(err, "EmitDiagnosisExecutor", "emitDiagnosis", "publish triples batch")
 	}
 
 	result := emitDiagnosisResult{
