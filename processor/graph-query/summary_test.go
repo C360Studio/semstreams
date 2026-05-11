@@ -290,3 +290,31 @@ func TestParseGraphSummaryRequest_ExplicitFalseOverrides(t *testing.T) {
 		t.Errorf("explicit include_predicates=false ignored")
 	}
 }
+
+// TestParseSummaryRequest_RoundTrip locks in the JSON tag contract
+// per the project's polymorphic-config rule (memory:
+// feedback_polymorphic_config_needs_json_roundtrip_test.md). The
+// request struct IS operator-visible via GraphQL variables → NATS
+// payload, so a stealth rename of a snake_case tag would silently
+// break operators without surfacing here. This test catches that.
+func TestParseSummaryRequest_RoundTrip(t *testing.T) {
+	original := graph.SummaryRequest{
+		IncludePredicates: false,
+		EntitySampleLimit: 500,
+		ExamplesPerType:   3,
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	decoded := parseSummaryRequest(encoded)
+	if decoded.IncludePredicates != original.IncludePredicates {
+		t.Errorf("IncludePredicates round-trip: got %v, want %v", decoded.IncludePredicates, original.IncludePredicates)
+	}
+	if decoded.EntitySampleLimit != original.EntitySampleLimit {
+		t.Errorf("EntitySampleLimit round-trip: got %d, want %d", decoded.EntitySampleLimit, original.EntitySampleLimit)
+	}
+	if decoded.ExamplesPerType != original.ExamplesPerType {
+		t.Errorf("ExamplesPerType round-trip: got %d, want %d", decoded.ExamplesPerType, original.ExamplesPerType)
+	}
+}

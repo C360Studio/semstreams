@@ -1,8 +1,11 @@
 package graphquery
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 )
 
 // TestSearchGraphResponseEmpty covers the empty-detection predicate
@@ -69,7 +72,7 @@ func TestAdaptSemanticToGlobalSearchResponse_HappyPath(t *testing.T) {
 		{"entity_id":"acme.x.agent.web.observation.h2","similarity":0.71}
 	]}}`)
 
-	got := adaptSemanticToGlobalSearchResponse(semanticPayload, "what do we know", 0)
+	got := adaptSemanticToGlobalSearchResponse(semanticPayload)
 	if got == nil {
 		t.Fatalf("expected non-nil adapted response")
 	}
@@ -108,9 +111,36 @@ func TestAdaptSemanticToGlobalSearchResponse_EmptyReturnsNil(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := adaptSemanticToGlobalSearchResponse([]byte(tt.body), "q", 0); got != nil {
+			if got := adaptSemanticToGlobalSearchResponse([]byte(tt.body)); got != nil {
 				t.Errorf("expected nil, got %+v", got)
 			}
 		})
+	}
+}
+
+// TestHandleSearchGraph_InvalidRequestPropagates confirms invalid-
+// input errors from handleGlobalSearch (unmarshal failure, empty
+// query) propagate through handleSearchGraph unchanged. The fallback
+// path is for empty-but-successful responses, not for caller bugs;
+// surfacing the error lets the caller fix the request rather than
+// silently triggering a redundant semantic search.
+//
+// A full end-to-end test of the empty→fallback path requires
+// distinguishing globalSearch's INTERNAL semantic call (graphrag
+// Tier 1) from the OUTER semantic fallback — both hit the same NATS
+// subject so they're indistinguishable at the mock layer. The
+// fallback logic is covered as unit tests against the helpers
+// (searchGraphResponseEmpty + adaptSemanticToGlobalSearchResponse)
+// instead; live integration coverage will land with the e2e tier
+// that exercises a real graph-embedding deployment.
+func TestHandleSearchGraph_InvalidRequestPropagates(t *testing.T) {
+	c := newSummaryTestComponent(func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return nil, errors.New("should not be called: handleGlobalSearch should fail at unmarshal")
+	})
+	// Unparseable JSON — handleGlobalSearch fails at json.Unmarshal
+	// before any NATS subordinate call. handleSearchGraph propagates
+	// the error.
+	if _, err := c.handleSearchGraph(context.Background(), []byte(`{bad json`)); err == nil {
+		t.Errorf("expected error to propagate for unparseable request; got nil")
 	}
 }

@@ -4,7 +4,6 @@ package graphquery
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -96,7 +95,7 @@ func (c *Component) handleSearchGraph(ctx context.Context, data []byte) ([]byte,
 	// per the existing graph-embedding contract; we map entries to
 	// EntityDigest so existing callers reading the digest list keep
 	// working.
-	out := adaptSemanticToGlobalSearchResponse(semanticResp, origReq.Query, time.Since(time.Now()))
+	out := adaptSemanticToGlobalSearchResponse(semanticResp)
 	if out == nil || len(out.EntityDigests) == 0 {
 		// Fallback found nothing either — return the original empty
 		// globalSearch payload so the caller has uniform structure.
@@ -159,7 +158,11 @@ type semanticEnvelope struct {
 // markers indicating the fallback fired. Returns nil if the input
 // is unparseable or empty (callers fall back to the original empty
 // globalSearch payload).
-func adaptSemanticToGlobalSearchResponse(data []byte, query string, _ time.Duration) *GlobalSearchResponse {
+//
+// The Answer field is intentionally omitted: the fallback is a
+// last-resort discovery surface, not a synthesis path. Downstream
+// callers that want narrative output answer-synthesize on their own.
+func adaptSemanticToGlobalSearchResponse(data []byte) *GlobalSearchResponse {
 	var env semanticEnvelope
 	if err := json.Unmarshal(data, &env); err != nil || len(env.SimilaritySearch.Results) == 0 {
 		return nil
@@ -177,16 +180,11 @@ func adaptSemanticToGlobalSearchResponse(data []byte, query string, _ time.Durat
 	if len(digests) == 0 {
 		return nil
 	}
-	reason := "global_search_empty_semantic_fallback"
-	// Answer omitted on the fallback path — the fallback is a
-	// last-resort discovery surface; downstream callers can
-	// answer-synthesize on their own if they want narrative output.
-	_ = query // arg reserved for future per-query annotation; kept named for godoc clarity
 	return &GlobalSearchResponse{
 		Strategy:       searchGraphStrategySemanticFallback,
 		EntityDigests:  digests,
 		Count:          len(digests),
 		Degraded:       true,
-		DegradedReason: reason,
+		DegradedReason: "global_search_empty_semantic_fallback",
 	}
 }

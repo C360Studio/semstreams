@@ -11,7 +11,6 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -186,7 +185,7 @@ func extractEntityIDsFromPrefixResponse(data []byte) []string {
 // by count descending (highest-count types first), with ties broken
 // alphabetically on the type name so the response is stable across
 // calls — load-bearing for prompt-caching downstream.
-func aggregateEntityTypes(entityIDs []string, examplesPerType int) []EntityTypeSummary {
+func aggregateEntityTypes(entityIDs []string, examplesPerType int) []graph.EntityTypeSummary {
 	if examplesPerType <= 0 {
 		examplesPerType = graphSummaryDefaultExamplesPerType
 	}
@@ -211,9 +210,9 @@ func aggregateEntityTypes(entityIDs []string, examplesPerType int) []EntityTypeS
 			b.examples = append(b.examples, id)
 		}
 	}
-	out := make([]EntityTypeSummary, 0, len(buckets))
+	out := make([]graph.EntityTypeSummary, 0, len(buckets))
 	for t, b := range buckets {
-		out = append(out, EntityTypeSummary{Type: t, Count: b.count, Examples: b.examples})
+		out = append(out, graph.EntityTypeSummary{Type: t, Count: b.count, Examples: b.examples})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
@@ -242,16 +241,3 @@ func extractPredicates(data []byte) []graph.PredicateSummary {
 	}
 	return resp.Data.Predicates
 }
-
-// EntityTypeSummary is re-exported here as a type alias of the graph
-// package definition so handler code reads cleanly without the
-// `graph.` prefix on every line. Declared as a local alias rather
-// than an import-side rename so the public-facing types stay in
-// graph/.
-type EntityTypeSummary = graph.EntityTypeSummary
-
-// IsKVNotFoundError is unused inside this file but kept as an
-// import-pin so the natsclient package stays imported (handler files
-// share an import set; subtractive edits elsewhere should not drop
-// it). Lifted from query.go's existing import list.
-var _ = natsclient.IsKVNotFoundError
