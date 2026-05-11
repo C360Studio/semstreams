@@ -106,6 +106,28 @@ func TestTryWebObservationEntityID_QueryStringPreserved(t *testing.T) {
 	}
 }
 
+// TestTryWebObservationEntityID_StripsUserinfo confirms credentials in
+// the raw URL never reach the canonical form (or the entity hash). A
+// URL with userinfo and the same URL without must converge to one
+// entity, and the canonical URL stored on agent.web.url must not leak
+// the credentials downstream.
+func TestTryWebObservationEntityID_StripsUserinfo(t *testing.T) {
+	plain, _, err := TryWebObservationEntityID("acme", "ops", "https://example.com/path")
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+	credentialed, canon, err := TryWebObservationEntityID("acme", "ops", "https://user:secret@example.com/path")
+	if err != nil {
+		t.Fatalf("credentialed: %v", err)
+	}
+	if plain != credentialed {
+		t.Errorf("credentials in URL produced a different entity: plain=%q credentialed=%q", plain, credentialed)
+	}
+	if strings.Contains(canon, "user") || strings.Contains(canon, "secret") {
+		t.Errorf("canonical URL leaked credentials: %q", canon)
+	}
+}
+
 // TestTryWebObservationEntityID_Rejections covers the input-validation
 // failure modes: empty/dotted org/platform/url, malformed url, missing scheme/host.
 func TestTryWebObservationEntityID_Rejections(t *testing.T) {

@@ -1,9 +1,20 @@
 package executors
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+// webEmitTimeout bounds how long the per-tool emission path will wait
+// for graph-ingest before giving up. The emission ctx is detached from
+// the caller's ctx (context.WithoutCancel) so an upstream agent-loop
+// cancellation doesn't half-write batches; this timeout prevents a
+// wedged graph-ingest from leaking the goroutine. Per the 2026-05-11
+// design decision: emission is opportunistic substrate observation,
+// not the LLM-facing contract.
+const webEmitTimeout = 5 * time.Second
 
 // webEmitFailuresTotal counts per-result triple emission failures from
 // the web_search and http_request executors, labelled by tool and

@@ -193,9 +193,13 @@ func (e *WebSearchExecutor) Execute(ctx context.Context, call agentic.ToolCall) 
 
 	// Opportunistic graph emission. Failures here never affect the
 	// LLM-facing return — log + counter + continue per the 2026-05-11
-	// design decision.
+	// design decision. Detach from the caller's ctx so a cancellation
+	// mid-emission doesn't leave half-written batches; bounded timeout
+	// prevents a wedged graph-ingest from leaking goroutines.
 	if e.publisher != nil {
-		e.emitObservations(ctx, call, query, results)
+		emitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), webEmitTimeout)
+		defer cancel()
+		e.emitObservations(emitCtx, call, query, results)
 	}
 
 	return agentic.ToolResult{
@@ -236,14 +240,20 @@ func (e *WebSearchExecutor) emitObservations(ctx context.Context, call agentic.T
 			continue
 		}
 
+		// Loop back-link is emitted first so a partial-write under
+		// graph-ingest degradation still leaves a discoverable pointer
+		// from the loop to the (possibly under-populated) observation
+		// entity. The URL-side predicates can be re-populated by any
+		// later observation of the same URL; the back-link is the
+		// rule-matchable fact that drives downstream query patterns.
 		triples := []message.Triple{
+			{Subject: loopEntityID, Predicate: agvocab.LoopObservedWeb, Object: urlEntity, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebTitle, Object: r.title, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebSnippet, Object: r.description, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebSourceQuery, Object: query, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebObservedAt, Object: observedAt, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebObservedBy, Object: loopEntityID, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
-			{Subject: loopEntityID, Predicate: agvocab.LoopObservedWeb, Object: urlEntity, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 		}
 		for _, tr := range triples {
 			if err := e.publisher.AddTriple(ctx, tr); err != nil {

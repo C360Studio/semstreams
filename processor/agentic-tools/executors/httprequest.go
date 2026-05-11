@@ -207,8 +207,15 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		truncated = true
 	}
 
+	// Opportunistic graph emission. Detach from the caller's ctx so an
+	// upstream cancellation doesn't half-write the batch, and so the
+	// reqCtx's deferred cancel() doesn't kill the emission path the
+	// moment Execute returns. Bounded timeout prevents a wedged
+	// graph-ingest from leaking the goroutine.
 	if e.publisher != nil {
-		e.emitObservation(reqCtx, call, rawURL, resp, content, truncated)
+		emitCtx, emitCancel := context.WithTimeout(context.WithoutCancel(ctx), webEmitTimeout)
+		defer emitCancel()
+		e.emitObservation(emitCtx, call, rawURL, resp, content, truncated)
 	}
 
 	return agentic.ToolResult{
@@ -247,7 +254,10 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 	fetchedAt := now.UTC().Format(time.RFC3339Nano)
 	contentType := resp.Header.Get("Content-Type")
 
+	// Loop back-link first so partial-writes under graph-ingest
+	// degradation still leave a discoverable pointer from the loop.
 	triples := []message.Triple{
+		{Subject: loopEntityID, Predicate: agvocab.LoopFetchedWeb, Object: urlEntity, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebFetchedAt, Object: fetchedAt, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebFetchedBy, Object: loopEntityID, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
@@ -255,7 +265,6 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 		{Subject: urlEntity, Predicate: agvocab.WebStatusCode, Object: resp.StatusCode, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebText, Object: body, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebTruncated, Object: truncated, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
-		{Subject: loopEntityID, Predicate: agvocab.LoopFetchedWeb, Object: urlEntity, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 	}
 	for _, tr := range triples {
 		if err := e.publisher.AddTriple(ctx, tr); err != nil {

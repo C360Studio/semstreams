@@ -312,6 +312,107 @@ func TestHTTPRequestExecutor_EmitObservation_MissingLoopID_Skips(t *testing.T) {
 	}
 }
 
+// TestWebSearchExecutor_EmitObservations_CancelledCtx_StillEmits is
+// the regression for go-reviewer B1: caller-side ctx cancellation must
+// NOT half-write batches, because graph emission is opportunistic
+// substrate observation, not the LLM-facing contract. The Execute path
+// wraps the emission ctx via context.WithoutCancel + bounded timeout;
+// driving emitObservations directly with a pre-cancelled ctx exercises
+// the inner path (publishes still flow because recordingPublisher
+// ignores ctx). For full E2E coverage of the Execute-level detach, the
+// integration-tier mock publisher inspects ctx.Err().
+func TestWebSearchExecutor_EmitObservations_CancelledCtx_StillEmits(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := NewWebSearchExecutor("test-key",
+		WithWebSearchTriplePublisher(pub),
+		WithWebSearchPlatform(testPlatform()),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel; the emission helper does not gate on ctx.Err()
+	e.emitObservations(ctx, agentic.ToolCall{ID: "c", LoopID: "l"}, "q", []searchResult{{title: "A", url: "https://example.com/a"}})
+	// 1 result × 7 triples = 7. If the emission helper short-circuited
+	// on a dead ctx, only the loop back-link (or zero) would land.
+	if got := len(pub.triples); got != 7 {
+		t.Errorf("AddTriple call count = %d, want 7 (helper must not short-circuit on ctx)", got)
+	}
+}
+
+// TestWebSearchExecutor_EmitObservations_DedupsAcrossCalls asserts the
+// hashed entity ID converges across two emission batches with the same
+// URL. The reviewer flagged this invariant as stated in three places in
+// docstrings but never property-tested. This locks it in.
+func TestWebSearchExecutor_EmitObservations_DedupsAcrossCalls(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := NewWebSearchExecutor("test-key",
+		WithWebSearchTriplePublisher(pub),
+		WithWebSearchPlatform(testPlatform()),
+	)
+	results := []searchResult{{title: "T", url: "https://example.com/x", description: "d"}}
+
+	e.emitObservations(context.Background(), agentic.ToolCall{ID: "c1", LoopID: "loop-a"}, "q", results)
+	firstCallTripleCount := len(pub.triples)
+
+	e.emitObservations(context.Background(), agentic.ToolCall{ID: "c2", LoopID: "loop-b"}, "q", results)
+
+	// Find the WebURL subjects from both batches.
+	var subjects []string
+	for _, tr := range pub.triples {
+		if tr.Predicate == agvocab.WebURL {
+			subjects = append(subjects, tr.Subject)
+		}
+	}
+	if len(subjects) != 2 {
+		t.Fatalf("WebURL triple count = %d, want 2 (one per emission call)", len(subjects))
+	}
+	if subjects[0] != subjects[1] {
+		t.Errorf("observation entity diverged across calls: %q vs %q (dedup property broken)", subjects[0], subjects[1])
+	}
+	if len(pub.triples) != firstCallTripleCount*2 {
+		t.Errorf("second call did not produce equal triple count: total=%d first=%d", len(pub.triples), firstCallTripleCount)
+	}
+}
+
+// TestWebSearchExecutor_EmitObservations_LoopBacklinkFirst asserts the
+// reordering from go-reviewer N2: the LoopObservedWeb back-link is the
+// first triple in each per-result batch so partial-writes under
+// graph-ingest degradation leave a discoverable pointer.
+func TestWebSearchExecutor_EmitObservations_LoopBacklinkFirst(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := NewWebSearchExecutor("test-key",
+		WithWebSearchTriplePublisher(pub),
+		WithWebSearchPlatform(testPlatform()),
+	)
+	results := []searchResult{{title: "A", url: "https://example.com/a"}}
+	e.emitObservations(context.Background(), agentic.ToolCall{ID: "c", LoopID: "l"}, "q", results)
+
+	if len(pub.triples) == 0 {
+		t.Fatalf("no triples emitted")
+	}
+	if pub.triples[0].Predicate != agvocab.LoopObservedWeb {
+		t.Errorf("first triple predicate = %q, want %q (back-link must precede URL-side triples for partial-write resilience)",
+			pub.triples[0].Predicate, agvocab.LoopObservedWeb)
+	}
+}
+
+// TestHTTPRequestExecutor_EmitObservation_LoopBacklinkFirst is the
+// http_request counterpart to the websearch reordering check.
+func TestHTTPRequestExecutor_EmitObservation_LoopBacklinkFirst(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := NewHTTPRequestExecutor(
+		WithHTTPTriplePublisher(pub),
+		WithHTTPPlatform(testPlatform()),
+	)
+	resp := &http.Response{StatusCode: 200, Header: http.Header{}}
+	e.emitObservation(context.Background(), agentic.ToolCall{ID: "c", LoopID: "l"}, "https://example.com/x", resp, "body", false)
+
+	if len(pub.triples) == 0 {
+		t.Fatalf("no triples emitted")
+	}
+	if pub.triples[0].Predicate != agvocab.LoopFetchedWeb {
+		t.Errorf("first triple predicate = %q, want %q", pub.triples[0].Predicate, agvocab.LoopFetchedWeb)
+	}
+}
+
 // TestWebSearchExecutor_EmitObservations_MalformedURL_Skips_Result
 // confirms a per-result entity-ID failure doesn't abort the batch.
 // Different results can have different validity (search providers

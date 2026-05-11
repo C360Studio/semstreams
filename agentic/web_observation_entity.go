@@ -95,6 +95,13 @@ func canonicalizeURL(rawURL string) (string, error) {
 	// strings.ToLower on host:port still works).
 	u.Host = strings.ToLower(u.Host)
 
+	// Strip userinfo. Credentials in a canonical URL would leak into the
+	// entity hash AND into agent.web.url; the same URL with vs without
+	// credentials would also diverge across loops, breaking dedup. The
+	// agent's original (credentialed) URL stays in the trajectory for
+	// audit if anyone needs it.
+	u.User = nil
+
 	// Strip default port.
 	if (u.Scheme == "http" && strings.HasSuffix(u.Host, ":80")) ||
 		(u.Scheme == "https" && strings.HasSuffix(u.Host, ":443")) {
