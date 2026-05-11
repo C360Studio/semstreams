@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/model/wire"
 	"github.com/c360studio/semstreams/pkg/errs"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -21,6 +22,7 @@ import (
 // Client wraps OpenAI SDK for agentic model requests
 type Client struct {
 	client       *openai.Client
+	wireClient   *wire.Client // populated lazily when endpoint.WireBackend = "wire" (ADR-037)
 	endpoint     *model.EndpointConfig
 	chunkHandler ChunkHandler
 	metrics      *modelMetrics
@@ -334,30 +336,51 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 //   - Rate limits (429): exponential from RateLimitDelay, up to MaxRateLimitRetries
 //
 // Both curves cap at MaxDelay and respect ctx cancellation at every wait point.
+//
+// When endpoint.WireBackend = "wire" (ADR-037), the call routes through
+// the wire-native path (chatCompletionWire); otherwise the SDK path runs.
 func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (agentic.AgentResponse, error) {
+	if c.useWireBackend() {
+		return c.chatCompletionWire(ctx, req)
+	}
 	c.runProviderStartupProbes(ctx)
 	chatReq := c.buildChatRequest(req)
-
-	// Log full request payload at debug level for wire-level diagnostics
-	if c.logger != nil && c.logger.Enabled(context.Background(), slog.LevelDebug) {
-		if payload, err := json.Marshal(chatReq); err == nil {
-			c.logger.Debug("OpenAI API request payload",
-				slog.String("request_id", req.RequestID),
-				slog.String("model", chatReq.Model),
-				slog.Int("message_count", len(chatReq.Messages)),
-				slog.String("payload", string(payload)))
-		}
-	}
-
-	// Acquire throttle slot before any network attempt.
+	c.debugLogRequest(req.RequestID, chatReq.Model, len(chatReq.Messages), &chatReq)
 	if c.throttle != nil {
 		if err := c.throttle.Acquire(ctx); err != nil {
 			return errorResponse(req.RequestID, err.Error()), nil
 		}
 		defer c.throttle.Release()
 	}
+	return c.runRetryLoop(ctx, req.RequestID, chatReq.Model, func() (agentic.AgentResponse, error) {
+		return c.doSingleAttempt(ctx, chatReq, req.RequestID)
+	})
+}
 
-	// Resolve retry parameters
+// debugLogRequest emits a debug log of the outgoing chat completion
+// payload when logger debug is enabled. Generic across SDK and wire
+// payload shapes via json.Marshal.
+func (c *Client) debugLogRequest(requestID, model string, messageCount int, payload any) {
+	if c.logger == nil || !c.logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	c.logger.Debug("OpenAI API request payload",
+		slog.String("request_id", requestID),
+		slog.String("model", model),
+		slog.Int("message_count", messageCount),
+		slog.String("payload", string(body)))
+}
+
+// runRetryLoop drives the two-curve backoff for transient errors and
+// rate-limits. attemptFn is invoked once per attempt; it must return
+// (response, nil) on success or (_, err) for retry classification.
+// Backend-agnostic — works for both SDK and wire paths via
+// isRetryableAny / isRateLimitedAny.
+func (c *Client) runRetryLoop(ctx context.Context, requestID, model string, attemptFn func() (agentic.AgentResponse, error)) (agentic.AgentResponse, error) {
 	maxAttempts := c.retryCfg.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 3
@@ -368,70 +391,75 @@ func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (
 	maxDelay := c.retryCfg.maxDelayDuration(60 * time.Second)
 
 	genericAttempt, rlAttempt := 0, 0
-
 	for {
-		// Check context before each attempt
 		if ctx.Err() != nil {
-			return errorResponse(req.RequestID, ctx.Err().Error()), nil
+			return errorResponse(requestID, ctx.Err().Error()), nil
 		}
-
-		resp, err := c.doSingleAttempt(ctx, chatReq, req.RequestID)
+		resp, err := attemptFn()
 		if err == nil {
 			return c.withRetryCount(resp, genericAttempt+rlAttempt), nil
 		}
-
-		// Rate-limited (429) — separate backoff curve
-		if isRateLimited(err) {
-			rlAttempt++
-			if c.metrics != nil {
-				c.metrics.recordRateLimitHit(chatReq.Model)
+		switch {
+		case isRateLimitedAny(err):
+			done, newDelay, halt := c.handleRateLimit(ctx, requestID, model, err, &rlAttempt, maxRLRetries, rlDelay, maxDelay)
+			if halt {
+				return done, nil
 			}
-			if rlAttempt >= maxRLRetries {
-				c.logWarn("rate limit retries exhausted", req.RequestID, chatReq.Model,
-					slog.Int("attempts", rlAttempt), slog.Int("max_attempts", maxRLRetries))
-				return errorResponse(req.RequestID, err.Error()), nil
+			rlDelay = newDelay
+		case !isRetryableAny(err):
+			return errorResponse(requestID, err.Error()), nil
+		default:
+			done, newDelay, halt := c.handleTransient(ctx, requestID, model, err, &genericAttempt, maxAttempts, genericDelay, maxDelay)
+			if halt {
+				return done, nil
 			}
-
-			wait := addJitter(rlDelay)
-			c.logWarn("rate limited by provider, backing off", req.RequestID, chatReq.Model,
-				slog.Int("attempt", rlAttempt), slog.Int("max_attempts", maxRLRetries),
-				slog.Duration("wait", wait))
-			if c.metrics != nil {
-				c.metrics.recordRateLimitRetry(chatReq.Model)
-			}
-			if !sleepWithContext(ctx, wait) {
-				return errorResponse(req.RequestID, ctx.Err().Error()), nil
-			}
-			rlDelay = min(time.Duration(float64(rlDelay)*2), maxDelay)
-			continue
+			genericDelay = newDelay
 		}
-
-		// Non-retryable error — fail immediately
-		if !isRetryable(err) {
-			return errorResponse(req.RequestID, err.Error()), nil
-		}
-
-		// Transient error (5xx, network) — generic backoff curve
-		genericAttempt++
-		if genericAttempt >= maxAttempts {
-			c.logWarn("transient error retries exhausted", req.RequestID, chatReq.Model,
-				slog.Int("attempts", genericAttempt), slog.Int("max_attempts", maxAttempts),
-				slog.String("last_error", err.Error()))
-			return errorResponse(req.RequestID, err.Error()), nil
-		}
-
-		wait := addJitter(genericDelay)
-		if c.logger != nil {
-			c.logger.Debug("transient error, retrying",
-				slog.String("request_id", req.RequestID), slog.String("model", chatReq.Model),
-				slog.Int("attempt", genericAttempt), slog.Int("max_attempts", maxAttempts),
-				slog.Duration("wait", wait), slog.String("error", err.Error()))
-		}
-		if !sleepWithContext(ctx, wait) {
-			return errorResponse(req.RequestID, ctx.Err().Error()), nil
-		}
-		genericDelay = min(time.Duration(float64(genericDelay)*2), maxDelay)
 	}
+}
+
+func (c *Client) handleRateLimit(ctx context.Context, requestID, model string, err error, attempt *int, maxAttempts int, delay, maxDelay time.Duration) (agentic.AgentResponse, time.Duration, bool) {
+	*attempt++
+	if c.metrics != nil {
+		c.metrics.recordRateLimitHit(model)
+	}
+	if *attempt >= maxAttempts {
+		c.logWarn("rate limit retries exhausted", requestID, model,
+			slog.Int("attempts", *attempt), slog.Int("max_attempts", maxAttempts))
+		return errorResponse(requestID, err.Error()), delay, true
+	}
+	wait := addJitter(delay)
+	c.logWarn("rate limited by provider, backing off", requestID, model,
+		slog.Int("attempt", *attempt), slog.Int("max_attempts", maxAttempts),
+		slog.Duration("wait", wait))
+	if c.metrics != nil {
+		c.metrics.recordRateLimitRetry(model)
+	}
+	if !sleepWithContext(ctx, wait) {
+		return errorResponse(requestID, ctx.Err().Error()), delay, true
+	}
+	return agentic.AgentResponse{}, min(time.Duration(float64(delay)*2), maxDelay), false
+}
+
+func (c *Client) handleTransient(ctx context.Context, requestID, model string, err error, attempt *int, maxAttempts int, delay, maxDelay time.Duration) (agentic.AgentResponse, time.Duration, bool) {
+	*attempt++
+	if *attempt >= maxAttempts {
+		c.logWarn("transient error retries exhausted", requestID, model,
+			slog.Int("attempts", *attempt), slog.Int("max_attempts", maxAttempts),
+			slog.String("last_error", err.Error()))
+		return errorResponse(requestID, err.Error()), delay, true
+	}
+	wait := addJitter(delay)
+	if c.logger != nil {
+		c.logger.Debug("transient error, retrying",
+			slog.String("request_id", requestID), slog.String("model", model),
+			slog.Int("attempt", *attempt), slog.Int("max_attempts", maxAttempts),
+			slog.Duration("wait", wait), slog.String("error", err.Error()))
+	}
+	if !sleepWithContext(ctx, wait) {
+		return errorResponse(requestID, ctx.Err().Error()), delay, true
+	}
+	return agentic.AgentResponse{}, min(time.Duration(float64(delay)*2), maxDelay), false
 }
 
 // logWarn logs a warning if a logger is set. Reduces boilerplate in ChatCompletion.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/model/wire"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/sashabaranov/go-openai"
 )
@@ -32,6 +33,7 @@ const (
 // Uses the standard OpenAI SDK for consistency with the embedding package.
 type OpenAIClient struct {
 	client     *openai.Client
+	wireClient *wire.Client // ADR-037: populated when WireBackend = "wire"
 	model      string
 	maxRetries int
 	logger     *slog.Logger
@@ -73,6 +75,12 @@ type OpenAIConfig struct {
 	IdleConnTimeout       string
 	ResponseHeaderTimeout string
 	DisableKeepAlives     bool
+
+	// WireBackend selects the HTTP client implementation. "" or "sdk"
+	// (default) uses the sashabaranov/go-openai client; "wire" uses the
+	// framework-owned model/wire client (ADR-037). Mirrors
+	// EndpointConfig.WireBackend.
+	WireBackend string
 }
 
 // OpenAIConfigFromEndpoint builds an OpenAIConfig from a resolved capability
@@ -107,6 +115,7 @@ func OpenAIConfigFromEndpoint(resolved *model.ResolvedEndpoint, ep *model.Endpoi
 		cfg.IdleConnTimeout = ep.IdleConnTimeout
 		cfg.ResponseHeaderTimeout = ep.ResponseHeaderTimeout
 		cfg.DisableKeepAlives = ep.DisableKeepAlives
+		cfg.WireBackend = ep.WireBackend
 	}
 	return cfg
 }
@@ -138,9 +147,7 @@ func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 		apiKey = "not-needed" // Local services don't require a key
 	}
 
-	config := openai.DefaultConfig(apiKey)
-	config.BaseURL = cfg.BaseURL
-	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptions{
+	httpClient := model.NewHTTPClient(model.HTTPClientOptions{
 		Timeout:               timeout,
 		IdleConnTimeout:       cfg.IdleConnTimeout,
 		ResponseHeaderTimeout: cfg.ResponseHeaderTimeout,
@@ -148,6 +155,9 @@ func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 		MaxIdleConnsPerHost:   10,
 	})
 
+	config := openai.DefaultConfig(apiKey)
+	config.BaseURL = cfg.BaseURL
+	config.HTTPClient = httpClient
 	client := openai.NewClientWithConfig(config)
 
 	logger := cfg.Logger
@@ -155,12 +165,35 @@ func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 		logger = slog.Default()
 	}
 
-	return &OpenAIClient{
+	out := &OpenAIClient{
 		client:     client,
 		model:      cfg.Model,
 		maxRetries: maxRetries,
 		logger:     logger,
-	}, nil
+	}
+
+	// ADR-037: per-endpoint wire backend opt-in. The wire client shares
+	// the same HTTP transport (model.NewHTTPClient invariant from
+	// beta.43/47). A misconfigured WireBackend value would have failed
+	// the EndpointConfig validation upstream; we treat any non-"wire"
+	// value as the SDK path.
+	if cfg.WireBackend == "wire" {
+		authHeader := ""
+		if cfg.APIKey != "" {
+			authHeader = "Bearer " + cfg.APIKey
+		}
+		wc, err := wire.NewClient(wire.ClientConfig{
+			BaseURL:    cfg.BaseURL,
+			HTTPClient: httpClient,
+			AuthHeader: authHeader,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("graph/llm: build wire client: %w", err)
+		}
+		out.wireClient = wc
+	}
+
+	return out, nil
 }
 
 // ChatCompletion sends a chat completion request to the LLM service.
@@ -210,7 +243,8 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 		Temperature: float32(temperature),
 	}
 
-	// Execute with retry logic
+	// Execute with retry logic. The wire backend gates inside the loop
+	// so retry semantics stay identical across backends.
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -223,33 +257,87 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 			}
 		}
 
-		resp, err := c.client.CreateChatCompletion(ctx, chatReq)
-		if err == nil {
-			// Success
-			if len(resp.Choices) == 0 {
-				return nil, errs.WrapInvalid(errs.ErrInvalidData, "OpenAIClient",
-					"ChatCompletion", "no choices in response")
+		if c.wireClient != nil {
+			resp, err := c.doWireChat(ctx, chatReq)
+			if err == nil {
+				return resp, nil
 			}
-
-			return &ChatResponse{
-				Content:          resp.Choices[0].Message.Content,
-				PromptTokens:     resp.Usage.PromptTokens,
-				CompletionTokens: resp.Usage.CompletionTokens,
-				TotalTokens:      resp.Usage.TotalTokens,
-				Model:            resp.Model,
-				FinishReason:     string(resp.Choices[0].FinishReason),
-			}, nil
+			lastErr = err
+		} else {
+			resp, err := c.client.CreateChatCompletion(ctx, chatReq)
+			if err == nil {
+				if len(resp.Choices) == 0 {
+					return nil, errs.WrapInvalid(errs.ErrInvalidData, "OpenAIClient",
+						"ChatCompletion", "no choices in response")
+				}
+				return &ChatResponse{
+					Content:          resp.Choices[0].Message.Content,
+					PromptTokens:     resp.Usage.PromptTokens,
+					CompletionTokens: resp.Usage.CompletionTokens,
+					TotalTokens:      resp.Usage.TotalTokens,
+					Model:            resp.Model,
+					FinishReason:     string(resp.Choices[0].FinishReason),
+				}, nil
+			}
+			lastErr = err
 		}
 
-		lastErr = err
 		c.logger.Warn("LLM request failed, retrying",
 			"attempt", attempt+1,
 			"max_retries", c.maxRetries,
-			"error", err)
+			"error", lastErr)
 	}
 
 	return nil, errs.WrapTransient(lastErr, "OpenAIClient", "ChatCompletion",
 		fmt.Sprintf("failed after %d retries", c.maxRetries+1))
+}
+
+// doWireChat is the wire-native ChatCompletion path used when the
+// client was configured with WireBackend = "wire". Builds a
+// wire.ChatCompletionRequest from the SDK chatReq (lift-and-shift
+// translation; graph/llm has no tool/streaming surface) and decodes
+// the wire response into a ChatResponse with the same field set the
+// SDK path produces.
+func (c *OpenAIClient) doWireChat(ctx context.Context, chatReq openai.ChatCompletionRequest) (*ChatResponse, error) {
+	wreq := &wire.ChatCompletionRequest{
+		Model:     chatReq.Model,
+		MaxTokens: chatReq.MaxTokens,
+		Messages:  make([]wire.Message, len(chatReq.Messages)),
+	}
+	if chatReq.Temperature > 0 {
+		t := float64(chatReq.Temperature)
+		wreq.Temperature = &t
+	}
+	for i, msg := range chatReq.Messages {
+		wreq.Messages[i] = wire.Message{Role: msg.Role}
+		if msg.Content != "" {
+			_ = wreq.Messages[i].SetContentString(msg.Content)
+		}
+	}
+
+	resp, err := c.wireClient.ChatCompletion(ctx, wreq)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Choices) == 0 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidData, "OpenAIClient",
+			"ChatCompletion", "no choices in response")
+	}
+	out := &ChatResponse{
+		Model:        resp.Model,
+		FinishReason: resp.Choices[0].FinishReason,
+	}
+	if resp.Choices[0].Message != nil {
+		if s, ok := resp.Choices[0].Message.ContentString(); ok {
+			out.Content = s
+		}
+	}
+	if resp.Usage != nil {
+		out.PromptTokens = resp.Usage.PromptTokens
+		out.CompletionTokens = resp.Usage.CompletionTokens
+		out.TotalTokens = resp.Usage.TotalTokens
+	}
+	return out, nil
 }
 
 // Model returns the model identifier.
