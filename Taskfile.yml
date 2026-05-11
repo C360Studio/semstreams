@@ -1,5 +1,12 @@
 version: "3"
 
+# Load .env automatically so live_llm and other secret-bearing tests can
+# read GEMINI_API_KEY / OPENAI_API_KEY / etc. via os.Getenv when invoked
+# through `task`. Matches the sibling pattern in ../semspec and
+# ../semteams. .env is gitignored; copy .env.example to .env and fill
+# in the keys you need.
+dotenv: ['.env']
+
 includes:
   build:
     taskfile: ./taskfiles/build.yml
