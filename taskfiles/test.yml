@@ -53,7 +53,7 @@ tasks:
     desc: Live round-trip against Gemini 3.x preview (needs GEMINI_API_KEY in .env)
     cmds:
       - echo "[LIVE] Gemini 3.x thought_signature round-trip..."
-      - go test -tags=live_llm -v -timeout 90s -run TestGemini3x_ThoughtSignature_RoundTrip ./processor/agentic-model/...
+      - go test -tags=live_llm -v -timeout 240s -run TestGemini3x_ThoughtSignature_RoundTrip ./processor/agentic-model/...
 
   live:ollama:
     desc: Live response_format integration against local Ollama (needs Ollama at :11434)
