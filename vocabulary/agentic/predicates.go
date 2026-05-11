@@ -470,6 +470,22 @@ const (
 	// Example: "Investigate MQTT retained-message behavior"
 	// DataType: string
 	LoopDescription = "agent.loop.description"
+
+	// LoopObservedWeb is an entity reference to a web observation entity
+	// (agent.web.observation) the loop saw in a web_search result.
+	// Multi-valued: one triple per result. Paired with the URL entity's
+	// agent.web.observed_by back-link. See the Web Predicates block.
+	// Example: entity ID of a web.observation entity
+	// DataType: string (entity ID)
+	LoopObservedWeb = "agent.loop.observed_web"
+
+	// LoopFetchedWeb is an entity reference to a web observation entity
+	// (agent.web.observation) the loop pulled via http_request. Multi-valued:
+	// one triple per successful 2xx/3xx fetch. Paired with the URL entity's
+	// agent.web.fetched_by back-link. See the Web Predicates block.
+	// Example: entity ID of a web.observation entity
+	// DataType: string (entity ID)
+	LoopFetchedWeb = "agent.loop.fetched_web"
 )
 
 // Step Predicates
@@ -733,6 +749,116 @@ const (
 	// Example: "2026-05-09T14:22:00Z"
 	// DataType: time.Time
 	TodoUpdatedAt = "agent.todo.updated_at"
+)
+
+// Web Predicates
+//
+// Emitted by the web_search and http_request tools when an operator has
+// wired an optional TriplePublisher into their registration. The URL-side
+// predicates land on a per-URL agent.web.observation entity whose instance
+// segment is sha256-hex(canonical URL) so the same URL converges across
+// loops (natural dedup). The loop-side back-link predicates
+// (agent.loop.observed_web and agent.loop.fetched_web) live in the Loop
+// Predicates block above.
+//
+// Discipline: title, snippet, text, and source_query are flagged rule-opaque
+// per the LLM-authored-content principle. The first three are external prose
+// the tool's primary contract returns; the LLM-authored source_query is opaque
+// so rules don't predicate on its content (which would teach agents to optimise
+// queries toward rule triggers — Goodhart). Rules match on the structural
+// fields (url, content_type, status_code, observed_at, fetched_at, truncated)
+// or follow the entity-ID back-links.
+const (
+	// WebURL is the canonical URL the observation entity represents.
+	// The canonicalisation rules are documented in
+	// agentic/entity_ids.go:TryWebObservationEntityID (lowercase scheme+host,
+	// strip default port, strip fragment, strip trailing slash on bare host,
+	// preserve query string). Rule-matchable for allow/deny prefix matching
+	// and host-routing rules.
+	// Example: "https://pkg.go.dev/net/http"
+	// DataType: string
+	WebURL = "agent.web.url"
+
+	// WebTitle is the search-result title returned by the search provider.
+	// Free-form external prose. Rule-opaque — the rule-validator rejects
+	// any rule whose condition.field names this predicate.
+	// Example: "net/http package - Go Documentation"
+	// DataType: string
+	WebTitle = "agent.web.title"
+
+	// WebSnippet is the search-result description returned by the search
+	// provider. Free-form external prose. Rule-opaque.
+	// Example: "Package http provides HTTP client and server implementations…"
+	// DataType: string
+	WebSnippet = "agent.web.snippet"
+
+	// WebText is the fetched body of an http_request, after HTML→text
+	// extraction, truncated at the executor's httpMaxTextSize cap. Free-form
+	// external prose. Rule-opaque. WebTruncated reflects whether the cap was
+	// hit so rules can branch on completeness without reading the body.
+	// Example: "Package http provides HTTP client and server …"
+	// DataType: string
+	WebText = "agent.web.text"
+
+	// WebSourceQuery is the search query string passed to the web_search
+	// tool. LLM-authored content; rule-opaque so rules don't condition on
+	// query text (which would create a feedback loop where agents optimise
+	// queries toward rule triggers). Rules wanting to react to specific
+	// search activity should match on the observation entity's WebURL or
+	// the loop's role/workflow instead.
+	// Example: "NATS JetStream KV bucket history retention"
+	// DataType: string
+	WebSourceQuery = "agent.web.source_query"
+
+	// WebObservedAt is the wall-clock timestamp the web_search call saw
+	// this URL. Rule-matchable for age-based predicates.
+	// Example: "2026-05-11T14:22:00Z"
+	// DataType: time.Time
+	WebObservedAt = "agent.web.observed_at"
+
+	// WebFetchedAt is the wall-clock timestamp the http_request call pulled
+	// this URL's body. Rule-matchable.
+	// Example: "2026-05-11T14:22:30Z"
+	// DataType: time.Time
+	WebFetchedAt = "agent.web.fetched_at"
+
+	// WebObservedBy is the loop entity ID that observed this URL via
+	// web_search. Multi-valued across loops (different loops can converge
+	// on the same observation entity). Rule-matchable for relationship
+	// walks.
+	// Example: entity ID of the observing loop
+	// DataType: string (entity ID)
+	WebObservedBy = "agent.web.observed_by"
+
+	// WebFetchedBy is the loop entity ID that pulled this URL via
+	// http_request. Multi-valued across loops. Rule-matchable.
+	// Example: entity ID of the fetching loop
+	// DataType: string (entity ID)
+	WebFetchedBy = "agent.web.fetched_by"
+
+	// WebContentType is the HTTP Content-Type header value from an
+	// http_request fetch. Effectively an enum for rule purposes (route
+	// HTML vs JSON vs binary), so rule-matchable.
+	// Example: "text/html; charset=utf-8"
+	// DataType: string
+	WebContentType = "agent.web.content_type"
+
+	// WebStatusCode is the HTTP response status code from an http_request
+	// fetch. Only emitted for 2xx/3xx (the tool surfaces ≥400 as an error
+	// and does not write to the graph). Rule-matchable for retry-on-redirect
+	// style rules.
+	// Example: 200
+	// DataType: int
+	WebStatusCode = "agent.web.status_code"
+
+	// WebTruncated indicates whether the http_request body exceeded the
+	// executor's httpMaxTextSize cap and was truncated when written to
+	// WebText. Rule-matchable so a future "re-fetch when truncated" rule
+	// can act on completeness without reading the body. WebText itself
+	// remains rule-opaque.
+	// Example: false
+	// DataType: bool
+	WebTruncated = "agent.web.truncated"
 )
 
 // Ops Config Predicates (Phase 3, reserved)

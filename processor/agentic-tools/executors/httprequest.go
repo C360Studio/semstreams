@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,17 +12,39 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 const (
 	httpMaxResponseSize = 100 * 1024 // 100KB
 	httpMaxTextSize     = 20000      // chars
 	httpRequestTimeout  = 30 * time.Second
+
+	// httpRequestTripleSource is the Source field on triples this tool
+	// publishes; mirrors agent-web-search / coordinator-decide.
+	httpRequestTripleSource = "agent-http-request"
 )
 
 // HTTPRequestExecutor handles http_request tool calls.
+//
+// Triple emission is optional (mirrors WebSearchExecutor): when a non-nil
+// TriplePublisher is supplied via WithHTTPTriplePublisher, each
+// successful 2xx/3xx fetch additionally emits a fixed set of predicates
+// onto an agent.web.observation entity plus a back-link triple onto the
+// calling loop entity. Non-2xx responses (≥400) do not emit — the
+// graph claim is "we observed this URL's content" and a 4xx/5xx isn't
+// that observation. Per-triple failures log + counter + continue
+// (semstreams.agentic_tool_web.emit_failures_total).
 type HTTPRequestExecutor struct {
 	timeout time.Duration
+
+	publisher agentictools.TriplePublisher
+	platform  component.PlatformMeta
+	logger    *slog.Logger
+	now       func() time.Time
 }
 
 // HTTPRequestOption configures the executor.
@@ -32,9 +55,44 @@ func WithHTTPTimeout(d time.Duration) HTTPRequestOption {
 	return func(e *HTTPRequestExecutor) { e.timeout = d }
 }
 
+// WithHTTPTriplePublisher enables graph emission. nil disables emission
+// (default).
+func WithHTTPTriplePublisher(p agentictools.TriplePublisher) HTTPRequestOption {
+	return func(e *HTTPRequestExecutor) { e.publisher = p }
+}
+
+// WithHTTPPlatform supplies the platform identity used to build
+// observation entity IDs and resolve the calling loop's entity ID.
+// Required when publisher is non-nil; ignored otherwise.
+func WithHTTPPlatform(p component.PlatformMeta) HTTPRequestOption {
+	return func(e *HTTPRequestExecutor) { e.platform = p }
+}
+
+// WithHTTPLogger replaces the default logger (slog.Default()). nil-safe.
+func WithHTTPLogger(l *slog.Logger) HTTPRequestOption {
+	return func(e *HTTPRequestExecutor) {
+		if l != nil {
+			e.logger = l
+		}
+	}
+}
+
+// WithHTTPClock replaces the time source the executor stamps onto
+// fetched_at / triple timestamps. nil-safe.
+func WithHTTPClock(now func() time.Time) HTTPRequestOption {
+	return func(e *HTTPRequestExecutor) {
+		if now != nil {
+			e.now = now
+		}
+	}
+}
+
 // NewHTTPRequestExecutor creates an HTTP request executor.
 func NewHTTPRequestExecutor(opts ...HTTPRequestOption) *HTTPRequestExecutor {
-	e := &HTTPRequestExecutor{}
+	e := &HTTPRequestExecutor{
+		logger: slog.Default(),
+		now:    time.Now,
+	}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -143,14 +201,69 @@ func (e *HTTPRequestExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	}
 
 	content := string(body)
+	truncated := false
 	if len(content) > httpMaxTextSize {
 		content = content[:httpMaxTextSize] + "\n[content truncated]"
+		truncated = true
+	}
+
+	if e.publisher != nil {
+		e.emitObservation(reqCtx, call, rawURL, resp, content, truncated)
 	}
 
 	return agentic.ToolResult{
 		CallID:  call.ID,
 		Content: fmt.Sprintf("HTTP %d\n\n%s", resp.StatusCode, content),
 	}, nil
+}
+
+// emitObservation writes the URL-side observation entity plus a
+// LoopFetchedWeb back-link onto the calling loop. Per-triple publish
+// failures log + counter + continue; emission is additive observation,
+// not the LLM-facing contract. Non-2xx responses never reach this code
+// path — the executor returned earlier with an Error result and the
+// graph claim ("we observed this URL's content") doesn't apply.
+func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.ToolCall, rawURL string, resp *http.Response, body string, truncated bool) {
+	if call.LoopID == "" {
+		e.logger.Warn("http_request emission skipped: tool call missing loop_id",
+			"call_id", call.ID, "url", rawURL)
+		return
+	}
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(e.platform.Org, e.platform.Platform, call.LoopID)
+	if err != nil {
+		e.logger.Warn("http_request emission skipped: cannot resolve loop entity",
+			"call_id", call.ID, "loop_id", call.LoopID, "error", err)
+		return
+	}
+	urlEntity, canon, err := agentic.TryWebObservationEntityID(e.platform.Org, e.platform.Platform, rawURL)
+	if err != nil {
+		webEmitFailuresTotal.WithLabelValues("http_request", "entity_id").Inc()
+		e.logger.Warn("http_request emission skipped: cannot build observation entity",
+			"call_id", call.ID, "url", rawURL, "error", err)
+		return
+	}
+
+	now := e.now()
+	fetchedAt := now.UTC().Format(time.RFC3339Nano)
+	contentType := resp.Header.Get("Content-Type")
+
+	triples := []message.Triple{
+		{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebFetchedAt, Object: fetchedAt, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebFetchedBy, Object: loopEntityID, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebContentType, Object: contentType, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebStatusCode, Object: resp.StatusCode, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebText, Object: body, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: urlEntity, Predicate: agvocab.WebTruncated, Object: truncated, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+		{Subject: loopEntityID, Predicate: agvocab.LoopFetchedWeb, Object: urlEntity, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+	}
+	for _, tr := range triples {
+		if err := e.publisher.AddTriple(ctx, tr); err != nil {
+			webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
+			e.logger.Warn("http_request emission failed for triple",
+				"call_id", call.ID, "url", canon, "predicate", tr.Predicate, "error", err)
+		}
+	}
 }
 
 // httpResolveAndValidate performs DNS resolution and SSRF validation in a single

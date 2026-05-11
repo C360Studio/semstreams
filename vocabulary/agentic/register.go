@@ -30,6 +30,7 @@ func Register() {
 	registerStepPredicates()
 	registerIdentityPredicates()
 	registerTodoPredicates()
+	registerWebPredicates()
 }
 
 // registerTodoPredicates registers predicates for agent-private todo
@@ -375,6 +376,73 @@ func registerLoopPredicates() {
 	vocabulary.Register(LoopDescription,
 		vocabulary.WithDescription("User task prompt that initiated this loop; indexed for NL/BM25 search"),
 		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopObservedWeb,
+		vocabulary.WithDescription("Entity reference to a web observation seen by this loop via web_search (multi-valued)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopFetchedWeb,
+		vocabulary.WithDescription("Entity reference to a web observation pulled by this loop via http_request (multi-valued)"),
+		vocabulary.WithDataType("string"))
+}
+
+// registerWebPredicates registers predicates for web observation entities
+// emitted by the web_search and http_request tools. Title, snippet, text,
+// and source_query are flagged rule-opaque per the LLM-authored content
+// discipline (rules predicating on LLM-authored content create Goodhart
+// feedback loops). Structural fields stay rule-matchable.
+func registerWebPredicates() {
+	vocabulary.Register(WebURL,
+		vocabulary.WithDescription("Canonical URL this observation entity represents"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(WebTitle,
+		vocabulary.WithDescription("Search-result title returned by the provider; rule-opaque external prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(WebSnippet,
+		vocabulary.WithDescription("Search-result description returned by the provider; rule-opaque external prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(WebText,
+		vocabulary.WithDescription("Fetched body of an http_request (HTML→text, truncated); rule-opaque external prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(WebSourceQuery,
+		vocabulary.WithDescription("LLM-authored search query string; rule-opaque to prevent agents optimising queries toward rule triggers"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(WebObservedAt,
+		vocabulary.WithDescription("Wall-clock timestamp the web_search call saw this URL"),
+		vocabulary.WithDataType("time.Time"))
+
+	vocabulary.Register(WebFetchedAt,
+		vocabulary.WithDescription("Wall-clock timestamp the http_request call pulled this URL's body"),
+		vocabulary.WithDataType("time.Time"))
+
+	vocabulary.Register(WebObservedBy,
+		vocabulary.WithDescription("Loop entity ID that observed this URL via web_search"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(WebFetchedBy,
+		vocabulary.WithDescription("Loop entity ID that pulled this URL via http_request"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(WebContentType,
+		vocabulary.WithDescription("HTTP Content-Type header value from an http_request fetch"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(WebStatusCode,
+		vocabulary.WithDescription("HTTP response status code from an http_request fetch (2xx/3xx only)"),
+		vocabulary.WithDataType("int"))
+
+	vocabulary.Register(WebTruncated,
+		vocabulary.WithDescription("Whether the http_request body was truncated; rule-matchable structural flag"),
+		vocabulary.WithDataType("bool"))
 }
 
 // registerStepPredicates registers predicates for trajectory step entities.
