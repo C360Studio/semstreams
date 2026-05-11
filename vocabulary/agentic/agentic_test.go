@@ -85,6 +85,11 @@ func TestPredicateFormat(t *testing.T) {
 		agentic.LoopUser,
 		agentic.LoopObservedWeb,
 		agentic.LoopFetchedWeb,
+		// Scratch
+		agentic.ScratchID,
+		agentic.ScratchText,
+		agentic.ScratchCreatedAt,
+		agentic.ScratchChars,
 		// Web
 		agentic.WebURL,
 		agentic.WebTitle,
@@ -271,10 +276,11 @@ func TestPredicateCount(t *testing.T) {
 	// Model: 8, Loop: 17 (15 core + LoopHasStep + LoopDescription + LoopObservedWeb + LoopFetchedWeb)
 	// Step: 18 (15 core + tool_status + error_message + error_category), Identity: 6
 	// Todo: 5 (ADR-036 — id, content, status, position, updated_at)
+	// Scratch: 4 (id, text, created_at, chars)
 	// Web: 12 (url, title, snippet, text, source_query, observed_at, fetched_at,
 	//   observed_by, fetched_by, content_type, status_code, truncated)
-	// Total: 108 predicates
-	expectedMin := 108
+	// Total: 112 predicates
+	expectedMin := 112
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -456,6 +462,44 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 		}
 		if meta.RuleOpaque != tt.ruleOpaque {
 			t.Errorf("%s: RuleOpaque = %v, want %v (ADR-036 §Decision Rule 1: rules MUST NOT predicate on opaque content)",
+				tt.name, meta.RuleOpaque, tt.ruleOpaque)
+		}
+	}
+}
+
+// TestScratchPredicatesRegistered asserts the 4 scratchpad predicates
+// land with the right data types and rule-opaque flags. ScratchText is
+// rule-opaque per the LLM-authored-content discipline; the other three
+// (id, created_at, chars) stay rule-matchable as structural facts.
+func TestScratchPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	scratchPredicates := []struct {
+		name       string
+		predicate  string
+		dataType   string
+		ruleOpaque bool
+	}{
+		{"ScratchID", agentic.ScratchID, "string", false},
+		{"ScratchText", agentic.ScratchText, "string", true},
+		{"ScratchCreatedAt", agentic.ScratchCreatedAt, "time.Time", false},
+		{"ScratchChars", agentic.ScratchChars, "int", false},
+	}
+
+	for _, tt := range scratchPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+		if meta.RuleOpaque != tt.ruleOpaque {
+			t.Errorf("%s: RuleOpaque = %v, want %v (LLM-authored content must not be rule-predicable — Goodhart feedback loop)",
 				tt.name, meta.RuleOpaque, tt.ruleOpaque)
 		}
 	}
