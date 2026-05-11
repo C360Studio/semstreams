@@ -255,18 +255,57 @@ func TestWireBackend_RequestShape_MatchesSDK(t *testing.T) {
 	}
 }
 
-// TestUseWireBackend_DefaultIsSDK verifies the gate defaults to SDK.
+// TestUseWireBackend_DefaultIsSDK verifies the gate defaults to SDK by
+// constructing a Client per backend selection and asserting the gate
+// reflects the eagerly-constructed wireClient.
 func TestUseWireBackend_DefaultIsSDK(t *testing.T) {
-	c := &Client{endpoint: &model.EndpointConfig{}}
-	if c.useWireBackend() {
+	build := func(backend string) *Client {
+		c, err := NewClient(&model.EndpointConfig{
+			Provider:    "openai",
+			URL:         "http://example.invalid/v1",
+			Model:       "test",
+			WireBackend: backend,
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%q): %v", backend, err)
+		}
+		return c
+	}
+	if build("").useWireBackend() {
 		t.Error("empty WireBackend should not select wire path")
 	}
-	c.endpoint.WireBackend = "sdk"
-	if c.useWireBackend() {
+	if build("sdk").useWireBackend() {
 		t.Error("explicit sdk should not select wire path")
 	}
-	c.endpoint.WireBackend = "wire"
-	if !c.useWireBackend() {
+	if !build("wire").useWireBackend() {
 		t.Error("wire should select wire path")
+	}
+}
+
+// TestNewClient_ConcurrentChatCompletion_NoRace exercises the wire
+// backend under -race with concurrent ChatCompletion calls. With the
+// pre-M1-fix lazy ensureWireClient, this trips a data race; with the
+// eager NewClient construction, it passes cleanly.
+func TestNewClient_ConcurrentChatCompletion_NoRace(t *testing.T) {
+	srv := newStubServer(t, fakeChatCompletionResponse, nil)
+	c := newWireDifferentialClient(t, srv.URL, "wire")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const N = 16
+	errs := make(chan error, N)
+	for range N {
+		go func() {
+			_, err := c.ChatCompletion(ctx, agentic.AgentRequest{
+				RequestID: "req-conc",
+				Messages:  []agentic.ChatMessage{{Role: "user", Content: "hi"}},
+			})
+			errs <- err
+		}()
+	}
+	for range N {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent ChatCompletion: %v", err)
+		}
 	}
 }

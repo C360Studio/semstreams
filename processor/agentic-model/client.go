@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -75,15 +76,55 @@ func NewClient(endpoint *model.EndpointConfig) (*Client, error) {
 	// fields preserve Go's net/http defaults (backward compatible).
 	// See model/httpclient.go and operations/09-openai-client-keepalive.md
 	// for the failure modes this addresses.
-	config.HTTPClient = model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(endpoint))
+	httpClient := model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(endpoint))
+	config.HTTPClient = httpClient
 
 	client := openai.NewClientWithConfig(config)
 
-	return &Client{
+	out := &Client{
 		client:   client,
 		endpoint: endpoint,
 		retryCfg: defaultClientRetryConfig,
-	}, nil
+	}
+
+	// ADR-037: eager wire client construction when the endpoint opts in.
+	// Building lazily under sync.Mutex was the alternative; eager is
+	// simpler and removes the data race on c.wireClient writes between
+	// concurrent ChatCompletion calls (go-reviewer M1).
+	if endpoint.WireBackend == "wire" {
+		wc, err := buildWireClientForEndpoint(endpoint, httpClient)
+		if err != nil {
+			return nil, err
+		}
+		out.wireClient = wc
+	}
+
+	return out, nil
+}
+
+// buildWireClientForEndpoint constructs a *wire.Client for the given
+// endpoint, sharing the same HTTP transport as the SDK client (the
+// model.NewHTTPClient invariant from beta.43/47). Pulled out of
+// ensureWireClient (now retired) so construction happens once at
+// NewClient time, eliminating the concurrent-write race.
+func buildWireClientForEndpoint(endpoint *model.EndpointConfig, httpClient *http.Client) (*wire.Client, error) {
+	apiKey := ""
+	if endpoint.APIKeyEnv != "" {
+		apiKey = os.Getenv(endpoint.APIKeyEnv)
+	}
+	authHeader := ""
+	if apiKey != "" {
+		authHeader = "Bearer " + apiKey
+	}
+	wc, err := wire.NewClient(wire.ClientConfig{
+		BaseURL:    endpoint.URL,
+		HTTPClient: httpClient,
+		AuthHeader: authHeader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agentic-model: build wire client: %w", err)
+	}
+	return wc, nil
 }
 
 // SetChunkHandler sets the callback for receiving streaming deltas.

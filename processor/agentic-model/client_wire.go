@@ -4,61 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/model/wire"
 )
 
 // useWireBackend reports whether this endpoint is configured for the
-// ADR-037 wire-native client path.
+// ADR-037 wire-native client path. The wire client is eagerly built in
+// NewClient when WireBackend == "wire"; this gate then dispatches to it.
 func (c *Client) useWireBackend() bool {
-	return c.endpoint != nil && c.endpoint.WireBackend == "wire"
-}
-
-// wireClientOnce builds a *wire.Client lazily for the endpoint, reusing
-// it across requests. Returns nil if the endpoint is misconfigured;
-// caller falls back to the SDK path.
-func (c *Client) ensureWireClient() (*wire.Client, error) {
-	if c.wireClient != nil {
-		return c.wireClient, nil
-	}
-	if c.endpoint == nil {
-		return nil, errors.New("agentic-model: wire backend requires endpoint config")
-	}
-	apiKey := ""
-	if c.endpoint.APIKeyEnv != "" {
-		apiKey = os.Getenv(c.endpoint.APIKeyEnv)
-	}
-	httpClient := c.httpClientOrDefault()
-	authHeader := ""
-	if apiKey != "" {
-		authHeader = "Bearer " + apiKey
-	}
-	cfg := wire.ClientConfig{
-		BaseURL:    c.endpoint.URL,
-		HTTPClient: httpClient,
-		AuthHeader: authHeader,
-	}
-	wc, err := wire.NewClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("agentic-model: build wire client: %w", err)
-	}
-	c.wireClient = wc
-	return wc, nil
-}
-
-// httpClientOrDefault returns the same HTTP client used by the SDK path
-// for this endpoint. Both backends consume model.NewHTTPClient — the
-// connection-hygiene invariant from beta.43/47 holds for both.
-func (c *Client) httpClientOrDefault() *http.Client {
-	return model.NewHTTPClient(model.HTTPClientOptionsFromEndpoint(c.endpoint))
+	return c.wireClient != nil
 }
 
 // buildWireRequest builds the wire-shape ChatCompletionRequest from an
@@ -86,10 +45,10 @@ func (c *Client) buildWireRequest(req agentic.AgentRequest) wire.ChatCompletionR
 
 	c.applyWireRequestParams(&chatReq, req)
 	if req.ResponseFormat != nil {
-		chatReq.ResponseFormat = agenticResponseFormatToWire(req.ResponseFormat)
+		chatReq.ResponseFormat = c.agenticResponseFormatToWire(req.ResponseFormat, req.RequestID)
 	}
 	if len(req.Tools) > 0 {
-		chatReq.Tools = agenticToolsToWire(req.Tools)
+		chatReq.Tools = c.agenticToolsToWire(req.Tools, req.RequestID)
 	}
 	if req.ToolChoice != nil {
 		switch req.ToolChoice.Mode {
@@ -177,10 +136,22 @@ const wireKeyC360ThoughtSignature = "c360_thought_signature"
 // extra fields, including google.thought_signature.
 const wireKeyExtraContent = "extra_content"
 
-func agenticToolsToWire(in []agentic.ToolDefinition) []wire.Tool {
+// agenticToolsToWire translates the agentic tool definitions to wire
+// shape. A marshal failure on tool.Parameters (caller authored an
+// unmarshalable type — channel, func, cyclic map) is surfaced via Warn
+// so callers see "tool schema dropped" in operator logs instead of an
+// upstream "missing parameters" 400. Parity with the SDK-side
+// applyResponseFormat Warn (beta.48 lesson).
+func (c *Client) agenticToolsToWire(in []agentic.ToolDefinition, requestID string) []wire.Tool {
 	out := make([]wire.Tool, len(in))
 	for i, tool := range in {
-		params, _ := json.Marshal(tool.Parameters)
+		params, err := json.Marshal(tool.Parameters)
+		if err != nil && c.logger != nil {
+			c.logger.Warn("tool parameters failed to marshal; upstream will reject with a generic schema error",
+				slog.String("request_id", requestID),
+				slog.String("tool", tool.Name),
+				slog.Any("err", err))
+		}
 		out[i] = wire.Tool{
 			Type: "function",
 			Function: wire.FunctionDefinition{
@@ -224,8 +195,12 @@ func (c *Client) applyWireRequestParams(chatReq *wire.ChatCompletionRequest, req
 
 // agenticResponseFormatToWire translates agentic.ResponseFormat to the
 // wire shape. Mirrors toOpenAIResponseFormat (SDK side); schema bytes
-// flow as json.RawMessage in both directions.
-func agenticResponseFormatToWire(rf *agentic.ResponseFormat) *wire.ResponseFormat {
+// flow as json.RawMessage in both directions. A marshal failure on
+// rf.Schema is surfaced via Warn — silent drop here would surface as
+// an upstream generic 400 with "schema must be object" instead of the
+// real root cause (caller's schema map contains an unmarshalable
+// value). Parity with the SDK-side applyResponseFormat Warn.
+func (c *Client) agenticResponseFormatToWire(rf *agentic.ResponseFormat, requestID string) *wire.ResponseFormat {
 	if rf == nil {
 		return nil
 	}
@@ -238,7 +213,16 @@ func agenticResponseFormatToWire(rf *agentic.ResponseFormat) *wire.ResponseForma
 		Strict: rf.Strict,
 	}
 	if len(rf.Schema) > 0 {
-		if b, err := json.Marshal(rf.Schema); err == nil {
+		b, err := json.Marshal(rf.Schema)
+		switch {
+		case err != nil:
+			if c.logger != nil {
+				c.logger.Warn("response_format schema failed to marshal; upstream will reject with a generic schema error",
+					slog.String("request_id", requestID),
+					slog.String("name", rf.Name),
+					slog.Any("err", err))
+			}
+		default:
 			out.JSONSchema.Schema = b
 		}
 	}
@@ -338,16 +322,16 @@ func (c *Client) convertWireResponse(resp *wire.ChatCompletionResponse, requestI
 		}
 	}
 
+	stripC360KeysFromResponse(resp)
 	return response
 }
 
 // doSingleAttemptWire is the wire-native equivalent of doSingleAttempt.
 // Returns (response, nil) on success or (zero, error) on failure.
+// c.wireClient is eagerly built in NewClient — no nil check needed
+// because useWireBackend gates the dispatch on a non-nil c.wireClient.
 func (c *Client) doSingleAttemptWire(ctx context.Context, chatReq wire.ChatCompletionRequest, requestID string) (agentic.AgentResponse, error) {
-	wc, err := c.ensureWireClient()
-	if err != nil {
-		return agentic.AgentResponse{}, err
-	}
+	wc := c.wireClient
 
 	if c.endpoint.Stream {
 		resp, err := c.streamChatCompletionWire(ctx, wc, chatReq, requestID)
@@ -406,9 +390,12 @@ func (c *Client) streamChatCompletionWire(ctx context.Context, wc *wire.Client, 
 		}
 
 		contentDelta, reasoningDelta := acc.processChunk(chunk, requestID)
-		if c.metrics != nil && (contentDelta != "" || reasoningDelta != "") {
+		// Metric parity with the SDK streaming path: record one chunk per
+		// choice unconditionally; TTFT fires on the first non-empty delta
+		// (content or reasoning), matching SDK behaviour at client.go:617.
+		if c.metrics != nil {
 			c.metrics.recordStreamChunk(chatReq.Model)
-			if !firstTokenRecorded {
+			if !firstTokenRecorded && (contentDelta != "" || reasoningDelta != "") {
 				c.metrics.recordStreamTTFT(chatReq.Model, time.Since(streamStart).Seconds())
 				firstTokenRecorded = true
 			}
@@ -493,6 +480,27 @@ func stripC360KeysFromRequest(req *wire.ChatCompletionRequest) {
 	for i := range req.Messages {
 		for j := range req.Messages[i].ToolCalls {
 			delete(req.Messages[i].ToolCalls[j].Extras, wireKeyC360ThoughtSignature)
+		}
+	}
+}
+
+// stripC360KeysFromResponse removes the framework-internal carrier key
+// from a wire response after convertWireResponse has lifted its values
+// into agentic.Metadata. Keeps the response object clean for downstream
+// trace exports / debug logs — the canonical representation of a
+// processed Gemini response is "no extra_content, no carrier; signature
+// lives only in agentic.ToolCall.Metadata."
+func stripC360KeysFromResponse(resp *wire.ChatCompletionResponse) {
+	if resp == nil {
+		return
+	}
+	for ci := range resp.Choices {
+		msg := resp.Choices[ci].Message
+		if msg == nil {
+			continue
+		}
+		for ti := range msg.ToolCalls {
+			delete(msg.ToolCalls[ti].Extras, wireKeyC360ThoughtSignature)
 		}
 	}
 }

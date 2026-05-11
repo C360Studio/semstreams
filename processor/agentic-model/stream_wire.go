@@ -139,7 +139,10 @@ func (a *wireStreamAccumulator) processChunk(chunk *wire.StreamChunk, requestID 
 		a.lastToolIndex = idx
 	}
 
-	if a.chunkHandler != nil && (contentDelta != "" || reasoningDelta != "") {
+	// Mirror the SDK streamAccumulator: fire the chunkHandler per choice
+	// unconditionally so consumers see one tick per delta, even when the
+	// delta contained only tool_call updates (empty content + reasoning).
+	if a.chunkHandler != nil {
 		a.chunkHandler(StreamChunk{
 			RequestID:      requestID,
 			ContentDelta:   contentDelta,
@@ -290,8 +293,21 @@ func (a *wireStreamAccumulator) toAgentResponse(requestID string) agentic.AgentR
 		}
 		sortInts(indices)
 
+		// Synthesize a wire response and run adapter.NormalizeResponse so
+		// the streaming path matches non-streaming (convertWireResponse)
+		// for provider-blob extraction — Gemini 3.x thought_signature
+		// echo on multi-turn flows depends on this hook running on the
+		// streaming path too. Without it, the carrier never lands on
+		// agentic.ToolCall.Metadata.
+		synth := a.synthesizeWireResponse(indices)
+		adapter := a.adapter
+		if adapter == nil {
+			adapter = defaultAdapter
+		}
+		adapter.NormalizeResponse(synth)
+
 		toolCalls := make([]agentic.ToolCall, 0, len(indices))
-		for _, idx := range indices {
+		for i, idx := range indices {
 			tc := a.toolCalls[idx]
 			args := make(map[string]any)
 			if tc.Function.Arguments != "" {
@@ -306,16 +322,51 @@ func (a *wireStreamAccumulator) toAgentResponse(requestID string) agentic.AgentR
 					args = make(map[string]any)
 				}
 			}
-			toolCalls = append(toolCalls, agentic.ToolCall{
+			out := agentic.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
-			})
+			}
+			// Read the carrier off the post-NormalizeResponse wire shape
+			// (synth.Choices[0].Message.ToolCalls[i] mirrors the SDK-side
+			// extraction in convertWireResponse).
+			if sig := readC360ThoughtSignature(synth.Choices[0].Message.ToolCalls[i]); sig != "" {
+				if out.Metadata == nil {
+					out.Metadata = make(map[string]any, 1)
+				}
+				out.Metadata[agentic.MetadataKeyGoogleThoughtSignature] = sig
+			}
+			toolCalls = append(toolCalls, out)
 		}
 		resp.Message.ToolCalls = toolCalls
 	}
 
 	return resp
+}
+
+// synthesizeWireResponse builds a wire.ChatCompletionResponse covering
+// the tool_calls the accumulator collected, in index-sorted order.
+// Returned as a single Choice with the accumulator's Message snapshot —
+// enough surface for adapter NormalizeResponse to walk tool_call Extras
+// and write framework-internal carriers. Indices argument is the
+// already-sorted slice so we can iterate deterministically.
+func (a *wireStreamAccumulator) synthesizeWireResponse(indices []int) *wire.ChatCompletionResponse {
+	msg := &wire.Message{Role: a.role}
+	if a.content.Len() > 0 {
+		_ = msg.SetContentString(a.content.String())
+	}
+	if a.reasoning.Len() > 0 {
+		msg.ReasoningContent = a.reasoning.String()
+	}
+	if len(indices) > 0 {
+		msg.ToolCalls = make([]wire.ToolCall, len(indices))
+		for i, idx := range indices {
+			msg.ToolCalls[i] = *a.toolCalls[idx]
+		}
+	}
+	return &wire.ChatCompletionResponse{
+		Choices: []wire.Choice{{Message: msg, FinishReason: a.finishReason}},
+	}
 }
 
 // sortInts is a tiny ascending-sort helper that keeps stream_wire.go

@@ -152,11 +152,17 @@ func (a *GeminiAdapter) NormalizeResponse(resp *wire.ChatCompletionResponse) {
 	}
 }
 
-// extractGeminiThoughtSignature reads extra_content.google.thought_signature
-// from a wire.ToolCall.Extras and writes the value into the
-// framework-internal carrier key. Logging is intentionally absent here —
-// the absence of a signature on a non-3.x preview Gemini response is
-// the common case, not a warning condition.
+// extractGeminiThoughtSignature MOVES extra_content.google.thought_signature
+// from a wire.ToolCall.Extras into the framework-internal carrier key.
+// Both the original wireKeyExtraContent entry and the carrier key are
+// deleted after the agentic-side read in convertWireResponse (via the
+// stripC360KeysFromResponse hygiene step), so the response object never
+// carries the Gemini-shape blob alongside the carrier — debug logs and
+// trace exports see a single normalized representation.
+//
+// Logging is intentionally absent here — the absence of a signature on
+// a non-3.x preview Gemini response is the common case, not a warning
+// condition.
 func extractGeminiThoughtSignature(tc *wire.ToolCall) {
 	if tc == nil {
 		return
@@ -185,4 +191,5 @@ func extractGeminiThoughtSignature(tc *wire.ToolCall) {
 		tc.Extras = make(map[string]json.RawMessage, 1)
 	}
 	tc.Extras[wireKeyC360ThoughtSignature] = b
+	delete(tc.Extras, wireKeyExtraContent)
 }

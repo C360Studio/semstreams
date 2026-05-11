@@ -47,6 +47,12 @@ func TestGeminiAdapter_NormalizeResponse_ExtractsThoughtSignature(t *testing.T) 
 	if got != "sig-abc-123" {
 		t.Errorf("carrier = %q, want %q", got, "sig-abc-123")
 	}
+	// extra_content must be removed after extraction (M2/L7) — the
+	// response object should not carry both keys for downstream debug-log
+	// / trace-export consumers.
+	if _, present := resp.Choices[0].Message.ToolCalls[0].Extras[wireKeyExtraContent]; present {
+		t.Error("expected extra_content removed after extraction")
+	}
 }
 
 // TestGeminiAdapter_NormalizeResponse_NoExtraContent_IsNoOp asserts
@@ -225,6 +231,39 @@ func TestSignature_RoundTripThroughAgentic(t *testing.T) {
 	_ = json.Unmarshal(rawExtra, &shape)
 	if shape.Google.ThoughtSignature != "sig-rt" {
 		t.Errorf("reconstructed signature = %q, want sig-rt", shape.Google.ThoughtSignature)
+	}
+}
+
+// TestStreamingPath_LiftsThoughtSignature asserts that the streaming
+// wire path runs NormalizeResponse and lifts the thought_signature
+// carrier into agentic.Metadata. Without this, multi-turn tool flows
+// on Gemini 3.x via wire+streaming silently fail to echo the signature
+// on subsequent requests. This is the test that would have caught H1.
+func TestStreamingPath_LiftsThoughtSignature(t *testing.T) {
+	extra, _ := json.Marshal(map[string]any{
+		"google": map[string]any{"thought_signature": "sig-streamed"},
+	})
+	acc := newWireStreamAccumulator(&GeminiAdapter{}, nil, nil)
+	idx := 0
+	acc.toolCalls = map[int]*wire.ToolCall{
+		idx: {
+			ID:       "call-1",
+			Type:     "function",
+			Function: wire.Function{Name: "f", Arguments: "{}"},
+			Extras:   map[string]json.RawMessage{wireKeyExtraContent: extra},
+		},
+	}
+	acc.lastToolIndex = idx
+	acc.finishReason = "tool_calls"
+	acc.role = "assistant"
+
+	resp := acc.toAgentResponse("req-stream-sig")
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool_call, got %d", len(resp.Message.ToolCalls))
+	}
+	sig, _ := resp.Message.ToolCalls[0].Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string)
+	if sig != "sig-streamed" {
+		t.Errorf("streaming path Metadata sig = %q, want sig-streamed (NormalizeResponse not called?)", sig)
 	}
 }
 
