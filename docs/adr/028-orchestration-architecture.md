@@ -121,7 +121,7 @@ Commit to a three-layer agentic orchestration architecture:
   branch on the content of a result ("did the researcher find
   subtopics?"), that's a judgment call. The rule should trigger a
   coordinator; the coordinator's terminal tool result emits a triple
-  (e.g., `coordinator.next_action = fan_out`) that a subsequent rule
+  (e.g., `coordinator.decision.next_action = fan_out`) that a subsequent rule
   can match on deterministically.
 - **Tool retries live in config.** For tools where transient failures
   (timeout, external 5xx) are worth auto-retrying at the framework
@@ -152,7 +152,7 @@ Commit to a three-layer agentic orchestration architecture:
   read_loop_result handles single-result retrieval; artifact store
   generalises it to multi-file dev outputs.
 - **Rule 03 re-enable** — depends on coordinator emitting a
-  `coordinator.next_action = fan_out` triple for rule 03 to match on.
+  `coordinator.decision.next_action = fan_out` triple for rule 03 to match on.
 
 ## Consequences
 

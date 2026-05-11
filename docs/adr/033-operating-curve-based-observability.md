@@ -233,7 +233,7 @@ cut. SemStreams ships **opinion-free machinery**. Products ship
 | `OperatingCurve`, `RegimeAnnotation`, `SentinelRun` data shapes | SemStreams (framework) | Mechanical observability infrastructure. Storage layout for the operating-curve library. |
 | Sentinel-run scheduler | SemStreams (framework, reusing ADR-031 cron rule) | A sentinel run is a cron rule with a fixture-controlled prompt set and a regime-tagged result write-back. No new scheduler. |
 | Stationarity-check primitive (variance comparison vs. established curve) | SemStreams (framework) | Mechanical, no LLM judgment. Pure function over `OperatingCurve` + new sample. |
-| Signal taxonomy as agvocab predicates: `ops.curve_departure.*`, `ops.threshold_crossed.*`, `ops.regime_expired.*` | SemStreams (framework) | Vocabulary, not opinion. Same shape as `coordinator.next_action`. |
+| Signal taxonomy as agvocab predicates: `ops.curve_departure.*`, `ops.threshold_crossed.*`, `ops.regime_expired.*` | SemStreams (framework) | Vocabulary, not opinion. Same shape as `coordinator.decision.next_action`. |
 | Ops-agent state machine (read predicate stream → mechanical detect → emit signal) | SemStreams (framework) | Generic orchestration loop. Reuses `agentic-loop`. |
 | The axis catalog itself (Q1–Q5, G1–G10, future axes) | Product (semteams, semspec) | Curated against this product's failure modes. Different products care about different axes. |
 | Detector implementations (`ThinkingSpiral`, `RapidShallowToolCalls`, `EmptyStopAfterToolCalls`, terminal-artifact validators, etc.) | Product | Each detects a failure mode specific to product flows. |

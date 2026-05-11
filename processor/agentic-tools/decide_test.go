@@ -333,8 +333,8 @@ func TestDecideExecutor_SAP_CoercesAndSignalsLoudly(t *testing.T) {
 	if got := byPredicate[agvocab.CoordinatorNextAction]; got != "fan_out" {
 		t.Errorf("CoordinatorNextAction = %v, want canonical %q", got, "fan_out")
 	}
-	if got := byPredicate[agvocab.CoordinatorDecideSAPCoerced]; got != "fan-out|fan_out" {
-		t.Errorf("CoordinatorDecideSAPCoerced = %v, want %q", got, "fan-out|fan_out")
+	if got := byPredicate[agvocab.CoordinatorDecisionSAPCoerced]; got != "fan-out|fan_out" {
+		t.Errorf("CoordinatorDecisionSAPCoerced = %v, want %q", got, "fan-out|fan_out")
 	}
 }
 

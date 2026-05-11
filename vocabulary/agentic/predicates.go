@@ -597,7 +597,7 @@ const (
 	// "fan_out", "synthesize", "retry", "done".
 	// Example: "fan_out"
 	// DataType: string
-	CoordinatorNextAction = "coordinator.next_action"
+	CoordinatorNextAction = "coordinator.decision.next_action"
 
 	// CoordinatorDecisionReason is a short natural-language justification
 	// the coordinator supplied alongside its action choice. Small enough
@@ -606,9 +606,9 @@ const (
 	// Example: "researcher produced three distinct subtopics worth
 	// separate investigation"
 	// DataType: string
-	CoordinatorDecisionReason = "coordinator.decision_reason"
+	CoordinatorDecisionReason = "coordinator.decision.reason"
 
-	// CoordinatorDecideSAPCoerced is an audit triple emitted by the
+	// CoordinatorDecisionSAPCoerced is an audit triple emitted by the
 	// decide tool's SAP (schema-aligned-parsing) layer when it normalises
 	// an LLM-emitted action_allowlist drift to the allowlist's canonical
 	// form. Object is "{raw}|{canonical}" so a single predicate captures
@@ -623,7 +623,7 @@ const (
 	// can act on the signal rather than raise MaxIterations.
 	// Example: "fan-out|fan_out"
 	// DataType: string
-	CoordinatorDecideSAPCoerced = "coordinator.decide_sap_coerced"
+	CoordinatorDecisionSAPCoerced = "coordinator.decision.sap_coerced"
 )
 
 // Ops Predicates
