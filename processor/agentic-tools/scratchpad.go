@@ -204,9 +204,10 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 	// an orphan ScratchID + ScratchText pair (the first two writes) in
 	// the graph on graph-ingest degradation — the orphan was harmless
 	// (no duplication, the retry minted a fresh UUID), but the atomic
-	// batch eliminates the window entirely. See
-	// TestScratchpadExecutor_PartialWrite_LeavesOrphanID test history
-	// for the explicit before-vs-after assertion.
+	// batch eliminates the window entirely. The post-migration assertion
+	// lives in TestScratchpadExecutor_BatchFailure_LeavesNoOrphans; see
+	// git history for the pre-migration TestScratchpadExecutor_
+	// PartialWrite_LeavesOrphanID it replaced.
 	triples := []message.Triple{
 		{Subject: loopEntityID, Predicate: agvocab.ScratchID, Object: scratchID, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
 		{Subject: loopEntityID, Predicate: agvocab.ScratchText, Object: args.Text, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},

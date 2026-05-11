@@ -19,11 +19,12 @@ import (
 // assert exactly what triples the agent-tool emitted.
 //
 // Records via both AddTriple (single) and AddTriplesBatch (atomic).
-// On error the single-add records nothing (preserves the original
-// pre-2026-05-13 behavior); the batch flattens the slice into the
-// triples log even on error so tests can assert which triples WOULD
-// have been emitted (atomic semantics — they would have landed
-// together if not for the error).
+// On error BOTH methods bail before recording — atomic-failure mirror
+// of the production graph-ingest CAS path, where a failed batch
+// commits nothing for the shared Subject. Tests that need to inspect
+// "what triples WOULD have been emitted" can read the migrated tool's
+// constructed slice via other means (the executors build the slice
+// before calling the publisher).
 type recordingPublisher struct {
 	triples []message.Triple
 	// batchCalls records the number of AddTriplesBatch invocations so
