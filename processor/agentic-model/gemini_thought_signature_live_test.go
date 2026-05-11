@@ -44,7 +44,10 @@ func geminiTestModel() string {
 	if m := os.Getenv("GEMINI_TEST_MODEL"); m != "" {
 		return m
 	}
-	return "gemini-3.0-pro-preview"
+	// Matches the `gemini-3-pro-preview` endpoint in configs/gemini-example.json.
+	// Update both this default and the example config when Google publishes
+	// the stable release slug (the preview identifier rotates).
+	return "gemini-3.1-pro-preview"
 }
 
 func newGeminiLiveClient(t *testing.T) *agenticmodel.Client {

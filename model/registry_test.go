@@ -106,6 +106,29 @@ func TestValidate(t *testing.T) {
 			wantErr: "endpoint \"bad\": unknown provider \"unknown\"",
 		},
 		{
+			name: "endpoint invalid wire_backend",
+			modify: func(r *Registry) {
+				r.Endpoints["bad"] = &EndpointConfig{
+					Model: "test", MaxTokens: 1000, WireBackend: "wires",
+				}
+			},
+			wantErr: "endpoint \"bad\": wire_backend must be",
+		},
+		{
+			name: "endpoint gemini provider + wire backend is valid",
+			modify: func(r *Registry) {
+				r.Endpoints["gemini-3"] = &EndpointConfig{
+					Provider:    "gemini",
+					URL:         "https://generativelanguage.googleapis.com/v1beta/openai",
+					Model:       "gemini-3-preview",
+					APIKeyEnv:   "GEMINI_API_KEY",
+					MaxTokens:   1048576,
+					WireBackend: "wire",
+				}
+			},
+			wantErr: "", // empty = should validate cleanly
+		},
+		{
 			name: "endpoint invalid tool_format",
 			modify: func(r *Registry) {
 				r.Endpoints["bad"] = &EndpointConfig{

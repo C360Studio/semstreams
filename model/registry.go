@@ -460,6 +460,12 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 
 	validProviders := map[string]bool{
 		"anthropic": true, "ollama": true, "openai": true, "openrouter": true,
+		// "gemini" is the explicit-adapter route for Gemini endpoints —
+		// engages GeminiAdapter (ADR-037 chunk 8) for the 3.x preview
+		// thought_signature flow. Gemini 2.5 stable still works through
+		// the "openai" umbrella; pick "gemini" when you need the
+		// per-tool_call Extras translation.
+		"gemini": true,
 	}
 	if ep.Provider != "" && !validProviders[ep.Provider] {
 		return fmt.Errorf("endpoint %q: unknown provider %q", name, ep.Provider)

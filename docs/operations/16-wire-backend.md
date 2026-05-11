@@ -19,17 +19,33 @@ rationale, design alternatives, and migration plan.
 
 ## Configuration
 
-Each endpoint in the model registry can opt into the wire client:
+Each endpoint in the model registry can opt into the wire client. A full
+working example is checked in at `configs/gemini-example.json` — a
+three-tier setup (`gemini-flash` / `gemini-pro` / `gemini-3-pro-preview`)
+that operators can copy into their own platform config.
 
-```yaml
-endpoints:
-  gemini-3x:
-    provider: gemini
-    url: https://generativelanguage.googleapis.com/v1beta/openai
-    model: gemini-3.0-pro-preview
-    api_key_env: GEMINI_API_KEY
-    wire_backend: wire   # opt-in; default is "sdk"
+The 3.x preview entry is the one that needs both `provider: "gemini"`
+AND `wire_backend: "wire"`:
+
+```json
+{
+  "gemini-3-pro-preview": {
+    "provider": "gemini",
+    "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "model": "gemini-3.1-pro-preview",
+    "api_key_env": "GEMINI_API_KEY",
+    "wire_backend": "wire",
+    "supports_tools": true,
+    "tool_format": "openai"
+  }
+}
 ```
+
+Important: Gemini 2.5 stable does NOT need the wire backend or the
+`gemini` provider — it works through the OpenAI-compat umbrella
+(`provider: "openai"`) like any other OpenAI-shape endpoint. Pick
+`provider: "gemini"` only when you need the per-tool_call Extras
+translation (thought_signature, future 3.x quirks).
 
 Valid values:
 
