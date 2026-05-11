@@ -108,7 +108,7 @@ func (e *DecideExecutor) SetLogger(logger *slog.Logger) {
 // prose. When the description named a handful of example actions,
 // models biased their terminal choice toward those examples,
 // overriding the persona's enumerated value and wedging chains at an
-// unhandled coordinator.next_action triple. The action vocabulary
+// unhandled coordinator.decision.next_action triple. The action vocabulary
 // lives strictly in the role's system prompt; flows that want
 // structural enforcement use the per-spawn allowlist threaded through
 // TaskMessage.Metadata under MetadataKeyDecideActionAllowlist (see
@@ -120,7 +120,7 @@ func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
 			Name:        DecideToolName,
-			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your role's system prompt enumerates. Emits a coordinator.next_action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data.",
+			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your role's system prompt enumerates. Emits a coordinator.decision.next_action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -266,7 +266,7 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 	if sapCoerced {
 		triples = append(triples, message.Triple{
 			Subject:    loopEntityID,
-			Predicate:  agvocab.CoordinatorDecideSAPCoerced,
+			Predicate:  agvocab.CoordinatorDecisionSAPCoerced,
 			Object:     allowlist.rawAction + "|" + allowlist.canonicalAction,
 			Source:     decideToolSource,
 			Timestamp:  now,

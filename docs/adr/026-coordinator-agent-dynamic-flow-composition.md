@@ -22,7 +22,7 @@ Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). T
 
 - **Invoked by rules**, not continuously running. Rules fire at decision points where metadata isn't enough to choose the next action (e.g. "did the researcher produce fan-out-worthy subtopics, or is it done?"). Those rules spawn the coordinator as a normal agent loop with the coordinator role persona.
 - **Reads agent output on demand** via `read_loop_result(loop_id)`. The upstream agent's prose is never injected into the coordinator's prompt — the coordinator fetches only what fits its context.
-- **Returns a structured terminal decision** via a `decide()` tool whose schema enumerates the valid next actions (e.g. `fan_out`, `synthesize`, `retry`, `done`). Rules downstream match on `coordinator.next_action` triples and route accordingly.
+- **Returns a structured terminal decision** via a `decide()` tool whose schema enumerates the valid next actions (e.g. `fan_out`, `synthesize`, `retry`, `done`). Rules downstream match on `coordinator.decision.next_action` triples and route accordingly.
 - **Contains schema discipline to one role.** Researcher, coder, synthesizer, reviewer agents produce free text. Only the coordinator needs structured output — which means ADR-028's per-tool retry policy gets invoked at the coordinator's `decide` tool, not at every role's submit boundary.
 - **Can manipulate flows and rules at runtime** via the six tool executors defined below. That's how the coordinator adapts the pipeline when its judgment reveals a gap.
 
@@ -89,7 +89,7 @@ Seven tool executors in total: one terminal `decide` tool that is the coordinato
 ```
 
 On successful decide, the tool emits a triple on the coordinator's loop entity:
-`coordinator.next_action = <action>`. The rule engine matches downstream rules on that triple and routes mechanically. The reason + action-specific fields land in the loop's result text so they're inspectable via `read_loop_result` without any tool parsing.
+`coordinator.decision.next_action = <action>`. The rule engine matches downstream rules on that triple and routes mechanically. The reason + action-specific fields land in the loop's result text so they're inspectable via `read_loop_result` without any tool parsing.
 
 Because `decide` is where schema discipline is concentrated, it's also the first real consumer of the opt-in `tool_retries` policy (ADR-028 Layer 1). Stock coordinator configs declare:
 
@@ -297,11 +297,11 @@ external network call to manage its own infrastructure.
 
 Before a first coordinator ships, in order:
 
-1. `decide` terminal tool — simplest, most important. Defined per flow, emits the `coordinator.next_action` triple. No flow-composition capability yet; just judgment.
+1. `decide` terminal tool — simplest, most important. Defined per flow, emits the `coordinator.decision.next_action` triple. No flow-composition capability yet; just judgment.
 2. `read_loop_result` is already built (ADR-028 Layer 1).
 3. Opt-in retry policy is already built (ADR-028 Layer 1) — the coordinator's stock config opts in for `decide`.
 4. Stock research coordinator persona + `configs/flows/coordinator-research.json`.
-5. Re-enable rule 03 (subtopic fan-out) in the deep-research flow, this time matching on `coordinator.next_action = fan_out`.
+5. Re-enable rule 03 (subtopic fan-out) in the deep-research flow, this time matching on `coordinator.decision.next_action = fan_out`.
 6. End-to-end coordinator exercise on the deep-research flow.
 7. Six flow-composition executors — after the judgment-only coordinator is proved out.
 

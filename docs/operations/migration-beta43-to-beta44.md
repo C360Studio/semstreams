@@ -251,8 +251,10 @@ actionable before the next retry budget review.
   exact + SAP allowlist resolver
 - `processor/agentic-tools/decide.go:normaliseActionForSAP` — V1
   normalisation rules
-- `vocabulary/agentic/predicates.go:CoordinatorDecideSAPCoerced` —
-  audit triple predicate
+- `vocabulary/agentic/predicates.go:CoordinatorDecisionSAPCoerced` —
+  audit triple predicate (renamed from `CoordinatorDecideSAPCoerced`
+  alongside the 3-segment predicate convention sweep; same underlying
+  audit semantics)
 - `processor/rule/action_id_test.go` —
   fingerprint stability + cap resolution tests
 - `processor/rule/action_maxiterations_test.go` — end-to-end cap

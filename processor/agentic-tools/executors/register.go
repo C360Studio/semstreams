@@ -92,12 +92,12 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	}
 
 	track(registerBash(reg, logger))
-	track(registerWebSearch(reg, logger))
-	track(registerHTTPRequest(reg, logger))
+	track(registerWebSearch(reg, deps.NATSClient, deps.Platform, logger))
+	track(registerHTTPRequest(reg, deps.NATSClient, deps.Platform, logger))
 	track(registerGitHub(reg, logger))
 
 	if deps.NATSClient == nil {
-		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity)")
+		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
 		track(registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket))
 		track(registerDecide(reg, deps.NATSClient, deps.Platform, logger))

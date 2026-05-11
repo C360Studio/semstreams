@@ -83,6 +83,21 @@ func TestPredicateFormat(t *testing.T) {
 		agentic.LoopWorkflowStep,
 		agentic.LoopEndedAt,
 		agentic.LoopUser,
+		agentic.LoopObservedWeb,
+		agentic.LoopFetchedWeb,
+		// Web
+		agentic.WebURL,
+		agentic.WebTitle,
+		agentic.WebSnippet,
+		agentic.WebText,
+		agentic.WebSourceQuery,
+		agentic.WebObservedAt,
+		agentic.WebFetchedAt,
+		agentic.WebObservedBy,
+		agentic.WebFetchedBy,
+		agentic.WebContentType,
+		agentic.WebStatusCode,
+		agentic.WebTruncated,
 	}
 
 	for _, p := range predicates {
@@ -253,11 +268,13 @@ func TestPredicateCount(t *testing.T) {
 
 	// Expected predicates by category:
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
-	// Model: 8, Loop: 15 (core + LoopHasStep + LoopDescription)
+	// Model: 8, Loop: 17 (15 core + LoopHasStep + LoopDescription + LoopObservedWeb + LoopFetchedWeb)
 	// Step: 18 (15 core + tool_status + error_message + error_category), Identity: 6
 	// Todo: 5 (ADR-036 — id, content, status, position, updated_at)
-	// Total: 94 predicates
-	expectedMin := 94
+	// Web: 12 (url, title, snippet, text, source_query, observed_at, fetched_at,
+	//   observed_by, fetched_by, content_type, status_code, truncated)
+	// Total: 108 predicates
+	expectedMin := 108
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -322,6 +339,8 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 		{"LoopUser", agentic.LoopUser, "string"},
 		{"LoopHasStep", agentic.LoopHasStep, "string"},
 		{"LoopDescription", agentic.LoopDescription, "string"},
+		{"LoopObservedWeb", agentic.LoopObservedWeb, "string"},
+		{"LoopFetchedWeb", agentic.LoopFetchedWeb, "string"},
 	}
 
 	for _, tt := range loopPredicates {
@@ -439,5 +458,66 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 			t.Errorf("%s: RuleOpaque = %v, want %v (ADR-036 §Decision Rule 1: rules MUST NOT predicate on opaque content)",
 				tt.name, meta.RuleOpaque, tt.ruleOpaque)
 		}
+	}
+}
+
+// TestWebPredicatesRegistered asserts the 12 web predicates land with the
+// right data types and rule-opaque flags. Title, snippet, text, and
+// source_query are rule-opaque per the LLM-authored content discipline
+// (rules predicating on LLM-sampled values create Goodhart feedback loops).
+func TestWebPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	webPredicates := []struct {
+		name       string
+		predicate  string
+		dataType   string
+		ruleOpaque bool
+	}{
+		{"WebURL", agentic.WebURL, "string", false},
+		{"WebTitle", agentic.WebTitle, "string", true},
+		{"WebSnippet", agentic.WebSnippet, "string", true},
+		{"WebText", agentic.WebText, "string", true},
+		{"WebSourceQuery", agentic.WebSourceQuery, "string", true},
+		{"WebObservedAt", agentic.WebObservedAt, "time.Time", false},
+		{"WebFetchedAt", agentic.WebFetchedAt, "time.Time", false},
+		{"WebObservedBy", agentic.WebObservedBy, "string", false},
+		{"WebFetchedBy", agentic.WebFetchedBy, "string", false},
+		{"WebContentType", agentic.WebContentType, "string", false},
+		{"WebStatusCode", agentic.WebStatusCode, "int", false},
+		{"WebTruncated", agentic.WebTruncated, "bool", false},
+	}
+
+	opaqueCount := 0
+	matchableCount := 0
+	for _, tt := range webPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+		if meta.RuleOpaque != tt.ruleOpaque {
+			t.Errorf("%s: RuleOpaque = %v, want %v (LLM-authored content must not be rule-predicable — Goodhart feedback loop)",
+				tt.name, meta.RuleOpaque, tt.ruleOpaque)
+		}
+		if tt.ruleOpaque {
+			opaqueCount++
+		} else {
+			matchableCount++
+		}
+	}
+
+	// Aligns with the semteams 2026-05-11 review: 4 rule-opaque + 8 rule-matchable.
+	if opaqueCount != 4 {
+		t.Errorf("rule-opaque count = %d, want 4 (title, snippet, text, source_query)", opaqueCount)
+	}
+	if matchableCount != 8 {
+		t.Errorf("rule-matchable count = %d, want 8 (url, observed_at, fetched_at, observed_by, fetched_by, content_type, status_code, truncated)", matchableCount)
 	}
 }
