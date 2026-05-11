@@ -255,8 +255,11 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 
 	// Apply provider-specific message normalization (e.g., Gemini requires a
 	// non-empty name on tool results and non-empty content on assistant tool_call messages).
+	// ADR-037 chunk 6: the adapter speaks wire types; round-trip at this seam
+	// until the wire-native client path lands.
 	adapter := c.getAdapter()
-	messages = adapter.NormalizeMessages(messages)
+	wireMessages := adapter.NormalizeMessages(sdkMessagesToWire(messages))
+	messages = wireMessagesToSDK(wireMessages)
 
 	chatReq := openai.ChatCompletionRequest{
 		Model:    c.endpoint.Model,
@@ -280,8 +283,14 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 
 	c.applyResponseFormat(&chatReq, req)
 
-	// Apply provider-specific request normalization.
-	adapter.NormalizeRequest(&chatReq)
+	// Apply provider-specific request normalization. ADR-037 chunk 6:
+	// adapter operates on wire types; round-trip the relevant SDK fields
+	// for adapter inspection and copy back any mutations. Today all
+	// adapters are no-op on NormalizeRequest; chunk 8 wires the Gemini
+	// thought_signature Extras carrier through this seam.
+	wireReq := sdkRequestToWire(&chatReq)
+	adapter.NormalizeRequest(&wireReq)
+	applyWireRequestToSDK(wireReq, &chatReq)
 
 	// Convert tools if present. Strict is forwarded to the SDK's native
 	// FunctionDefinition.Strict field (go-openai v1.41+); adapters that
@@ -607,7 +616,12 @@ func (c *Client) streamChatCompletion(ctx context.Context, chatReq openai.ChatCo
 // model-family quirk, not a provider quirk — qwen3-via-Ollama (generic
 // adapter) and qwen3-via-OpenAI-compat (openai adapter) both emit it.
 func (c *Client) convertResponse(resp openai.ChatCompletionResponse, requestID string) agentic.AgentResponse {
-	c.getAdapter().NormalizeResponse(&resp)
+	// ADR-037 chunk 6: NormalizeResponse operates on wire types; round-trip
+	// so adapters can begin extracting provider blobs (chunk 8 Gemini
+	// thought_signature is the first non-no-op consumer).
+	wireResp := sdkResponseToWire(&resp)
+	c.getAdapter().NormalizeResponse(&wireResp)
+	applyWireResponseToSDK(wireResp, &resp)
 	extractThinkBlocksFromResponse(&resp)
 
 	response := agentic.AgentResponse{

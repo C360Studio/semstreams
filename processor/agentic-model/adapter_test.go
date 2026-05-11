@@ -3,9 +3,15 @@ package agenticmodel_test
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/model/wire"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
-	openai "github.com/sashabaranov/go-openai"
 )
+
+// contentOf returns the message's string content, or "" if not a string.
+func contentOf(m wire.Message) string {
+	s, _ := m.ContentString()
+	return s
+}
 
 // --- AdapterFor ---
 
@@ -46,7 +52,7 @@ func TestAdapterFor_Empty(t *testing.T) {
 
 func TestGeminiAdapter_NormalizeMessages_ToolNameFallback(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("gemini")
-	messages := []openai.ChatCompletionMessage{
+	messages := []wire.Message{
 		{Role: "tool", ToolCallID: "call-1", Name: ""},
 		{Role: "tool", ToolCallID: "call-2", Name: "read_file"},
 	}
@@ -63,43 +69,34 @@ func TestGeminiAdapter_NormalizeMessages_ToolNameFallback(t *testing.T) {
 
 func TestGeminiAdapter_NormalizeMessages_AssistantContentFallback(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("gemini")
-	messages := []openai.ChatCompletionMessage{
+	messages := []wire.Message{
 		{
 			Role:      "assistant",
-			Content:   "",
-			ToolCalls: []openai.ToolCall{{ID: "call-1"}},
+			ToolCalls: []wire.ToolCall{{ID: "call-1"}},
 		},
-		{
-			Role:      "assistant",
-			Content:   "existing",
-			ToolCalls: []openai.ToolCall{{ID: "call-2"}},
-		},
-		{
-			Role:    "assistant",
-			Content: "",
-			// No tool calls — should NOT get space
-		},
+		mustAssistantToolCall("existing", "call-2"),
+		{Role: "assistant"}, // No tool calls — should NOT get space
 	}
 
 	result := adapter.NormalizeMessages(messages)
 
-	if result[0].Content != " " {
-		t.Errorf("empty content with tool_calls → %q, want space", result[0].Content)
+	if contentOf(result[0]) != " " {
+		t.Errorf("empty content with tool_calls → %q, want space", contentOf(result[0]))
 	}
-	if result[1].Content != "existing" {
-		t.Errorf("existing content → %q, want existing", result[1].Content)
+	if contentOf(result[1]) != "existing" {
+		t.Errorf("existing content → %q, want existing", contentOf(result[1]))
 	}
-	if result[2].Content != "" {
-		t.Errorf("no tool_calls, empty content → %q, want empty", result[2].Content)
+	if s, ok := result[2].ContentString(); ok && s != "" {
+		t.Errorf("no tool_calls, empty content → %q, want empty", s)
 	}
 }
 
 func TestGenericAdapter_NormalizeMessages_SameAsGemini(t *testing.T) {
 	// Generic adapter applies the same safe normalizations
 	adapter := agenticmodel.AdapterFor("")
-	messages := []openai.ChatCompletionMessage{
+	messages := []wire.Message{
 		{Role: "tool", ToolCallID: "call-1", Name: ""},
-		{Role: "assistant", Content: "", ToolCalls: []openai.ToolCall{{ID: "call-1"}}},
+		{Role: "assistant", ToolCalls: []wire.ToolCall{{ID: "call-1"}}},
 	}
 
 	result := adapter.NormalizeMessages(messages)
@@ -107,44 +104,44 @@ func TestGenericAdapter_NormalizeMessages_SameAsGemini(t *testing.T) {
 	if result[0].Name != "unknown_tool" {
 		t.Errorf("generic: empty tool name → %q, want unknown_tool", result[0].Name)
 	}
-	if result[1].Content != " " {
-		t.Errorf("generic: empty assistant content with tool_calls → %q, want space", result[1].Content)
+	if contentOf(result[1]) != " " {
+		t.Errorf("generic: empty assistant content with tool_calls → %q, want space", contentOf(result[1]))
 	}
 }
 
 func TestGenericAdapter_NormalizeMessages_CollapsesConsecutiveSameRole(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("")
-	messages := []openai.ChatCompletionMessage{
+	messages := mustWireMessages([]roleContent{
 		{Role: "system", Content: "rule one"},
 		{Role: "system", Content: "rule two"},
 		{Role: "user", Content: "hi"},
 		{Role: "user", Content: "are you there?"},
 		{Role: "assistant", Content: "yes"},
-	}
+	})
 
 	result := adapter.NormalizeMessages(messages)
 
 	if len(result) != 3 {
 		t.Fatalf("expected 3 messages after collapse, got %d", len(result))
 	}
-	if result[0].Role != "system" || result[0].Content != "rule one\n\nrule two" {
-		t.Errorf("merged system → role=%q content=%q", result[0].Role, result[0].Content)
+	if result[0].Role != "system" || contentOf(result[0]) != "rule one\n\nrule two" {
+		t.Errorf("merged system → role=%q content=%q", result[0].Role, contentOf(result[0]))
 	}
-	if result[1].Role != "user" || result[1].Content != "hi\n\nare you there?" {
-		t.Errorf("merged user → role=%q content=%q", result[1].Role, result[1].Content)
+	if result[1].Role != "user" || contentOf(result[1]) != "hi\n\nare you there?" {
+		t.Errorf("merged user → role=%q content=%q", result[1].Role, contentOf(result[1]))
 	}
-	if result[2].Role != "assistant" || result[2].Content != "yes" {
-		t.Errorf("standalone assistant → role=%q content=%q", result[2].Role, result[2].Content)
+	if result[2].Role != "assistant" || contentOf(result[2]) != "yes" {
+		t.Errorf("standalone assistant → role=%q content=%q", result[2].Role, contentOf(result[2]))
 	}
 }
 
 func TestGenericAdapter_NormalizeMessages_PreservesToolPairs(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("")
-	messages := []openai.ChatCompletionMessage{
-		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call-1"}}},
-		{Role: "assistant", ToolCalls: []openai.ToolCall{{ID: "call-2"}}},
-		{Role: "tool", ToolCallID: "call-1", Name: "read_file", Content: "result one"},
-		{Role: "tool", ToolCallID: "call-2", Name: "read_file", Content: "result two"},
+	messages := []wire.Message{
+		{Role: "assistant", ToolCalls: []wire.ToolCall{{ID: "call-1"}}},
+		{Role: "assistant", ToolCalls: []wire.ToolCall{{ID: "call-2"}}},
+		mustToolResult("call-1", "read_file", "result one"),
+		mustToolResult("call-2", "read_file", "result two"),
 	}
 
 	result := adapter.NormalizeMessages(messages)
@@ -165,31 +162,31 @@ func TestGenericAdapter_NormalizeMessages_PreservesToolPairs(t *testing.T) {
 
 func TestGenericAdapter_NormalizeMessages_MergesEmptyContent(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("")
-	messages := []openai.ChatCompletionMessage{
+	messages := mustWireMessages([]roleContent{
 		{Role: "user", Content: ""},
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi"},
 		{Role: "assistant", Content: ""},
-	}
+	})
 
 	result := adapter.NormalizeMessages(messages)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(result))
 	}
-	if result[0].Content != "hello" {
-		t.Errorf("empty + nonempty user → %q, want %q", result[0].Content, "hello")
+	if contentOf(result[0]) != "hello" {
+		t.Errorf("empty + nonempty user → %q, want %q", contentOf(result[0]), "hello")
 	}
-	if result[1].Content != "hi" {
-		t.Errorf("nonempty + empty assistant → %q, want %q", result[1].Content, "hi")
+	if contentOf(result[1]) != "hi" {
+		t.Errorf("nonempty + empty assistant → %q, want %q", contentOf(result[1]), "hi")
 	}
 }
 
 func TestOpenAIAdapter_NormalizeMessages_NoChanges(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("openai")
-	messages := []openai.ChatCompletionMessage{
+	messages := []wire.Message{
 		{Role: "tool", ToolCallID: "call-1", Name: ""},
-		{Role: "assistant", Content: "", ToolCalls: []openai.ToolCall{{ID: "call-1"}}},
+		{Role: "assistant", ToolCalls: []wire.ToolCall{{ID: "call-1"}}},
 	}
 
 	result := adapter.NormalizeMessages(messages)
@@ -198,8 +195,8 @@ func TestOpenAIAdapter_NormalizeMessages_NoChanges(t *testing.T) {
 	if result[0].Name != "" {
 		t.Errorf("openai: tool name should be unchanged, got %q", result[0].Name)
 	}
-	if result[1].Content != "" {
-		t.Errorf("openai: content should be unchanged, got %q", result[1].Content)
+	if s, ok := result[1].ContentString(); ok && s != "" {
+		t.Errorf("openai: content should be unchanged, got %q", s)
 	}
 }
 
@@ -208,7 +205,7 @@ func TestOpenAIAdapter_NormalizeMessages_NoChanges(t *testing.T) {
 func TestGeminiAdapter_NormalizeStreamDelta_WithExplicitIndex(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("gemini")
 	idx := 3
-	tc := openai.ToolCall{Index: &idx, ID: "call-1"}
+	tc := wire.ToolCall{Index: &idx, ID: "call-1"}
 
 	got := adapter.NormalizeStreamDelta(tc, 0)
 	if got != 3 {
@@ -218,7 +215,7 @@ func TestGeminiAdapter_NormalizeStreamDelta_WithExplicitIndex(t *testing.T) {
 
 func TestGeminiAdapter_NormalizeStreamDelta_NewToolCall(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("gemini")
-	tc := openai.ToolCall{ID: "call-new"} // no index
+	tc := wire.ToolCall{ID: "call-new"} // no index
 
 	got := adapter.NormalizeStreamDelta(tc, 2)
 	if got != -1 {
@@ -228,7 +225,7 @@ func TestGeminiAdapter_NormalizeStreamDelta_NewToolCall(t *testing.T) {
 
 func TestGeminiAdapter_NormalizeStreamDelta_Continuation(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("gemini")
-	tc := openai.ToolCall{} // no index, no ID
+	tc := wire.ToolCall{} // no index, no ID
 
 	got := adapter.NormalizeStreamDelta(tc, 5)
 	if got != 5 {
@@ -239,7 +236,7 @@ func TestGeminiAdapter_NormalizeStreamDelta_Continuation(t *testing.T) {
 func TestOpenAIAdapter_NormalizeStreamDelta_AlwaysExplicit(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("openai")
 	idx := 2
-	tc := openai.ToolCall{Index: &idx, ID: "call-1"}
+	tc := wire.ToolCall{Index: &idx, ID: "call-1"}
 
 	got := adapter.NormalizeStreamDelta(tc, 0)
 	if got != 2 {
@@ -249,10 +246,40 @@ func TestOpenAIAdapter_NormalizeStreamDelta_AlwaysExplicit(t *testing.T) {
 
 func TestOpenAIAdapter_NormalizeStreamDelta_MissingIndex(t *testing.T) {
 	adapter := agenticmodel.AdapterFor("openai")
-	tc := openai.ToolCall{ID: "call-1"} // no index (shouldn't happen with OpenAI)
+	tc := wire.ToolCall{ID: "call-1"} // no index (shouldn't happen with OpenAI)
 
 	got := adapter.NormalizeStreamDelta(tc, 0)
 	if got != 0 {
 		t.Errorf("openai missing index → %d, want 0 (safe default)", got)
 	}
+}
+
+// mustAssistantToolCall is a fixture helper for assistant messages with both
+// content and tool_calls.
+func mustAssistantToolCall(content, toolCallID string) wire.Message {
+	m := wire.Message{
+		Role:      "assistant",
+		ToolCalls: []wire.ToolCall{{ID: toolCallID}},
+	}
+	if content != "" {
+		if err := m.SetContentString(content); err != nil {
+			panic(err)
+		}
+	}
+	return m
+}
+
+// mustToolResult is a fixture helper for tool-result messages.
+func mustToolResult(toolCallID, name, content string) wire.Message {
+	m := wire.Message{
+		Role:       "tool",
+		ToolCallID: toolCallID,
+		Name:       name,
+	}
+	if content != "" {
+		if err := m.SetContentString(content); err != nil {
+			panic(err)
+		}
+	}
+	return m
 }

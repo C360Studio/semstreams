@@ -251,6 +251,10 @@ func (a *streamAccumulator) flushPending() {
 // Delegates to the provider adapter for quirk-specific index inference.
 // A return value of -1 from the adapter is a sentinel meaning "allocate
 // the next available index", which is resolved here via nextToolIndex.
+//
+// ADR-037 chunk 6: adapter speaks wire types; translate the single SDK
+// ToolCall at this seam. The wire-native streaming path (chunk 7+) will
+// call NormalizeStreamDelta directly without translation.
 func (a *streamAccumulator) inferToolIndex(tc openai.ToolCall) int {
 	var adapter ProviderAdapter
 	if a.adapter != nil {
@@ -259,7 +263,7 @@ func (a *streamAccumulator) inferToolIndex(tc openai.ToolCall) int {
 		adapter = defaultAdapter
 	}
 
-	idx := adapter.NormalizeStreamDelta(tc, a.lastToolIndex)
+	idx := adapter.NormalizeStreamDelta(sdkToolCallToWire(tc), a.lastToolIndex)
 	if idx == -1 {
 		return a.nextToolIndex()
 	}
