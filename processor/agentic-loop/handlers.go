@@ -1837,6 +1837,20 @@ func hasUserOrAssistantMessage(messages []agentic.ChatMessage) bool {
 // buildToolMessages converts tool results into ChatMessages for the conversation context.
 // Falls back to Error when Content is empty — Gemini rejects tool result messages
 // with no content (400 INVALID_ARGUMENT).
+//
+// Decoration order, when ResultHint and pagination metadata are present:
+//  1. base content (Content or formatted Error fallback or "(empty result)")
+//  2. hint preamble prepended (decorateContentWithHint) — top of message,
+//     so small/mid-tier models pick up the structured cue first
+//  3. pagination continuation appended (decorateContentWithPagination) —
+//     bottom of message, immediately before the next-turn boundary so
+//     the model has the continuation token in close proximity to its
+//     own response decision
+//
+// Composes with the ApprovalRequiredPrefix in-band signaling pattern
+// (which fires before this function via gateForApproval in
+// HandleToolResult). New executors should prefer ResultHint over
+// magic-string sniffing.
 func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agentic.ChatMessage {
 	messages := make([]agentic.ChatMessage, len(results))
 	for i, r := range results {
@@ -1848,6 +1862,8 @@ func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agent
 		if content == "" {
 			content = "(empty result)"
 		}
+		content = decorateContentWithHint(content, r.ResultHint)
+		content = decorateContentWithPagination(content, r.Metadata)
 		name := r.Name
 		if name == "" {
 			name = h.loopManager.GetToolName(r.CallID)

@@ -39,6 +39,23 @@ type ToolDefinition struct {
 	// non-conforming schema returns 400 from the upstream — caller bug,
 	// not a framework concern.
 	Strict bool `json:"strict,omitempty"`
+
+	// Paginated declares that this tool supports continuation paging via
+	// the agentic.MetadataKey{HasMore,NextOffset,NextCursor} contract.
+	// When true, the executor MUST set MetadataKeyHasMore on every
+	// successful result (bool false for last page, bool true with one
+	// of NextOffset or NextCursor for intermediate pages). The agent
+	// loop reads has_more in buildToolMessages and appends a canonical
+	// continuation hint to the model's next message — telling the
+	// model it can call the same tool again with the supplied
+	// continuation token instead of having to re-narrow blind.
+	//
+	// Informational at the wire level today: the loop branches on the
+	// actual has_more value in result metadata, not on this flag. Future
+	// uses include operator introspection ("which tools paginate?") and
+	// loop-side contract-violation warnings when has_more arrives from
+	// a tool that didn't declare Paginated.
+	Paginated bool `json:"paginated,omitempty"`
 }
 
 // Validate checks if the ToolDefinition is valid
@@ -229,17 +246,118 @@ const (
 	ToolErrorUnknown ToolErrorKind = "unknown"
 )
 
+// ToolResultHint classifies non-error conditions on a SUCCESSFUL tool
+// call where the agent should refine its approach before continuing.
+// It is the structured sibling of ToolErrorKind: ErrorKind classifies
+// errors (the tool failed), Hint classifies successes that returned
+// data the agent should treat as a signal to adjust.
+//
+// Distinct from ToolErrorKind because the call worked — there's
+// nothing to "retry" in the failure sense. The cases are advisory:
+// the model should narrow, broaden, or introspect on the next turn.
+// The agent loop reads Hint in buildToolMessages and prepends a
+// canonical hint line to the model's next message so small/mid-tier
+// models don't have to parse free-form English advice from a
+// successful result body.
+//
+// Pre-2026-05-11, the only in-band signaling pattern was
+// ApprovalRequiredPrefix — a stringly-typed magic-string sniffed off
+// the Error field. ResultHint replaces that pattern's spirit with a
+// typed enum: producers set it directly; consumers branch on the
+// typed value.
+type ToolResultHint string
+
+const (
+	// HintTooLarge means the call returned more data than the executor
+	// or framework permitted and the content was truncated (or the
+	// raw response would have exceeded an internal cap). Action: the
+	// model should narrow its query — add a filter, an entity_id, or
+	// a smaller limit. Composes with the pagination contract
+	// (MetadataKeyHasMore) when both are set: the model gets BOTH
+	// "narrow your query" AND "or continue with cursor=..." in one
+	// shot.
+	HintTooLarge ToolResultHint = "too_large"
+
+	// HintEmpty means the call succeeded with an empty result set
+	// (no entities matched the filter, search returned zero hits).
+	// Action: the model should try a broader filter, drop one of
+	// the predicates, or invoke a different tool to find candidate
+	// entities. Distinct from ToolErrorNotFound — empty results
+	// from a well-formed query is not an error.
+	HintEmpty ToolResultHint = "empty"
+
+	// HintSyntaxError means the tool's query-language parser
+	// rejected the request. Distinct from ToolErrorInvalidArgs —
+	// InvalidArgs is the AGENT's arguments failing JSON-schema
+	// validation at the framework boundary; SyntaxError is the
+	// TOOL's deeper parse of the argument content (e.g. the
+	// graph-query DSL itself rejecting a malformed expression).
+	// Action: the model should call an introspect/help facility
+	// on the tool before retrying with the same shape.
+	HintSyntaxError ToolResultHint = "syntax_error"
+)
+
+// MetadataKeyHasMore is the ToolResult.Metadata key set to a bool true
+// when more pages of results remain after the current call. Always set
+// when an executor opts into pagination (ToolDefinition.Paginated=true);
+// absence on a paginated tool's result is a contract violation worth
+// a Warn log. Mutually paired with either MetadataKeyNextOffset (for
+// byte/index-based paging) or MetadataKeyNextCursor (for opaque-keyset
+// paging) — never both.
+//
+// The agent loop reads this in buildToolMessages and appends a
+// canonical continuation hint to the model's next message so the
+// model knows it can call the same tool again with the supplied
+// continuation token, instead of having to re-narrow blind.
+//
+// Names are unprefixed because they're the canonical wire shape
+// read_loop_result has already shipped under (semspec is already
+// integrated against these strings). Lifting the existing names into
+// constants is the contract semspec asked for — promotion, not
+// rename.
+const MetadataKeyHasMore = "has_more"
+
+// MetadataKeyNextOffset is the ToolResult.Metadata key carrying the
+// byte/index offset to pass back on the next call to continue paging.
+// Use for offset-stable result sources where bytes-from-the-start
+// is meaningful (read_loop_result's byte-paging of a single string
+// is the canonical example). Mutually exclusive with NextCursor.
+const MetadataKeyNextOffset = "next_offset"
+
+// MetadataKeyNextCursor is the ToolResult.Metadata key carrying an
+// opaque server-format-controlled cursor token to pass back on the
+// next call. Use for keyset-paginated result SETS where there is no
+// natural byte offset (graph_search-style result iteration). The
+// agent must never inspect or modify the cursor — server owns the
+// format, so the backend can change encoding without breaking
+// in-flight pagination. Mutually exclusive with NextOffset.
+const MetadataKeyNextCursor = "next_cursor"
+
+// MetadataKeyTotalBytes is the OPTIONAL ToolResult.Metadata key
+// carrying the total result count, when the executor can compute it
+// cheaply (no expensive secondary round-trip). Useful for UIs that
+// want progress bars; not load-bearing for the agent. Absent when
+// the executor can't compute it without extra work.
+//
+// Named `total_bytes` rather than `total_available` to match the
+// existing read_loop_result wire — promotion of the shipped shape,
+// not rename. Executors with non-byte units can set their own
+// unit-specific key and document it; this one is reserved for
+// byte-paging consistency.
+const MetadataKeyTotalBytes = "total_bytes"
+
 // ToolResult represents the result of a tool call
 type ToolResult struct {
-	CallID    string         `json:"call_id"`
-	Name      string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
-	Content   string         `json:"content,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	ErrorKind ToolErrorKind  `json:"error_kind,omitempty"` // Structured classification of the failure
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	LoopID    string         `json:"loop_id,omitempty"`
-	TraceID   string         `json:"trace_id,omitempty"`
-	StopLoop  bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
+	CallID     string         `json:"call_id"`
+	Name       string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
+	Content    string         `json:"content,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	ErrorKind  ToolErrorKind  `json:"error_kind,omitempty"`  // Structured classification of the failure
+	ResultHint ToolResultHint `json:"result_hint,omitempty"` // Structured action recommendation when call worked but agent should refine
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	LoopID     string         `json:"loop_id,omitempty"`
+	TraceID    string         `json:"trace_id,omitempty"`
+	StopLoop   bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
 }
 
 // Validate checks if the ToolResult is valid

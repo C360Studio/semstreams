@@ -51,11 +51,18 @@ func NewReadLoopResultExecutor(kv LoopsKVReader) *ReadLoopResultExecutor {
 }
 
 // ListTools describes the read_loop_result tool.
+//
+// Paginated: true declares this tool follows the canonical pagination
+// contract (agentic.MetadataKeyHasMore + MetadataKeyNextOffset). The
+// agent loop reads has_more in buildToolMessages and appends a
+// continuation hint to the model's next message when more pages
+// remain; the executor sets the metadata fields in readLoopResult.
 func (e *ReadLoopResultExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
 			Name:        ReadLoopResultToolName,
 			Description: "Fetch the final Result text a previously completed agent loop produced, so this agent can react to or build on it without having the full content injected into its prompt. Returns a text slice plus role/outcome/completed_at metadata and total_bytes so the caller can page through long results by calling again with a different offset.",
+			Paginated:   true,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -139,16 +146,16 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 		CallID:  call.ID,
 		Content: slice,
 		Metadata: map[string]any{
-			"loop_id":        loopID,
-			"role":           event.Role,
-			"outcome":        event.Outcome,
-			"completed_at":   event.CompletedAt,
-			"total_bytes":    total,
-			"returned_bytes": len(slice),
-			"offset":         start,
-			"has_more":       end < total,
-			"next_offset":    end,
-			"task_id":        event.TaskID,
+			"loop_id":                     loopID,
+			"role":                        event.Role,
+			"outcome":                     event.Outcome,
+			"completed_at":                event.CompletedAt,
+			"returned_bytes":              len(slice),
+			"offset":                      start,
+			"task_id":                     event.TaskID,
+			agentic.MetadataKeyHasMore:    end < total,
+			agentic.MetadataKeyNextOffset: end,
+			agentic.MetadataKeyTotalBytes: total,
 		},
 	}, nil
 }
