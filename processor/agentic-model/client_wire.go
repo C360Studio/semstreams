@@ -109,6 +109,7 @@ func (c *Client) buildWireRequest(req agentic.AgentRequest) wire.ChatCompletionR
 	}
 
 	adapter.NormalizeRequest(&chatReq)
+	stripC360KeysFromRequest(&chatReq)
 	return chatReq
 }
 
@@ -150,9 +151,31 @@ func agenticToolCallsToWire(in []agentic.ToolCall) []wire.ToolCall {
 				Arguments: string(argsJSON),
 			},
 		}
+		// Carry the Gemini thought_signature through the wire layer
+		// under a framework-internal key (c360_thought_signature).
+		// GeminiAdapter.NormalizeMessages reconstructs the actual
+		// extra_content shape Gemini expects; the buildWireRequest
+		// hygiene step strips any remaining c360_* keys on send.
+		if sig, ok := tc.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); ok && sig != "" {
+			if out[j].Extras == nil {
+				out[j].Extras = make(map[string]json.RawMessage, 1)
+			}
+			if b, err := json.Marshal(sig); err == nil {
+				out[j].Extras[wireKeyC360ThoughtSignature] = b
+			}
+		}
 	}
 	return out
 }
+
+// wireKeyC360ThoughtSignature is the framework-internal carrier key on
+// wire.ToolCall.Extras that bridges agentic.ToolCall.Metadata across
+// the wire layer until the provider adapter reshapes it.
+const wireKeyC360ThoughtSignature = "c360_thought_signature"
+
+// wireKeyExtraContent is the Gemini-shape key for the per-tool_call
+// extra fields, including google.thought_signature.
+const wireKeyExtraContent = "extra_content"
 
 func agenticToolsToWire(in []agentic.ToolDefinition) []wire.Tool {
 	out := make([]wire.Tool, len(in))
@@ -298,6 +321,12 @@ func (c *Client) convertWireResponse(resp *wire.ChatCompletionResponse, requestI
 				Name:      tc.Function.Name,
 				Arguments: args,
 			}
+			if sig := readC360ThoughtSignature(tc); sig != "" {
+				if toolCalls[i].Metadata == nil {
+					toolCalls[i].Metadata = make(map[string]any, 1)
+				}
+				toolCalls[i].Metadata[agentic.MetadataKeyGoogleThoughtSignature] = sig
+			}
 		}
 		response.Message.ToolCalls = toolCalls
 	}
@@ -434,4 +463,36 @@ func isRateLimitedAny(err error) bool {
 		return true
 	}
 	return isRateLimited(err)
+}
+
+// readC360ThoughtSignature reads the framework-internal carrier key
+// from a wire.ToolCall.Extras. Returns "" if absent or non-string.
+// Called by convertWireResponse to lift the signature into
+// agentic.ToolCall.Metadata for cross-turn propagation.
+func readC360ThoughtSignature(tc wire.ToolCall) string {
+	raw, ok := tc.Extras[wireKeyC360ThoughtSignature]
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
+// stripC360KeysFromRequest drops any framework-internal carrier keys
+// from a wire request that the adapter chain didn't consume. Defense
+// in depth: if a Gemini-sourced thought_signature flows into a
+// non-Gemini endpoint (e.g. cross-model fallback), the carrier is
+// silently stripped rather than escaping into the request body.
+func stripC360KeysFromRequest(req *wire.ChatCompletionRequest) {
+	if req == nil {
+		return
+	}
+	for i := range req.Messages {
+		for j := range req.Messages[i].ToolCalls {
+			delete(req.Messages[i].ToolCalls[j].Extras, wireKeyC360ThoughtSignature)
+		}
+	}
 }

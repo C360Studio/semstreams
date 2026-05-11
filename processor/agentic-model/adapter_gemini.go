@@ -1,26 +1,55 @@
 package agenticmodel
 
-import "github.com/c360studio/semstreams/model/wire"
+import (
+	"encoding/json"
+
+	"github.com/c360studio/semstreams/model/wire"
+)
 
 // GeminiAdapter normalizes payloads for Google's Gemini OpenAI-compatible endpoint.
 // Gemini's endpoint is broadly compatible but has several quirks that cause 400 errors.
+//
+// As of ADR-037 chunk 8, GeminiAdapter is Extras-aware for the Gemini
+// 3.x preview thought_signature flow:
+//   - NormalizeResponse extracts each tool_call's
+//     extra_content.google.thought_signature into the framework-internal
+//     carrier key wire.ToolCall.Extras[wireKeyC360ThoughtSignature]
+//     for convertWireResponse to lift into agentic.ToolCall.Metadata.
+//   - NormalizeMessages reconstructs the extra_content shape on the
+//     outgoing wire ToolCall for the FIRST tool_call per assistant
+//     message (Gemini's "first call per step" contract).
+//
+// The adapter only runs when endpoint.Provider == "gemini" (gated by
+// AdapterFor). Non-Gemini paths leave the carrier untouched; the
+// stripC360KeysFromRequest hygiene step in buildWireRequest removes it
+// before send to avoid leaking the framework-internal key.
 type GeminiAdapter struct{}
 
 // Name returns "gemini".
 func (a *GeminiAdapter) Name() string { return "gemini" }
 
-// NormalizeRequest is a no-op for Gemini in chunk 6; chunk 8 wires the
-// thought_signature Extras carrier for Gemini 3.x preview models.
+// NormalizeRequest is a no-op for Gemini today. NormalizeMessages owns
+// the thought_signature reconstruction so it runs per-message during
+// request building.
 func (a *GeminiAdapter) NormalizeRequest(_ *wire.ChatCompletionRequest) {}
 
-// NormalizeMessages fixes two Gemini-specific message constraints:
+// NormalizeMessages fixes Gemini-specific message constraints and
+// reconstructs the per-tool_call thought_signature shape on outgoing
+// assistant messages:
 //
 //  1. Tool result messages require a non-empty name field.
 //     Without it: 400 INVALID_ARGUMENT: function_response.name cannot be empty.
 //
 //  2. Assistant messages with tool_calls require a non-empty content field.
 //     Gemini rejects a completely absent content — single space is the
-//     conventional workaround (used by LiteLLM, OpenAI proxy, etc.).
+//     conventional workaround.
+//
+//  3. Assistant messages with the framework-internal
+//     wireKeyC360ThoughtSignature carrier on their tool_calls get the
+//     Gemini-shape extra_content reconstructed. Only the FIRST tool_call
+//     per message carries the signature (Gemini 3.x contract — subsequent
+//     calls in the same step inherit). The carrier key is deleted in place
+//     to avoid double-send.
 func (a *GeminiAdapter) NormalizeMessages(messages []wire.Message) []wire.Message {
 	for i := range messages {
 		if messages[i].Role == "tool" && messages[i].Name == "" {
@@ -31,9 +60,56 @@ func (a *GeminiAdapter) NormalizeMessages(messages []wire.Message) []wire.Messag
 			if !ok || s == "" {
 				_ = messages[i].SetContentString(" ")
 			}
+			rebuildGeminiThoughtSignature(&messages[i])
 		}
 	}
 	return messages
+}
+
+// rebuildGeminiThoughtSignature walks an assistant message's tool_calls
+// and converts the framework-internal carrier on the FIRST tool_call
+// (only) into Gemini's extra_content.google.thought_signature shape.
+// Subsequent tool_calls in the same message have their carrier
+// stripped — per Gemini's "first call per step" rule, sending the
+// signature on every tool_call duplicates information and risks
+// rejection on a strict-mode preview build.
+func rebuildGeminiThoughtSignature(msg *wire.Message) {
+	if msg == nil {
+		return
+	}
+	firstHandled := false
+	for j := range msg.ToolCalls {
+		tc := &msg.ToolCalls[j]
+		rawSig, ok := tc.Extras[wireKeyC360ThoughtSignature]
+		if !ok {
+			continue
+		}
+		if firstHandled {
+			delete(tc.Extras, wireKeyC360ThoughtSignature)
+			continue
+		}
+		var sig string
+		if err := json.Unmarshal(rawSig, &sig); err != nil || sig == "" {
+			delete(tc.Extras, wireKeyC360ThoughtSignature)
+			continue
+		}
+		// Build extra_content = {"google": {"thought_signature": "<sig>"}}.
+		// Use a typed builder to avoid hand-marshaling nested maps —
+		// matches Gemini's documented shape exactly.
+		extra := map[string]any{
+			"google": map[string]any{
+				"thought_signature": sig,
+			},
+		}
+		if b, err := json.Marshal(extra); err == nil {
+			if tc.Extras == nil {
+				tc.Extras = make(map[string]json.RawMessage, 1)
+			}
+			tc.Extras[wireKeyExtraContent] = b
+		}
+		delete(tc.Extras, wireKeyC360ThoughtSignature)
+		firstHandled = true
+	}
 }
 
 // NormalizeStreamDelta infers the tool call index when Gemini omits it.
@@ -46,12 +122,67 @@ func (a *GeminiAdapter) NormalizeStreamDelta(delta wire.ToolCall, lastIndex int)
 		return *delta.Index
 	}
 	if delta.ID != "" {
-		// New tool call — signal the accumulator to allocate the next index.
 		return -1
 	}
 	return lastIndex
 }
 
-// NormalizeResponse is a no-op for Gemini in chunk 6. Chunk 8 wires the
-// thought_signature capture from Extras into agentic.ToolCall.Metadata.
-func (a *GeminiAdapter) NormalizeResponse(_ *wire.ChatCompletionResponse) {}
+// NormalizeResponse extracts the per-tool_call thought_signature from
+// Gemini's extra_content.google.thought_signature shape into the
+// framework-internal carrier key wireKeyC360ThoughtSignature. The
+// generic convertWireResponse then lifts the carrier into
+// agentic.ToolCall.Metadata under MetadataKeyGoogleThoughtSignature so
+// the signature flows across loop turns without Gemini-specific code
+// in the agentic layer.
+//
+// Safe to call universally — adapters that don't see extra_content
+// (every non-Gemini provider) read no carrier and write nothing.
+func (a *GeminiAdapter) NormalizeResponse(resp *wire.ChatCompletionResponse) {
+	if resp == nil {
+		return
+	}
+	for ci := range resp.Choices {
+		msg := resp.Choices[ci].Message
+		if msg == nil {
+			continue
+		}
+		for ti := range msg.ToolCalls {
+			extractGeminiThoughtSignature(&msg.ToolCalls[ti])
+		}
+	}
+}
+
+// extractGeminiThoughtSignature reads extra_content.google.thought_signature
+// from a wire.ToolCall.Extras and writes the value into the
+// framework-internal carrier key. Logging is intentionally absent here —
+// the absence of a signature on a non-3.x preview Gemini response is
+// the common case, not a warning condition.
+func extractGeminiThoughtSignature(tc *wire.ToolCall) {
+	if tc == nil {
+		return
+	}
+	rawExtra, ok := tc.Extras[wireKeyExtraContent]
+	if !ok {
+		return
+	}
+	var shape struct {
+		Google struct {
+			ThoughtSignature string `json:"thought_signature"`
+		} `json:"google"`
+	}
+	if err := json.Unmarshal(rawExtra, &shape); err != nil {
+		return
+	}
+	sig := shape.Google.ThoughtSignature
+	if sig == "" {
+		return
+	}
+	b, err := json.Marshal(sig)
+	if err != nil {
+		return
+	}
+	if tc.Extras == nil {
+		tc.Extras = make(map[string]json.RawMessage, 1)
+	}
+	tc.Extras[wireKeyC360ThoughtSignature] = b
+}
