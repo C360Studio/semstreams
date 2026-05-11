@@ -30,7 +30,31 @@ func Register() {
 	registerStepPredicates()
 	registerIdentityPredicates()
 	registerTodoPredicates()
+	registerScratchPredicates()
 	registerWebPredicates()
+}
+
+// registerScratchPredicates registers predicates for the scratchpad tool
+// (semspec ask 2026-05-12, ADR-036 §Future candidates). ScratchText is
+// rule-opaque per the LLM-authored content discipline; the three
+// structural predicates stay rule-matchable.
+func registerScratchPredicates() {
+	vocabulary.Register(ScratchID,
+		vocabulary.WithDescription("Stable per-call identifier (UUID) correlating the four triples written by one scratchpad call"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(ScratchText,
+		vocabulary.WithDescription("Free-form pre-commit reasoning prose; owner-interpretable only, rule-opaque"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(ScratchCreatedAt,
+		vocabulary.WithDescription("Wall-clock timestamp of the scratchpad call"),
+		vocabulary.WithDataType("time.Time"))
+
+	vocabulary.Register(ScratchChars,
+		vocabulary.WithDescription("Character count of ScratchText; structural fact for size-based dashboards/rules without reading the rule-opaque body"),
+		vocabulary.WithDataType("int"))
 }
 
 // registerTodoPredicates registers predicates for agent-private todo

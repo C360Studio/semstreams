@@ -751,6 +751,60 @@ const (
 	TodoUpdatedAt = "agent.todo.updated_at"
 )
 
+// Scratch Predicates (ADR-036 §Future candidates — agent.scratch.*)
+//
+// Emitted by the scratchpad tool on every call. Append-only on the
+// owning loop entity (NOT full-list-replace like write_todos): each
+// scratchpad call mints a stable scratch.id and lands four triples
+// keyed by it. The agent is the sole writer and sole interpreter of
+// content; rule-opaque flagging on agent.scratch.text mirrors the
+// ADR-036 discipline applied to TodoContent.
+//
+// The semspec ask (2026-05-12, scratchpad proposal) framed this as
+// pre-commit reasoning runway for mid-tier models that struggle under
+// simultaneous strict response_format + strict tool-args. Persona
+// pattern: instruct "scratchpad first, then your commit tool" plus
+// caller-side tool_choice=required on the first dispatch turn.
+//
+// Per-call audit / recovery: scratch entries are queryable via
+// query_relationships on the loop entity for any agent (recovery,
+// debug, ops diagnosis) reconstructing what the model drafted before
+// committing.
+const (
+	// ScratchID is the stable per-call identifier (UUID). Keyed onto
+	// the loop entity so the four triples for one call correlate.
+	// Rule-matchable.
+	// Example: "550e8400-e29b-41d4-a716-446655440000"
+	// DataType: string
+	ScratchID = "agent.scratch.id"
+
+	// ScratchText is the free-form prose the agent emitted. Owner-
+	// interpretable only. Rule-opaque — the rule-validator rejects any
+	// rule whose condition.field names this predicate (LLM-authored
+	// content; rules predicating on it would create Goodhart feedback
+	// loops where agents optimise drafts toward rule triggers).
+	// Example: "I need to handle the case where retry hint is empty…"
+	// DataType: string
+	ScratchText = "agent.scratch.text"
+
+	// ScratchCreatedAt is the wall-clock timestamp of the scratchpad
+	// call. Rule-matchable for ordering (no explicit position predicate
+	// needed; sort by created_at) and for age-based rules.
+	// Example: "2026-05-12T09:15:00Z"
+	// DataType: time.Time
+	ScratchCreatedAt = "agent.scratch.created_at"
+
+	// ScratchChars is the character count of ScratchText. Rule-matchable
+	// structural fact so operators / ops-agent can predicate on size
+	// (e.g. "agent called scratchpad with > 8000 chars" — signal of
+	// a model that's using the channel as a context dump rather than
+	// pre-commit reasoning). Lets dashboards surface size patterns
+	// without needing to read the rule-opaque body.
+	// Example: 245
+	// DataType: int
+	ScratchChars = "agent.scratch.chars"
+)
+
 // Web Predicates
 //
 // Emitted by the web_search and http_request tools when an operator has

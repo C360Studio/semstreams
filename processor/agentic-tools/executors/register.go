@@ -104,6 +104,7 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		track(registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger))
 		track(registerGraphQuery(ctx, reg, deps.NATSClient, logger))
 		track(registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger))
+		track(registerScratchpad(reg, deps.NATSClient, deps.Platform, logger))
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
