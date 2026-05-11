@@ -196,6 +196,33 @@ func TestSummarizeGraphExecutor_WrongName(t *testing.T) {
 	}
 }
 
+// TestSummarizeGraphExecutor_HandlerErrorEnvelope is the H1
+// regression test from the go-reviewer audit. natsclient's
+// SubscribeForRequests wraps handler (nil, err) returns as a body
+// payload of the form `error: <msg>`. The tool MUST detect this
+// before attempting to json.Unmarshal as SummaryData; otherwise a
+// downstream component outage surfaces as a cryptic parse error
+// pointing the LLM at the wrong remediation.
+//
+// See memory feedback_natsclient_error_payload_convention.md — the
+// same shape bit PR #48 twice.
+func TestSummarizeGraphExecutor_HandlerErrorEnvelope(t *testing.T) {
+	// Exact byte shape natsclient.SubscribeForRequests emits when the
+	// handler returns (nil, err).
+	mock := &recordingNATSQuerier{resp: []byte("error: graph-ingest unreachable")}
+	e := NewSummarizeGraphExecutor(mock)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{ID: "c", Name: "summarize_graph"})
+	if err != nil {
+		t.Fatalf("Execute should not return Go err: %v", err)
+	}
+	if res.ErrorKind != agentic.ToolErrorExternal {
+		t.Errorf("ErrorKind = %v, want external (downstream alive, reporting failure)", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "graph-ingest unreachable") {
+		t.Errorf("Error should surface the handler's message verbatim; got %q", res.Error)
+	}
+}
+
 // TestSortedPredicatesByCount_StableTieBreak guards prompt-caching:
 // equal-count predicates must sort alphabetically so repeat summary
 // calls on the same graph produce identical text.

@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,34 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 )
+
+// natsErrorPrefix is the convention natsclient.SubscribeForRequests
+// uses to surface handler-side Go errors back to callers — the
+// response body is `error: <msg>`, NOT a transport-level error.
+// Every NATS Request caller must check for this prefix before
+// attempting to decode the body as the expected response shape,
+// otherwise a downstream component failure surfaces to the LLM as
+// an opaque "parse response" error pointing at the wrong fix.
+//
+// See memory feedback_natsclient_error_payload_convention.md —
+// this convention bit PR #48 twice (todos.go H1 + pathrag.go
+// sister-bug). Every new NATS query caller in this PR follows the
+// same pattern.
+var natsErrorPrefix = []byte("error: ")
+
+// extractNATSHandlerError inspects raw NATS response bytes for the
+// natsclient "error: <msg>" handler-error envelope. Returns
+// (extracted-message, true) when the body matches the convention,
+// otherwise ("", false). Callers should propagate the extracted
+// message as ToolErrorExternal (downstream component is alive but
+// reporting failure) rather than ToolErrorInternal (we can't parse
+// the response).
+func extractNATSHandlerError(data []byte) (string, bool) {
+	if bytes.HasPrefix(data, natsErrorPrefix) {
+		return string(data[len(natsErrorPrefix):]), true
+	}
+	return "", false
+}
 
 const (
 	// summarizeGraphSubject is the NATS subject the graph-query
@@ -142,6 +171,19 @@ func (e *SummarizeGraphExecutor) Execute(ctx context.Context, call agentic.ToolC
 		}, nil
 	}
 
+	// natsclient convention: handler-side Go errors come back in the
+	// body as "error: <msg>" rather than the err return. Check FIRST,
+	// before json.Unmarshal — otherwise downstream failures surface
+	// as opaque "parse response" errors and the LLM tries to fix the
+	// wrong thing. See feedback_natsclient_error_payload_convention.md.
+	if msg, ok := extractNATSHandlerError(respData); ok {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("summarize_graph server error: %s", msg),
+			ErrorKind: agentic.ToolErrorExternal,
+		}, nil
+	}
+
 	var resp graph.QueryResponse[graph.SummaryData]
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return agentic.ToolResult{
@@ -150,6 +192,11 @@ func (e *SummarizeGraphExecutor) Execute(ctx context.Context, call agentic.ToolC
 			ErrorKind: agentic.ToolErrorInternal,
 		}, nil
 	}
+	// Belt-and-suspenders: the server-side handler today always returns
+	// (nil, err) on failure rather than NewQueryError, so resp.Error
+	// is effectively unreachable. Keeping the check guards against a
+	// future refactor that switches the handler to wrapped error
+	// responses without breaking the agent-facing semantics.
 	if resp.Error != "" {
 		return agentic.ToolResult{
 			CallID:    call.ID,

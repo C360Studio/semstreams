@@ -143,6 +143,17 @@ func (e *SearchGraphExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
+	// natsclient convention: handler-side Go errors come back in the
+	// body as "error: <msg>" rather than the err return. Check FIRST.
+	// See feedback_natsclient_error_payload_convention.md.
+	if msg, ok := extractNATSHandlerError(respData); ok {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("search_graph server error: %s", msg),
+			ErrorKind: agentic.ToolErrorExternal,
+		}, nil
+	}
+
 	// The server-side resolver returns a GlobalSearchResponse-shaped
 	// payload directly (NOT wrapped in QueryResponse[T]) per the
 	// existing graph-query convention — see handleSearchGraph in
@@ -194,11 +205,18 @@ func parseSearchGraphArgs(raw map[string]any) (searchGraphArgs, error) {
 
 // searchGraphResponsePayload mirrors the on-wire shape of
 // processor/graph-query.GlobalSearchResponse so the executor can
-// decode + format without taking a dependency on the graph-query
-// package (which would introduce a circular import: agentic-tools →
-// graph-query → … → agentic-tools). The field set is a subset — we
-// only decode what the formatter touches; other fields ride along as
-// json.RawMessage if needed in V2.
+// decode + format without taking a production-side dependency on
+// graph-query (no current cycle, but keeping the executor decoupled
+// from graph-query's internal types preserves freedom for either
+// package to evolve independently). The field set is a deliberate
+// subset — we decode only what formatSearchGraphResponse touches.
+//
+// Drift risk: a future field add to GlobalSearchResponse won't
+// surface here automatically. The
+// TestSearchGraphResponsePayload_DecodesFromRealGlobalSearchResponse
+// round-trip test in search_graph_test.go pins the contract by
+// importing the real type (test-only, no production cycle); any
+// drift on either side trips it immediately.
 type searchGraphResponsePayload struct {
 	Strategy           string                     `json:"strategy,omitempty"`
 	Answer             string                     `json:"answer,omitempty"`

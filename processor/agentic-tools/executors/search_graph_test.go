@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	graphquery "github.com/c360studio/semstreams/processor/graph-query"
 )
 
 func marshalSearchResp(t *testing.T, r searchGraphResponsePayload) []byte {
@@ -92,10 +93,14 @@ func TestSearchGraphExecutor_HappyPath_FormatsAnswer(t *testing.T) {
 
 // TestSearchGraphExecutor_DegradedBannerLeadsResponse is the
 // load-bearing test for the discovery contract: when the server-side
-// fallback fired, the FIRST line of the response must flag it so the
-// reading agent treats the body as advisory. Without this banner an
-// LLM has no idea the rich-looking answer was synthesized from
-// fallback hits.
+// fallback fired, the FIRST non-empty line of the response must flag
+// it so the reading agent treats the body as advisory. Without this
+// banner an LLM has no idea the rich-looking answer was synthesized
+// from fallback hits.
+//
+// The assertion uses the literal first line (split by newline) rather
+// than substring-anywhere matching so we lock in the position
+// invariant, not just the presence. Reviewer L1 nit fix.
 func TestSearchGraphExecutor_DegradedBannerLeadsResponse(t *testing.T) {
 	canned := searchGraphResponsePayload{
 		Strategy:       "semantic_fallback",
@@ -112,8 +117,9 @@ func TestSearchGraphExecutor_DegradedBannerLeadsResponse(t *testing.T) {
 	res, _ := e.Execute(context.Background(), agentic.ToolCall{
 		ID: "c", Name: "search_graph", Arguments: map[string]any{"query": "x"},
 	})
-	if !strings.HasPrefix(res.Content, "⚠") && !strings.HasPrefix(strings.ToLower(res.Content), "warning") && !strings.Contains(strings.ToLower(res.Content)[:200], "degraded") {
-		t.Errorf("degraded banner not at top of response:\n%s", res.Content)
+	firstLine := strings.SplitN(res.Content, "\n", 2)[0]
+	if !strings.Contains(strings.ToLower(firstLine), "degraded") {
+		t.Errorf("degraded banner not the first line; first line = %q\n--- full content ---\n%s", firstLine, res.Content)
 	}
 	// And the reason is surfaced so operators / agents can route on
 	// fallback type.
@@ -122,6 +128,84 @@ func TestSearchGraphExecutor_DegradedBannerLeadsResponse(t *testing.T) {
 	}
 	if res.Metadata["degraded"] != true {
 		t.Errorf("metadata degraded should be true on fallback path")
+	}
+}
+
+// TestSearchGraphResponsePayload_DecodesFromRealGlobalSearchResponse
+// is the M1 regression test from the go-reviewer audit. The agent-
+// tool's response shape is a deliberate SUBSET of
+// processor/graph-query.GlobalSearchResponse — taking a direct
+// dependency on graph-query from agentic-tools would risk a future
+// import cycle. The downside: a future field add to the source-of-
+// truth shape silently won't surface in the agent-tool response.
+//
+// This test pins the contract: round-trip a fully-populated
+// GlobalSearchResponse through JSON and confirm every field the
+// formatter touches is preserved on the receiving side. Future
+// drift on either side trips the test immediately.
+func TestSearchGraphResponsePayload_DecodesFromRealGlobalSearchResponse(t *testing.T) {
+	source := graphquery.GlobalSearchResponse{
+		Strategy:    "semantic_fallback",
+		Answer:      "Test answer body.",
+		AnswerModel: "test-model",
+		Count:       2,
+		EntityDigests: []graphquery.EntityDigest{
+			{ID: "a.b.c.d.e.f", Type: "thing", Label: "Thing", Relevance: 0.9},
+		},
+		CommunitySummaries: []graphquery.CommunitySummary{
+			{Summary: "cluster prose"},
+		},
+		Degraded:       true,
+		DegradedReason: "global_search_empty_semantic_fallback",
+	}
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		t.Fatalf("marshal source: %v", err)
+	}
+	var decoded searchGraphResponsePayload
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode into subset: %v", err)
+	}
+	if decoded.Strategy != source.Strategy ||
+		decoded.Answer != source.Answer ||
+		decoded.AnswerModel != source.AnswerModel ||
+		decoded.Count != source.Count ||
+		decoded.Degraded != source.Degraded ||
+		decoded.DegradedReason != source.DegradedReason {
+		t.Errorf("scalar field drift between GlobalSearchResponse and searchGraphResponsePayload: decoded=%+v", decoded)
+	}
+	if len(decoded.EntityDigests) != 1 {
+		t.Fatalf("EntityDigests length = %d, want 1", len(decoded.EntityDigests))
+	}
+	if decoded.EntityDigests[0].ID != source.EntityDigests[0].ID ||
+		decoded.EntityDigests[0].Type != source.EntityDigests[0].Type ||
+		decoded.EntityDigests[0].Label != source.EntityDigests[0].Label ||
+		decoded.EntityDigests[0].Relevance != source.EntityDigests[0].Relevance {
+		t.Errorf("EntityDigest field drift: decoded=%+v", decoded.EntityDigests[0])
+	}
+	if len(decoded.CommunitySummaries) != 1 || decoded.CommunitySummaries[0].Summary != "cluster prose" {
+		t.Errorf("CommunitySummary field drift: decoded=%+v", decoded.CommunitySummaries)
+	}
+}
+
+// TestSearchGraphExecutor_HandlerErrorEnvelope is the H1 regression
+// test (companion to TestSummarizeGraphExecutor_HandlerErrorEnvelope).
+// Same natsclient handler-error-as-body convention; same risk of
+// surfacing the wrong remediation if not caught.
+func TestSearchGraphExecutor_HandlerErrorEnvelope(t *testing.T) {
+	mock := &recordingNATSQuerier{resp: []byte("error: graph-query classifier offline")}
+	e := NewSearchGraphExecutor(mock)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "c", Name: "search_graph", Arguments: map[string]any{"query": "x"},
+	})
+	if err != nil {
+		t.Fatalf("Execute should not return Go err: %v", err)
+	}
+	if res.ErrorKind != agentic.ToolErrorExternal {
+		t.Errorf("ErrorKind = %v, want external", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "classifier offline") {
+		t.Errorf("Error should surface handler message verbatim; got %q", res.Error)
 	}
 }
 
