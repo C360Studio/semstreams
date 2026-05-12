@@ -171,7 +171,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "Filter name (pii_redaction injection_detection content_moderation rate_limiting)",
+                "description": "Filter name (pii_redaction injection_detection content_moderation rate_limiting tool_call_governance)",
                 "category": "basic"
               },
               "pii_config": {
@@ -331,6 +331,29 @@
                         "category": "advanced"
                       }
                     }
+                  }
+                }
+              },
+              "tool_call_config": {
+                "type": "object",
+                "description": "Tool call governance filter configuration",
+                "category": "advanced",
+                "properties": {
+                  "blocked_command_patterns": {
+                    "type": "array",
+                    "description": "Substrings appended to the default bash command blocklist",
+                    "items": {
+                      "type": "string"
+                    },
+                    "category": "advanced"
+                  },
+                  "blocked_url_patterns": {
+                    "type": "array",
+                    "description": "Substrings appended to the default http_request URL blocklist",
+                    "items": {
+                      "type": "string"
+                    },
+                    "category": "advanced"
                   }
                 }
               }

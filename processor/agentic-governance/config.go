@@ -41,7 +41,7 @@ const (
 
 // FilterConfig holds configuration for a single filter
 type FilterConfig struct {
-	Name    string `json:"name" schema:"type:string,description:Filter name (pii_redaction injection_detection content_moderation rate_limiting),category:basic"`
+	Name    string `json:"name" schema:"type:string,description:Filter name (pii_redaction injection_detection content_moderation rate_limiting tool_call_governance),category:basic"`
 	Enabled bool   `json:"enabled" schema:"type:bool,description:Whether this filter is enabled,category:basic,default:true"`
 
 	// PII filter config
@@ -55,6 +55,25 @@ type FilterConfig struct {
 
 	// Rate limiter config
 	RateLimitConfig *RateLimitFilterConfig `json:"rate_limit_config,omitempty" schema:"type:object,description:Rate limit filter configuration,category:advanced"`
+
+	// Tool call governance config
+	ToolCallConfig *ToolCallFilterConfig `json:"tool_call_config,omitempty" schema:"type:object,description:Tool call governance filter configuration,category:advanced"`
+}
+
+// ToolCallFilterConfig holds operator-supplied patterns for the
+// tool_call_governance filter. Patterns are APPENDED to the safety
+// defaults baked into NewToolCallFilter (metadata endpoints, fork bomb,
+// rm -rf /, etc.); they do not replace them. Operators cannot weaken
+// the safety floor — only extend it.
+type ToolCallFilterConfig struct {
+	// BlockedCommandPatterns are additional substrings that block bash
+	// commands. Matched case-insensitively. Appended to safety defaults.
+	BlockedCommandPatterns []string `json:"blocked_command_patterns,omitempty" schema:"type:array,description:Substrings appended to the default bash command blocklist,category:advanced"`
+
+	// BlockedURLPatterns are additional substrings that block
+	// http_request URLs. Matched case-insensitively. Appended to safety
+	// defaults.
+	BlockedURLPatterns []string `json:"blocked_url_patterns,omitempty" schema:"type:array,description:Substrings appended to the default http_request URL blocklist,category:advanced"`
 }
 
 // ViolationConfig holds violation handling configuration
@@ -131,6 +150,10 @@ func (f *FilterConfig) Validate() error {
 				return errs.WrapInvalid(err, "FilterConfig", "Validate", "validate rate_limit_config")
 			}
 		}
+	case "tool_call_governance":
+		// ToolCallFilterConfig has no internal invariants today —
+		// empty pattern slices are valid (filter falls back to safety
+		// defaults). Validation hook reserved for future fields.
 	default:
 		return errs.WrapInvalid(fmt.Errorf("unknown filter name: %s", f.Name), "FilterConfig", "Validate", "validate filter name")
 	}

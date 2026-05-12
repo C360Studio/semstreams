@@ -27,27 +27,55 @@ type ToolCallFilter struct {
 	piiFilter *PIIFilter
 }
 
-// NewToolCallFilter creates a filter for tool call governance.
+// defaultBlockedCommandPatterns is the safety floor for bash command
+// substrings. Operators cannot weaken these via config; only extend.
+func defaultBlockedCommandPatterns() []string {
+	return []string{
+		"metadata.google", // GCP metadata endpoint
+		"169.254.169.254", // AWS metadata endpoint
+		"metadata.azure",  // Azure metadata endpoint
+		"rm -rf /",        // Destructive commands
+		":(){ :|:& };:",   // Fork bomb
+		"> /dev/sd",       // Raw device write
+		"mkfs.",           // Format filesystem
+	}
+}
+
+// defaultBlockedURLPatterns is the safety floor for http_request URL
+// substrings. Operators cannot weaken these via config; only extend.
+func defaultBlockedURLPatterns() []string {
+	return []string{
+		"169.254.169.254", // AWS metadata
+		"metadata.google", // GCP metadata
+		"metadata.azure",  // Azure metadata
+		"localhost",       // Local services (SSRF also catches this)
+		"127.0.0.1",       // Loopback
+	}
+}
+
+// NewToolCallFilter creates a filter for tool call governance using the
+// safety defaults only. For operator-extended patterns use
+// NewToolCallFilterWithConfig.
 func NewToolCallFilter(piiFilter *PIIFilter) *ToolCallFilter {
 	return &ToolCallFilter{
-		piiFilter: piiFilter,
-		BlockedCommandPatterns: []string{
-			"metadata.google", // GCP metadata endpoint
-			"169.254.169.254", // AWS metadata endpoint
-			"metadata.azure",  // Azure metadata endpoint
-			"rm -rf /",        // Destructive commands
-			":(){ :|:& };:",   // Fork bomb
-			"> /dev/sd",       // Raw device write
-			"mkfs.",           // Format filesystem
-		},
-		BlockedURLPatterns: []string{
-			"169.254.169.254", // AWS metadata
-			"metadata.google", // GCP metadata
-			"metadata.azure",  // Azure metadata
-			"localhost",       // Local services (SSRF also catches this)
-			"127.0.0.1",       // Loopback
-		},
+		piiFilter:              piiFilter,
+		BlockedCommandPatterns: defaultBlockedCommandPatterns(),
+		BlockedURLPatterns:     defaultBlockedURLPatterns(),
 	}
+}
+
+// NewToolCallFilterWithConfig creates a tool call governance filter and
+// appends operator-supplied patterns to the safety defaults. A nil cfg
+// is equivalent to NewToolCallFilter — defaults only. Custom patterns
+// extend the safety floor; they never replace it.
+func NewToolCallFilterWithConfig(piiFilter *PIIFilter, cfg *ToolCallFilterConfig) *ToolCallFilter {
+	f := NewToolCallFilter(piiFilter)
+	if cfg == nil {
+		return f
+	}
+	f.BlockedCommandPatterns = append(f.BlockedCommandPatterns, cfg.BlockedCommandPatterns...)
+	f.BlockedURLPatterns = append(f.BlockedURLPatterns, cfg.BlockedURLPatterns...)
+	return f
 }
 
 // Name returns the filter identifier.
@@ -166,3 +194,63 @@ func ToolCallToMessage(call agentic.ToolCall, userID, channelID string) *Message
 		},
 	}
 }
+
+// FilterToolCalls satisfies agentic.ToolCallFilter so the governance filter
+// can be installed directly on agentic-loop's MessageHandler. Each call is
+// converted to a governance Message and run through Process. A blocked call
+// becomes a ToolCallRejection carrying the violation message; a per-call
+// Process error becomes a rejection (reason includes the error) so a
+// transient internal failure cannot silently approve subsequent calls in
+// the batch.
+func (f *ToolCallFilter) FilterToolCalls(loopID string, calls []agentic.ToolCall) (agentic.ToolCallFilterResult, error) {
+	out := agentic.ToolCallFilterResult{}
+	// agentic.ToolCallFilter (agentic/filter.go) is contextless, so the
+	// underlying Process call runs with context.Background(). For
+	// today's synchronous in-memory regex checks this is fine; a future
+	// filter that calls remote services should plumb context through
+	// the interface rather than block here.
+	ctx := context.Background()
+	for _, call := range calls {
+		msg := ToolCallToMessage(call, "", "")
+		if loopID != "" {
+			msg.Content.Metadata["loop_id"] = loopID
+		}
+
+		res, err := f.Process(ctx, msg)
+		if err != nil {
+			out.Rejected = append(out.Rejected, agentic.ToolCallRejection{
+				Call:   call,
+				Reason: fmt.Sprintf("governance filter error: %v", err),
+			})
+			continue
+		}
+
+		if res.Allowed {
+			out.Approved = append(out.Approved, call)
+			continue
+		}
+
+		out.Rejected = append(out.Rejected, agentic.ToolCallRejection{
+			Call:   call,
+			Reason: violationReason(res.Violation),
+		})
+	}
+	return out, nil
+}
+
+// violationReason extracts a human-readable rejection reason from a
+// Violation. Falls back to a generic message when the violation or its
+// details map is missing the "message" key.
+func violationReason(v *Violation) string {
+	if v == nil {
+		return "policy violation"
+	}
+	if v.Details != nil {
+		if m, ok := v.Details["message"].(string); ok && m != "" {
+			return m
+		}
+	}
+	return fmt.Sprintf("policy violation (%s)", v.FilterName)
+}
+
+var _ agentic.ToolCallFilter = (*ToolCallFilter)(nil)
