@@ -266,6 +266,16 @@ func createFilter(config FilterConfig) (Filter, error) {
 		}
 		return NewRateLimiter(rateLimitConfig)
 
+	case "tool_call_governance":
+		// PIIFilter dependency is wired post-build in component.go
+		// (it must reference the live PIIFilter sibling that
+		// BuildFromConfig produced; the chain author cannot know the
+		// pointer here). When no PII filter is configured the
+		// tool_call_governance filter simply skips PII scanning for
+		// non-bash/non-http_request tool args — its bash/URL
+		// pattern enforcement is independent.
+		return NewToolCallFilterWithConfig(nil, config.ToolCallConfig), nil
+
 	default:
 		return nil, errs.WrapInvalid(fmt.Errorf("unknown filter: %s", config.Name), "FilterChain", "createFilter", "validate filter name")
 	}

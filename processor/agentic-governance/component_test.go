@@ -270,3 +270,116 @@ func TestComponent_Initialize(t *testing.T) {
 	err = c.Initialize()
 	assert.NoError(t, err)
 }
+
+// countToolCallFilters reports how many *ToolCallFilter instances are in
+// the chain. Used by the legacy-flag tests to detect the double-add
+// regression the EnableToolGovernance/!hasToolGovernance guard prevents.
+func countToolCallFilters(c *Component) int {
+	n := 0
+	for _, f := range c.chain.Filters {
+		if _, ok := f.(*ToolCallFilter); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// findToolCallFilter returns the first *ToolCallFilter in the chain or
+// nil. Used to assert PII filter sibling wiring.
+func findToolCallFilter(c *Component) *ToolCallFilter {
+	for _, f := range c.chain.Filters {
+		if tcf, ok := f.(*ToolCallFilter); ok {
+			return tcf
+		}
+	}
+	return nil
+}
+
+// TestComponent_EnableToolGovernance_Legacy_NoConfigDeclared verifies the
+// legacy bool flag still auto-appends a ToolCallFilter when the operator
+// has NOT declared tool_call_governance in Filters. PIIFilter sibling
+// must be wired automatically (defaults include pii_redaction).
+func TestComponent_EnableToolGovernance_Legacy_NoConfigDeclared(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableToolGovernance = true
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	assert.Equal(t, 1, countToolCallFilters(c), "legacy flag should append exactly one ToolCallFilter")
+	tcf := findToolCallFilter(c)
+	require.NotNil(t, tcf)
+	assert.NotNil(t, tcf.piiFilter, "legacy-appended ToolCallFilter must have PIIFilter sibling wired")
+	assert.Equal(t, defaultBlockedCommandPatterns(), tcf.BlockedCommandPatterns,
+		"legacy path uses safety defaults only")
+}
+
+// TestComponent_EnableToolGovernance_Legacy_WithConfigDeclared verifies
+// the guard at component.go (!hasToolGovernance): when the operator has
+// declared tool_call_governance in Filters AND set EnableToolGovernance,
+// there must be exactly one ToolCallFilter — the config-declared one,
+// not a duplicate from the legacy auto-add. Confirms the operator's
+// custom patterns survived and the PIIFilter sibling was patched in
+// post-build.
+func TestComponent_EnableToolGovernance_Legacy_WithConfigDeclared(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableToolGovernance = true
+	config.FilterChain.Filters = append(config.FilterChain.Filters, FilterConfig{
+		Name:    "tool_call_governance",
+		Enabled: true,
+		ToolCallConfig: &ToolCallFilterConfig{
+			BlockedCommandPatterns: []string{"cd /workspace "},
+		},
+	})
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	assert.Equal(t, 1, countToolCallFilters(c),
+		"legacy flag MUST NOT duplicate a config-declared ToolCallFilter")
+	tcf := findToolCallFilter(c)
+	require.NotNil(t, tcf)
+	assert.NotNil(t, tcf.piiFilter,
+		"config-declared ToolCallFilter must have PIIFilter sibling patched in post-build")
+	assert.Contains(t, tcf.BlockedCommandPatterns, "cd /workspace ",
+		"operator's custom pattern must survive")
+	assert.Contains(t, tcf.BlockedCommandPatterns, "rm -rf /",
+		"safety default must still be present (append-not-replace)")
+}
+
+// TestComponent_ConfigDeclaredToolGovernance_NoLegacyFlag verifies the
+// happy path: operator declares tool_call_governance in Filters,
+// EnableToolGovernance stays false (default). One filter, custom
+// patterns honored, PII sibling wired.
+func TestComponent_ConfigDeclaredToolGovernance_NoLegacyFlag(t *testing.T) {
+	config := DefaultConfig()
+	config.FilterChain.Filters = append(config.FilterChain.Filters, FilterConfig{
+		Name:    "tool_call_governance",
+		Enabled: true,
+		ToolCallConfig: &ToolCallFilterConfig{
+			BlockedCommandPatterns: []string{"cd /workspace "},
+			BlockedURLPatterns:     []string{"internal.example.invalid"},
+		},
+	})
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	assert.Equal(t, 1, countToolCallFilters(c))
+	tcf := findToolCallFilter(c)
+	require.NotNil(t, tcf)
+	assert.NotNil(t, tcf.piiFilter)
+	assert.Contains(t, tcf.BlockedCommandPatterns, "cd /workspace ")
+	assert.Contains(t, tcf.BlockedURLPatterns, "internal.example.invalid")
+}

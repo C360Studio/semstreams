@@ -89,16 +89,47 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.Wrap(err, "Component", "NewComponent", "build filter chain")
 	}
 
-	if config.EnableToolGovernance {
-		var piiFilter *PIIFilter
-		for _, f := range chain.Filters {
-			if pf, ok := f.(*PIIFilter); ok {
-				piiFilter = pf
-				break
+	// Post-build dependency wiring for tool_call_governance. createFilter
+	// can't resolve the live PIIFilter sibling pointer at chain-build
+	// time, so config-declared tool_call_governance filters are built
+	// with piiFilter=nil and patched here.
+	//
+	// Implicit ordering invariant: this patch happens between chain
+	// construction and component lifecycle Start. Any future code that
+	// mutates chain.Filters after NewComponent returns would skip this
+	// loop — add filters via this codepath or extend the patch logic.
+	//
+	// The nil-piiFilter check below intentionally overrides any
+	// *ToolCallFilter whose piiFilter was nil at construction. Today
+	// every code path lands here with nil (createFilter passes nil
+	// explicitly). A future caller that programmatically constructs a
+	// ToolCallFilter with deliberately-nil piiFilter and adds it to the
+	// chain would be silently rewired — construct outside this codepath
+	// or use a sentinel if that's not desired.
+	var piiFilter *PIIFilter
+	var hasToolGovernance bool
+	for _, f := range chain.Filters {
+		switch v := f.(type) {
+		case *PIIFilter:
+			if piiFilter == nil {
+				piiFilter = v
 			}
+		case *ToolCallFilter:
+			hasToolGovernance = true
 		}
+	}
+	for _, f := range chain.Filters {
+		if tcf, ok := f.(*ToolCallFilter); ok && tcf.piiFilter == nil {
+			tcf.piiFilter = piiFilter
+		}
+	}
+
+	// Legacy EnableToolGovernance: only auto-append when the chain
+	// doesn't already include a config-declared tool_call_governance
+	// filter, to avoid running the filter twice.
+	if config.EnableToolGovernance && !hasToolGovernance {
 		chain.AddFilter(NewToolCallFilter(piiFilter))
-		logger.Info("Tool call governance filter enabled")
+		logger.Info("Tool call governance filter enabled (legacy EnableToolGovernance)")
 	}
 
 	// Create violation handler. Pass the component's output port defs so
