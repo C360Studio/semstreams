@@ -354,6 +354,123 @@ func TestComponent_EnableToolGovernance_Legacy_WithConfigDeclared(t *testing.T) 
 		"safety default must still be present (append-not-replace)")
 }
 
+// TestComponent_ToolCallFilter_Accessor_NotConfigured verifies the
+// accessor returns nil when neither EnableToolGovernance: true nor a
+// config-declared tool_call_governance filter is present (the
+// default config in DefaultConfig()).
+func TestComponent_ToolCallFilter_Accessor_NotConfigured(t *testing.T) {
+	config := DefaultConfig()
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	assert.Nil(t, c.ToolCallFilter(),
+		"default config (no governance enabled either way) returns nil accessor")
+}
+
+// TestComponent_ToolCallFilter_Accessor_LegacyFlag verifies the
+// accessor returns the legacy-appended filter when
+// EnableToolGovernance: true is set without a config-declared filter.
+func TestComponent_ToolCallFilter_Accessor_LegacyFlag(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableToolGovernance = true
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	got := c.ToolCallFilter()
+	require.NotNil(t, got, "legacy flag should expose ToolCallFilter via accessor")
+
+	// Confirm it's the same instance the chain holds.
+	chainTCF := findToolCallFilter(c)
+	require.NotNil(t, chainTCF)
+	assert.Same(t, chainTCF, got,
+		"accessor must return the SAME instance held in the chain (not a copy)")
+}
+
+// TestComponent_ToolCallFilter_Accessor_ConfigDeclared verifies the
+// accessor returns the config-declared filter when tool_call_governance
+// is in FilterChain.Filters. Custom patterns must be present on the
+// returned filter, proving the accessor returns the chain's instance.
+func TestComponent_ToolCallFilter_Accessor_ConfigDeclared(t *testing.T) {
+	config := DefaultConfig()
+	config.FilterChain.Filters = append(config.FilterChain.Filters, FilterConfig{
+		Name:    "tool_call_governance",
+		Enabled: true,
+		ToolCallConfig: &ToolCallFilterConfig{
+			BlockedCommandPatterns: []string{"cd /workspace "},
+		},
+	})
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	got := c.ToolCallFilter()
+	require.NotNil(t, got)
+
+	tcf, ok := got.(*ToolCallFilter)
+	require.True(t, ok, "accessor must return a *ToolCallFilter behind the interface")
+	assert.Contains(t, tcf.BlockedCommandPatterns, "cd /workspace ",
+		"accessor returned filter must carry operator's custom patterns")
+	// Regression guard for the post-build PIIFilter patch loop in
+	// component.go (~108-124). If a future refactor moves piiFilter
+	// wiring outside NewComponent's return path, this assertion fires
+	// before any operator deployment sees a silent PII-scan gap.
+	assert.NotNil(t, tcf.piiFilter,
+		"accessor returned filter must have PIIFilter sibling patched in")
+}
+
+// TestComponent_ToolCallFilter_Accessor_BothPaths verifies the accessor
+// still returns exactly one filter when both EnableToolGovernance: true
+// and a config-declared tool_call_governance are set — the
+// !hasToolGovernance guard prevents duplicates, and the accessor must
+// return the config-declared instance (carrying the operator's custom
+// patterns).
+func TestComponent_ToolCallFilter_Accessor_BothPaths(t *testing.T) {
+	config := DefaultConfig()
+	config.EnableToolGovernance = true
+	config.FilterChain.Filters = append(config.FilterChain.Filters, FilterConfig{
+		Name:    "tool_call_governance",
+		Enabled: true,
+		ToolCallConfig: &ToolCallFilterConfig{
+			BlockedCommandPatterns: []string{"cd /workspace "},
+		},
+	})
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := NewComponent(rawConfig, component.Dependencies{})
+	require.NoError(t, err)
+	c := comp.(*Component)
+
+	assert.Equal(t, 1, countToolCallFilters(c),
+		"both paths must not produce two ToolCallFilters (legacy guard)")
+
+	got := c.ToolCallFilter()
+	require.NotNil(t, got)
+	tcf := got.(*ToolCallFilter)
+	assert.Contains(t, tcf.BlockedCommandPatterns, "cd /workspace ",
+		"accessor must return the config-declared instance (not a legacy-added one with only defaults)")
+}
+
+// TestComponent_ToolCallFilter_Accessor_NilReceiver guards a passing
+// caller from panicking on a possibly-nil Component pointer.
+func TestComponent_ToolCallFilter_Accessor_NilReceiver(t *testing.T) {
+	var c *Component
+	assert.Nil(t, c.ToolCallFilter())
+}
+
 // TestComponent_ConfigDeclaredToolGovernance_NoLegacyFlag verifies the
 // happy path: operator declares tool_call_governance in Filters,
 // EnableToolGovernance stays false (default). One filter, custom
