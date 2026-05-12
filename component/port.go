@@ -140,13 +140,24 @@ func (p *Port) UnmarshalJSON(data []byte) error {
 				return errs.Wrap(err, "Port", "UnmarshalJSON", "jetstream config unmarshaling")
 			}
 			p.Config = jsConfig
-		case "kvwatch":
+		// Accept both concatenated ("kvwatch") and dashed ("kv-watch")
+		// spellings to match PortDefinition.UnmarshalJSON
+		// (component/ports.go). Pre-2026-05-13 only the concatenated
+		// form parsed here while PortDefinition accepted both —
+		// operator configs that used the dashed spelling worked
+		// through the PortDefinition path but failed loudly if the
+		// same Port was round-tripped through Port.UnmarshalJSON
+		// (e.g. KV-stored Port descriptors or serialized flow
+		// definitions). Audit finding 2026-05-08 (Finding 5).
+		case "kvwatch", "kv-watch":
 			var kvConfig KVWatchPort
 			if err := json.Unmarshal(configWrapper.Data, &kvConfig); err != nil {
 				return errs.Wrap(err, "Port", "UnmarshalJSON", "kvwatch config unmarshaling")
 			}
 			p.Config = kvConfig
-		case "kvwrite":
+		case "kvwrite", "kv-write", "kv":
+			// "kv" is the shorthand PortDefinition.UnmarshalJSON
+			// accepts as well; keep parity.
 			var kvConfig KVWritePort
 			if err := json.Unmarshal(configWrapper.Data, &kvConfig); err != nil {
 				return errs.Wrap(err, "Port", "UnmarshalJSON", "kvwrite config unmarshaling")

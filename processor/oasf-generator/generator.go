@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
@@ -181,20 +182,18 @@ func (g *Generator) fetchEntityTriples(ctx context.Context, entityID string) ([]
 		return nil, errs.Wrap(err, "Generator", "fetchEntityTriples", "get entity state")
 	}
 
-	// Parse entity state (expected to contain triples)
-	var entityState EntityState
+	// Parse entity state (expected to contain triples). Uses the
+	// canonical graph.EntityState rather than a local shadow so any
+	// future oasf logic that needs MessageType (filter by source),
+	// Version (optimistic-concurrency), or StorageRef sees real values
+	// rather than zero values from a silently-stripped JSON decode.
+	// Audit finding 2026-05-08 (Finding 4); closed in this commit.
+	var entityState graph.EntityState
 	if err := json.Unmarshal(entry.Value, &entityState); err != nil {
 		return nil, errs.Wrap(err, "Generator", "fetchEntityTriples", "unmarshal entity state")
 	}
 
 	return entityState.Triples, nil
-}
-
-// EntityState represents the stored state of an entity in KV.
-type EntityState struct {
-	ID        string           `json:"id"`
-	Triples   []message.Triple `json:"triples"`
-	UpdatedAt time.Time        `json:"updated_at"`
 }
 
 // storeAndPublish stores the OASF record and publishes a generation event.

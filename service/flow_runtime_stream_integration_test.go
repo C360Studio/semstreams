@@ -498,20 +498,25 @@ func collectEnvelopesOfType(t *testing.T, conn *websocket.Conn, msgType string, 
 
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			// Check for any kind of close or permanent error
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				break
-			}
-			// Check if it's a network timeout (expected, continue trying)
+			// Timeout = no data yet, retry until deadline. This is
+			// the only safe continue path. Every other error class
+			// puts the gorilla/websocket connection into a state
+			// where a subsequent ReadMessage call panics with
+			// "repeated read on failed websocket connection" — the
+			// library considers retry after error a programmer bug.
+			// Pre-2026-05-13 the loop had a default "continue on
+			// transient error" path that hit exactly that panic on
+			// CI runners (network-shape sensitive); the defer
+			// recover() below caught it but left envelopes empty,
+			// flaking the downstream assertion. Audit-cleanup
+			// 2026-05-13.
 			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 				continue
 			}
-			// Check for "use of closed network connection" type errors
-			if strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "failed") {
-				break
-			}
-			// Other transient error, continue trying until deadline
-			continue
+			// Any non-timeout error (close, EOF, "use of closed
+			// network connection", abnormal close, etc.) is
+			// terminal for this connection. Stop reading.
+			break
 		}
 
 		var envelope StatusStreamEnvelope
