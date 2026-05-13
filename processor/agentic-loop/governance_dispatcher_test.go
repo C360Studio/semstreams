@@ -54,7 +54,7 @@ func TestDispatcher_DisabledModePassThroughNoPublish(t *testing.T) {
 	t.Parallel()
 
 	pub := &mockVerdictPublisher{}
-	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeDisabled}, pub, slog.Default())
+	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeDisabled}, pub, slog.Default(), nil)
 
 	calls := []agentic.ToolCall{
 		{ID: "c1", Name: "bash"},
@@ -75,7 +75,7 @@ func TestDispatcher_AuditModePublishesAndPassesThrough(t *testing.T) {
 	t.Parallel()
 
 	pub := &mockVerdictPublisher{}
-	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default())
+	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default(), nil)
 
 	calls := []agentic.ToolCall{
 		{ID: "c1", Name: "bash", Arguments: map[string]any{"command": "ls /tmp"}},
@@ -114,7 +114,7 @@ func TestDispatcher_AuditModeIgnoresPublishFailure(t *testing.T) {
 	t.Parallel()
 
 	pub := &mockVerdictPublisher{err: errors.New("nats unavailable")}
-	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default())
+	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default(), nil)
 
 	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -130,7 +130,7 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 	pub := &mockVerdictPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
@@ -161,7 +161,7 @@ func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {
 	pub := &mockVerdictPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
@@ -193,7 +193,7 @@ func TestDispatcher_EnforceModeFailsClosedOnTimeout(t *testing.T) {
 	pub := &mockVerdictPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "100ms"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
@@ -221,7 +221,7 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 	pub := &mockVerdictPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{
@@ -267,7 +267,7 @@ func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 	}}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "1s"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{
@@ -301,7 +301,7 @@ func TestDispatcher_EnforceModeVerdictBeforeSelectArrival(t *testing.T) {
 	pub := &raceTestPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	calls := []agentic.ToolCall{{ID: "fast-call", Name: "bash"}}
@@ -329,7 +329,7 @@ func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {
 	pub := &mockVerdictPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "50ms"},
-		pub, slog.Default(),
+		pub, slog.Default(), nil,
 	)
 
 	// Propose returns via timeout (no verdict sent inside).
@@ -341,6 +341,116 @@ func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {
 	// Now fire a late verdict — must not panic.
 	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
 	d.HandleVerdict("approved", "late-call", payload)
+}
+
+// --- metrics integration --------------------------------------------
+
+// mockDispatcherMetrics captures metric calls so tests can assert the
+// dispatcher fires them on the right transitions.
+type mockDispatcherMetrics struct {
+	mu                 sync.Mutex
+	verdicts           []recordedVerdict
+	missingWaiterCalls int
+}
+
+type recordedVerdict struct {
+	decision string
+	mode     string
+	duration float64
+}
+
+func (m *mockDispatcherMetrics) RecordGovernanceVerdict(decision, mode string, duration float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verdicts = append(m.verdicts, recordedVerdict{decision: decision, mode: mode, duration: duration})
+}
+
+func (m *mockDispatcherMetrics) RecordGovernanceVerdictMissingWaiter() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.missingWaiterCalls++
+}
+
+func (m *mockDispatcherMetrics) Verdicts() []recordedVerdict {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]recordedVerdict, len(m.verdicts))
+	copy(out, m.verdicts)
+	return out
+}
+
+func TestDispatcher_EnforceModeRecordsApprovedVerdictMetric(t *testing.T) {
+	t.Parallel()
+
+	pub := &mockVerdictPublisher{}
+	mx := &mockDispatcherMetrics{}
+	d := NewGovernanceDispatcher(
+		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
+		pub, slog.Default(), mx,
+	)
+
+	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
+		d.HandleVerdict("approved", "c1", payload)
+	}()
+
+	_, err := d.Propose(context.Background(), "loop-1", "", calls)
+	require.NoError(t, err)
+
+	recorded := mx.Verdicts()
+	require.Len(t, recorded, 1)
+	assert.Equal(t, "approved", recorded[0].decision)
+	assert.Equal(t, ToolCallGovernanceModeEnforce, recorded[0].mode)
+	assert.Greater(t, recorded[0].duration, 0.0)
+}
+
+func TestDispatcher_EnforceModeRecordsTimeoutVerdictMetric(t *testing.T) {
+	t.Parallel()
+
+	pub := &mockVerdictPublisher{}
+	mx := &mockDispatcherMetrics{}
+	d := NewGovernanceDispatcher(
+		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "50ms"},
+		pub, slog.Default(), mx,
+	)
+
+	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
+	_, err := d.Propose(context.Background(), "loop-1", "", calls)
+	require.NoError(t, err)
+
+	recorded := mx.Verdicts()
+	require.Len(t, recorded, 1)
+	assert.Equal(t, "timeout", recorded[0].decision, "timeout decision is its own label, not rejected")
+	assert.Equal(t, ToolCallGovernanceModeEnforce, recorded[0].mode)
+}
+
+// Late verdict (after Propose timeout already fired) increments the
+// missing-waiter counter — this is the canonical signal that the
+// subscribe-before-publish race-fix regressed.
+func TestDispatcher_LateVerdictIncrementsMissingWaiterMetric(t *testing.T) {
+	t.Parallel()
+
+	pub := &mockVerdictPublisher{}
+	mx := &mockDispatcherMetrics{}
+	d := NewGovernanceDispatcher(
+		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "30ms"},
+		pub, slog.Default(), mx,
+	)
+
+	// Propose returns via timeout first.
+	_, err := d.Propose(context.Background(), "loop-1", "",
+		[]agentic.ToolCall{{ID: "late-call", Name: "bash"}})
+	require.NoError(t, err)
+
+	// Late verdict — waiter already released by defer. Must increment
+	// the missing-waiter counter, not panic.
+	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
+	d.HandleVerdict("approved", "late-call", payload)
+
+	assert.Equal(t, 1, mx.missingWaiterCalls,
+		"late verdict for released waiter must increment subscribe-before-publish counter")
 }
 
 // --- subject parsing -------------------------------------------------

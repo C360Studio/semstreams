@@ -162,6 +162,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
 		config.ToolCallGovernance, verdictPublisher, deps.GetLogger(),
+		getMetrics(deps.MetricsRegistry),
 	))
 
 	// Wire LLM-backed summarizer for context compaction if model registry is available

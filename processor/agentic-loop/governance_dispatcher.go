@@ -64,6 +64,25 @@ type VerdictPublisher interface {
 	PublishToStream(ctx context.Context, subject string, data []byte) error
 }
 
+// DispatcherMetrics is the optional metrics-sink interface the
+// dispatcher calls into for observability. The Component's
+// *loopMetrics satisfies it; tests pass nil.
+//
+// Kept narrow so the dispatcher stays free of Prometheus types and the
+// metrics layer can evolve independently. Implementations should be
+// non-blocking — the dispatcher is on the loop's hot path.
+type DispatcherMetrics interface {
+	// RecordGovernanceVerdict observes the wait duration and counts the
+	// verdict. decision is "approved" | "rejected" | "timeout"; mode is
+	// "audit" | "enforce".
+	RecordGovernanceVerdict(decision, mode string, duration float64)
+
+	// RecordGovernanceVerdictMissingWaiter signals that a verdict
+	// arrived for a call_id without a registered waiter — points at
+	// the subscribe-before-publish race regressing or a late arrival.
+	RecordGovernanceVerdictMissingWaiter()
+}
+
 // ToolCallRejection records why a tool call was denied. Mirrors the
 // existing agentic.ToolCallRejection shape used by the in-process
 // filter so the downstream serial-dispatch code can treat both paths
@@ -200,14 +219,15 @@ type GovernanceDispatcher interface {
 
 // NewGovernanceDispatcher constructs the dispatcher matching the
 // configured mode. Publisher may be nil in disabled mode (no publishes
-// happen). The returned dispatcher's HandleVerdict is safe to call
-// from JetStream consumer callbacks.
+// happen). Metrics may be nil — observability records are skipped when
+// unset. The returned dispatcher's HandleVerdict is safe to call from
+// JetStream consumer callbacks.
 //
 // The dispatcher does NOT subscribe — the Component owns the wildcard
 // JetStream subscription and routes verdicts through HandleVerdict.
 // That keeps the consumer lifecycle (create / bind / cleanup-on-stop)
 // in one place and lets the dispatcher stay free of NATS dependencies.
-func NewGovernanceDispatcher(cfg ToolCallGovernanceConfig, publisher VerdictPublisher, logger *slog.Logger) GovernanceDispatcher {
+func NewGovernanceDispatcher(cfg ToolCallGovernanceConfig, publisher VerdictPublisher, logger *slog.Logger, metrics DispatcherMetrics) GovernanceDispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -216,11 +236,13 @@ func NewGovernanceDispatcher(cfg ToolCallGovernanceConfig, publisher VerdictPubl
 		return &auditDispatcher{
 			publisher: publisher,
 			logger:    logger,
+			metrics:   metrics,
 		}
 	case ToolCallGovernanceModeEnforce:
 		return &enforceDispatcher{
 			publisher: publisher,
 			logger:    logger,
+			metrics:   metrics,
 			timeout:   cfg.ParsedTimeout(),
 			waiters:   map[string]chan verdictArrival{},
 		}
@@ -256,6 +278,7 @@ func (d *disabledDispatcher) Mode() string { return ToolCallGovernanceModeDisabl
 type auditDispatcher struct {
 	publisher VerdictPublisher
 	logger    *slog.Logger
+	metrics   DispatcherMetrics
 }
 
 func (d *auditDispatcher) Propose(ctx context.Context, loopID, parentLoopID string, calls []agentic.ToolCall) (DispatcherResult, error) {
@@ -286,6 +309,12 @@ func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) {
 		slog.String("call_id", callID),
 		slog.String("rule_id", payload.RuleID),
 		slog.String("reason", payload.EffectiveReason()))
+	if d.metrics != nil {
+		// Audit mode can't measure latency (no per-call start time
+		// kept) — count the verdict with zero duration. Duration
+		// histogram is still useful for verdict-arrival rate visualisation.
+		d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeAudit, 0)
+	}
 }
 
 func (d *auditDispatcher) Mode() string { return ToolCallGovernanceModeAudit }
@@ -304,6 +333,7 @@ type verdictArrival struct {
 type enforceDispatcher struct {
 	publisher VerdictPublisher
 	logger    *slog.Logger
+	metrics   DispatcherMetrics
 	timeout   time.Duration
 
 	mu      sync.Mutex
@@ -379,7 +409,15 @@ func (d *enforceDispatcher) Propose(ctx context.Context, loopID, parentLoopID st
 			continue
 		}
 
+		waitStart := time.Now()
 		decision, reason := d.awaitVerdict(ctx, channels[call.ID], call, loopID)
+		waitDuration := time.Since(waitStart).Seconds()
+		if d.metrics != nil {
+			// Record under the verdict's canonical decision label —
+			// "timeout" is its own label distinct from "rejected".
+			d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeEnforce, waitDuration)
+		}
+
 		switch decision {
 		case "approved":
 			approved = append(approved, call)
@@ -449,6 +487,9 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		d.logger.Debug("Verdict arrived after waiter released; ignoring",
 			slog.String("call_id", callID),
 			slog.String("decision", decision))
+		if d.metrics != nil {
+			d.metrics.RecordGovernanceVerdictMissingWaiter()
+		}
 		return
 	}
 
