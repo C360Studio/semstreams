@@ -489,6 +489,32 @@ func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action,
 	return nil
 }
 
+// substituteStringProperties returns a shallow copy of props with any
+// top-level string value run through ec.SubstituteVariables. Non-string
+// values (numbers, bools, nested maps, arrays) pass through unchanged.
+//
+// The shallow-only contract matches the public docs at
+// `docs/operations/17-tool-call-governance.md` which describe
+// `properties` as a flat map. Deep-nested template strings (e.g.
+// `properties.foo.bar = "$message.x"`) are intentionally NOT recursed
+// — that's a separate behaviour contract and warrants its own
+// substitution-warning story. Returns nil unchanged so callers don't
+// have to special-case empty maps.
+func substituteStringProperties(props map[string]any, ec *ExecutionContext) map[string]any {
+	if props == nil {
+		return nil
+	}
+	out := make(map[string]any, len(props))
+	for k, v := range props {
+		if s, ok := v.(string); ok {
+			out[k] = ec.SubstituteVariables(s)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // executePublish executes a publish action, sending a message to a NATS subject.
 func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *ExecutionContext) error {
 	entityID := ec.EntityID
@@ -499,6 +525,14 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 	}
 
 	subject := ec.SubstituteVariables(action.Subject)
+	// Substitute $message.*/$entity.* etc. tokens in string property
+	// values before publish. ADR-039's canonical reject pattern relies
+	// on `properties.call_id = "$message.call_id"` resolving so the
+	// agentic-loop verdict dispatcher can demux via
+	// VerdictPayload.EffectiveCallID (falls back to Properties when
+	// top-level CallID is empty). Pre-fix, the literal template string
+	// reached the wire and broke enforce-mode routing.
+	properties := substituteStringProperties(action.Properties, ec)
 
 	// Build the message payload
 	payload := map[string]any{
@@ -506,7 +540,7 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 		"subject":    subject,
 		"timestamp":  time.Now().Format(time.RFC3339Nano),
 		"source":     "rule_engine",
-		"properties": action.Properties,
+		"properties": properties,
 	}
 	if ec.RelatedID != "" {
 		payload["related_id"] = ec.RelatedID
@@ -517,7 +551,7 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 			"subject", subject,
 			"entity_id", entityID,
 			"related_id", ec.RelatedID,
-			"properties", action.Properties)
+			"properties", properties)
 	}
 
 	// Publish via NATS if publisher is configured
@@ -964,11 +998,11 @@ func (e *ActionExecutor) executePublishBoidSignal(ctx context.Context, action Ac
 		signal["related_id"] = ec.RelatedID
 	}
 
-	// Include any custom properties
-	if action.Properties != nil {
-		for k, v := range action.Properties {
-			signal[k] = v
-		}
+	// Include any custom properties. Substitute string templates first
+	// for parity with executePublish — rule authors expect
+	// `$message.*`/`$entity.*` tokens in Properties to resolve.
+	for k, v := range substituteStringProperties(action.Properties, ec) {
+		signal[k] = v
 	}
 
 	if e.logger != nil {

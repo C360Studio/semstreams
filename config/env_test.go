@@ -126,6 +126,77 @@ func TestExpandEnvWithDefaults(t *testing.T) {
 			envVars:  map[string]string{"MY_VAR": ""},
 			expected: "default",
 		},
+		// Rule-engine substitution namespaces pass through unchanged.
+		// The bare-`$VAR` arm is uppercase-only by design — see envVarRe
+		// doc in env.go. Eating these tokens at load time silently
+		// broke rule templates and produced garbage subjects/properties
+		// downstream (semspec bug 2026-05-13).
+		{
+			name:     "rule namespace $message passes through",
+			input:    "$message.loop_id",
+			envVars:  nil,
+			expected: "$message.loop_id",
+		},
+		{
+			name:     "rule namespace $entity passes through",
+			input:    "$entity.id",
+			envVars:  nil,
+			expected: "$entity.id",
+		},
+		{
+			name:     "rule namespace $related passes through",
+			input:    "$related.id",
+			envVars:  nil,
+			expected: "$related.id",
+		},
+		{
+			name:     "rule namespace $state passes through",
+			input:    "$state.iteration",
+			envVars:  nil,
+			expected: "$state.iteration",
+		},
+		{
+			name:     "rule namespace $caller passes through",
+			input:    "$caller.role",
+			envVars:  nil,
+			expected: "$caller.role",
+		},
+		{
+			name:     "rule namespace $schedule passes through",
+			input:    "$schedule.spec",
+			envVars:  nil,
+			expected: "$schedule.spec",
+		},
+		{
+			name:     "ADR-039 publish subject template survives expansion",
+			input:    "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+			envVars:  nil,
+			expected: "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+		},
+		{
+			name:     "deep path $entity.triple.X survives",
+			input:    "$entity.triple.agent.loop.role",
+			envVars:  nil,
+			expected: "$entity.triple.agent.loop.role",
+		},
+		{
+			name:     "lowercase bare $var no longer expands (uppercase-only by design)",
+			input:    "$my_var",
+			envVars:  map[string]string{"my_var": "hello"},
+			expected: "$my_var",
+		},
+		{
+			name:     "mixed env + rule tokens: env expands, rule token survives",
+			input:    "${HOST:-localhost}/path.$message.call_id",
+			envVars:  map[string]string{"HOST": "example.com"},
+			expected: "example.com/path.$message.call_id",
+		},
+		{
+			name:     "braced lowercase still expands (explicit form)",
+			input:    "${my_var}",
+			envVars:  map[string]string{"my_var": "hello"},
+			expected: "hello",
+		},
 	}
 
 	for _, tt := range tests {
@@ -145,6 +216,7 @@ func TestExpandEnvWithDefaults(t *testing.T) {
 			os.Unsetenv("VAR")
 			os.Unsetenv("VAR1")
 			os.Unsetenv("VAR2")
+			os.Unsetenv("my_var")
 
 			for key, value := range tt.envVars {
 				os.Setenv(key, value)
