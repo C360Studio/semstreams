@@ -434,7 +434,14 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.StateNotDeployed, undeployed.RuntimeState)
 
-	// Verify all components removed
+	// Verify all components removed. This is a one-shot assertion —
+	// no Eventually polling — because the Manager's engine-write
+	// watermark (engineHighWaterRev in config/manager.go) skips
+	// watcher events for revisions the engine has already applied
+	// to memory synchronously. Before that watermark existed, a
+	// queued Stop PUT (Enabled=false) could land in the watcher
+	// AFTER Undeploy's synchronous DELETE, transiently re-inserting
+	// the component into memory.
 	cfg := s.configMgr.GetConfig()
 	currentConfig := cfg.Get()
 	s.NotContains(currentConfig.Components, "udp-lifecycle-1")
