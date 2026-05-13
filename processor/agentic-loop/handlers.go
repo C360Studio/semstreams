@@ -996,6 +996,16 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 	// an invalid-args error at execute time. Metadata is flow-specific
 	// context the dispatcher attached to the task.
 	//
+	// Merge semantics: cached TaskMessage metadata fills in keys that
+	// the ToolCall doesn't already carry. Wire-adapter pre-population
+	// (e.g. the Gemini wire backend stamping
+	// MetadataKeyGoogleThoughtSignature on each tool call in
+	// client_wire.go) must NOT block propagation of cached domain
+	// metadata like action_allowlist / related_loops / trace_id —
+	// pre-fix the guard was `len(approved[i].Metadata) == 0` and any
+	// wire-side pre-population silently dropped the entire cached map
+	// for every Gemini-wire tool call.
+	//
 	// Metadata["loop_id"] is intentionally NOT stamped here — the
 	// canonical stamp lives in dispatchToolCall so every dispatch path
 	// (this main path, approval re-dispatch, and queue dequeue) gets
@@ -1004,8 +1014,15 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 	// metadata stays untouched until dispatch.
 	metadata := h.loopManager.GetCachedMetadata(loopID)
 	for i := range approved {
-		if len(metadata) > 0 && len(approved[i].Metadata) == 0 {
-			approved[i].Metadata = metadata
+		if len(metadata) > 0 {
+			if approved[i].Metadata == nil {
+				approved[i].Metadata = make(map[string]any, len(metadata))
+			}
+			for k, v := range metadata {
+				if _, exists := approved[i].Metadata[k]; !exists {
+					approved[i].Metadata[k] = v
+				}
+			}
 		}
 		if approved[i].LoopID == "" {
 			approved[i].LoopID = loopID
