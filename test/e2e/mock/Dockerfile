@@ -6,7 +6,7 @@
 # Build from repository root:
 #   docker build -t mock-openai:latest -f test/e2e/mock/Dockerfile .
 
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 # Build stage
 FROM golang:${GO_VERSION}-alpine AS builder

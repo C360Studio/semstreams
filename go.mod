@@ -1,6 +1,6 @@
 module github.com/c360studio/semstreams
 
-go 1.25.3
+go 1.26.2
 
 require (
 	github.com/go-acme/lego/v4 v4.20.4
