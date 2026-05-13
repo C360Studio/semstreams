@@ -96,6 +96,11 @@ func actionDistinguisher(a Action) string {
 		return a.Bucket + "/" + a.Key
 	case ActionTypeDeny:
 		return a.Reason
+	case ActionTypeApprove:
+		// Different approve subjects (verdict targets) are distinct
+		// firings for counter purposes — typical templates encode
+		// loop_id/call_id into the subject, so each is unique.
+		return a.Subject
 	}
 	return ""
 }

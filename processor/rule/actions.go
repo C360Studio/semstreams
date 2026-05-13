@@ -38,12 +38,25 @@ const (
 	// and surfaces as *DenyVerdict to the caller. The deny is always the terminal
 	// outcome: no later action in the same evaluation cycle runs once a deny fires.
 	ActionTypeDeny = "deny"
+	// ActionTypeApprove issues an approve verdict — writes an audit triple via
+	// the TripleMutator and publishes a verdict to the configured Subject.
+	// Asymmetric to deny: approve does NOT short-circuit subsequent actions.
+	// Approval doesn't preclude observability/audit/derived-state actions on
+	// the same rule firing; the asymmetry is the feature, not an oversight.
+	// See ADR-039 §"Why explicit approve, not optimistic absence of deny".
+	ActionTypeApprove = "approve"
 )
 
 // PredicateRuleDeny is the audit-triple predicate written by deny actions.
 // Downstream rules that gate on denials should match against this constant
 // so they stay in sync with any future rename.
 const PredicateRuleDeny = "rule.deny"
+
+// PredicateRuleApprove is the audit-triple predicate written by approve
+// actions. Downstream rules that gate on approvals (rate-limit a caller's
+// successful tool-call rate, audit-log every approve, etc.) should match
+// against this constant so they stay in sync with any future rename.
+const PredicateRuleApprove = "rule.approve"
 
 // Action represents an action to execute when a rule fires.
 // Actions are triggered by state transitions (OnEnter, OnExit) or
@@ -215,10 +228,13 @@ type Action struct {
 	// correctly.
 	MaxIterations *int `json:"max_iterations,omitempty"`
 
-	// Reason is the human-readable denial message for deny actions.
-	// It travels with the *DenyVerdict error so callers can record it
-	// without a side-channel lookup. Variable substitution is applied
-	// (e.g. "$caller.id denied: insufficient role $caller.role").
+	// Reason is the human-readable verdict message for deny AND approve
+	// actions. For deny it travels with the *DenyVerdict error so callers
+	// can record it without a side-channel lookup; for approve it lands in
+	// the audit triple and in the verdict payload published to Subject.
+	// Variable substitution is applied (e.g.
+	// "$caller.id denied: insufficient role $caller.role" or
+	// "$caller.id approved for tool $message.tool_name").
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -356,6 +372,8 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executeUpdateKV(ctx, action, ec)
 	case ActionTypeDeny:
 		return e.executeDeny(ctx, action, ec)
+	case ActionTypeApprove:
+		return e.executeApprove(ctx, action, ec)
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
@@ -1038,6 +1056,91 @@ func (e *ActionExecutor) executeDeny(ctx context.Context, action Action, ec *Exe
 	}
 
 	return &DenyVerdict{RuleID: ruleID, Reason: reason}
+}
+
+// executeApprove issues an approve verdict — writes a best-effort audit triple
+// and publishes a verdict payload to the configured Subject. Asymmetric to
+// executeDeny: approve returns nil and does NOT short-circuit subsequent
+// actions. Approval is permissive, not terminal; later actions in the same
+// rule firing (observability triples, downstream notifications, derived
+// state) still run. See ADR-039 §"Why explicit approve, not optimistic
+// absence of deny" for the design rationale.
+//
+// Audit-write failure does NOT flip the verdict from approve to anything
+// else: the verdict is the structural outcome, logged at Error level so
+// operators see the audit gap, and the publish still attempts. Publish
+// failure DOES return an error — unlike audit, publish failure means
+// downstream consumers (the agentic-loop subject-mode dispatcher) never
+// learn the verdict and would time out.
+func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *ExecutionContext) error {
+	if action.Subject == "" {
+		return errors.New("subject is required for approve action")
+	}
+
+	subject := ec.SubstituteVariables(action.Subject)
+	reason := ec.SubstituteVariables(action.Reason)
+	ruleID := ec.RuleID()
+	entityID := ec.EntityID
+
+	// Best-effort audit triple. Mirror executeDeny's pattern: audit-write
+	// failure must NOT change the verdict — approve still proceeds to
+	// publish so downstream consumers see the decision.
+	if e.tripleMutator != nil {
+		auditTriple := message.Triple{
+			Subject:    ruleID,
+			Predicate:  PredicateRuleApprove,
+			Object:     reason,
+			Source:     "rule_engine",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+		}
+		if _, err := e.tripleMutator.AddTriple(ctx, ruleID, auditTriple); err != nil {
+			if e.logger != nil {
+				e.logger.Error("approve verdict audit triple write failed; verdict still applies",
+					"rule_id", ruleID,
+					"subject", subject,
+					"reason", reason,
+					"error", err)
+			}
+			// fall through — verdict is structural, publish below must run
+		}
+	}
+
+	// Publish the verdict payload. The subject itself carries the routing
+	// identity (e.g. `agent.toolcall.approved.<loop_id>.<call_id>`); the
+	// payload carries context for audit/ops/replay.
+	if e.publisher == nil {
+		if e.logger != nil {
+			e.logger.Debug("Approve verdict not published (no publisher configured)",
+				"subject", subject,
+				"rule_id", ruleID)
+		}
+		return nil
+	}
+
+	payload := map[string]any{
+		"decision":  "approved",
+		"rule_id":   ruleID,
+		"reason":    reason,
+		"entity_id": entityID,
+		"timestamp": time.Now().Format(time.RFC3339Nano),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal approve verdict payload: %w", err)
+	}
+	if err := e.publisher.Publish(ctx, subject, data); err != nil {
+		return fmt.Errorf("publish approve verdict to %s: %w", subject, err)
+	}
+
+	if e.logger != nil {
+		e.logger.Debug("Approve verdict published",
+			"subject", subject,
+			"rule_id", ruleID,
+			"reason", reason,
+			"size", len(data))
+	}
+	return nil
 }
 
 // executeUpdateKV writes JSON to a named KV bucket with optional CAS merge semantics.

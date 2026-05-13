@@ -24,7 +24,7 @@ import (
 // match deep predicate paths like $entity.triple.agent.loop.role. We stop
 // at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
 // doesn't over-match.
-var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller)\.\w[\w.]*`)
+var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller|message)\.\w[\w.]*`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -61,6 +61,20 @@ type ExecutionContext struct {
 	// substitution layer reads this; see caller_substitution.go for the
 	// namespace contract.
 	Caller *CallerContext
+
+	// MessageData carries the payload of the inbound message that
+	// triggered rule evaluation, as a generic map for dotted-path
+	// access. Populated on the message-path (NATS-subscribed rules)
+	// from `GenericJSONPayload.Data`. Nil for entity-state-driven and
+	// cron-fired evaluations — those have no inbound message in scope.
+	// The `$message.*` substitution layer reads this; see
+	// message_substitution.go for the namespace contract.
+	//
+	// Required for ADR-039 tool-call governance: rule templates need
+	// to splice fields from the proposed tool-call payload (`loop_id`,
+	// `call_id`, `tool_name`, etc.) into verdict subjects and audit
+	// reasons.
+	MessageData map[string]any
 }
 
 // RuleID returns the originating rule's identifier, or an empty string if the
@@ -95,6 +109,11 @@ func (ec *ExecutionContext) RuleID() string {
 //   - $caller.id: Caller identity ID (caller-aware rules only)
 //   - $caller.role: Caller role claim (caller-aware rules only)
 //   - $caller.org: Caller organization claim (caller-aware rules only)
+//   - $message.<field_path>: dotted-path access into the inbound
+//     message data (message-path rules only). E.g. $message.loop_id
+//     or $message.tool_args.command. Tokens survive substitution (and
+//     trip the unresolved-template warning) when MessageData is nil
+//     or the path doesn't resolve — see message_substitution.go.
 //
 // Entity triple values can be accessed via $entity.triple.<predicate> syntax.
 //
@@ -144,6 +163,11 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	// $caller.* tokens will then trip the unresolved-template warning
 	// below.
 	result = applyCallerSubstitutions(result, ec.Caller)
+
+	// Message-data substitutions (message-path rules only). No-op when
+	// ec.MessageData is nil; unknown $message.* tokens then trip the
+	// unresolved-template warning below.
+	result = applyMessageSubstitutions(result, ec.MessageData)
 
 	ec.warnUnresolvedTemplateVars(template, result)
 
