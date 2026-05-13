@@ -11,7 +11,7 @@
 #     -t semstreams:latest .
 
 # Build arguments
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_DATE=unknown
