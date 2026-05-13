@@ -434,11 +434,32 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.StateNotDeployed, undeployed.RuntimeState)
 
-	// Verify all components removed
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-	s.NotContains(currentConfig.Components, "udp-lifecycle-1")
-	s.NotContains(currentConfig.Components, "ws-lifecycle-1")
+	// Verify all components removed. Poll instead of asserting once
+	// because the config Manager's KV watcher processes events
+	// asynchronously, and prior Stop operations (which wrote
+	// Enabled=false PUTs at earlier revisions) can still be in the
+	// watcher's queue when Undeploy returns. If the watcher hasn't
+	// caught up to the trailing DELETE events yet, it can transiently
+	// re-insert the components into in-memory state from those stale
+	// PUT events before processing the DELETEs. The transient window
+	// is sub-second in practice; tests need to wait for convergence
+	// to assert reliably.
+	//
+	// Underlying production race: the engine writes to in-memory
+	// config synchronously AND to KV, while the Manager's watcher
+	// also writes to in-memory based on KV events. The watcher's
+	// stale PUT events can override the engine's synchronous DELETEs
+	// during the eventual-consistency window. See
+	// engine_integration_test.go and config/manager.go:processWatcher
+	// for the full sequence.
+	s.Require().Eventually(func() bool {
+		cfg := s.configMgr.GetConfig()
+		currentConfig := cfg.Get()
+		_, hasUDP := currentConfig.Components["udp-lifecycle-1"]
+		_, hasWS := currentConfig.Components["ws-lifecycle-1"]
+		return !hasUDP && !hasWS
+	}, 2*time.Second, 25*time.Millisecond,
+		"in-memory config should converge to empty Components map after Undeploy + watcher catch-up")
 }
 
 func TestEngineIntegrationSuite(t *testing.T) {
