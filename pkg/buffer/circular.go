@@ -384,14 +384,31 @@ func (cb *circularBuffer[T]) WriteWithContext(ctx context.Context, item T) error
 	var ctxWg sync.WaitGroup
 	ctxWg.Add(1)
 
-	// Set up context cancellation handler without holding the lock
+	// Set up context cancellation handler. Acquire cb.mu before
+	// Broadcast to avoid a lost-wakeup race: without the lock, the
+	// Broadcast can fire between the waiter's pre-wait ctx check and
+	// the actual cb.notFull.Wait() call (where the waiter enqueues
+	// onto the cond's waiter list). The Broadcast hits zero waiters
+	// and is lost; the waiter then enters Wait with nothing left to
+	// wake it, hanging until some other unrelated Signal/Broadcast.
+	//
+	// Holding cb.mu around Broadcast serializes against the
+	// pre-wait window: either the waiter has finished entering Wait
+	// (released mu, now on the cond queue → Broadcast wakes it), or
+	// the waiter hasn't reached Wait yet (still holding mu → we
+	// block here until it enters Wait + releases mu).
+	//
+	// Detected via TestConcurrentContextCancellations CI timeout
+	// 2026-05-13. Local runs passed because the lost-wakeup
+	// timing window is small and CI runners' contention shape
+	// happens to widen it.
 	go func() {
 		defer ctxWg.Done()
 		select {
 		case <-ctx.Done():
-			// Wake up waiting goroutines when context is cancelled
-			// This is safe because Broadcast can be called without holding the mutex
+			cb.mu.Lock()
 			cb.notFull.Broadcast()
+			cb.mu.Unlock()
 		case <-done:
 			// Function completed successfully, exit goroutine
 		}
