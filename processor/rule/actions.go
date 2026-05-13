@@ -1118,7 +1118,7 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 		return nil
 	}
 
-	payload := map[string]any{
+	payloadData := map[string]any{
 		"decision":  "approved",
 		"rule_id":   ruleID,
 		"reason":    reason,
@@ -1134,13 +1134,21 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 	// state evaluations have no inbound call_id).
 	if ec.MessageData != nil {
 		if v, ok := ec.MessageData["call_id"].(string); ok && v != "" {
-			payload["call_id"] = v
+			payloadData["call_id"] = v
 		}
 		if v, ok := ec.MessageData["loop_id"].(string); ok && v != "" {
-			payload["loop_id"] = v
+			payloadData["loop_id"] = v
 		}
 	}
-	data, err := json.Marshal(payload)
+	// Wrap in a `core.json.v1` BaseMessage so subscribers using the
+	// payload registry (`message.NewDecoder(reg).Decode(data)`) can
+	// read this off the wire. Raw `json.Marshal(map)` would deliver
+	// silently to the agentic-loop's bespoke handler today but trap
+	// any future audit/ops dashboard subscriber that decodes via
+	// registry. See feedback_nats_publishes_use_payload_registry.
+	generic := message.NewGenericJSON(payloadData)
+	baseMsg := message.NewBaseMessage(generic.Schema(), generic, "rule_engine")
+	data, err := json.Marshal(baseMsg)
 	if err != nil {
 		return fmt.Errorf("marshal approve verdict payload: %w", err)
 	}

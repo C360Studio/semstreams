@@ -2510,11 +2510,22 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 	assert.Equal(t, "agent.toolcall.approved.loop-abc.call-001", got.subject,
 		"subject must have $message.* substituted")
 
-	var payload map[string]any
-	require.NoError(t, json.Unmarshal(got.data, &payload))
-	assert.Equal(t, "approved", payload["decision"])
-	assert.Equal(t, "approve-rule-pub", payload["rule_id"])
-	assert.Equal(t, "policy permits", payload["reason"])
+	// Wire format is core.json.v1 BaseMessage wrapping a GenericJSONPayload.
+	// Unwrap to verify the verdict fields land in the Data map per the
+	// NATS-uses-payload-registry discipline.
+	var envelope struct {
+		Type    map[string]string `json:"type"`
+		Payload struct {
+			Data map[string]any `json:"data"`
+		} `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(got.data, &envelope))
+	assert.Equal(t, "core", envelope.Type["domain"], "must be core.json.v1 envelope")
+	assert.Equal(t, "json", envelope.Type["category"])
+	assert.Equal(t, "v1", envelope.Type["version"])
+	assert.Equal(t, "approved", envelope.Payload.Data["decision"])
+	assert.Equal(t, "approve-rule-pub", envelope.Payload.Data["rule_id"])
+	assert.Equal(t, "policy permits", envelope.Payload.Data["reason"])
 }
 
 // TestExecuteApprove_WritesAuditTriple verifies the audit triple is written

@@ -1797,6 +1797,14 @@ func (c *Component) getContextManagerForLoop(loopID string) *ContextManager {
 // authorship paths (approve action's top-level fields, publish action's
 // nested Properties) are supported.
 //
+// Wire format: the rule engine's `approve` action publishes a
+// `core.json.v1` BaseMessage; the canonical ADR-039 reject pattern
+// (`publish` action + `deny`) publishes a raw map. This handler
+// tolerates BOTH shapes — registry decode first, falling back to raw
+// JSON. The discipline (every publish wraps in registry) governs new
+// code; the fallback preserves the existing reject path. See
+// feedback_nats_publishes_use_payload_registry.
+//
 // No-op when the dispatcher is nil (disabled-mode-without-construction
 // edge case; should not occur in production because NewComponent always
 // constructs a dispatcher).
@@ -1806,10 +1814,10 @@ func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte)
 		return
 	}
 
-	var payload VerdictPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
+	payload, ok := decodeVerdictPayload(c.decoder, data)
+	if !ok {
 		c.logger.Warn("Failed to decode tool-call verdict payload; ignoring",
-			slog.String("error", err.Error()))
+			slog.Int("size", len(data)))
 		return
 	}
 
@@ -1823,6 +1831,73 @@ func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte)
 	}
 
 	dispatcher.HandleVerdict(decision, callID, data)
+}
+
+// decodeVerdictPayload reads a VerdictPayload from wire bytes,
+// tolerating both authorship paths:
+//
+//  1. `approve` action — `core.json.v1` BaseMessage wrapping a
+//     GenericJSONPayload whose Data map contains the verdict fields.
+//     Decode via the registry, extract Data into VerdictPayload.
+//  2. `publish` action (the ADR-039 reject pattern) — raw map JSON
+//     with fields nested under `properties`. Decode via raw
+//     json.Unmarshal.
+//
+// Returns the decoded VerdictPayload and true on success; false on
+// double-fallback failure (neither shape parsed). The double-attempt
+// is acceptable for verdict frequency (per-tool-call, not per-token).
+func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload, bool) {
+	// Try registry decode first — the canonical post-beta.69 shape.
+	if decoder != nil {
+		if baseMsg, err := decoder.Decode(data); err == nil {
+			if generic, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				return verdictPayloadFromMap(generic.Data), true
+			}
+		}
+	}
+
+	// Fallback: raw JSON, used by the canonical ADR-039 reject pattern
+	// emitted via the `publish` action. Pre-existing wire shape; the
+	// fallback preserves compatibility.
+	var raw VerdictPayload
+	if err := json.Unmarshal(data, &raw); err == nil {
+		return raw, true
+	}
+
+	return VerdictPayload{}, false
+}
+
+// verdictPayloadFromMap translates a GenericJSONPayload.Data map into
+// the typed VerdictPayload. Only the routing-relevant fields are
+// extracted; the original bytes are still passed to the dispatcher's
+// HandleVerdict for context logging.
+func verdictPayloadFromMap(data map[string]any) VerdictPayload {
+	p := VerdictPayload{}
+	if v, ok := data["decision"].(string); ok {
+		p.Decision = v
+	}
+	if v, ok := data["call_id"].(string); ok {
+		p.CallID = v
+	}
+	if v, ok := data["loop_id"].(string); ok {
+		p.LoopID = v
+	}
+	if v, ok := data["rule_id"].(string); ok {
+		p.RuleID = v
+	}
+	if v, ok := data["reason"].(string); ok {
+		p.Reason = v
+	}
+	if v, ok := data["entity_id"].(string); ok {
+		p.EntityID = v
+	}
+	if v, ok := data["timestamp"].(string); ok {
+		p.Timestamp = v
+	}
+	if v, ok := data["properties"].(map[string]any); ok {
+		p.Properties = v
+	}
+	return p
 }
 
 // updateBoidPositionFromToolResult updates the agent's position in the Boid coordination system
