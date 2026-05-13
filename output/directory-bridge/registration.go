@@ -297,6 +297,14 @@ func (rm *RegistrationManager) sendHeartbeats(ctx context.Context) {
 	rm.mu.RUnlock()
 
 	for _, reg := range registrations {
+		// Backends that don't expire records (CID-anchored — see Backend
+		// interface contract on PublishResult.ExpiresAt) set ExpiresAt to
+		// the zero value. Skip heartbeat entirely for those; otherwise
+		// the time.Until below would return a large-negative duration and
+		// fire a pointless Refresh every interval.
+		if reg.ExpiresAt.IsZero() {
+			continue
+		}
 		// Check if heartbeat is needed (expiry approaching)
 		if time.Until(reg.ExpiresAt) > rm.config.GetHeartbeatInterval()*2 {
 			continue

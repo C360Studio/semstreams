@@ -35,6 +35,11 @@ type Backend interface {
 	// source entity is deleted from ENTITY_STATES, and on component Stop
 	// for every active registration.
 	Withdraw(ctx context.Context, req *WithdrawRequest) error
+
+	// Close releases any backend-held resources (open connections, pools,
+	// auth token caches). Called once during component Stop. Backends
+	// without resources to release implement this as a no-op.
+	Close() error
 }
 
 // PublishRequest is the bridge → backend contract for adding or replacing
