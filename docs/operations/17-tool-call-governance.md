@@ -12,7 +12,7 @@ wiring**; subject-mode is now the sole tool-call governance path. The
 beta.68 → beta.69 → beta.70 migration is documented in the [migration
 guide][migration].
 
-[migration]: migration-beta69-to-beta70.md
+[migration]: migration-beta68-to-beta70.md
 
 ## When to use this
 
