@@ -202,8 +202,8 @@ func TestComponent_Initialize(t *testing.T) {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 
-	if comp.dirClient == nil {
-		t.Error("expected dirClient to be initialized")
+	if comp.backend == nil {
+		t.Error("expected backend to be initialized")
 	}
 
 	if comp.regManager == nil {

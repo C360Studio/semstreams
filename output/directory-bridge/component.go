@@ -33,8 +33,10 @@ type Component struct {
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 
-	// Directory client and registration manager
-	dirClient  *DirectoryClient
+	// Backend and registration manager. The backend is selected during
+	// Initialize; today only the HTTP wire format is wired, but the
+	// Backend interface accommodates a future gRPC (agntcy/dir) impl.
+	backend    Backend
 	regManager *RegistrationManager
 	idProvider identity.Provider
 
@@ -87,8 +89,9 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 // Initialize prepares the component.
 func (c *Component) Initialize() error {
-	// Create directory client
-	c.dirClient = NewDirectoryClient(c.config.DirectoryURL)
+	// Select backend. PR-A wires the HTTP backend exclusively; backend
+	// selection from config lands in a follow-up PR.
+	c.backend = NewHTTPBackend(c.config.DirectoryURL)
 
 	// Create identity provider
 	var err error
@@ -100,7 +103,7 @@ func (c *Component) Initialize() error {
 	}
 
 	// Create registration manager
-	c.regManager = NewRegistrationManager(c.dirClient, c.idProvider, c.config, c.logger)
+	c.regManager = NewRegistrationManager(c.backend, c.idProvider, c.config, c.logger)
 
 	return nil
 }

@@ -11,8 +11,10 @@ import (
 )
 
 // RegistrationManager handles the lifecycle of agent registrations.
+// It owns the heartbeat scheduler and the entityID→Registration map; the
+// concrete protocol/wire format is delegated to a Backend.
 type RegistrationManager struct {
-	client           *DirectoryClient
+	backend          Backend
 	identityProvider identity.Provider
 	config           Config
 	logger           *slog.Logger
@@ -56,10 +58,13 @@ type Registration struct {
 	Retries int `json:"retries"`
 }
 
-// NewRegistrationManager creates a new registration manager.
-func NewRegistrationManager(client *DirectoryClient, identityProvider identity.Provider, config Config, logger *slog.Logger) *RegistrationManager {
+// NewRegistrationManager creates a new registration manager bound to the
+// given Backend. Callers wrap a *DirectoryClient via NewHTTPBackend or
+// NewHTTPBackendFromClient when constructing for the current HTTP wire
+// format.
+func NewRegistrationManager(backend Backend, identityProvider identity.Provider, config Config, logger *slog.Logger) *RegistrationManager {
 	return &RegistrationManager{
-		client:           client,
+		backend:          backend,
 		identityProvider: identityProvider,
 		config:           config,
 		logger:           logger,
@@ -138,38 +143,29 @@ func (rm *RegistrationManager) RegisterAgent(ctx context.Context, entityID strin
 		agentDID = newIdentity.DIDString()
 	}
 
-	// Create registration request
-	req := &RegistrationRequest{
-		AgentDID:   agentDID,
-		OASFRecord: record,
-		TTL:        int(rm.config.GetRegistrationTTL().Seconds()),
+	// Publish via the backend.
+	result, err := rm.backend.Publish(ctx, &PublishRequest{
+		EntityID: entityID,
+		AgentDID: agentDID,
+		Record:   record,
+		TTL:      rm.config.GetRegistrationTTL(),
 		Metadata: map[string]any{
 			"semstreams_entity_id": entityID,
 			"source":               "semstreams",
 		},
-	}
-
-	// Register with directory
-	resp, err := rm.client.Register(ctx, req)
+	})
 	if err != nil {
 		return err
-	}
-
-	if !resp.Success {
-		return &RegistrationError{
-			EntityID: entityID,
-			Message:  resp.Error,
-		}
 	}
 
 	// Store registration
 	registration := &Registration{
 		EntityID:       entityID,
-		RegistrationID: resp.RegistrationID,
+		RegistrationID: result.RecordID,
 		AgentDID:       agentDID,
 		OASFRecord:     record,
 		RegisteredAt:   time.Now(),
-		ExpiresAt:      resp.ExpiresAt,
+		ExpiresAt:      result.ExpiresAt,
 		LastHeartbeat:  time.Now(),
 	}
 
@@ -179,7 +175,7 @@ func (rm *RegistrationManager) RegisterAgent(ctx context.Context, entityID strin
 
 	rm.logger.Info("Registered agent with directory",
 		slog.String("entity_id", entityID),
-		slog.String("registration_id", resp.RegistrationID),
+		slog.String("registration_id", result.RecordID),
 		slog.String("agent_did", agentDID))
 
 	return nil
@@ -196,39 +192,31 @@ func (rm *RegistrationManager) UpdateRegistration(ctx context.Context, entityID 
 		return rm.RegisterAgent(ctx, entityID, record, nil)
 	}
 
-	// Re-register with updated OASF record
-	req := &RegistrationRequest{
-		AgentDID:   existing.AgentDID,
-		OASFRecord: record,
-		TTL:        int(rm.config.GetRegistrationTTL().Seconds()),
+	// Re-publish via the backend with the updated OASF record.
+	result, err := rm.backend.Publish(ctx, &PublishRequest{
+		EntityID: entityID,
+		AgentDID: existing.AgentDID,
+		Record:   record,
+		TTL:      rm.config.GetRegistrationTTL(),
 		Metadata: map[string]any{
 			"semstreams_entity_id": entityID,
 			"source":               "semstreams",
 		},
-	}
-
-	resp, err := rm.client.Register(ctx, req)
+	})
 	if err != nil {
 		return err
-	}
-
-	if !resp.Success {
-		return &RegistrationError{
-			EntityID: entityID,
-			Message:  resp.Error,
-		}
 	}
 
 	// Update registration
 	rm.mu.Lock()
 	existing.OASFRecord = record
-	existing.RegistrationID = resp.RegistrationID
-	existing.ExpiresAt = resp.ExpiresAt
+	existing.RegistrationID = result.RecordID
+	existing.ExpiresAt = result.ExpiresAt
 	rm.mu.Unlock()
 
 	rm.logger.Debug("Updated agent registration",
 		slog.String("entity_id", entityID),
-		slog.String("registration_id", resp.RegistrationID))
+		slog.String("registration_id", result.RecordID))
 
 	return nil
 }
@@ -246,9 +234,9 @@ func (rm *RegistrationManager) Deregister(ctx context.Context, entityID string) 
 		return nil // Not registered
 	}
 
-	err := rm.client.Deregister(ctx, &DeregistrationRequest{
-		RegistrationID: registration.RegistrationID,
-		AgentDID:       registration.AgentDID,
+	err := rm.backend.Withdraw(ctx, &WithdrawRequest{
+		RecordID: registration.RegistrationID,
+		AgentDID: registration.AgentDID,
 	})
 	if err != nil {
 		return err
@@ -314,9 +302,9 @@ func (rm *RegistrationManager) sendHeartbeats(ctx context.Context) {
 			continue
 		}
 
-		resp, err := rm.client.Heartbeat(ctx, &HeartbeatRequest{
-			RegistrationID: reg.RegistrationID,
-			AgentDID:       reg.AgentDID,
+		result, err := rm.backend.Refresh(ctx, &RefreshRequest{
+			RecordID: reg.RegistrationID,
+			AgentDID: reg.AgentDID,
 		})
 		if err != nil {
 			rm.logger.Warn("Heartbeat failed",
@@ -327,12 +315,12 @@ func (rm *RegistrationManager) sendHeartbeats(ctx context.Context) {
 
 		rm.mu.Lock()
 		reg.LastHeartbeat = time.Now()
-		reg.ExpiresAt = resp.ExpiresAt
+		reg.ExpiresAt = result.ExpiresAt
 		rm.mu.Unlock()
 
 		rm.logger.Debug("Heartbeat sent",
 			slog.String("entity_id", reg.EntityID),
-			slog.Time("expires_at", resp.ExpiresAt))
+			slog.Time("expires_at", result.ExpiresAt))
 	}
 }
 
