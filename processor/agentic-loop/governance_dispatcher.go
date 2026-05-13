@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 )
 
 // VerdictPublisher is the minimum surface the governance dispatcher
@@ -552,7 +553,16 @@ func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, pa
 		payload.URL = url
 	}
 
-	data, err := json.Marshal(payload)
+	// Wrap in a `core.json.v1` BaseMessage envelope so the rule
+	// processor's decoder can parse this off the wire. The rule
+	// processor requires wireFormat-shaped messages (id/type/meta/
+	// payload); a raw `json.Marshal(ProposedToolCallPayload)` would
+	// fail decode and the rules would never see proposed calls. The
+	// `Data` map round-trips through GenericJSONPayload so
+	// `$message.<field>` substitution reads the proposed-call fields
+	// directly via `extractMessageData` in
+	// processor/rule/message_handler.go.
+	data, err := payloadToBaseMessageBytes(payload, "agentic-loop")
 	if err != nil {
 		return fmt.Errorf("marshal proposed-call payload: %w", err)
 	}
@@ -562,6 +572,35 @@ func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, pa
 		return fmt.Errorf("publish proposed to %s: %w", subject, err)
 	}
 	return nil
+}
+
+// payloadToBaseMessageBytes converts a ProposedToolCallPayload into a
+// wire-format BaseMessage envelope wrapping a `core.json.v1`
+// GenericJSONPayload. Returns the marshaled bytes ready to publish.
+//
+// The rule processor decodes via `message.NewDecoder(reg).Decode(data)`
+// which expects a wireFormat envelope; raw struct JSON fails that
+// decode path. GenericJSONPayload is the existing well-known type for
+// arbitrary JSON data; rule conditions and `$message.*` substitution
+// already consume `GenericJSONPayload.Data`.
+//
+// Round-trips the proposed payload via JSON to land in
+// `map[string]any` because GenericJSONPayload.Data is map-typed. The
+// allocation cost is acceptable on the per-tool-call hot path
+// (proposed-call publish is once per tool call; not once per
+// iteration).
+func payloadToBaseMessageBytes(payload ProposedToolCallPayload, source string) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal proposed-call to map: %w", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(raw, &asMap); err != nil {
+		return nil, fmt.Errorf("re-decode proposed-call to map: %w", err)
+	}
+	generic := message.NewGenericJSON(asMap)
+	baseMsg := message.NewBaseMessage(generic.Schema(), generic, source)
+	return json.Marshal(baseMsg)
 }
 
 // coerceArguments normalises ToolCall.Arguments to a map[string]any so

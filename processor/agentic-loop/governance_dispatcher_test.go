@@ -92,20 +92,43 @@ func TestDispatcher_AuditModePublishesAndPassesThrough(t *testing.T) {
 
 	for i, expected := range []string{"c1", "c2"} {
 		assert.Equal(t, "agent.toolcall.proposed.loop-abc", published[i].subject)
-		var payload ProposedToolCallPayload
-		require.NoError(t, json.Unmarshal(published[i].data, &payload))
+		payload := unwrapProposedFromBaseMessage(t, published[i].data)
 		assert.Equal(t, "loop-abc", payload.LoopID)
 		assert.Equal(t, "parent-loop", payload.ParentLoopID, "parent_loop_id rides along from day one (ADR-039)")
 		assert.Equal(t, expected, payload.CallID)
 	}
 	// Flattened conveniences
-	var firstPayload ProposedToolCallPayload
-	require.NoError(t, json.Unmarshal(published[0].data, &firstPayload))
+	firstPayload := unwrapProposedFromBaseMessage(t, published[0].data)
 	assert.Equal(t, "ls /tmp", firstPayload.Command, "bash command should flatten to Command field for rule readability")
 
-	var secondPayload ProposedToolCallPayload
-	require.NoError(t, json.Unmarshal(published[1].data, &secondPayload))
+	secondPayload := unwrapProposedFromBaseMessage(t, published[1].data)
 	assert.Equal(t, "https://example.com", secondPayload.URL, "http_request url should flatten to URL field")
+}
+
+// unwrapProposedFromBaseMessage extracts a ProposedToolCallPayload from
+// the BaseMessage wire envelope the dispatcher publishes. Mirrors the
+// rule processor's decode path: pull `payload.data` out of the wire
+// form, re-marshal to bytes, decode into the typed payload.
+//
+// Kept as a test helper because production consumers (rule processor +
+// agentic-loop verdict handler) use different code paths — rules read
+// via GenericJSONPayload.Data; agentic-loop reads VerdictPayload off
+// the verdict subject. Tests need the typed view of the proposed-call
+// shape to assert on the canonical fields.
+func unwrapProposedFromBaseMessage(t *testing.T, data []byte) ProposedToolCallPayload {
+	t.Helper()
+	// wireFormat carries the payload under "payload" — extract it as a
+	// raw RawMessage, then re-unmarshal into the typed struct.
+	var envelope struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(data, &envelope), "envelope must be wireFormat-shaped")
+	// The payload is a GenericJSONPayload: { "data": { ... proposed-call fields ... } }
+	var generic struct {
+		Data ProposedToolCallPayload `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(envelope.Payload, &generic), "payload must be GenericJSONPayload-shaped")
+	return generic.Data
 }
 
 // Audit-mode publish failure logs but DOES NOT prevent dispatch.
@@ -604,10 +627,20 @@ type selectiveFailPublisher struct {
 }
 
 func (m *selectiveFailPublisher) PublishToStream(_ context.Context, subject string, data []byte) error {
-	var payload ProposedToolCallPayload
-	if err := json.Unmarshal(data, &payload); err == nil {
-		if m.failCallIDPredicate != nil && m.failCallIDPredicate(payload.CallID) {
-			return errors.New("selective publish failure")
+	// Bytes are BaseMessage-wrapped (wire envelope around GenericJSONPayload).
+	// Extract the proposed-call payload via the wire envelope so the
+	// per-call_id predicate can decide whether to fail.
+	var envelope struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err == nil {
+		var generic struct {
+			Data ProposedToolCallPayload `json:"data"`
+		}
+		if err := json.Unmarshal(envelope.Payload, &generic); err == nil {
+			if m.failCallIDPredicate != nil && m.failCallIDPredicate(generic.Data.CallID) {
+				return errors.New("selective publish failure")
+			}
 		}
 	}
 	m.mu.Lock()

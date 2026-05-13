@@ -158,6 +158,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-graph-triples", s.verifyGraphTriples},
 		{"verify-tool-execution", s.verifyToolExecution},
 		{"verify-streaming-metrics", s.verifyStreamingMetrics},
+		{"verify-tool-call-governance", s.verifyToolCallGovernance},
 		{"validate-results", s.validateResults},
 		// AGNTCY integration stages (optional, skip if not configured)
 		{"verify-oasf-generation", s.verifyOASFGeneration},
@@ -527,6 +528,64 @@ func (s *Scenario) verifyStreamingMetrics(ctx context.Context, result *scenarios
 	}
 
 	result.Details["streaming_verified"] = true
+	return nil
+}
+
+// verifyToolCallGovernance checks that the ADR-039 subject-mode
+// governance flow fired. The e2e config sets agentic-loop.mode=audit
+// and ships an approve-all rule that subscribes to
+// agent.toolcall.proposed.>. When the temperature-anomaly task issues
+// its tool call (`query_entity`), the loop publishes a proposed-call,
+// the rule fires an approve verdict, and three metrics increment:
+//
+//   - tool_call_governance_verdict_total{mode="audit"} — verdict received
+//   - tool_call_governance_verdict_duration_seconds_count — duration observed
+//   - rule_actions_executed_total — approve action fired in the rule engine
+//
+// Audit mode means dispatch is NOT gated; this stage validates the
+// governance path is wired end-to-end without affecting the existing
+// scenario's success criteria. HARD FAILURE because:
+//   - default mode=disabled retains pre-ADR-039 behavior, so failure
+//     here means the e2e config didn't take effect (regression: this
+//     was the canonical e2e coverage we added pre-tag).
+//   - audit-mode failure is the cheapest leading indicator that
+//     enforce-mode would wedge in production.
+func (s *Scenario) verifyToolCallGovernance(ctx context.Context, result *scenarios.Result) error {
+	verdictTotal, err := s.metrics.SumMetricsByName(ctx, "semstreams_agentic_loop_tool_call_governance_verdict_total")
+	if err != nil {
+		return fmt.Errorf("failed to fetch governance verdict counter: %w", err)
+	}
+	result.Metrics["governance_verdicts_total"] = verdictTotal
+
+	if verdictTotal < 1 {
+		return fmt.Errorf(
+			"governance verdict counter is 0 — agentic-loop did not publish a proposed-call OR the rule processor did not emit a verdict. " +
+				"Check (1) agentic-loop tool_call_governance.mode is set to 'audit' or 'enforce' in configs/agentic.json, " +
+				"(2) the rule processor subscribes to agent.toolcall.proposed.> with a rule whose actions include approve/publish to agent.toolcall.{approved,rejected}.* subjects, " +
+				"(3) the rule processor and agentic-loop are healthy")
+	}
+
+	// Confirm at least one verdict was an approve (the e2e rule is
+	// approve-all). If we ever see only timeouts here, the rule fired
+	// but its verdict didn't reach the loop in time — points at NATS
+	// propagation or a subject mismatch.
+	approves, err := s.metrics.GetMetricByLabels(ctx,
+		"semstreams_agentic_loop_tool_call_governance_verdict_total",
+		map[string]string{"decision": "approved", "mode": "audit"})
+	if err != nil {
+		return fmt.Errorf("failed to fetch approve verdict counter by labels: %w", err)
+	}
+	var approvedCount float64
+	for _, m := range approves {
+		approvedCount += m.Value
+	}
+	result.Metrics["governance_verdicts_approved_audit"] = approvedCount
+
+	if approvedCount < 1 {
+		return fmt.Errorf("audit-mode approve counter is 0 — rule fired but the verdict subject did not reach the loop. Subject mismatch or stream propagation issue?")
+	}
+
+	result.Details["governance_verified"] = true
 	return nil
 }
 
