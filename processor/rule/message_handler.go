@@ -142,10 +142,13 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 
 			// Perform stateful evaluation. Message-path rules have no KV
 			// revision and no bootstrap phase, so those fields stay zero.
+			// MessageData carries the inbound payload for $message.*
+			// substitution in action templates (ADR-039).
 			transition, err := rp.statefulEvaluator.Evaluate(ctx, Evaluation{
 				Rule:              ruleDef,
 				EntityID:          entityID,
 				CurrentlyMatching: triggered,
+				MessageData:       extractMessageData(msg),
 			})
 			if err != nil {
 				rp.logger.Warn("Stateful evaluation failed", "rule_name", ruleName, "error", err)
@@ -383,6 +386,31 @@ func extractEntityID(msg message.Message) string {
 
 	// Fallback to message ID if no entity_id in payload
 	return msg.ID()
+}
+
+// extractMessageData returns the inbound message's payload as a generic
+// map for `$message.*` substitution. Mirrors the path the expression
+// evaluator uses at `expression_factory.go:97` — only
+// `GenericJSONPayload` exposes its data as a generic map, so other
+// payload types yield nil and the substitution layer falls back to
+// silent-pass + warning per the unresolvedTemplateVarRe contract.
+//
+// nil is a valid return: it signals "no message-data scope for this
+// evaluation" to downstream substitution. Authors who reach for
+// $message.* in templates fired by entity-state or cron rules will see
+// the unresolved-template warning, which is the correct surfacing.
+func extractMessageData(msg message.Message) map[string]any {
+	if msg == nil {
+		return nil
+	}
+	payload := msg.Payload()
+	if payload == nil {
+		return nil
+	}
+	if generic, ok := payload.(*message.GenericJSONPayload); ok {
+		return generic.Data
+	}
+	return nil
 }
 
 // recordError records an error and updates health status

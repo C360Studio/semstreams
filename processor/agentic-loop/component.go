@@ -103,6 +103,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	config.Consumer.EnsureDefaults()
 	config.Context.EnsureDefaults()
+	config.ToolCallGovernance.EnsureDefaults()
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -147,6 +148,22 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	handler := NewMessageHandler(config, loopOpts...)
 	handler.modelRegistry = deps.ModelRegistry
 	handler.toolRegistry = deps.ToolRegistry
+
+	// Subject-mode tool-call governance dispatcher (ADR-039). Always
+	// constructed — when Mode is "disabled" (the default) the
+	// dispatcher is a pass-through and the existing in-process
+	// ToolCallFilter wiring runs unchanged. A nil NATSClient (rare —
+	// almost always test scaffolding) yields a publisher-less
+	// dispatcher: disabled mode is unaffected, audit/enforce skip the
+	// publish step and log at Debug.
+	var verdictPublisher VerdictPublisher
+	if deps.NATSClient != nil {
+		verdictPublisher = deps.NATSClient
+	}
+	handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
+		config.ToolCallGovernance, verdictPublisher, deps.GetLogger(),
+		getMetrics(deps.MetricsRegistry),
+	))
 
 	// Wire LLM-backed summarizer for context compaction if model registry is available
 	if deps.ModelRegistry != nil && config.Context.Enabled {
@@ -650,6 +667,15 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			handler = c.handleSignalMessage
 		case "agent.approval_response":
 			handler = c.handleApprovalResponseMessage
+		case "agent.toolcall.approved", "agent.toolcall.rejected":
+			// Verdicts from rule-driven tool-call governance (ADR-039).
+			// Both subjects route into the same demux — the dispatcher
+			// uses the subject path to extract decision + call_id.
+			// Skip if no dispatcher is configured (disabled mode with
+			// no fallback construction); the wildcard subscription is
+			// still cheap to bind but never gets traffic in disabled
+			// mode because nothing publishes to proposed.
+			handler = c.handleToolCallVerdictMessage
 		case "agent.boid":
 			// Only subscribe to Boid signals if Boid coordination is enabled
 			if !c.config.BoidEnabled {
@@ -1757,6 +1783,121 @@ func (c *Component) handleBoidSignalMessage(ctx context.Context, data []byte) {
 // This is used by BoidHandler to apply steering signals to context.
 func (c *Component) getContextManagerForLoop(loopID string) *ContextManager {
 	return c.handler.GetContextManager(loopID)
+}
+
+// handleToolCallVerdictMessage routes inbound verdicts from
+// agent.toolcall.approved.> and agent.toolcall.rejected.> into the
+// governance dispatcher (ADR-039). The dispatcher demuxes by call_id
+// to per-call waiter channels.
+//
+// Both wildcard subjects share this single handler because the
+// existing input-port consumer wrapper discards the subject (see
+// setupConsumer's adapter at component.go:805). The verdict's decision
+// is read from the payload via VerdictPayload.EffectiveDecision — both
+// authorship paths (approve action's top-level fields, publish action's
+// nested Properties) are supported.
+//
+// Wire format: the rule engine's `approve` action publishes a
+// `core.json.v1` BaseMessage; the canonical ADR-039 reject pattern
+// (`publish` action + `deny`) publishes a raw map. This handler
+// tolerates BOTH shapes — registry decode first, falling back to raw
+// JSON. The discipline (every publish wraps in registry) governs new
+// code; the fallback preserves the existing reject path. See
+// feedback_nats_publishes_use_payload_registry.
+//
+// No-op when the dispatcher is nil (disabled-mode-without-construction
+// edge case; should not occur in production because NewComponent always
+// constructs a dispatcher).
+func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) {
+	dispatcher := c.handler.GovernanceDispatcher()
+	if dispatcher == nil {
+		return
+	}
+
+	payload, ok := decodeVerdictPayload(c.decoder, data)
+	if !ok {
+		c.logger.Warn("Failed to decode tool-call verdict payload; ignoring",
+			slog.Int("size", len(data)))
+		return
+	}
+
+	decision := payload.EffectiveDecision()
+	callID := payload.EffectiveCallID()
+	if decision == "" || callID == "" {
+		c.logger.Warn("Tool-call verdict payload missing decision or call_id; ignoring",
+			slog.String("decision", decision),
+			slog.String("call_id", callID))
+		return
+	}
+
+	dispatcher.HandleVerdict(decision, callID, data)
+}
+
+// decodeVerdictPayload reads a VerdictPayload from wire bytes,
+// tolerating both authorship paths:
+//
+//  1. `approve` action — `core.json.v1` BaseMessage wrapping a
+//     GenericJSONPayload whose Data map contains the verdict fields.
+//     Decode via the registry, extract Data into VerdictPayload.
+//  2. `publish` action (the ADR-039 reject pattern) — raw map JSON
+//     with fields nested under `properties`. Decode via raw
+//     json.Unmarshal.
+//
+// Returns the decoded VerdictPayload and true on success; false on
+// double-fallback failure (neither shape parsed). The double-attempt
+// is acceptable for verdict frequency (per-tool-call, not per-token).
+func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload, bool) {
+	// Try registry decode first — the canonical post-beta.69 shape.
+	if decoder != nil {
+		if baseMsg, err := decoder.Decode(data); err == nil {
+			if generic, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
+				return verdictPayloadFromMap(generic.Data), true
+			}
+		}
+	}
+
+	// Fallback: raw JSON, used by the canonical ADR-039 reject pattern
+	// emitted via the `publish` action. Pre-existing wire shape; the
+	// fallback preserves compatibility.
+	var raw VerdictPayload
+	if err := json.Unmarshal(data, &raw); err == nil {
+		return raw, true
+	}
+
+	return VerdictPayload{}, false
+}
+
+// verdictPayloadFromMap translates a GenericJSONPayload.Data map into
+// the typed VerdictPayload. Only the routing-relevant fields are
+// extracted; the original bytes are still passed to the dispatcher's
+// HandleVerdict for context logging.
+func verdictPayloadFromMap(data map[string]any) VerdictPayload {
+	p := VerdictPayload{}
+	if v, ok := data["decision"].(string); ok {
+		p.Decision = v
+	}
+	if v, ok := data["call_id"].(string); ok {
+		p.CallID = v
+	}
+	if v, ok := data["loop_id"].(string); ok {
+		p.LoopID = v
+	}
+	if v, ok := data["rule_id"].(string); ok {
+		p.RuleID = v
+	}
+	if v, ok := data["reason"].(string); ok {
+		p.Reason = v
+	}
+	if v, ok := data["entity_id"].(string); ok {
+		p.EntityID = v
+	}
+	if v, ok := data["timestamp"].(string); ok {
+		p.Timestamp = v
+	}
+	if v, ok := data["properties"].(map[string]any); ok {
+		p.Properties = v
+	}
+	return p
 }
 
 // updateBoidPositionFromToolResult updates the agent's position in the Boid coordination system

@@ -52,6 +52,11 @@ type loopMetrics struct {
 
 	// Graph-write-before-publish ordering
 	graphWritePublishTimeouts *prometheus.CounterVec
+
+	// Tool-call governance (ADR-039)
+	governanceVerdictDuration                *prometheus.HistogramVec
+	governanceVerdictTotal                   *prometheus.CounterVec
+	governanceSubscribeBeforePublishFailures prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -229,6 +234,32 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Name:      "graph_write_publish_timeout_total",
 				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
 			}, []string{"state"}),
+
+			// Tool-call governance (ADR-039) drives the timeout-tuning
+			// decision in beta.70 — buckets span 1ms → 5s to capture
+			// both fast in-process rule fires and slow networked
+			// rule-engine paths.
+			governanceVerdictDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "tool_call_governance_verdict_duration_seconds",
+				Help:      "Time from proposed-call publish to verdict arrival. decision label is approved|rejected|timeout; mode is audit|enforce. Drives the timeout-tuning decision in beta.70 — wide range now, tighten after measurement.",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0},
+			}, []string{"decision", "mode"}),
+
+			governanceVerdictTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "tool_call_governance_verdict_total",
+				Help:      "Total tool-call governance verdicts by decision and mode. Sum of decision=approved + decision=rejected + decision=timeout equals total proposed-call publishes (modulo in-flight). Sustained decision=timeout signals undersized timeout config or stuck rule-engine path.",
+			}, []string{"decision", "mode"}),
+
+			governanceSubscribeBeforePublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
+				Help:      "Times a verdict arrived for a call_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -256,6 +287,9 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterHistogram("agentic-loop", "context_compaction_tokens_saved", metrics.contextCompactionTokensSaved)
 			_ = registry.RegisterGauge("agentic-loop", "context_compacted_region_tokens", metrics.contextCompactedRegionTokens)
 			_ = registry.RegisterCounterVec("agentic-loop", "graph_write_publish_timeout_total", metrics.graphWritePublishTimeouts)
+			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
+			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
+			_ = registry.RegisterCounter("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCreated)
@@ -281,9 +315,34 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionTokensSaved)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactedRegionTokens)
 			_ = prometheus.DefaultRegisterer.Register(metrics.graphWritePublishTimeouts)
+			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictDuration)
+			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictTotal)
+			_ = prometheus.DefaultRegisterer.Register(metrics.governanceSubscribeBeforePublishFailures)
 		}
 	})
 	return metrics
+}
+
+// RecordGovernanceVerdict observes the verdict duration and
+// increments the per-decision counter. Implements
+// DispatcherMetrics — the GovernanceDispatcher calls this directly.
+// Decision is "approved" | "rejected" | "timeout"; mode is "audit" |
+// "enforce" — disabled mode never records verdicts (no publish, no
+// wait).
+func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration float64) {
+	m.governanceVerdictDuration.WithLabelValues(decision, mode).Observe(duration)
+	m.governanceVerdictTotal.WithLabelValues(decision, mode).Inc()
+}
+
+// RecordGovernanceVerdictMissingWaiter increments the
+// subscribe-before-publish-failures counter. Implements
+// DispatcherMetrics. Each non-zero increment signals a verdict
+// arrived for a call_id that no longer had a registered waiter —
+// either the race-fix regressed (verdict beat the pre-register) or a
+// verdict arrived after Propose's timeout already fired (benign in
+// audit mode, signal in enforce mode).
+func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
+	m.governanceSubscribeBeforePublishFailures.Inc()
 }
 
 // recordGraphWritePublishTimeout increments the counter when the

@@ -59,6 +59,15 @@ type Evaluation struct {
 	Related           *gtypes.EntityState // nil for single-entity or message-path
 	Revision          uint64              // KV revision that triggered this evaluation; 0 if unknown
 	Bootstrap         bool                // true during watcher initial-state replay
+
+	// MessageData carries the payload of the inbound message that
+	// triggered evaluation, as a generic map for dotted-path access.
+	// Populated by `evaluateRulesForMessage` from
+	// `GenericJSONPayload.Data` for message-path (NATS-subscribed)
+	// rules. Nil for entity-state-driven and cron-fired evaluations.
+	// Plumbed through to `ExecutionContext.MessageData` so
+	// `$message.*` substitution can resolve.
+	MessageData map[string]any
 }
 
 // entityKey returns the state-tracker key (single entity or canonical pair).
@@ -162,11 +171,12 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	}
 
 	ec := &ExecutionContext{
-		EntityID:  ev.EntityID,
-		RelatedID: ev.RelatedID,
-		Entity:    ev.Entity,
-		Related:   ev.Related,
-		State:     matchState,
+		EntityID:    ev.EntityID,
+		RelatedID:   ev.RelatedID,
+		Entity:      ev.Entity,
+		Related:     ev.Related,
+		State:       matchState,
+		MessageData: ev.MessageData,
 	}
 
 	stateFields := expression.StateFields{

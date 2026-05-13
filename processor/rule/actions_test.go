@@ -2434,3 +2434,206 @@ func TestExecuteDeny_VariableSubstitutionInReason(t *testing.T) {
 	require.Len(t, mut.addedTriples, 1)
 	assert.Equal(t, "caller alice with role viewer is denied", mut.addedTriples[0].Object)
 }
+
+// --- executeApprove tests ---
+//
+// Approve is asymmetric to deny: it returns nil (does NOT short-circuit
+// subsequent actions), publishes a verdict payload to the configured
+// Subject, and writes an audit triple under PredicateRuleApprove. These
+// tests pin those invariants and the parity with deny on audit-failure
+// handling.
+
+// newApproveTestEC builds an ExecutionContext suitable for approve tests.
+// MessageData is populated so $message.* substitution can resolve in the
+// canonical ADR-039 use case (templating verdict subjects with the
+// proposed call's loop_id / call_id).
+func newApproveTestEC(ruleID string, caller *CallerContext, msgData map[string]any) *ExecutionContext {
+	return &ExecutionContext{
+		EntityID: "acme.ops.test.svc.entity.001",
+		State: &MatchState{
+			RuleID: ruleID,
+		},
+		Caller:      caller,
+		MessageData: msgData,
+	}
+}
+
+// TestExecuteApprove_ReturnsNilDoesNotShortCircuit pins the asymmetry: approve
+// returns nil so the action executor's Execute loop continues with later
+// actions. Deny short-circuits via *DenyVerdict; approve does NOT. This
+// asymmetry is the feature, not an oversight — observability/audit
+// actions on the same rule firing still run after approve. See ADR-039.
+func TestExecuteApprove_ReturnsNilDoesNotShortCircuit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	pub := &mockPublisher{}
+	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	ec := newApproveTestEC("approve-rule-1", nil, nil)
+	action := Action{
+		Type:    ActionTypeApprove,
+		Subject: "agent.toolcall.approved.loop-abc.call-001",
+		Reason:  "approved by policy",
+	}
+
+	err := executor.executeApprove(ctx, action, ec)
+	assert.NoError(t, err, "approve must return nil so later actions can fire")
+}
+
+// TestExecuteApprove_PublishesVerdictPayload pins that approve publishes to
+// the substituted Subject with a payload carrying decision="approved" and
+// the rule context. Subject substitution must resolve $message.* tokens
+// so per-call verdict routing works for ADR-039 governance.
+func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	pub := &mockPublisher{}
+	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	ec := newApproveTestEC("approve-rule-pub", nil, map[string]any{
+		"loop_id": "loop-abc",
+		"call_id": "call-001",
+	})
+	action := Action{
+		Type:    ActionTypeApprove,
+		Subject: "agent.toolcall.approved.$message.loop_id.$message.call_id",
+		Reason:  "policy permits",
+	}
+
+	err := executor.executeApprove(ctx, action, ec)
+	require.NoError(t, err)
+
+	require.Len(t, pub.published, 1, "approve must publish exactly once")
+	got := pub.published[0]
+	assert.Equal(t, "agent.toolcall.approved.loop-abc.call-001", got.subject,
+		"subject must have $message.* substituted")
+
+	// Wire format is core.json.v1 BaseMessage wrapping a GenericJSONPayload.
+	// Unwrap to verify the verdict fields land in the Data map per the
+	// NATS-uses-payload-registry discipline.
+	var envelope struct {
+		Type    map[string]string `json:"type"`
+		Payload struct {
+			Data map[string]any `json:"data"`
+		} `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(got.data, &envelope))
+	assert.Equal(t, "core", envelope.Type["domain"], "must be core.json.v1 envelope")
+	assert.Equal(t, "json", envelope.Type["category"])
+	assert.Equal(t, "v1", envelope.Type["version"])
+	assert.Equal(t, "approved", envelope.Payload.Data["decision"])
+	assert.Equal(t, "approve-rule-pub", envelope.Payload.Data["rule_id"])
+	assert.Equal(t, "policy permits", envelope.Payload.Data["reason"])
+}
+
+// TestExecuteApprove_WritesAuditTriple verifies the audit triple is written
+// with PredicateRuleApprove and the substituted reason as the object.
+// Downstream rules that count approvals by caller can match on this
+// predicate.
+func TestExecuteApprove_WritesAuditTriple(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	pub := &mockPublisher{}
+	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	ec := newApproveTestEC("approve-rule-audit", nil, nil)
+	action := Action{
+		Type:    ActionTypeApprove,
+		Subject: "agent.toolcall.approved.test",
+		Reason:  "policy permits",
+	}
+
+	require.NoError(t, executor.executeApprove(ctx, action, ec))
+
+	require.Len(t, mut.addedTriples, 1, "AddTriple must be called exactly once")
+	triple := mut.addedTriples[0]
+	assert.Equal(t, PredicateRuleApprove, triple.Predicate,
+		"audit triple predicate must be %q", PredicateRuleApprove)
+	assert.Equal(t, "policy permits", triple.Object,
+		"audit triple object must be the substituted reason")
+}
+
+// TestExecuteApprove_AuditFailureDoesNotBlockPublish is the deny-parity
+// invariant: an audit-write failure logs at Error level but MUST NOT
+// prevent the publish from running. The verdict is structural — operators
+// without an audit triple is a known-bad state we surface loudly, but
+// downstream consumers (agentic-loop) still need to receive the verdict
+// or the call would time out.
+func TestExecuteApprove_AuditFailureDoesNotBlockPublish(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{addErr: errors.New("nats unavailable")}
+	pub := &mockPublisher{}
+	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	ec := newApproveTestEC("approve-rule-audit-fail", nil, nil)
+	action := Action{
+		Type:    ActionTypeApprove,
+		Subject: "agent.toolcall.approved.test",
+		Reason:  "permit",
+	}
+
+	err := executor.executeApprove(ctx, action, ec)
+	assert.NoError(t, err, "audit failure must NOT propagate; publish ran")
+	require.Len(t, pub.published, 1, "publish must still fire when audit fails")
+}
+
+// TestExecuteApprove_PublishFailureReturnsError diverges from audit-failure
+// handling: publish failure DOES return an error because downstream
+// consumers never learned the verdict. The caller (rule processor) will
+// log + retry per its action-error policy.
+func TestExecuteApprove_PublishFailureReturnsError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	pub := &mockPublisher{err: errors.New("jetstream timeout")}
+	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	ec := newApproveTestEC("approve-rule-pub-fail", nil, nil)
+	action := Action{
+		Type:    ActionTypeApprove,
+		Subject: "agent.toolcall.approved.test",
+		Reason:  "permit",
+	}
+
+	err := executor.executeApprove(ctx, action, ec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publish approve verdict")
+}
+
+// TestExecuteApprove_RequiresSubject rejects approve actions without a
+// Subject — the verdict has nowhere to go and downstream consumers
+// would time out. Fail loudly at action-execute time so operator config
+// errors surface immediately rather than as mysterious timeouts.
+func TestExecuteApprove_RequiresSubject(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	executor := NewActionExecutorFull(slog.Default(), &mockTripleMutator{}, &mockPublisher{})
+	ec := newApproveTestEC("approve-no-subject", nil, nil)
+	action := Action{Type: ActionTypeApprove, Reason: "permit"}
+
+	err := executor.executeApprove(ctx, action, ec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subject is required")
+}
+
+// TestExecuteApprove_NoPublisherIsNoOp covers the early-boot or
+// publisher-not-configured scenario: approve must still complete (return
+// nil) and write the audit triple. The publish step is skipped without
+// error so dev/test environments without a NATS publisher don't break.
+func TestExecuteApprove_NoPublisherIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mut := &mockTripleMutator{}
+	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	ec := newApproveTestEC("approve-no-pub", nil, nil)
+	action := Action{Type: ActionTypeApprove, Subject: "agent.toolcall.approved.x", Reason: "permit"}
+
+	assert.NoError(t, executor.executeApprove(ctx, action, ec))
+	assert.Len(t, mut.addedTriples, 1, "audit triple still written without publisher")
+}

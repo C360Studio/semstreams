@@ -172,6 +172,13 @@
               "subject": "sensor.processed.entity",
               "type": "jetstream",
               "description": "Sensor entity events"
+            },
+            {
+              "name": "rule_toolcall_proposed_in",
+              "subject": "agent.toolcall.proposed.>",
+              "type": "jetstream",
+              "stream_name": "AGENT",
+              "description": "ADR-039 — proposed tool calls awaiting governance verdict"
             }
           ],
           "outputs": [
@@ -186,12 +193,60 @@
               "type": "jetstream",
               "stream_name": "AGENT",
               "description": "Agent task triggers from rules"
+            },
+            {
+              "name": "toolcall_approved_out",
+              "subject": "agent.toolcall.approved.*",
+              "type": "jetstream",
+              "stream_name": "AGENT",
+              "description": "ADR-039 — approve verdicts to agentic-loop"
+            },
+            {
+              "name": "toolcall_rejected_out",
+              "subject": "agent.toolcall.rejected.*",
+              "type": "jetstream",
+              "stream_name": "AGENT",
+              "description": "ADR-039 — reject verdicts to agentic-loop"
             }
           ]
         },
         "enable_graph_integration": true,
         "graph_event_subject_prefix": "sensor.processed",
         "inline_rules": [
+          {
+            "id": "governance-approve-all-audit",
+            "type": "expression",
+            "name": "ADR-039 audit-mode approve-all (E2E coverage)",
+            "description": "Approves every proposed tool call so the e2e:agentic scenario can verify the governance flow fires (metric increments). Audit-mode means dispatch is not gated; this rule's verdict is observability only. Required `tool_name` condition filters out non-tool-call messages — the rule's default subscription is `>` (match-all), so this condition is what scopes it.",
+            "enabled": true,
+            "conditions": [
+              {
+                "field": "tool_name",
+                "operator": "ne",
+                "value": "",
+                "required": true
+              },
+              {
+                "field": "call_id",
+                "operator": "ne",
+                "value": "",
+                "required": true
+              }
+            ],
+            "logic": "and",
+            "on_enter": [
+              {
+                "type": "approve",
+                "subject": "agent.toolcall.approved.$message.call_id",
+                "reason": "e2e governance audit approve-all for $message.tool_name"
+              }
+            ],
+            "metadata": {
+              "category": "governance",
+              "tier": 0,
+              "purpose": "e2e-coverage"
+            }
+          },
           {
             "id": "temperature-anomaly-agent",
             "type": "expression",
@@ -318,6 +373,10 @@
         "timeout": "30s",
         "stream_name": "AGENT",
         "loops_bucket": "AGENT_LOOPS",
+        "tool_call_governance": {
+          "mode": "audit",
+          "timeout": "1s"
+        },
         "ports": {
           "inputs": [
             {

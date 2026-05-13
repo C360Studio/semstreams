@@ -141,11 +141,14 @@ seeing them side-by-side makes the distinction concrete.
 │                                                                    │
 │  Work items (JetStream streams):                                  │
 │                                                                    │
-│   agent.task.*      ──► agentic-loop    "Execute this task"       │
-│   agent.request.*   ──► agentic-model   "Call LLM with these msgs"│
-│   tool.execute.*    ──► agentic-tools   "Run this tool"           │
-│   tool.result.*     ──► agentic-loop    "Here's the tool output"  │
-│   agent.response.*  ──► agentic-loop    "Here's the LLM output"   │
+│   agent.task.*               ──► agentic-loop    "Execute this task"        │
+│   agent.request.*            ──► agentic-model   "Call LLM with these msgs" │
+│   tool.execute.*             ──► agentic-tools   "Run this tool"            │
+│   tool.result.*              ──► agentic-loop    "Here's the tool output"   │
+│   agent.response.*           ──► agentic-loop    "Here's the LLM output"    │
+│   agent.toolcall.proposed.*  ──► rule processor  "Should this call run?"    │
+│   agent.toolcall.approved.>  ──► agentic-loop    "Verdict: approved"        │
+│   agent.toolcall.rejected.>  ──► agentic-loop    "Verdict: rejected"        │
 │                                                                    │
 │  State (KV buckets — twofer):                                     │
 │                                                                    │
