@@ -54,9 +54,9 @@ type loopMetrics struct {
 	graphWritePublishTimeouts *prometheus.CounterVec
 
 	// Tool-call governance (ADR-039)
-	governanceVerdictDuration                 *prometheus.HistogramVec
-	governanceVerdictTotal                    *prometheus.CounterVec
-	governanceSubscribeBeforePublishFailures  prometheus.Counter
+	governanceVerdictDuration                *prometheus.HistogramVec
+	governanceVerdictTotal                   *prometheus.CounterVec
+	governanceSubscribeBeforePublishFailures prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
