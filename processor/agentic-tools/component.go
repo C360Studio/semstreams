@@ -414,10 +414,8 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 
 	// Check approval filter
 	if c.approvalFilter != nil {
-		filterResult, filterErr := c.approvalFilter.FilterToolCalls(call.LoopID, []agentic.ToolCall{call})
-		if filterErr != nil {
-			c.logger.Error("Approval filter error", "tool", call.Name, "error", filterErr)
-		} else if len(filterResult.Rejected) > 0 {
+		filterResult := c.approvalFilter.FilterToolCalls(call.LoopID, []agentic.ToolCall{call})
+		if len(filterResult.Rejected) > 0 {
 			c.logger.Info("Tool requires approval", "tool", call.Name)
 
 			if c.metrics != nil {

@@ -195,52 +195,13 @@ func ToolCallToMessage(call agentic.ToolCall, userID, channelID string) *Message
 	}
 }
 
-// FilterToolCalls satisfies agentic.ToolCallFilter so the governance filter
-// can be installed directly on agentic-loop's MessageHandler. Each call is
-// converted to a governance Message and run through Process. A blocked call
-// becomes a ToolCallRejection carrying the violation message; a per-call
-// Process error becomes a rejection (reason includes the error) so a
-// transient internal failure cannot silently approve subsequent calls in
-// the batch.
-func (f *ToolCallFilter) FilterToolCalls(loopID string, calls []agentic.ToolCall) (agentic.ToolCallFilterResult, error) {
-	out := agentic.ToolCallFilterResult{}
-	// agentic.ToolCallFilter (agentic/filter.go) is contextless, so the
-	// underlying Process call runs with context.Background(). For
-	// today's synchronous in-memory regex checks this is fine; a future
-	// filter that calls remote services should plumb context through
-	// the interface rather than block here.
-	ctx := context.Background()
-	for _, call := range calls {
-		msg := ToolCallToMessage(call, "", "")
-		if loopID != "" {
-			msg.Content.Metadata["loop_id"] = loopID
-		}
-
-		res, err := f.Process(ctx, msg)
-		if err != nil {
-			out.Rejected = append(out.Rejected, agentic.ToolCallRejection{
-				Call:   call,
-				Reason: fmt.Sprintf("governance filter error: %v", err),
-			})
-			continue
-		}
-
-		if res.Allowed {
-			out.Approved = append(out.Approved, call)
-			continue
-		}
-
-		out.Rejected = append(out.Rejected, agentic.ToolCallRejection{
-			Call:   call,
-			Reason: violationReason(res.Violation),
-		})
-	}
-	return out, nil
-}
-
 // violationReason extracts a human-readable rejection reason from a
 // Violation. Falls back to a generic message when the violation or its
 // details map is missing the "message" key.
+//
+// Retained on the struct because subject-mode rule actions emit
+// rejection reasons from the same Violation shape (via the chain's
+// Process surface running on the agent.toolcall.proposed.* subject).
 func violationReason(v *Violation) string {
 	if v == nil {
 		return "policy violation"
@@ -252,5 +213,3 @@ func violationReason(v *Violation) string {
 	}
 	return fmt.Sprintf("policy violation (%s)", v.FilterName)
 }
-
-var _ agentic.ToolCallFilter = (*ToolCallFilter)(nil)

@@ -14,10 +14,10 @@ const DefaultContextLimit = 128000
 
 // Tool-call governance mode constants. ADR-039.
 //
-// Disabled is the default — current behavior, no publish to the
-// proposed subject, direct dispatch. Existing in-process
-// ToolCallFilter wiring (beta.67+68) continues to run; semspec's
-// pre-migration deployments keep working unchanged.
+// Disabled is the default — no publish to the proposed subject,
+// direct dispatch. The in-process ToolCallFilter wiring beta.67+68
+// shipped was retired in beta.70; subject-mode is now the sole
+// governance path.
 //
 // Audit publishes proposed tool calls to the proposed subject and
 // dispatches IMMEDIATELY without waiting for a verdict — shadow mode
@@ -61,28 +61,26 @@ type Config struct {
 	ApprovalTimeoutStr   string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
 	Consumer             ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context              ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
-	ToolCallGovernance   ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled retains existing in-process filter behavior,category:advanced"`
+	ToolCallGovernance   ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"`
 	Ports                *component.PortConfig    `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
 }
 
 // ToolCallGovernanceConfig configures subject-mode tool-call governance
-// (ADR-039). When Mode is "disabled" (the default), the loop keeps its
-// existing in-process ToolCallFilter wiring and never publishes to the
-// proposed subject. When Mode is "audit", every tool call is published
-// to agent.toolcall.proposed.* but dispatch is NOT blocked — verdicts
-// that arrive are logged/counted for observability. When Mode is
-// "enforce", the loop publishes-then-waits for a per-call verdict on
-// agent.toolcall.approved/rejected.* subjects, with Timeout as the
-// fail-closed window.
+// (ADR-039). When Mode is "disabled" (the default), tool calls dispatch
+// directly with no governance gate. When Mode is "audit", every tool
+// call is published to agent.toolcall.proposed.* but dispatch is NOT
+// blocked — verdicts that arrive are logged/counted for observability.
+// When Mode is "enforce", the loop publishes-then-waits for a per-call
+// verdict on agent.toolcall.approved/rejected.* subjects, with Timeout
+// as the fail-closed window.
 //
-// The in-process ToolCallFilter (beta.67+68) is retained alongside this
-// new flow at beta.69 — retirement deferred to beta.70 per ADR-039
-// §"Retirement of beta.67+68 surface". Operators migrate by switching
-// Mode to "audit" (verify rules), then "enforce" (cut over).
+// Beta.70 retired the in-process ToolCallFilter wiring that the
+// beta.67+68 release shipped (per ADR-039 Phase 3); subject-mode is
+// now the sole governance path.
 type ToolCallGovernanceConfig struct {
 	// Mode is one of "disabled", "audit", or "enforce". Default
-	// "disabled" preserves pre-beta.69 behavior.
-	Mode string `json:"mode,omitempty" schema:"type:string,description:Governance mode (disabled|audit|enforce). Default disabled retains in-process filter behavior,default:disabled,category:advanced"`
+	// "disabled" leaves no governance gate.
+	Mode string `json:"mode,omitempty" schema:"type:string,description:Governance mode (disabled|audit|enforce). Default disabled means no governance gate,default:disabled,category:advanced"`
 
 	// Timeout is the per-call wait window in enforce mode before the
 	// dispatcher fails-closed (rejects). Parsed as a Go duration string

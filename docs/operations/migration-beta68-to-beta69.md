@@ -96,20 +96,10 @@ cover the same policy surface.
 
 #### Stage 3 (beta.70): in-process filter surface retired
 
-When semspec's subject-mode rules are confirmed end-to-end, beta.70
-will retire the in-process filter wiring. Beta.70 will:
-
-- Remove `*ToolCallFilter` interface from `agentic` package.
-- Remove `agentic-loop.Component.SetToolCallFilter` /
-  `agentic-loop.Component.ToolCallFilter` accessors.
-- Remove the `agentic-governance.Component.ToolCallFilter()` accessor
-  (beta.67+68 wiring point).
-- Tighten the `tool_call_governance.timeout` default from `1s` to a
-  measured p99 from beta.69 deployments.
-
-There is no behavior change for deployments already on
-`mode=enforce` at beta.69 — beta.70 only removes the pre-migration
-escape hatch.
+beta.70 retired the in-process filter wiring. See the
+[beta.69 → beta.70 migration guide](migration-beta69-to-beta70.md) for
+the concrete symbol removals and the no-op upgrade path for
+deployments already on `mode=enforce` at beta.69.
 
 ### Translating semspec's filter config to rules
 

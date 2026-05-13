@@ -1872,65 +1872,77 @@ func TestHandleTask_DuplicateTaskID_DedupReturnsCreatedFalse(t *testing.T) {
 	}
 }
 
-// --- ToolCallFilter tests ---
-
-// mockFilter implements agentic.ToolCallFilter for testing
-type mockFilter struct {
-	approveAll   bool
-	rejectAll    bool
-	rejectByName map[string]string // name -> reason
+// extractDispatchedToolCall unmarshals the BaseMessage envelope from a
+// tool.execute publish and returns the inner ToolCall. The
+// dispatchToolCall path serializes the ToolCall as the message
+// payload before publishing, so the tool's post-merge Metadata is
+// observable through this single channel.
+func extractDispatchedToolCall(t *testing.T, data []byte) agentic.ToolCall {
+	t.Helper()
+	var envelope struct {
+		Payload agentic.ToolCall `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("failed to unmarshal tool.execute envelope: %v", err)
+	}
+	return envelope.Payload
 }
 
-func (f *mockFilter) FilterToolCalls(loopID string, calls []agentic.ToolCall) (agentic.ToolCallFilterResult, error) {
-	if f.approveAll {
-		return agentic.ToolCallFilterResult{Approved: calls}, nil
-	}
-
-	var result agentic.ToolCallFilterResult
-	for _, call := range calls {
-		if f.rejectAll {
-			result.Rejected = append(result.Rejected, agentic.ToolCallRejection{
-				Call:   call,
-				Reason: "all calls rejected",
-			})
-			continue
-		}
-		if reason, reject := f.rejectByName[call.Name]; reject {
-			result.Rejected = append(result.Rejected, agentic.ToolCallRejection{
-				Call:   call,
-				Reason: reason,
-			})
-		} else {
-			result.Approved = append(result.Approved, call)
-		}
-	}
-	return result, nil
-}
-
-func TestToolCallFilter_AllApproved(t *testing.T) {
+// TestPropagateMetadata_MergesWithWirePopulation pins the merge fix
+// for the Gemini-wire metadata-dropping bug: when the wire adapter
+// pre-populates ToolCall.Metadata (e.g. with a thought signature),
+// the cached TaskMessage.Metadata MUST still propagate onto the
+// dispatched call by filling in keys the wire side didn't set —
+// instead of being skipped entirely by a "no-op if non-empty" guard.
+//
+// Pre-fix shape (broken):
+//
+//	if len(metadata) > 0 && len(approved[i].Metadata) == 0 {
+//	    approved[i].Metadata = metadata
+//	}
+//
+// Any wire-side pre-population blocked the entire cached map. That
+// silently dropped action_allowlist / related_loops / caller context
+// for every Gemini-wire tool call (client_wire.go:303-313 in the
+// readC360ThoughtSignature branch).
+//
+// Post-fix: merge, with call-specific keys winning (so the wire
+// adapter's per-call metadata is never overwritten).
+func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	handler.SetToolCallFilter(&mockFilter{approveAll: true})
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "task-filter-approved",
+		TaskID: "task-merge",
 		Role:   "general",
 		Model:  "test-model",
-		Prompt: "Test",
+		Prompt: "exercise the metadata merge",
+		Metadata: map[string]any{
+			agentic.MetadataKeyDecideActionAllowlist: []any{"fan_out", "synthesize"},
+			"custom_audit_tag":                       "audit-merge-1",
+		},
 	})
 	if err != nil {
 		t.Fatalf("HandleTask() error = %v", err)
 	}
 	loopID := taskResult.LoopID
 
+	// Model response with a tool call carrying wire-adapter
+	// pre-population, mirroring what client_wire.go's Gemini path
+	// produces when readC360ThoughtSignature returns a non-empty sig.
 	response := agentic.AgentResponse{
-		RequestID: "req-filter-ok",
+		RequestID: "req-merge-1",
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
 			ToolCalls: []agentic.ToolCall{
-				{ID: "call-fa-1", Name: "tool_a"},
-				{ID: "call-fa-2", Name: "tool_b"},
+				{
+					ID:   "call-merge-1",
+					Name: "fan_out",
+					Metadata: map[string]any{
+						agentic.MetadataKeyGoogleThoughtSignature: "wire-sig-abc",
+					},
+				},
 			},
 		},
 	}
@@ -1940,35 +1952,59 @@ func TestToolCallFilter_AllApproved(t *testing.T) {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
 
-	// Serial dispatch: first call dispatched, second queued
-	toolCount := 0
+	// Inspect the dispatched tool.execute message — the post-merge
+	// ToolCall lives inside its payload.
+	var got agentic.ToolCall
+	found := false
 	for _, msg := range result.PublishedMessages {
 		if containsIgnoreCase(msg.Subject, "tool.execute") {
-			toolCount++
+			got = extractDispatchedToolCall(t, msg.Data)
+			found = true
+			break
 		}
 	}
-	if toolCount != 1 {
-		t.Errorf("Expected 1 tool.execute message (serial dispatch), got %d", toolCount)
+	if !found {
+		t.Fatalf("no tool.execute message published; PublishedMessages=%+v", result.PublishedMessages)
 	}
-	if len(result.PendingTools) != 1 {
-		t.Errorf("Expected 1 pending tool (serial dispatch), got %d", len(result.PendingTools))
+
+	// Wire-side pre-population survives (call-specific keys win).
+	if sig, ok := got.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); !ok || sig != "wire-sig-abc" {
+		t.Errorf("Gemini thought signature lost — got Metadata[%q]=%v, want %q",
+			agentic.MetadataKeyGoogleThoughtSignature, got.Metadata[agentic.MetadataKeyGoogleThoughtSignature], "wire-sig-abc")
+	}
+
+	// Cached TaskMessage metadata IS propagated — the bug was that
+	// these keys were silently dropped when wire pre-population
+	// existed.
+	if _, ok := got.Metadata[agentic.MetadataKeyDecideActionAllowlist]; !ok {
+		t.Errorf("action_allowlist dropped — wire pre-population blocked propagation of cached task metadata. "+
+			"got Metadata=%v", got.Metadata)
+	}
+	if audit, ok := got.Metadata["custom_audit_tag"].(string); !ok || audit != "audit-merge-1" {
+		t.Errorf("custom_audit_tag dropped — got Metadata[custom_audit_tag]=%v, want %q",
+			got.Metadata["custom_audit_tag"], "audit-merge-1")
 	}
 }
 
-func TestToolCallFilter_PartialRejection(t *testing.T) {
+// TestPropagateMetadata_NoOverwriteOnConflict pins the merge-direction
+// invariant: when a key exists in BOTH the wire-populated call
+// metadata AND the cached task metadata, the wire side wins. This
+// prevents the cached task metadata from overwriting per-call wire
+// state (e.g. a thought signature that's specific to this call).
+func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	handler.SetToolCallFilter(&mockFilter{
-		rejectByName: map[string]string{
-			"dangerous_tool": "not authorized",
-		},
-	})
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "task-filter-partial",
+		TaskID: "task-conflict",
 		Role:   "general",
 		Model:  "test-model",
-		Prompt: "Test",
+		Prompt: "exercise the merge conflict path",
+		Metadata: map[string]any{
+			// Cached task metadata also carries this key — call-side
+			// must win so per-call wire context is preserved.
+			agentic.MetadataKeyGoogleThoughtSignature: "task-sig-bad",
+		},
 	})
 	if err != nil {
 		t.Fatalf("HandleTask() error = %v", err)
@@ -1976,13 +2012,18 @@ func TestToolCallFilter_PartialRejection(t *testing.T) {
 	loopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-filter-partial",
+		RequestID: "req-conflict-1",
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
 			ToolCalls: []agentic.ToolCall{
-				{ID: "call-fp-1", Name: "safe_tool"},
-				{ID: "call-fp-2", Name: "dangerous_tool"},
+				{
+					ID:   "call-conflict-1",
+					Name: "fan_out",
+					Metadata: map[string]any{
+						agentic.MetadataKeyGoogleThoughtSignature: "wire-sig-good",
+					},
+				},
 			},
 		},
 	}
@@ -1992,119 +2033,18 @@ func TestToolCallFilter_PartialRejection(t *testing.T) {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
 
-	// Only safe_tool should be published
-	toolCount := 0
+	var got agentic.ToolCall
 	for _, msg := range result.PublishedMessages {
 		if containsIgnoreCase(msg.Subject, "tool.execute") {
-			toolCount++
+			got = extractDispatchedToolCall(t, msg.Data)
+			break
 		}
 	}
-	if toolCount != 1 {
-		t.Errorf("Expected 1 tool.execute message, got %d", toolCount)
-	}
-	// Only 1 pending tool (safe_tool)
-	if len(result.PendingTools) != 1 {
-		t.Errorf("Expected 1 pending tool, got %d", len(result.PendingTools))
-	}
-}
 
-func TestToolCallFilter_AllRejected(t *testing.T) {
-	handler := agenticloop.NewMessageHandler(createTestConfig())
-	handler.SetToolCallFilter(&mockFilter{rejectAll: true})
-
-	ctx := context.Background()
-	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "task-filter-all-reject",
-		Role:   "general",
-		Model:  "test-model",
-		Prompt: "Test",
-	})
-	if err != nil {
-		t.Fatalf("HandleTask() error = %v", err)
-	}
-	loopID := taskResult.LoopID
-
-	response := agentic.AgentResponse{
-		RequestID: "req-filter-reject",
-		Status:    "tool_call",
-		Message: agentic.ChatMessage{
-			Role: "assistant",
-			ToolCalls: []agentic.ToolCall{
-				{ID: "call-fr-1", Name: "tool_x"},
-				{ID: "call-fr-2", Name: "tool_y"},
-			},
-		},
-	}
-
-	result, err := handler.HandleModelResponse(ctx, loopID, response)
-	if err != nil {
-		t.Fatalf("HandleModelResponse() error = %v", err)
-	}
-
-	// No tool.execute messages should be published
-	toolCount := 0
-	for _, msg := range result.PublishedMessages {
-		if containsIgnoreCase(msg.Subject, "tool.execute") {
-			toolCount++
-		}
-	}
-	if toolCount != 0 {
-		t.Errorf("Expected 0 tool.execute messages, got %d", toolCount)
-	}
-
-	// All tools rejected → handleToolsComplete should fire → agent.request published
-	requestCount := 0
-	for _, msg := range result.PublishedMessages {
-		if containsIgnoreCase(msg.Subject, "agent.request") {
-			requestCount++
-		}
-	}
-	if requestCount == 0 {
-		t.Error("All-rejected filter should trigger handleToolsComplete and publish agent.request")
-	}
-}
-
-func TestToolCallFilter_Nil_NoFiltering(t *testing.T) {
-	handler := agenticloop.NewMessageHandler(createTestConfig())
-	// No filter set — default behavior
-
-	ctx := context.Background()
-	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "task-no-filter",
-		Role:   "general",
-		Model:  "test-model",
-		Prompt: "Test",
-	})
-	if err != nil {
-		t.Fatalf("HandleTask() error = %v", err)
-	}
-	loopID := taskResult.LoopID
-
-	response := agentic.AgentResponse{
-		RequestID: "req-no-filter",
-		Status:    "tool_call",
-		Message: agentic.ChatMessage{
-			Role: "assistant",
-			ToolCalls: []agentic.ToolCall{
-				{ID: "call-nf-1", Name: "tool_a"},
-			},
-		},
-	}
-
-	result, err := handler.HandleModelResponse(ctx, loopID, response)
-	if err != nil {
-		t.Fatalf("HandleModelResponse() error = %v", err)
-	}
-
-	// Without filter, all calls proceed normally
-	toolCount := 0
-	for _, msg := range result.PublishedMessages {
-		if containsIgnoreCase(msg.Subject, "tool.execute") {
-			toolCount++
-		}
-	}
-	if toolCount != 1 {
-		t.Errorf("Expected 1 tool.execute message, got %d", toolCount)
+	if sig, ok := got.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); !ok || sig != "wire-sig-good" {
+		t.Errorf("Merge direction wrong — call-specific value should win on conflict. "+
+			"got Metadata[%q]=%v, want %q",
+			agentic.MetadataKeyGoogleThoughtSignature, got.Metadata[agentic.MetadataKeyGoogleThoughtSignature], "wire-sig-good")
 	}
 }
 
@@ -2218,81 +2158,6 @@ func TestEmptyNameToolCalls_AllEmpty(t *testing.T) {
 	if requestCount == 0 {
 		t.Error("All-empty-name tool calls should trigger handleToolsComplete and publish agent.request")
 	}
-}
-
-// TestToolCallFilter_RejectedCallsPreserveToolName verifies that rejected tool calls
-// track their name so tool result messages include it. Without this, Gemini rejects
-// the request with "function_response.name: Name cannot be empty".
-func TestToolCallFilter_RejectedCallsPreserveToolName(t *testing.T) {
-	handler := agenticloop.NewMessageHandler(createTestConfig())
-	handler.SetToolCallFilter(&mockFilter{rejectAll: true})
-
-	ctx := context.Background()
-	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "task-reject-name",
-		Role:   "general",
-		Model:  "test-model",
-		Prompt: "Test rejected names",
-	})
-	if err != nil {
-		t.Fatalf("HandleTask() error = %v", err)
-	}
-	loopID := taskResult.LoopID
-
-	response := agentic.AgentResponse{
-		RequestID: "req-reject-name",
-		Status:    "tool_call",
-		Message: agentic.ChatMessage{
-			Role: "assistant",
-			ToolCalls: []agentic.ToolCall{
-				{ID: "call-rn-1", Name: "forbidden_tool"},
-				{ID: "call-rn-2", Name: "blocked_tool"},
-			},
-		},
-	}
-
-	result, err := handler.HandleModelResponse(ctx, loopID, response)
-	if err != nil {
-		t.Fatalf("HandleModelResponse() error = %v", err)
-	}
-
-	// All rejected → handleToolsComplete fires → agent.request published.
-	// Parse the request to verify tool result messages have names.
-	for _, msg := range result.PublishedMessages {
-		if !containsIgnoreCase(msg.Subject, "agent.request") {
-			continue
-		}
-
-		var envelope map[string]any
-		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
-			t.Fatalf("Failed to parse envelope: %v", err)
-		}
-		payload, ok := envelope["payload"].(map[string]any)
-		if !ok {
-			t.Fatal("Expected payload in BaseMessage envelope")
-		}
-		messages, ok := payload["messages"].([]any)
-		if !ok {
-			t.Fatal("Expected messages array in payload")
-		}
-
-		// Find tool result messages and verify they have names
-		for _, m := range messages {
-			msgMap, ok := m.(map[string]any)
-			if !ok {
-				continue
-			}
-			if msgMap["role"] != "tool" {
-				continue
-			}
-			name, _ := msgMap["name"].(string)
-			if name == "" {
-				t.Errorf("Tool result message for call %v has empty name — Gemini would reject this", msgMap["tool_call_id"])
-			}
-		}
-		return
-	}
-	t.Error("No agent.request published after all-rejected filter")
 }
 
 // --- Conversation context regression tests ---
