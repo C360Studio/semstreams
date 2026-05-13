@@ -149,6 +149,25 @@
       "default": "120s",
       "category": "basic"
     },
+    "tool_call_governance": {
+      "type": "object",
+      "description": "Subject-mode tool-call governance (ADR-039). Default mode=disabled retains existing in-process filter behavior",
+      "category": "advanced",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Governance mode (disabled|audit|enforce). Default disabled retains in-process filter behavior",
+          "default": "disabled",
+          "category": "advanced"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Per-call verdict wait window in enforce mode (e.g. 500ms or 2s). Default 1s",
+          "default": "1s",
+          "category": "advanced"
+        }
+      }
+    },
     "tool_result_max_bytes": {
       "type": "integer",
       "description": "Maximum bytes for tool result content before truncation. 0 means no limit",
