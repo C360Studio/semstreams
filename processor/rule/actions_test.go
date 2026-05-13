@@ -532,6 +532,94 @@ func TestAction_Publish_PayloadFormat(t *testing.T) {
 	assert.Equal(t, float64(1), props["priority"]) // JSON numbers are float64
 }
 
+// TestExecutePublish_SubstitutesPropertyTemplates pins ADR-039's reject-shape
+// invariant: `properties.call_id = "$message.call_id"` (and similar
+// `$message.*` / `$entity.*` tokens) must resolve from ExecutionContext
+// before publish. Pre-fix, the literal template string reached the wire
+// and broke the agentic-loop verdict dispatcher's call-id demux for the
+// canonical ADR-039 reject pattern (`publish` action + `deny`). Non-string
+// property values (numbers, bools, nested maps) must pass through
+// unchanged — the shallow-only contract matches docs/operations/17.
+func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+	ec := &ExecutionContext{
+		EntityID: "c360.platform.test.svc.entity.001",
+		MessageData: map[string]any{
+			"loop_id":   "loop-abc",
+			"call_id":   "call-001",
+			"tool_name": "bash",
+		},
+	}
+	action := Action{
+		Type:    ActionTypePublish,
+		Subject: "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+		Properties: map[string]any{
+			"decision":  "rejected",
+			"call_id":   "$message.call_id",
+			"loop_id":   "$message.loop_id",
+			"tool_name": "$message.tool_name",
+			"reason":    "writes outside worktree blocked",
+			"priority":  3,    // non-string survives unchanged
+			"sticky":    true, // non-string survives unchanged
+		},
+	}
+
+	require.NoError(t, executor.executePublish(ctx, action, ec))
+	require.Len(t, mock.published, 1, "publish must fire exactly once")
+
+	got := mock.published[0]
+	assert.Equal(t,
+		"agent.toolcall.rejected.loop-abc.call-001",
+		got.subject,
+		"subject $message.* tokens must substitute (existing behaviour)")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(got.data, &payload))
+
+	props, ok := payload["properties"].(map[string]any)
+	require.True(t, ok, "properties must be a map")
+	assert.Equal(t, "rejected", props["decision"], "static string passes through unchanged")
+	assert.Equal(t, "call-001", props["call_id"],
+		"$message.call_id MUST resolve — VerdictPayload.EffectiveCallID falls back to this field for publish-action verdicts")
+	assert.Equal(t, "loop-abc", props["loop_id"], "$message.loop_id must resolve")
+	assert.Equal(t, "bash", props["tool_name"], "$message.tool_name must resolve")
+	assert.Equal(t, "writes outside worktree blocked", props["reason"], "static string passes through")
+	assert.Equal(t, float64(3), props["priority"], "non-string number survives unchanged (JSON unmarshals to float64)")
+	assert.Equal(t, true, props["sticky"], "non-string bool survives unchanged")
+}
+
+// TestExecutePublish_NilPropertiesNoOp pins that a publish action with no
+// Properties block doesn't panic and emits a nil/empty properties map
+// downstream. Guard against the substituteStringProperties helper
+// trying to range over a nil map after Bug 2's fix.
+func TestExecutePublish_NilPropertiesNoOp(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+	ec := &ExecutionContext{EntityID: "entity.001"}
+	action := Action{
+		Type:    ActionTypePublish,
+		Subject: "test.subject",
+	}
+
+	require.NoError(t, executor.executePublish(ctx, action, ec))
+	require.Len(t, mock.published, 1)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(mock.published[0].data, &payload))
+	// JSON null deserialises to nil interface; either nil or empty map is fine.
+	if v, ok := payload["properties"]; ok && v != nil {
+		_, isMap := v.(map[string]any)
+		assert.True(t, isMap, "properties when present must be a map, got %T", v)
+	}
+}
+
 // T043: Test Publish action without publisher (no-op)
 func TestAction_Publish_NoPublisher(t *testing.T) {
 	t.Parallel()
