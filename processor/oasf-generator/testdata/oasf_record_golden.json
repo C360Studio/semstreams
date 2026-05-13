@@ -1,0 +1,43 @@
+{
+  "name": "agent-contract-test",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "authors": [
+    "semstreams-test"
+  ],
+  "created_at": "",
+  "description": "Help developers review code and ship docs",
+  "skills": [
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "description": "Review code for quality and security issues",
+      "confidence": 0.9,
+      "permissions": [
+        "file_read",
+        "file_write"
+      ]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "confidence": 1
+    }
+  ],
+  "domains": [
+    {
+      "name": "documentation"
+    },
+    {
+      "name": "software-development"
+    }
+  ],
+  "extensions": {
+    "action_types": [
+      "model-call",
+      "tool-call"
+    ],
+    "semstreams_entity_id": "acme.ops.agentic.system.agent.contract-test",
+    "source": "semstreams"
+  }
+}
