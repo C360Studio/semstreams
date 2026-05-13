@@ -2,11 +2,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -158,20 +160,32 @@ func NewA2AClient(baseURL string) *A2AClient {
 }
 
 // A2ATask represents an A2A task for testing.
+// Mirrors the server-side input/a2a.Task wire shape.
 type A2ATask struct {
-	ID     string `json:"id"`
-	Status struct {
-		State string `json:"state"`
-	} `json:"status"`
-	Messages []A2AMessage `json:"messages,omitempty"`
+	ID        string         `json:"id"`
+	SessionID string         `json:"sessionId,omitempty"`
+	Status    A2ATaskStatus  `json:"status"`
+	Message   A2AMessage     `json:"message,omitzero"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+// A2ATaskStatus mirrors input/a2a.TaskStatus.
+type A2ATaskStatus struct {
+	State     string `json:"state"`
+	Message   string `json:"message,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
 // A2AMessage represents an A2A message.
 type A2AMessage struct {
-	Role  string `json:"role"`
-	Parts []struct {
-		Text string `json:"text,omitempty"`
-	} `json:"parts"`
+	Role  string           `json:"role"`
+	Parts []A2AMessagePart `json:"parts"`
+}
+
+// A2AMessagePart mirrors input/a2a.MessagePart for the text variant.
+type A2AMessagePart struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 }
 
 // A2AAgentCard represents an A2A agent card response.
@@ -236,26 +250,28 @@ func (c *A2AClient) GetAgentCard(ctx context.Context) (*A2AAgentCard, error) {
 	return &card, nil
 }
 
-// SubmitTask submits a task to the A2A adapter.
+// SubmitTask submits a task to the A2A adapter via POST /tasks/send.
+// The adapter authenticates via X-Agent-DID; we pass a fixed test DID so the
+// stage works whether or not auth is enabled on the deployment.
 func (c *A2AClient) SubmitTask(ctx context.Context, taskID, prompt string) (*A2ATask, error) {
-	body := fmt.Sprintf(`{
-		"jsonrpc": "2.0",
-		"method": "tasks/send",
-		"params": {
-			"id": "%s",
-			"message": {
-				"role": "user",
-				"parts": [{"text": "%s"}]
-			}
+	task := A2ATask{
+		ID: taskID,
+		Message: A2AMessage{
+			Role:  "user",
+			Parts: []A2AMessagePart{{Type: "text", Text: prompt}},
 		},
-		"id": "1"
-	}`, taskID, prompt)
+	}
+	body, err := json.Marshal(task)
+	if err != nil {
+		return nil, fmt.Errorf("marshal task: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/tasks/send", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-DID", "did:semstreams:e2e-test")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -263,43 +279,45 @@ func (c *A2AClient) SubmitTask(ctx context.Context, taskID, prompt string) (*A2A
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// handleSendTask returns 202 Accepted on success.
+	if resp.StatusCode != http.StatusAccepted {
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("task submission failed: %s - %s", resp.Status, string(respBody))
 	}
 
-	var result struct {
-		Result *A2ATask `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var result A2ATask
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
-
-	if result.Error != nil {
-		return nil, fmt.Errorf("A2A error %d: %s", result.Error.Code, result.Error.Message)
-	}
-
-	return result.Result, nil
+	return &result, nil
 }
 
-// GetTask retrieves task status from the A2A adapter.
-func (c *A2AClient) GetTask(ctx context.Context, taskID string) (*A2ATask, error) {
-	body := fmt.Sprintf(`{
-		"jsonrpc": "2.0",
-		"method": "tasks/get",
-		"params": {"id": "%s"},
-		"id": "1"
-	}`, taskID)
+// SubmitTaskRaw submits an arbitrary request body to /tasks/send. Used for
+// negative-path tests that need malformed payloads. Returns status code and body.
+func (c *A2AClient) SubmitTaskRaw(ctx context.Context, rawBody []byte) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/tasks/send", bytes.NewReader(rawBody))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-DID", "did:semstreams:e2e-test")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/", strings.NewReader(body))
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+// GetTask retrieves task status via GET /tasks/get?id=<id>.
+func (c *A2AClient) GetTask(ctx context.Context, taskID string) (*A2ATask, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/tasks/get?id="+url.QueryEscape(taskID), nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -312,22 +330,42 @@ func (c *A2AClient) GetTask(ctx context.Context, taskID string) (*A2ATask, error
 		return nil, fmt.Errorf("get task failed: %s - %s", resp.Status, string(respBody))
 	}
 
-	var result struct {
-		Result *A2ATask `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var result A2ATask
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	return &result, nil
+}
 
-	if result.Error != nil {
-		return nil, fmt.Errorf("A2A error %d: %s", result.Error.Code, result.Error.Message)
+// CancelTask cancels a task via POST /tasks/cancel.
+func (c *A2AClient) CancelTask(ctx context.Context, taskID string) (*A2ATask, error) {
+	body, err := json.Marshal(map[string]string{"id": taskID})
+	if err != nil {
+		return nil, fmt.Errorf("marshal cancel: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/tasks/cancel", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-DID", "did:semstreams:e2e-test")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("cancel task failed: %s - %s", resp.Status, string(respBody))
 	}
 
-	return result.Result, nil
+	var result A2ATask
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
 }
 
 // AGNTCYMockClient provides HTTP client for testing the AGNTCY mock server.
@@ -436,11 +474,25 @@ func (c *AGNTCYMockClient) WaitForRegistration(
 }
 
 // MockServerStats contains statistics from the AGNTCY mock server.
+// Structural fields (Spans*, MetricsDataPoints*, *Names) are populated by the
+// mock's OTLP-JSON parser and allow assertions beyond byte-count proof-of-life.
 type MockServerStats struct {
 	RequestCount    int64 `json:"request_count"`
 	Registrations   int   `json:"registrations"`
 	TracesReceived  int64 `json:"traces_received"`
 	MetricsReceived int64 `json:"metrics_received"`
+
+	// Structural trace aggregates parsed from OTLP JSON payloads.
+	TracesSpansTotal       int64    `json:"traces_spans_total"`
+	TracesStatusOK         int64    `json:"traces_status_ok"`
+	TracesStatusError      int64    `json:"traces_status_error"`
+	TracesParentChildLinks int      `json:"traces_parent_child_links"`
+	TracesSpanNames        []string `json:"traces_span_names"`
+	TracesLoopIDs          []string `json:"traces_loop_ids"`
+
+	// Structural metric aggregates.
+	MetricsDataPointsTotal int64    `json:"metrics_data_points_total"`
+	MetricsNames           []string `json:"metrics_names"`
 }
 
 // GetStats retrieves mock server statistics for e2e assertions.

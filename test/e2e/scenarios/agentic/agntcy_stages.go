@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"slices"
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
@@ -255,6 +257,89 @@ func (s *Scenario) verifyA2AAdapter(ctx context.Context, result *scenarios.Resul
 	return nil
 }
 
+// verifyA2ATaskLifecycle exercises the A2A adapter's task lifecycle endpoints
+// (POST /tasks/send → GET /tasks/get?id=… → POST /tasks/cancel) against the
+// running a2a-adapter component. This drives the production TaskMapper code path
+// — parsing the A2A wire format, extracting text from MessageParts, mapping into
+// agentic.TaskMessage — which the agent-card-only stage does not touch.
+//
+// The handler's get/cancel implementations are placeholders today (the TODO at
+// component.go:304 / :340), so this stage validates wire shape, not durable task
+// state. When persistence lands the assertions tighten to reflect real state.
+func (s *Scenario) verifyA2ATaskLifecycle(ctx context.Context, result *scenarios.Result) error {
+	agntcyConfig := s.getAGNTCYConfig()
+	if !agntcyConfig.Enabled {
+		result.Details["agntcy_a2a_lifecycle_skipped"] = "AGNTCY tests disabled"
+		return nil
+	}
+	if agntcyConfig.A2AURL == "" {
+		result.Details["agntcy_a2a_lifecycle_skipped"] = "A2A URL not configured"
+		return nil
+	}
+
+	a2aClient := client.NewA2AClient(agntcyConfig.A2AURL)
+	if err := a2aClient.Health(ctx); err != nil {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("A2A adapter not reachable for lifecycle stage: %v", err))
+		result.Details["agntcy_a2a_lifecycle_skipped"] = "adapter not reachable"
+		return nil
+	}
+
+	taskID := fmt.Sprintf("e2e-a2a-lifecycle-%d", time.Now().UnixNano())
+	const prompt = "Summarize the agent registry. Reply with one sentence."
+
+	// 1. SUBMIT — exercises TaskMapper.ToTaskMessage + handleSendTask happy path.
+	submitted, err := a2aClient.SubmitTask(ctx, taskID, prompt)
+	if err != nil {
+		return fmt.Errorf("submit task: %w", err)
+	}
+	if submitted.ID != taskID {
+		return fmt.Errorf("submit response task id = %q, want %q", submitted.ID, taskID)
+	}
+	if submitted.Status.State != "submitted" {
+		return fmt.Errorf("submit response state = %q, want \"submitted\"", submitted.Status.State)
+	}
+	result.Details["agntcy_a2a_lifecycle_submit_state"] = submitted.Status.State
+
+	// 2. NEGATIVE — empty parts should be rejected at the mapper boundary
+	// (task_mapper.go: "task message has no text content").
+	emptyTaskBody := []byte(`{"id":"e2e-a2a-empty","message":{"role":"user","parts":[]}}`)
+	status, body, err := a2aClient.SubmitTaskRaw(ctx, emptyTaskBody)
+	if err != nil {
+		return fmt.Errorf("submit empty-parts task: %w", err)
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("empty-parts submit returned %d (body=%s), want 400", status, string(body))
+	}
+	result.Details["agntcy_a2a_lifecycle_negative_status"] = status
+
+	// 3. GET — placeholder handler returns "working".
+	fetched, err := a2aClient.GetTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("get task: %w", err)
+	}
+	if fetched.ID != taskID {
+		return fmt.Errorf("get response task id = %q, want %q", fetched.ID, taskID)
+	}
+	if fetched.Status.State == "" {
+		return fmt.Errorf("get response state empty")
+	}
+	result.Details["agntcy_a2a_lifecycle_get_state"] = fetched.Status.State
+
+	// 4. CANCEL — placeholder handler returns "canceled".
+	canceled, err := a2aClient.CancelTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("cancel task: %w", err)
+	}
+	if canceled.Status.State != "canceled" {
+		return fmt.Errorf("cancel response state = %q, want \"canceled\"", canceled.Status.State)
+	}
+	result.Details["agntcy_a2a_lifecycle_cancel_state"] = canceled.Status.State
+
+	result.Details["agntcy_a2a_lifecycle_verified"] = true
+	return nil
+}
+
 // verifyDirectoryBridge tests that the directory-bridge component registers agents.
 // This test verifies the directory-bridge component is watching OASF records and
 // registering them with the mock directory server.
@@ -327,16 +412,53 @@ func (s *Scenario) verifyOTELExport(ctx context.Context, result *scenarios.Resul
 
 	result.Metrics["otel_traces_received"] = int(stats.TracesReceived)
 	result.Metrics["otel_metrics_received"] = int(stats.MetricsReceived)
+	result.Metrics["otel_spans_total"] = int(stats.TracesSpansTotal)
+	result.Metrics["otel_status_ok"] = int(stats.TracesStatusOK)
+	result.Metrics["otel_status_error"] = int(stats.TracesStatusError)
+	result.Metrics["otel_metric_data_points"] = int(stats.MetricsDataPointsTotal)
+	result.Details["otel_span_names"] = stats.TracesSpanNames
+	result.Details["otel_metric_names"] = stats.MetricsNames
 
-	if stats.TracesReceived > 0 {
-		result.Details["otel_traces_exported"] = true
-	} else {
+	if stats.TracesReceived == 0 {
 		result.Warnings = append(result.Warnings,
 			"No OTEL traces received by mock server — exporter may not have flushed within the test window")
 		result.Details["otel_traces_exported"] = false
+		return nil
+	}
+	result.Details["otel_traces_exported"] = true
+
+	// Structural assertions on the parsed OTLP JSON. These catch:
+	//   - exporter emitting empty trace bodies (bytes > 0, spans == 0)
+	//   - the agent.loop_id attribute being dropped at the wire boundary
+	//   - the loop span being renamed or never published
+	if stats.TracesSpansTotal == 0 {
+		return fmt.Errorf("mock received %d trace POSTs but parsed 0 spans — exporter JSON shape likely drifted",
+			stats.TracesReceived)
 	}
 
+	if !containsString(stats.TracesSpanNames, "agent.loop") {
+		return fmt.Errorf("mock saw no agent.loop spans, only %v — span collector LoopCreated handler may be wired wrong",
+			stats.TracesSpanNames)
+	}
+
+	if injectedLoopID, ok := result.Details["loop_id"].(string); ok && injectedLoopID != "" {
+		if !containsString(stats.TracesLoopIDs, injectedLoopID) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf(
+				"injected loop_id %q not present in span attrs (saw %v) — span may have flushed for a different loop, or attribute key changed",
+				injectedLoopID, stats.TracesLoopIDs))
+		} else {
+			result.Details["otel_injected_loop_id_found"] = true
+		}
+	}
+
+	result.Details["otel_structural_verified"] = true
 	return nil
+}
+
+// containsString reports whether s appears in xs. Tiny helper local to AGNTCY
+// stages — no general-purpose slice util in the e2e harness.
+func containsString(xs []string, s string) bool {
+	return slices.Contains(xs, s)
 }
 
 // cleanupAGNTCY cleans up test resources created by AGNTCY tests.

@@ -164,6 +164,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-oasf-generation", s.verifyOASFGeneration},
 		{"verify-directory-bridge", s.verifyDirectoryBridge},
 		{"verify-a2a-adapter", s.verifyA2AAdapter},
+		{"verify-a2a-task-lifecycle", s.verifyA2ATaskLifecycle},
 		{"verify-otel-export", s.verifyOTELExport},
 	}
 
