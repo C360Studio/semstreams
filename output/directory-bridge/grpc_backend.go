@@ -81,7 +81,15 @@ func (b *GRPCBackend) Publish(ctx context.Context, req *PublishRequest) (*Publis
 		return nil, fmt.Errorf("marshal OASF record: %w", err)
 	}
 
-	stream, err := b.client.Push(ctx)
+	// Wrap caller's ctx so every early-return reclaims the stream's
+	// underlying HTTP/2 stream. grpc.ClientStream leaks until its ctx is
+	// cancelled or io.EOF is drained — and we leave several error paths
+	// below that bypass the EOF drain. Cancel-on-success is safe; gRPC
+	// tolerates post-completion cancellation.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := b.client.Push(streamCtx)
 	if err != nil {
 		return nil, fmt.Errorf("open push stream: %w", err)
 	}
@@ -122,6 +130,9 @@ func (b *GRPCBackend) Refresh(_ context.Context, req *RefreshRequest) (*PublishR
 	if req == nil {
 		return nil, fmt.Errorf("refresh request is nil")
 	}
+	if req.RecordID == "" {
+		return nil, fmt.Errorf("refresh request RecordID is empty")
+	}
 	return &PublishResult{
 		RecordID:  req.RecordID,
 		ExpiresAt: time.Time{},
@@ -138,7 +149,12 @@ func (b *GRPCBackend) Withdraw(ctx context.Context, req *WithdrawRequest) error 
 		return fmt.Errorf("withdraw request RecordID is empty")
 	}
 
-	stream, err := b.client.Delete(ctx)
+	// Same stream-leak mitigation as Publish: cancel-on-return reclaims
+	// the HTTP/2 stream on any pre-CloseAndRecv error path.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := b.client.Delete(streamCtx)
 	if err != nil {
 		return fmt.Errorf("open delete stream: %w", err)
 	}
@@ -163,8 +179,12 @@ func (b *GRPCBackend) Close() error {
 
 // oasfToProtoRecord converts our domain OASFRecord into the wire-level
 // core.v1.Record. The proto carries the record as an opaque
-// google.protobuf.Struct (allowing OASF schema evolution without proto
-// regeneration), so the safest bridge is JSON → structpb.
+// google.protobuf.Struct, so we hand-roll JSON → structpb instead of
+// using corev1.UnmarshalRecord — that helper enforces the AGNTCY typed
+// proto OASF schema (which has numeric Skill.id as uint32), but our
+// oasf-generator emits string Skill.id values per our internal OASF
+// shape. Aligning the two schemas is out of scope for PR-B; see the
+// pr70-deferred-review-findings memory for the schema-alignment task.
 func oasfToProtoRecord(rec any) (*corev1.Record, error) {
 	jsonBytes, err := json.Marshal(rec)
 	if err != nil {

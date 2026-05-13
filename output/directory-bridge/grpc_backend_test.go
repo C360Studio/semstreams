@@ -161,7 +161,19 @@ func TestGRPCBackend_PublishWithdrawRoundTrip(t *testing.T) {
 		Version:       "1.0.0",
 		SchemaVersion: "1.0.0",
 		Description:   "grpc backend round-trip",
-		Skills:        []oasfgenerator.OASFSkill{{ID: "test", Name: "Test"}},
+		// Multi-field skill exercises nested object round-trip through
+		// the JSON → structpb bridge. Confidence is a non-zero float so
+		// the test catches a regression to int-only or zero-value handling.
+		Skills: []oasfgenerator.OASFSkill{{
+			ID:         "test-skill",
+			Name:       "Test Skill",
+			Confidence: 0.95,
+		}},
+		// Domain.Priority is the canonical numeric-field round-trip case
+		// — JSON has no integer type so structpb represents it as
+		// NumberValue (a float64). Asserting we get 5 back catches any
+		// drift where the field is silently dropped.
+		Domains: []oasfgenerator.OASFDomain{{Name: "test-domain", Priority: 5}},
 	}
 
 	// Publish
@@ -191,8 +203,33 @@ func TestGRPCBackend_PublishWithdrawRoundTrip(t *testing.T) {
 		t.Fatalf("server did not store record under CID %q", res.RecordID)
 	}
 	// Verify the OASF name round-tripped through the structpb.
-	if stored.GetData().GetFields()["name"].GetStringValue() != "test-agent" {
-		t.Errorf("server received unexpected record payload: %v", stored.GetData())
+	fields := stored.GetData().GetFields()
+	if fields["name"].GetStringValue() != "test-agent" {
+		t.Errorf("name field did not round-trip: %v", fields["name"])
+	}
+
+	// Verify nested skill object survived JSON → structpb.
+	skills := fields["skills"].GetListValue().GetValues()
+	if len(skills) != 1 {
+		t.Fatalf("skills slice = %d entries, want 1", len(skills))
+	}
+	skill := skills[0].GetStructValue().GetFields()
+	if skill["id"].GetStringValue() != "test-skill" {
+		t.Errorf("skills[0].id = %v, want \"test-skill\"", skill["id"])
+	}
+	if got := skill["confidence"].GetNumberValue(); got != 0.95 {
+		t.Errorf("skills[0].confidence = %v, want 0.95", got)
+	}
+
+	// Verify numeric field (int in Go) round-tripped as a structpb
+	// NumberValue. JSON has no int type so it lands as float64; assert
+	// the value, not the Go type.
+	domains := fields["domains"].GetListValue().GetValues()
+	if len(domains) != 1 {
+		t.Fatalf("domains slice = %d entries, want 1", len(domains))
+	}
+	if got := domains[0].GetStructValue().GetFields()["priority"].GetNumberValue(); got != 5 {
+		t.Errorf("domains[0].priority = %v, want 5", got)
 	}
 
 	// Withdraw
@@ -276,6 +313,10 @@ func TestGRPCBackend_NilRequests(t *testing.T) {
 			return err
 		}},
 		{"refresh-nil", func() error { _, err := backend.Refresh(ctx, nil); return err }},
+		{"refresh-empty-cid", func() error {
+			_, err := backend.Refresh(ctx, &RefreshRequest{AgentDID: "did:test"})
+			return err
+		}},
 		{"withdraw-nil", func() error { return backend.Withdraw(ctx, nil) }},
 		{"withdraw-empty-cid", func() error { return backend.Withdraw(ctx, &WithdrawRequest{}) }},
 	}
