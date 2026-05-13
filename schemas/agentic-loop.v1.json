@@ -151,12 +151,12 @@
     },
     "tool_call_governance": {
       "type": "object",
-      "description": "Subject-mode tool-call governance (ADR-039). Default mode=disabled retains existing in-process filter behavior",
+      "description": "Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate)",
       "category": "advanced",
       "properties": {
         "mode": {
           "type": "string",
-          "description": "Governance mode (disabled|audit|enforce). Default disabled retains in-process filter behavior",
+          "description": "Governance mode (disabled|audit|enforce). Default disabled means no governance gate",
           "default": "disabled",
           "category": "advanced"
         },

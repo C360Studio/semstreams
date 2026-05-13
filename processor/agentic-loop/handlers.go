@@ -58,14 +58,12 @@ type MessageHandler struct {
 	loopManager       *LoopManager
 	trajectoryManager *TrajectoryManager
 	compactor         *Compactor
-	toolCallFilter    agentic.ToolCallFilter
 	// governanceDispatcher implements subject-mode tool-call governance
 	// (ADR-039). Set via SetGovernanceDispatcher at component boot. Nil
-	// means disabled-mode pass-through; in that case the existing
-	// toolCallFilter (beta.67+68) keeps running unchanged. When
-	// non-nil, governance runs BEFORE the in-process filter — a deny
-	// at the governance layer short-circuits the call before the
-	// filter ever sees it.
+	// is treated as disabled-mode pass-through (no governance gate).
+	// Beta.70 retired the in-process ToolCallFilter wiring that
+	// previously co-existed with this dispatcher; subject-mode is now
+	// the sole governance path.
 	governanceDispatcher GovernanceDispatcher
 	modelRegistry        model.RegistryReader
 	toolRegistry         component.ToolRegistryReader
@@ -315,9 +313,9 @@ func (h *MessageHandler) resolveParentLoopID(loopID string) string {
 }
 
 // SetGovernanceDispatcher installs the subject-mode tool-call
-// governance dispatcher (ADR-039). Same pre-Start ordering invariant
-// as SetToolCallFilter — the field is not synchronized once the
-// JetStream consumer callbacks start reading it.
+// governance dispatcher (ADR-039). The dispatcher field is not
+// synchronized once the JetStream consumer callbacks start reading
+// it — the setter must be called between NewComponent and Start.
 //
 // Nil clears any previously installed dispatcher (effectively
 // reverting to disabled-mode pass-through). The Component wires this
@@ -332,13 +330,6 @@ func (h *MessageHandler) SetGovernanceDispatcher(d GovernanceDispatcher) {
 // verdicts via HandleVerdict.
 func (h *MessageHandler) GovernanceDispatcher() GovernanceDispatcher {
 	return h.governanceDispatcher
-}
-
-// SetToolCallFilter sets a filter that intercepts tool calls before execution.
-// When set, each tool call batch is passed through the filter. Rejected calls
-// receive immediate error results; approved calls proceed to tool.execute.
-func (h *MessageHandler) SetToolCallFilter(filter agentic.ToolCallFilter) {
-	h.toolCallFilter = filter
 }
 
 // SetToolRegistry installs the shared tool registry used by discoverTools.
@@ -899,9 +890,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			return result, err
 		}
 
-		// Edge case: if filtering (empty-name rejection or ToolCallFilter) removed ALL
-		// calls, no tool.execute messages were published so no tool results will arrive.
-		// Trigger tools-complete immediately.
+		// Edge case: if filtering (empty-name rejection or governance
+		// reject) removed ALL calls, no tool.execute messages were
+		// published so no tool results will arrive. Trigger tools-
+		// complete immediately.
 		if h.loopManager.AllToolsComplete(loopID) {
 			completionResult, err := h.handleToolsComplete(ctx, loopID, entity, cm, &result)
 			if err != nil {
@@ -933,9 +925,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 }
 
 // handleToolCallResponse processes tool call responses.
-// When a ToolCallFilter is set, calls are filtered before dispatch.
-// Rejected calls receive immediate error results; approved calls are published.
-// Domain metadata from the task is propagated to each approved tool call.
+// When a GovernanceDispatcher is wired (audit or enforce mode), each batch is
+// proposed via the dispatcher; rejected calls receive immediate error results
+// and approved calls are dispatched. Domain metadata from the task is
+// propagated to each approved tool call.
 func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID string, toolCalls []agentic.ToolCall) error {
 	// Reject tool calls with empty names — Gemini sometimes emits these as
 	// acknowledgment non-responses. Store error results so the model gets a
@@ -995,32 +988,6 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 			}
 		}
 		approved = govResult.Approved
-	}
-
-	// Apply filter if configured. Runs AFTER governance — operators
-	// during the beta.69 → beta.70 migration can keep both layers
-	// active; the filter sees only governance-approved calls.
-	if h.toolCallFilter != nil {
-		filterResult, err := h.toolCallFilter.FilterToolCalls(loopID, approved)
-		if err != nil {
-			return err
-		}
-
-		// Store immediate error results for rejected calls
-		for _, rejection := range filterResult.Rejected {
-			h.loopManager.TrackToolName(rejection.Call.ID, rejection.Call.Name)
-			errResult := agentic.ToolResult{
-				CallID: rejection.Call.ID,
-				Name:   rejection.Call.Name,
-				Error:  fmt.Sprintf("tool call rejected: %s", rejection.Reason),
-				LoopID: loopID,
-			}
-			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
-				return err
-			}
-		}
-
-		approved = filterResult.Approved
 	}
 
 	// Propagate domain metadata and loop correlation onto each approved

@@ -20,10 +20,17 @@ func IsApprovalRequired(reason string) bool {
 	return agentic.IsApprovalRequired(reason)
 }
 
-// ApprovalFilter implements agentic.ToolCallFilter. It checks each tool call
-// against a configured list of tool names that require human approval. If a
-// tool is in the list, the call is rejected with an ApprovalRequiredPrefix
-// reason so the loop can transition to awaiting_approval.
+// ApprovalFilter gates tool calls that require human approval before
+// execution. It is internal to agentic-tools — the loop in this
+// component's dispatch path consults it before publishing to NATS for
+// actual execution. Calls for tools in the configured set are
+// rejected with an ApprovalRequiredPrefix reason so the higher-level
+// loop can transition to awaiting_approval.
+//
+// (Beta.70 retired the cross-component `agentic.ToolCallFilter`
+// interface. ApprovalFilter no longer implements it; the
+// agentic-tools-internal consumer below works against the concrete
+// type directly.)
 type ApprovalFilter struct {
 	approvalSet map[string]bool
 }
@@ -38,7 +45,21 @@ func NewApprovalFilter(approvalRequired []string) *ApprovalFilter {
 	return &ApprovalFilter{approvalSet: set}
 }
 
-var _ agentic.ToolCallFilter = (*ApprovalFilter)(nil)
+// ApprovalFilterResult is the outcome of evaluating a batch of tool
+// calls against the approval gate. Approved calls flow through to
+// execution; Rejected calls carry a reason for the awaiting_approval
+// path.
+type ApprovalFilterResult struct {
+	Approved []agentic.ToolCall
+	Rejected []ApprovalRejection
+}
+
+// ApprovalRejection pairs a rejected call with its approval-required
+// reason. Internal to agentic-tools.
+type ApprovalRejection struct {
+	Call   agentic.ToolCall
+	Reason string
+}
 
 // FilterToolCalls checks each call against the configured approval
 // list. A call carrying a non-empty ApprovedBy is the explicit bypass
@@ -46,8 +67,8 @@ var _ agentic.ToolCallFilter = (*ApprovalFilter)(nil)
 // ApprovalResponse arrived, so we trust it and pass the call through
 // regardless of the gating list. Empty ApprovedBy means the call has
 // not been through approval and the gating list applies normally.
-func (f *ApprovalFilter) FilterToolCalls(_ string, calls []agentic.ToolCall) (agentic.ToolCallFilterResult, error) {
-	var result agentic.ToolCallFilterResult
+func (f *ApprovalFilter) FilterToolCalls(_ string, calls []agentic.ToolCall) ApprovalFilterResult {
+	var result ApprovalFilterResult
 
 	for _, call := range calls {
 		if !f.approvalSet[call.Name] {
@@ -61,11 +82,11 @@ func (f *ApprovalFilter) FilterToolCalls(_ string, calls []agentic.ToolCall) (ag
 			result.Approved = append(result.Approved, call)
 			continue
 		}
-		result.Rejected = append(result.Rejected, agentic.ToolCallRejection{
+		result.Rejected = append(result.Rejected, ApprovalRejection{
 			Call:   call,
 			Reason: fmt.Sprintf("%sTool '%s' requires human approval before execution", ApprovalRequiredPrefix, call.Name),
 		})
 	}
 
-	return result, nil
+	return result
 }

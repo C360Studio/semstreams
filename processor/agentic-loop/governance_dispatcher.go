@@ -5,8 +5,9 @@
 // ToolCallGovernanceConfig.Mode:
 //
 //   - disabled: pass-through. All calls return as approved without
-//     publishing. Existing in-process ToolCallFilter (beta.67+68) keeps
-//     running unchanged.
+//     publishing. No governance gate active. (Beta.70 retired the
+//     beta.67+68 in-process ToolCallFilter wiring; subject-mode is
+//     now the sole governance path.)
 //   - audit: publishes each proposed call to agent.toolcall.proposed.*
 //     but returns all calls as approved IMMEDIATELY. Verdicts that
 //     arrive later are recorded for observability only. Shadow mode
@@ -84,10 +85,10 @@ type DispatcherMetrics interface {
 	RecordGovernanceVerdictMissingWaiter()
 }
 
-// ToolCallRejection records why a tool call was denied. Mirrors the
-// existing agentic.ToolCallRejection shape used by the in-process
-// filter so the downstream serial-dispatch code can treat both paths
-// uniformly.
+// ToolCallRejection records why a tool call was denied by the
+// governance dispatcher. The downstream serial-dispatch path consumes
+// this to write per-call error results for the model to react to on
+// its next iteration.
 type ToolCallRejection struct {
 	Call   agentic.ToolCall
 	Reason string
@@ -95,8 +96,7 @@ type ToolCallRejection struct {
 
 // DispatcherResult is the verdict for a batch of proposed calls. Empty
 // Rejected with full Approved is the disabled-mode/audit-mode steady
-// state. Partial splits are produced by enforce mode and the in-process
-// filter path.
+// state. Partial splits are produced by enforce mode.
 type DispatcherResult struct {
 	Approved []agentic.ToolCall
 	Rejected []ToolCallRejection

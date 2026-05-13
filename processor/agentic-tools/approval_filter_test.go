@@ -5,7 +5,6 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestApprovalFilter_ApprovesNormalTools(t *testing.T) {
@@ -16,8 +15,7 @@ func TestApprovalFilter_ApprovesNormalTools(t *testing.T) {
 		{ID: "call-2", Name: "web_search"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 2)
 	assert.Empty(t, result.Rejected)
@@ -30,8 +28,7 @@ func TestApprovalFilter_RejectsApprovalRequired(t *testing.T) {
 		{ID: "call-1", Name: "create_rule"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Empty(t, result.Approved)
 	assert.Len(t, result.Rejected, 1)
@@ -47,8 +44,7 @@ func TestApprovalFilter_MixedBatch(t *testing.T) {
 		{ID: "call-2", Name: "delete_rule"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 1)
 	assert.Equal(t, "bash", result.Approved[0].Name)
@@ -64,8 +60,7 @@ func TestApprovalFilter_EmptyList(t *testing.T) {
 		{ID: "call-2", Name: "bash"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 2)
 	assert.Empty(t, result.Rejected)
@@ -83,8 +78,7 @@ func TestApprovalFilter_ApprovedByBypass(t *testing.T) {
 		{ID: "call-1", Name: "delete_rule", ApprovedBy: "alice@example.com"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 1, "approved-by call should bypass the gate")
 	assert.Empty(t, result.Rejected)
@@ -101,8 +95,7 @@ func TestApprovalFilter_ApprovedByDoesNotAffectNonGatedTool(t *testing.T) {
 		{ID: "call-1", Name: "bash", ApprovedBy: "alice@example.com"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 1)
 	assert.Empty(t, result.Rejected)
@@ -120,8 +113,7 @@ func TestApprovalFilter_MixedBatchWithBypass(t *testing.T) {
 		{ID: "call-3", Name: "bash"},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Len(t, result.Approved, 2)
 	assert.Len(t, result.Rejected, 1)
@@ -138,8 +130,7 @@ func TestApprovalFilter_EmptyApprovedByStillGates(t *testing.T) {
 		{ID: "call-1", Name: "delete_rule", ApprovedBy: ""},
 	}
 
-	result, err := filter.FilterToolCalls("loop-1", calls)
-	require.NoError(t, err)
+	result := filter.FilterToolCalls("loop-1", calls)
 
 	assert.Empty(t, result.Approved)
 	assert.Len(t, result.Rejected, 1)

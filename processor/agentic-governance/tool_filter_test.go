@@ -175,119 +175,13 @@ func TestToolCallToMessage(t *testing.T) {
 	assert.Equal(t, "loop-1", msg.Content.Metadata["loop_id"])
 }
 
-// TestToolCallFilter_ImplementsAgenticInterface is a compile-time + runtime
-// check that ToolCallFilter satisfies agentic.ToolCallFilter so it can be
-// installed via MessageHandler.SetToolCallFilter.
-func TestToolCallFilter_ImplementsAgenticInterface(t *testing.T) {
-	var _ agentic.ToolCallFilter = (*ToolCallFilter)(nil)
-
-	f := NewToolCallFilter(nil)
-	var iface agentic.ToolCallFilter = f
-	assert.NotNil(t, iface)
-}
-
-// TestFilterToolCalls_ParityWithProcess runs both the Process() surface and
-// the FilterToolCalls() surface against the same set of calls and asserts
-// they agree per call. This guards against the two surfaces drifting.
-func TestFilterToolCalls_ParityWithProcess(t *testing.T) {
-	f := NewToolCallFilter(nil)
-	ctx := context.Background()
-
-	calls := []agentic.ToolCall{
-		{ID: "ok", Name: "bash", Arguments: map[string]any{"command": "go test ./..."}},
-		{ID: "metadata", Name: "bash", Arguments: map[string]any{"command": "curl 169.254.169.254"}},
-		{ID: "rm", Name: "bash", Arguments: map[string]any{"command": "rm -rf /"}},
-		{ID: "url-ok", Name: "http_request", Arguments: map[string]any{"url": "https://pkg.go.dev"}},
-		{ID: "url-bad", Name: "http_request", Arguments: map[string]any{"url": "http://localhost/admin"}},
-	}
-
-	// Process surface
-	wantAllowed := map[string]bool{}
-	for _, c := range calls {
-		res, err := f.Process(ctx, ToolCallToMessage(c, "", ""))
-		require.NoError(t, err)
-		wantAllowed[c.ID] = res.Allowed
-	}
-
-	// FilterToolCalls surface
-	got, err := f.FilterToolCalls("loop-7", calls)
-	require.NoError(t, err)
-
-	approvedIDs := map[string]bool{}
-	for _, c := range got.Approved {
-		approvedIDs[c.ID] = true
-	}
-	rejectedIDs := map[string]bool{}
-	for _, r := range got.Rejected {
-		rejectedIDs[r.Call.ID] = true
-		assert.NotEmpty(t, r.Reason, "rejection reason should be populated for %s", r.Call.ID)
-	}
-
-	for id, allowed := range wantAllowed {
-		if allowed {
-			assert.True(t, approvedIDs[id], "call %s should be approved (Process said allowed)", id)
-			assert.False(t, rejectedIDs[id], "call %s should not be in rejected list", id)
-		} else {
-			assert.True(t, rejectedIDs[id], "call %s should be rejected (Process said blocked)", id)
-			assert.False(t, approvedIDs[id], "call %s should not be in approved list", id)
-		}
-	}
-}
-
-// TestFilterToolCalls_EmptySlice locks the empty-batch contract: nil or
-// empty calls return an empty result with nil error. Callers iterate
-// over Approved/Rejected without checking len, so an unintended nil-vs-
-// empty drift here would still be benign, but downstream consumers may
-// grow stricter checks in the future.
-func TestFilterToolCalls_EmptySlice(t *testing.T) {
-	f := NewToolCallFilter(nil)
-
-	resNil, err := f.FilterToolCalls("loop-x", nil)
-	require.NoError(t, err)
-	assert.Empty(t, resNil.Approved)
-	assert.Empty(t, resNil.Rejected)
-
-	resEmpty, err := f.FilterToolCalls("loop-x", []agentic.ToolCall{})
-	require.NoError(t, err)
-	assert.Empty(t, resEmpty.Approved)
-	assert.Empty(t, resEmpty.Rejected)
-}
-
-// TestFilterToolCalls_StampsLoopID verifies the loopID parameter overrides
-// an unset ToolCall.LoopID in the synthesized governance Message metadata,
-// so any downstream filter that branches on loop_id sees the loop the
-// agentic-loop is operating on.
-func TestFilterToolCalls_StampsLoopID(t *testing.T) {
-	f := NewToolCallFilter(nil)
-
-	calls := []agentic.ToolCall{
-		{ID: "c1", Name: "bash", Arguments: map[string]any{"command": "echo ok"}},
-	}
-	res, err := f.FilterToolCalls("loop-xyz", calls)
-	require.NoError(t, err)
-	require.Len(t, res.Approved, 1)
-	require.Empty(t, res.Rejected)
-}
-
-// TestFilterToolCalls_RejectsBatchEntry_OnInternalError verifies the safer
-// error contract: a per-call Process error becomes a Rejected entry for
-// that call, not an aborted batch. This prevents an internal evaluator
-// failure from silently approving subsequent calls in the same batch.
-func TestFilterToolCalls_RejectsBatchEntry_OnInternalError(t *testing.T) {
-	// Forcing Process to error is not possible with the current real
-	// ToolCallFilter (every code path returns nil err), so we exercise
-	// the rejection-reason branch directly via violationReason and
-	// assert the contract documented above through code review.
-	//
-	// This test fixes the contract for future authors: if any new code
-	// in Process can return an error, FilterToolCalls MUST surface it
-	// as a Rejected entry, not as a returned error that aborts the
-	// batch. Touching this behaviour without updating the test is a
-	// review red flag.
-	t.Run("violationReason fallbacks", func(t *testing.T) {
-		assert.Equal(t, "policy violation", violationReason(nil))
-		assert.Equal(t, "policy violation (pii_redaction)", violationReason(&Violation{FilterName: "pii_redaction"}))
-		v := &Violation{FilterName: "tool_call_governance", Details: map[string]any{"message": "blocked: rm -rf /"}}
-		assert.Equal(t, "blocked: rm -rf /", violationReason(v))
-	})
+// TestViolationReason covers the rejection-reason fallback path used
+// when the chain reports a policy violation. Subject-mode rule actions
+// emit rejection reasons from this same shape, so the test pins the
+// fallback hierarchy for future authors.
+func TestViolationReason(t *testing.T) {
+	assert.Equal(t, "policy violation", violationReason(nil))
+	assert.Equal(t, "policy violation (pii_redaction)", violationReason(&Violation{FilterName: "pii_redaction"}))
+	v := &Violation{FilterName: "tool_call_governance", Details: map[string]any{"message": "blocked: rm -rf /"}}
+	assert.Equal(t, "blocked: rm -rf /", violationReason(v))
 }

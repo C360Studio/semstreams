@@ -7,11 +7,12 @@ emit verdicts on `agent.toolcall.approved.*` / `.rejected.*`, and the
 loop dispatches only approved calls.
 
 This is the rule-driven replacement for the in-process `ToolCallFilter`
-wiring shipped in beta.67+68. The filter wiring stays in place at
-beta.69 as an escape hatch — see [migration guide][migration] for the
-deprecation timeline.
+wiring shipped in beta.67+68. **Beta.70 retired the in-process filter
+wiring**; subject-mode is now the sole tool-call governance path. The
+beta.68 → beta.69 → beta.70 migration is documented in the [migration
+guide][migration].
 
-[migration]: migration-beta68-to-beta69.md
+[migration]: migration-beta69-to-beta70.md
 
 ## When to use this
 
@@ -24,10 +25,9 @@ Use subject-mode governance when policy needs to:
 - Vary across rule-engine deployments without code changes in
   agentic-loop.
 
-The in-process `ToolCallFilter` (beta.67+68) handles fixed
-command-pattern blocklists with no rule-engine dependency; if that's
-your only need, you can stay on it through beta.69. Beta.70 retires
-it.
+The in-process `ToolCallFilter` (beta.67+68) handled fixed
+command-pattern blocklists with no rule-engine dependency. Beta.70
+retired that wiring; subject-mode rules are now the only path.
 
 ## Modes
 
@@ -44,14 +44,14 @@ Configure on the agentic-loop component:
 
 | Mode | Behavior |
 |---|---|
-| `disabled` (default) | No publish, no wait. In-process `ToolCallFilter` runs unchanged. Pre-beta.69 behavior. |
+| `disabled` (default) | No publish, no wait. No governance gate active. |
 | `audit` | Publishes every proposed call to `agent.toolcall.proposed.*`. Dispatches **immediately** without waiting. Verdicts that arrive are logged for observability. Use during rule development. |
 | `enforce` | Publishes proposed call, waits up to `timeout` for a per-call verdict, dispatches on approve / fails on reject / fail-closed on timeout. Production posture. |
 
-The default `1s` timeout is deliberately generous for beta.69 so
-operators see real p99 latency in the
-`tool_call_governance_verdict_duration_seconds` histogram before
-tightening. Beta.70 will tighten the default after measurement.
+The default `1s` timeout is deliberately generous to surface real p99
+latency in the `tool_call_governance_verdict_duration_seconds`
+histogram. Operators measuring sub-100ms p99 in audit mode can drop
+the default with no functional change.
 
 ## Subject Topology
 

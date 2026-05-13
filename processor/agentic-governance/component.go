@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -601,30 +600,8 @@ func (c *Component) ProcessMessage(ctx context.Context, msg *Message) (*ChainRes
 	return c.chain.Process(ctx, msg)
 }
 
-// ToolCallFilter returns the chain's *ToolCallFilter as an agentic.ToolCallFilter,
-// or nil when neither EnableToolGovernance: true nor a "tool_call_governance"
-// entry in FilterChain.Filters was configured. Returns the FIRST matching
-// filter when multiple are present (today the legacy-add guard prevents
-// duplicates; future slice-based wiring should add a ToolCallFilters()
-// accessor rather than redefining this one).
-//
-// The returned filter is safe to share — pass directly to
-// agentic-loop's Component.SetToolCallFilter so the same instance
-// enforces pre-execution tool-call governance there as well. The
-// filter is read-only after construction (BlockedCommandPatterns,
-// BlockedURLPatterns, piiFilter); both Process and FilterToolCalls
-// surfaces can run concurrently on the shared instance. Note the
-// receiver's pre-Start ordering invariant when wiring downstream:
-// the agentic-loop side's SetToolCallFilter must be called before
-// its Component.Start.
-func (c *Component) ToolCallFilter() agentic.ToolCallFilter {
-	if c == nil || c.chain == nil {
-		return nil
-	}
-	for _, f := range c.chain.Filters {
-		if tcf, ok := f.(*ToolCallFilter); ok {
-			return tcf
-		}
-	}
-	return nil
-}
+// (Beta.70 retired the ToolCallFilter() accessor. The
+// `*ToolCallFilter` struct remains as a chain-internal Filter; cross-
+// component governance now flows through subject-mode rules per
+// ADR-039. The chain instance is reachable via ProcessMessage above
+// if a future caller needs to run the chain manually.)

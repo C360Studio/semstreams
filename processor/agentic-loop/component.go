@@ -151,11 +151,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 	// Subject-mode tool-call governance dispatcher (ADR-039). Always
 	// constructed — when Mode is "disabled" (the default) the
-	// dispatcher is a pass-through and the existing in-process
-	// ToolCallFilter wiring runs unchanged. A nil NATSClient (rare —
-	// almost always test scaffolding) yields a publisher-less
-	// dispatcher: disabled mode is unaffected, audit/enforce skip the
-	// publish step and log at Debug.
+	// dispatcher is a pass-through with no governance gate. A nil
+	// NATSClient (rare — almost always test scaffolding) yields a
+	// publisher-less dispatcher: disabled mode is unaffected;
+	// audit/enforce skip the publish step and log at Debug.
 	var verdictPublisher VerdictPublisher
 	if deps.NATSClient != nil {
 		verdictPublisher = deps.NATSClient
@@ -301,31 +300,6 @@ func (c *Component) DataFlow() component.FlowMetrics {
 // Initialize prepares the component (no-op for this component)
 func (c *Component) Initialize() error {
 	return nil
-}
-
-// SetToolCallFilter installs a filter that intercepts tool calls before
-// execution on this component's MessageHandler. Pass-through to
-// MessageHandler.SetToolCallFilter.
-//
-// **Ordering invariant:** must be called between NewComponent and Start.
-// The underlying field on MessageHandler is not synchronized — once
-// Start spawns the JetStream consumer callback goroutines, reads of
-// the filter slot race with any further writes. Pass nil to clear a
-// previously installed filter (still bound by the pre-Start
-// ordering). Runtime hot-swap requires either (a) stopping the
-// component first, or (b) promoting the underlying field to
-// atomic.Pointer — neither is wired today.
-//
-// Typical wiring: hold a reference to an agentic-governance.Component,
-// call its ToolCallFilter() accessor to obtain the configured filter,
-// then call SetToolCallFilter here to install it on the loop side.
-// The same governance filter instance enforces inbound governance
-// in the chain AND pre-execution tool-call governance in the loop.
-func (c *Component) SetToolCallFilter(filter agentic.ToolCallFilter) {
-	if c == nil || c.handler == nil {
-		return
-	}
-	c.handler.SetToolCallFilter(filter)
 }
 
 // Start starts the component.
