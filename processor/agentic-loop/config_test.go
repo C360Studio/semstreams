@@ -201,17 +201,21 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() ports should not be nil")
 	}
 
-	// Verify input ports (includes agent.boid for Boid coordination
-	// and agent.approval_response for human-in-the-loop flow)
-	if len(cfg.Ports.Inputs) != 6 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 6", len(cfg.Ports.Inputs))
+	// Verify input ports (includes agent.boid for Boid coordination,
+	// agent.approval_response for human-in-the-loop flow, and the
+	// ADR-039 verdict ports agent.toolcall.approved/rejected for
+	// subject-mode tool-call governance).
+	if len(cfg.Ports.Inputs) != 8 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 8", len(cfg.Ports.Inputs))
 	}
 
 	// Verify output ports (agent.created + agent.failed declared as explicit
 	// output ports so downstream products can override their subjects via
-	// port config, matching the existing treatment of agent.request etc).
-	if len(cfg.Ports.Outputs) != 7 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 7", len(cfg.Ports.Outputs))
+	// port config, matching the existing treatment of agent.request etc.
+	// agent.toolcall.proposed added in ADR-039 — published before dispatch
+	// when governance mode is audit or enforce).
+	if len(cfg.Ports.Outputs) != 8 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 8", len(cfg.Ports.Outputs))
 	}
 
 	// Verify KV ports

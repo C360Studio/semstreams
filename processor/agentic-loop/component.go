@@ -103,6 +103,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	config.Consumer.EnsureDefaults()
 	config.Context.EnsureDefaults()
+	config.ToolCallGovernance.EnsureDefaults()
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -147,6 +148,21 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	handler := NewMessageHandler(config, loopOpts...)
 	handler.modelRegistry = deps.ModelRegistry
 	handler.toolRegistry = deps.ToolRegistry
+
+	// Subject-mode tool-call governance dispatcher (ADR-039). Always
+	// constructed — when Mode is "disabled" (the default) the
+	// dispatcher is a pass-through and the existing in-process
+	// ToolCallFilter wiring runs unchanged. A nil NATSClient (rare —
+	// almost always test scaffolding) yields a publisher-less
+	// dispatcher: disabled mode is unaffected, audit/enforce skip the
+	// publish step and log at Debug.
+	var verdictPublisher VerdictPublisher
+	if deps.NATSClient != nil {
+		verdictPublisher = deps.NATSClient
+	}
+	handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
+		config.ToolCallGovernance, verdictPublisher, deps.GetLogger(),
+	))
 
 	// Wire LLM-backed summarizer for context compaction if model registry is available
 	if deps.ModelRegistry != nil && config.Context.Enabled {
@@ -650,6 +666,15 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			handler = c.handleSignalMessage
 		case "agent.approval_response":
 			handler = c.handleApprovalResponseMessage
+		case "agent.toolcall.approved", "agent.toolcall.rejected":
+			// Verdicts from rule-driven tool-call governance (ADR-039).
+			// Both subjects route into the same demux — the dispatcher
+			// uses the subject path to extract decision + call_id.
+			// Skip if no dispatcher is configured (disabled mode with
+			// no fallback construction); the wildcard subscription is
+			// still cheap to bind but never gets traffic in disabled
+			// mode because nothing publishes to proposed.
+			handler = c.handleToolCallVerdictMessage
 		case "agent.boid":
 			// Only subscribe to Boid signals if Boid coordination is enabled
 			if !c.config.BoidEnabled {
@@ -1757,6 +1782,46 @@ func (c *Component) handleBoidSignalMessage(ctx context.Context, data []byte) {
 // This is used by BoidHandler to apply steering signals to context.
 func (c *Component) getContextManagerForLoop(loopID string) *ContextManager {
 	return c.handler.GetContextManager(loopID)
+}
+
+// handleToolCallVerdictMessage routes inbound verdicts from
+// agent.toolcall.approved.> and agent.toolcall.rejected.> into the
+// governance dispatcher (ADR-039). The dispatcher demuxes by call_id
+// to per-call waiter channels.
+//
+// Both wildcard subjects share this single handler because the
+// existing input-port consumer wrapper discards the subject (see
+// setupConsumer's adapter at component.go:805). The verdict's decision
+// is read from the payload via VerdictPayload.EffectiveDecision — both
+// authorship paths (approve action's top-level fields, publish action's
+// nested Properties) are supported.
+//
+// No-op when the dispatcher is nil (disabled-mode-without-construction
+// edge case; should not occur in production because NewComponent always
+// constructs a dispatcher).
+func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) {
+	dispatcher := c.handler.GovernanceDispatcher()
+	if dispatcher == nil {
+		return
+	}
+
+	var payload VerdictPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		c.logger.Warn("Failed to decode tool-call verdict payload; ignoring",
+			slog.String("error", err.Error()))
+		return
+	}
+
+	decision := payload.EffectiveDecision()
+	callID := payload.EffectiveCallID()
+	if decision == "" || callID == "" {
+		c.logger.Warn("Tool-call verdict payload missing decision or call_id; ignoring",
+			slog.String("decision", decision),
+			slog.String("call_id", callID))
+		return
+	}
+
+	dispatcher.HandleVerdict(decision, callID, data)
 }
 
 // updateBoidPositionFromToolResult updates the agent's position in the Boid coordination system

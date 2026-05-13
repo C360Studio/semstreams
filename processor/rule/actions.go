@@ -1125,6 +1125,21 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 		"entity_id": entityID,
 		"timestamp": time.Now().Format(time.RFC3339Nano),
 	}
+	// Echo call_id / loop_id from the proposed message so downstream
+	// consumers (the agentic-loop subject-mode dispatcher) can demux
+	// verdicts without parsing the subject. ADR-039: the subject IS
+	// authoritative for the decision, but the payload mirrors the
+	// routing identifiers so consumers don't need a custom subject
+	// parser. No-op when MessageData is nil (cron-fired or entity-
+	// state evaluations have no inbound call_id).
+	if ec.MessageData != nil {
+		if v, ok := ec.MessageData["call_id"].(string); ok && v != "" {
+			payload["call_id"] = v
+		}
+		if v, ok := ec.MessageData["loop_id"].(string); ok && v != "" {
+			payload["loop_id"] = v
+		}
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal approve verdict payload: %w", err)

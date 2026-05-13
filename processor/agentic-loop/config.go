@@ -12,6 +12,37 @@ import (
 // DefaultContextLimit is the fallback context window size when the model is unknown.
 const DefaultContextLimit = 128000
 
+// Tool-call governance mode constants. ADR-039.
+//
+// Disabled is the default — current behavior, no publish to the
+// proposed subject, direct dispatch. Existing in-process
+// ToolCallFilter wiring (beta.67+68) continues to run; semspec's
+// pre-migration deployments keep working unchanged.
+//
+// Audit publishes proposed tool calls to the proposed subject and
+// dispatches IMMEDIATELY without waiting for a verdict — shadow mode
+// for operators developing governance rules without blocking
+// production tool-call flow. Verdicts that arrive later are counted
+// for observability only.
+//
+// Enforce subscribes-then-publishes, waits up to ToolCallGovernance.Timeout
+// for a per-call verdict, and dispatches on approve / fails on
+// reject / fail-closed on timeout. The default 1s timeout is
+// deliberately generous for beta.69 to surface real p99 latency
+// before tightening in beta.70.
+const (
+	ToolCallGovernanceModeDisabled = "disabled"
+	ToolCallGovernanceModeAudit    = "audit"
+	ToolCallGovernanceModeEnforce  = "enforce"
+)
+
+// DefaultToolCallGovernanceTimeout is the wait window for a per-call
+// verdict in enforce mode before the dispatcher fails-closed (treats
+// the absence of a verdict as a reject). 1s is generous for beta.69 to
+// surface real p99 latency; tightens after measurement in beta.70 per
+// ADR-039 §"Observability".
+const DefaultToolCallGovernanceTimeout = "1s"
+
 // Config represents the configuration for the agentic-loop processor
 type Config struct {
 	MaxIterations        int                   `json:"max_iterations" schema:"type:int,description:Maximum number of iterations before loop terminates,default:20,min:1,max:1000,category:basic,required"`
@@ -28,9 +59,101 @@ type Config struct {
 	ContentBucket        string                `json:"content_bucket,omitempty" schema:"type:string,description:NATS ObjectStore bucket for trajectory step content (tool results and model responses),default:AGENT_CONTENT,category:advanced"`
 	TrajectoryCacheTTL   string                `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
 	ApprovalTimeoutStr   string                `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
-	Consumer             ConsumerConfig        `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
-	Context              ContextConfig         `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
-	Ports                *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
+	Consumer             ConsumerConfig             `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
+	Context              ContextConfig              `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
+	ToolCallGovernance   ToolCallGovernanceConfig   `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled retains existing in-process filter behavior,category:advanced"`
+	Ports                *component.PortConfig      `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
+}
+
+// ToolCallGovernanceConfig configures subject-mode tool-call governance
+// (ADR-039). When Mode is "disabled" (the default), the loop keeps its
+// existing in-process ToolCallFilter wiring and never publishes to the
+// proposed subject. When Mode is "audit", every tool call is published
+// to agent.toolcall.proposed.* but dispatch is NOT blocked — verdicts
+// that arrive are logged/counted for observability. When Mode is
+// "enforce", the loop publishes-then-waits for a per-call verdict on
+// agent.toolcall.approved/rejected.* subjects, with Timeout as the
+// fail-closed window.
+//
+// The in-process ToolCallFilter (beta.67+68) is retained alongside this
+// new flow at beta.69 — retirement deferred to beta.70 per ADR-039
+// §"Retirement of beta.67+68 surface". Operators migrate by switching
+// Mode to "audit" (verify rules), then "enforce" (cut over).
+type ToolCallGovernanceConfig struct {
+	// Mode is one of "disabled", "audit", or "enforce". Default
+	// "disabled" preserves pre-beta.69 behavior.
+	Mode string `json:"mode,omitempty" schema:"type:string,description:Governance mode (disabled|audit|enforce). Default disabled retains in-process filter behavior,default:disabled,category:advanced"`
+
+	// Timeout is the per-call wait window in enforce mode before the
+	// dispatcher fails-closed (rejects). Parsed as a Go duration string
+	// (e.g. "500ms", "2s"). Ignored when Mode is "disabled" or "audit".
+	Timeout string `json:"timeout,omitempty" schema:"type:string,description:Per-call verdict wait window in enforce mode (e.g. 500ms or 2s). Default 1s,default:1s,category:advanced"`
+}
+
+// IsEnabled returns true when the governance flow is active (audit or
+// enforce). Callers use this to skip publish setup work when governance
+// is disabled.
+func (c ToolCallGovernanceConfig) IsEnabled() bool {
+	return c.Mode == ToolCallGovernanceModeAudit || c.Mode == ToolCallGovernanceModeEnforce
+}
+
+// IsEnforcing returns true when verdicts gate dispatch. Callers use
+// this to decide whether to wait for verdicts before dispatching.
+func (c ToolCallGovernanceConfig) IsEnforcing() bool {
+	return c.Mode == ToolCallGovernanceModeEnforce
+}
+
+// ParsedTimeout returns the parsed Timeout duration. Falls back to the
+// default when unset or unparseable; Validate is the safety net for
+// malformed input.
+func (c ToolCallGovernanceConfig) ParsedTimeout() time.Duration {
+	if c.Timeout == "" {
+		d, _ := time.ParseDuration(DefaultToolCallGovernanceTimeout)
+		return d
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		fallback, _ := time.ParseDuration(DefaultToolCallGovernanceTimeout)
+		return fallback
+	}
+	return d
+}
+
+// Validate validates the tool-call governance configuration.
+func (c ToolCallGovernanceConfig) Validate() error {
+	switch c.Mode {
+	case "", ToolCallGovernanceModeDisabled, ToolCallGovernanceModeAudit, ToolCallGovernanceModeEnforce:
+		// ok
+	default:
+		return errs.WrapInvalid(
+			fmt.Errorf("mode must be one of disabled, audit, enforce (got %q)", c.Mode),
+			"ToolCallGovernanceConfig", "Validate", "check mode")
+	}
+
+	if c.Timeout != "" {
+		d, err := time.ParseDuration(c.Timeout)
+		if err != nil {
+			return errs.WrapInvalid(err, "ToolCallGovernanceConfig", "Validate", "parse timeout")
+		}
+		if d <= 0 {
+			return errs.WrapInvalid(
+				fmt.Errorf("timeout must be positive (got %s)", c.Timeout),
+				"ToolCallGovernanceConfig", "Validate", "check timeout value")
+		}
+	}
+	return nil
+}
+
+// EnsureDefaults fills zero-valued fields with defaults. Called from
+// Config-level defaulting at boot so an unset governance section has a
+// stable Mode + Timeout instead of empty strings.
+func (c *ToolCallGovernanceConfig) EnsureDefaults() {
+	if c.Mode == "" {
+		c.Mode = ToolCallGovernanceModeDisabled
+	}
+	if c.Timeout == "" {
+		c.Timeout = DefaultToolCallGovernanceTimeout
+	}
 }
 
 // ConsumerConfig holds JetStream consumer tuning for long-running ports.
@@ -103,6 +226,11 @@ func (c Config) Validate() error {
 
 	// Validate consumer config
 	if err := c.Consumer.Validate(); err != nil {
+		return err
+	}
+
+	// Validate tool-call governance config
+	if err := c.ToolCallGovernance.Validate(); err != nil {
 		return err
 	}
 
@@ -231,6 +359,17 @@ func DefaultContextConfig() ContextConfig {
 	}
 }
 
+// DefaultToolCallGovernanceConfig returns the default tool-call
+// governance configuration: disabled mode (preserves pre-ADR-039
+// behavior) with the framework default Timeout for when an operator
+// later flips to enforce.
+func DefaultToolCallGovernanceConfig() ToolCallGovernanceConfig {
+	return ToolCallGovernanceConfig{
+		Mode:    ToolCallGovernanceModeDisabled,
+		Timeout: DefaultToolCallGovernanceTimeout,
+	}
+}
+
 // DefaultConfig returns the default configuration
 func DefaultConfig() Config {
 	return Config{
@@ -246,6 +385,7 @@ func DefaultConfig() Config {
 		TrajectoryDetail:   "summary",
 		Consumer:           DefaultConsumerConfig(),
 		Context:            DefaultContextConfig(),
+		ToolCallGovernance: DefaultToolCallGovernanceConfig(),
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
@@ -295,6 +435,22 @@ func DefaultConfig() Config {
 					StreamName:  "AGENT",
 					Required:    false,
 					Description: "Human approval responses for gated tool calls",
+				},
+				{
+					Name:        "agent.toolcall.approved",
+					Type:        "jetstream",
+					Subject:     "agent.toolcall.approved.>",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+				},
+				{
+					Name:        "agent.toolcall.rejected",
+					Type:        "jetstream",
+					Subject:     "agent.toolcall.rejected.>",
+					StreamName:  "AGENT",
+					Required:    false,
+					Description: "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
 				},
 			},
 			Outputs: []component.PortDefinition{
@@ -346,6 +502,13 @@ func DefaultConfig() Config {
 					Subject:     "agent.approval_pending.*",
 					StreamName:  "AGENT",
 					Description: "Tool calls awaiting human approval (JetStream)",
+				},
+				{
+					Name:        "agent.toolcall.proposed",
+					Type:        "jetstream",
+					Subject:     "agent.toolcall.proposed.*",
+					StreamName:  "AGENT",
+					Description: "Proposed tool calls awaiting rule-driven governance verdict (ADR-039). Emitted in audit and enforce modes.",
 				},
 			},
 			KVWrite: []component.PortDefinition{
