@@ -14,13 +14,13 @@ func TestRegistrationManager_RegisterAgent(t *testing.T) {
 	mock := NewMockDirectory()
 	defer mock.Close()
 
-	client := NewDirectoryClient(mock.URL())
+	backend := NewHTTPBackend(mock.URL())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	config := DefaultConfig()
 	config.DirectoryURL = mock.URL()
 
-	rm := NewRegistrationManager(client, nil, config, logger)
+	rm := NewRegistrationManager(backend, nil, config, logger)
 
 	record := &oasfgenerator.OASFRecord{
 		Name:          "TestAgent",
@@ -59,11 +59,11 @@ func TestRegistrationManager_UpdateRegistration(t *testing.T) {
 	mock := NewMockDirectory()
 	defer mock.Close()
 
-	client := NewDirectoryClient(mock.URL())
+	backend := NewHTTPBackend(mock.URL())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	config := DefaultConfig()
-	rm := NewRegistrationManager(client, nil, config, logger)
+	rm := NewRegistrationManager(backend, nil, config, logger)
 
 	// Initial registration
 	record1 := &oasfgenerator.OASFRecord{
@@ -108,11 +108,11 @@ func TestRegistrationManager_Deregister(t *testing.T) {
 	mock := NewMockDirectory()
 	defer mock.Close()
 
-	client := NewDirectoryClient(mock.URL())
+	backend := NewHTTPBackend(mock.URL())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	config := DefaultConfig()
-	rm := NewRegistrationManager(client, nil, config, logger)
+	rm := NewRegistrationManager(backend, nil, config, logger)
 
 	// Register first
 	record := &oasfgenerator.OASFRecord{
@@ -149,11 +149,11 @@ func TestRegistrationManager_ListRegistrations(t *testing.T) {
 	mock := NewMockDirectory()
 	defer mock.Close()
 
-	client := NewDirectoryClient(mock.URL())
+	backend := NewHTTPBackend(mock.URL())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	config := DefaultConfig()
-	rm := NewRegistrationManager(client, nil, config, logger)
+	rm := NewRegistrationManager(backend, nil, config, logger)
 
 	// Start empty
 	if len(rm.ListRegistrations()) != 0 {
@@ -179,12 +179,12 @@ func TestRegistrationManager_StartStop(t *testing.T) {
 	mock := NewMockDirectory()
 	defer mock.Close()
 
-	client := NewDirectoryClient(mock.URL())
+	backend := NewHTTPBackend(mock.URL())
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	config := DefaultConfig()
 	config.HeartbeatInterval = "50ms" // Short for testing
-	rm := NewRegistrationManager(client, nil, config, logger)
+	rm := NewRegistrationManager(backend, nil, config, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
