@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	directorybridge "github.com/c360studio/semstreams/output/directory-bridge"
@@ -20,6 +21,11 @@ import (
 // (which is unexported) without taking a dependency on internals — the
 // stage runs outside the bridge's Component shell because it doesn't
 // need the KV-watch / heartbeat machinery, just the bare Backend.
+//
+// Duplication is intentional, not an accident — exporting the bridge's
+// helper would add a public API surface whose only consumer is this
+// test-binary stage. The mirror is shallow (TLS or insecure + optional
+// per-RPC creds) and drift risk is low. See PR #81 go-reviewer S4.
 func buildHubDialOptions(cfg *directorybridge.AgntcyGRPCConfig, auth directorybridge.AuthProvider) []grpc.DialOption {
 	opts := make([]grpc.DialOption, 0, 2)
 	if cfg.TLS {
@@ -45,8 +51,15 @@ func buildHubDialOptions(cfg *directorybridge.AgntcyGRPCConfig, auth directorybr
 //	AGNTCY_HUB_AUTH=1
 //	AGNTCY_HUB_ENDPOINT="prod.api.ads.outshift.io:443"   # optional override
 //	AGNTCY_HUB_OIDC_ISSUER="https://idp.example.com/oauth2/token"
-//	AGNTCY_HUB_CLIENT_ID="..."                            # or AGNTCY_HUB_CLIENT_ID_VALUE
+//	AGNTCY_HUB_CLIENT_ID="..."
 //	AGNTCY_HUB_CLIENT_SECRET="..."                        # required
+//	AGNTCY_HUB_TIMEOUT="30s"                              # optional, default 30s
+//
+// Gate semantics: AGNTCY_HUB_AUTH set to *any non-empty value* enables
+// the stage. The gate does NOT honor "0" / "false" / "no" — only empty
+// or unset skips. This is the safer default for a stage that publishes
+// to a production directory: opt-in must be deliberate, opt-out is the
+// default.
 //
 // Why opt-in: this stage talks to a real directory and would either
 // pollute it with CI-named records or fail without credentials. Default
@@ -66,6 +79,15 @@ func (s *Scenario) verifyAGNTCYHubPublish(ctx context.Context, result *scenarios
 		return fmt.Errorf("AGNTCY hub config: %w", err)
 	}
 
+	timeout := 30 * time.Second
+	if v := os.Getenv("AGNTCY_HUB_TIMEOUT"); v != "" {
+		parsed, perr := time.ParseDuration(v)
+		if perr != nil {
+			return fmt.Errorf("invalid AGNTCY_HUB_TIMEOUT %q: %w", v, perr)
+		}
+		timeout = parsed
+	}
+
 	auth, err := directorybridge.NewAuthProvider(cfg.Auth)
 	if err != nil {
 		return fmt.Errorf("build auth provider: %w", err)
@@ -80,11 +102,16 @@ func (s *Scenario) verifyAGNTCYHubPublish(ctx context.Context, result *scenarios
 	defer backend.Close()
 
 	record := buildHubTestRecord()
-	pubCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	entityID, ok := record.Extensions["semstreams_entity_id"].(string)
+	if !ok || entityID == "" {
+		return fmt.Errorf("internal: semstreams_entity_id extension missing or wrong type on test record")
+	}
+
+	pubCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	pub, err := backend.Publish(pubCtx, &directorybridge.PublishRequest{
-		EntityID: record.Extensions["semstreams_entity_id"].(string),
+		EntityID: entityID,
 		AgentDID: "did:semstreams:e2e-hub-publish-test",
 		Record:   record,
 		TTL:      0, // CID-anchored backend — TTL ignored
@@ -105,14 +132,17 @@ func (s *Scenario) verifyAGNTCYHubPublish(ctx context.Context, result *scenarios
 	// Cleanup: withdraw the test record so we don't leave CI artifacts
 	// in the hub's index. Errors here are logged-not-fatal — the
 	// publish succeeded, that's the assertion the stage is making.
-	withdrawCtx, cancelW := context.WithTimeout(ctx, 30*time.Second)
+	// Include the CID in the warning so operators have what they need
+	// to manually delete the record if our cleanup failed.
+	withdrawCtx, cancelW := context.WithTimeout(ctx, timeout)
 	defer cancelW()
 	if err := backend.Withdraw(withdrawCtx, &directorybridge.WithdrawRequest{
 		RecordID: pub.RecordID,
 		AgentDID: "did:semstreams:e2e-hub-publish-test",
 	}); err != nil {
 		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("hub withdraw failed (record left in directory): %v", err))
+			fmt.Sprintf("hub withdraw failed for CID %s (record left in directory; entity_id=%s): %v",
+				pub.RecordID, entityID, err))
 	} else {
 		result.Details["agntcy_hub_publish_cleanup"] = "withdrawn"
 	}
@@ -172,24 +202,15 @@ func buildHubConfigFromEnv() (*directorybridge.AgntcyGRPCConfig, error) {
 }
 
 // splitCSV splits a comma-separated env value into trimmed entries.
-// Empty entries are dropped.
+// Empty entries are dropped. Uses strings.TrimSpace so we correctly
+// handle CR/LF / NBSP / other Unicode whitespace that env values can
+// carry from Windows copy-paste etc.
 func splitCSV(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			seg := s[start:i]
-			// Trim leading/trailing ASCII space without pulling strings.
-			for len(seg) > 0 && (seg[0] == ' ' || seg[0] == '\t') {
-				seg = seg[1:]
-			}
-			for len(seg) > 0 && (seg[len(seg)-1] == ' ' || seg[len(seg)-1] == '\t') {
-				seg = seg[:len(seg)-1]
-			}
-			if seg != "" {
-				out = append(out, seg)
-			}
-			start = i + 1
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
 		}
 	}
 	return out
@@ -197,11 +218,13 @@ func splitCSV(s string) []string {
 
 // buildHubTestRecord constructs a minimal OASF record for the hub-
 // publish smoke test. The entity ID encodes "this is a SemStreams CI
-// artifact" so AGNTCY operators reviewing the directory can identify
-// it as safe to delete if our withdraw cleanup ever fails.
+// artifact" in the 6-part SemStreams convention (org.platform.domain.
+// system.type.instance per CLAUDE.md) so AGNTCY operators reviewing
+// the directory can identify it as safe to delete if our withdraw
+// cleanup ever fails.
 func buildHubTestRecord() *oasfgenerator.OASFRecord {
 	now := time.Now().UTC()
-	entityID := fmt.Sprintf("semstreams.ci.publisher.test.%d", now.Unix())
+	entityID := fmt.Sprintf("semstreams.e2e.publisher.hub.smoke.%d", now.Unix())
 
 	rec := &oasfgenerator.OASFRecord{
 		Name:          "semstreams-ci-publisher-test",

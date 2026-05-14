@@ -1,7 +1,10 @@
 package agentic
 
 import (
+	"strings"
 	"testing"
+
+	directorybridge "github.com/c360studio/semstreams/output/directory-bridge"
 )
 
 func TestBuildHubConfigFromEnv_DefaultsAndRequiredFields(t *testing.T) {
@@ -57,7 +60,7 @@ func TestBuildHubConfigFromEnv_DefaultsAndRequiredFields(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
 			}
-			if !contains(err.Error(), tc.wantErr) {
+			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
@@ -162,12 +165,37 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
-// contains is a tiny substring helper to keep test imports minimal.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
+// TestBuildHubDialOptions_InsecureNoAuth covers the local-mock-direction
+// shape — insecure transport, no per-RPC creds. Locks the option count
+// so a future refactor that drops WithPerRPCCredentials (or doubles up
+// transport credentials) fails fast here instead of in the live-hub
+// path that doesn't run in CI.
+func TestBuildHubDialOptions_InsecureNoAuth(t *testing.T) {
+	cfg := &directorybridge.AgntcyGRPCConfig{Endpoint: "h:1", TLS: false}
+	opts := buildHubDialOptions(cfg, directorybridge.NoOpAuthProvider{})
+	if got := len(opts); got != 1 {
+		t.Errorf("len(opts) = %d, want 1 (just insecure transport)", got)
 	}
-	return false
+}
+
+// TestBuildHubDialOptions_TLSWithAuth covers the hosted-hub-direction
+// shape — TLS transport + PerRPC OIDC.
+func TestBuildHubDialOptions_TLSWithAuth(t *testing.T) {
+	t.Setenv("AGNTCY_HUB_TEST_SECRET", "s")
+	auth, err := directorybridge.NewAuthProvider(&directorybridge.AuthConfig{
+		Type:            "oidc",
+		Issuer:          "https://idp.example.com/token",
+		ClientID:        "c",
+		ClientSecretEnv: "AGNTCY_HUB_TEST_SECRET",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthProvider: %v", err)
+	}
+	defer auth.Close()
+
+	cfg := &directorybridge.AgntcyGRPCConfig{Endpoint: "h:1", TLS: true}
+	opts := buildHubDialOptions(cfg, auth)
+	if got := len(opts); got != 2 {
+		t.Errorf("len(opts) = %d, want 2 (TLS transport + PerRPC OIDC)", got)
+	}
 }
