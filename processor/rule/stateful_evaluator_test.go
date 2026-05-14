@@ -514,6 +514,152 @@ func (m *mockActionExecutor) Execute(_ context.Context, action Action, _ *Execut
 	return nil
 }
 
+// TestStatefulEvaluator_WhenMessagePayloadAccess is the ADR-041
+// acceptance test: action-When clauses on message-path rules can match
+// against the inbound message payload via `$message.<field>` tokens AND
+// via bare field names (entity-is-nil resolution falls through to
+// messageFields). This is what unlocks semspec's consolidated-rule
+// governance pattern.
+func TestStatefulEvaluator_WhenMessagePayloadAccess(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	ruleDef := Definition{
+		ID:   "message-when-rule",
+		Type: "expression",
+		Name: "Message-Path When Rule",
+		OnEnter: []Action{
+			{
+				Type:    ActionTypePublish,
+				Subject: "test.explicit-message",
+				When: []expression.ConditionExpression{
+					// Explicit $message.<field> form (recommended per ADR-041).
+					{Field: "$message.command", Operator: "contains", Value: "cd /workspace"},
+				},
+			},
+			{
+				Type:    ActionTypePublish,
+				Subject: "test.bare-name-message",
+				When: []expression.ConditionExpression{
+					// Bare name; entity is nil so resolves from messageFields.
+					{Field: "tool_name", Operator: "eq", Value: "bash"},
+				},
+			},
+			{
+				Type:    ActionTypePublish,
+				Subject: "test.deep-path",
+				When: []expression.ConditionExpression{
+					// Deep-path access into nested payload.
+					{Field: "$message.tool_args.command", Operator: "starts_with", Value: "rm"},
+				},
+			},
+			{
+				Type:    ActionTypePublish,
+				Subject: "test.no-match",
+				When: []expression.ConditionExpression{
+					{Field: "$message.command", Operator: "contains", Value: "safe"},
+				},
+			},
+		},
+	}
+
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-msg-path",
+		CurrentlyMatching: true,
+		MessageData: map[string]any{
+			"command":   "cd /workspace && something",
+			"tool_name": "bash",
+			"tool_args": map[string]any{
+				"command": "rm -rf /tmp/x",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+
+	// Three matches (explicit, bare, deep-path); the "safe" one doesn't.
+	if actionExecutor.executeCallCount != 3 {
+		t.Errorf("Expected 3 actions executed (explicit + bare + deep-path matched; safe didn't), got %d", actionExecutor.executeCallCount)
+	}
+}
+
+// TestStatefulEvaluator_WhenConsolidatedGovernancePattern exercises
+// semspec's exact governance use case from
+// `.semspec/semstreams-ask-action-when-message-payload.md`: one rule
+// with publish+deny pairs guarded by $message.command patterns, plus a
+// trailing unconditional approve fallback. With ADR-041, exactly one
+// verdict per call by construction — no multi-rule race, no enforce-
+// mode timeout false positives.
+func TestStatefulEvaluator_WhenConsolidatedGovernancePattern(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	ruleDef := Definition{
+		ID:   "governance-bash-blocklist",
+		Type: "expression",
+		Name: "ADR-039 governance with consolidated blocklist",
+		OnEnter: []Action{
+			// Block "cd /workspace" pattern.
+			{
+				Type:    ActionTypePublish,
+				Subject: "agent.toolcall.rejected.cd",
+				When: []expression.ConditionExpression{
+					{Field: "$message.command", Operator: "contains", Value: "cd /workspace"},
+				},
+			},
+			// Trailing unconditional approve — only fires if no earlier
+			// guarded action matched. With $message access in When, this
+			// becomes a real composable fallback.
+			{
+				Type:    ActionTypePublish,
+				Subject: "agent.toolcall.approved.fallback",
+			},
+		},
+	}
+
+	// Case 1: command matches blocklist → rejected fires + fallback also
+	// fires (no deny short-circuit in this test since we're just
+	// exercising the When-clause field-resolution path).
+	actionExecutor.executeCallCount = 0
+	_, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-1",
+		CurrentlyMatching: true,
+		MessageData:       map[string]any{"command": "cd /workspace && ls", "tool_name": "bash"},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if actionExecutor.executeCallCount != 2 {
+		t.Errorf("Case 1: expected 2 actions (rejected + fallback approve), got %d", actionExecutor.executeCallCount)
+	}
+
+	// Case 2: command doesn't match → rejected skipped, only fallback fires.
+	actionExecutor.executeCallCount = 0
+	_, err = evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          "entity-2",
+		CurrentlyMatching: true,
+		MessageData:       map[string]any{"command": "ls /tmp", "tool_name": "bash"},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if actionExecutor.executeCallCount != 1 {
+		t.Errorf("Case 2: expected 1 action (fallback only), got %d", actionExecutor.executeCallCount)
+	}
+}
+
 // TestStatefulEvaluator_TransitionFieldTracking verifies that FieldValues are
 // persisted across evaluations and used by the transition operator.
 func TestStatefulEvaluator_TransitionFieldTracking(t *testing.T) {

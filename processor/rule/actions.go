@@ -175,8 +175,20 @@ type Action struct {
 	WorkflowStep string `json:"workflow_step,omitempty"`
 
 	// When is an optional guard clause for conditional action execution.
-	// If present, all conditions must match (AND logic) against the entity's current
-	// state and $state.* fields for the action to execute. Actions without When always execute.
+	// All conditions must match (AND logic) for the action to execute.
+	// Actions without When always execute.
+	//
+	// Field resolution follows the same precedence as rule-level
+	// conditions (see ADR-041):
+	//
+	//   - `$state.<field>` / `$prev.<field>` → rule match state
+	//   - `$message.<dotted.path>` → inbound message payload (recommended)
+	//   - bare name → entity triples first (when entity is non-nil),
+	//     falls through to message payload if not on the entity
+	//
+	// Use `$message.<field>` for unambiguous access in new rules. Bare
+	// names work but their resolution source depends on whether the rule
+	// fires on an entity-state event or a message-path event.
 	When []expression.ConditionExpression `json:"when,omitempty"`
 
 	// Bucket is the KV bucket name for update_kv actions (e.g., "PLAN_STATES").

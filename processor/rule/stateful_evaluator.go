@@ -189,7 +189,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	}
 
 	actions := e.selectActions(ev.Rule, transition, currentlyMatching, recovering, ev.EntityID, ev.RelatedID, iteration)
-	e.runActions(ctx, ev.Rule, ec, actions, ev.Entity, stateFields, ev.EntityID, ev.RelatedID)
+	e.runActions(ctx, ev.Rule, ec, actions, ev.Entity, stateFields, expression.MessageFields(ev.MessageData), ev.EntityID, ev.RelatedID)
 
 	matchState.FieldValues = captureTransitionFields(ev.Rule, ev.Entity)
 
@@ -231,7 +231,7 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 	if expr.Logic == "" {
 		expr.Logic = expression.LogicAnd
 	}
-	match, err := e.exprEvaluator.EvaluateWithStateFields(entity, prevFields, expr)
+	match, err := e.exprEvaluator.EvaluateWithStateAndMessage(entity, prevFields, nil, expr)
 	if err != nil {
 		e.logger.Warn("Failed to re-evaluate transition conditions",
 			"rule_id", ruleDef.ID,
@@ -297,6 +297,11 @@ func (e *StatefulEvaluator) selectActions(
 // clause does not match. Action errors are logged and do not stop subsequent
 // actions — the rule engine prefers best-effort execution so one failing
 // side effect does not block the rest of a transition.
+//
+// messageFields carries the inbound message payload (nil on entity-state
+// evaluations) so When clauses can match against `$message.<field>`
+// tokens or bare names that resolve from the payload — see
+// EvaluateWithStateAndMessage for the precedence rule.
 func (e *StatefulEvaluator) runActions(
 	ctx context.Context,
 	ruleDef Definition,
@@ -304,11 +309,12 @@ func (e *StatefulEvaluator) runActions(
 	actions []Action,
 	entity *gtypes.EntityState,
 	stateFields expression.StateFields,
+	messageFields expression.MessageFields,
 	entityID, relatedID string,
 ) {
 	for _, action := range actions {
 		if len(action.When) > 0 {
-			match, whenErr := e.evaluateWhen(action.When, entity, stateFields)
+			match, whenErr := e.evaluateWhen(action.When, entity, stateFields, messageFields)
 			if whenErr != nil {
 				e.logger.Warn("When clause evaluation failed, skipping action",
 					"rule_id", ruleDef.ID,
@@ -450,18 +456,21 @@ func captureTransitionFields(ruleDef Definition, entity *gtypes.EntityState) map
 }
 
 // evaluateWhen evaluates a When clause (action-level guard conditions).
-// When clauses use AND logic by default — all conditions must match for the action to execute.
-// If entity is nil (message-path rules), the When clause is skipped and returns true.
+// When clauses use AND logic by default — all conditions must match for
+// the action to execute. Field resolution mirrors rule-level conditions:
+// `$state.*` from stateFields, `$message.<path>` from messageFields,
+// bare names from entity triples (when present) then messageFields. See
+// `Evaluator.EvaluateWithStateAndMessage` for the full precedence rule
+// and ADR-041 for the unification rationale.
 func (e *StatefulEvaluator) evaluateWhen(
 	conditions []expression.ConditionExpression,
 	entity *gtypes.EntityState,
 	stateFields expression.StateFields,
+	messageFields expression.MessageFields,
 ) (bool, error) {
-	// For message-path rules without entity state, skip When evaluation
-	// unless all conditions reference $state.* fields
 	expr := expression.LogicalExpression{
 		Conditions: conditions,
 		Logic:      expression.LogicAnd,
 	}
-	return e.exprEvaluator.EvaluateWithStateFields(entity, stateFields, expr)
+	return e.exprEvaluator.EvaluateWithStateAndMessage(entity, stateFields, messageFields, expr)
 }

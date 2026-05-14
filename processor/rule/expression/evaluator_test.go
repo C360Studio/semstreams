@@ -1113,7 +1113,7 @@ func TestExpressionEvaluator_TransitionOperator(t *testing.T) {
 				Logic:      LogicAnd,
 			}
 
-			result, err := evaluator.EvaluateWithStateFields(testEntity, tt.stateFields, expr)
+			result, err := evaluator.EvaluateWithStateAndMessage(testEntity, tt.stateFields, nil, expr)
 			if tt.shouldErr {
 				require.Error(t, err)
 				return
@@ -1132,4 +1132,278 @@ func createTestEntity(entityID string, triples []message.Triple) *gtypes.EntityS
 		Version:   1,
 		UpdatedAt: time.Now(),
 	}
+}
+
+// TestEvaluateWithStateAndMessage_MessageFieldExplicit pins that explicit
+// $message.<path> tokens resolve from MessageFields and walk deep paths.
+// This is the recommended form (ADR-041) — operators writing rules should
+// reach for the explicit prefix when the resolution source matters.
+func TestEvaluateWithStateAndMessage_MessageFieldExplicit(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+
+	tests := []struct {
+		name      string
+		condition ConditionExpression
+		message   MessageFields
+		expected  bool
+		shouldErr bool
+	}{
+		{
+			name: "$message.command resolves top-level field",
+			condition: ConditionExpression{
+				Field:    "$message.command",
+				Operator: OpContains,
+				Value:    "cd /workspace",
+			},
+			message:  MessageFields{"command": "cd /workspace && ls", "tool_name": "bash"},
+			expected: true,
+		},
+		{
+			name: "$message.deep.path walks nested maps",
+			condition: ConditionExpression{
+				Field:    "$message.tool_args.command",
+				Operator: OpEqual,
+				Value:    "echo hello",
+			},
+			message: MessageFields{
+				"tool_args": map[string]any{"command": "echo hello"},
+			},
+			expected: true,
+		},
+		{
+			name: "missing $message field with Required errors",
+			condition: ConditionExpression{
+				Field:    "$message.absent",
+				Operator: OpEqual,
+				Value:    "x",
+				Required: true,
+			},
+			message:   MessageFields{"command": "x"},
+			shouldErr: true,
+		},
+		{
+			name: "missing $message field without Required returns false",
+			condition: ConditionExpression{
+				Field:    "$message.absent",
+				Operator: OpEqual,
+				Value:    "x",
+			},
+			message:  MessageFields{"command": "x"},
+			expected: false,
+		},
+		{
+			name: "$message field with nil messageFields returns false",
+			condition: ConditionExpression{
+				Field:    "$message.command",
+				Operator: OpEqual,
+				Value:    "x",
+			},
+			message:  nil,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := LogicalExpression{Conditions: []ConditionExpression{tt.condition}, Logic: LogicAnd}
+			result, err := evaluator.EvaluateWithStateAndMessage(nil, nil, tt.message, expr)
+			if tt.shouldErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestEvaluateWithStateAndMessage_BareNameMessagePath pins that on message-path
+// rules (entity nil), bare field names resolve from MessageFields. This is
+// the asymmetry semspec hit on beta.71: action-When clauses on message-path
+// rules previously couldn't see the payload because the evaluator skipped
+// non-$state fields when entity was nil. ADR-041 closes this.
+func TestEvaluateWithStateAndMessage_BareNameMessagePath(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+
+	tests := []struct {
+		name      string
+		condition ConditionExpression
+		message   MessageFields
+		expected  bool
+	}{
+		{
+			name: "bare command resolves from messageFields when entity is nil",
+			condition: ConditionExpression{
+				Field:    "command",
+				Operator: OpContains,
+				Value:    "cd /workspace",
+			},
+			message:  MessageFields{"command": "cd /workspace && ls"},
+			expected: true,
+		},
+		{
+			name: "bare tool_name eq matches",
+			condition: ConditionExpression{
+				Field:    "tool_name",
+				Operator: OpEqual,
+				Value:    "bash",
+			},
+			message:  MessageFields{"tool_name": "bash"},
+			expected: true,
+		},
+		{
+			name: "bare deep.path walks into nested maps",
+			condition: ConditionExpression{
+				Field:    "tool_args.command",
+				Operator: OpEqual,
+				Value:    "echo hi",
+			},
+			message:  MessageFields{"tool_args": map[string]any{"command": "echo hi"}},
+			expected: true,
+		},
+		{
+			name: "missing bare field returns false without Required",
+			condition: ConditionExpression{
+				Field:    "absent",
+				Operator: OpEqual,
+				Value:    "x",
+			},
+			message:  MessageFields{"command": "x"},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := LogicalExpression{Conditions: []ConditionExpression{tt.condition}, Logic: LogicAnd}
+			result, err := evaluator.EvaluateWithStateAndMessage(nil, nil, tt.message, expr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged pins the
+// backward-compat guarantee: entity-path rules with bare field names
+// resolve from entity triples, unchanged from the pre-ADR-041 behaviour.
+// This is the critical regression class — any existing rule that matches
+// on `field: "battery.level"` against entity state must keep working.
+func TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+	entity := createTestEntity("test.entity.001", []message.Triple{
+		{Predicate: "battery.level", Object: 15.0},
+		{Predicate: "status", Object: "active"},
+	})
+
+	tests := []struct {
+		name      string
+		condition ConditionExpression
+		expected  bool
+	}{
+		{
+			name: "bare predicate resolves from entity triple",
+			condition: ConditionExpression{
+				Field:    "battery.level",
+				Operator: OpLessThan,
+				Value:    20.0,
+			},
+			expected: true,
+		},
+		{
+			name: "bare predicate string operator",
+			condition: ConditionExpression{
+				Field:    "status",
+				Operator: OpEqual,
+				Value:    "active",
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := LogicalExpression{Conditions: []ConditionExpression{tt.condition}, Logic: LogicAnd}
+			result, err := evaluator.EvaluateWithStateAndMessage(entity, nil, nil, expr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestEvaluateWithStateAndMessage_EntityFallsThroughToMessage pins the
+// precedence rule: when entity is non-nil but the bare field isn't on
+// the entity, resolution falls through to messageFields. This is the
+// "mixed source" case — a rule on an entity-state event that wants to
+// match on the inbound event's metadata.
+func TestEvaluateWithStateAndMessage_EntityFallsThroughToMessage(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+	entity := createTestEntity("test.entity.001", []message.Triple{
+		{Predicate: "battery.level", Object: 15.0},
+	})
+
+	expr := LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "battery.level", Operator: OpLessThan, Value: 20.0},
+			{Field: "command", Operator: OpContains, Value: "danger"}, // from messageFields
+		},
+		Logic: LogicAnd,
+	}
+	result, err := evaluator.EvaluateWithStateAndMessage(entity, nil, MessageFields{"command": "danger zone"}, expr)
+	require.NoError(t, err)
+	assert.True(t, result, "entity-resolved AND message-fallback should both match")
+}
+
+// TestEvaluateWithStateAndMessage_PrecedenceOrder pins the explicit
+// precedence: $state.* > $message.* > entity triples > bare-from-message.
+// Even when keys overlap across sources, the explicit namespace wins.
+func TestEvaluateWithStateAndMessage_PrecedenceOrder(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+	entity := createTestEntity("test.entity.001", []message.Triple{
+		{Predicate: "shared_key", Object: "entity_value"},
+	})
+
+	// $message.shared_key explicit beats entity triple of same name.
+	expr := LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "$message.shared_key", Operator: OpEqual, Value: "message_value"},
+		},
+		Logic: LogicAnd,
+	}
+	result, err := evaluator.EvaluateWithStateAndMessage(entity, nil, MessageFields{"shared_key": "message_value"}, expr)
+	require.NoError(t, err)
+	assert.True(t, result, "$message.* explicit must resolve from messageFields, not entity triple")
+
+	// Bare shared_key with entity present resolves from entity, NOT
+	// messageFields (entity wins for bare names on entity-path rules).
+	expr2 := LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "shared_key", Operator: OpEqual, Value: "entity_value"},
+		},
+		Logic: LogicAnd,
+	}
+	result2, err := evaluator.EvaluateWithStateAndMessage(entity, nil, MessageFields{"shared_key": "message_value"}, expr2)
+	require.NoError(t, err)
+	assert.True(t, result2, "bare name with entity present must resolve from entity triple")
+}
+
+// TestEvaluateWithStateAndMessage_StatePlusMessage exercises the
+// canonical ADR-039 use case: action-When clauses that combine
+// $state.iteration with $message.command. semspec's consolidated-rule
+// pattern depends on this composition.
+func TestEvaluateWithStateAndMessage_StatePlusMessage(t *testing.T) {
+	evaluator := NewExpressionEvaluator()
+
+	expr := LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "$state.iteration", Operator: OpLessThan, Value: 5},
+			{Field: "$message.command", Operator: OpContains, Value: "cd /workspace"},
+		},
+		Logic: LogicAnd,
+	}
+	stateFields := StateFields{"$state.iteration": 2}
+	messageFields := MessageFields{"command": "cd /workspace && rm -rf"}
+
+	result, err := evaluator.EvaluateWithStateAndMessage(nil, stateFields, messageFields, expr)
+	require.NoError(t, err)
+	assert.True(t, result, "$state.* AND $message.* must compose in a single When clause")
 }
