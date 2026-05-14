@@ -196,9 +196,14 @@ func TestSubstituteVariables_Message_VerdictSubject(t *testing.T) {
 // warning via the same path as missing $entity.triple.X. This is the
 // silent-pass guard the ADR specifically called out — catches new event
 // shapes that forgot to populate a field at publish time.
+//
+// Not t.Parallel(): slog.SetDefault mutates package-global state, and
+// any other parallel test that captures slog.Default() at setup races
+// against our SetDefault/Cleanup window. See the same discipline at
+// TestExecutionContext_SubstituteVariables_WarnsOnUnresolved in
+// actions_test.go. Caught on the beta.72 Go-bump CI run when scheduler
+// timing shifted enough to surface the latent race.
 func TestSubstituteVariables_Message_UnresolvedFieldWarns(t *testing.T) {
-	t.Parallel()
-
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	prev := slog.Default()
