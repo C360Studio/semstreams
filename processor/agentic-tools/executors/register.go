@@ -35,6 +35,7 @@ import (
 //     query_entity) are skipped
 //   - RuleManager nil → rule CRUD tools are skipped
 //   - ComponentRegistry nil → list_components skipped (Pattern-B step 5)
+//   - SkipBuiltins nil/empty → all builtins register (today's behaviour)
 //
 // Platform is a value type (not pointer) because PlatformMeta is a small
 // POD; the empty value is still safe for the decide tool to use.
@@ -53,6 +54,57 @@ type ToolDependencies struct {
 	// the name is frozen at RegisterBuiltins for the lifetime of the
 	// process.
 	LoopsBucket string
+	// SkipBuiltins is the list of builtin group keys to NOT register.
+	// Product shells set this when they want to register their own
+	// implementation under a canonical tool name (e.g., a chain-scoped
+	// `bash` wrapper for sandbox isolation).
+	//
+	// Valid group keys are defined in BuiltinGroupKeys. Unknown names
+	// cause RegisterBuiltins to return an error before any registration
+	// happens — typos surface loudly at boot, not silently as "wait,
+	// why isn't my replacement tool being called?".
+	//
+	// For single-tool registrations (e.g., bash, decide), the group key
+	// IS the tool name. For multi-tool registrations (e.g., graph_query
+	// advertises five query_* tools, rules advertises five rule_* CRUD
+	// tools), the group key is the register-function's domain label
+	// and skips all tools registered by that function as a unit. See
+	// BuiltinGroupKeys for the full mapping.
+	//
+	// Empty/nil = today's behaviour: every builtin registers.
+	SkipBuiltins []string
+}
+
+// BuiltinGroupKeys is the closed set of valid SkipBuiltins entries.
+// For single-tool register functions the key matches the tool name;
+// for multi-tool register functions the key is a domain label that
+// skips the whole group as a unit (the registry can't partially
+// register one executor's ListTools() output).
+//
+// The slice is exported so external callers (and tests) can iterate
+// for validation, documentation, or "skip everything except X"
+// derivation. Order is stable for golden-test reproducibility.
+var BuiltinGroupKeys = []string{
+	// Single-tool registrations: key == tool name
+	"bash",
+	"web_search",
+	"http_request",
+	"read_loop_result",
+	"decide",
+	"emit_diagnosis",
+	"write_todos",
+	"scratchpad",
+	"summarize_graph",
+	"search_graph",
+	"flow_monitor",
+	// Multi-tool registrations: key is the register-function's domain
+	"github",            // registerGitHub — github_* tools
+	"graph_query",       // registerGraphQuery — query_entity + 4 others
+	"rules",             // registerRules — rule CRUD tools
+	"flows",             // registerFlows — flow CRUD tools
+	"personas",          // registerPersonas — persona CRUD tools
+	"flow_templates",    // registerFlowTemplates — flow_template CRUD tools
+	"component_catalog", // registerComponentCatalog — list_components
 }
 
 // RegisterBuiltins wires every tool this package owns into the supplied
@@ -84,46 +136,89 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		loopsBucket = "AGENT_LOOPS"
 	}
 
+	skip, err := resolveSkipSet(deps.SkipBuiltins)
+	if err != nil {
+		return fmt.Errorf("RegisterBuiltins: %w", err)
+	}
+
 	var errs []error
 	track := func(err error) {
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
+	// gate runs fn() only when key is not in the skip set. Each
+	// register_* function is wrapped through this so the gating policy
+	// (skip vs register, log on skip) lives in one place and stays
+	// uniform across single-tool and multi-tool registrations.
+	gate := func(key string, fn func() error) {
+		if skip[key] {
+			logger.Debug("Skipping builtin tool group (SkipBuiltins)",
+				"group", key,
+				"hint", "product shell will register its own implementation under this name")
+			return
+		}
+		track(fn())
+	}
 
-	track(registerBash(reg, logger))
-	track(registerWebSearch(reg, deps.NATSClient, deps.Platform, logger))
-	track(registerHTTPRequest(reg, deps.NATSClient, deps.Platform, logger))
-	track(registerGitHub(reg, logger))
+	gate("bash", func() error { return registerBash(reg, logger) })
+	gate("web_search", func() error { return registerWebSearch(reg, deps.NATSClient, deps.Platform, logger) })
+	gate("http_request", func() error { return registerHTTPRequest(reg, deps.NATSClient, deps.Platform, logger) })
+	gate("github", func() error { return registerGitHub(reg, logger) })
 
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
-		track(registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket))
-		track(registerDecide(reg, deps.NATSClient, deps.Platform, logger))
-		track(registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger))
-		track(registerGraphQuery(ctx, reg, deps.NATSClient, logger))
-		track(registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger))
-		track(registerScratchpad(reg, deps.NATSClient, deps.Platform, logger))
+		gate("read_loop_result", func() error { return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket) })
+		gate("decide", func() error { return registerDecide(reg, deps.NATSClient, deps.Platform, logger) })
+		gate("emit_diagnosis", func() error { return registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger) })
+		gate("graph_query", func() error { return registerGraphQuery(ctx, reg, deps.NATSClient, logger) })
+		gate("write_todos", func() error { return registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger) })
+		gate("scratchpad", func() error { return registerScratchpad(reg, deps.NATSClient, deps.Platform, logger) })
 		// Gateway-first discovery tools (PR #54 step 2): thin wrappers
 		// over the new graph.query.summary + graph.query.searchGraph
 		// server-side resolvers. Read-only, no platform identity
 		// required. See project_graph_tools_gateway_first_plan memory.
-		track(registerSummarizeGraph(reg, deps.NATSClient, logger))
-		track(registerSearchGraph(reg, deps.NATSClient, logger))
+		gate("summarize_graph", func() error { return registerSummarizeGraph(reg, deps.NATSClient, logger) })
+		gate("search_graph", func() error { return registerSearchGraph(reg, deps.NATSClient, logger) })
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
 	// duplicate-name failures propagate.
-	track(registerRules(reg, deps.RuleManager, logger))
-	track(registerFlows(reg, deps.FlowManager, logger))
-	track(registerPersonas(reg, deps.PersonaManager, logger))
-	track(registerFlowTemplates(reg, deps.FlowTemplateManager, logger))
-	track(registerComponentCatalog(reg, deps.ComponentRegistry, logger))
-	track(registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket))
+	gate("rules", func() error { return registerRules(reg, deps.RuleManager, logger) })
+	gate("flows", func() error { return registerFlows(reg, deps.FlowManager, logger) })
+	gate("personas", func() error { return registerPersonas(reg, deps.PersonaManager, logger) })
+	gate("flow_templates", func() error { return registerFlowTemplates(reg, deps.FlowTemplateManager, logger) })
+	gate("component_catalog", func() error { return registerComponentCatalog(reg, deps.ComponentRegistry, logger) })
+	gate("flow_monitor", func() error { return registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket) })
 
 	if len(errs) > 0 {
 		return fmt.Errorf("RegisterBuiltins: %w", errors.Join(errs...))
 	}
 	return nil
+}
+
+// resolveSkipSet validates the skip list against BuiltinGroupKeys and
+// returns a lookup map. An unknown name returns an error referencing
+// the full valid set so operators can self-correct without grepping
+// the source.
+//
+// Empty/nil input is the common case (today's behaviour); returns
+// (nil, nil) — the gate() helper treats nil maps as "skip nothing".
+func resolveSkipSet(skipBuiltins []string) (map[string]bool, error) {
+	if len(skipBuiltins) == 0 {
+		return nil, nil
+	}
+	valid := make(map[string]bool, len(BuiltinGroupKeys))
+	for _, k := range BuiltinGroupKeys {
+		valid[k] = true
+	}
+	skip := make(map[string]bool, len(skipBuiltins))
+	for _, name := range skipBuiltins {
+		if !valid[name] {
+			return nil, fmt.Errorf("unknown builtin group key %q in SkipBuiltins; valid keys: %v", name, BuiltinGroupKeys)
+		}
+		skip[name] = true
+	}
+	return skip, nil
 }
