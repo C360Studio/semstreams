@@ -5,6 +5,60 @@
   "title": "directory-bridge Configuration",
   "description": "Registers agents with AGNTCY directories using OASF records",
   "properties": {
+    "agntcy_grpc": {
+      "type": "object",
+      "description": "agntcy_grpc backend settings",
+      "category": "basic",
+      "properties": {
+        "auth": {
+          "type": "object",
+          "description": "auth",
+          "properties": {
+            "client_id": {
+              "type": "string",
+              "description": "client_id"
+            },
+            "client_id_env": {
+              "type": "string",
+              "description": "client_id_env"
+            },
+            "client_secret_env": {
+              "type": "string",
+              "description": "client_secret_env"
+            },
+            "issuer": {
+              "type": "string",
+              "description": "issuer"
+            },
+            "scopes": {
+              "type": "array",
+              "description": "scopes",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "description": "type"
+            }
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "endpoint"
+        },
+        "tls": {
+          "type": "boolean",
+          "description": "tls"
+        }
+      }
+    },
+    "backend": {
+      "type": "string",
+      "description": "Wire-format backend (http or agntcy_grpc)",
+      "default": "http",
+      "category": "basic"
+    },
     "consumer_name_suffix": {
       "type": "string",
       "description": "Suffix for consumer names",
@@ -18,7 +72,7 @@
     },
     "directory_url": {
       "type": "string",
-      "description": "AGNTCY directory service URL",
+      "description": "AGNTCY directory service URL (HTTP backend only)",
       "category": "basic"
     },
     "heartbeat_interval": {

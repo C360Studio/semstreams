@@ -3,6 +3,7 @@ package directorybridge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
@@ -87,14 +88,18 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}, nil
 }
 
-// Initialize prepares the component.
+// Initialize prepares the component, selecting a Backend implementation
+// based on config.Backend. Empty / "http" selects the legacy HTTP wire
+// format; "agntcy_grpc" selects the AGNTCY gRPC StoreService wire
+// format with optional per-RPC OIDC auth.
 func (c *Component) Initialize() error {
-	// Select backend. PR-A wires the HTTP backend exclusively; backend
-	// selection from config lands in a follow-up PR.
-	c.backend = NewHTTPBackend(c.config.DirectoryURL)
+	backend, err := c.buildBackend()
+	if err != nil {
+		return errs.Wrap(err, "Component", "Initialize", "build backend")
+	}
+	c.backend = backend
 
 	// Create identity provider
-	var err error
 	c.idProvider, err = identity.DefaultProviderFactory(identity.ProviderConfig{
 		ProviderType: c.config.IdentityProvider,
 	})
@@ -106,6 +111,34 @@ func (c *Component) Initialize() error {
 	c.regManager = NewRegistrationManager(c.backend, c.idProvider, c.config, c.logger)
 
 	return nil
+}
+
+// buildBackend constructs the wire-level Backend implementation selected
+// by config.Backend. The auth provider's lifetime is owned by the
+// backend (returned wrapped via NewGRPCBackend), so callers do not need
+// to hold a separate reference for shutdown.
+func (c *Component) buildBackend() (Backend, error) {
+	switch c.config.Backend {
+	case "", BackendHTTP:
+		return NewHTTPBackend(c.config.DirectoryURL), nil
+	case BackendAgntcyGRPC:
+		if c.config.AgntcyGRPC == nil {
+			return nil, fmt.Errorf("backend %q requires agntcy_grpc block (validation should have caught this)", BackendAgntcyGRPC)
+		}
+		auth, err := NewAuthProvider(c.config.AgntcyGRPC.Auth)
+		if err != nil {
+			return nil, fmt.Errorf("build auth provider: %w", err)
+		}
+		dialOpts := buildGRPCDialOptions(c.config.AgntcyGRPC, auth)
+		backend, err := NewGRPCBackendWithAuth(c.config.AgntcyGRPC.Endpoint, auth, dialOpts...)
+		if err != nil {
+			_ = auth.Close()
+			return nil, fmt.Errorf("dial agntcy_grpc backend: %w", err)
+		}
+		return backend, nil
+	default:
+		return nil, fmt.Errorf("unsupported backend %q", c.config.Backend)
+	}
 }
 
 // Start begins watching for OASF records and registering agents.

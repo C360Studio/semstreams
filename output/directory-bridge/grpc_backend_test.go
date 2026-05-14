@@ -250,26 +250,22 @@ func TestGRPCBackend_PublishWithdrawRoundTrip(t *testing.T) {
 	}
 }
 
-// TestGRPCBackend_RefreshIsNoop documents the CID-anchored contract:
-// Refresh never hits the wire (fake.pushCalls stays at 0) and returns
-// the same RecordID with ExpiresAt zero so the bridge keeps skipping
-// heartbeats for this registration.
-func TestGRPCBackend_RefreshIsNoop(t *testing.T) {
+// TestGRPCBackend_RefreshReturnsNotSupported documents the
+// CID-anchored contract: Refresh never hits the wire AND surfaces a
+// typed [ErrRefreshNotSupported] sentinel. The bridge's
+// RegistrationManager skips Refresh when ExpiresAt.IsZero() (set by
+// Publish for this backend), so direct callers — only seen on
+// operator-triggered re-publish or debug tools — get a clear signal.
+func TestGRPCBackend_RefreshReturnsNotSupported(t *testing.T) {
 	fake, backend, teardown := startTestServer(t)
 	defer teardown()
 
-	res, err := backend.Refresh(context.Background(), &RefreshRequest{
+	_, err := backend.Refresh(context.Background(), &RefreshRequest{
 		RecordID: "test:abcdef",
 		AgentDID: "did:test",
 	})
-	if err != nil {
-		t.Fatalf("Refresh: %v", err)
-	}
-	if res.RecordID != "test:abcdef" {
-		t.Errorf("RecordID = %q, want echo of input", res.RecordID)
-	}
-	if !res.ExpiresAt.IsZero() {
-		t.Errorf("ExpiresAt = %v, want zero", res.ExpiresAt)
+	if !errors.Is(err, ErrRefreshNotSupported) {
+		t.Errorf("Refresh err = %v, want %v", err, ErrRefreshNotSupported)
 	}
 	if fake.pushCalls != 0 || fake.deleteCalls != 0 {
 		t.Errorf("Refresh hit the wire: push=%d delete=%d, want 0/0", fake.pushCalls, fake.deleteCalls)
