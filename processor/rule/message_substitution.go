@@ -36,6 +36,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
 // messageTokenRe matches `$message.<field_path>` where the path is one
@@ -70,43 +72,10 @@ func applyMessageSubstitutions(template string, data map[string]any) string {
 		if path == "" {
 			return token
 		}
-		value, ok := extractMessageValue(data, path)
+		value, ok := expression.ExtractMessageValue(expression.MessageFields(data), path)
 		if !ok {
 			return token
 		}
 		return fmt.Sprintf("%v", value)
 	})
-}
-
-// extractMessageValue walks data along the dotted path. Returns the
-// terminal value and true on success; the second return is false (and
-// the caller must leave the token literal in place) when:
-//
-//   - any non-terminal segment is missing from the current map, OR
-//   - any non-terminal segment resolves to a non-map value (can't
-//     descend further), OR
-//   - the terminal segment is missing.
-//
-// A nil terminal value is considered a successful resolution (the JSON
-// `null` distinct from "missing"). Callers render `<nil>` via fmt — the
-// silent-pass safety net is the regex-leftover warning, not extra
-// fallback logic here.
-func extractMessageValue(data map[string]any, path string) (any, bool) {
-	parts := strings.Split(path, ".")
-	current := any(data)
-	for i, part := range parts {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		value, exists := m[part]
-		if !exists {
-			return nil, false
-		}
-		if i == len(parts)-1 {
-			return value, true
-		}
-		current = value
-	}
-	return nil, false
 }

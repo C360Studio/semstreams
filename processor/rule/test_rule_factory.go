@@ -3,7 +3,6 @@ package rule
 
 import (
 	"fmt"
-	"strings"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -17,6 +16,8 @@ type TestRule struct {
 	subscribed    []string
 	enabled       bool
 	conditions    []expression.ConditionExpression
+	logic         string
+	evaluator     *expression.Evaluator
 	shouldTrigger bool // Set to true when conditions match
 }
 
@@ -28,6 +29,8 @@ func NewTestRule(id, name string, subjects []string, conditions []expression.Con
 		subscribed: subjects,
 		enabled:    true,
 		conditions: conditions,
+		logic:      expression.LogicAnd,
+		evaluator:  expression.NewExpressionEvaluator(),
 	}
 }
 
@@ -41,7 +44,9 @@ func (r *TestRule) Subscribe() []string {
 	return r.subscribed
 }
 
-// Evaluate evaluates the rule against messages
+// Evaluate evaluates the rule against messages.
+// Routes through the unified expression.Evaluator — same field
+// resolution semantics as production rules. See ADR-041.
 func (r *TestRule) Evaluate(messages []message.Message) bool {
 	if !r.enabled || len(messages) == 0 {
 		return false
@@ -50,7 +55,7 @@ func (r *TestRule) Evaluate(messages []message.Message) bool {
 	// For test purposes, evaluate the last message
 	msg := messages[len(messages)-1]
 
-	// Get payload data - try to cast to GenericJSONPayload
+	// Get payload data — only GenericJSONPayload supports field-keyed matching.
 	payload := msg.Payload()
 	genericPayload, ok := payload.(*message.GenericJSONPayload)
 	if !ok {
@@ -62,37 +67,27 @@ func (r *TestRule) Evaluate(messages []message.Message) bool {
 		return false
 	}
 
-	// Evaluate conditions if present
-	if len(r.conditions) > 0 {
-		return r.evaluateConditions(data)
+	if len(r.conditions) == 0 {
+		// No conditions - trigger if we have data
+		r.shouldTrigger = len(data) > 0
+		return r.shouldTrigger
 	}
 
-	// Default: trigger if we have data
-	r.shouldTrigger = len(data) > 0
-	return r.shouldTrigger
-}
-
-// evaluateConditions checks if message data matches rule conditions
-func (r *TestRule) evaluateConditions(data map[string]interface{}) bool {
-	for _, cond := range r.conditions {
-		// Extract nested field value (e.g., "battery.level")
-		value := extractNestedValue(data, cond.Field)
-		if value == nil {
-			return false
-		}
-
-		// Evaluate condition
-		if !evaluateCondition(value, cond.Operator, cond.Value) {
-			return false
-		}
+	expr := expression.LogicalExpression{
+		Conditions: r.conditions,
+		Logic:      r.logic,
 	}
-
-	r.shouldTrigger = true
-	return true
+	result, err := r.evaluator.EvaluateWithStateAndMessage(nil, nil, expression.MessageFields(data), expr)
+	if err != nil {
+		return false
+	}
+	r.shouldTrigger = result
+	return result
 }
 
-// EvaluateEntityState evaluates the rule directly against EntityState triples.
-// This implements the EntityStateEvaluator interface for KV watch-based evaluation.
+// EvaluateEntityState evaluates the rule against entity triples via the
+// unified evaluator. Implements the EntityStateEvaluator interface for
+// KV watch-based evaluation.
 func (r *TestRule) EvaluateEntityState(entityState *gtypes.EntityState) bool {
 	if !r.enabled || entityState == nil {
 		return false
@@ -104,32 +99,16 @@ func (r *TestRule) EvaluateEntityState(entityState *gtypes.EntityState) bool {
 		return true
 	}
 
-	// Evaluate conditions against triples
-	for _, cond := range r.conditions {
-		// Find triple with matching predicate
-		var value interface{}
-		found := false
-		for _, triple := range entityState.Triples {
-			if triple.Predicate == cond.Field {
-				value = triple.Object
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			// Required field not found
-			return false
-		}
-
-		// Evaluate condition
-		if !evaluateCondition(value, cond.Operator, cond.Value) {
-			return false
-		}
+	expr := expression.LogicalExpression{
+		Conditions: r.conditions,
+		Logic:      r.logic,
 	}
-
-	r.shouldTrigger = true
-	return true
+	result, err := r.evaluator.Evaluate(entityState, expr)
+	if err != nil {
+		return false
+	}
+	r.shouldTrigger = result
+	return result
 }
 
 // ExecuteEvents generates events when rule triggers
@@ -144,7 +123,7 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
 	event := gtypes.Event{
 		Type:     gtypes.EventEntityUpdate, // Using a standard event type
 		EntityID: "test.entity." + r.id,
-		Properties: map[string]interface{}{
+		Properties: map[string]any{
 			"rule_id":    r.id,
 			"rule_name":  r.name,
 			"message_id": msg.ID(),
@@ -162,79 +141,6 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
 
 	r.shouldTrigger = false // Reset trigger state
 	return []Event{&event}, nil
-}
-
-// extractNestedValue extracts a value from nested map using dot notation
-func extractNestedValue(data map[string]interface{}, field string) interface{} {
-	parts := strings.Split(field, ".")
-	current := data
-
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			// Last part - return the value
-			return current[part]
-		}
-
-		// Navigate deeper
-		next, ok := current[part].(map[string]interface{})
-		if !ok {
-			return nil
-		}
-		current = next
-	}
-
-	return nil
-}
-
-// evaluateCondition evaluates a single condition
-func evaluateCondition(value interface{}, operator string, expected interface{}) bool {
-	switch operator {
-	case "eq":
-		return value == expected
-	case "ne":
-		return value != expected
-	case "lt":
-		return compareNumbers(value, expected) < 0
-	case "lte":
-		return compareNumbers(value, expected) <= 0
-	case "gt":
-		return compareNumbers(value, expected) > 0
-	case "gte":
-		return compareNumbers(value, expected) >= 0
-	default:
-		return false
-	}
-}
-
-// compareNumbers compares two values as numbers
-func compareNumbers(a, b interface{}) int {
-	aFloat := toFloat64(a)
-	bFloat := toFloat64(b)
-
-	if aFloat < bFloat {
-		return -1
-	} else if aFloat > bFloat {
-		return 1
-	}
-	return 0
-}
-
-// toFloat64 converts a value to float64
-func toFloat64(v interface{}) float64 {
-	switch val := v.(type) {
-	case float64:
-		return val
-	case float32:
-		return float64(val)
-	case int:
-		return float64(val)
-	case int64:
-		return float64(val)
-	case int32:
-		return float64(val)
-	default:
-		return 0
-	}
 }
 
 // TestRuleFactory creates test rules for integration testing

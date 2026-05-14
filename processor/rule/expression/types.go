@@ -130,3 +130,19 @@ const (
 // in condition expressions. Keys are the full field names (e.g., "$state.iteration").
 // This avoids circular dependencies between the expression and rule packages.
 type StateFields map[string]interface{}
+
+// MessageFields carries the inbound NATS message payload for `$message.*`
+// pseudo-field resolution in condition expressions. The map shape is
+// `map[string]any` (matching `GenericJSONPayload.Data` and what
+// `ExecutionContext.MessageData` carries through the rule pipeline).
+//
+// Deep-path access is supported: `$message.tool_args.command` walks the
+// map along the dotted path. Bare field names (e.g. `command`) also
+// resolve here when entity state is nil or when the field isn't present
+// as an entity triple — see Evaluator.EvaluateWithStateAndMessage for the
+// full precedence rule.
+//
+// Empty or nil maps cause `$message.*` and bare-name message lookups to
+// return "not found" — same surfacing behaviour as missing entity triples
+// (condition fails when Required=false, errors when Required=true).
+type MessageFields map[string]any

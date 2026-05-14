@@ -30,7 +30,7 @@ func NewExpressionEvaluator() *Evaluator {
 	evaluator.operators[OpNotIn] = operatorNotIn
 	evaluator.operators[OpBetween] = operatorBetween
 
-	// Note: OpTransition is handled specially in evaluateConditionWithState
+	// Note: OpTransition is handled specially in evaluateConditionWithStateAndMessage
 	// because it needs access to $prev.* state fields, not just fieldValue/compareValue.
 
 	// Register string operators
@@ -42,16 +42,35 @@ func NewExpressionEvaluator() *Evaluator {
 	return evaluator
 }
 
-// Evaluate evaluates a logical expression against an entity state
+// Evaluate evaluates a logical expression against an entity state.
+// Equivalent to EvaluateWithStateAndMessage with nil stateFields and nil
+// messageFields — entity triples are the only resolution source.
 func (e *Evaluator) Evaluate(entityState *gtypes.EntityState, expr LogicalExpression) (bool, error) {
-	return e.EvaluateWithStateFields(entityState, nil, expr)
+	return e.EvaluateWithStateAndMessage(entityState, nil, nil, expr)
 }
 
-// EvaluateWithStateFields evaluates a logical expression against entity state and optional
-// match state fields. The stateFields parameter provides $state.* pseudo-field values
-// (e.g., "$state.iteration", "$state.max_iterations") for conditions that reference
-// rule execution state rather than entity triples.
-func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, stateFields StateFields, expr LogicalExpression) (bool, error) {
+// EvaluateWithStateAndMessage evaluates a logical expression against the
+// full field-resolution surface: entity triples, rule match-state
+// (`$state.*`/`$prev.*`), and the inbound message payload (`$message.*`).
+//
+// Field resolution precedence per condition:
+//
+//  1. `$state.*` / `$prev.*` → stateFields map
+//  2. `$message.<dotted.path>` → messageFields via deep-walk
+//  3. Bare field name → entity triples first (when entity is non-nil);
+//     falls through to messageFields if not present on the entity.
+//     When entity is nil (message-path rules), bare names resolve from
+//     messageFields directly.
+//
+// This is the single condition evaluator for both rule-level conditions
+// (where the rule fires on message-path or entity-state events) and
+// action-level `when` guards. See ADR-041 for the unification rationale.
+//
+// `$message.command` is the recommended form when both rule-level and
+// when-clause use the same field, because it makes the resolution source
+// explicit. Bare `command` works equivalently on message-path rules but
+// implicitly prefers entity triples on entity-path rules.
+func (e *Evaluator) EvaluateWithStateAndMessage(entityState *gtypes.EntityState, stateFields StateFields, messageFields MessageFields, expr LogicalExpression) (bool, error) {
 	if len(expr.Conditions) == 0 {
 		return true, nil // Empty condition list passes
 	}
@@ -60,7 +79,7 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 
 	// Evaluate each condition
 	for i, condition := range expr.Conditions {
-		result, err := e.evaluateConditionWithState(entityState, stateFields, condition)
+		result, err := e.evaluateConditionWithStateAndMessage(entityState, stateFields, messageFields, condition)
 		if err != nil {
 			return false, err
 		}
@@ -92,11 +111,12 @@ func (e *Evaluator) EvaluateWithStateFields(entityState *gtypes.EntityState, sta
 	}
 }
 
-// evaluateConditionWithState evaluates a single condition, resolving $state.* fields
-// from stateFields before falling through to entity triple evaluation.
-func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, stateFields StateFields, condition ConditionExpression) (bool, error) {
-	// Check for $state.* pseudo-fields first
-	if strings.HasPrefix(condition.Field, "$state.") {
+// evaluateConditionWithStateAndMessage resolves a single condition against
+// the layered sources (stateFields, messageFields, entity triples) per
+// the precedence rule documented on EvaluateWithStateAndMessage.
+func (e *Evaluator) evaluateConditionWithStateAndMessage(entityState *gtypes.EntityState, stateFields StateFields, messageFields MessageFields, condition ConditionExpression) (bool, error) {
+	// 1. `$state.*` / `$prev.*` — pseudo-fields from rule match state.
+	if strings.HasPrefix(condition.Field, "$state.") || strings.HasPrefix(condition.Field, "$prev.") {
 		fieldValue, exists := stateFields[condition.Field]
 		if !exists {
 			if condition.Required {
@@ -107,84 +127,84 @@ func (e *Evaluator) evaluateConditionWithState(entityState *gtypes.EntityState, 
 			}
 			return false, nil
 		}
-
-		// Get operator function
-		opFunc, opExists := e.operators[condition.Operator]
-		if !opExists {
-			return false, &EvaluationError{
-				Field:    condition.Field,
-				Operator: condition.Operator,
-				Message:  "unsupported operator",
-			}
-		}
-
-		result, err := opFunc(fieldValue, condition.Value)
-		if err != nil {
-			return false, &EvaluationError{
-				Field:    condition.Field,
-				Operator: condition.Operator,
-				Message:  "operator execution failed",
-				Err:      err,
-			}
-		}
-		return result, nil
+		return e.applyOperator(condition, fieldValue)
 	}
 
-	// Handle transition operator (needs previous value from state)
+	// 2. `$message.<path>` — explicit message payload access.
+	if strings.HasPrefix(condition.Field, "$message.") {
+		path := strings.TrimPrefix(condition.Field, "$message.")
+		fieldValue, exists := ExtractMessageValue(messageFields, path)
+		if !exists {
+			if condition.Required {
+				return false, &EvaluationError{
+					Field:   condition.Field,
+					Message: "required message field not found",
+				}
+			}
+			return false, nil
+		}
+		return e.applyOperator(condition, fieldValue)
+	}
+
+	// 3. Transition operator — entity-state-only (uses $prev.* from
+	//    stateFields against the current entity triple value).
 	if condition.Operator == OpTransition {
 		return e.evaluateTransition(entityState, stateFields, condition)
 	}
 
-	// If entityState is nil (message-path rules), non-$state fields are treated as missing
-	if entityState == nil {
-		if condition.Required {
+	// 4. Bare field name resolution.
+	//    Entity-path (entity non-nil): triples first, fall through to
+	//    messageFields if not present.
+	//    Message-path (entity nil): messageFields only.
+	if entityState != nil {
+		fieldValue, exists, err := e.typeDetector.GetFieldValue(entityState, condition.Field)
+		if err != nil {
 			return false, &EvaluationError{
 				Field:   condition.Field,
-				Message: "entity state is nil, field not available",
+				Message: "failed to get field value",
+				Err:     err,
 			}
 		}
-		return false, nil
+		if exists {
+			return e.applyOperator(condition, fieldValue)
+		}
+		// Fall through to messageFields below.
 	}
 
-	return e.evaluateCondition(entityState, condition)
-}
+	if messageFields != nil {
+		if fieldValue, ok := ExtractMessageValue(messageFields, condition.Field); ok {
+			return e.applyOperator(condition, fieldValue)
+		}
+	}
 
-// evaluateCondition evaluates a single condition against entity state
-func (e *Evaluator) evaluateCondition(entityState *gtypes.EntityState, condition ConditionExpression) (bool, error) {
-	// Get field value from entity state
-	fieldValue, exists, err := e.typeDetector.GetFieldValue(entityState, condition.Field)
-	if err != nil {
+	if condition.Required {
+		if entityState == nil && messageFields == nil {
+			return false, &EvaluationError{
+				Field:   condition.Field,
+				Message: "no entity state or message fields available",
+			}
+		}
 		return false, &EvaluationError{
 			Field:   condition.Field,
-			Message: "failed to get field value",
-			Err:     err,
+			Message: "required field not found",
 		}
 	}
+	return false, nil
+}
 
-	// Handle missing fields based on Required flag
-	if !exists {
-		if condition.Required {
-			// Required field missing - fail fast as requested
-			return false, &EvaluationError{
-				Field:   condition.Field,
-				Message: "required field not found",
-			}
-		}
-		// Optional field missing - condition fails (conservative approach)
-		return false, nil
-	}
-
-	// Get operator function
-	opFunc, exists := e.operators[condition.Operator]
-	if !exists {
+// applyOperator runs the registered operator function for the condition
+// against fieldValue and returns the boolean result. Used by every field
+// resolution branch in evaluateConditionWithStateAndMessage so error
+// shapes stay uniform.
+func (e *Evaluator) applyOperator(condition ConditionExpression, fieldValue any) (bool, error) {
+	opFunc, ok := e.operators[condition.Operator]
+	if !ok {
 		return false, &EvaluationError{
 			Field:    condition.Field,
 			Operator: condition.Operator,
 			Message:  "unsupported operator",
 		}
 	}
-
-	// Execute operator
 	result, err := opFunc(fieldValue, condition.Value)
 	if err != nil {
 		return false, &EvaluationError{
@@ -194,7 +214,6 @@ func (e *Evaluator) evaluateCondition(entityState *gtypes.EntityState, condition
 			Err:      err,
 		}
 	}
-
 	return result, nil
 }
 

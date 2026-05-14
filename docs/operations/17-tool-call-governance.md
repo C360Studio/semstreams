@@ -181,6 +181,80 @@ publishes the verdict in one action. It does NOT short-circuit
 subsequent actions — operators may want to add metric-counter actions
 or downstream notifications on the same firing.
 
+### Consolidated blocklist with fallback approve (recommended)
+
+The canonical race-free shape for enforce-mode governance: one rule
+that pairs `publish` + `deny` for each bad pattern, then a trailing
+unconditional approve. Exactly one verdict per call, no multi-rule
+race condition. Requires action-`when` clauses with `$message.*`
+access (ADR-041, beta.72+).
+
+```json
+{
+  "name": "bash-workspace-guard",
+  "subscribe": ["agent.toolcall.proposed.>"],
+  "conditions": [
+    {"field": "$message.tool_name", "operator": "eq", "value": "bash"}
+  ],
+  "on_enter": [
+    {
+      "type": "publish",
+      "when": [{"field": "$message.command", "operator": "contains", "value": "cd /workspace"}],
+      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "properties": {
+        "decision": "rejected",
+        "call_id": "$message.call_id",
+        "reason": "bash 'cd /workspace' blocked — stay in worktree"
+      }
+    },
+    {
+      "type": "deny",
+      "when": [{"field": "$message.command", "operator": "contains", "value": "cd /workspace"}],
+      "reason": "bash 'cd /workspace' blocked"
+    },
+    {
+      "type": "publish",
+      "when": [{"field": "$message.command", "operator": "contains", "value": "> /workspace/"}],
+      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "properties": {
+        "decision": "rejected",
+        "call_id": "$message.call_id",
+        "reason": "bash redirect into /workspace blocked"
+      }
+    },
+    {
+      "type": "deny",
+      "when": [{"field": "$message.command", "operator": "contains", "value": "> /workspace/"}],
+      "reason": "bash redirect into /workspace blocked"
+    },
+    {
+      "type": "publish",
+      "subject": "agent.toolcall.approved.$message.loop_id.$message.call_id",
+      "properties": {
+        "decision": "approved",
+        "call_id": "$message.call_id",
+        "reason": "bash command passed blocklist"
+      }
+    }
+  ]
+}
+```
+
+Sequencing invariants this pattern relies on:
+
+- Actions inside a rule run sequentially in declared order
+- `deny` short-circuits remaining actions in the same firing (returns
+  `*DenyVerdict`, which the executor handles by breaking the loop —
+  see `processor/rule/stateful_evaluator.go:357-366`)
+- Actions without a `when` clause always run if reached
+- Therefore the trailing unconditional `publish approved` only fires
+  when **no earlier `deny` matched** → exactly one verdict per call
+
+Without the `when` clause's access to `$message.*`, this pattern is
+impossible to express in a single rule. Pre-ADR-041 the only option
+was N separate rules (one per bad pattern), which introduced a
+multi-rule firing race in enforce mode.
+
 ### Role-based allowlist with caller context
 
 ```json
