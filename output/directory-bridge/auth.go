@@ -114,11 +114,21 @@ func (p *OIDCAuthProvider) Close() error { return nil }
 // importing google.golang.org/grpc/credentials/oauth) to keep the
 // dependency surface small — that package pulls in google.golang.org/api
 // transitively.
+//
+// Known limitation: the gRPC PerRPCCredentials context is intentionally
+// dropped — oauth2.TokenSource.Token() pre-dates context plumbing and
+// doesn't accept one. If a gRPC RPC deadline trips while a token
+// refresh is in-flight, the refresh continues on its own HTTP client
+// timeout (90s by net/http default). The window is small but nonzero;
+// operators sensitive to it should set tight client timeouts on the
+// HTTP client passed via oauth2.HTTPClient context value before
+// constructing the provider. Acceptable v1 limitation per ADR-042.
 type oauthTokenSource struct {
 	src oauth2.TokenSource
 }
 
 // GetRequestMetadata returns the Authorization header for one RPC.
+// See the type comment for context-handling caveats.
 func (o *oauthTokenSource) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
 	tok, err := o.src.Token()
 	if err != nil {

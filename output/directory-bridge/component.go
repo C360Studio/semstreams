@@ -335,6 +335,18 @@ func (c *Component) Stop(timeout time.Duration) error {
 		}
 	}
 
+	// Release backend resources: gRPC client connection, OIDC token-
+	// refresh state, etc. Backend.Close() is the only seam that lets
+	// the AuthProvider lifetime bound to NewGRPCBackendWithAuth actually
+	// release. Without this call every Initialize/Stop cycle leaks a
+	// *grpc.ClientConn (caught in PR #80 go-reviewer pass).
+	if c.backend != nil {
+		if err := c.backend.Close(); err != nil {
+			c.logger.Warn("Failed to close backend", slog.Any("error", err))
+		}
+		c.backend = nil
+	}
+
 	c.running = false
 	c.logger.Info("Directory bridge stopped")
 

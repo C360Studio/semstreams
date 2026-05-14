@@ -69,19 +69,19 @@ const (
 type AgntcyGRPCConfig struct {
 	// Endpoint is the host:port the gRPC client dials.
 	// Example: "prod.api.ads.outshift.io:443".
-	Endpoint string `json:"endpoint"`
+	Endpoint string `json:"endpoint" schema:"type:string,description:gRPC endpoint host:port,category:basic"`
 
 	// TLS controls whether the client establishes TLS on dial. The
 	// hosted hub requires TLS (true); local dev / bufconn tests use
 	// false. When false the client uses insecure transport credentials
 	// (grpc.WithTransportCredentials(insecure.NewCredentials())) —
 	// suitable only for trusted networks and local development.
-	TLS bool `json:"tls"`
+	TLS bool `json:"tls" schema:"type:bool,description:Establish TLS on dial (required for the hosted hub),category:basic"`
 
 	// Auth carries optional per-RPC OIDC authentication. nil or
 	// Type=="none" disables auth (suitable for local dev / private
 	// deployments). The hosted hub generally requires Type=="oidc".
-	Auth *AuthConfig `json:"auth,omitempty"`
+	Auth *AuthConfig `json:"auth,omitempty" schema:"type:object,description:Per-RPC OIDC auth (omit for unauthenticated),category:basic"`
 }
 
 // AuthConfig configures per-RPC authentication for the agntcy_grpc
@@ -90,29 +90,29 @@ type AgntcyGRPCConfig struct {
 type AuthConfig struct {
 	// Type selects the auth flow. One of "none" or "oidc". Empty
 	// defaults to "none".
-	Type string `json:"type"`
+	Type string `json:"type" schema:"type:string,description:Auth flow (none or oidc),category:basic,default:none"`
 
 	// Issuer is the OIDC token endpoint URL (the `token_endpoint` from
 	// the issuer's OIDC discovery document). Required when Type=="oidc".
-	Issuer string `json:"issuer,omitempty"`
+	Issuer string `json:"issuer,omitempty" schema:"type:string,description:OIDC token endpoint URL,category:basic"`
 
 	// ClientID is the OIDC client identifier. Prefer ClientIDEnv for
 	// secret management hygiene. Required when Type=="oidc" if
 	// ClientIDEnv is not set.
-	ClientID string `json:"client_id,omitempty"`
+	ClientID string `json:"client_id,omitempty" schema:"type:string,description:OIDC client identifier (inline; prefer client_id_env),category:basic"`
 
 	// ClientIDEnv names an environment variable to read the OIDC
 	// client_id from at runtime. Wins over ClientID when both set.
-	ClientIDEnv string `json:"client_id_env,omitempty"`
+	ClientIDEnv string `json:"client_id_env,omitempty" schema:"type:string,description:Env var name for OIDC client_id (wins over inline),category:basic"`
 
 	// ClientSecretEnv names an environment variable to read the OIDC
 	// client_secret from at runtime. Required when Type=="oidc".
 	// No inline client_secret field — secrets do not live in JSON
 	// config on disk; this is intentional.
-	ClientSecretEnv string `json:"client_secret_env,omitempty"`
+	ClientSecretEnv string `json:"client_secret_env,omitempty" schema:"type:string,description:Env var name for OIDC client_secret (secrets must not live in config),category:basic"`
 
 	// Scopes is the OIDC scope list requested at token-endpoint time.
-	Scopes []string `json:"scopes,omitempty"`
+	Scopes []string `json:"scopes,omitempty" schema:"type:array,description:OIDC scope list,category:basic"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -138,6 +138,7 @@ func DefaultConfig() Config {
 				},
 			},
 		},
+		Backend:           BackendHTTP,
 		HeartbeatInterval: "30s",
 		RegistrationTTL:   "5m",
 		IdentityProvider:  "local",

@@ -12,44 +12,54 @@
       "properties": {
         "auth": {
           "type": "object",
-          "description": "auth",
+          "description": "Per-RPC OIDC auth (omit for unauthenticated)",
+          "category": "basic",
           "properties": {
             "client_id": {
               "type": "string",
-              "description": "client_id"
+              "description": "OIDC client identifier (inline; prefer client_id_env)",
+              "category": "basic"
             },
             "client_id_env": {
               "type": "string",
-              "description": "client_id_env"
+              "description": "Env var name for OIDC client_id (wins over inline)",
+              "category": "basic"
             },
             "client_secret_env": {
               "type": "string",
-              "description": "client_secret_env"
+              "description": "Env var name for OIDC client_secret (secrets must not live in config)",
+              "category": "basic"
             },
             "issuer": {
               "type": "string",
-              "description": "issuer"
+              "description": "OIDC token endpoint URL",
+              "category": "basic"
             },
             "scopes": {
               "type": "array",
-              "description": "scopes",
+              "description": "OIDC scope list",
               "items": {
                 "type": "string"
-              }
+              },
+              "category": "basic"
             },
             "type": {
               "type": "string",
-              "description": "type"
+              "description": "Auth flow (none or oidc)",
+              "default": "none",
+              "category": "basic"
             }
           }
         },
         "endpoint": {
           "type": "string",
-          "description": "endpoint"
+          "description": "gRPC endpoint host:port",
+          "category": "basic"
         },
         "tls": {
           "type": "boolean",
-          "description": "tls"
+          "description": "Establish TLS on dial (required for the hosted hub)",
+          "category": "basic"
         }
       }
     },

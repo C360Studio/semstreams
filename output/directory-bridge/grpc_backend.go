@@ -94,6 +94,13 @@ func NewGRPCBackendFromClient(conn *grpc.ClientConn) *GRPCBackend {
 // The dialOpts slice is expected to already include transport credentials
 // (TLS or insecure) and any grpc.WithPerRPCCredentials needed for auth;
 // see buildGRPCDialOptions in auth.go for the canonical construction.
+//
+// Note on error semantics: grpc.NewClient is non-blocking — it only
+// validates dial arguments and returns. Connection establishment
+// happens lazily on the first RPC. As a result, unreachable hosts /
+// DNS failures / TLS handshake errors will not surface here; the first
+// Publish or Withdraw call returns them instead. The error returned by
+// this constructor reflects argument-validation failures only.
 func NewGRPCBackendWithAuth(target string, auth AuthProvider, dialOpts ...grpc.DialOption) (*GRPCBackend, error) {
 	conn, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {

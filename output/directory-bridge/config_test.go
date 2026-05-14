@@ -326,6 +326,16 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 	if len(decoded.AgntcyGRPC.Auth.Scopes) != len(original.AgntcyGRPC.Auth.Scopes) {
 		t.Errorf("Auth.Scopes len = %d, want %d", len(decoded.AgntcyGRPC.Auth.Scopes), len(original.AgntcyGRPC.Auth.Scopes))
 	}
+	// Element-wise compare — length parity alone wouldn't catch a slice
+	// that round-tripped with swapped/dropped/renamed entries.
+	for i, want := range original.AgntcyGRPC.Auth.Scopes {
+		if i >= len(decoded.AgntcyGRPC.Auth.Scopes) {
+			break
+		}
+		if got := decoded.AgntcyGRPC.Auth.Scopes[i]; got != want {
+			t.Errorf("Auth.Scopes[%d] = %q, want %q", i, got, want)
+		}
+	}
 
 	// Confirm the decoded config validates (covers the V (validate) leg
 	// of the round-trip-and-validate contract).

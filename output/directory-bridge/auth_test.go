@@ -1,6 +1,11 @@
 package directorybridge
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -61,13 +66,50 @@ func TestNewAuthProvider_OIDC_MissingClientSecret(t *testing.T) {
 	}
 }
 
+// TestNewAuthProvider_OIDC_Success exercises the full token-fetch path
+// (not just construction) against an httptest.Server that mints a fake
+// access token. Construction alone, as the prior version of this test
+// did, doesn't catch a misnamed oauth2 import or a broken adapter —
+// only an end-to-end GetRequestMetadata call does.
 func TestNewAuthProvider_OIDC_Success(t *testing.T) {
-	t.Setenv("PR_C_OIDC_TEST_CLIENT_SECRET", "the-secret")
-	t.Setenv("PR_C_OIDC_TEST_CLIENT_ID", "env-client")
+	// Fake issuer that satisfies the OAuth2 client-credentials flow.
+	// Asserts the client_id / client_secret made it through, then mints
+	// a bearer token the provider should surface in Authorization.
+	const wantClientID = "env-client"
+	const wantSecret = "the-secret"
+	const issuedToken = "fake-access-token"
+
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// clientcredentials sends client_id/secret either in Basic auth
+		// or as form params; check both.
+		gotID, gotSecret, hasBasic := r.BasicAuth()
+		if !hasBasic {
+			gotID = r.Form.Get("client_id")
+			gotSecret = r.Form.Get("client_secret")
+		}
+		if gotID != wantClientID || gotSecret != wantSecret {
+			http.Error(w, "bad credentials", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": issuedToken,
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	}))
+	defer issuer.Close()
+
+	t.Setenv("PR_C_OIDC_TEST_CLIENT_SECRET", wantSecret)
+	t.Setenv("PR_C_OIDC_TEST_CLIENT_ID", wantClientID)
 
 	p, err := NewAuthProvider(&AuthConfig{
 		Type:            "oidc",
-		Issuer:          "https://issuer.example.com/token",
+		Issuer:          issuer.URL,
 		ClientIDEnv:     "PR_C_OIDC_TEST_CLIENT_ID",
 		ClientSecretEnv: "PR_C_OIDC_TEST_CLIENT_SECRET",
 		Scopes:          []string{"a", "b"},
@@ -75,16 +117,33 @@ func TestNewAuthProvider_OIDC_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuthProvider: %v", err)
 	}
+	defer p.Close()
+
 	if _, ok := p.(*OIDCAuthProvider); !ok {
 		t.Errorf("got %T, want *OIDCAuthProvider", p)
 	}
-	if perRPC := p.PerRPC(); perRPC == nil {
-		t.Error("OIDCAuthProvider.PerRPC() = nil, want PerRPCCredentials")
-	} else if !perRPC.RequireTransportSecurity() {
+
+	perRPC := p.PerRPC()
+	if perRPC == nil {
+		t.Fatal("OIDCAuthProvider.PerRPC() = nil, want PerRPCCredentials")
+	}
+	if !perRPC.RequireTransportSecurity() {
 		t.Error("OIDC PerRPC must require transport security (bearer tokens over TLS)")
 	}
-	if err := p.Close(); err != nil {
-		t.Errorf("Close: %v", err)
+
+	md, err := perRPC.GetRequestMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("GetRequestMetadata: %v", err)
+	}
+	authz, ok := md["authorization"]
+	if !ok {
+		t.Fatalf("metadata missing authorization header: %v", md)
+	}
+	if want := "Bearer " + issuedToken; authz != want {
+		t.Errorf("authorization = %q, want %q", authz, want)
+	}
+	if !strings.HasPrefix(authz, "Bearer ") {
+		t.Errorf("authorization must start with \"Bearer \", got %q", authz)
 	}
 }
 
