@@ -1,6 +1,6 @@
 module github.com/c360studio/semstreams
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/agntcy/dir/api v1.3.0
