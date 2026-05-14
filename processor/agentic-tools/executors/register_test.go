@@ -177,3 +177,198 @@ func (m *recordingRuleManager) GetRule(_ context.Context, _ string) (*rule.Defin
 func (m *recordingRuleManager) ListRules(_ context.Context) (map[string]rule.Definition, error) {
 	return nil, nil
 }
+
+// TestRegisterBuiltins_SkipBuiltins_BashOmitted is the canonical
+// semteams use case: the product shell wants to register its own
+// chain-scoped `bash` implementation under the canonical name. Setting
+// SkipBuiltins=["bash"] omits the framework bash; the product shell's
+// subsequent RegisterTool("bash", custom) succeeds because the slot
+// is empty.
+func TestRegisterBuiltins_SkipBuiltins_BashOmitted(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		Logger:       slog.Default(),
+		SkipBuiltins: []string{"bash"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterBuiltins with SkipBuiltins=[bash]: %v", err)
+	}
+
+	tools := reg.ListTools()
+	if containsName(tools, "bash") {
+		t.Errorf("bash should be skipped, but is registered")
+	}
+	// Sanity-check: other builtins still register.
+	if !containsName(tools, "web_search") {
+		t.Errorf("web_search should still register when only bash is skipped")
+	}
+	if !containsName(tools, "http_request") {
+		t.Errorf("http_request should still register when only bash is skipped")
+	}
+
+	// Product-shell can now register a replacement under the canonical name.
+	stub := &registerTestStubExecutor{name: "bash"}
+	if err := reg.RegisterTool("bash", stub); err != nil {
+		t.Fatalf("product-shell bash replacement should succeed after SkipBuiltins[bash]: %v", err)
+	}
+}
+
+// TestRegisterBuiltins_SkipBuiltins_MultiToolGroup verifies that a
+// group-key skip (e.g., "graph_query") omits ALL tools the register
+// function would have advertised — necessary because RegisterExecutor
+// is atomic over an executor's full ListTools().
+func TestRegisterBuiltins_SkipBuiltins_MultiToolGroup(t *testing.T) {
+	t.Parallel()
+	// NATS-required tools skip when NATSClient is nil, so pass a non-nil
+	// path via the same skip mechanism: skip graph_query and verify that
+	// query_entity / query_relationships / etc. are absent. We test
+	// without NATSClient first to verify the skip semantics are
+	// orthogonal to the NATSClient-nil skip path.
+	t.Run("group_skip_with_nil_nats_no_op", func(t *testing.T) {
+		t.Parallel()
+		reg := agentictools.NewExecutorRegistry()
+		err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+			Logger:       slog.Default(),
+			SkipBuiltins: []string{"graph_query"},
+		})
+		if err != nil {
+			t.Fatalf("RegisterBuiltins: %v", err)
+		}
+		// With NATSClient=nil, graph_query wouldn't fire anyway; skip is a no-op.
+		// query_entity should be absent either way.
+		if containsName(reg.ListTools(), "query_entity") {
+			t.Errorf("query_entity should not register when NATSClient is nil regardless of skip")
+		}
+	})
+
+	t.Run("github_group_skip", func(t *testing.T) {
+		t.Parallel()
+		// github is a multi-tool group with no NATS dependency. Skipping
+		// it should leave bash registered while all github_* tools are
+		// absent.
+		reg := agentictools.NewExecutorRegistry()
+		err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+			Logger:       slog.Default(),
+			SkipBuiltins: []string{"github"},
+		})
+		if err != nil {
+			t.Fatalf("RegisterBuiltins: %v", err)
+		}
+		if !containsName(reg.ListTools(), "bash") {
+			t.Errorf("bash should still register when only github is skipped")
+		}
+		for _, name := range reg.ListTools() {
+			if strings.HasPrefix(name.Name, "github_") {
+				t.Errorf("github_* tool %q should be absent under SkipBuiltins=[github]", name.Name)
+			}
+		}
+	})
+}
+
+// TestRegisterBuiltins_SkipBuiltins_MultipleNames verifies that
+// multiple skip entries compose: all named groups are absent and
+// everything else registers as usual.
+func TestRegisterBuiltins_SkipBuiltins_MultipleNames(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		Logger:       slog.Default(),
+		SkipBuiltins: []string{"bash", "web_search", "github"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterBuiltins: %v", err)
+	}
+	tools := reg.ListTools()
+	for _, omitted := range []string{"bash", "web_search"} {
+		if containsName(tools, omitted) {
+			t.Errorf("%q should be skipped", omitted)
+		}
+	}
+	// http_request not in skip list — should register
+	if !containsName(tools, "http_request") {
+		t.Errorf("http_request should still register")
+	}
+}
+
+// TestRegisterBuiltins_SkipBuiltins_UnknownNameErrors is the
+// loud-typo-catching contract: an unknown group key must error before
+// any registration happens, with the valid set in the message so
+// operators can self-correct without grepping.
+func TestRegisterBuiltins_SkipBuiltins_UnknownNameErrors(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		Logger:       slog.Default(),
+		SkipBuiltins: []string{"bahs"}, // typo for "bash"
+	})
+	if err == nil {
+		t.Fatalf("unknown SkipBuiltins entry must error, got nil")
+	}
+	if !strings.Contains(err.Error(), "bahs") {
+		t.Errorf("error must reference the unknown name, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "valid keys") {
+		t.Errorf("error must reference the valid-keys list, got: %v", err)
+	}
+	// No registration should have happened.
+	if len(reg.ListTools()) != 0 {
+		t.Errorf("registry must be empty on validation failure, got %d tools", len(reg.ListTools()))
+	}
+}
+
+// TestRegisterBuiltins_SkipBuiltins_EmptyNoOp pins backward-compat:
+// nil or empty SkipBuiltins must produce identical behaviour to the
+// pre-feature call (all builtins register).
+func TestRegisterBuiltins_SkipBuiltins_EmptyNoOp(t *testing.T) {
+	t.Parallel()
+	reg := agentictools.NewExecutorRegistry()
+	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
+		Logger:       slog.Default(),
+		SkipBuiltins: nil,
+	})
+	if err != nil {
+		t.Fatalf("nil SkipBuiltins: %v", err)
+	}
+	if !containsName(reg.ListTools(), "bash") {
+		t.Errorf("bash should register when SkipBuiltins is nil")
+	}
+
+	reg2 := agentictools.NewExecutorRegistry()
+	err = RegisterBuiltins(context.Background(), reg2, ToolDependencies{
+		Logger:       slog.Default(),
+		SkipBuiltins: []string{},
+	})
+	if err != nil {
+		t.Fatalf("empty SkipBuiltins: %v", err)
+	}
+	if !containsName(reg2.ListTools(), "bash") {
+		t.Errorf("bash should register when SkipBuiltins is empty")
+	}
+}
+
+// TestBuiltinGroupKeys_Stability locks the canonical set + ordering
+// of BuiltinGroupKeys. External callers iterate this slice for
+// validation/docs; reordering or renaming an entry is a BREAKING
+// change worth flagging at PR review.
+func TestBuiltinGroupKeys_Stability(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"bash", "web_search", "http_request",
+		"read_loop_result", "decide", "emit_diagnosis",
+		"write_todos", "scratchpad",
+		"summarize_graph", "search_graph", "flow_monitor",
+		"github", "graph_query",
+		"rules", "flows", "personas", "flow_templates",
+		"component_catalog",
+	}
+	if len(BuiltinGroupKeys) != len(want) {
+		t.Fatalf("BuiltinGroupKeys count = %d, want %d. Adding a builtin? Update this test AND consumer docs.", len(BuiltinGroupKeys), len(want))
+	}
+	for i, k := range want {
+		if BuiltinGroupKeys[i] != k {
+			t.Errorf("BuiltinGroupKeys[%d] = %q, want %q. Order matters for golden-test reproducibility.", i, BuiltinGroupKeys[i], k)
+		}
+	}
+}
