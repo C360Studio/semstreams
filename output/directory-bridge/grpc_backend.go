@@ -10,7 +10,6 @@ import (
 	corev1 "github.com/agntcy/dir/api/core/v1"
 	storev1 "github.com/agntcy/dir/api/store/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // GRPCBackend implements Backend by talking to an AGNTCY-compatible
@@ -178,21 +177,27 @@ func (b *GRPCBackend) Close() error {
 }
 
 // oasfToProtoRecord converts our domain OASFRecord into the wire-level
-// core.v1.Record. The proto carries the record as an opaque
-// google.protobuf.Struct, so we hand-roll JSON → structpb instead of
-// using corev1.UnmarshalRecord — that helper enforces the AGNTCY typed
-// proto OASF schema (which has numeric Skill.id as uint32), but our
-// oasf-generator emits string Skill.id values per our internal OASF
-// shape. Aligning the two schemas is out of scope for PR-B; see the
-// pr70-deferred-review-findings memory for the schema-alignment task.
+// core.v1.Record using the AGNTCY SDK's corev1.UnmarshalRecord helper.
+// The helper performs the JSON → structpb conversion AND runs the
+// typed-proto Decode against the schema_version discriminator (1.x → v1,
+// 0.8.x → v1alpha2, 0.7.x → v1alpha1) — so malformed records fail here
+// at the publisher's marshalling boundary instead of as an opaque
+// stream error 50ms later at the directory.
+//
+// Routing through UnmarshalRecord became viable in PR-O2 once the
+// oasf-generator switched from string Skill.IDs to uint32 (per ADR-042).
+// Pre-PR-O2 records would have failed Decode with
+// "json: cannot unmarshal string into Go struct field Skill.skills.id
+// of type uint32"; the typed validation here is exactly the kind of
+// pre-flight check the original go-reviewer pass on PR-B recommended.
 func oasfToProtoRecord(rec any) (*corev1.Record, error) {
 	jsonBytes, err := json.Marshal(rec)
 	if err != nil {
 		return nil, fmt.Errorf("marshal record to JSON: %w", err)
 	}
-	data := &structpb.Struct{}
-	if err := data.UnmarshalJSON(jsonBytes); err != nil {
-		return nil, fmt.Errorf("unmarshal record to structpb: %w", err)
+	record, err := corev1.UnmarshalRecord(jsonBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode OASF record: %w", err)
 	}
-	return &corev1.Record{Data: data}, nil
+	return record, nil
 }

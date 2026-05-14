@@ -329,5 +329,41 @@ func TestGRPCBackend_NilRequests(t *testing.T) {
 	}
 }
 
+// TestGRPCBackend_PublishRejectsMalformedRecordBeforeStream verifies
+// that the AGNTCY typed-decode validation in oasfToProtoRecord runs at
+// the marshalling boundary, *before* the bidirectional Push stream is
+// opened. A record with an unrecognised schema_version discriminator
+// must fail at the publisher — not as an opaque server-side stream
+// error 50ms later. This is the pre-flight check go-reviewer flagged
+// on PR #70 (finding #1-revert), now closed.
+//
+// We assert on the failure mode (the publish errors AND the server's
+// Push handler was never invoked) rather than on the specific error
+// string — the SDK's error wording may evolve.
+func TestGRPCBackend_PublishRejectsMalformedRecordBeforeStream(t *testing.T) {
+	fake, backend, teardown := startTestServer(t)
+	defer teardown()
+
+	bad := &oasfgenerator.OASFRecord{
+		Name:          "broken-agent",
+		Version:       "1.0.0",
+		SchemaVersion: "999.0.0", // not a registered OASF schema version
+		Skills:        []oasfgenerator.OASFSkill{{ID: 9_100_001, Name: "semstreams/x"}},
+	}
+
+	_, err := backend.Publish(context.Background(), &PublishRequest{
+		EntityID: "acme.ops.agentic.system.agent.bad",
+		AgentDID: "did:semstreams:bad",
+		Record:   bad,
+		TTL:      time.Minute,
+	})
+	if err == nil {
+		t.Fatal("expected typed-decode rejection at marshal boundary")
+	}
+	if fake.pushCalls != 0 {
+		t.Errorf("server's Push handler invoked %d times; expected 0 (validation must run before stream open)", fake.pushCalls)
+	}
+}
+
 // Compile-time assertion that GRPCBackend implements Backend.
 var _ Backend = (*GRPCBackend)(nil)
