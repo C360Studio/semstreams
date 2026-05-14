@@ -51,9 +51,6 @@ type Config struct {
 	ConsumerNameSuffix   string                   `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
 	DeleteConsumerOnStop bool                     `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
 	LoopsBucket          string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
-	PositionsBucket      string                   `json:"positions_bucket,omitempty" schema:"type:string,description:NATS KV bucket name for boid agent positions,default:AGENT_POSITIONS,category:advanced"`
-	BoidEnabled          bool                     `json:"boid_enabled,omitempty" schema:"type:bool,description:Enable Boid-style agent coordination (position tracking and steering signals),default:false,category:advanced"`
-	BoidSignalTTL        string                   `json:"boid_signal_ttl,omitempty" schema:"type:string,description:TTL for Boid steering signals before expiration (e.g. 30s or 1m),default:30s,category:advanced"`
 	ToolResultMaxBytes   int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
 	TrajectoryDetail     string                   `json:"trajectory_detail,omitempty" schema:"type:string,description:Trajectory detail level: summary (default) or full,default:summary,category:advanced"`
 	ContentBucket        string                   `json:"content_bucket,omitempty" schema:"type:string,description:NATS ObjectStore bucket for trajectory step content (tool results and model responses),default:AGENT_CONTENT,category:advanced"`
@@ -375,9 +372,6 @@ func DefaultConfig() Config {
 		Timeout:            "120s",
 		StreamName:         "AGENT",
 		LoopsBucket:        "AGENT_LOOPS",
-		PositionsBucket:    "AGENT_POSITIONS",
-		BoidEnabled:        false,
-		BoidSignalTTL:      "30s",
 		ContentBucket:      "AGENT_CONTENT",
 		ToolResultMaxBytes: 32768,
 		TrajectoryDetail:   "summary",
@@ -417,14 +411,6 @@ func DefaultConfig() Config {
 					StreamName:  "AGENT",
 					Required:    false,
 					Description: "Control signals for loops (cancel, pause, etc.)",
-				},
-				{
-					Name:        "agent.boid",
-					Type:        "jetstream",
-					Subject:     "agent.boid.>",
-					StreamName:  "AGENT",
-					Required:    false,
-					Description: "Boid steering signals for agent coordination",
 				},
 				{
 					Name:        "agent.approval_response",

@@ -45,11 +45,6 @@ type loopMetrics struct {
 	contextCompactionTokensSaved prometheus.Histogram
 	contextCompactedRegionTokens prometheus.Gauge
 
-	// Boid coordination
-	boidSignalsReceived  *prometheus.CounterVec
-	boidPositionUpdates  prometheus.Counter
-	boidEntitiesFiltered prometheus.Counter
-
 	// Graph-write-before-publish ordering
 	graphWritePublishTimeouts *prometheus.CounterVec
 
@@ -155,20 +150,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID. Sustained non-zero rate points at NATS redelivery or executor double-publish.",
 			}, []string{"reason"}),
 
-			boidSignalsReceived: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "boid_signals_received_total",
-				Help:      "Total Boid steering signals received by type",
-			}, []string{"signal_type"}),
-
-			boidPositionUpdates: prometheus.NewCounter(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "boid_position_updates_total",
-				Help:      "Total Boid position updates in KV store",
-			}),
-
 			requestTokensIn: prometheus.NewHistogram(prometheus.HistogramOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
@@ -221,13 +202,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Current tokens in compacted history region",
 			}),
 
-			boidEntitiesFiltered: prometheus.NewCounter(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "boid_entities_filtered_total",
-				Help:      "Total times entities were reordered by Boid steering",
-			}),
-
 			graphWritePublishTimeouts: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
@@ -276,9 +250,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_calls_dispatched_total", metrics.toolCallsDispatched)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_received_total", metrics.toolResultsReceived)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
-			_ = registry.RegisterCounterVec("agentic-loop", "boid_signals_received_total", metrics.boidSignalsReceived)
-			_ = registry.RegisterCounter("agentic-loop", "boid_position_updates_total", metrics.boidPositionUpdates)
-			_ = registry.RegisterCounter("agentic-loop", "boid_entities_filtered_total", metrics.boidEntitiesFiltered)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_in", metrics.requestTokensIn)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_out", metrics.requestTokensOut)
 			_ = registry.RegisterCounter("agentic-loop", "tool_results_truncated_total", metrics.toolResultsTruncated)
@@ -304,9 +275,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolCallsDispatched)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsReceived)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
-			_ = prometheus.DefaultRegisterer.Register(metrics.boidSignalsReceived)
-			_ = prometheus.DefaultRegisterer.Register(metrics.boidPositionUpdates)
-			_ = prometheus.DefaultRegisterer.Register(metrics.boidEntitiesFiltered)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensIn)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensOut)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsTruncated)
@@ -414,21 +382,6 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 // executor double-publishing.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
-}
-
-// recordBoidSignalReceived records a Boid steering signal received.
-func (m *loopMetrics) recordBoidSignalReceived(signalType string) {
-	m.boidSignalsReceived.WithLabelValues(signalType).Inc()
-}
-
-// recordBoidPositionUpdate records a Boid position update.
-func (m *loopMetrics) recordBoidPositionUpdate() {
-	m.boidPositionUpdates.Inc()
-}
-
-// recordBoidEntitiesFiltered records entity filtering by Boid steering.
-func (m *loopMetrics) recordBoidEntitiesFiltered() {
-	m.boidEntitiesFiltered.Inc()
 }
 
 // recordRequestTokens records prompt and completion token counts for an LLM request.

@@ -34,8 +34,8 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	ports := comp.InputPorts()
 
-	if len(ports) != 8 {
-		t.Fatalf("InputPorts() count = %d, want 8", len(ports))
+	if len(ports) != 7 {
+		t.Fatalf("InputPorts() count = %d, want 7", len(ports))
 	}
 
 	// Expected input ports with required flag
@@ -48,7 +48,6 @@ func TestComponent_InputPorts(t *testing.T) {
 		"agent.response":          {"agent.response.>", true},
 		"tool.result":             {"tool.result.>", true},
 		"agent.signal":            {"agent.signal.*", false},            // Optional - not all deployments need signal handling
-		"agent.boid":              {"agent.boid.>", false},              // Optional - Boid steering signals for coordination
 		"agent.approval_response": {"agent.approval_response.*", false}, // Optional - human-in-the-loop approval flow
 		"agent.toolcall.approved": {"agent.toolcall.approved.>", false}, // ADR-039 — verdict inbound (approve)
 		"agent.toolcall.rejected": {"agent.toolcall.rejected.>", false}, // ADR-039 — verdict inbound (reject)

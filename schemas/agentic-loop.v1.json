@@ -10,18 +10,6 @@
       "description": "Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely",
       "category": "advanced"
     },
-    "boid_enabled": {
-      "type": "boolean",
-      "description": "Enable Boid-style agent coordination (position tracking and steering signals)",
-      "default": false,
-      "category": "advanced"
-    },
-    "boid_signal_ttl": {
-      "type": "string",
-      "description": "TTL for Boid steering signals before expiration (e.g. 30s or 1m)",
-      "default": "30s",
-      "category": "advanced"
-    },
     "consumer": {
       "type": "object",
       "description": "JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result)",
@@ -130,12 +118,6 @@
       "type": "string",
       "description": "Port configuration for inputs and outputs",
       "category": "basic"
-    },
-    "positions_bucket": {
-      "type": "string",
-      "description": "NATS KV bucket name for boid agent positions",
-      "default": "AGENT_POSITIONS",
-      "category": "advanced"
     },
     "stream_name": {
       "type": "string",
