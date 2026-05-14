@@ -31,9 +31,13 @@ func TestNewOASFRecord(t *testing.T) {
 func TestOASFRecord_AddSkill(t *testing.T) {
 	record := NewOASFRecord("test-agent", "1.0.0", "A test agent")
 
+	// Use the OASF code-evaluation extension ID for "code-review"; the
+	// test exercises the AddSkill plumbing, not the resolver — wire
+	// shape is what matters here.
+	const codeReviewExtID uint32 = 9_100_001
 	skill := OASFSkill{
-		ID:          "code-review",
-		Name:        "Code Review",
+		ID:          codeReviewExtID,
+		Name:        "semstreams/code_review",
 		Description: "Reviews code for quality",
 		Confidence:  0.9,
 		Permissions: []string{"file_read"},
@@ -43,8 +47,8 @@ func TestOASFRecord_AddSkill(t *testing.T) {
 	if len(record.Skills) != 1 {
 		t.Fatalf("expected 1 skill, got %d", len(record.Skills))
 	}
-	if record.Skills[0].ID != "code-review" {
-		t.Errorf("expected skill ID 'code-review', got %q", record.Skills[0].ID)
+	if record.Skills[0].ID != codeReviewExtID {
+		t.Errorf("expected skill ID %d, got %d", codeReviewExtID, record.Skills[0].ID)
 	}
 }
 
@@ -169,7 +173,7 @@ func TestOASFSkill_Validate(t *testing.T) {
 		{
 			name: "valid skill",
 			skill: OASFSkill{
-				ID:         "code-review",
+				ID:         9_100_001, // arbitrary extension-range ID; test exercises Validate, not the resolver
 				Name:       "Code Review",
 				Confidence: 0.9,
 			},
@@ -186,7 +190,7 @@ func TestOASFSkill_Validate(t *testing.T) {
 		{
 			name: "missing name",
 			skill: OASFSkill{
-				ID:         "code-review",
+				ID:         9_100_001,
 				Confidence: 0.9,
 			},
 			wantErr: true,
@@ -194,7 +198,7 @@ func TestOASFSkill_Validate(t *testing.T) {
 		{
 			name: "confidence too low",
 			skill: OASFSkill{
-				ID:         "code-review",
+				ID:         9_100_001, // arbitrary extension-range ID; test exercises Validate, not the resolver
 				Name:       "Code Review",
 				Confidence: -0.1,
 			},
@@ -203,7 +207,7 @@ func TestOASFSkill_Validate(t *testing.T) {
 		{
 			name: "confidence too high",
 			skill: OASFSkill{
-				ID:         "code-review",
+				ID:         9_100_001, // arbitrary extension-range ID; test exercises Validate, not the resolver
 				Name:       "Code Review",
 				Confidence: 1.1,
 			},
@@ -224,8 +228,8 @@ func TestOASFSkill_Validate(t *testing.T) {
 func TestOASFRecord_MarshalJSON(t *testing.T) {
 	record := NewOASFRecord("test-agent", "1.0.0", "A test agent")
 	record.AddSkill(OASFSkill{
-		ID:          "code-review",
-		Name:        "Code Review",
+		ID:          9_100_001,
+		Name:        "semstreams/code_review",
 		Description: "Reviews code",
 		Confidence:  0.9,
 	})

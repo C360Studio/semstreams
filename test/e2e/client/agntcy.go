@@ -33,8 +33,11 @@ type OASFRecord struct {
 }
 
 // OASFSkill represents a skill in an OASF record.
+//
+// ID is the AGNTCY OASF taxonomy class ID (uint32); name is the
+// matching hierarchical path. Mirrors processor/oasf-generator.OASFSkill.
 type OASFSkill struct {
-	ID          string   `json:"id"`
+	ID          uint32   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
 	Confidence  float64  `json:"confidence,omitempty"`

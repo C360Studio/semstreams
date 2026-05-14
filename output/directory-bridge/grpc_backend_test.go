@@ -165,8 +165,8 @@ func TestGRPCBackend_PublishWithdrawRoundTrip(t *testing.T) {
 		// the JSON → structpb bridge. Confidence is a non-zero float so
 		// the test catches a regression to int-only or zero-value handling.
 		Skills: []oasfgenerator.OASFSkill{{
-			ID:         "test-skill",
-			Name:       "Test Skill",
+			ID:         9_100_001,
+			Name:       "semstreams/test_skill",
 			Confidence: 0.95,
 		}},
 		// Domain.Priority is the canonical numeric-field round-trip case
@@ -214,8 +214,8 @@ func TestGRPCBackend_PublishWithdrawRoundTrip(t *testing.T) {
 		t.Fatalf("skills slice = %d entries, want 1", len(skills))
 	}
 	skill := skills[0].GetStructValue().GetFields()
-	if skill["id"].GetStringValue() != "test-skill" {
-		t.Errorf("skills[0].id = %v, want \"test-skill\"", skill["id"])
+	if got := skill["id"].GetNumberValue(); got != 9_100_001 {
+		t.Errorf("skills[0].id = %v, want 9_100_001 (numeric — uint32 round-tripped as structpb NumberValue)", got)
 	}
 	if got := skill["confidence"].GetNumberValue(); got != 0.95 {
 		t.Errorf("skills[0].confidence = %v, want 0.95", got)

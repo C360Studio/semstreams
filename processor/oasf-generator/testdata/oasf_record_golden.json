@@ -9,19 +9,20 @@
   "description": "Help developers review code and ship docs",
   "skills": [
     {
-      "id": "code-review",
-      "name": "Code Review",
+      "id": 18344129,
+      "name": "semstreams/documentation",
+      "description": "Documentation",
+      "confidence": 1
+    },
+    {
+      "id": 20037539,
+      "name": "semstreams/code_review",
       "description": "Review code for quality and security issues",
       "confidence": 0.9,
       "permissions": [
         "file_read",
         "file_write"
       ]
-    },
-    {
-      "id": "documentation",
-      "name": "Documentation",
-      "confidence": 1
     }
   ],
   "domains": [

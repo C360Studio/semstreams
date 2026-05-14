@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	agentic "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/c360studio/semstreams/vocabulary/oasf"
 )
 
 func TestMapper_MapTriplesToOASF_BasicCapability(t *testing.T) {
@@ -57,21 +58,36 @@ func TestMapper_MapTriplesToOASF_BasicCapability(t *testing.T) {
 		t.Fatal("expected at least one skill")
 	}
 
-	// Find the software-design skill
+	// "software-design" is not in the published OASF taxonomy at MVP
+	// coverage, so it resolves to an extension class. Locate the skill
+	// by its extension ID and assert the new wire shape:
+	//   - ID is the deterministic ExtensionID for "software-design"
+	//   - Name is the semstreams/-prefixed hierarchical form
+	//   - The human display label ("Software Design") survives on
+	//     Description (CapabilityName fallback per the mapper contract)
+	wantID := oasf.ExtensionID("software-design")
 	var skill *OASFSkill
 	for i := range record.Skills {
-		if record.Skills[i].ID == "software-design" {
+		if record.Skills[i].ID == wantID {
 			skill = &record.Skills[i]
 			break
 		}
 	}
 
 	if skill == nil {
-		t.Fatal("expected to find 'software-design' skill")
+		t.Fatalf("expected to find skill with ExtensionID(%q)=%d", "software-design", wantID)
 	}
-
-	if skill.Name != "Software Design" {
-		t.Errorf("expected skill name 'Software Design', got %q", skill.Name)
+	if !oasf.IsExtension(skill.ID) {
+		t.Errorf("skill.ID = %d, want extension-range value", skill.ID)
+	}
+	if skill.Name != "semstreams/software_design" {
+		t.Errorf("skill.Name = %q, want \"semstreams/software_design\"", skill.Name)
+	}
+	// CapabilityDescription set explicitly → wins over CapabilityName
+	// fallback. (When no description is supplied, the mapper preserves
+	// CapabilityName on Description — covered by the contract test.)
+	if skill.Description != "Creates software architecture diagrams" {
+		t.Errorf("skill.Description = %q, want explicit CapabilityDescription", skill.Description)
 	}
 }
 
@@ -214,6 +230,130 @@ func TestMapper_MapTriplesToOASF_WithExtensions(t *testing.T) {
 	}
 }
 
+// TestMapper_OASFClassOverride exercises the operator-override path:
+// when CapabilityOASFClass is set on a capability, the mapper uses that
+// class ID verbatim and resolves the hierarchical name through the
+// vocabulary/oasf taxonomy (rather than ExtensionID/ExtensionName
+// derived from the source expression).
+func TestMapper_OASFClassOverride(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.overrider"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		// Source expression would normally resolve to an extension —
+		// but the operator pins this skill to OASF Tool Interaction.
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		{Subject: agentID, Predicate: agentic.CapabilityName, Object: "Code Review", Context: skillContext, Timestamp: time.Now()},
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(oasf.CategoryToolInteraction), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	record, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err != nil {
+		t.Fatalf("MapTriplesToOASF: %v", err)
+	}
+	if len(record.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(record.Skills))
+	}
+	skill := record.Skills[0]
+
+	if skill.ID != oasf.CategoryToolInteraction {
+		t.Errorf("skill.ID = %d, want %d (operator override)", skill.ID, oasf.CategoryToolInteraction)
+	}
+	if oasf.IsExtension(skill.ID) {
+		t.Errorf("operator-overridden ID resolved as extension: %d", skill.ID)
+	}
+	if skill.Name != "tool_interaction" {
+		t.Errorf("skill.Name = %q, want \"tool_interaction\" (canonical name from oasf.Name)", skill.Name)
+	}
+}
+
+// TestMapper_OASFClassOverride_NonCoveredCanonicalIDFails asserts that
+// pinning an OASF class ID outside MVP coverage AND outside the
+// extension range (e.g., uid=99 — not a SemStreams constant, not
+// >= ExtensionBase) is rejected at the generator. This is the
+// "operator pinned a hypothetical class" failure mode the previous
+// resolver silently accepted (PR-O2 go-reviewer SHOULD-FIX #1).
+func TestMapper_OASFClassOverride_NonCoveredCanonicalIDFails(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.bad-override"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		// 99 is not in our MVP constants and not in the extension range.
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(99), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	_, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err == nil {
+		t.Fatal("expected error for non-covered canonical override ID")
+	}
+}
+
+// TestMapper_OASFClassOverride_WinsOverExtensionFallback covers the
+// case the prior tests left untested: a skill whose expression *would*
+// otherwise resolve to an extension ID, while a canonical operator
+// override is also set. The override must win — proves the precedence
+// in resolveSkillIdentity isn't quietly re-ordered to "extension
+// fallback first if anything else fails".
+func TestMapper_OASFClassOverride_WinsOverExtensionFallback(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.dual"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		// Without override, "code-review" → ExtensionID (no canonical match).
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		// Override pins to NLP — should beat the extension fallback.
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(oasf.CategoryNLP), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	record, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err != nil {
+		t.Fatalf("MapTriplesToOASF: %v", err)
+	}
+	if len(record.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(record.Skills))
+	}
+	skill := record.Skills[0]
+
+	if skill.ID != oasf.CategoryNLP {
+		t.Errorf("skill.ID = %d, want %d (operator override must beat extension fallback)", skill.ID, oasf.CategoryNLP)
+	}
+	if oasf.IsExtension(skill.ID) {
+		t.Errorf("override-resolved ID landed in extension range: %d", skill.ID)
+	}
+	if skill.Name != "natural_language_processing" {
+		t.Errorf("skill.Name = %q, want \"natural_language_processing\" (canonical, not semstreams/code_review)", skill.Name)
+	}
+}
+
+// TestMapper_OASFClassOverride_ZeroIgnored asserts that an override
+// triple carrying zero is treated as "no override" — same behaviour as
+// the triple being absent.
+func TestMapper_OASFClassOverride_ZeroIgnored(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.zero"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(0), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	record, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err != nil {
+		t.Fatalf("MapTriplesToOASF: %v", err)
+	}
+	if len(record.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(record.Skills))
+	}
+	if !oasf.IsExtension(record.Skills[0].ID) {
+		t.Errorf("zero override should not suppress extension fallback; got ID=%d", record.Skills[0].ID)
+	}
+}
+
 func TestMapper_MapTriplesToOASF_NoExtensions(t *testing.T) {
 	mapper := NewMapper("1.0.0", []string{"system"}, false)
 
@@ -269,27 +409,6 @@ func TestExtractAgentName(t *testing.T) {
 			got := extractAgentName(tt.entityID)
 			if got != tt.want {
 				t.Errorf("extractAgentName(%q) = %q, want %q", tt.entityID, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGenerateSkillID(t *testing.T) {
-	tests := []struct {
-		name string
-		want string
-	}{
-		{"Code Review", "code-review"},
-		{"software_design", "software-design"},
-		{"UPPERCASE", "uppercase"},
-		{"Mixed Case Name", "mixed-case-name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := generateSkillID(tt.name)
-			if got != tt.want {
-				t.Errorf("generateSkillID(%q) = %q, want %q", tt.name, got, tt.want)
 			}
 		})
 	}

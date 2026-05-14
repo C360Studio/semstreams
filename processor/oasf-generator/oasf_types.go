@@ -43,10 +43,18 @@ type OASFRecord struct {
 
 // OASFSkill represents a single capability/skill in an OASF record.
 type OASFSkill struct {
-	// ID is a unique identifier for this skill.
-	ID string `json:"id"`
+	// ID is the AGNTCY OASF taxonomy class ID. Canonical values are
+	// drawn from the published taxonomy (see vocabulary/oasf); IDs in
+	// the extension range (>= oasf.ExtensionBase) identify SemStreams
+	// custom skill classes that don't have a canonical taxonomy entry.
+	// Zero is intentionally not a valid OASF class ID.
+	ID uint32 `json:"id"`
 
-	// Name is the human-readable name of the skill.
+	// Name is the OASF hierarchical name for the skill class
+	// (path-segment form, e.g. "natural_language_processing" or
+	// "semstreams/code_review" for extensions). Pairs with ID — the
+	// numeric class is authoritative, the name is the human-readable
+	// hierarchy mirror.
 	Name string `json:"name"`
 
 	// Description provides details about what this skill does.
@@ -159,8 +167,8 @@ func (r *OASFRecord) MarshalJSON() ([]byte, error) {
 
 // Validate checks if the OASF skill is valid.
 func (s *OASFSkill) Validate() error {
-	if s.ID == "" {
-		return fmt.Errorf("id is required")
+	if s.ID == 0 {
+		return fmt.Errorf("id is required (zero is not a valid OASF class ID)")
 	}
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
@@ -177,9 +185,4 @@ func (d *OASFDomain) Validate() error {
 		return fmt.Errorf("name is required")
 	}
 	return nil
-}
-
-// SkillKey generates a unique key for a skill for deduplication.
-func (s *OASFSkill) SkillKey() string {
-	return s.ID
 }
