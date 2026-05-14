@@ -95,3 +95,10 @@ func (b *HTTPBackend) Withdraw(ctx context.Context, req *WithdrawRequest) error 
 		AgentDID:       req.AgentDID,
 	})
 }
+
+// Close is a no-op for the HTTP backend — net/http's Transport pools idle
+// connections internally and reclaims them on GC. No backend-owned resources
+// to release.
+func (b *HTTPBackend) Close() error {
+	return nil
+}
