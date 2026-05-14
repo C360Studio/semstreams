@@ -30,8 +30,6 @@ const (
 	ActionTypePublishAgent = "publish_agent"
 	// ActionTypeTriggerWorkflow triggers a reactive workflow by publishing to workflow.trigger.<workflow_id>
 	ActionTypeTriggerWorkflow = "trigger_workflow"
-	// ActionTypePublishBoidSignal publishes a Boid steering signal for agent coordination
-	ActionTypePublishBoidSignal = "publish_boid_signal"
 	// ActionTypeUpdateKV writes JSON to a named KV bucket with optional CAS merge
 	ActionTypeUpdateKV = "update_kv"
 	// ActionTypeDeny issues a deny verdict that short-circuits subsequent actions
@@ -161,12 +159,6 @@ type Action struct {
 
 	// ContextData provides additional context passed to the workflow
 	ContextData map[string]any `json:"context_data,omitempty"`
-
-	// BoidSignalType specifies the type of boid signal: separation, cohesion, or alignment
-	BoidSignalType string `json:"boid_signal_type,omitempty"`
-
-	// BoidStrength specifies the steering strength for boid signals (0.0-1.0)
-	BoidStrength float64 `json:"boid_strength,omitempty"`
 
 	// WorkflowSlug identifies the workflow for publish_agent actions (e.g., "github-issue-to-pr")
 	WorkflowSlug string `json:"workflow_slug,omitempty"`
@@ -378,8 +370,6 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executePublishAgent(ctx, action, ec)
 	case ActionTypeTriggerWorkflow:
 		return e.executeTriggerWorkflow(ctx, action, ec)
-	case ActionTypePublishBoidSignal:
-		return e.executePublishBoidSignal(ctx, action, ec)
 	case ActionTypeUpdateKV:
 		return e.executeUpdateKV(ctx, action, ec)
 	case ActionTypeDeny:
@@ -960,104 +950,6 @@ func (e *ActionExecutor) executeTriggerWorkflow(ctx context.Context, action Acti
 		e.logger.Debug("Workflow trigger not published (no publisher configured)",
 			"workflow_id", action.WorkflowID,
 			"subject", subject,
-			"entity_id", entityID)
-	}
-
-	return nil
-}
-
-// executePublishBoidSignal executes a publish_boid_signal action.
-// It publishes a BoidSteeringSignal to the agent.boid.<loopID> subject
-// for consumption by the agentic-loop for coordination.
-func (e *ActionExecutor) executePublishBoidSignal(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID := ec.EntityID
-	if action.Subject == "" {
-		return errors.New("subject is required for publish_boid_signal action")
-	}
-	if action.BoidSignalType == "" {
-		return errors.New("boid_signal_type is required for publish_boid_signal action")
-	}
-
-	// Validate signal type
-	validSignalTypes := map[string]bool{
-		"separation": true,
-		"cohesion":   true,
-		"alignment":  true,
-	}
-	if !validSignalTypes[action.BoidSignalType] {
-		return fmt.Errorf("invalid boid_signal_type %q: must be one of: separation, cohesion, alignment", action.BoidSignalType)
-	}
-
-	// Substitute variables in subject
-	subject := ec.SubstituteVariables(action.Subject)
-
-	// Build signal payload
-	strength := action.BoidStrength
-	if strength <= 0 || strength > 1 {
-		strength = 0.5 // Default strength
-	}
-
-	signal := map[string]any{
-		"loop_id":     entityID,
-		"signal_type": action.BoidSignalType,
-		"strength":    strength,
-		"source_rule": "rule_engine",
-		"timestamp":   time.Now().Format(time.RFC3339Nano),
-	}
-
-	// Add related entity as context
-	if ec.RelatedID != "" {
-		signal["related_id"] = ec.RelatedID
-	}
-
-	// Include any custom properties. Substitute string templates first
-	// for parity with executePublish — rule authors expect
-	// `$message.*`/`$entity.*` tokens in Properties to resolve.
-	for k, v := range substituteStringProperties(action.Properties, ec) {
-		signal[k] = v
-	}
-
-	if e.logger != nil {
-		e.logger.Debug("Publishing boid signal",
-			"subject", subject,
-			"signal_type", action.BoidSignalType,
-			"entity_id", entityID,
-			"strength", strength)
-	}
-
-	// Publish via NATS if publisher is configured
-	if e.publisher != nil {
-		// Wrap in BaseMessage for proper deserialization
-		msgType := message.Type{
-			Domain:   "boid",
-			Category: "signal",
-			Version:  "v1",
-		}
-
-		// Create a generic payload wrapper
-		payload := &message.GenericJSONPayload{Data: signal}
-		baseMsg := message.NewBaseMessage(msgType, payload, "rule-processor")
-
-		data, err := json.Marshal(baseMsg)
-		if err != nil {
-			return fmt.Errorf("marshal boid signal message: %w", err)
-		}
-
-		if err := e.publisher.Publish(ctx, subject, data); err != nil {
-			return fmt.Errorf("publish boid signal to %s: %w", subject, err)
-		}
-
-		if e.logger != nil {
-			e.logger.Debug("Boid signal published",
-				"subject", subject,
-				"signal_type", action.BoidSignalType,
-				"entity_id", entityID,
-				"size", len(data))
-		}
-	} else if e.logger != nil {
-		e.logger.Debug("Boid signal not published (no publisher configured)",
-			"subject", subject,
-			"signal_type", action.BoidSignalType,
 			"entity_id", entityID)
 	}
 

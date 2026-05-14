@@ -362,9 +362,6 @@ type ContextSlice struct {
 	IncludeRegions   []RegionType // Regions to include
 	ExcludeRegions   []RegionType // Regions to exclude (takes precedence)
 	PreserveEntities []string     // Entity IDs to always keep
-
-	// Boid steering configuration (from active steering signals)
-	AvoidEntities []string // Entities to deprioritize (from separation signals)
 }
 
 // CheckBudget checks if current context is within the token budget.
@@ -395,7 +392,6 @@ func (cm *ContextManager) getTotalTokensLocked() int {
 
 // SliceForBudget removes content to fit within the budget.
 // Uses graph-aware slicing that preserves entity context when EntityPriority is set.
-// Boid steering signals influence eviction: AvoidEntities are evicted first.
 func (cm *ContextManager) SliceForBudget(budget int, slice ContextSlice) error {
 	if budget <= 0 {
 		return nil // No budget limit
@@ -412,45 +408,13 @@ func (cm *ContextManager) SliceForBudget(budget int, slice ContextSlice) error {
 	toEvict := current - budget
 	evicted := 0
 
-	// Build avoid set from Boid separation signals
-	avoidSet := make(map[string]bool)
-	for _, e := range slice.AvoidEntities {
-		avoidSet[e] = true
-	}
-
 	// Get effective priorities (adjusted for entity priority if set)
 	priorities := cm.getEffectivePriorities()
 
 	// Build eviction order (lowest priority first)
 	order := cm.buildEvictionOrder(priorities, slice)
 
-	// First pass: evict avoided entities from all regions
-	if len(avoidSet) > 0 {
-		for _, region := range order {
-			if evicted >= toEvict {
-				break
-			}
-
-			messages := cm.regions[region]
-			if len(messages) == 0 {
-				continue
-			}
-
-			// Partition: keep non-avoided, evict avoided
-			var kept []contextMessage
-			for _, msg := range messages {
-				entityID := extractEntityIDFromMessage(msg.Message.Content)
-				if avoidSet[entityID] && evicted < toEvict && !cm.shouldPreserve(msg, slice.PreserveEntities) {
-					evicted += msg.Tokens
-				} else {
-					kept = append(kept, msg)
-				}
-			}
-			cm.regions[region] = kept
-		}
-	}
-
-	// Second pass: evict remaining messages if still over budget
+	// Evict messages until budget is met
 	for _, region := range order {
 		if evicted >= toEvict {
 			break
@@ -588,92 +552,4 @@ func (cm *ContextManager) ClearGraphEntities() {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.regions[RegionGraphEntities] = []contextMessage{}
-}
-
-// BoidSteeringConfig holds Boid steering signal configuration for context building.
-type BoidSteeringConfig struct {
-	// PrioritizeEntities are entities to move earlier in context (cohesion).
-	PrioritizeEntities []string
-
-	// AvoidEntities are entities to deprioritize in context (separation).
-	AvoidEntities []string
-
-	// AlignPatterns are predicate patterns to favor (alignment).
-	AlignPatterns []string
-}
-
-// ApplyBoidSteering reorders graph entity context based on Boid steering signals.
-// This moves prioritized entities earlier and avoided entities later in the context.
-func (cm *ContextManager) ApplyBoidSteering(steering BoidSteeringConfig) {
-	if len(steering.PrioritizeEntities) == 0 && len(steering.AvoidEntities) == 0 {
-		return
-	}
-
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	graphEntities := cm.regions[RegionGraphEntities]
-	if len(graphEntities) == 0 {
-		return
-	}
-
-	// Build lookup sets
-	prioritizeSet := make(map[string]bool)
-	for _, e := range steering.PrioritizeEntities {
-		prioritizeSet[e] = true
-	}
-	avoidSet := make(map[string]bool)
-	for _, e := range steering.AvoidEntities {
-		avoidSet[e] = true
-	}
-
-	// Partition entities: prioritized, normal, avoided
-	var prioritized, normal, avoided []contextMessage
-	for _, msg := range graphEntities {
-		// Extract entity ID from message content (format: "[Entity: {id}]\n...")
-		entityID := extractEntityIDFromMessage(msg.Message.Content)
-
-		switch {
-		case prioritizeSet[entityID]:
-			prioritized = append(prioritized, msg)
-		case avoidSet[entityID]:
-			avoided = append(avoided, msg)
-		default:
-			normal = append(normal, msg)
-		}
-	}
-
-	// Reassemble: prioritized first, then normal, then avoided
-	reordered := make([]contextMessage, 0, len(graphEntities))
-	reordered = append(reordered, prioritized...)
-	reordered = append(reordered, normal...)
-	reordered = append(reordered, avoided...)
-
-	cm.regions[RegionGraphEntities] = reordered
-
-	cm.logger.Debug("Applied Boid steering to context",
-		"loop_id", cm.loopID,
-		"prioritized", len(prioritized),
-		"avoided", len(avoided),
-		"normal", len(normal))
-}
-
-// extractEntityIDFromMessage extracts the entity ID from a graph entity message.
-// Expected format: "[Entity: some.entity.id]\nContent..."
-func extractEntityIDFromMessage(content string) string {
-	// Look for "[Entity: " prefix
-	const prefix = "[Entity: "
-	start := strings.Index(content, prefix)
-	if start == -1 {
-		return ""
-	}
-
-	// Find the closing bracket
-	start += len(prefix)
-	end := strings.Index(content[start:], "]")
-	if end == -1 {
-		return ""
-	}
-
-	return strings.TrimSpace(content[start : start+end])
 }

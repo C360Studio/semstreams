@@ -61,14 +61,6 @@
                     "type": "string"
                   }
                 },
-                "boid_signal_type": {
-                  "type": "string",
-                  "description": "boid_signal_type"
-                },
-                "boid_strength": {
-                  "type": "number",
-                  "description": "boid_strength"
-                },
                 "bucket": {
                   "type": "string",
                   "description": "bucket"
@@ -309,14 +301,6 @@
                     "type": "string"
                   }
                 },
-                "boid_signal_type": {
-                  "type": "string",
-                  "description": "boid_signal_type"
-                },
-                "boid_strength": {
-                  "type": "number",
-                  "description": "boid_strength"
-                },
                 "bucket": {
                   "type": "string",
                   "description": "bucket"
@@ -475,14 +459,6 @@
                     "type": "string"
                   }
                 },
-                "boid_signal_type": {
-                  "type": "string",
-                  "description": "boid_signal_type"
-                },
-                "boid_strength": {
-                  "type": "number",
-                  "description": "boid_strength"
-                },
                 "bucket": {
                   "type": "string",
                   "description": "bucket"
@@ -640,14 +616,6 @@
                   "items": {
                     "type": "string"
                   }
-                },
-                "boid_signal_type": {
-                  "type": "string",
-                  "description": "boid_signal_type"
-                },
-                "boid_strength": {
-                  "type": "number",
-                  "description": "boid_strength"
                 },
                 "bucket": {
                   "type": "string",
@@ -825,14 +793,6 @@
                   "items": {
                     "type": "string"
                   }
-                },
-                "boid_signal_type": {
-                  "type": "string",
-                  "description": "boid_signal_type"
-                },
-                "boid_strength": {
-                  "type": "number",
-                  "description": "boid_strength"
                 },
                 "bucket": {
                   "type": "string",

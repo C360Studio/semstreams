@@ -2054,7 +2054,6 @@ func (h *MessageHandler) GetTrajectory(loopID string) (agentic.Trajectory, error
 }
 
 // GetContextManager returns the ContextManager for a given loop ID.
-// Used by BoidHandler to apply steering signals to context.
 func (h *MessageHandler) GetContextManager(loopID string) *ContextManager {
 	return h.loopManager.GetContextManager(loopID)
 }

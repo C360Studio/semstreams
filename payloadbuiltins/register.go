@@ -23,7 +23,6 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	"github.com/c360studio/semstreams/processor/rule"
-	ruleboid "github.com/c360studio/semstreams/processor/rule/boid"
 	"github.com/c360studio/semstreams/storage/objectstore"
 )
 
@@ -49,7 +48,6 @@ func Register(reg *payloadregistry.Registry) error {
 	track(agenticoperatingmodel.RegisterPayloads(reg))
 	track(agenticdispatch.RegisterPayloads(reg))
 	track(rule.RegisterPayloads(reg))
-	track(ruleboid.RegisterPayloads(reg))
 	track(githubwebhook.RegisterPayloads(reg))
 	track(objectstore.RegisterPayloads(reg))
 

@@ -201,12 +201,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() ports should not be nil")
 	}
 
-	// Verify input ports (includes agent.boid for Boid coordination,
-	// agent.approval_response for human-in-the-loop flow, and the
-	// ADR-039 verdict ports agent.toolcall.approved/rejected for
-	// subject-mode tool-call governance).
-	if len(cfg.Ports.Inputs) != 8 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 8", len(cfg.Ports.Inputs))
+	// Verify input ports (includes agent.approval_response for human-
+	// in-the-loop flow, and the ADR-039 verdict ports
+	// agent.toolcall.approved/rejected for subject-mode tool-call
+	// governance).
+	if len(cfg.Ports.Inputs) != 7 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 7", len(cfg.Ports.Inputs))
 	}
 
 	// Verify output ports (agent.created + agent.failed declared as explicit
