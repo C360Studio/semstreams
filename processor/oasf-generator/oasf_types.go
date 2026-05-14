@@ -5,7 +5,6 @@ package oasfgenerator
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 )
 
@@ -186,12 +185,4 @@ func (d *OASFDomain) Validate() error {
 		return fmt.Errorf("name is required")
 	}
 	return nil
-}
-
-// SkillKey generates a unique key for a skill for deduplication.
-// Returns the stringified class ID so callers using string-keyed maps
-// (e.g. JSON-shaped dedup tables) can continue to work; the underlying
-// numeric ID is the source of truth.
-func (s *OASFSkill) SkillKey() string {
-	return strconv.FormatUint(uint64(s.ID), 10)
 }

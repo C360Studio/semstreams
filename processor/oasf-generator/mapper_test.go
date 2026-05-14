@@ -268,6 +268,67 @@ func TestMapper_OASFClassOverride(t *testing.T) {
 	}
 }
 
+// TestMapper_OASFClassOverride_NonCoveredCanonicalIDFails asserts that
+// pinning an OASF class ID outside MVP coverage AND outside the
+// extension range (e.g., uid=99 — not a SemStreams constant, not
+// >= ExtensionBase) is rejected at the generator. This is the
+// "operator pinned a hypothetical class" failure mode the previous
+// resolver silently accepted (PR-O2 go-reviewer SHOULD-FIX #1).
+func TestMapper_OASFClassOverride_NonCoveredCanonicalIDFails(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.bad-override"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		// 99 is not in our MVP constants and not in the extension range.
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(99), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	_, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err == nil {
+		t.Fatal("expected error for non-covered canonical override ID")
+	}
+}
+
+// TestMapper_OASFClassOverride_WinsOverExtensionFallback covers the
+// case the prior tests left untested: a skill whose expression *would*
+// otherwise resolve to an extension ID, while a canonical operator
+// override is also set. The override must win — proves the precedence
+// in resolveSkillIdentity isn't quietly re-ordered to "extension
+// fallback first if anything else fails".
+func TestMapper_OASFClassOverride_WinsOverExtensionFallback(t *testing.T) {
+	mapper := NewMapper("1.0.0", []string{"system"}, false)
+
+	agentID := "acme.ops.agentic.system.agent.dual"
+	const skillContext = "code-review"
+	triples := []message.Triple{
+		// Without override, "code-review" → ExtensionID (no canonical match).
+		{Subject: agentID, Predicate: agentic.CapabilityExpression, Object: "code-review", Context: skillContext, Timestamp: time.Now()},
+		// Override pins to NLP — should beat the extension fallback.
+		{Subject: agentID, Predicate: agentic.CapabilityOASFClass, Object: int64(oasf.CategoryNLP), Context: skillContext, Timestamp: time.Now()},
+	}
+
+	record, err := mapper.MapTriplesToOASF(agentID, triples)
+	if err != nil {
+		t.Fatalf("MapTriplesToOASF: %v", err)
+	}
+	if len(record.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(record.Skills))
+	}
+	skill := record.Skills[0]
+
+	if skill.ID != oasf.CategoryNLP {
+		t.Errorf("skill.ID = %d, want %d (operator override must beat extension fallback)", skill.ID, oasf.CategoryNLP)
+	}
+	if oasf.IsExtension(skill.ID) {
+		t.Errorf("override-resolved ID landed in extension range: %d", skill.ID)
+	}
+	if skill.Name != "natural_language_processing" {
+		t.Errorf("skill.Name = %q, want \"natural_language_processing\" (canonical, not semstreams/code_review)", skill.Name)
+	}
+}
+
 // TestMapper_OASFClassOverride_ZeroIgnored asserts that an override
 // triple carrying zero is treated as "no override" — same behaviour as
 // the triple being absent.

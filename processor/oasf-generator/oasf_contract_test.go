@@ -106,7 +106,7 @@ func contractTriples() []message.Triple {
 		{Subject: contractAgentID, Predicate: agentic.CapabilityPermission, Object: "file_read", Context: "code-review", Timestamp: ts},
 		{Subject: contractAgentID, Predicate: agentic.CapabilityPermission, Object: "file_write", Context: "code-review", Timestamp: ts},
 
-		// Skill 2: minimal — exercises generateSkillID fallback when name only
+		// Skill 2: minimal — exercises ExtensionID fallback when an expression has no canonical OASF class
 		{Subject: contractAgentID, Predicate: agentic.CapabilityExpression, Object: "documentation", Context: "documentation", Timestamp: ts},
 		{Subject: contractAgentID, Predicate: agentic.CapabilityName, Object: "Documentation", Context: "documentation", Timestamp: ts},
 

@@ -2,6 +2,7 @@ package oasfgenerator
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -76,7 +77,9 @@ func (m *Mapper) MapTriplesToOASF(agentID string, triples []message.Triple) (*OA
 	m.applyTripleProperties(ctx, triples)
 
 	// Finalize the record
-	m.finalizeRecord(ctx, agentID)
+	if err := m.finalizeRecord(ctx, agentID); err != nil {
+		return nil, err
+	}
 
 	return ctx.record, nil
 }
@@ -140,8 +143,21 @@ func (m *Mapper) applyTripleProperties(ctx *mappingContext, triples []message.Tr
 			// Operator override: pin the OASF class ID directly,
 			// bypassing expression-based resolution. Zero is treated as
 			// "no override" so an absent triple and a zero-valued triple
-			// behave identically.
-			override := uint32(toInt64(triple.Object))
+			// behave identically. A value that fails to coerce to int64
+			// (typo'd string, unexpected type) is warn-logged and
+			// dropped — keeping no-override semantics for the skill but
+			// surfacing the misconfiguration in operator logs instead
+			// of silently mapping to zero.
+			raw, ok := toInt64(triple.Object)
+			if !ok {
+				slog.Warn("oasf-generator: CapabilityOASFClass override value did not coerce to int; treating as no-override",
+					slog.String("predicate", agentic.CapabilityOASFClass),
+					slog.String("subject", triple.Subject),
+					slog.String("raw_type", fmt.Sprintf("%T", triple.Object)),
+					slog.Any("raw_value", triple.Object))
+				continue
+			}
+			override := uint32(raw)
 			sb := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
 			if sb != nil && override != 0 {
 				sb.overrideClassID = override
@@ -177,8 +193,9 @@ func (m *Mapper) applyTripleProperties(ctx *mappingContext, triples []message.Tr
 // the OASF taxonomy resolution that turns each skillBuilder's source
 // expression into a canonical class ID + hierarchical name pair (or an
 // extension ID + semstreams/-prefixed name when the expression has no
-// canonical match).
-func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) {
+// canonical match). Returns an error if any skill's OASF identity
+// resolution is structurally invalid (see resolveSkillIdentity).
+func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) error {
 	// Apply permissions to skills
 	for expr, perms := range ctx.permissionsByExpression {
 		if sb, ok := ctx.skillsByExpression[expr]; ok {
@@ -188,7 +205,9 @@ func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) {
 
 	// Resolve OASF identity and emit each skill.
 	for _, sb := range ctx.skillsByExpression {
-		resolveSkillIdentity(sb)
+		if err := resolveSkillIdentity(sb); err != nil {
+			return err
+		}
 		// Preserve the operator's display label if no description is set
 		// — OASF has no instance-level display-name field, so the
 		// human-readable name lives in description rather than being
@@ -214,6 +233,7 @@ func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) {
 		ctx.record.SetExtension("semstreams_entity_id", agentID)
 		ctx.record.SetExtension("source", "semstreams")
 	}
+	return nil
 }
 
 // getOrCreateSkill gets or creates a skillBuilder by context key. The
@@ -253,37 +273,56 @@ func (m *Mapper) findSkillForContext(skills map[string]*skillBuilder, context st
 // builder's skill. The resolution precedence is:
 //
 //  1. Operator override (CapabilityOASFClass triple) — wins outright,
-//     used verbatim. Hierarchical name comes from the OASF lookup if
-//     the override resolves to a canonical class; otherwise the name is
-//     derived from the source expression via ExtensionName.
+//     used verbatim. The hierarchical name comes from the canonical
+//     taxonomy if oasf.Name returns one for the override; for overrides
+//     in the extension range, the name is derived from the source
+//     expression via ExtensionName.
 //  2. Canonical class via oasf.LookupID(expression).
 //  3. Extension class via oasf.ExtensionID(expression), with a
 //     semstreams/-prefixed hierarchical name.
 //
-// A builder with no expression and no override emits an extension ID
-// derived from the empty string — i.e., 0 — which is intentionally
-// invalid; Validate will reject it. That branch only fires if a
-// CapabilityName or CapabilityDescription triple existed with no
-// CapabilityExpression and no context, which is a malformed input.
-func resolveSkillIdentity(sb *skillBuilder) {
+// Returns an error when the operator override is structurally invalid —
+// either pointing at a non-covered canonical class (no constant in
+// vocabulary/oasf and not in the extension range) or in the extension
+// range without a CapabilityExpression to derive a name from. Failing
+// at the generator boundary keeps misuse visible at construction time
+// instead of as an opaque wire-format rejection downstream.
+func resolveSkillIdentity(sb *skillBuilder) error {
 	if sb.overrideClassID != 0 {
 		sb.skill.ID = sb.overrideClassID
+		// Canonical-by-coverage: name from the published taxonomy.
 		if name := oasf.Name(sb.overrideClassID); name != "" {
 			sb.skill.Name = name
-		} else {
-			sb.skill.Name = oasf.ExtensionName(sb.expression)
+			return nil
 		}
-		return
+		// Non-canonical, non-extension: operator pinned a hypothetical
+		// class ID with no vocabulary/oasf constant. Surface loudly.
+		if !oasf.IsExtension(sb.overrideClassID) {
+			return fmt.Errorf("CapabilityOASFClass override = %d has no covered canonical name and is not in the extension range; "+
+				"either add a constant in vocabulary/oasf or drop the override",
+				sb.overrideClassID)
+		}
+		// Extension-range override: hierarchical name comes from the
+		// source expression. Without an expression we'd emit an empty
+		// Name (Validate catches it, but the error site is here).
+		if sb.expression == "" {
+			return fmt.Errorf("CapabilityOASFClass override = %d in extension range requires a CapabilityExpression triple "+
+				"to derive the hierarchical name",
+				sb.overrideClassID)
+		}
+		sb.skill.Name = oasf.ExtensionName(sb.expression)
+		return nil
 	}
 
 	if id, ok := oasf.LookupID(sb.expression); ok {
 		sb.skill.ID = id
 		sb.skill.Name = oasf.Name(id)
-		return
+		return nil
 	}
 
 	sb.skill.ID = oasf.ExtensionID(sb.expression)
 	sb.skill.Name = oasf.ExtensionName(sb.expression)
+	return nil
 }
 
 // getOrCreateDomain gets or creates a domain by name.
@@ -312,32 +351,36 @@ func extractAgentName(entityID string) string {
 	return entityID
 }
 
-// toInt64 converts any value to an int64. Used for CapabilityOASFClass
-// where the triple Object may arrive as float64 (JSON numbers), int,
-// int32, int64, uint, uint32, or a numeric string.
-func toInt64(v any) int64 {
+// toInt64 converts any value to an int64 and reports whether the
+// conversion succeeded. Used for CapabilityOASFClass where the triple
+// Object may arrive as float64 (JSON numbers), int, int32, int64, uint,
+// uint32, uint64, or a numeric string. Callers warn-log on `ok == false`
+// so operator typos and shape regressions surface in operations rather
+// than landing as silent zero values (zero is the documented
+// "no-override" sentinel and must be distinguishable from parse failure).
+func toInt64(v any) (int64, bool) {
 	switch val := v.(type) {
 	case int:
-		return int64(val)
+		return int64(val), true
 	case int32:
-		return int64(val)
+		return int64(val), true
 	case int64:
-		return val
+		return val, true
 	case uint:
-		return int64(val)
+		return int64(val), true
 	case uint32:
-		return int64(val)
+		return int64(val), true
 	case uint64:
-		return int64(val)
+		return int64(val), true
 	case float32:
-		return int64(val)
+		return int64(val), true
 	case float64:
-		return int64(val)
+		return int64(val), true
 	case string:
-		i, _ := strconv.ParseInt(val, 10, 64)
-		return i
+		i, err := strconv.ParseInt(val, 10, 64)
+		return i, err == nil
 	default:
-		return 0
+		return 0, false
 	}
 }
 
