@@ -19,14 +19,14 @@ import (
 var categoryFixtures embed.FS
 
 // upstreamCategory is the subset of the OASF base_skill JSON shape this
-// test depends on. The upstream schema has more fields (extends,
-// attributes, etc.) but they do not participate in the wire contract we
-// care about pinning.
+// test depends on. The upstream schema has more fields (attributes, etc.)
+// but they do not participate in the wire contract we care about pinning.
 type upstreamCategory struct {
 	UID      uint32 `json:"uid"`
 	Name     string `json:"name"`
 	Caption  string `json:"caption"`
 	Category bool   `json:"category"`
+	Extends  string `json:"extends"`
 }
 
 // TestCategoriesMatchUpstream pins our category constants against the
@@ -69,6 +69,10 @@ func TestCategoriesMatchUpstream(t *testing.T) {
 			if !got.Category {
 				t.Errorf("upstream %s is not marked as a category — schema shape may have changed",
 					fileBase)
+			}
+			if got.Extends != "base_skill" {
+				t.Errorf("upstream %s extends = %q, want \"base_skill\" — taxonomy root may have moved",
+					fileBase, got.Extends)
 			}
 			if got.Caption == "" {
 				t.Errorf("upstream %s has empty caption — schema shape may have changed",

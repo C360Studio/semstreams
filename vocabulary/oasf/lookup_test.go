@@ -25,6 +25,52 @@ func TestNameUnknownReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestLookupIDAcceptsHierarchicalNames(t *testing.T) {
+	// Top-level segment alone resolves.
+	id, ok := LookupID("natural_language_processing")
+	if !ok || id != CategoryNLP {
+		t.Errorf("LookupID(top-level) = (%d, %v), want (%d, true)", id, ok, CategoryNLP)
+	}
+
+	// Hierarchical path with the top-level segment as the head also
+	// resolves to that category — subcategories aren't in MVP coverage,
+	// so anything below the first slash is ignored. This is the call
+	// shape PR-O2's mapper will hit when an OASF skill name like
+	// "natural_language_processing/natural_language_understanding"
+	// flows in from operator config or upstream taxonomy lookups.
+	id, ok = LookupID("natural_language_processing/natural_language_understanding/contextual_comprehension")
+	if !ok || id != CategoryNLP {
+		t.Errorf("LookupID(hierarchical) = (%d, %v), want (%d, true)", id, ok, CategoryNLP)
+	}
+}
+
+func TestLookupIDDistinguishesMissFromEmpty(t *testing.T) {
+	// The motivating distinction for adding LookupID alongside ID:
+	// callers (notably PR-O2's mapper) need to tell "you handed me
+	// garbage" from "the name was empty" so they can route to
+	// ExtensionID vs return an error.
+	cases := []struct {
+		name   string
+		input  string
+		wantID uint32
+		wantOK bool
+	}{
+		{"empty", "", 0, false},
+		{"unknown-category", "not_a_category", 0, false},
+		{"unknown-prefix-of-hierarchy", "not_a_category/anything", 0, false},
+		{"covered", "tool_interaction", CategoryToolInteraction, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, ok := LookupID(tc.input)
+			if id != tc.wantID || ok != tc.wantOK {
+				t.Errorf("LookupID(%q) = (%d, %v), want (%d, %v)",
+					tc.input, id, ok, tc.wantID, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestCaptionForKnownAndUnknown(t *testing.T) {
 	if got := Caption(CategoryNLP); got != "Natural Language Processing" {
 		t.Errorf("Caption(NLP) = %q, want \"Natural Language Processing\"", got)
@@ -106,8 +152,13 @@ func TestExtensionNameShape(t *testing.T) {
 	}
 }
 
-func TestExtensionNameEmpty(t *testing.T) {
-	if got := ExtensionName(""); got != "semstreams" {
-		t.Errorf("ExtensionName(\"\") = %q, want %q", got, "semstreams")
+func TestExtensionNameEmptyMatchesIDSentinel(t *testing.T) {
+	// Symmetric with ExtensionID("") == 0: callers checking one and
+	// emitting the other must not write a half-formed extension record.
+	if got := ExtensionName(""); got != "" {
+		t.Errorf("ExtensionName(\"\") = %q, want \"\" (must match ExtensionID(\"\") == 0)", got)
+	}
+	if got := ExtensionName("   "); got != "" {
+		t.Errorf("ExtensionName(whitespace) = %q, want \"\"", got)
 	}
 }

@@ -1,5 +1,18 @@
 package oasf
 
+import "strings"
+
+// categoryIDByName is the reverse index of categoryNames, built once at
+// init for O(1) lookup. Kept private because the forward direction
+// (categoryNames) remains the source of truth — this is a derived view.
+var categoryIDByName = func() map[string]uint32 {
+	m := make(map[string]uint32, len(categoryNames))
+	for id, name := range categoryNames {
+		m[name] = id
+	}
+	return m
+}()
+
 // Name returns the OASF hierarchical name (path-segment form) for the
 // given canonical class ID, or the empty string if the ID is not part of
 // SemStreams' MVP coverage of the OASF taxonomy.
@@ -23,20 +36,34 @@ func Caption(id uint32) string {
 	return ""
 }
 
-// ID returns the canonical OASF class ID for the given hierarchical
-// name (or its top-level prefix), or 0 if the name does not match a
-// covered class. Zero is intentionally not a valid OASF class ID (the
-// taxonomy starts at 1), so callers can rely on `id == 0` as a "not
-// found" sentinel.
+// LookupID returns the canonical OASF class ID for the given hierarchical
+// name and a boolean indicating whether the lookup succeeded. The name
+// may be a bare top-level segment ("natural_language_processing") or a
+// full hierarchical path ("natural_language_processing/.../foo"); in the
+// hierarchical case only the top-level segment is matched against MVP
+// coverage. Subcategory and skill lookups land in a later PR alongside
+// subcategories.go / skills.go.
+//
+// Prefer this over [ID] in mapper code where "you handed me garbage" and
+// "the name was empty" need to be distinguished — [ID] collapses both to
+// the zero sentinel.
+func LookupID(name string) (uint32, bool) {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[:i]
+	}
+	id, ok := categoryIDByName[name]
+	return id, ok
+}
+
+// ID is a convenience wrapper around [LookupID] that returns 0 on miss.
+// Zero is intentionally not a valid OASF class ID (the taxonomy starts
+// at 1), so callers that don't need to distinguish miss-from-empty can
+// rely on `id == 0` as the "not found" sentinel.
 //
 // For unmapped expressions, callers should fall back to [ExtensionID].
 func ID(name string) uint32 {
-	for id, n := range categoryNames {
-		if n == name {
-			return id
-		}
-	}
-	return 0
+	id, _ := LookupID(name)
+	return id
 }
 
 // IsCanonical reports whether the given class ID is part of SemStreams'

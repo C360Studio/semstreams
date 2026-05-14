@@ -56,12 +56,13 @@ func ExtensionID(expression string) uint32 {
 // prefixed with "semstreams/" so wire consumers can distinguish
 // extension skills from canonical OASF taxonomy entries by name alone.
 //
-// Empty or whitespace-only expressions return the bare prefix, which
-// callers should treat as "unidentified extension".
+// Empty or whitespace-only expressions return the empty string,
+// matching [ExtensionID]'s zero-sentinel behaviour — callers checking
+// one and emitting the other won't write a half-formed extension record.
 func ExtensionName(expression string) string {
 	expr := strings.ToLower(strings.TrimSpace(expression))
 	if expr == "" {
-		return extensionPrefix
+		return ""
 	}
 	// Convert kebab-case to snake_case so the hierarchy reads
 	// consistently with OASF's path-segment convention.
