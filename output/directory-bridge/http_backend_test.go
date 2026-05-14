@@ -24,7 +24,7 @@ func TestHTTPBackend_PublishRefreshWithdraw(t *testing.T) {
 		Version:       "1.0.0",
 		SchemaVersion: "1.0.0",
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-		Skills:        []oasfgenerator.OASFSkill{{ID: "test", Name: "Test"}},
+		Skills:        []oasfgenerator.OASFSkill{{ID: 9_100_001, Name: "semstreams/test"}},
 	}
 
 	// --- Publish ---

@@ -207,8 +207,8 @@ func validateOASFRecord(record *client.OASFRecord) error {
 
 	// Validate skills
 	for i, skill := range record.Skills {
-		if skill.ID == "" {
-			return fmt.Errorf("skill[%d].id is required", i)
+		if skill.ID == 0 {
+			return fmt.Errorf("skill[%d].id is required (zero is not a valid OASF class ID)", i)
 		}
 		if skill.Name == "" {
 			return fmt.Errorf("skill[%d].name is required", i)

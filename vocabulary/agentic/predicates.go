@@ -99,6 +99,25 @@ const (
 	// DataType: string
 	// IRI: agent-ontology:requiresPermission
 	CapabilityPermission = "agent.capability.permission"
+
+	// CapabilityOASFClass is the AGNTCY OASF taxonomy class ID for the
+	// capability. When present, the oasf-generator uses this value
+	// directly for Skill.id rather than resolving via CapabilityExpression
+	// lookup — the operator override path that lets configs pin a
+	// canonical OASF class for capabilities whose expression doesn't
+	// resolve cleanly.
+	//
+	// The value is a uint32 OASF class ID (see vocabulary/oasf). Zero is
+	// treated as "no override" — the mapper falls back to the standard
+	// resolve path (LookupID → ExtensionID). Values in the extension
+	// range (>= oasf.ExtensionBase) are also accepted but the operator
+	// is generally better off omitting the override and letting the
+	// mapper derive a deterministic extension ID.
+	//
+	// Example: 1 (Natural Language Processing), 14 (Tool Interaction).
+	// DataType: int (wire uint32)
+	// IRI: none — references the OASF taxonomy via the integer class ID
+	CapabilityOASFClass = "agent.capability.oasf_class"
 )
 
 // Delegation Predicates

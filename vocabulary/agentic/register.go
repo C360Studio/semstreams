@@ -147,6 +147,10 @@ func registerCapabilityPredicates() {
 		vocabulary.WithDescription("Permission required for the capability"),
 		vocabulary.WithDataType("string"),
 		vocabulary.WithIRI(IriRequiresPermission))
+
+	vocabulary.Register(CapabilityOASFClass,
+		vocabulary.WithDescription("Operator override for AGNTCY OASF taxonomy class ID; zero means no override (mapper resolves via expression lookup)"),
+		vocabulary.WithDataType("int"))
 }
 
 // registerDelegationPredicates registers predicates for authority delegation.

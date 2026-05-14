@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	agentic "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/c360studio/semstreams/vocabulary/oasf"
 )
 
 // Mapper converts SemStreams triples to OASF records.
@@ -32,10 +33,23 @@ func NewMapper(defaultVersion string, defaultAuthors []string, includeExtensions
 	}
 }
 
+// skillBuilder accumulates a single Skill's data during mapping. The
+// wire-level OASFSkill.ID + .Name fields are only populated at
+// finalizeRecord time, by resolving the source expression (or honoring
+// an operator-set OASF class override) through vocabulary/oasf. Keeping
+// the source expression on the builder is required because extension
+// IDs are derived from it (see oasf.ExtensionID).
+type skillBuilder struct {
+	skill           *OASFSkill // accumulating wire shape; ID/Name set at finalize
+	expression      string     // SemStreams internal expression (drives OASF resolution)
+	displayName     string     // operator-supplied human label from CapabilityName
+	overrideClassID uint32     // operator-set CapabilityOASFClass (0 = no override)
+}
+
 // mappingContext holds the state while mapping triples.
 type mappingContext struct {
 	record                  *OASFRecord
-	skillsByExpression      map[string]*OASFSkill
+	skillsByExpression      map[string]*skillBuilder
 	domainsByName           map[string]*OASFDomain
 	permissionsByExpression map[string][]string
 }
@@ -50,7 +64,7 @@ func (m *Mapper) MapTriplesToOASF(agentID string, triples []message.Triple) (*OA
 	// Initialize mapping context
 	ctx := &mappingContext{
 		record:                  NewOASFRecord(extractAgentName(agentID), m.defaultVersion, ""),
-		skillsByExpression:      make(map[string]*OASFSkill),
+		skillsByExpression:      make(map[string]*skillBuilder),
 		domainsByName:           make(map[string]*OASFDomain),
 		permissionsByExpression: make(map[string][]string),
 	}
@@ -67,7 +81,10 @@ func (m *Mapper) MapTriplesToOASF(agentID string, triples []message.Triple) (*OA
 	return ctx.record, nil
 }
 
-// extractSkills creates skills from capability expressions and names (first pass).
+// extractSkills creates skill builders from capability expressions and
+// names (first pass). The OASF wire-level ID and hierarchical Name are
+// resolved later in finalizeRecord — at extraction time we just record
+// the source expression and display name.
 func (m *Mapper) extractSkills(ctx *mappingContext, triples []message.Triple) {
 	for _, triple := range triples {
 		switch triple.Predicate {
@@ -77,8 +94,8 @@ func (m *Mapper) extractSkills(ctx *mappingContext, triples []message.Triple) {
 			if tripleCtx == "" {
 				tripleCtx = expr
 			}
-			skill := m.getOrCreateSkill(ctx.skillsByExpression, tripleCtx)
-			skill.ID = expr
+			sb := m.getOrCreateSkill(ctx.skillsByExpression, tripleCtx)
+			sb.expression = expr
 
 		case agentic.CapabilityName:
 			name := toString(triple.Object)
@@ -86,8 +103,8 @@ func (m *Mapper) extractSkills(ctx *mappingContext, triples []message.Triple) {
 			if tripleCtx == "" {
 				tripleCtx = name
 			}
-			skill := m.getOrCreateSkill(ctx.skillsByExpression, tripleCtx)
-			skill.Name = name
+			sb := m.getOrCreateSkill(ctx.skillsByExpression, tripleCtx)
+			sb.displayName = name
 		}
 	}
 }
@@ -107,16 +124,27 @@ func (m *Mapper) applyTripleProperties(ctx *mappingContext, triples []message.Tr
 		switch triple.Predicate {
 		case agentic.CapabilityDescription:
 			desc := toString(triple.Object)
-			skill := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
-			if skill != nil {
-				skill.Description = desc
+			sb := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
+			if sb != nil {
+				sb.skill.Description = desc
 			}
 
 		case agentic.CapabilityConfidence:
 			conf := toFloat64(triple.Object)
-			skill := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
-			if skill != nil {
-				skill.Confidence = conf
+			sb := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
+			if sb != nil {
+				sb.skill.Confidence = conf
+			}
+
+		case agentic.CapabilityOASFClass:
+			// Operator override: pin the OASF class ID directly,
+			// bypassing expression-based resolution. Zero is treated as
+			// "no override" so an absent triple and a zero-valued triple
+			// behave identically.
+			override := uint32(toInt64(triple.Object))
+			sb := m.findSkillForContext(ctx.skillsByExpression, tripleCtx)
+			if sb != nil && override != 0 {
+				sb.overrideClassID = override
 			}
 
 		case agentic.CapabilityPermission:
@@ -145,21 +173,30 @@ func (m *Mapper) applyTripleProperties(ctx *mappingContext, triples []message.Tr
 	}
 }
 
-// finalizeRecord applies final transformations to the record.
+// finalizeRecord applies final transformations to the record, including
+// the OASF taxonomy resolution that turns each skillBuilder's source
+// expression into a canonical class ID + hierarchical name pair (or an
+// extension ID + semstreams/-prefixed name when the expression has no
+// canonical match).
 func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) {
 	// Apply permissions to skills
 	for expr, perms := range ctx.permissionsByExpression {
-		if skill, ok := ctx.skillsByExpression[expr]; ok {
-			skill.Permissions = perms
+		if sb, ok := ctx.skillsByExpression[expr]; ok {
+			sb.skill.Permissions = perms
 		}
 	}
 
-	// Convert skill map to slice
-	for _, skill := range ctx.skillsByExpression {
-		if skill.ID == "" {
-			skill.ID = generateSkillID(skill.Name)
+	// Resolve OASF identity and emit each skill.
+	for _, sb := range ctx.skillsByExpression {
+		resolveSkillIdentity(sb)
+		// Preserve the operator's display label if no description is set
+		// — OASF has no instance-level display-name field, so the
+		// human-readable name lives in description rather than being
+		// dropped on the floor.
+		if sb.skill.Description == "" && sb.displayName != "" {
+			sb.skill.Description = sb.displayName
 		}
-		ctx.record.AddSkill(*skill)
+		ctx.record.AddSkill(*sb.skill)
 	}
 
 	// Convert domain map to slice
@@ -179,33 +216,74 @@ func (m *Mapper) finalizeRecord(ctx *mappingContext, agentID string) {
 	}
 }
 
-// getOrCreateSkill gets or creates a skill by expression/name.
-func (m *Mapper) getOrCreateSkill(skills map[string]*OASFSkill, key string) *OASFSkill {
-	if skill, ok := skills[key]; ok {
-		return skill
+// getOrCreateSkill gets or creates a skillBuilder by context key. The
+// builder seeds the source expression with the context key — if a later
+// CapabilityExpression triple supplies a different expression for the
+// same context, that overwrites the seed.
+func (m *Mapper) getOrCreateSkill(skills map[string]*skillBuilder, key string) *skillBuilder {
+	if sb, ok := skills[key]; ok {
+		return sb
 	}
-	skill := &OASFSkill{
-		ID:         key,
-		Name:       key,
-		Confidence: 1.0, // Default confidence
+	sb := &skillBuilder{
+		skill: &OASFSkill{
+			Confidence: 1.0, // Default confidence
+		},
+		expression: key, // seed; CapabilityExpression triple overwrites
 	}
-	skills[key] = skill
-	return skill
+	skills[key] = sb
+	return sb
 }
 
-// findSkillForContext finds a skill matching the triple context.
-// If no context or no match, returns the first skill or nil.
-func (m *Mapper) findSkillForContext(skills map[string]*OASFSkill, context string) *OASFSkill {
+// findSkillForContext finds a skillBuilder matching the triple context.
+// If no context or no match, returns the first builder or nil.
+func (m *Mapper) findSkillForContext(skills map[string]*skillBuilder, context string) *skillBuilder {
 	if context != "" {
-		if skill, ok := skills[context]; ok {
-			return skill
+		if sb, ok := skills[context]; ok {
+			return sb
 		}
 	}
-	// Return first skill if any
-	for _, skill := range skills {
-		return skill
+	// Return first builder if any
+	for _, sb := range skills {
+		return sb
 	}
 	return nil
+}
+
+// resolveSkillIdentity populates the OASF wire-level ID and Name on the
+// builder's skill. The resolution precedence is:
+//
+//  1. Operator override (CapabilityOASFClass triple) — wins outright,
+//     used verbatim. Hierarchical name comes from the OASF lookup if
+//     the override resolves to a canonical class; otherwise the name is
+//     derived from the source expression via ExtensionName.
+//  2. Canonical class via oasf.LookupID(expression).
+//  3. Extension class via oasf.ExtensionID(expression), with a
+//     semstreams/-prefixed hierarchical name.
+//
+// A builder with no expression and no override emits an extension ID
+// derived from the empty string — i.e., 0 — which is intentionally
+// invalid; Validate will reject it. That branch only fires if a
+// CapabilityName or CapabilityDescription triple existed with no
+// CapabilityExpression and no context, which is a malformed input.
+func resolveSkillIdentity(sb *skillBuilder) {
+	if sb.overrideClassID != 0 {
+		sb.skill.ID = sb.overrideClassID
+		if name := oasf.Name(sb.overrideClassID); name != "" {
+			sb.skill.Name = name
+		} else {
+			sb.skill.Name = oasf.ExtensionName(sb.expression)
+		}
+		return
+	}
+
+	if id, ok := oasf.LookupID(sb.expression); ok {
+		sb.skill.ID = id
+		sb.skill.Name = oasf.Name(id)
+		return
+	}
+
+	sb.skill.ID = oasf.ExtensionID(sb.expression)
+	sb.skill.Name = oasf.ExtensionName(sb.expression)
 }
 
 // getOrCreateDomain gets or creates a domain by name.
@@ -234,13 +312,33 @@ func extractAgentName(entityID string) string {
 	return entityID
 }
 
-// generateSkillID generates a unique skill ID from a name.
-func generateSkillID(name string) string {
-	// Convert to lowercase, replace spaces with hyphens
-	id := strings.ToLower(name)
-	id = strings.ReplaceAll(id, " ", "-")
-	id = strings.ReplaceAll(id, "_", "-")
-	return id
+// toInt64 converts any value to an int64. Used for CapabilityOASFClass
+// where the triple Object may arrive as float64 (JSON numbers), int,
+// int32, int64, uint, uint32, or a numeric string.
+func toInt64(v any) int64 {
+	switch val := v.(type) {
+	case int:
+		return int64(val)
+	case int32:
+		return int64(val)
+	case int64:
+		return val
+	case uint:
+		return int64(val)
+	case uint32:
+		return int64(val)
+	case uint64:
+		return int64(val)
+	case float32:
+		return int64(val)
+	case float64:
+		return int64(val)
+	case string:
+		i, _ := strconv.ParseInt(val, 10, 64)
+		return i
+	default:
+		return 0
+	}
 }
 
 // toString converts any value to a string.
@@ -305,13 +403,22 @@ func appendUnique(slice []string, value string) []string {
 
 // PredicateMapping defines how SemStreams predicates map to OASF fields.
 // This table is for documentation and validation purposes.
+//
+// CapabilityExpression drives both skills[].id and skills[].name via
+// the vocabulary/oasf resolver — canonical taxonomy lookup with
+// extension fallback. CapabilityName is preserved on skills[].description
+// when no explicit description is set (OASF has no instance-level
+// display-name field). CapabilityOASFClass is an operator override
+// that pins skills[].id to a specific OASF class, bypassing
+// CapabilityExpression resolution.
 var PredicateMapping = map[string]string{
 	// Capability predicates -> Skills
-	agentic.CapabilityName:        "skills[].name",
+	agentic.CapabilityName:        "skills[].description (fallback)",
 	agentic.CapabilityDescription: "skills[].description",
-	agentic.CapabilityExpression:  "skills[].id",
+	agentic.CapabilityExpression:  "skills[].{id, name} (via vocabulary/oasf)",
 	agentic.CapabilityConfidence:  "skills[].confidence",
 	agentic.CapabilityPermission:  "skills[].permissions[]",
+	agentic.CapabilityOASFClass:   "skills[].id (operator override)",
 
 	// Intent predicates -> Description and Domains
 	agentic.IntentGoal: "description",

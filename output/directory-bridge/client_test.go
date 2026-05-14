@@ -21,7 +21,7 @@ func TestDirectoryClient_Register(t *testing.T) {
 		Description:   "A test agent",
 		Skills: []oasfgenerator.OASFSkill{
 			{
-				ID:   "skill-1",
+				ID:   9_100_001,
 				Name: "test-skill",
 			},
 		},
