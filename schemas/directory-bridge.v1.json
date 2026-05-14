@@ -5,6 +5,70 @@
   "title": "directory-bridge Configuration",
   "description": "Registers agents with AGNTCY directories using OASF records",
   "properties": {
+    "agntcy_grpc": {
+      "type": "object",
+      "description": "agntcy_grpc backend settings",
+      "category": "basic",
+      "properties": {
+        "auth": {
+          "type": "object",
+          "description": "Per-RPC OIDC auth (omit for unauthenticated)",
+          "category": "basic",
+          "properties": {
+            "client_id": {
+              "type": "string",
+              "description": "OIDC client identifier (inline; prefer client_id_env)",
+              "category": "basic"
+            },
+            "client_id_env": {
+              "type": "string",
+              "description": "Env var name for OIDC client_id (wins over inline)",
+              "category": "basic"
+            },
+            "client_secret_env": {
+              "type": "string",
+              "description": "Env var name for OIDC client_secret (secrets must not live in config)",
+              "category": "basic"
+            },
+            "issuer": {
+              "type": "string",
+              "description": "OIDC token endpoint URL",
+              "category": "basic"
+            },
+            "scopes": {
+              "type": "array",
+              "description": "OIDC scope list",
+              "items": {
+                "type": "string"
+              },
+              "category": "basic"
+            },
+            "type": {
+              "type": "string",
+              "description": "Auth flow (none or oidc)",
+              "default": "none",
+              "category": "basic"
+            }
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "gRPC endpoint host:port",
+          "category": "basic"
+        },
+        "tls": {
+          "type": "boolean",
+          "description": "Establish TLS on dial (required for the hosted hub)",
+          "category": "basic"
+        }
+      }
+    },
+    "backend": {
+      "type": "string",
+      "description": "Wire-format backend (http or agntcy_grpc)",
+      "default": "http",
+      "category": "basic"
+    },
     "consumer_name_suffix": {
       "type": "string",
       "description": "Suffix for consumer names",
@@ -18,7 +82,7 @@
     },
     "directory_url": {
       "type": "string",
-      "description": "AGNTCY directory service URL",
+      "description": "AGNTCY directory service URL (HTTP backend only)",
       "category": "basic"
     },
     "heartbeat_interval": {

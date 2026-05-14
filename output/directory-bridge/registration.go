@@ -2,6 +2,7 @@ package directorybridge
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -315,6 +316,20 @@ func (rm *RegistrationManager) sendHeartbeats(ctx context.Context) {
 			AgentDID: reg.AgentDID,
 		})
 		if err != nil {
+			// Self-healing path for CID-anchored backends: a non-zero
+			// ExpiresAt got into the map (operator forge, future bug),
+			// the backend's Refresh returns ErrRefreshNotSupported, and
+			// without intervention we'd log "Heartbeat failed" forever
+			// at every interval. Zero out ExpiresAt so the IsZero guard
+			// above starts skipping this registration cleanly.
+			if errors.Is(err, ErrRefreshNotSupported) {
+				rm.logger.Warn("Backend does not support refresh; clearing expiry to stop further heartbeat attempts",
+					slog.String("entity_id", reg.EntityID))
+				rm.mu.Lock()
+				reg.ExpiresAt = time.Time{}
+				rm.mu.Unlock()
+				continue
+			}
 			rm.logger.Warn("Heartbeat failed",
 				slog.String("entity_id", reg.EntityID),
 				slog.Any("error", err))

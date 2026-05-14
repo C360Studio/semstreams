@@ -1,9 +1,12 @@
 package directorybridge
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/component"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -233,6 +236,217 @@ func TestConfigGetRetryDelay(t *testing.T) {
 			got := cfg.GetRetryDelay()
 			if got != tt.want {
 				t.Errorf("GetRetryDelay() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConfig_JSONRoundTrip covers the polymorphic-config discipline:
+// every operator-reachable field (including the new Backend selector,
+// the AgntcyGRPC block, and its nested AuthConfig) must survive a
+// JSON marshal/unmarshal round-trip without silent dropping. See the
+// feedback memory feedback_polymorphic_config_needs_json_roundtrip_test.
+func TestConfig_JSONRoundTrip(t *testing.T) {
+	original := Config{
+		Ports: &component.PortConfig{
+			Inputs:  []component.PortDefinition{{Name: "i", Subject: "a", Type: "kv-watch"}},
+			Outputs: []component.PortDefinition{{Name: "o", Subject: "b", Type: "jetstream"}},
+		},
+		Backend:      BackendAgntcyGRPC,
+		DirectoryURL: "http://legacy-http",
+		AgntcyGRPC: &AgntcyGRPCConfig{
+			Endpoint: "prod.api.ads.outshift.io:443",
+			TLS:      true,
+			Auth: &AuthConfig{
+				Type:            "oidc",
+				Issuer:          "https://issuer.example.com/token",
+				ClientID:        "inline-client",
+				ClientIDEnv:     "EXAMPLE_CLIENT_ID",
+				ClientSecretEnv: "EXAMPLE_CLIENT_SECRET",
+				Scopes:          []string{"agntcy.publish", "agntcy.read"},
+			},
+		},
+		HeartbeatInterval:    "30s",
+		RegistrationTTL:      "5m",
+		IdentityProvider:     "local",
+		OASFKVBucket:         "OASF_RECORDS",
+		RetryCount:           3,
+		RetryDelay:           "1s",
+		ConsumerNameSuffix:   "test-suffix",
+		DeleteConsumerOnStop: true,
+	}
+
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded Config
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Spot-check every field that wasn't already in the existing
+	// TestConfigValidate / TestDefaultConfig coverage. Catches the
+	// "shadow struct" / "field silently dropped" failure mode the
+	// polymorphic-config rule exists to prevent.
+	if decoded.Backend != original.Backend {
+		t.Errorf("Backend = %q, want %q", decoded.Backend, original.Backend)
+	}
+	if decoded.DirectoryURL != original.DirectoryURL {
+		t.Errorf("DirectoryURL = %q, want %q", decoded.DirectoryURL, original.DirectoryURL)
+	}
+	if decoded.AgntcyGRPC == nil {
+		t.Fatal("AgntcyGRPC dropped during round-trip")
+	}
+	if decoded.AgntcyGRPC.Endpoint != original.AgntcyGRPC.Endpoint {
+		t.Errorf("AgntcyGRPC.Endpoint = %q, want %q", decoded.AgntcyGRPC.Endpoint, original.AgntcyGRPC.Endpoint)
+	}
+	if decoded.AgntcyGRPC.TLS != original.AgntcyGRPC.TLS {
+		t.Errorf("AgntcyGRPC.TLS = %v, want %v", decoded.AgntcyGRPC.TLS, original.AgntcyGRPC.TLS)
+	}
+	if decoded.AgntcyGRPC.Auth == nil {
+		t.Fatal("AgntcyGRPC.Auth dropped during round-trip")
+	}
+	if decoded.AgntcyGRPC.Auth.Type != original.AgntcyGRPC.Auth.Type {
+		t.Errorf("Auth.Type = %q, want %q", decoded.AgntcyGRPC.Auth.Type, original.AgntcyGRPC.Auth.Type)
+	}
+	if decoded.AgntcyGRPC.Auth.Issuer != original.AgntcyGRPC.Auth.Issuer {
+		t.Errorf("Auth.Issuer = %q, want %q", decoded.AgntcyGRPC.Auth.Issuer, original.AgntcyGRPC.Auth.Issuer)
+	}
+	if decoded.AgntcyGRPC.Auth.ClientID != original.AgntcyGRPC.Auth.ClientID {
+		t.Errorf("Auth.ClientID = %q, want %q", decoded.AgntcyGRPC.Auth.ClientID, original.AgntcyGRPC.Auth.ClientID)
+	}
+	if decoded.AgntcyGRPC.Auth.ClientIDEnv != original.AgntcyGRPC.Auth.ClientIDEnv {
+		t.Errorf("Auth.ClientIDEnv = %q, want %q", decoded.AgntcyGRPC.Auth.ClientIDEnv, original.AgntcyGRPC.Auth.ClientIDEnv)
+	}
+	if decoded.AgntcyGRPC.Auth.ClientSecretEnv != original.AgntcyGRPC.Auth.ClientSecretEnv {
+		t.Errorf("Auth.ClientSecretEnv = %q, want %q", decoded.AgntcyGRPC.Auth.ClientSecretEnv, original.AgntcyGRPC.Auth.ClientSecretEnv)
+	}
+	if len(decoded.AgntcyGRPC.Auth.Scopes) != len(original.AgntcyGRPC.Auth.Scopes) {
+		t.Errorf("Auth.Scopes len = %d, want %d", len(decoded.AgntcyGRPC.Auth.Scopes), len(original.AgntcyGRPC.Auth.Scopes))
+	}
+	// Element-wise compare — length parity alone wouldn't catch a slice
+	// that round-tripped with swapped/dropped/renamed entries.
+	for i, want := range original.AgntcyGRPC.Auth.Scopes {
+		if i >= len(decoded.AgntcyGRPC.Auth.Scopes) {
+			break
+		}
+		if got := decoded.AgntcyGRPC.Auth.Scopes[i]; got != want {
+			t.Errorf("Auth.Scopes[%d] = %q, want %q", i, got, want)
+		}
+	}
+
+	// Confirm the decoded config validates (covers the V (validate) leg
+	// of the round-trip-and-validate contract).
+	if err := decoded.Validate(); err != nil {
+		t.Errorf("decoded config failed validate: %v", err)
+	}
+}
+
+// TestConfigValidate_BackendVariants exercises the new selector and
+// per-backend validation branches.
+func TestConfigValidate_BackendVariants(t *testing.T) {
+	base := DefaultConfig()
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name:   "empty backend defaults to http",
+			mutate: func(c *Config) { c.Backend = "" },
+		},
+		{
+			name:   "explicit http",
+			mutate: func(c *Config) { c.Backend = BackendHTTP },
+		},
+		{
+			name: "agntcy_grpc requires block",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = nil
+			},
+			wantErr: "requires agntcy_grpc block",
+		},
+		{
+			name: "agntcy_grpc requires endpoint",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{Endpoint: ""}
+			},
+			wantErr: "endpoint is required",
+		},
+		{
+			name: "agntcy_grpc with none auth ok",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{Endpoint: "h:1", Auth: &AuthConfig{Type: "none"}}
+			},
+		},
+		{
+			name: "oidc auth requires issuer",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{
+					Endpoint: "h:1",
+					Auth:     &AuthConfig{Type: "oidc", ClientID: "x", ClientSecretEnv: "S"},
+				}
+			},
+			wantErr: "issuer is required",
+		},
+		{
+			name: "oidc auth requires client_id",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{
+					Endpoint: "h:1",
+					Auth:     &AuthConfig{Type: "oidc", Issuer: "iss", ClientSecretEnv: "S"},
+				}
+			},
+			wantErr: "client_id or client_id_env",
+		},
+		{
+			name: "oidc auth requires client_secret_env",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{
+					Endpoint: "h:1",
+					Auth:     &AuthConfig{Type: "oidc", Issuer: "iss", ClientID: "x"},
+				}
+			},
+			wantErr: "client_secret_env",
+		},
+		{
+			name:    "unknown backend",
+			mutate:  func(c *Config) { c.Backend = "nonsense" },
+			wantErr: "backend must be",
+		},
+		{
+			name: "unknown auth type",
+			mutate: func(c *Config) {
+				c.Backend = BackendAgntcyGRPC
+				c.AgntcyGRPC = &AgntcyGRPCConfig{Endpoint: "h:1", Auth: &AuthConfig{Type: "kerberos"}}
+			},
+			wantErr: "auth.type must be",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("Validate() error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
 	}
