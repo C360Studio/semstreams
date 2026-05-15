@@ -20,6 +20,7 @@ import (
 	agenticoperatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	githubwebhook "github.com/c360studio/semstreams/input/github-webhook"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/message/oms"
 	"github.com/c360studio/semstreams/payloadregistry"
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	"github.com/c360studio/semstreams/processor/rule"
@@ -44,6 +45,7 @@ func Register(reg *payloadregistry.Registry) error {
 	}
 
 	track(message.RegisterPayloads(reg))
+	track(oms.RegisterPayloads(reg))
 	track(agentic.RegisterPayloads(reg))
 	track(agenticoperatingmodel.RegisterPayloads(reg))
 	track(agenticdispatch.RegisterPayloads(reg))

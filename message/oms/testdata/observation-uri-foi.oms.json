@@ -1,0 +1,10 @@
+{
+    "type": "Observation",
+    "id": "acme.ops.robotics.gcs.drone.001/obs/12345",
+    "procedure": "http://example.org/procedures/voltmeter",
+    "observedProperty": "http://example.org/properties/battery-voltage",
+    "featureOfInterest": "http://example.org/features/battery-pack-001",
+    "phenomenonTime": "2026-05-15T14:30:00Z",
+    "resultTime": "2026-05-15T14:30:00.250Z",
+    "result": 12.4
+}
