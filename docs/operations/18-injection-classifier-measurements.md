@@ -177,6 +177,7 @@ not in this doc.
 
 ## Related
 
+- [20-adr043-rollout.md](20-adr043-rollout.md) — end-to-end operator playbook; this doc is its Stage 3.
 - [ADR-043](../adr/043-prompt-injection-defense-detonation-corpus.md) — the design.
 - [`cmd/measure-injection-classifier/main.go`](../../cmd/measure-injection-classifier/main.go) — the harness.
 - [`processor/agentic-governance/injection_corpus/`](../../processor/agentic-governance/injection_corpus/) — corpus format and vendored seed.

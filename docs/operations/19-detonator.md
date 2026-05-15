@@ -227,6 +227,7 @@ instruction-override > benign. Multi-label is Phase 4.
 
 ## Related
 
+- [20-adr043-rollout.md](20-adr043-rollout.md) — end-to-end operator playbook; this doc is its Stage 2.
 - [ADR-043](../adr/043-prompt-injection-defense-detonation-corpus.md) — the design.
 - [18-injection-classifier-measurements.md](18-injection-classifier-measurements.md) — Phase 2 measurement protocol the detonator output plugs into.
 - [`processor/agentic-detonator/`](../../processor/agentic-detonator/) — package implementation.
