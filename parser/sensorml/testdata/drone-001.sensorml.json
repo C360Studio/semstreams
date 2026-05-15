@@ -1,0 +1,63 @@
+{
+    "type": "PhysicalSystem",
+    "id": "drone-001",
+    "label": "Quadcopter Drone 001",
+    "description": "Reference UAV platform used in Phase 5 fixture",
+    "definition": "http://www.w3.org/ns/sosa/Platform",
+    "identifiers": [
+        {
+            "definition": "http://sensorml.com/ont/swe/property/SerialNumber",
+            "label": "Serial Number",
+            "value": "SN-12345"
+        },
+        {
+            "definition": "http://sensorml.com/ont/swe/property/CallSign",
+            "label": "Call Sign",
+            "value": "ALPHA-1"
+        }
+    ],
+    "capabilities": [
+        {
+            "definition": "http://sensorml.com/ont/swe/property/MaxAltitude",
+            "label": "Maximum operating altitude",
+            "value": 500,
+            "uom": "m"
+        }
+    ],
+    "characteristics": [
+        {
+            "definition": "http://sensorml.com/ont/swe/property/PayloadMass",
+            "label": "Payload mass capacity",
+            "value": 2.5,
+            "uom": "kg"
+        }
+    ],
+    "components": [
+        {
+            "type": "PhysicalComponent",
+            "id": "battery-sensor",
+            "label": "Battery telemetry sensor",
+            "definition": "http://www.w3.org/ns/sosa/Sensor",
+            "method": {
+                "href": "http://example.org/procedures/voltmeter",
+                "title": "Voltage measurement procedure"
+            }
+        },
+        {
+            "type": "PhysicalComponent",
+            "id": "gps-receiver",
+            "label": "GPS receiver",
+            "definition": "http://www.w3.org/ns/sosa/Sensor",
+            "method": {
+                "href": "http://example.org/procedures/gnss-fix",
+                "title": "GNSS positioning procedure"
+            }
+        }
+    ],
+    "connections": [
+        {
+            "source": "battery-sensor/output/voltage",
+            "destination": "controller/input/batteryLevel"
+        }
+    ]
+}
