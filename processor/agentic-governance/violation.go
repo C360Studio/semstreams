@@ -89,20 +89,35 @@ func NewViolationHandler(config ViolationConfig, nc *natsclient.Client, logger *
 	}
 }
 
-// Handle processes a violation
+// Handle processes a violation. Shadow-mode violations (Action ==
+// ViolationActionFlagged, used by ADR-043 Phase 2 classifier shadow
+// mode) still emit the audit event + publish so observability and
+// downstream rule consumers can see the verdict, but skip the
+// user-facing notification and admin alert paths — operators are
+// not yet ready to act on shadow-mode results, that's the whole
+// point of shadow mode.
 func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) error {
+	shadow := violation.Action == ViolationActionFlagged
+
 	// Record metrics
 	if h.metrics != nil {
 		h.metrics.recordViolation(violation.FilterName, violation.Severity)
 	}
 
 	// Log the violation
-	h.logger.Warn("Policy violation detected",
+	logFn := h.logger.Warn
+	if shadow {
+		// Shadow verdicts are info-level: operators expect them
+		// during calibration and they don't pollute Warn-watchers.
+		logFn = h.logger.Info
+	}
+	logFn("Policy violation detected",
 		"violation_id", violation.ID,
 		"filter", violation.FilterName,
 		"severity", violation.Severity,
 		"user_id", violation.UserID,
 		"action", violation.Action,
+		"shadow", shadow,
 	)
 
 	// Skip NATS operations if client is nil (unit testing)
@@ -110,7 +125,9 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 		return nil
 	}
 
-	// Store in KV if configured
+	// Store in KV if configured. Shadow-mode verdicts still land
+	// in the audit store — the whole point of calibration is to
+	// review what would have been blocked.
 	if h.config.Store != "" {
 		if err := h.storeViolation(ctx, violation); err != nil {
 			h.logger.Error("Failed to store violation", "error", err, "violation_id", violation.ID)
@@ -118,17 +135,22 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 		}
 	}
 
-	// Notify user if configured
-	if h.config.NotifyUser {
-		if err := h.notifyUser(ctx, violation); err != nil {
-			h.logger.Error("Failed to notify user", "error", err, "violation_id", violation.ID)
+	if !shadow {
+		// Notify user if configured. Skipped in shadow mode —
+		// the user took no action that warrants a message back.
+		if h.config.NotifyUser {
+			if err := h.notifyUser(ctx, violation); err != nil {
+				h.logger.Error("Failed to notify user", "error", err, "violation_id", violation.ID)
+			}
 		}
-	}
 
-	// Alert admins if severity warrants
-	if h.shouldAlertAdmin(violation.Severity) {
-		if err := h.alertAdmin(ctx, violation); err != nil {
-			h.logger.Error("Failed to alert admin", "error", err, "violation_id", violation.ID)
+		// Alert admins if severity warrants. Skipped in shadow
+		// mode — admin paging on calibration noise defeats the
+		// purpose.
+		if h.shouldAlertAdmin(violation.Severity) {
+			if err := h.alertAdmin(ctx, violation); err != nil {
+				h.logger.Error("Failed to alert admin", "error", err, "violation_id", violation.ID)
+			}
 		}
 	}
 

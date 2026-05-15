@@ -1,0 +1,34 @@
+version: "3"
+
+# ADR-043 (prompt-injection embedding classifier) measurement targets.
+#
+# These tasks invoke cmd/measure-injection-classifier against the
+# vendored seed (smoke / regression target) or against an
+# operator-supplied corpus (real per-deployment measurement).
+
+tasks:
+  measure:
+    desc: |
+      Smoke-run the ADR-043 measurement harness against the vendored
+      internal_seed_v0.jsonl. Output is the noise floor for the
+      Phase 2 seed and a regression target for the loader and
+      classifier.
+    cmds:
+      - go run ./cmd/measure-injection-classifier
+          --corpus processor/agentic-governance/injection_corpus/testdata/internal_seed_v0.jsonl
+          --self-eval
+          --threshold 0.30
+
+  measure:eval:
+    desc: |
+      Run the harness against an operator-supplied holdout eval
+      corpus. Requires CORPUS=... and EVAL=... environment vars.
+      Example:
+        CORPUS=corpora/prod.jsonl EVAL=corpora/holdout.jsonl task adr043:measure:eval
+    cmds:
+      - test -n "{{.CORPUS}}" || { echo "CORPUS env var required"; exit 1; }
+      - test -n "{{.EVAL}}" || { echo "EVAL env var required"; exit 1; }
+      - go run ./cmd/measure-injection-classifier
+          --corpus {{.CORPUS}}
+          --eval-corpus {{.EVAL}}
+          --threshold {{.THRESHOLD | default "0.70"}}

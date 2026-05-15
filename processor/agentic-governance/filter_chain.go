@@ -98,12 +98,21 @@ func (fc *FilterChain) Process(ctx context.Context, msg *Message) (*ChainResult,
 			result.Modifications = append(result.Modifications, filter.Name())
 		}
 
+		// Collect violations regardless of Allowed. ADR-043
+		// shadow-mode filters return Allowed=true with a Violation
+		// attached (action=Flagged); those still need to surface
+		// in the chain result so the handler emits the audit
+		// event and downstream rules can react. Decoupling
+		// violation collection from the block-or-not decision
+		// here is the only correct shape for log-only / shadow
+		// patterns.
+		if filterResult.Violation != nil {
+			result.Violations = append(result.Violations, filterResult.Violation)
+		}
+
 		// Handle blocked messages
 		if !filterResult.Allowed {
 			result.Allowed = false
-			if filterResult.Violation != nil {
-				result.Violations = append(result.Violations, filterResult.Violation)
-			}
 
 			// Apply violation policy
 			switch fc.Policy {
@@ -224,7 +233,7 @@ func BuildFromConfig(config FilterChainConfig, metrics *governanceMetrics) (*Fil
 			continue
 		}
 
-		filter, err := createFilter(filterConfig)
+		filter, err := createFilter(filterConfig, metrics)
 		if err != nil {
 			return nil, errs.WrapInvalid(err, "FilterChain", "BuildFromConfig", fmt.Sprintf("create filter %s", filterConfig.Name))
 		}
@@ -235,8 +244,11 @@ func BuildFromConfig(config FilterChainConfig, metrics *governanceMetrics) (*Fil
 	return chain, nil
 }
 
-// createFilter creates a filter from configuration
-func createFilter(config FilterConfig) (Filter, error) {
+// createFilter creates a filter from configuration. metrics may be
+// nil; filters that need it (currently only injection_classifier)
+// guard accordingly. Most filters rely on the chain-level metrics
+// already in place and ignore this handle.
+func createFilter(config FilterConfig, metrics *governanceMetrics) (Filter, error) {
 	switch config.Name {
 	case "pii_redaction":
 		piiConfig := config.PIIConfig
@@ -251,6 +263,14 @@ func createFilter(config FilterConfig) (Filter, error) {
 			injectionConfig = DefaultInjectionConfig()
 		}
 		return NewInjectionFilter(injectionConfig)
+
+	case "injection_classifier":
+		// ADR-043 Phase 2. Peer to injection_detection (regex);
+		// runs as its own filter slot so the chain decides
+		// ordering and operators disable either tier
+		// independently. Validate() already enforced that
+		// ClassifierConfig is present and well-formed.
+		return NewInjectionClassifierFilter(config.ClassifierConfig, metrics)
 
 	case "content_moderation":
 		contentConfig := config.ContentConfig

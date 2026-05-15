@@ -27,6 +27,50 @@
           "items": {
             "type": "object",
             "properties": {
+              "classifier_config": {
+                "type": "object",
+                "description": "Embedding classifier configuration (ADR-043 Phase 2)",
+                "category": "advanced",
+                "properties": {
+                  "corpus_sources": {
+                    "type": "array",
+                    "description": "Corpus files to load",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "domain": {
+                          "type": "string",
+                          "description": "Tag identifying this corpus",
+                          "category": "basic"
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "JSONL file path",
+                          "category": "basic"
+                        },
+                        "version": {
+                          "type": "string",
+                          "description": "Corpus revision",
+                          "category": "basic"
+                        }
+                      }
+                    },
+                    "category": "advanced"
+                  },
+                  "shadow_mode": {
+                    "type": "boolean",
+                    "description": "Emit verdict but never block (calibration mode)",
+                    "default": true,
+                    "category": "basic"
+                  },
+                  "threshold": {
+                    "type": "number",
+                    "description": "Cosine-similarity floor for a positive match (0.0-1.0)",
+                    "default": 0.7,
+                    "category": "basic"
+                  }
+                }
+              },
               "content_config": {
                 "type": "object",
                 "description": "Content filter configuration",
@@ -171,7 +215,7 @@
               },
               "name": {
                 "type": "string",
-                "description": "Filter name (pii_redaction injection_detection content_moderation rate_limiting tool_call_governance)",
+                "description": "Filter name (pii_redaction injection_detection injection_classifier content_moderation rate_limiting tool_call_governance)",
                 "category": "basic"
               },
               "pii_config": {
