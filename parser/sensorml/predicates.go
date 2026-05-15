@@ -1,0 +1,116 @@
+package sensorml
+
+import (
+	"github.com/c360studio/semstreams/vocabulary"
+	"github.com/c360studio/semstreams/vocabulary/sosa"
+)
+
+// Predicate name constants for the dotted-name SemStreams
+// convention. Each is registered to its SOSA/SSN IRI in init()
+// so that RDF/Turtle export through vocabulary/export emits the
+// compacted sosa:/ssn: forms automatically.
+const (
+	// PredType is the RDF type assertion (sosa class IRI).
+	PredType = "sensorml.process.type"
+
+	// PredLabel pairs to dc:title for the SensorML label field.
+	PredLabel = "sensorml.process.label"
+
+	// PredDescription pairs to dc:description.
+	PredDescription = "sensorml.process.description"
+
+	// PredDefinition pairs to the entity's SOSA-aligned class IRI.
+	PredDefinition = "sensorml.process.definition"
+
+	// PredHosts maps PhysicalSystem → child PhysicalComponent
+	// (sosa:hosts).
+	PredHosts = "sensorml.system.hosts"
+
+	// PredIsHostedBy is the inverse of PredHosts.
+	PredIsHostedBy = "sensorml.component.isHostedBy"
+
+	// PredHasSubSystem maps an AggregateProcess to its child
+	// processes (ssn:hasSubSystem).
+	PredHasSubSystem = "sensorml.process.hasSubSystem"
+
+	// PredUsedProcedure maps a PhysicalComponent / SimpleProcess
+	// to the method reference (sosa:usedProcedure).
+	PredUsedProcedure = "sensorml.process.usedProcedure"
+
+	// PredAttachedTo records the SensorML attachedTo reference —
+	// "I am physically mounted on this thing". Maps to
+	// sosa:isHostedBy (the inverse of sosa:hosts), NOT
+	// ssn:hasDeployment — deployment is a temporal-spatial-
+	// purpose context, while attachedTo is a hardware mounting
+	// link. Operators modeling explicit deployment contexts
+	// should introduce a separate predicate targeting
+	// ssn:hasDeployment when that capability lands.
+	PredAttachedTo = "sensorml.process.attachedTo"
+
+	// PredIdentifierValue carries a flat identifier value
+	// (typically a serial number, registration ID, or callsign).
+	// Maps to skos:notation.
+	PredIdentifierValue = "sensorml.identifier.value"
+
+	// PredCapabilityValue carries a capability-list entry's value
+	// (operating range, performance bound).
+	PredCapabilityValue = "sensorml.capability.value"
+
+	// PredCharacteristicValue carries a characteristic-list
+	// entry's value (physical property of the device).
+	PredCharacteristicValue = "sensorml.characteristic.value"
+)
+
+// init registers every dotted predicate this package emits with
+// the global predicate registry, binding each to its SOSA / SSN
+// / SKOS IRI. Importing the package runs this; downstream RDF
+// export gets compacted sosa:/ssn: forms without extra wiring.
+//
+// Pre-existing IRI constants in vocabulary/standards.go cover the
+// SKOS / DC bindings; vocabulary/sosa covers SOSA + SSN.
+func init() {
+	vocabulary.Register(PredType,
+		vocabulary.WithIRI("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"))
+	vocabulary.Register(PredLabel, vocabulary.WithIRI(vocabulary.DcTitle))
+	vocabulary.Register(PredDescription,
+		vocabulary.WithIRI("http://purl.org/dc/terms/description"))
+	vocabulary.Register(PredDefinition,
+		vocabulary.WithIRI("http://www.w3.org/2000/01/rdf-schema#isDefinedBy"))
+
+	vocabulary.Register(PredHosts, vocabulary.WithIRI(sosa.Hosts))
+	vocabulary.Register(PredIsHostedBy, vocabulary.WithIRI(sosa.IsHostedBy))
+	vocabulary.Register(PredHasSubSystem, vocabulary.WithIRI(sosa.SSNHasSubSystem))
+	vocabulary.Register(PredUsedProcedure, vocabulary.WithIRI(sosa.UsedProcedure))
+	vocabulary.Register(PredAttachedTo, vocabulary.WithIRI(sosa.IsHostedBy))
+
+	vocabulary.Register(PredIdentifierValue, vocabulary.WithIRI(vocabulary.SkosNotation))
+	// Capability and characteristic both bind to ssn:hasProperty:
+	// SOSA/SSN does not carry top-level predicates that split
+	// "performance bound" (capability) from "physical property"
+	// (characteristic). The discrimination survives via the
+	// SensorML-side Term.Definition field, which downstream
+	// rule / SPARQL consumers can use to refine.
+	vocabulary.Register(PredCapabilityValue,
+		vocabulary.WithIRI("http://www.w3.org/ns/ssn/hasProperty"))
+	vocabulary.Register(PredCharacteristicValue,
+		vocabulary.WithIRI("http://www.w3.org/ns/ssn/hasProperty"))
+}
+
+// processClassIRI returns the SOSA class IRI that best matches
+// the given SensorML process type. The IRI is what rdf:type
+// triples point at — PhysicalSystem → ssn:System, PhysicalComponent
+// → sosa:Sensor (default; deployers can override via the SensorML
+// definition field), SimpleProcess / AggregateProcess →
+// sosa:Procedure.
+func processClassIRI(process Process) string {
+	switch process.(type) {
+	case *PhysicalSystem:
+		return sosa.SSNSystem
+	case *PhysicalComponent:
+		return sosa.Sensor
+	case *SimpleProcess, *AggregateProcess:
+		return sosa.Procedure
+	default:
+		return ""
+	}
+}
