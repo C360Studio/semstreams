@@ -63,3 +63,4 @@ cmd/e2e/test/e2e/results/*.txt
 /e2e
 /e2e-semstreams
 /measure-injection-classifier
+/detonate-injections
