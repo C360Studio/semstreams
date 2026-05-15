@@ -284,6 +284,7 @@ Rejected as out-of-scope but worth noting: OSH is the dominant open-source CS AP
 - ADR-039: Tool-call governance — rule-driven
 - ADR-042: OASF taxonomy adoption (pattern this ADR mirrors for SOSA/SWE/OMS sub-packages)
 - ADR-043: Prompt-injection defense via detonation corpus (parallel doc-only ADR; orthogonal scope)
+- [`docs/operations/21-adr044-framework-primitives-reference.md`](../operations/21-adr044-framework-primitives-reference.md) — reference for Phase 2-6 primitives + CS API endpoint composition (Phase 7 deliverable)
 - `vocabulary/standards.go:465-471` (existing ad-hoc SOSA constants that Phase 2 formalizes)
 - `vocabulary/export/prefix.go:21-22` (existing SOSA/SSN prefix registrations)
 - `processor/graph-index-spatial/` (point-only spatial index that Phase 3 extends)
