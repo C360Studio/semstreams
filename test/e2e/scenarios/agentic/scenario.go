@@ -166,6 +166,11 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-a2a-adapter", s.verifyA2AAdapter},
 		{"verify-a2a-task-lifecycle", s.verifyA2ATaskLifecycle},
 		{"verify-otel-export", s.verifyOTELExport},
+		// Opt-in: only runs when AGNTCY_HUB_AUTH env is set. Publishes
+		// to a real AGNTCY-conformant directory (default
+		// prod.api.ads.outshift.io:443). Default CI skips cleanly.
+		// See verifyAGNTCYHubPublish godoc for required env vars.
+		{"verify-agntcy-hub-publish", s.verifyAGNTCYHubPublish},
 	}
 
 	for _, stage := range stages {
