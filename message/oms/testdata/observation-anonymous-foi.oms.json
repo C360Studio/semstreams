@@ -1,0 +1,18 @@
+{
+    "type": "Observation",
+    "id": "acme.ops.surveying.lidar.scan.session.42/obs/00101",
+    "procedure": "http://example.org/procedures/lidar-pulse",
+    "observedProperty": "http://example.org/properties/surface-reflectance",
+    "featureOfInterest": {
+        "type": "Feature",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [-122.4194, 37.7749]
+        },
+        "properties": {
+            "label": "Anonymous scan cell"
+        }
+    },
+    "resultTime": "2026-05-15T15:02:00Z",
+    "result": 0.39
+}

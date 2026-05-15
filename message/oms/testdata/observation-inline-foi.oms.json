@@ -1,0 +1,19 @@
+{
+    "type": "Observation",
+    "id": "acme.ops.surveying.lidar.scan.session.42/obs/00099",
+    "procedure": "http://example.org/procedures/lidar-pulse",
+    "observedProperty": "http://example.org/properties/surface-reflectance",
+    "featureOfInterest": {
+        "type": "Feature",
+        "id": "scan-cell-7",
+        "geometry": {
+            "type": "Point",
+            "coordinates": [-122.4194, 37.7749]
+        },
+        "properties": {
+            "label": "San Francisco scan cell 7"
+        }
+    },
+    "resultTime": "2026-05-15T15:00:00Z",
+    "result": 0.42
+}
