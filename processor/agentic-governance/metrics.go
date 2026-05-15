@@ -33,6 +33,16 @@ type governanceMetrics struct {
 
 	// Messages processed by type and result
 	messagesProcessed *prometheus.CounterVec
+
+	// Embedding-classifier decisions by verdict and signal bucket
+	// (ADR-043 Phase 2). Signal label is constrained to the ADR-043
+	// enum + "unknown" + "no_match" so cardinality is bounded.
+	classifierDecisions *prometheus.CounterVec
+
+	// Embedding-classifier similarity scores. Buckets concentrate
+	// near 1.0 because cosine similarity above 0.5 is the
+	// interesting range.
+	classifierScore prometheus.Histogram
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -101,6 +111,21 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 				Name:      "messages_processed_total",
 				Help:      "Messages processed by type and result",
 			}, []string{"message_type", "result"}),
+
+			classifierDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "governance",
+				Name:      "injection_classifier_decisions_total",
+				Help:      "Injection classifier decisions by verdict (allow/shadow/block) and signal bucket",
+			}, []string{"verdict", "signal"}),
+
+			classifierScore: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "governance",
+				Name:      "injection_classifier_score",
+				Help:      "Best-match cosine similarity score per classifier invocation",
+				Buckets:   []float64{0.1, 0.3, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99},
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -113,6 +138,8 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 			_ = registry.RegisterCounterVec("agentic-governance", "content_moderated_total", metrics.contentModerated)
 			_ = registry.RegisterCounterVec("agentic-governance", "rate_limit_exceeded_total", metrics.rateLimitExceeded)
 			_ = registry.RegisterCounterVec("agentic-governance", "messages_processed_total", metrics.messagesProcessed)
+			_ = registry.RegisterCounterVec("agentic-governance", "injection_classifier_decisions_total", metrics.classifierDecisions)
+			_ = registry.RegisterHistogram("agentic-governance", "injection_classifier_score", metrics.classifierScore)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.filterTotal)
@@ -123,9 +150,23 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contentModerated)
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitExceeded)
 			_ = prometheus.DefaultRegisterer.Register(metrics.messagesProcessed)
+			_ = prometheus.DefaultRegisterer.Register(metrics.classifierDecisions)
+			_ = prometheus.DefaultRegisterer.Register(metrics.classifierScore)
 		}
 	})
 	return metrics
+}
+
+// recordClassifierDecision records a Phase 2 injection-classifier
+// verdict. verdict is one of "allow", "shadow", "block"; signal is
+// one of the ADR-043 buckets, "benign", "no_match", or "unknown".
+func (m *governanceMetrics) recordClassifierDecision(verdict, signal string) {
+	m.classifierDecisions.WithLabelValues(verdict, signal).Inc()
+}
+
+// recordClassifierScore records a similarity score sample.
+func (m *governanceMetrics) recordClassifierScore(score float64) {
+	m.classifierScore.Observe(score)
 }
 
 // recordFilterResult records filter invocation result.

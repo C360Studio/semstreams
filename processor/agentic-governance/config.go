@@ -41,7 +41,7 @@ const (
 
 // FilterConfig holds configuration for a single filter
 type FilterConfig struct {
-	Name    string `json:"name" schema:"type:string,description:Filter name (pii_redaction injection_detection content_moderation rate_limiting tool_call_governance),category:basic"`
+	Name    string `json:"name" schema:"type:string,description:Filter name (pii_redaction injection_detection injection_classifier content_moderation rate_limiting tool_call_governance),category:basic"`
 	Enabled bool   `json:"enabled" schema:"type:bool,description:Whether this filter is enabled,category:basic,default:true"`
 
 	// PII filter config
@@ -49,6 +49,12 @@ type FilterConfig struct {
 
 	// Injection filter config
 	InjectionConfig *InjectionFilterConfig `json:"injection_config,omitempty" schema:"type:object,description:Injection filter configuration,category:advanced"`
+
+	// Injection classifier (embedding tier) config — ADR-043 Phase 2.
+	// Peer to InjectionConfig; the regex tier and the classifier
+	// tier are separate filter slots so the chain orders them and
+	// operators disable either independently.
+	ClassifierConfig *InjectionClassifierConfig `json:"classifier_config,omitempty" schema:"type:object,description:Embedding classifier configuration (ADR-043 Phase 2),category:advanced"`
 
 	// Content filter config
 	ContentConfig *ContentFilterConfig `json:"content_config,omitempty" schema:"type:object,description:Content filter configuration,category:advanced"`
@@ -137,6 +143,13 @@ func (f *FilterConfig) Validate() error {
 			if err := f.InjectionConfig.Validate(); err != nil {
 				return errs.WrapInvalid(err, "FilterConfig", "Validate", "validate injection_config")
 			}
+		}
+	case "injection_classifier":
+		if f.ClassifierConfig == nil {
+			return errs.WrapInvalid(fmt.Errorf("classifier_config is required for injection_classifier filter"), "FilterConfig", "Validate", "validate classifier_config presence")
+		}
+		if err := f.ClassifierConfig.Validate(); err != nil {
+			return errs.WrapInvalid(err, "FilterConfig", "Validate", "validate classifier_config")
 		}
 	case "content_moderation":
 		if f.ContentConfig != nil {
