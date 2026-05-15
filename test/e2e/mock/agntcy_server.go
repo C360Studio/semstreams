@@ -47,13 +47,20 @@ type AGNTCYServer struct {
 	requestCount int64
 }
 
-// AgentRegistration represents a registered agent.
+// AgentRegistration represents a registered agent. Field/JSON-tag
+// shape matches directory-bridge's production wire (see
+// output/directory-bridge/client.go RegistrationRequest). Pre-fix the
+// mock used agent_id + string TTL, neither of which the bridge sends —
+// every registration landed with empty AgentDID and dropped TTL, and
+// the verify-directory-bridge e2e stage silently warned to timeout
+// for the entire ADR-042 arc.
 type AgentRegistration struct {
-	AgentID       string         `json:"agent_id"`
+	AgentDID      string         `json:"agent_did"`
 	OASFRecord    map[string]any `json:"oasf_record"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 	RegisteredAt  time.Time      `json:"registered_at"`
 	LastHeartbeat time.Time      `json:"last_heartbeat"`
-	TTL           string         `json:"ttl"`
+	TTLSeconds    int            `json:"ttl_seconds"`
 }
 
 // NewAGNTCYServer creates a new mock AGNTCY server.
@@ -75,10 +82,16 @@ func (s *AGNTCYServer) setupRoutes() {
 	// Health endpoint
 	s.mux.HandleFunc("/health", s.handleHealth)
 
-	// Directory endpoints
-	s.mux.HandleFunc("/v1/agents/register", s.handleRegister)
-	s.mux.HandleFunc("/v1/agents/heartbeat", s.handleHeartbeat)
-	s.mux.HandleFunc("/v1/agents", s.handleListAgents)
+	// Directory endpoints — paths mirror the production wire that
+	// output/directory-bridge.DirectoryClient drives:
+	//   POST   /v1/agents                              (register)
+	//   POST   /v1/agents/{registration_id}/heartbeat
+	//   DELETE /v1/agents/{registration_id}            (deregister)
+	//   GET    /v1/agents                              (list, e2e-only)
+	s.mux.HandleFunc("POST /v1/agents", s.handleRegister)
+	s.mux.HandleFunc("POST /v1/agents/{id}/heartbeat", s.handleHeartbeat)
+	s.mux.HandleFunc("DELETE /v1/agents/{id}", s.handleDeregister)
+	s.mux.HandleFunc("GET /v1/agents", s.handleListAgents)
 
 	// Stats endpoint for e2e assertions
 	s.mux.HandleFunc("/stats", s.handleStats)
@@ -157,68 +170,112 @@ func (s *AGNTCYServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Payload matches output/directory-bridge.RegistrationRequest:
+	// agent_did (DID string), oasf_record (record body), ttl as int
+	// seconds, metadata (carries semstreams_entity_id for correlation
+	// with the source agent entity).
 	var req struct {
-		AgentID    string         `json:"agent_id"`
+		AgentDID   string         `json:"agent_did"`
 		OASFRecord map[string]any `json:"oasf_record"`
-		TTL        string         `json:"ttl"`
+		TTL        int            `json:"ttl"`
+		Metadata   map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
+	// Generate a server-side registration_id so the mock matches the
+	// production directory contract — directory-bridge expects
+	// resp.RegistrationID + resp.ExpiresAt back to drive Refresh /
+	// Withdraw. Pre-fix the mock returned agent_id only; bridge then
+	// stored an empty RegistrationID and every subsequent heartbeat
+	// 404'd silently.
+	regID := "reg-" + req.AgentDID
+
 	s.registrationsMu.Lock()
-	s.registrations[req.AgentID] = &AgentRegistration{
-		AgentID:       req.AgentID,
+	s.registrations[regID] = &AgentRegistration{
+		AgentDID:      req.AgentDID,
 		OASFRecord:    req.OASFRecord,
+		Metadata:      req.Metadata,
 		RegisteredAt:  time.Now(),
 		LastHeartbeat: time.Now(),
-		TTL:           req.TTL,
+		TTLSeconds:    req.TTL,
 	}
 	s.registrationsMu.Unlock()
 
-	log.Printf("[AGNTCY Mock] Agent registered: %s", req.AgentID)
+	log.Printf("[AGNTCY Mock] Agent registered: did=%s registration_id=%s", req.AgentDID, regID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":     "registered",
-		"agent_id":   req.AgentID,
-		"expires_at": time.Now().Add(5 * time.Minute).Format(time.RFC3339),
+		"success":         true,
+		"registration_id": regID,
+		"expires_at":      time.Now().Add(time.Duration(req.TTL) * time.Second).Format(time.RFC3339),
 	})
 }
 
 func (s *AGNTCYServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&s.requestCount, 1)
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	// Registration ID comes from the path (mirrors production:
+	// DirectoryClient.Heartbeat POSTs to /v1/agents/{id}/heartbeat).
+	regID := r.PathValue("id")
+	if regID == "" {
+		http.Error(w, "registration_id required in path", http.StatusBadRequest)
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
-		return
-	}
-
-	var req struct {
-		AgentID string `json:"agent_id"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
+	// Body is optional — DirectoryClient sends {registration_id, agent_did}
+	// but the mock only needs the path-extracted ID. Drain to keep the
+	// connection clean.
+	_, _ = io.ReadAll(r.Body)
 
 	s.registrationsMu.Lock()
-	if reg, ok := s.registrations[req.AgentID]; ok {
+	reg, ok := s.registrations[regID]
+	if ok {
 		reg.LastHeartbeat = time.Now()
 	}
 	s.registrationsMu.Unlock()
 
+	if !ok {
+		http.Error(w, "registration not found", http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status": "ok",
+		"success":    true,
+		"expires_at": time.Now().Add(time.Duration(reg.TTLSeconds) * time.Second).Format(time.RFC3339),
 	})
+}
+
+// handleDeregister removes a registration by ID — mirrors production
+// DirectoryClient.Deregister which DELETEs /v1/agents/{registration_id}.
+// Pre-fix the docker-stack mock had no DELETE route at all, so every
+// Deregister call from the bridge 404'd silently.
+func (s *AGNTCYServer) handleDeregister(w http.ResponseWriter, r *http.Request) {
+	atomic.AddInt64(&s.requestCount, 1)
+
+	regID := r.PathValue("id")
+	if regID == "" {
+		http.Error(w, "registration_id required in path", http.StatusBadRequest)
+		return
+	}
+
+	s.registrationsMu.Lock()
+	_, ok := s.registrations[regID]
+	delete(s.registrations, regID)
+	s.registrationsMu.Unlock()
+
+	if !ok {
+		// 404 is the appropriate response, but the bridge's
+		// Deregister treats any non-2xx as an error. Many directories
+		// return 204 for "gone already" — match that behaviour so
+		// idempotent withdraws don't fail.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *AGNTCYServer) handleListAgents(w http.ResponseWriter, _ *http.Request) {

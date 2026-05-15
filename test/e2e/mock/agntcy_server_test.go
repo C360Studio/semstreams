@@ -2,6 +2,7 @@ package mock
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,8 +10,98 @@ import (
 	"testing"
 	"time"
 
+	directorybridge "github.com/c360studio/semstreams/output/directory-bridge"
 	otel "github.com/c360studio/semstreams/output/otel"
+	oasfgenerator "github.com/c360studio/semstreams/processor/oasf-generator"
 )
+
+// TestAGNTCYServer_DirectoryRoundTrip drives the production
+// DirectoryClient against the mock to confirm the wire shape matches
+// end-to-end: Register → Heartbeat → Deregister all succeed, and the
+// stored AgentRegistration carries the agent_did, oasf_record, and
+// metadata.semstreams_entity_id that the bridge sends. Pre-fix the
+// mock expected agent_id + string TTL + a flat /heartbeat route, none
+// of which the bridge speaks; every registration silently landed with
+// empty fields and heartbeats / deregisters 404'd.
+func TestAGNTCYServer_DirectoryRoundTrip(t *testing.T) {
+	server := NewAGNTCYServer()
+	if err := server.Start(":0"); err != nil {
+		t.Fatalf("start mock server: %v", err)
+	}
+	defer server.Stop()
+
+	client := directorybridge.NewDirectoryClient(server.URL())
+	ctx := context.Background()
+
+	const (
+		agentDID = "did:semstreams:test-roundtrip"
+		entityID = "acme.ops.agentic.system.agent.roundtrip"
+	)
+	regResp, err := client.Register(ctx, &directorybridge.RegistrationRequest{
+		AgentDID: agentDID,
+		OASFRecord: &oasfgenerator.OASFRecord{
+			Name:          "roundtrip-test",
+			Version:       "1.0.0",
+			SchemaVersion: "1.0.0",
+		},
+		TTL: 300,
+		Metadata: map[string]any{
+			"semstreams_entity_id": entityID,
+			"source":               "semstreams",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if !regResp.Success || regResp.RegistrationID == "" {
+		t.Fatalf("Register response = %+v, want Success + non-empty RegistrationID", regResp)
+	}
+
+	// Mock should have stored the DID + metadata in its registration map.
+	regs := server.GetRegistrations()
+	stored, ok := regs[regResp.RegistrationID]
+	if !ok {
+		t.Fatalf("mock did not store registration_id %q (have %d entries)", regResp.RegistrationID, len(regs))
+	}
+	if stored.AgentDID != agentDID {
+		t.Errorf("stored AgentDID = %q, want %q", stored.AgentDID, agentDID)
+	}
+	if got, _ := stored.Metadata["semstreams_entity_id"].(string); got != entityID {
+		t.Errorf("stored Metadata[semstreams_entity_id] = %q, want %q", got, entityID)
+	}
+	if stored.TTLSeconds != 300 {
+		t.Errorf("stored TTLSeconds = %d, want 300", stored.TTLSeconds)
+	}
+
+	// Heartbeat should hit /v1/agents/{id}/heartbeat and refresh LastHeartbeat.
+	before := stored.LastHeartbeat
+	time.Sleep(5 * time.Millisecond)
+	hbResp, err := client.Heartbeat(ctx, &directorybridge.HeartbeatRequest{
+		RegistrationID: regResp.RegistrationID,
+		AgentDID:       agentDID,
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if !hbResp.Success {
+		t.Errorf("Heartbeat Success = false: %s", hbResp.Error)
+	}
+	stored = server.GetRegistrations()[regResp.RegistrationID]
+	if !stored.LastHeartbeat.After(before) {
+		t.Errorf("LastHeartbeat not advanced: before=%v after=%v", before, stored.LastHeartbeat)
+	}
+
+	// Deregister should remove the entry.
+	if err := client.Deregister(ctx, &directorybridge.DeregistrationRequest{
+		RegistrationID: regResp.RegistrationID,
+		AgentDID:       agentDID,
+	}); err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+	if _, stillThere := server.GetRegistrations()[regResp.RegistrationID]; stillThere {
+		t.Error("registration still present after Deregister")
+	}
+}
 
 // TestAGNTCYServer_OTELTracesStructuralParse drives an end-to-end loop:
 // build a SpanData (the same shape semstreams's span collector produces) →
