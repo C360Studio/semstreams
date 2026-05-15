@@ -380,7 +380,12 @@ func (s *Scenario) verifyDirectoryBridge(ctx context.Context, result *scenarios.
 	}
 
 	result.Details["agntcy_directory_registered"] = true
-	result.Details["agntcy_directory_agent_id"] = reg.AgentID
+	result.Details["agntcy_directory_agent_did"] = reg.AgentDID
+	if reg.Metadata != nil {
+		if eid, ok := reg.Metadata["semstreams_entity_id"].(string); ok {
+			result.Details["agntcy_directory_entity_id"] = eid
+		}
+	}
 
 	return nil
 }
