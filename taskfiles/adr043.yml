@@ -32,3 +32,52 @@ tasks:
           --corpus {{.CORPUS}}
           --eval-corpus {{.EVAL}}
           --threshold {{.THRESHOLD | default "0.70"}}
+
+  proof:
+    desc: |
+      Phase 3d first-user proof: runs the measurement harness twice —
+      first against the Phase 2 baseline seed alone, then against
+      the seed + synthetic detonator output — to demonstrate the
+      wire-up end-to-end. The synthetic detonator file mimics what
+      a real canary run would produce; operators rerun with real
+      detonator output for generalization claims.
+    cmds:
+      - 'echo "=== BASELINE (seed only) ==="'
+      - go run ./cmd/measure-injection-classifier
+          --corpus processor/agentic-governance/injection_corpus/testdata/internal_seed_v0.jsonl
+          --self-eval
+          --threshold 0.30
+      - 'echo ""'
+      - 'echo "=== AUGMENTED (seed + synthetic detonator output) ==="'
+      - go run ./cmd/measure-injection-classifier
+          --corpus processor/agentic-governance/injection_corpus/testdata/internal_seed_v0.jsonl
+          --corpus processor/agentic-governance/injection_corpus/testdata/detonator_synthetic_phase3d.jsonl
+          --self-eval
+          --threshold 0.30
+
+  detonate:
+    desc: |
+      Run the ADR-043 Phase 3 detonator against a batch of
+      unlabeled inputs. Requires INPUT=... (JSONL of {id, text}),
+      OUTPUT=... (JSONL of labeled corpus records), and
+      ENDPOINT=... (JSON file with model.EndpointConfig for the
+      canary model). Idempotent across re-runs.
+      Example:
+        INPUT=corpora/scrape.jsonl \
+        OUTPUT=corpora/detonated.jsonl \
+        ENDPOINT=configs/canary.json \
+        task adr043:detonate
+    cmds:
+      - test -n "{{.INPUT}}" || { echo "INPUT env var required"; exit 1; }
+      - test -n "{{.OUTPUT}}" || { echo "OUTPUT env var required"; exit 1; }
+      - test -n "{{.ENDPOINT}}" || { echo "ENDPOINT env var required"; exit 1; }
+      - go run ./cmd/detonate-injections
+          --input {{.INPUT}}
+          --output {{.OUTPUT}}
+          --endpoint-config {{.ENDPOINT}}
+          --concurrency {{.CONCURRENCY | default "2"}}
+          --max-turns {{.MAX_TURNS | default "6"}}
+          --timeout {{.TIMEOUT | default "60s"}}
+          {{if .LIMIT}}--limit {{.LIMIT}}{{end}}
+          {{if .SYSTEM_PROMPT}}--system-prompt-file {{.SYSTEM_PROMPT}}{{end}}
+          {{if .VERBOSE}}--verbose{{end}}
