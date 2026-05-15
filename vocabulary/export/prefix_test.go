@@ -93,6 +93,50 @@ func TestPrefixMap_UsedPrefixMap(t *testing.T) {
 	}
 }
 
+func TestRegister_IdempotentSameNamespace(t *testing.T) {
+	// Re-registering an existing default with the same namespace is a no-op.
+	if err := Register("sosa", "http://www.w3.org/ns/sosa/"); err != nil {
+		t.Fatalf("Register sosa same namespace: %v", err)
+	}
+}
+
+func TestRegister_RejectsCollision(t *testing.T) {
+	err := Register("sosa", "https://example.org/different/")
+	if err == nil {
+		t.Fatalf("expected error rebinding sosa to a different namespace")
+	}
+}
+
+func TestRegister_RejectsEmpty(t *testing.T) {
+	if err := Register("", "http://example.org/"); err == nil {
+		t.Fatalf("expected error for empty prefix")
+	}
+	if err := Register("foo", ""); err == nil {
+		t.Fatalf("expected error for empty namespace")
+	}
+}
+
+func TestRegister_NewPrefixAppearsInSnapshot(t *testing.T) {
+	// Pick a prefix unlikely to collide with the defaults or sub-packages.
+	const probe = "test-register-probe"
+	const ns = "https://example.org/test-register-probe/"
+	if err := Register(probe, ns); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	// Cleanup is intentional: this is a registry of test fixtures and
+	// the next test run would see the leftover. We have no Unregister
+	// to keep the API surface narrow; reach into the private map.
+	t.Cleanup(func() {
+		defaultPrefixesMu.Lock()
+		delete(defaultPrefixes, probe)
+		defaultPrefixesMu.Unlock()
+	})
+	pm := newPrefixMap("")
+	if got := pm.namespaceFor(probe); got != ns {
+		t.Errorf("namespaceFor(%q) = %q, want %q", probe, got, ns)
+	}
+}
+
 func TestEnsureTrailingSlash(t *testing.T) {
 	tests := []struct {
 		input string
