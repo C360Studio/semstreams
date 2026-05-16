@@ -27,10 +27,13 @@ import (
 )
 
 var (
-	// entityIDRegex validates entity ID format: platform.namespace.type.subtype.instance.name
-	// Example: c360.platform1.robotics.gcs1.drone.1
+	// entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
+	// Each segment must start with [a-zA-Z0-9] and may continue with [a-zA-Z0-9_-].
+	// Kept in sync with processor/graph-ingest/component.go entityIDRegex —
+	// realistic instance segments like "sensor-042" or "warehouse-7" need hyphens.
+	// Example: c360.platform1.robotics.gcs1.drone.unit-1
 	entityIDRegex = regexp.MustCompile(
-		`^[a-zA-Z0-9]+\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+$`)
+		`^[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 )
 
 // Metrics holds Prometheus metrics for DataManager KV operations
