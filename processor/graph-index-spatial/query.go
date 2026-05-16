@@ -255,7 +255,7 @@ func (c *Component) handleQueryPolygonNATS(ctx context.Context, data []byte) ([]
 		return nil, errs.WrapInvalid(err, "Component", "handleQueryPolygonNATS", "invalid request envelope")
 	}
 	if len(req.Polygon) == 0 {
-		return nil, errs.WrapInvalid(nil, "Component", "handleQueryPolygonNATS", "missing \"polygon\" field")
+		return nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "handleQueryPolygonNATS", "missing \"polygon\" field")
 	}
 	if req.Limit <= 0 {
 		req.Limit = 100
@@ -272,14 +272,14 @@ func (c *Component) handleQueryPolygonNATS(ctx context.Context, data []byte) ([]
 	// issue separate polygon queries, then UNION the results.
 	poly, ok := geom.(geojson.Polygon)
 	if !ok {
-		return nil, errs.WrapInvalid(nil, "Component", "handleQueryPolygonNATS",
+		return nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "handleQueryPolygonNATS",
 			fmt.Sprintf("expected Polygon geometry, got %q", geom.Type()))
 	}
 	poly = poly.Normalize().(geojson.Polygon)
 
 	bbox := geojson.ComputeBBox(poly)
 	if len(bbox) != 4 {
-		return nil, errs.WrapInvalid(nil, "Component", "handleQueryPolygonNATS",
+		return nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "handleQueryPolygonNATS",
 			"polygon has no coordinates")
 	}
 
