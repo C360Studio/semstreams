@@ -41,10 +41,17 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 	return nil
 }
 
-// SpatialResult represents an entity found in spatial search
+// SpatialResult represents an entity found in spatial search. Lat/Lon/Alt
+// echo the indexed coordinates the filter just used to include the entity —
+// downstream consumers (CS API GeoJSON FeatureCollection, dashboards) get
+// geometry-bearing results without an N+1 round-trip per match. Alt is 0
+// when the indexed entity has no vertical component.
 type SpatialResult struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID   string  `json:"id"`
+	Type string  `json:"type"`
+	Lat  float64 `json:"lat"`
+	Lon  float64 `json:"lon"`
+	Alt  float64 `json:"alt,omitempty"`
 }
 
 // boundsRequest holds parsed spatial bounds query parameters
@@ -154,7 +161,13 @@ func (c *Component) collectSpatialResults(ctx context.Context, keys []string, re
 			if coords.Lat >= req.South && coords.Lat <= req.North &&
 				coords.Lon >= req.West && coords.Lon <= req.East {
 				seen[entityID] = true
-				results = append(results, SpatialResult{ID: entityID, Type: "entity"})
+				results = append(results, SpatialResult{
+					ID:   entityID,
+					Type: "entity",
+					Lat:  coords.Lat,
+					Lon:  coords.Lon,
+					Alt:  coords.Alt,
+				})
 				if len(results) >= req.Limit {
 					return results
 				}
@@ -378,7 +391,13 @@ func filterEntitiesByPolygon(cells []spatialCellData, poly geojson.Polygon, limi
 				continue
 			}
 			seen[entityID] = true
-			results = append(results, SpatialResult{ID: entityID, Type: "entity"})
+			results = append(results, SpatialResult{
+				ID:   entityID,
+				Type: "entity",
+				Lat:  coords.Lat,
+				Lon:  coords.Lon,
+				Alt:  coords.Alt,
+			})
 			if limit > 0 && len(results) >= limit {
 				return results
 			}
