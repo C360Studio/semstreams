@@ -262,6 +262,96 @@ func TestWrapClassified(t *testing.T) {
 	}
 }
 
+// TestWrapClassified_NilInnerSynthesizesFromAction proves GH #94: when the
+// caller has no upstream Go error to wrap but does have a validation action
+// message ("missing polygon field"), the wrap synthesizes a non-nil
+// classified error from the action rather than collapsing to nil and
+// silently presenting invalid input as success.
+func TestWrapClassified_NilInnerSynthesizesFromAction(t *testing.T) {
+	tests := []struct {
+		name     string
+		wrapFunc func(error, string, string, string) error
+		isClass  func(error) bool
+		class    ErrorClass
+	}{
+		{"WrapTransient", WrapTransient, IsTransient, ErrorTransient},
+		{"WrapFatal", WrapFatal, IsFatal, ErrorFatal},
+		{"WrapInvalid", WrapInvalid, IsInvalid, ErrorInvalid},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.wrapFunc(nil, "Component", "method", "missing required field")
+			if err == nil {
+				t.Fatalf("%s(nil, ..., %q) returned nil — silent-success regression", test.name, "missing required field")
+			}
+			if !test.isClass(err) {
+				t.Errorf("%s: expected class %v, got %v (err=%v)", test.name, test.class, Classify(err), err)
+			}
+			if !strings.Contains(err.Error(), "missing required field") {
+				t.Errorf("%s: synthesized error should preserve the action message, got: %s", test.name, err.Error())
+			}
+			if !strings.Contains(err.Error(), "Component.method") {
+				t.Errorf("%s: synthesized error should preserve component/method context, got: %s", test.name, err.Error())
+			}
+		})
+	}
+}
+
+// TestWrapClassified_NilInnerEmptyActionReturnsNil keeps the no-signal call
+// (nothing to wrap, no action diagnostic) as a true no-op. This is the only
+// path that should still return nil.
+func TestWrapClassified_NilInnerEmptyActionReturnsNil(t *testing.T) {
+	tests := []struct {
+		name     string
+		wrapFunc func(error, string, string, string) error
+	}{
+		{"WrapTransient", WrapTransient},
+		{"WrapFatal", WrapFatal},
+		{"WrapInvalid", WrapInvalid},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.wrapFunc(nil, "Component", "method", "")
+			if err != nil {
+				t.Errorf("%s(nil, ..., \"\") expected nil, got %v", test.name, err)
+			}
+		})
+	}
+}
+
+// TestWrapClassified_NonNilInnerUnchanged confirms the existing contract
+// for the typical case (real upstream error) is not regressed by the
+// nil-inner synthesis change.
+func TestWrapClassified_NonNilInnerUnchanged(t *testing.T) {
+	upstream := errors.New("upstream failure")
+	tests := []struct {
+		name     string
+		wrapFunc func(error, string, string, string) error
+		isClass  func(error) bool
+	}{
+		{"WrapTransient", WrapTransient, IsTransient},
+		{"WrapFatal", WrapFatal, IsFatal},
+		{"WrapInvalid", WrapInvalid, IsInvalid},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.wrapFunc(upstream, "Component", "method", "action")
+			if err == nil {
+				t.Fatalf("%s with non-nil inner returned nil", test.name)
+			}
+			if !errors.Is(err, upstream) {
+				t.Errorf("%s: wrapped error should unwrap to upstream, got: %v", test.name, err)
+			}
+			if !test.isClass(err) {
+				t.Errorf("%s: classification lost, got: %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestRetryConfig_ShouldRetry(t *testing.T) {
 	config := DefaultRetryConfig()
 

@@ -253,28 +253,46 @@ func Wrap(err error, component, method, action string) error {
 	return fmt.Errorf("%s.%s: %s failed: %w", component, method, action, err)
 }
 
-// WrapTransient wraps an error as transient with context
+// WrapTransient wraps an error as transient with context.
+// When err is nil and action is non-empty, synthesizes the error from action
+// so synchronous validation paths emit a non-nil classified error rather than
+// silently returning nil. nil+empty-action still returns nil.
 func WrapTransient(err error, component, method, action string) error {
 	if err == nil {
-		return nil
+		if action == "" {
+			return nil
+		}
+		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
 	return newClassified(ErrorTransient, wrappedErr, component, method, wrappedErr.Error())
 }
 
-// WrapFatal wraps an error as fatal with context
+// WrapFatal wraps an error as fatal with context.
+// When err is nil and action is non-empty, synthesizes the error from action
+// so synchronous validation paths emit a non-nil classified error rather than
+// silently returning nil. nil+empty-action still returns nil.
 func WrapFatal(err error, component, method, action string) error {
 	if err == nil {
-		return nil
+		if action == "" {
+			return nil
+		}
+		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
 	return newClassified(ErrorFatal, wrappedErr, component, method, wrappedErr.Error())
 }
 
-// WrapInvalid wraps an error as invalid with context
+// WrapInvalid wraps an error as invalid with context.
+// When err is nil and action is non-empty, synthesizes the error from action
+// so synchronous validation paths emit a non-nil classified error rather than
+// silently returning nil. nil+empty-action still returns nil.
 func WrapInvalid(err error, component, method, action string) error {
 	if err == nil {
-		return nil
+		if action == "" {
+			return nil
+		}
+		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
 	return newClassified(ErrorInvalid, wrappedErr, component, method, wrappedErr.Error())
