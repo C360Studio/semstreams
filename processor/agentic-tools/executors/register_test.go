@@ -362,6 +362,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"github", "graph_query",
 		"rules", "flows", "personas", "flow_templates",
 		"component_catalog",
+		"flow_lifecycle",
 	}
 	if len(BuiltinGroupKeys) != len(want) {
 		t.Fatalf("BuiltinGroupKeys count = %d, want %d. Adding a builtin? Update this test AND consumer docs.", len(BuiltinGroupKeys), len(want))

@@ -48,6 +48,7 @@ type ToolDependencies struct {
 	PersonaManager      PersonaManager      // Pattern-B step 3
 	FlowTemplateManager FlowTemplateManager // Pattern-B step 4
 	ComponentRegistry   *component.Registry // Pattern-B step 5; nil → list_components skipped
+	FlowEngineManager   FlowEngineManager   // Pattern-B step 6; nil → flow_lifecycle skipped
 	// LoopsBucket is the NATS KV bucket name holding agent-loop state.
 	// read_loop_result + flow_monitor both read from it. Empty falls back
 	// to "AGENT_LOOPS". One bucket per process — wiring is boot-time so
@@ -105,6 +106,7 @@ var BuiltinGroupKeys = []string{
 	"personas",          // registerPersonas — persona CRUD tools
 	"flow_templates",    // registerFlowTemplates — flow_template CRUD tools
 	"component_catalog", // registerComponentCatalog — list_components
+	"flow_lifecycle",    // registerFlowLifecycle — deploy/start/stop/undeploy_flow
 }
 
 // RegisterBuiltins wires every tool this package owns into the supplied
@@ -191,6 +193,7 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	gate("flow_templates", func() error { return registerFlowTemplates(reg, deps.FlowTemplateManager, logger) })
 	gate("component_catalog", func() error { return registerComponentCatalog(reg, deps.ComponentRegistry, logger) })
 	gate("flow_monitor", func() error { return registerFlowMonitor(reg, deps.NATSClient, deps.FlowManager, logger, loopsBucket) })
+	gate("flow_lifecycle", func() error { return registerFlowLifecycle(reg, deps.FlowEngineManager, logger) })
 
 	if len(errs) > 0 {
 		return fmt.Errorf("RegisterBuiltins: %w", errors.Join(errs...))
