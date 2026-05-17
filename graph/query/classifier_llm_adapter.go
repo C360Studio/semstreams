@@ -13,16 +13,29 @@ import (
 var thinkTagPattern = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // DefaultClassificationTimeout caps a single query-classification LLM
-// call when no operator-configured timeout is supplied. Sized small
-// because classification produces a tiny JSON envelope — a slow
-// response is a stuck call, not a long generation; healthy
-// classifiers respond in well under a second. The bound exists so a
-// slow LLM can't eat the full HTTP gateway budget and force
-// handleGlobalSearch's keyword-fallback path to land after the gateway
-// has already returned an error to the client. Operators running
-// reasoning models that legitimately think (qwen3, deepseek-r1) can
-// raise the bound via capability.timeout in the model registry.
-const DefaultClassificationTimeout = 5 * time.Second
+// call when no operator-configured timeout is supplied. Classification
+// produces a tiny JSON envelope, but the wall-clock budget must absorb
+// model cold-start on modest hardware (Ollama loading a 1-2B model from
+// disk can take 10-20s on first inference). Healthy classifiers respond
+// in well under a second once warm; the 30s ceiling exists to bound a
+// stuck call without rejecting cold-start on hardware where production
+// users actually run. The bound still guards the HTTP gateway budget —
+// 30s is well under the gateway's request timeout — so a slow LLM can't
+// eat the full window and force handleGlobalSearch's keyword-fallback
+// path to land after the gateway has already returned an error.
+//
+// Operators running reasoning models that legitimately think (qwen3,
+// deepseek-r1) can raise the bound via capability.timeout in the model
+// registry. Operators on always-warm production hardware can lower it
+// to recover faster fallback to keyword classification when the model
+// is genuinely stuck.
+//
+// History: was 5s pre-2026-05-17. The 5s default caused integration
+// tests to fail on developer hardware where the model wasn't warm, and
+// the same pattern would hit any production operator without a warm-up
+// shim. Bumped to 30s after acknowledging that "clean except the LLM
+// flake" was hiding a real production gotcha.
+const DefaultClassificationTimeout = 30 * time.Second
 
 // LLMClientAdapter adapts a graph/llm.Client to the query.LLMClient interface.
 //
