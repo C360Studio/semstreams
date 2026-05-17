@@ -58,11 +58,14 @@ var toolCategories = map[string]ToolCategory{
 	"answer_question": CategoryOrchestration,
 
 	// Meta
-	"create_rule": CategoryMeta,
-	"update_rule": CategoryMeta,
-	"delete_rule": CategoryMeta,
-	"create_flow": CategoryMeta,
-	"deploy_flow": CategoryMeta,
+	"create_rule":   CategoryMeta,
+	"update_rule":   CategoryMeta,
+	"delete_rule":   CategoryMeta,
+	"create_flow":   CategoryMeta,
+	"deploy_flow":   CategoryMeta,
+	"start_flow":    CategoryMeta,
+	"stop_flow":     CategoryMeta,
+	"undeploy_flow": CategoryMeta,
 
 	// GitHub tools
 	"github_read":   CategoryKnowledge,
