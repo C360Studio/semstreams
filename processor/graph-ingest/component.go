@@ -1127,6 +1127,60 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 	return nil
 }
 
+// updateEntityAtRevision is the CAS-protected variant of UpdateEntity.
+// It only commits if the entity's KV revision still matches expectedRev,
+// otherwise returns natsclient.ErrKVRevisionMismatch. This closes the
+// resurrect-after-delete window the plain UpdateEntity → Put path has:
+// a concurrent DeleteEntity that lands between the caller's read and
+// this write would otherwise turn an update into a silent re-create.
+//
+// Used by the mutation handlers' must-exist contract
+// (graph.mutation.entity.update / .update_with_triples). UpdateEntity
+// itself stays Put-based for callers (e.g. datamanager edge ops) that
+// want last-writer-wins.
+func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.EntityState, expectedRev uint64) error {
+	if entity == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateEntityAtRevision", "entity cannot be nil")
+	}
+
+	if err := validateEntityID(entity.ID); err != nil {
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return errs.Wrap(err, "Component", "updateEntityAtRevision", "context cancelled")
+	}
+
+	data, err := json.Marshal(entity)
+	if err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return errs.Wrap(err, "Component", "updateEntityAtRevision", "entity serialization")
+	}
+
+	if _, err := c.entityBucket.Update(ctx, entity.ID, data, expectedRev); err != nil {
+		// ErrKVRevisionMismatch and other KV errors propagate verbatim so
+		// callers can branch with errors.Is(..., natsclient.ErrKVRevisionMismatch).
+		atomic.AddInt64(&c.errors, 1)
+		return err
+	}
+
+	if c.entityCache != nil {
+		c.entityCache.Delete(entity.ID) //nolint:errcheck
+	}
+
+	atomic.AddInt64(&c.messagesProcessed, 1)
+	atomic.AddInt64(&c.bytesProcessed, int64(len(data)))
+	c.lastActivity.Store(time.Now())
+	c.entitiesUpdated.Inc()
+
+	c.logger.Debug("entity updated (CAS)",
+		slog.String("entity_id", entity.ID),
+		slog.Uint64("expected_revision", expectedRev),
+		slog.Uint64("version", entity.Version))
+
+	return nil
+}
+
 // DeleteEntity removes an entity from the graph
 func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 	// Validate entity ID format
