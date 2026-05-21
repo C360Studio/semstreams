@@ -5,6 +5,8 @@ package graphingest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -527,5 +529,170 @@ func TestIntegration_HandleEntity_InvalidJSON(t *testing.T) {
 			assert.False(t, base.Success)
 			assert.Contains(t, base.Error, "invalid request")
 		})
+	}
+}
+
+// --- PR-B tests: atomic create + UpdateWithRetry for update_with_triples ---
+
+// TestIntegration_CreateEntityStrict_AtomicConflict pins the
+// fundamental contract of the new atomic-create primitive: a second
+// create for the same ID surfaces natsclient.ErrKVKeyExists, and
+// the original entity content is untouched (no upsert).
+//
+// Tests the primitive directly so the contract is independent of
+// handler wiring; the handler-level mapping to "entity already
+// exists" + HTTP 409 is verified by
+// TestIntegration_HandleEntityCreate_Conflict (PR-A test, still
+// green because the semantic survives the refactor).
+func TestIntegration_CreateEntityStrict_AtomicConflict(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.atomic.create.001"
+	first := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntityStrict(ctx, first), "first create on fresh ID should succeed")
+
+	second := newMutationTestEntity(entityID)
+	second.Triples = []message.Triple{
+		{Subject: entityID, Predicate: "test.marker", Object: "second", Timestamp: time.Now(), Confidence: 1.0},
+	}
+	err := c.CreateEntityStrict(ctx, second)
+	require.Error(t, err, "second create on the same ID must fail")
+	assert.True(t, errors.Is(err, natsclient.ErrKVKeyExists),
+		"second create must surface ErrKVKeyExists sentinel so handlers can branch on it; got: %v", err)
+
+	// First entity's content survives — no upsert.
+	entry, err := c.entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	var stored graph.EntityState
+	require.NoError(t, json.Unmarshal(entry.Value, &stored))
+	for _, tr := range stored.Triples {
+		assert.NotEqual(t, "test.marker", tr.Predicate,
+			"second create's distinct triple must not be present — atomic create must not overwrite")
+	}
+}
+
+// TestIntegration_CreateEntityStrict_ConcurrentRaceOneWinner pins the
+// concurrency guarantee CreateEntityStrict provides over the prior
+// exists-check + Put pattern: with N goroutines all trying to create
+// the same ID, exactly one wins and N-1 see ErrKVKeyExists. The
+// PR-A pattern would allow last-writer-wins with all N reporting
+// success — a 409-Conflict contract violation.
+func TestIntegration_CreateEntityStrict_ConcurrentRaceOneWinner(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.atomic.race.001"
+	const N = 5
+
+	var wg sync.WaitGroup
+	results := make([]error, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			entity := newMutationTestEntity(entityID)
+			entity.Triples = append(entity.Triples, message.Triple{
+				Subject:    entityID,
+				Predicate:  "test.creator",
+				Object:     idx,
+				Timestamp:  time.Now(),
+				Confidence: 1.0,
+			})
+			results[idx] = c.CreateEntityStrict(ctx, entity)
+		}(i)
+	}
+	wg.Wait()
+
+	winners := 0
+	conflicts := 0
+	for i, err := range results {
+		switch {
+		case err == nil:
+			winners++
+		case errors.Is(err, natsclient.ErrKVKeyExists):
+			conflicts++
+		default:
+			t.Errorf("goroutine %d: unexpected error: %v", i, err)
+		}
+	}
+	assert.Equal(t, 1, winners, "exactly one concurrent create must win")
+	assert.Equal(t, N-1, conflicts, "all other concurrent creates must surface ErrKVKeyExists")
+}
+
+// TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive
+// pins the closing of the partial-erasure window semconnect Stage 27
+// flagged. N goroutines each call handleEntityUpdateWithTriples to
+// add a distinct triple; with PR-B's UpdateWithRetry path, every
+// goroutine eventually succeeds (CAS-conflicts retry against the
+// fresh state) and all N triples land on the entity. The PR-A path
+// (single CAS, fail-on-conflict) would have surfaced revision
+// mismatches and the loser goroutines' triples would be missing
+// from the final state.
+//
+// This is the load-bearing test for PR-B's semantic guarantee:
+// concurrent updates compose, they don't silently erase each other.
+func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.concurrent.upd.001"
+	require.NoError(t, c.CreateEntity(ctx, newMutationTestEntity(entityID)), "seed entity")
+
+	const N = 5
+	var wg sync.WaitGroup
+	results := make([]string, N) // empty on success, error msg on failure
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := graph.UpdateEntityWithTriplesRequest{
+				Entity: newMutationTestEntity(entityID),
+				AddTriples: []message.Triple{
+					{
+						Subject:    entityID,
+						Predicate:  fmt.Sprintf("test.concurrent.%d", idx),
+						Object:     idx,
+						Timestamp:  time.Now(),
+						Confidence: 1.0,
+					},
+				},
+				RequestID: fmt.Sprintf("req-conc-%d", idx),
+			}
+			respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+			if err != nil {
+				results[idx] = fmt.Sprintf("handler returned err: %v", err)
+				return
+			}
+			var resp graph.UpdateEntityWithTriplesResponse
+			if err := json.Unmarshal(respBytes, &resp); err != nil {
+				results[idx] = fmt.Sprintf("unmarshal: %v", err)
+				return
+			}
+			if !resp.Success {
+				results[idx] = resp.Error
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, msg := range results {
+		assert.Empty(t, msg,
+			"concurrent update %d must succeed via UpdateWithRetry; PR-A semantics would have surfaced a revision mismatch here", i)
+	}
+
+	// All N concurrent triples must be present on the final entity —
+	// none were silently erased by another goroutine's race.
+	entry, err := c.entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	var stored graph.EntityState
+	require.NoError(t, json.Unmarshal(entry.Value, &stored))
+
+	predicates := make(map[string]bool, len(stored.Triples))
+	for _, tr := range stored.Triples {
+		predicates[tr.Predicate] = true
+	}
+	for i := 0; i < N; i++ {
+		p := fmt.Sprintf("test.concurrent.%d", i)
+		assert.True(t, predicates[p],
+			"concurrent triple %q must survive on the final entity (PR-B retry semantics)", p)
 	}
 }

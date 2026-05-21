@@ -4,6 +4,7 @@ package graphingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -907,8 +908,31 @@ func validateEntityID(id string) error {
 	return nil
 }
 
-// CreateEntity creates a new entity in the graph
+// CreateEntity creates a new entity in the graph using upsert (Put)
+// semantics. Existing callers that need last-writer-wins behavior
+// (graph/datamanager edge ops) stay on this path. New atomic-create
+// callers (the NATS mutation handlers' POST 409 path) use
+// CreateEntityStrict, which fails fast with natsclient.ErrKVKeyExists
+// when the ID is already present.
 func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState) error {
+	return c.createEntity(ctx, entity, false)
+}
+
+// CreateEntityStrict creates a new entity atomically — if the ID is
+// already present, returns natsclient.ErrKVKeyExists without
+// overwriting. Closes the concurrent-create TOCTOU window the
+// graph.mutation.entity.create handler used to have when it relied
+// on exists-check + Put.
+func (c *Component) CreateEntityStrict(ctx context.Context, entity *graph.EntityState) error {
+	return c.createEntity(ctx, entity, true)
+}
+
+// createEntity is the shared body for CreateEntity / CreateEntityStrict.
+// atomicCreate=true switches the KV write from Put (upsert) to
+// Create (atomic key-create); everything else (hierarchy inference,
+// referential integrity stubs, cache invalidation, metrics) is
+// identical.
+func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState, atomicCreate bool) error {
 	if entity == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
 	}
@@ -946,10 +970,24 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 		return errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
 	}
 
-	// Store in KV bucket (single write with all triples)
-	if _, err := c.entityBucket.Put(ctx, entity.ID, data); err != nil {
+	// Store in KV bucket. Put is upsert (last-writer-wins); Create is
+	// atomic create-or-fail (returns natsclient.ErrKVKeyExists on
+	// conflict). The ErrKVKeyExists sentinel is bubbled verbatim so
+	// handlers can branch with errors.Is.
+	var writeErr error
+	if atomicCreate {
+		_, writeErr = c.entityBucket.Create(ctx, entity.ID, data)
+		if writeErr != nil && errors.Is(writeErr, natsclient.ErrKVKeyExists) {
+			// Expected conflict shape — don't count as a component
+			// error and don't wrap (preserves sentinel identity).
+			return writeErr
+		}
+	} else {
+		_, writeErr = c.entityBucket.Put(ctx, entity.ID, data)
+	}
+	if writeErr != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "CreateEntity", "KV store")
+		return errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
 	}
 
 	// Invalidate cache on write (cache consistency)
@@ -970,9 +1008,20 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
 
-	// Ensure referenced entities exist (fallback for referential integrity)
-	// This creates stub entities for any entity IDs referenced in relationship triples
-	// that don't already exist, guaranteeing graph consistency.
+	c.ensureRelationshipTargetsExist(ctx, entity)
+
+	return nil
+}
+
+// ensureRelationshipTargetsExist walks the entity's relationship triples
+// and, for each referenced entity that doesn't yet exist, creates a
+// stub. Bounded to 5 concurrent KV ops. Errors are best-effort —
+// referential integrity is a fallback, not a hard contract — so a
+// failure is logged but does not propagate.
+//
+// Extracted from createEntity to keep that function under the
+// revive.toml function-length cap (50 statements).
+func (c *Component) ensureRelationshipTargetsExist(ctx context.Context, entity *graph.EntityState) {
 	// Deduplicate target IDs — multiple triples may reference the same entity.
 	uniqueTargets := make(map[string]struct{})
 	for _, triple := range entity.Triples {
@@ -984,8 +1033,6 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 		}
 	}
 
-	// Check referential integrity for all unique targets in parallel, bounded to 5
-	// concurrent KV operations. Errors are best-effort — they don't fail entity creation.
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
 
@@ -1020,8 +1067,6 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 	}
 
 	wg.Wait()
-
-	return nil
 }
 
 // ensureReferencedEntityExists creates a stub entity if the referenced entity doesn't exist.
