@@ -191,17 +191,22 @@ Tiers only affect entities with text content. Telemetry-only entities cluster vi
 
 ## Orchestration Boundaries
 
-Two layers: **Reactive Engine** (conditions + actions + workflows) and **Components** (execute work).
+Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Components** (execute work). There is no separate workflow engine — `processor/reactive/` was retired. Multi-step patterns are expressed as coordinated rule sets firing components, with per-action `MaxIterations` providing iteration caps and entity triples + existing KV buckets + ObjectStore providing durable state.
 
 | Pattern | Use |
 |---------|-----|
-| A completes → B starts (no retry) | Reactive rule (single trigger) |
-| A → B → A → B... (max N times) | Reactive workflow (loop limits, timeouts) |
-| Execute LLM call, process tools | Component |
+| A completes → B starts (no retry) | Single rule, one action |
+| A → B → C → D (no loop) | Rule chain (one rule per transition) |
+| A → if X then B else C | One rule, action-level `when` clauses (ADR-041) |
+| A → B → A → B... (max N times) | Rule chain with per-action `MaxIterations` cap |
+| Fan-out + fan-in synchronization | Fan-out rule + synchronizer-key rule |
+| Execute LLM call, graph query, file I/O, etc. | Component |
 
-**Key rules**: Rules trigger, they don't orchestrate. Workflows coordinate, they don't execute. Components are workflow-agnostic. State ownership is exclusive.
+**Key rules**: Rules trigger, they don't do work inline. Components execute, they don't know their caller. State ownership is exclusive — domain entities in `ENTITY_STATES` (only `graph-ingest` writes), operational results in component-specific KV (e.g., `AGENT_LOOPS` with `COMPLETE_*` prefix), events in JetStream streams, bulky payloads in ObjectStore via `ContentStorable` with ref-triples on the owning entity.
 
-Use `/orchestration-check` for the full decision framework. See [Orchestration Layers](docs/concepts/14-orchestration-layers.md).
+**Engine gaps file as engine work, not app-side state plumbing.** semspec's 7,264 LOC of `workflow/reactive/` (the "semspec trap") is the cautionary tale — app-side state machines around rule-engine limitations become migration blockers the framework can't help dig out of. If a pattern needs a primitive the rule engine doesn't have, propose adding it; don't carve out a parallel path.
+
+Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog.
 
 ### Rules don't carry payloads
 

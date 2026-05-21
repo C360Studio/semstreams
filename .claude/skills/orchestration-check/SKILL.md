@@ -1,6 +1,6 @@
 ---
 name: orchestration-check
-description: Determine whether logic belongs in a reactive rule, workflow, or component. Use when adding orchestration logic, designing multi-step processes, or reviewing boundary violations.
+description: Determine whether logic belongs in a rule (single trigger or chain), a component, or somewhere else. Use when adding orchestration logic, designing multi-step processes, or reviewing boundary violations.
 argument-hint: [pattern or logic being evaluated]
 ---
 
@@ -12,87 +12,166 @@ $ARGUMENTS
 
 ## The Two Layers
 
+semstreams has **rules** and **components**. There is no separate
+workflow engine — `processor/reactive/` was retired. Multi-step
+patterns are expressed as coordinated rule sets firing components,
+with per-action `MaxIterations` as the iteration cap.
+
 | Layer | Responsibility | Owns | Does NOT Own |
 |-------|---------------|------|--------------|
-| **Reactive Engine** | State detection, triggers, multi-step coordination | Conditions, actions, step sequence, loop limits, timeouts | Actual work execution |
-| **Component** | Execute single units of work | Execution mechanics, internal state | Workflow awareness, caller context |
+| **Rule Engine** | State detection, trigger conditions, action sequencing, iteration caps | Trigger conditions, action sequence, `MaxIterations`, condition evaluation | Work execution, business logic, payload semantics |
+| **Component** | Execute single units of work | Execution mechanics, internal state machine | Caller identity, multi-step coordination |
 
 ## Quick Decision
 
 | Pattern | Use |
 |---------|-----|
-| Condition X met --> fire action Y (no retry) | Single-trigger reactive rule |
-| A --> B --> A --> B... (max N times, with timeouts) | Reactive workflow |
-| Execute LLM call, process tools, write files | Component |
+| A completes → B starts (no retry, no loop) | Single rule, one action |
+| A → B → C → D (no loop) | Rule chain (one rule per transition) |
+| A → if X then B else C | One rule, action-level `when` clauses (ADR-041) |
+| A → B → A → B... (max N times) | Rule chain with per-action `MaxIterations` cap |
+| Fan-out + fan-in synchronization | Fan-out rule + synchronizer-key rule |
+| Execute LLM call, graph query, file I/O, etc. | Component |
 
-## The 5 Rules
+## The 6 Rules
 
-1. **Rules trigger, they don't orchestrate** -- A rule fires one action, not a sequence.
-   - Anti-pattern: Rule A sets `step=1`, Rule B watches for `step=1` and sets `step=2`...
-   - Fix: Use a workflow for multi-step sequences.
+1. **Rules trigger; they don't orchestrate inline.** A rule fires
+   one set of actions, not a sequence of stateful steps.
+   - Anti-pattern: Rule A sets `step=1`, Rule B watches for `step=1`
+     and sets `step=2`, Rule C watches for `step=2`...
+   - Fix: each rule fires a component; state lives on the operation
+     entity, not in step counters.
 
-2. **Workflows coordinate, they don't execute** -- Workflows spawn components, not inline logic.
-   - Anti-pattern: Workflow step contains 100 lines of processing logic.
-   - Fix: Move processing into a component, have workflow publish to trigger it.
+2. **Components execute; they don't coordinate.** Components do one
+   thing and emit a result. They don't dispatch to other components
+   inline.
+   - Anti-pattern: a component calling another component's API
+     directly after finishing its work.
+   - Fix: the component emits its completion event; a rule fires
+     the next component.
 
-3. **Components are workflow-agnostic** -- Components don't know their caller.
-   - Anti-pattern: Component checks `workflow_id` to decide behavior.
-   - Fix: Pass behavior differences as configuration, not caller identity.
+3. **Components are caller-agnostic.** Same component, same
+   behavior, regardless of who triggered it.
+   - Anti-pattern: `if msg.workflow_id != "" { ... }` inside a
+     component.
+   - Fix: behavior differences come from configuration, not caller
+     identity.
 
-4. **State ownership is exclusive** -- Only one layer owns any piece of state.
+4. **State ownership is exclusive.** Only one layer owns a piece
+   of state.
 
    | State | Owner |
    |-------|-------|
-   | Trigger conditions | Rules |
-   | Step progress, iteration count | Workflow |
-   | Execution state (pending tools, loop phase) | Component |
-   | Domain entities | Knowledge graph (ENTITY_STATES) |
+   | Trigger conditions | Rule engine |
+   | Iteration counters | Rule engine (per-action `MatchState`) |
+   | Execution state inside a component | Component |
+   | Domain entities | `graph-ingest` (writes to `ENTITY_STATES`) |
+   | Operational results | Component that produced them (writes to its own bucket) |
 
-5. **If it needs a loop limit, it's a workflow** -- Simple handoffs use rules; cycles use workflows.
+5. **If you need a new KV bucket, ask twice.** Can the data live on
+   an existing entity as triples? Can it live in an existing
+   component's bucket (`AGENT_LOOPS`, etc.) with a distinct key
+   prefix? Can bulky content live in ObjectStore with a ref-triple?
+   If all three are "no" and it's genuinely component-owned
+   operational state, register the new bucket in
+   `entity_watch_buckets` and document it. **Never** create
+   app-side state buckets the rule engine isn't configured to watch.
+
+6. **Engine gaps file as engine work; never as app-side state
+   plumbing.** If the rule engine can't express something you need
+   (e.g., an evidence-array length predicate in `when`), file it as
+   a rule-engine improvement. The semspec trap (7,264 LOC of
+   `workflow/reactive/` that became a migration blocker) is the
+   cautionary tale.
 
 ## Anti-Patterns
 
-- Rule chains that build up state across multiple firings (should be workflow)
-- Workflows with inline processing logic (belongs in components)
-- Components checking workflow context to decide behavior (should be caller-agnostic)
-- Both rules and workflows tracking the same state (exclusive ownership violated)
+- Rule chains that build up step counters across multiple firings
+  (state belongs on the operation entity, not in rule-fired step
+  numbers)
+- Components dispatching to other components inline (rules
+  coordinate, components execute)
+- Components branching on caller identity (configure behavior,
+  don't introspect caller)
+- Both rules and entity triples tracking the same state (exclusive
+  ownership violated)
+- App-side state machines around rule-engine limitations (the
+  semspec trap)
+- New KV buckets without `entity_watch_buckets` registration
+  (invisible to the rule engine)
 
 ## State Storage Boundaries
 
-| Category | Storage | In Knowledge Graph? |
-|----------|---------|---------------------|
-| Domain entities | `ENTITY_STATES` KV | Yes (Graphable) |
-| Operational results | Component-specific KV | No |
-| Events/work items | JetStream streams | No |
+| Category | Storage | Rule-observable? | In Knowledge Graph? |
+|----------|---------|------------------|---------------------|
+| Domain entities | `ENTITY_STATES` KV (only `graph-ingest` writes) | Yes | Yes (`Graphable`) |
+| Operational results | Component-specific KV (e.g., `AGENT_LOOPS` with `COMPLETE_*`) | Yes (via `entity_watch_buckets`) | No |
+| Events / work items | JetStream streams | No (rules watch KV, not streams) | No |
+| Bulky payloads | ObjectStore via `ContentStorable`; ref-triple on owning entity | Indirectly (via refs) | Refs only |
 
-Do NOT write operational results to ENTITY_STATES -- it pollutes the knowledge graph.
+Per ADR-028: **rules carry references, never content.** If a payload
+might exceed ~16KB or contain freeform text, put it in ObjectStore
+and pass a ref. Do NOT write operational results to `ENTITY_STATES`
+— it pollutes the knowledge graph.
 
-## Reactive Rule Example (single trigger)
+## Example: Single trigger (Pattern 1)
 
-```go
-reactive.NewRule("architect-complete-spawn-editor").
-    WatchKV("AGENT_LOOPS", "LOOP_*").
-    When("architect role", func(ctx *reactive.RuleContext) bool {
-        return ctx.State.(*AgentLoopState).Role == "architect"
-    }).
-    When("completed", func(ctx *reactive.RuleContext) bool {
-        return ctx.State.(*AgentLoopState).Outcome == "success"
-    }).
-    Publish("agent.task.editor", ...).
-    Build()
+```json
+{
+  "name": "architect_complete_spawn_editor",
+  "type": "expression",
+  "when": {
+    "bucket": "AGENT_LOOPS",
+    "key_pattern": "COMPLETE_*",
+    "conditions": [
+      {"field": "role", "op": "eq", "value": "architect"},
+      {"field": "outcome", "op": "eq", "value": "success"}
+    ]
+  },
+  "actions": [
+    {
+      "type": "publish_agent",
+      "role": "editor",
+      "payload_ref": "{state.plan_objstore_ref}"
+    }
+  ]
+}
 ```
 
-## Workflow Example (loop with limit)
+## Example: Bounded iteration (Pattern 4)
 
-```go
-reactive.NewWorkflow("review-fix-cycle").
-    WithStateBucket("REVIEW_FIX_STATE").
-    WithMaxIterations(3).
-    WithTimeout(300 * time.Second).
-    AddRule(/* request-review rule */).
-    AddRule(/* fix-issues rule */).
-    AddRule(/* max-iterations-exceeded rule */).
-    MustBuild()
+```json
+{
+  "name": "review_fix_cycle",
+  "when": {"key_pattern": "review.complete.*"},
+  "actions": [
+    {
+      "type": "publish_agent",
+      "role": "fixer",
+      "when": "$state.review.issues_count > 0 AND $state.iteration < 3",
+      "max_iterations": 3
+    },
+    {
+      "type": "publish",
+      "subject": "pipeline.complete.{id}",
+      "when": "$state.review.issues_count == 0 OR $state.iteration >= 3"
+    }
+  ]
+}
 ```
 
-Read `docs/concepts/14-orchestration-layers.md` for full documentation.
+`MaxIterations` default is 3 framework-wide; explicit `0` means
+unlimited. Stable per-action counters survive rule renames if
+`Action.ID` is set explicitly.
+
+## Full pattern catalog + worked examples
+
+Read `docs/concepts/14-orchestration-layers.md` for the canonical
+"How we do workflows in semstreams" reference, including:
+
+- All 5 patterns with JSON rule definitions
+- The semspec trap (what app-side state machines cost long-term)
+- State-storage boundary discipline
+- Debugging orchestration issues
+- Worked examples (agent handoff, review-fix retry, data pipeline
+  validation, ADR-045 graph-search decomp+fusion)
