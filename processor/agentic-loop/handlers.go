@@ -748,6 +748,19 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 
 	step := h.buildTaskTrajectoryStep(request.RequestID, task, messages)
 
+	// Persist the task-initiation step eagerly so its `messages` survive into
+	// the trajectory. Every OTHER handler in this file calls AddStep right
+	// after building its step; HandleTask was the lone outlier — its
+	// TrajectorySteps return field is never consumed by the component
+	// (persistHandlerResult only forwards published messages + final state),
+	// so the request-side audit trail was silently dropped. Caught
+	// 2026-05-21 while wiring trajectory_detail:full into the UI.
+	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+		h.logger.Warn("failed to add task trajectory step",
+			slog.String("loop_id", loopID),
+			slog.String("error", addErr.Error()))
+	}
+
 	createdData, err := h.buildLoopCreatedData(loopID, task, entity)
 	if err != nil {
 		return HandlerResult{}, err
