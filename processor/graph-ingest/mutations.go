@@ -302,8 +302,16 @@ func (c *Component) entityRevisionAfterWrite(ctx context.Context, entityID strin
 // to fall back from when only triple.add_batch (upsert) was wired.
 //
 // PR-A: existence check is a Get followed by CreateEntity (Put). The
-// TOCTOU window between the two is acknowledged; PR-B will switch to
-// the atomic KV Create primitive that fails if the key exists.
+// TOCTOU window between the two means concurrent creates of the same
+// ID are last-writer-wins instead of strict create-or-fail. PR-B will
+// switch to the atomic KV Create primitive (natsclient.KVStore.Create
+// returns ErrKVKeyExists) which closes the window.
+//
+// The Entity field in the success response is read back from storage
+// so it reflects framework-injected triples (hierarchy / referential
+// integrity stubs); the caller-supplied req.Entity is NOT echoed
+// because CreateEntity may mutate it in place (entity.Triples append
+// in component.go).
 func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -328,15 +336,21 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 		return marshalCreateEntityError(req.TraceID, req.RequestID, err.Error())
 	}
 
+	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
+		return marshalCreateEntityError(req.TraceID, req.RequestID,
+			fmt.Sprintf("post-write read-back failed: %v", err))
+	}
+
 	return json.Marshal(graph.CreateEntityResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
-			KVRevision: c.entityRevisionAfterWrite(ctx, req.Entity.ID),
+			KVRevision: rev,
 			TraceID:    req.TraceID,
 			RequestID:  req.RequestID,
 		},
-		Entity: req.Entity,
+		Entity: stored,
 	})
 }
 
@@ -345,6 +359,13 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 // it REPLACES Entity.Triples before the write (the canonical set is
 // the request's Triples; Entity carries provenance metadata). When
 // Triples is nil/empty, Entity.Triples is written as-is.
+//
+// TriplesAdded in the response is the count on the *stored* entity
+// after the write, which may exceed len(req.Triples) when the
+// framework injects hierarchy / referential-integrity triples per
+// component.go:CreateEntity. Callers reasoning about provenance
+// should compare req.Triples against stored.Triples explicitly rather
+// than treating TriplesAdded as authoritative.
 func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -373,23 +394,37 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
 	}
 
+	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
+		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
+			fmt.Sprintf("post-write read-back failed: %v", err))
+	}
+
 	return json.Marshal(graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
-			KVRevision: c.entityRevisionAfterWrite(ctx, req.Entity.ID),
+			KVRevision: rev,
 			TraceID:    req.TraceID,
 			RequestID:  req.RequestID,
 		},
-		Entity:       req.Entity,
-		TriplesAdded: len(req.Entity.Triples),
+		Entity:       stored,
+		TriplesAdded: len(stored.Triples),
 	})
 }
 
-// handleEntityUpdate enforces must-exist semantics: returns Success=false
-// with "entity not found" when the entity ID is absent. CS API PUT/PATCH
-// maps that to HTTP 404 — distinct from create-or-conflict semantics
-// in handleEntityCreate.
+// handleEntityUpdate enforces must-exist semantics with a CAS-protected
+// write: a concurrent DeleteEntity that lands between the read and the
+// write turns the CAS into ErrKVRevisionMismatch instead of silently
+// resurrecting the entity (the bug an exists-check + Put pair would
+// have). CS API PUT/PATCH maps Success=false with "entity not found"
+// to HTTP 404; the same error message covers both "absent at read"
+// and "deleted concurrently before write" because semconnect maps both
+// to the same status.
+//
+// Concurrent-update conflicts (revision moved but key still present)
+// surface as "entity modified concurrently"; downstream gateways may
+// choose to retry, surface 409, or escalate.
 func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -400,44 +435,63 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 		return marshalUpdateEntityError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
-	exists, err := c.entityExists(ctx, req.Entity.ID)
+	_, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return marshalUpdateEntityError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity not found: %s", req.Entity.ID))
+		}
 		return marshalUpdateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("existence check failed: %v", err))
-	}
-	if !exists {
-		return marshalUpdateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("entity not found: %s", req.Entity.ID))
+			fmt.Sprintf("fetch current entity failed: %v", err))
 	}
 
-	if err := c.UpdateEntity(ctx, req.Entity); err != nil {
+	if err := c.updateEntityAtRevision(ctx, req.Entity, currentRev); err != nil {
+		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+			return marshalUpdateEntityError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
+		}
 		return marshalUpdateEntityError(req.TraceID, req.RequestID, err.Error())
+	}
+
+	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
+		return marshalUpdateEntityError(req.TraceID, req.RequestID,
+			fmt.Sprintf("post-write read-back failed: %v", err))
 	}
 
 	return json.Marshal(graph.UpdateEntityResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
-			KVRevision: c.entityRevisionAfterWrite(ctx, req.Entity.ID),
+			KVRevision: rev,
 			TraceID:    req.TraceID,
 			RequestID:  req.RequestID,
 		},
-		Entity:  req.Entity,
-		Version: int64(req.Entity.Version),
+		Entity:  stored,
+		Version: int64(stored.Version),
 	})
 }
 
 // handleEntityUpdateWithTriples applies a triple-set delta to an
 // existing entity: appends AddTriples, removes triples whose Predicate
-// is named in RemoveTriples, and writes the result. Entity metadata
-// (MessageType, Version, StorageRef) from the request also flows
-// through.
+// is named in RemoveTriples, and writes the result via CAS. Entity
+// metadata (MessageType, Version, StorageRef) from the request also
+// flows through.
 //
-// PR-A: read-modify-write — fetch current entity, apply delta in
-// memory, Put. TOCTOU window between fetch and put is acknowledged;
-// PR-B will collapse this to a single CAS over the entity state,
-// closing the partial-erasure window semconnect Stage 27 (2026-05-21)
-// called out across PUT/PATCH/DELETE on systems + datastreams.
+// PR-A: the read-modify-write sequence is CAS-protected against
+// concurrent delete (Update at the read revision fails with
+// ErrKVRevisionMismatch if the entity was modified or deleted
+// in-between). A concurrent triple add/remove from another writer
+// also surfaces as the same conflict, which the caller may retry.
+// The merge logic itself runs on stale data when a conflict happens
+// — that's the residual scope semconnect Stage 27 flagged and PR-B
+// will close by moving the delta apply inside an UpdateWithRetry
+// loop, eliminating the partial-erasure window in the
+// delete-all + re-add downstream shim.
+//
+// Unknown predicates in RemoveTriples are silently ignored (not
+// "404'd"); the contract is "remove if present" not "predicate must
+// exist".
 func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -448,7 +502,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
-	current, err := c.fetchEntityState(ctx, req.Entity.ID)
+	current, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
@@ -484,22 +538,32 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 
 	req.Entity.Triples = current.Triples
 
-	if err := c.UpdateEntity(ctx, req.Entity); err != nil {
+	if err := c.updateEntityAtRevision(ctx, req.Entity, currentRev); err != nil {
+		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
+		}
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
+	}
+
+	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
+		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			fmt.Sprintf("post-write read-back failed: %v", err))
 	}
 
 	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
-			KVRevision: c.entityRevisionAfterWrite(ctx, req.Entity.ID),
+			KVRevision: rev,
 			TraceID:    req.TraceID,
 			RequestID:  req.RequestID,
 		},
-		Entity:         req.Entity,
+		Entity:         stored,
 		TriplesAdded:   len(req.AddTriples),
 		TriplesRemoved: removed,
-		Version:        int64(req.Entity.Version),
+		Version:        int64(stored.Version),
 	})
 }
 
@@ -539,19 +603,27 @@ func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte
 	})
 }
 
-// fetchEntityState reads + decodes the entity from the KV bucket. The
+// fetchEntityState reads + decodes the entity from the KV bucket and
+// returns its current KV revision alongside the decoded state. The
 // not-found error is returned verbatim so callers can branch on
-// natsclient.ErrKVKeyNotFound via errors.Is.
-func (c *Component) fetchEntityState(ctx context.Context, entityID string) (*graph.EntityState, error) {
+// natsclient.ErrKVKeyNotFound via errors.Is. A zero-length entry is
+// also treated as "not found" — a tombstone replay or a half-finished
+// put can leave a key present with an empty body, and unmarshaling
+// "" would otherwise surface a confusing "unexpected end of JSON
+// input" instead of the clean not-found classification callers expect.
+func (c *Component) fetchEntityState(ctx context.Context, entityID string) (*graph.EntityState, uint64, error) {
 	entry, err := c.entityBucket.Get(ctx, entityID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	if len(entry.Value) == 0 {
+		return nil, 0, natsclient.ErrKVKeyNotFound
 	}
 	var state graph.EntityState
 	if err := json.Unmarshal(entry.Value, &state); err != nil {
-		return nil, fmt.Errorf("unmarshal entity state: %w", err)
+		return nil, 0, fmt.Errorf("unmarshal entity state: %w", err)
 	}
-	return &state, nil
+	return &state, entry.Revision, nil
 }
 
 // Per-response-shape error marshalers. The body-prefix error

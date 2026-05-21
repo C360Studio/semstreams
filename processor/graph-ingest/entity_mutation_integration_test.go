@@ -112,6 +112,13 @@ func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testin
 			Key:             "test/key",
 			ContentType:     "application/json",
 		},
+		// req.Triples (below) is the canonical set per the
+		// create_with_triples doc-comment. Entity.Triples here is a
+		// distractor that should NOT survive — pinning the
+		// replacement semantic, not append.
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: "should.be.replaced", Object: "distractor", Timestamp: now, Confidence: 1.0},
+		},
 	}
 	triples := []message.Triple{
 		{Subject: entityID, Predicate: "sensorml.uid", Object: "urn:test:001", Timestamp: now, Confidence: 1.0},
@@ -143,7 +150,11 @@ func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testin
 	assert.NotNil(t, stored.StorageRef, "StorageRef preserved")
 	assert.Equal(t, "test-bucket", stored.StorageRef.StorageInstance)
 	assert.Equal(t, "test/key", stored.StorageRef.Key)
-	assert.Len(t, stored.Triples, 2)
+	assert.Len(t, stored.Triples, 2, "req.Triples should REPLACE Entity.Triples, not append")
+	for _, tr := range stored.Triples {
+		assert.NotEqual(t, "should.be.replaced", tr.Predicate,
+			"distractor predicate from req.Entity.Triples must not survive when req.Triples is non-empty")
+	}
 }
 
 func TestIntegration_HandleEntityUpdate_NotFound(t *testing.T) {
@@ -284,6 +295,164 @@ func TestIntegration_HandleEntityDelete_Idempotent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
 	assert.True(t, resp.Success, "delete of absent entity should succeed (idempotent)")
 	assert.False(t, resp.Deleted, "Deleted should be false when entity was already absent")
+}
+
+// TestIntegration_HandleEntityUpdate_ResurrectAfterDelete pins the
+// CAS fix for the must-exist contract. Without CAS, a delete that
+// lands between the handler's existence check and its write would
+// silently re-create the entity — violating the contract semconnect
+// maps to HTTP 404. With CAS, the write fails with the same
+// "entity not found" shape callers already handle.
+//
+// Simulates the race deterministically: read the current revision,
+// delete out-of-band, then attempt the update — that's the same
+// observable state as "a concurrent delete won the race".
+func TestIntegration_HandleEntityUpdate_ResurrectAfterDelete(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.update.resurrect.001"
+	original := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, original), "seed entity")
+
+	// Simulate the concurrent delete: out-of-band, after the handler
+	// would have done its existence check, but before its write.
+	require.NoError(t, c.DeleteEntity(ctx, entityID), "delete between read and write")
+
+	updated := newMutationTestEntity(entityID)
+	updated.Version = 2
+	req := graph.UpdateEntityRequest{Entity: updated, RequestID: "req-resurrect"}
+	reqBytes, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respBytes, err := c.handleEntityUpdate(ctx, reqBytes)
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success, "update on deleted entity must NOT silently resurrect")
+	assert.Contains(t, resp.Error, "not found",
+		"error body should signal absence so semconnect can map to HTTP 404")
+
+	exists, err := c.entityExists(ctx, entityID)
+	require.NoError(t, err)
+	assert.False(t, exists, "entity must remain absent after the failed update")
+}
+
+// TestIntegration_HandleEntityUpdate_KVRevisionIncrements pins the
+// cache-invalidation / monotonic-revision contract downstream readers
+// (semconnect ETags, change-detection consumers) depend on.
+func TestIntegration_HandleEntityUpdate_KVRevisionIncrements(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.update.revmono.001"
+	require.NoError(t, c.CreateEntity(ctx, newMutationTestEntity(entityID)), "seed entity")
+
+	// First update: capture revision.
+	first := newMutationTestEntity(entityID)
+	first.Version = 2
+	r1, err := c.handleEntityUpdate(ctx, mustJSON(t, graph.UpdateEntityRequest{Entity: first}))
+	require.NoError(t, err)
+	var resp1 graph.UpdateEntityResponse
+	require.NoError(t, json.Unmarshal(r1, &resp1))
+	require.True(t, resp1.Success, "first update should succeed; err=%q", resp1.Error)
+
+	// Second update: revision must be strictly greater.
+	second := newMutationTestEntity(entityID)
+	second.Version = 3
+	r2, err := c.handleEntityUpdate(ctx, mustJSON(t, graph.UpdateEntityRequest{Entity: second}))
+	require.NoError(t, err)
+	var resp2 graph.UpdateEntityResponse
+	require.NoError(t, json.Unmarshal(r2, &resp2))
+	require.True(t, resp2.Success, "second update should succeed; err=%q", resp2.Error)
+
+	assert.Greater(t, resp2.KVRevision, resp1.KVRevision,
+		"sequential updates must produce strictly increasing KV revisions")
+}
+
+// TestIntegration_HandleEntity_NilEntity pins the nil-body guard
+// across all four entity-shape handlers — the guards exist in the
+// code; this test ensures a future refactor that drops them surfaces
+// the regression.
+func TestIntegration_HandleEntity_NilEntity(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	cases := []struct {
+		name    string
+		payload any
+		handler func([]byte) ([]byte, error)
+	}{
+		{"create", graph.CreateEntityRequest{Entity: nil}, func(b []byte) ([]byte, error) { return c.handleEntityCreate(ctx, b) }},
+		{"create_with_triples", graph.CreateEntityWithTriplesRequest{Entity: nil}, func(b []byte) ([]byte, error) { return c.handleEntityCreateWithTriples(ctx, b) }},
+		{"update", graph.UpdateEntityRequest{Entity: nil}, func(b []byte) ([]byte, error) { return c.handleEntityUpdate(ctx, b) }},
+		{"update_with_triples", graph.UpdateEntityWithTriplesRequest{Entity: nil}, func(b []byte) ([]byte, error) { return c.handleEntityUpdateWithTriples(ctx, b) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			respBytes, err := tc.handler(mustJSON(t, tc.payload))
+			require.NoError(t, err)
+
+			var base struct {
+				Success bool   `json:"success"`
+				Error   string `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(respBytes, &base))
+			assert.False(t, base.Success)
+			assert.Contains(t, base.Error, "entity cannot be nil")
+		})
+	}
+}
+
+// TestIntegration_HandleEntityDelete_EmptyID pins the empty-EntityID
+// guard. Without it, the handler would forward an empty key to
+// entityBucket.Delete and the failure mode would depend on the
+// underlying KV (likely a different error class than "invalid
+// request"). Pin the classification at the handler boundary.
+func TestIntegration_HandleEntityDelete_EmptyID(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	req := graph.DeleteEntityRequest{EntityID: "", RequestID: "req-delete-empty"}
+	respBytes, err := c.handleEntityDelete(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.DeleteEntityResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Error, "entity_id cannot be empty")
+}
+
+// TestIntegration_HandleEntityUpdateWithTriples_UnknownRemovePredicate
+// pins the "remove if present" semantic: naming a predicate in
+// RemoveTriples that doesn't exist on the entity is NOT an error,
+// it's a no-op. Downstream gateways (semconnect cs-api PATCH
+// /systems/{id}) rely on this — they emit RemoveTriples blindly
+// when they don't know which predicates were previously written.
+func TestIntegration_HandleEntityUpdateWithTriples_UnknownRemovePredicate(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.update_wt.unknown_remove.001"
+	require.NoError(t, c.CreateEntity(ctx, newMutationTestEntity(entityID)), "seed entity")
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:        newMutationTestEntity(entityID),
+		RemoveTriples: []string{"never.set.predicate"},
+		RequestID:     "req-update-wt-unknown",
+	}
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	require.True(t, resp.Success, "unknown RemoveTriples predicate must not fail; err=%q", resp.Error)
+	assert.Equal(t, 0, resp.TriplesRemoved, "no triples should be removed when the named predicate isn't present")
+}
+
+// mustJSON is a test convenience: marshals or fails the test.
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
 }
 
 func TestIntegration_HandleEntity_InvalidJSON(t *testing.T) {
