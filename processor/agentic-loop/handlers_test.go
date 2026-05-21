@@ -117,6 +117,72 @@ func TestHandleTask_CreatesLoop(t *testing.T) {
 	}
 }
 
+// TestHandleTask_PersistsStepInTrajectoryManager is a regression test for the
+// bug class where a handler builds a trajectory step and sets it on
+// result.TrajectorySteps but never calls trajectoryManager.AddStep — so the
+// step is silently dropped from the audit trail because
+// persistHandlerResult does not consume the TrajectorySteps field
+// (component.go's persistHandlerResult forwards Publishes + state only;
+// trajectory data flows via trajectoryManager → finalizeTrajectory →
+// writeTrajectoryToGraph).
+//
+// The analogous tool_call bug was fixed earlier and has its own regression
+// test below (see "tool_call steps were only on result.TrajectorySteps"
+// comment). HandleTask's task-initiation step was the lone remaining
+// outlier; this test prevents another regression of the same shape.
+//
+// Uses TrajectoryDetail=full because that's the mode where the bug
+// surfaced — UI consumers querying full trajectory detail saw missing
+// request-side messages. In summary mode the step still lands but
+// without Messages (by design), so summary mode wouldn't make the
+// data-loss observable to a downstream consumer.
+func TestHandleTask_PersistsStepInTrajectoryManager(t *testing.T) {
+	config := createTestConfig()
+	config.TrajectoryDetail = "full"
+	handler := agenticloop.NewMessageHandler(config)
+
+	taskMsg := agenticloop.TaskMessage{
+		TaskID: "task-trajectory-regression",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "Analyze this system",
+	}
+
+	ctx := context.Background()
+	result, err := handler.HandleTask(ctx, taskMsg)
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+
+	traj, trajErr := handler.GetTrajectory(result.LoopID)
+	if trajErr != nil {
+		t.Fatalf("GetTrajectory() error = %v", trajErr)
+	}
+
+	foundModelCall := false
+	for _, s := range traj.Steps {
+		if s.StepType == "model_call" {
+			foundModelCall = true
+			// The whole point of persisting the step is so its `messages`
+			// (the LLM request payload) survive into the trajectory.
+			// Empty messages here would mean the step reached the manager
+			// but lost its content along the way.
+			if len(s.Messages) == 0 {
+				t.Error("Persisted model_call step should carry its request messages in full-detail mode")
+			}
+			if s.Model != "qwen-32b" {
+				t.Errorf("Persisted model_call step Model = %q, want %q", s.Model, "qwen-32b")
+			}
+			break
+		}
+	}
+	if !foundModelCall {
+		t.Error("Trajectory manager should contain a model_call step after HandleTask " +
+			"(regression: task-initiation step was previously only set on result.TrajectorySteps " +
+			"and never added to the manager, so request-side audit was silently dropped)")
+	}
+}
+
 func TestHandleTask_MultipleRoles(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
