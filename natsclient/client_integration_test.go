@@ -181,14 +181,24 @@ func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 	}
 }
 
-// Helper function to start NATS container for integration tests
+// Helper function to start NATS container for integration tests.
+//
+// Wait strategy mirrors test_client.go: combined port + HTTP health on the
+// monitoring port with an explicit startup timeout. The bare ForListeningPort
+// strategy (without timeout) flakes under Docker API pressure when many
+// containers spawn in parallel — testcontainers' container-inspect call
+// can hit its default deadline before the port mapping resolves.
 func startTestNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.12-alpine",
-		ExposedPorts: []string{"4222/tcp"},
-		WaitingFor:   wait.ForListeningPort("4222/tcp"),
+		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
+		Cmd:          []string{"--http_port", "8222"},
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("4222/tcp"),
+			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -207,15 +217,19 @@ func startTestNATSContainer(ctx context.Context, t *testing.T) (testcontainers.C
 	return natsContainer, natsURL
 }
 
-// Helper function to start NATS container with JetStream for integration tests
+// Helper function to start NATS container with JetStream for integration tests.
+// Wait strategy rationale: see startTestNATSContainer above.
 func startTestNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.12-alpine",
-		ExposedPorts: []string{"4222/tcp"},
-		WaitingFor:   wait.ForListeningPort("4222/tcp"),
-		Cmd:          []string{"--js"}, // Enable JetStream
+		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
+		Cmd:          []string{"--js", "--http_port", "8222"}, // Enable JetStream + monitoring
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("4222/tcp"),
+			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

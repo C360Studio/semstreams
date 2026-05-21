@@ -261,13 +261,21 @@ func TestIntegration_HealthMonitoring(t *testing.T) {
 	}
 }
 
-// Helper function to start NATS container
+// Helper function to start NATS container.
+// Wait strategy mirrors test_client.go: combined port + HTTP health on the
+// monitoring port with an explicit startup timeout. Replaces the prior
+// bare ForListeningPort + arbitrary 100ms sleep — sleeps are not
+// synchronization (project test discipline), and the HTTP health check
+// is the authoritative "NATS ready to serve" signal.
 func startNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.12-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		WaitingFor:   wait.ForListeningPort("4222/tcp"),
 		Cmd:          []string{"-m", "8222"}, // Enable monitoring
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("4222/tcp"),
+			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -283,20 +291,21 @@ func startNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Conta
 	require.NoError(t, err)
 
 	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-
-	// Wait for NATS to be fully ready
-	time.Sleep(100 * time.Millisecond)
 
 	return natsContainer, natsURL
 }
 
-// Helper function to start NATS container with JetStream
+// Helper function to start NATS container with JetStream.
+// Wait strategy rationale: see startNATSContainer above.
 func startNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.12-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		WaitingFor:   wait.ForListeningPort("4222/tcp"),
 		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream and monitoring
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("4222/tcp"),
+			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -312,9 +321,6 @@ func startNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers
 	require.NoError(t, err)
 
 	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-
-	// Wait for NATS to be fully ready
-	time.Sleep(200 * time.Millisecond)
 
 	return natsContainer, natsURL
 }

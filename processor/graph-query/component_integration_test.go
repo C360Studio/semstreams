@@ -23,12 +23,18 @@ func setupTestNATS(t *testing.T) (*natsclient.Client, func()) {
 
 	ctx := context.Background()
 
-	// Start NATS container with JetStream
+	// Start NATS container with JetStream.
+	// Wait strategy mirrors natsclient/test_client.go: combined port + HTTP
+	// health on the monitoring port with explicit startup timeout. Bare
+	// ForListeningPort (without timeout) flakes under Docker API pressure.
 	req := testcontainers.ContainerRequest{
 		Image:        "nats:2.12-alpine",
-		ExposedPorts: []string{"4222/tcp"},
-		WaitingFor:   wait.ForListeningPort("4222/tcp"),
-		Cmd:          []string{"-js"}, // Enable JetStream
+		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
+		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream + monitoring
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("4222/tcp"),
+			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
+		),
 	}
 
 	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
