@@ -479,6 +479,13 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 // Unknown predicates in RemoveTriples are silently ignored (not
 // "404'd"); the contract is "remove if present" not "predicate must
 // exist".
+//
+// Retry exhaustion: on the unlikely path where every retry attempt
+// hits a CAS conflict and MaxAttempts is reached, UpdateWithRetry
+// returns natsclient.ErrKVMaxRetriesExceeded. The handler surfaces
+// it verbatim through the body-prefix error convention; downstream
+// gateways may retry the whole request or escalate. Distinct from
+// "entity not found", which is the NonRetryable absence path.
 func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {

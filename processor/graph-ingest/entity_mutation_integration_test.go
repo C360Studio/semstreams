@@ -616,6 +616,8 @@ func TestIntegration_CreateEntityStrict_ConcurrentRaceOneWinner(t *testing.T) {
 	}
 	assert.Equal(t, 1, winners, "exactly one concurrent create must win")
 	assert.Equal(t, N-1, conflicts, "all other concurrent creates must surface ErrKVKeyExists")
+	assert.Equal(t, N, winners+conflicts,
+		"every outcome must be either winner or ErrKVKeyExists — no unaccounted-for failures")
 }
 
 // TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive
@@ -630,6 +632,14 @@ func TestIntegration_CreateEntityStrict_ConcurrentRaceOneWinner(t *testing.T) {
 //
 // This is the load-bearing test for PR-B's semantic guarantee:
 // concurrent updates compose, they don't silently erase each other.
+//
+// Flake risk: if UpdateWithRetry's MaxAttempts is exhausted under
+// extreme load (CI + race detector + N goroutines all retrying
+// against each other), one goroutine could surface
+// ErrKVMaxRetriesExceeded. N=5 is well within the per-bucket retry
+// budget under normal conditions. If this test flakes, the
+// remediation is t.Skip + an issue tracking why the retry budget
+// is insufficient, NOT bumping MaxAttempts to hide the symptom.
 func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
@@ -695,4 +705,13 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 		assert.True(t, predicates[p],
 			"concurrent triple %q must survive on the final entity (PR-B retry semantics)", p)
 	}
+
+	// Metadata fields from each caller's req.Entity must also flow through
+	// the merge loop — testMutationType is what every caller sent, so the
+	// stored entity must carry it. If a retry path silently dropped
+	// metadata (e.g., wrote only the merged triples without the carrier's
+	// metadata), this assertion fails. Pins the contract claimed in
+	// handleEntityUpdateWithTriples's doc-comment.
+	assert.True(t, testMutationType.Equal(stored.MessageType),
+		"req.Entity.MessageType must survive across UpdateWithRetry attempts")
 }
