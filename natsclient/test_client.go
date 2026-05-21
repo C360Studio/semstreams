@@ -151,10 +151,17 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 		Image:        "nats:" + cfg.natsVersion,
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          args,
+		// Startup timeout applied at the ForAll level so it bounds BOTH
+		// strategies. Prior pattern only set it on ForHTTP, leaving
+		// ForListeningPort with its own (shorter) default — under Docker
+		// API pressure the port-listening check would burn through retries
+		// before the HTTP timeout could engage. Symptom:
+		//   "retries: 532, port: '', last err: port '4222/tcp' not found,
+		//   ctx err: context deadline exceeded"
 		WaitingFor: wait.ForAll(
 			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(cfg.startTimeout),
-		),
+			wait.ForHTTP("/").WithPort("8222/tcp"),
+		).WithStartupTimeoutDefault(cfg.startTimeout),
 	}
 
 	// Start container
@@ -279,10 +286,17 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 		Image:        "nats:" + cfg.natsVersion,
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          args,
+		// Startup timeout applied at the ForAll level so it bounds BOTH
+		// strategies. Prior pattern only set it on ForHTTP, leaving
+		// ForListeningPort with its own (shorter) default — under Docker
+		// API pressure the port-listening check would burn through retries
+		// before the HTTP timeout could engage. Symptom:
+		//   "retries: 532, port: '', last err: port '4222/tcp' not found,
+		//   ctx err: context deadline exceeded"
 		WaitingFor: wait.ForAll(
 			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(cfg.startTimeout),
-		),
+			wait.ForHTTP("/").WithPort("8222/tcp"),
+		).WithStartupTimeoutDefault(cfg.startTimeout),
 	}
 
 	// Start container
