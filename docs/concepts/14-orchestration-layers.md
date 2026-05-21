@@ -522,23 +522,34 @@ Layer mapping:
 - Components: validator, corrector, processor
 - State: an ingestion entity carries attempts and validation result
 
-### Graph search decomp+fusion (Patterns 2 + 4, ADR-045)
+### Graph search decomp+fusion (Patterns 2 + 3 + 4, ADR-045)
 
 ```text
-research_graph(intent) → decompose → execute → assess → if not sufficient, refine and re-execute (max 5) → synthesize → return to parent
+research_graph(topic, hints?)
+  → nl_classify  (reuses existing graph/query.Classifier)
+  → route_search (LLM examines candidates, emits one of 4 actions)
+  → branch:
+       synthesize_directly  → synthesize → return
+       retighten            → loop back to nl_classify (max 2)
+       walk_seeds           → execute → assess → refine? (max 5) → synthesize → return
+       decompose            → execute → assess → refine? (max 5) → synthesize → return
 ```
 
 Layer mapping:
-- Rules: six rules (R1–R6 in ADR-045) coordinating the chain;
-  conditional branch on assessment; refine loop with
-  `max_iterations: 5`; continuation rule fires the parent
-- Components: `decompose_intent`, `execute_subqueries`,
-  `assess_sufficiency`, `synthesize_answer`
-- State: a research-pipeline entity in `AGENT_LOOPS`; evidence in
-  ObjectStore via `ContentStorable`; refs as triples on the entity
+- Rules: seven rules (R0–R6 in ADR-045) coordinating the chain;
+  conditional branch on `route_search` decision; conditional branch
+  on `assess_sufficiency`; retighten loop with `max_iterations: 2`
+  (R2); refine loop with `max_iterations: 5` (R4); continuation rule
+  fires the parent
+- Components: `nl_classify` (wraps existing classifier),
+  `route_search`, `execute_subqueries`, `assess_sufficiency`,
+  `synthesize_answer`
+- State: a research-pipeline entity in `AGENT_LOOPS`; classifier
+  candidates + multi-hop evidence in ObjectStore via
+  `ContentStorable`; refs as triples on the entity
 
 See [ADR-045](../adr/045-graph-search-rule-chain.md) for the full
-design.
+design and the classify-and-route rationale.
 
 ## References
 
