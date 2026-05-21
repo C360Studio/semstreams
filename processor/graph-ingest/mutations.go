@@ -284,17 +284,6 @@ func (c *Component) entityExists(ctx context.Context, entityID string) (bool, er
 	return false, err
 }
 
-// entityRevisionAfterWrite returns the KV revision of the entity bucket
-// entry after a successful mutation. Best-effort: a Get failure here
-// surfaces as 0 (the caller's response just omits the KVRevision field).
-func (c *Component) entityRevisionAfterWrite(ctx context.Context, entityID string) uint64 {
-	entry, err := c.entityBucket.Get(ctx, entityID)
-	if err != nil {
-		return 0
-	}
-	return entry.Revision
-}
-
 // handleEntityCreate enforces create-or-fail semantics: returns
 // Success=false with an "entity already exists" error if the entity
 // ID is already present. CS API §7.6 (POST is strictly create) maps
@@ -419,12 +408,12 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 // resurrecting the entity (the bug an exists-check + Put pair would
 // have). CS API PUT/PATCH maps Success=false with "entity not found"
 // to HTTP 404; the same error message covers both "absent at read"
-// and "deleted concurrently before write" because semconnect maps both
-// to the same status.
-//
-// Concurrent-update conflicts (revision moved but key still present)
-// surface as "entity modified concurrently"; downstream gateways may
-// choose to retry, surface 409, or escalate.
+// and "concurrent modification or delete during write" because
+// downstream gateways (semconnect) currently map both to the same
+// status. A future PR may want to disambiguate "deleted concurrently"
+// vs "modified concurrently" with distinct error classes — for now
+// they share the "(concurrent modification or delete)" suffix so
+// callers can grep for it without having to peek inside ErrKVRevisionMismatch.
 func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {

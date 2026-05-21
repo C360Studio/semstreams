@@ -4,11 +4,13 @@ package graphingest
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -297,30 +299,29 @@ func TestIntegration_HandleEntityDelete_Idempotent(t *testing.T) {
 	assert.False(t, resp.Deleted, "Deleted should be false when entity was already absent")
 }
 
-// TestIntegration_HandleEntityUpdate_ResurrectAfterDelete pins the
-// CAS fix for the must-exist contract. Without CAS, a delete that
-// lands between the handler's existence check and its write would
-// silently re-create the entity — violating the contract semconnect
-// maps to HTTP 404. With CAS, the write fails with the same
-// "entity not found" shape callers already handle.
+// TestIntegration_HandleEntityUpdate_DeleteBeforeUpdate pins the
+// must-exist contract on the *handler* level when the entity is
+// already gone by the time the handler runs. This exercises the
+// fetchEntityState → ErrKVKeyNotFound path (mutations.go:430),
+// NOT the CAS branch (which can only be reached if the delete
+// races between fetchEntityState and updateEntityAtRevision).
 //
-// Simulates the race deterministically: read the current revision,
-// delete out-of-band, then attempt the update — that's the same
-// observable state as "a concurrent delete won the race".
-func TestIntegration_HandleEntityUpdate_ResurrectAfterDelete(t *testing.T) {
+// The CAS branch itself is covered by
+// TestIntegration_UpdateEntityAtRevision_StaleRevisionFromConcurrentDelete
+// below — that test invokes the CAS primitive directly with a
+// stale revision, which is the only deterministic way to exercise
+// the post-fetch race window without a mock bucket.
+func TestIntegration_HandleEntityUpdate_DeleteBeforeUpdate(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
-	const entityID = "c360.test.entity.update.resurrect.001"
+	const entityID = "c360.test.entity.update.delbefore.001"
 	original := newMutationTestEntity(entityID)
 	require.NoError(t, c.CreateEntity(ctx, original), "seed entity")
-
-	// Simulate the concurrent delete: out-of-band, after the handler
-	// would have done its existence check, but before its write.
-	require.NoError(t, c.DeleteEntity(ctx, entityID), "delete between read and write")
+	require.NoError(t, c.DeleteEntity(ctx, entityID), "delete before handler runs")
 
 	updated := newMutationTestEntity(entityID)
 	updated.Version = 2
-	req := graph.UpdateEntityRequest{Entity: updated, RequestID: "req-resurrect"}
+	req := graph.UpdateEntityRequest{Entity: updated, RequestID: "req-delbefore"}
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
@@ -336,6 +337,48 @@ func TestIntegration_HandleEntityUpdate_ResurrectAfterDelete(t *testing.T) {
 	exists, err := c.entityExists(ctx, entityID)
 	require.NoError(t, err)
 	assert.False(t, exists, "entity must remain absent after the failed update")
+}
+
+// TestIntegration_UpdateEntityAtRevision_StaleRevisionFromConcurrentDelete
+// pins the CAS primitive's behavior under the actual race the
+// must-exist contract protects against: a delete lands between
+// the handler's read (which captured revision R1) and the
+// handler's write (CAS attempt at R1). The tombstone bumps the
+// stream sequence, so CAS at R1 fails with ErrKVRevisionMismatch
+// instead of silently resurrecting the entity via Put.
+//
+// Tests the primitive directly (not through the handler) because
+// the handler's fetchEntityState would catch the delete first if
+// we deleted before invoking it — only by calling
+// updateEntityAtRevision with a captured stale revision can we
+// hit the post-fetch, pre-write window deterministically.
+func TestIntegration_UpdateEntityAtRevision_StaleRevisionFromConcurrentDelete(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.entity.cas.staledel.001"
+	original := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, original), "seed entity")
+
+	// Capture the revision while the entity exists — this models the
+	// state the handler holds after fetchEntityState succeeds.
+	_, capturedRev, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	require.NotZero(t, capturedRev)
+
+	// Out-of-band delete: the tombstone moves the KV sequence past
+	// capturedRev, so any subsequent CAS at capturedRev must fail.
+	require.NoError(t, c.DeleteEntity(ctx, entityID), "delete between read and write")
+
+	updated := newMutationTestEntity(entityID)
+	updated.Version = 2
+	err = c.updateEntityAtRevision(ctx, updated, capturedRev)
+	require.Error(t, err, "CAS at stale revision after concurrent delete must fail")
+	assert.True(t, errors.Is(err, natsclient.ErrKVRevisionMismatch),
+		"stale-revision CAS after delete must produce ErrKVRevisionMismatch; got: %v", err)
+
+	exists, err := c.entityExists(ctx, entityID)
+	require.NoError(t, err)
+	assert.False(t, exists, "failed CAS must not resurrect the deleted entity")
 }
 
 // TestIntegration_HandleEntityUpdate_KVRevisionIncrements pins the
