@@ -4,11 +4,17 @@ import "time"
 
 // Additional helper options for specific use cases
 
-// WithFastStartup configures NATS for fastest possible startup (good for unit tests)
+// WithFastStartup configures NATS for fastest possible RUNTIME (short
+// connection timeout, no extra features). Container startup itself still
+// needs a realistic budget — Docker API responsiveness under parallel
+// test pressure routinely exceeds 10s even when NATS itself is ready in
+// under a second. Use the package default (30s) for the container
+// startup wait; the "fast" part is the 2s connection timeout once the
+// container is up.
 func WithFastStartup() TestOption {
 	return func(cfg *testConfig) {
 		cfg.timeout = 2 * time.Second
-		cfg.startTimeout = 10 * time.Second
+		cfg.startTimeout = 30 * time.Second
 	}
 }
 
