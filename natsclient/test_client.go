@@ -121,9 +121,18 @@ func WithBucketPrefix(prefix string) TestOption {
 func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 	// Default configuration
 	cfg := &testConfig{
-		natsVersion:  "2.12-alpine",
-		timeout:      5 * time.Second,
-		startTimeout: 30 * time.Second,
+		natsVersion: "2.12-alpine",
+		timeout:     5 * time.Second,
+		// 60s startup timeout: comfortable headroom for full
+		// `go test -race -tags=integration ./...` sweeps where Docker
+		// can be under contention from dozens of parallel container
+		// spinups. Steady-state startup is well under 5s; the
+		// generous default only matters when the host is loaded.
+		// Beta.78 sweep showed 30s occasionally insufficient for
+		// hierarchy_sync_integration_test.go and
+		// entity_mutation_integration_test.go (port-not-found within
+		// the deadline). See issue #107.
+		startTimeout: 60 * time.Second,
 	}
 
 	// Apply options
@@ -256,9 +265,18 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 
 	// Default configuration
 	cfg := &testConfig{
-		natsVersion:  "2.12-alpine",
-		timeout:      5 * time.Second,
-		startTimeout: 30 * time.Second,
+		natsVersion: "2.12-alpine",
+		timeout:     5 * time.Second,
+		// 60s startup timeout: comfortable headroom for full
+		// `go test -race -tags=integration ./...` sweeps where Docker
+		// can be under contention from dozens of parallel container
+		// spinups. Steady-state startup is well under 5s; the
+		// generous default only matters when the host is loaded.
+		// Beta.78 sweep showed 30s occasionally insufficient for
+		// hierarchy_sync_integration_test.go and
+		// entity_mutation_integration_test.go (port-not-found within
+		// the deadline). See issue #107.
+		startTimeout: 60 * time.Second,
 	}
 
 	// Apply options
