@@ -243,6 +243,71 @@ func TestAsset_PositionAbsent_NoTripleEmitted(t *testing.T) {
 	}
 }
 
+func TestAsset_UniqueIDEmittedAsTriple(t *testing.T) {
+	// Issue #115: SensorML uniqueId used to be silently dropped by
+	// Asset.Triples() — the parser decoded AbstractProcess.UniqueID
+	// correctly but the emitter had no case for it, so the producer's
+	// globally-unique identifier was lost in the round trip and
+	// downstream consumers (CS API gateways) had no way to surface it.
+	defer vocabulary.SnapshotRegistry()()
+
+	const sml = `{
+		"type": "PhysicalSystem",
+		"id": "platform-001",
+		"label": "Sensor Platform",
+		"uniqueId": "urn:example:dev:42"
+	}`
+
+	process, err := UnmarshalProcess([]byte(sml))
+	if err != nil {
+		t.Fatalf("UnmarshalProcess: %v", err)
+	}
+
+	if got := process.Base().UniqueID; got != "urn:example:dev:42" {
+		t.Fatalf("AbstractProcess.UniqueID parse mismatch: got %q, want %q",
+			got, "urn:example:dev:42")
+	}
+
+	asset := NewAsset("acme.ops.robotics.gcs.platform.001", process)
+	triples := asset.Triples()
+
+	if !triplePredicateAndObjectMatch(triples, PredUniqueID, "urn:example:dev:42") {
+		t.Errorf("expected uid triple %q → %q; got %v",
+			PredUniqueID, "urn:example:dev:42", triples)
+	}
+
+	// Turtle export must compact PredUniqueID to dc:identifier
+	// (proves the predicates.go init() registration is live).
+	out, err := export.SerializeToString(triples, export.Turtle)
+	if err != nil {
+		t.Fatalf("Turtle export: %v", err)
+	}
+	if !strings.Contains(out, "dc:identifier") && !strings.Contains(out, "dcterms:identifier") {
+		t.Errorf("expected Turtle output to contain dc:identifier (or dcterms:identifier), got:\n%s", out)
+	}
+}
+
+func TestAsset_UniqueIDAbsent_NoTripleEmitted(t *testing.T) {
+	const sml = `{
+		"type": "PhysicalSystem",
+		"id": "no-uid-platform",
+		"label": "Platform without uniqueId"
+	}`
+
+	process, err := UnmarshalProcess([]byte(sml))
+	if err != nil {
+		t.Fatalf("UnmarshalProcess: %v", err)
+	}
+
+	asset := NewAsset("acme.ops.test.gcs.platform.001", process)
+	triples := asset.Triples()
+	for _, tr := range triples {
+		if tr.Predicate == PredUniqueID {
+			t.Errorf("unexpected uid triple emitted when SensorML has no uniqueId field: %v", tr)
+		}
+	}
+}
+
 func containsTriple(triples []message.Triple, want message.Triple) bool {
 	for _, t := range triples {
 		if t.Subject == want.Subject && t.Predicate == want.Predicate && t.Object == want.Object {
