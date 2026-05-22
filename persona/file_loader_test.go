@@ -53,8 +53,6 @@ func discardLogger() *slog.Logger {
 func TestFileLoader_HappyPath(t *testing.T) {
 	root := t.TempDir()
 	// Two role directories, each with 2 fragment files.
-	// Fragment IDs must be globally unique (the KV bucket keys by ID, not
-	// by role+ID), so we use distinct stems across roles.
 	roles := []struct{ dir, file, content string }{
 		{"ops", "ops-identity.md", "You are an ops agent."},
 		{"ops", "ops-constraints.md", "Never break prod."},
@@ -81,19 +79,19 @@ func TestFileLoader_HappyPath(t *testing.T) {
 		t.Fatalf("expected 4 fragments, got %d", got)
 	}
 
-	// Fragment IDs are the stem of the filename (not the role-prefixed path).
+	// Fragment IDs are role-prefixed (<role>/<filename-stem>) per #124.
 	for _, r := range roles {
-		fragID := strings.TrimSuffix(r.file, ".md")
-		p := mgr.get(fragID)
+		id := r.dir + "/" + strings.TrimSuffix(r.file, ".md")
+		p := mgr.get(id)
 		if p == nil {
-			t.Errorf("fragment %q not found in manager", fragID)
+			t.Errorf("fragment %q not found in manager", id)
 			continue
 		}
 		if p.Content != r.content {
-			t.Errorf("fragment %q: content mismatch: got %q, want %q", fragID, p.Content, r.content)
+			t.Errorf("fragment %q: content mismatch: got %q, want %q", id, p.Content, r.content)
 		}
 		if len(p.Roles) != 1 || p.Roles[0] != r.dir {
-			t.Errorf("fragment %q: roles mismatch: got %v, want [%s]", fragID, p.Roles, r.dir)
+			t.Errorf("fragment %q: roles mismatch: got %v, want [%s]", id, p.Roles, r.dir)
 		}
 	}
 }
@@ -145,7 +143,7 @@ func TestFileLoader_NonMarkdownFilesSkipped(t *testing.T) {
 	if got := mgr.count(); got != 1 {
 		t.Fatalf("expected 1 fragment (only .md), got %d", got)
 	}
-	if mgr.get("identity") == nil {
+	if mgr.get("ops/identity") == nil {
 		t.Error("identity fragment should be loaded")
 	}
 }
@@ -170,7 +168,7 @@ func TestFileLoader_HiddenFilesSkipped(t *testing.T) {
 	if got := mgr.count(); got != 1 {
 		t.Fatalf("expected 1 fragment, got %d", got)
 	}
-	if mgr.get("visible") == nil {
+	if mgr.get("ops/visible") == nil {
 		t.Error("visible fragment should be loaded")
 	}
 }
@@ -197,7 +195,7 @@ func TestFileLoader_NestedDirectoriesSkipped(t *testing.T) {
 	if got := mgr.count(); got != 1 {
 		t.Fatalf("expected 1 fragment (only depth-2), got %d", got)
 	}
-	if mgr.get("top") == nil {
+	if mgr.get("ops/top") == nil {
 		t.Error("top fragment should be loaded")
 	}
 }
@@ -217,7 +215,7 @@ func TestFileLoader_UnicodeContent(t *testing.T) {
 	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := mgr.get("unicode")
+	p := mgr.get("i18n/unicode")
 	if p == nil {
 		t.Fatal("unicode fragment not found")
 	}
@@ -227,14 +225,17 @@ func TestFileLoader_UnicodeContent(t *testing.T) {
 }
 
 func TestFileLoader_FragmentIDDerivation(t *testing.T) {
+	// Fragment IDs are namespaced by role to prevent cross-role collisions
+	// when the same filename appears in multiple role directories.
+	// See TestFileLoader_MultiRoleSameFilename_NoOverwrite and issue #124.
 	tests := []struct {
 		filename string
 		wantID   string
 	}{
-		{"00-identity.md", "00-identity"},
-		{"my.fragment.md", "my.fragment"}, // single extension stripped
-		{"simple.md", "simple"},
-		{"multi.dots.in.name.md", "multi.dots.in.name"},
+		{"00-identity.md", "ops/00-identity"},
+		{"my.fragment.md", "ops/my.fragment"}, // single extension stripped
+		{"simple.md", "ops/simple"},
+		{"multi.dots.in.name.md", "ops/multi.dots.in.name"},
 	}
 
 	root := t.TempDir()
@@ -259,6 +260,76 @@ func TestFileLoader_FragmentIDDerivation(t *testing.T) {
 	}
 }
 
+// TestFileLoader_MultiRoleSameFilename_NoOverwrite is the regression test
+// for issue #124: cross-role ID collisions used to silently drop fragments
+// from all but the alphabetically-last role when filenames were shared
+// across role directories. The fix namespaces Persona.ID by role so each
+// fragment survives upsert with the correct content and Roles assignment.
+//
+// Symptom before the fix: writing `coordinator/00-identity.md` and
+// `researcher/00-identity.md` both produced personas with ID="00-identity";
+// the second upsert overwrote the first and a downstream agent loop got
+// only the researcher's content (or only the coordinator's, depending on
+// walk order). Products using the documented <root>/<role>/<file>.md layout
+// with sensible shared filenames (00-identity.md, 10-output-contract.md)
+// were silently running on DefaultFragments() alone.
+func TestFileLoader_MultiRoleSameFilename_NoOverwrite(t *testing.T) {
+	root := t.TempDir()
+
+	// Three roles each holding identically-named fragments with
+	// role-distinguishable content. If the loader collapses on filename
+	// stem, at most one role's content survives — and the assertion below
+	// reports exactly which roles got dropped.
+	roles := []string{"coordinator", "ops", "researcher"}
+	fragments := []string{"00-identity.md", "10-output-contract.md"}
+
+	for _, role := range roles {
+		dir := filepath.Join(root, role)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, frag := range fragments {
+			content := fmt.Sprintf("role=%s fragment=%s", role, frag)
+			if err := os.WriteFile(filepath.Join(dir, frag), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	mgr := newFakeManager()
+	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantCount := len(roles) * len(fragments)
+	if got := mgr.count(); got != wantCount {
+		t.Fatalf("expected %d fragments (one per role/file pair); got %d — collision dropped some",
+			wantCount, got)
+	}
+
+	for _, role := range roles {
+		for _, frag := range fragments {
+			fragStem := strings.TrimSuffix(frag, ".md")
+			id := role + "/" + fragStem
+			p := mgr.get(id)
+			if p == nil {
+				t.Errorf("expected fragment %q (role=%s, file=%s) to survive multi-role load, not found",
+					id, role, frag)
+				continue
+			}
+			wantContent := fmt.Sprintf("role=%s fragment=%s", role, frag)
+			if p.Content != wantContent {
+				t.Errorf("fragment %q: content mismatch (collision overwrite?): got %q, want %q",
+					id, p.Content, wantContent)
+			}
+			if len(p.Roles) != 1 || p.Roles[0] != role {
+				t.Errorf("fragment %q: roles should remain [%s] after upsert; got %v",
+					id, role, p.Roles)
+			}
+		}
+	}
+}
+
 func TestFileLoader_RoleDerivation(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "custom-role-name")
@@ -273,7 +344,7 @@ func TestFileLoader_RoleDerivation(t *testing.T) {
 	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := mgr.get("frag")
+	p := mgr.get("custom-role-name/frag")
 	if p == nil {
 		t.Fatal("fragment not found")
 	}
@@ -298,7 +369,7 @@ func TestFileLoader_LargeFile(t *testing.T) {
 	if err := walkFragments(context.Background(), root, mgr.Upsert, discardLogger()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p := mgr.get("big")
+	p := mgr.get("ops/big")
 	if p == nil {
 		t.Fatal("large fragment not found")
 	}
@@ -404,7 +475,7 @@ func TestFileLoader_SymlinkEscapeSkipped(t *testing.T) {
 	}
 
 	// The legitimate file must always be loaded.
-	if content, ok := loaded["legit"]; !ok || content != legitContent {
+	if content, ok := loaded["ops/legit"]; !ok || content != legitContent {
 		t.Errorf("legit fragment not loaded correctly; got loaded=%v", loaded)
 	}
 

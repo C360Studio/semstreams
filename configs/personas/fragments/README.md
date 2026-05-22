@@ -14,7 +14,11 @@ configs/personas/fragments/
 ```
 
 - Each subdirectory name becomes the **role** the fragment is scoped to.
-- Each `.md` filename (without the `.md` extension) becomes the **fragment ID**.
+- The fragment **ID** is `<role>/<filename-stem>` — the role directory and the
+  `.md` filename (without the extension) joined with `/`. This prevents
+  silent collisions when the same filename appears in multiple role
+  directories (e.g. every role having its own `00-identity.md`) — see
+  issue #124 for the pre-fix behavior.
 - The full file body is used as the fragment **content** — there is no YAML
   frontmatter. Priority and category are not configurable here; set them via
   the `create_persona` / `update_persona` CRUD tools if needed.
@@ -22,8 +26,13 @@ configs/personas/fragments/
 Example: `configs/personas/fragments/ops/00-identity.md` loads as:
 
 ```json
-{"id": "00-identity", "roles": ["ops"], "content": "<file body>"}
+{"id": "ops/00-identity", "roles": ["ops"], "content": "<file body>"}
 ```
+
+Operator note: `update_persona` and `delete_persona` calls that target a
+file-loaded persona must use the role-prefixed ID
+(`update_persona("ops/00-identity", ...)`, not
+`update_persona("00-identity", ...)`).
 
 ## Precedence and source-of-truth model
 
