@@ -78,6 +78,13 @@ func (a *Asset) Triples() []message.Triple {
 			out = append(out, message.Triple{Subject: a.entityID, Predicate: PredCharacteristicValue, Object: char.Value})
 		}
 	}
+	if base.Position != nil && len(base.Position.Raw) > 0 {
+		out = append(out, message.Triple{
+			Subject:   a.entityID,
+			Predicate: PredPosition,
+			Object:    string(base.Position.Raw),
+		})
+	}
 	out = append(out, a.typeSpecificTriples()...)
 	return out
 }

@@ -170,6 +170,79 @@ func TestAsset_NilProcess(t *testing.T) {
 	}
 }
 
+func TestAsset_PositionRoundTripsAsTriple(t *testing.T) {
+	// Issue #114: SensorML position field used to be silently dropped
+	// by the parser's type model and triple emitter. The fix:
+	// preserve the raw GeoJSON-shaped JSON on AbstractProcess.Position
+	// and emit a sensorml.process.position triple (→ sosa:hasLocation).
+	defer vocabulary.SnapshotRegistry()()
+
+	const sml = `{
+		"type": "PhysicalSystem",
+		"id": "platform-001",
+		"label": "Sensor Platform",
+		"position": {"type": "Point", "coordinates": [-122.4194, 37.7749, 10.0]}
+	}`
+
+	process, err := UnmarshalProcess([]byte(sml))
+	if err != nil {
+		t.Fatalf("UnmarshalProcess: %v", err)
+	}
+
+	const platformID = "acme.ops.robotics.gcs.platform.001"
+	asset := NewAsset(platformID, process)
+	triples := asset.Triples()
+
+	// The parser must preserve the raw GeoJSON on the type model.
+	base := process.Base()
+	if base.Position == nil {
+		t.Fatal("expected AbstractProcess.Position to be populated; SensorML position field was silently dropped")
+	}
+	wantGeoJSON := `{"type": "Point", "coordinates": [-122.4194, 37.7749, 10.0]}`
+	if got := string(base.Position.Raw); got != wantGeoJSON {
+		t.Errorf("Position.Raw mismatch:\n got: %q\nwant: %q", got, wantGeoJSON)
+	}
+
+	// And emit a position triple under PredPosition (→ sosa:hasLocation).
+	if !triplePredicateAndObjectMatch(triples, PredPosition, wantGeoJSON) {
+		t.Errorf("expected position triple %q → %q; got %v", PredPosition, wantGeoJSON, triples)
+	}
+
+	// Turtle export must compact PredPosition to sosa:hasLocation
+	// (proving the predicate registration in init() is live).
+	out, err := export.SerializeToString(triples, export.Turtle)
+	if err != nil {
+		t.Fatalf("Turtle export: %v", err)
+	}
+	if !strings.Contains(out, "sosa:hasLocation") {
+		t.Errorf("expected Turtle output to contain sosa:hasLocation, got:\n%s", out)
+	}
+}
+
+func TestAsset_PositionAbsent_NoTripleEmitted(t *testing.T) {
+	// Regression: a process WITHOUT a position field must not
+	// emit a position triple. Guards against Object: "" or
+	// Object: "null" leaks.
+	const sml = `{
+		"type": "PhysicalSystem",
+		"id": "no-position-platform",
+		"label": "Indoor sensor — no geometry"
+	}`
+
+	process, err := UnmarshalProcess([]byte(sml))
+	if err != nil {
+		t.Fatalf("UnmarshalProcess: %v", err)
+	}
+
+	asset := NewAsset("acme.ops.indoor.gcs.platform.001", process)
+	triples := asset.Triples()
+	for _, tr := range triples {
+		if tr.Predicate == PredPosition {
+			t.Errorf("unexpected position triple emitted when SensorML has no position field: %v", tr)
+		}
+	}
+}
+
 func containsTriple(triples []message.Triple, want message.Triple) bool {
 	for _, t := range triples {
 		if t.Subject == want.Subject && t.Predicate == want.Predicate && t.Object == want.Object {

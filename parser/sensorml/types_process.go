@@ -1,5 +1,7 @@
 package sensorml
 
+import "encoding/json"
+
 // Process is the SensorML JSON polymorphic root. Every concrete
 // process type (PhysicalSystem, PhysicalComponent, SimpleProcess,
 // AggregateProcess) implements Process by reporting its
@@ -52,6 +54,38 @@ type AbstractProcess struct {
 	Outputs         DataComponentList  `json:"outputs,omitempty"`
 	Parameters      DataComponentList  `json:"parameters,omitempty"`
 	TypeOf          *Reference         `json:"typeOf,omitempty"`
+	Position        *Position          `json:"position,omitempty"`
+}
+
+// Position is the SensorML §7.1.6 spatial element. Wire form is a
+// GeoJSON-shaped Point / Polygon / LineString carried verbatim as
+// json.RawMessage so the parser does not have to know every valid
+// geometry shape. Consumers (graph-index-spatial, CS API gateways)
+// read Raw and parse as GeoJSON.
+//
+// MarshalJSON returns Raw directly — round-trips losslessly.
+// UnmarshalJSON copies the incoming bytes into Raw, so the source
+// stream is decoupled from the slice the struct retains.
+//
+// See issue #114.
+type Position struct {
+	Raw json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON captures the raw position JSON for later passthrough.
+func (p *Position) UnmarshalJSON(data []byte) error {
+	p.Raw = append(p.Raw[:0], data...)
+	return nil
+}
+
+// MarshalJSON returns the captured raw JSON. Returns the JSON
+// literal "null" when Raw is empty so consumers do not see invalid
+// JSON output if the struct was constructed without a payload.
+func (p Position) MarshalJSON() ([]byte, error) {
+	if len(p.Raw) == 0 {
+		return []byte("null"), nil
+	}
+	return p.Raw, nil
 }
 
 // SimpleProcess is a SensorML concrete leaf process — an
