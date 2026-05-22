@@ -66,6 +66,15 @@ const (
 	// the raw GeoJSON-shaped JSON text (string) — consumers parse
 	// it as GeoJSON when they need typed geometry. See issue #114.
 	PredPosition = "sensorml.process.position"
+
+	// PredUniqueID carries the SensorML §7.1.3 uniqueId — the
+	// producer-assigned globally-unique identifier (URN, UUID,
+	// vendor-scoped string). Distinct from the SemStreams-assigned
+	// 6-part Entity ID, which is the triple Subject; the uid
+	// preserves the original client identifier so consumers can
+	// correlate a POSTed resource against subsequent reads. Maps
+	// to dc:identifier. See issue #115.
+	PredUniqueID = "sensorml.process.uid"
 )
 
 // init registers every dotted predicate this package emits with
@@ -102,6 +111,7 @@ func init() {
 	vocabulary.Register(PredCharacteristicValue,
 		vocabulary.WithIRI("http://www.w3.org/ns/ssn/hasProperty"))
 	vocabulary.Register(PredPosition, vocabulary.WithIRI(sosa.HasLocation))
+	vocabulary.Register(PredUniqueID, vocabulary.WithIRI(vocabulary.DcIdentifier))
 }
 
 // processClassIRI returns the SOSA class IRI that best matches

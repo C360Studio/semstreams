@@ -63,6 +63,9 @@ func (a *Asset) Triples() []message.Triple {
 	if base.Definition != "" {
 		out = append(out, message.Triple{Subject: a.entityID, Predicate: PredDefinition, Object: base.Definition})
 	}
+	if base.UniqueID != "" {
+		out = append(out, message.Triple{Subject: a.entityID, Predicate: PredUniqueID, Object: base.UniqueID})
+	}
 	for _, ident := range base.Identifiers {
 		if ident.Value != nil {
 			out = append(out, message.Triple{Subject: a.entityID, Predicate: PredIdentifierValue, Object: ident.Value})
