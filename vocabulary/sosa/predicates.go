@@ -21,6 +21,7 @@ var iris = map[string]string{
 	Prefix + ":Platform":           Platform,
 	Prefix + ":Procedure":          Procedure,
 	Prefix + ":Sample":             Sample,
+	Prefix + ":SamplingFeature":    SamplingFeature,
 	Prefix + ":Sampler":            Sampler,
 	Prefix + ":Result":             Result,
 	Prefix + ":Actuator":           Actuator,
@@ -40,6 +41,7 @@ var iris = map[string]string{
 	Prefix + ":hosts":                Hosts,
 	Prefix + ":isHostedBy":           IsHostedBy,
 	Prefix + ":observedProperty":     ObservedProperty,
+	Prefix + ":hasLocation":          HasLocation,
 
 	// SSN classes
 	SSNPrefix + ":System":     SSNSystem,

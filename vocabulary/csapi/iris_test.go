@@ -7,12 +7,18 @@ import (
 
 func TestIRIsCoverConstants(t *testing.T) {
 	wantPairs := map[string]string{
-		Prefix + ":Datastream": Datastream,
+		Prefix + ":Datastream":    Datastream,
+		Prefix + ":ControlStream": ControlStream,
+		Prefix + ":Command":       Command,
+		Prefix + ":SystemEvent":   SystemEvent,
 
 		Prefix + ":producedBy":          ProducedBy,
 		Prefix + ":resultTimeRange":     ResultTimeRange,
 		Prefix + ":phenomenonTimeRange": PhenomenonTimeRange,
 		Prefix + ":resultType":          ResultType,
+		Prefix + ":controlsSystem":      ControlsSystem,
+		Prefix + ":partOfControlStream": PartOfControlStream,
+		Prefix + ":eventForSystem":      EventForSystem,
 	}
 	got := IRIs()
 	if len(got) != len(wantPairs) {
@@ -29,8 +35,9 @@ func TestIRIsCoverConstants(t *testing.T) {
 
 func TestConstantsLiveInDeclaredNamespace(t *testing.T) {
 	all := []string{
-		Datastream,
+		Datastream, ControlStream, Command, SystemEvent,
 		ProducedBy, ResultTimeRange, PhenomenonTimeRange, ResultType,
+		ControlsSystem, PartOfControlStream, EventForSystem,
 	}
 	for _, c := range all {
 		if !strings.HasPrefix(c, Namespace) {

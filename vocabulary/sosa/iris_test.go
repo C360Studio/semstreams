@@ -18,6 +18,7 @@ func TestIRIsCoverConstants(t *testing.T) {
 		Prefix + ":Platform":           Platform,
 		Prefix + ":Procedure":          Procedure,
 		Prefix + ":Sample":             Sample,
+		Prefix + ":SamplingFeature":    SamplingFeature,
 		Prefix + ":Sampler":            Sampler,
 		Prefix + ":Result":             Result,
 		Prefix + ":Actuator":           Actuator,
@@ -36,6 +37,7 @@ func TestIRIsCoverConstants(t *testing.T) {
 		Prefix + ":hosts":                Hosts,
 		Prefix + ":isHostedBy":           IsHostedBy,
 		Prefix + ":observedProperty":     ObservedProperty,
+		Prefix + ":hasLocation":          HasLocation,
 
 		SSNPrefix + ":System":         SSNSystem,
 		SSNPrefix + ":Deployment":     SSNDeployment,
@@ -64,11 +66,11 @@ func TestIRIsCoverConstants(t *testing.T) {
 func TestConstantsLiveInDeclaredNamespace(t *testing.T) {
 	sosaConsts := []string{
 		Sensor, Observation, FeatureOfInterest, ObservableProperty,
-		Platform, Procedure, Sample, Sampler, Result, Actuator,
+		Platform, Procedure, Sample, SamplingFeature, Sampler, Result, Actuator,
 		Actuation, ActuatableProperty,
 		Observes, HasFeatureOfInterest, MadeBySensor, MadeObservation,
 		UsedProcedure, HasSimpleResult, HasResult, ResultTime,
-		PhenomenonTime, Hosts, IsHostedBy, ObservedProperty,
+		PhenomenonTime, Hosts, IsHostedBy, ObservedProperty, HasLocation,
 	}
 	for _, c := range sosaConsts {
 		if !strings.HasPrefix(c, Namespace) {
