@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -283,6 +284,47 @@ func TestKVStore_ErrorBoundaries(t *testing.T) {
 		entry, err := kv.Get(ctx, "deleted-key")
 		require.NoError(t, err)
 		assert.Equal(t, "new-value", string(entry.Value))
+	})
+
+	t.Run("update_deleted_key_must_exist_caller_surfaces_clean_not_found", func(t *testing.T) {
+		// Companion to "update_deleted_key": that test validated the create-new
+		// semantics (caller's updateFn happily produces a value when current is nil).
+		// This test validates the must-exist semantics: a caller that returns
+		// retry.NonRetryable(ErrKVKeyNotFound) when current is nil must see
+		// that sentinel terminate the retry loop cleanly, NOT burn the full
+		// retry budget into ErrKVMaxRetriesExceeded.
+		//
+		// This is the scenario filed in issue #122. The fix in IsKVNotFoundError
+		// recognizing jetstream.ErrKeyDeleted is the defensive guard; this test
+		// validates the end-to-end behavior the must-exist callers (e.g.
+		// graph-ingest's handleEntityUpdateWithTriples) depend on.
+		kv := client.NewKVStore(bucket, func(opts *KVOptions) {
+			opts.MaxRetries = 3
+			opts.RetryDelay = 10 * time.Millisecond
+			opts.Timeout = time.Second
+		})
+
+		_, err := bucket.Create(ctx, "must-exist-tombstone-key", []byte("initial"))
+		require.NoError(t, err)
+		err = bucket.Delete(ctx, "must-exist-tombstone-key")
+		require.NoError(t, err)
+
+		var nilCurrentObserved int
+		err = kv.UpdateWithRetry(ctx, "must-exist-tombstone-key", func(current []byte) ([]byte, error) {
+			if len(current) == 0 {
+				nilCurrentObserved++
+				return nil, retry.NonRetryable(ErrKVKeyNotFound)
+			}
+			return []byte("should-not-reach"), nil
+		})
+
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrKVKeyNotFound),
+			"must-exist caller on tombstoned key must surface ErrKVKeyNotFound via errors.Is; got: %v", err)
+		assert.False(t, errors.Is(err, ErrKVMaxRetriesExceeded),
+			"NonRetryable must short-circuit before retry exhaustion; got: %v", err)
+		assert.Equal(t, 1, nilCurrentObserved,
+			"updateFn must be invoked exactly once — NonRetryable stops the loop on first attempt")
 	})
 
 	t.Run("panic_recovery", func(t *testing.T) {

@@ -408,18 +408,29 @@ func (kv *KVStore) Watch(ctx context.Context, pattern string) (jetstream.KeyWatc
 
 // Error detection helpers - based on Graph processor experience
 
-// IsKVNotFoundError checks if error indicates key not found
+// IsKVNotFoundError checks if error indicates key absence — either a never-created
+// key (jetstream.ErrKeyNotFound) or a tombstoned key (jetstream.ErrKeyDeleted).
+// Both surface to callers as "the key is not there"; UpdateWithRetry relies on
+// this to set revision=0 and route the updateFn down the create path.
+//
+// The NATS Go SDK's public Get already maps ErrKeyDeleted → ErrKeyNotFound, so
+// in the common KVStore.Get path only ErrKeyNotFound reaches us. The ErrKeyDeleted
+// branch defends paths that bypass that mapping (Watch handler entry-error chains,
+// GetRevision wrappers, future SDK changes). See issue #122 and
+// feedback_jetstream_sentinel_set_coverage.
 func IsKVNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for our custom error
 	if errors.Is(err, ErrKVKeyNotFound) {
 		return true
 	}
-	// Check for raw NATS errors
+	if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
+		return true
+	}
 	errMsg := err.Error()
 	return strings.Contains(errMsg, "key not found") ||
+		strings.Contains(errMsg, "key was deleted") ||
 		strings.Contains(errMsg, "10037")
 }
 

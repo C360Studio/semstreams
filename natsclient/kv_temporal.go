@@ -100,12 +100,7 @@ func (tr *TemporalResolver) GetAtTimestamp(
 	// Get history (from cache if available)
 	history, err := tr.getCachedHistory(ctx, key)
 	if err != nil {
-		// Check if it's a key not found error from NATS
-		if jetstream.ErrKeyNotFound != nil && err == jetstream.ErrKeyNotFound {
-			return nil, ErrKVKeyNotFound
-		}
-		// Also check for string match in case the error is different
-		if err.Error() == "nats: key not found" {
+		if IsKVNotFoundError(err) {
 			return nil, ErrKVKeyNotFound
 		}
 		return nil, fmt.Errorf("get history: %w", err)

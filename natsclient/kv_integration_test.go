@@ -5,6 +5,8 @@ package natsclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -403,13 +405,30 @@ func TestKVStore_Timeout(t *testing.T) {
 
 func TestKVStore_ErrorHelpers(t *testing.T) {
 	t.Run("IsKVNotFoundError", func(t *testing.T) {
-		// Test various not found error formats
+		// Our sentinel
 		assert.True(t, IsKVNotFoundError(ErrKVKeyNotFound))
 		assert.False(t, IsKVNotFoundError(ErrKVKeyExists))
 		assert.False(t, IsKVNotFoundError(nil))
 
-		// Test actual NATS error messages (would need real errors from NATS)
-		// These are the known patterns from the implementation
+		// Raw NATS sentinels — both the not-found and the tombstone-deleted
+		// cases must surface as "key absent" for UpdateWithRetry to route
+		// through the create path. See issue #122.
+		assert.True(t, IsKVNotFoundError(jetstream.ErrKeyNotFound),
+			"raw jetstream.ErrKeyNotFound must be recognized")
+		assert.True(t, IsKVNotFoundError(jetstream.ErrKeyDeleted),
+			"raw jetstream.ErrKeyDeleted (tombstone) must be recognized")
+
+		// Wrapped errors — errors.Is unwrap chain must work for both sentinels.
+		assert.True(t, IsKVNotFoundError(fmt.Errorf("history failed: %w", jetstream.ErrKeyDeleted)),
+			"wrapped ErrKeyDeleted must be recognized via errors.Is")
+		assert.True(t, IsKVNotFoundError(fmt.Errorf("get failed: %w", jetstream.ErrKeyNotFound)),
+			"wrapped ErrKeyNotFound must be recognized via errors.Is")
+
+		// String-match fallback — for errors that don't conform to errors.Is.
+		assert.True(t, IsKVNotFoundError(errors.New("kv get foo: nats: key was deleted")),
+			"raw 'key was deleted' substring must be recognized")
+		assert.True(t, IsKVNotFoundError(errors.New("kv get foo: nats: key not found")),
+			"raw 'key not found' substring must be recognized")
 	})
 
 	t.Run("IsKVConflictError", func(t *testing.T) {
