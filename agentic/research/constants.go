@@ -27,6 +27,12 @@ const (
 	// CategoryRouteDecision is route_search's structured emit: one of
 	// four actions plus action-specific args plus rationale.
 	CategoryRouteDecision = "route_decision"
+
+	// CategoryClassifierOutput is the nl_classify component's emit:
+	// classifier hints + initial candidate set. R1 fires on the
+	// matching trigger key; route_search (PR 3) consumes the payload
+	// to pick a routing action.
+	CategoryClassifierOutput = "classifier_output"
 )
 
 // RouteAction values for RouteDecision.Action. Closed enum per ADR-045

@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "research-graph-classify.v1.json",
+  "type": "object",
+  "title": "research-graph-classify Configuration",
+  "description": "ADR-045 nl_classify: classify a research topic via the existing graph/query.ClassifierChain and surface initial candidate entities for downstream route_search.",
+  "properties": {
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket name holding research-pipeline loops and trigger/completion keys",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
+    "max_candidates": {
+      "type": "integer",
+      "description": "Cap on number of candidate entities to surface from the search_graph response (latency vs route_search prompt budget). 0 means default (25).",
+      "default": 25,
+      "maximum": 200,
+      "category": "advanced"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port configuration. nl_classify requires one nats input subscribing to component.nl_classify.\u003e",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "research-graph-classify",
+    "type": "processor",
+    "protocol": "nl_classify",
+    "domain": "research",
+    "version": "0.1.0"
+  }
+}

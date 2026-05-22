@@ -141,6 +141,121 @@ func TestSearchResult_RoundTripThroughDecoder(t *testing.T) {
 	}
 }
 
+func TestClassifierOutput_RoundTripThroughDecoder(t *testing.T) {
+	original := &research.ClassifierOutput{
+		Topic:      "drone hover anomalies in robotics fleet",
+		Tier:       "0",
+		Intent:     "",
+		Confidence: 1.0,
+		Hints: map[string]any{
+			"path_intent":     true,
+			"path_start_node": "drone-001",
+		},
+		Candidates: []research.Candidate{
+			{
+				EntityID:    "acme.ops.robotics.gcs.drone.001",
+				Label:       "Drone 001",
+				Type:        "drone",
+				Relevance:   0.92,
+				SnippetText: "Drone 001 reported hover instability at 14:32Z.",
+				Tier:        "0",
+				Source:      "classifier_chain",
+			},
+			{
+				EntityID:  "acme.ops.robotics.gcs.drone.014",
+				Type:      "drone",
+				Relevance: 0.71,
+				Tier:      "0",
+				Source:    "search_graph",
+			},
+		},
+		Degraded:       true,
+		DegradedReason: "search_graph fell back to semantic strategy",
+	}
+
+	envelope := message.NewBaseMessage(original.Schema(), original, "research-roundtrip-test")
+	wireBytes, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
+	}
+	got, ok := decoded.Payload().(*research.ClassifierOutput)
+	if !ok {
+		t.Fatalf("payload: got %T, want *research.ClassifierOutput", decoded.Payload())
+	}
+	if got.Topic != original.Topic {
+		t.Errorf("topic: got %q, want %q", got.Topic, original.Topic)
+	}
+	if got.Tier != original.Tier {
+		t.Errorf("tier: got %q, want %q", got.Tier, original.Tier)
+	}
+	if !got.Degraded || got.DegradedReason != original.DegradedReason {
+		t.Errorf("degraded fields drifted: %+v", got)
+	}
+	if len(got.Candidates) != len(original.Candidates) {
+		t.Fatalf("candidates len: got %d, want %d", len(got.Candidates), len(original.Candidates))
+	}
+	for i := range original.Candidates {
+		if got.Candidates[i].EntityID != original.Candidates[i].EntityID {
+			t.Errorf("candidates[%d].EntityID: got %q, want %q", i, got.Candidates[i].EntityID, original.Candidates[i].EntityID)
+		}
+		if got.Candidates[i].Tier != original.Candidates[i].Tier {
+			t.Errorf("candidates[%d].Tier: got %q, want %q", i, got.Candidates[i].Tier, original.Candidates[i].Tier)
+		}
+	}
+}
+
+func TestClassifierOutput_ValidateRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  research.ClassifierOutput
+		wantSub string
+	}{
+		{
+			name:    "missing topic",
+			output:  research.ClassifierOutput{Topic: ""},
+			wantSub: "topic required",
+		},
+		{
+			name:    "negative confidence",
+			output:  research.ClassifierOutput{Topic: "x", Confidence: -0.1},
+			wantSub: "confidence",
+		},
+		{
+			name: "candidate missing entity_id",
+			output: research.ClassifierOutput{
+				Topic:      "x",
+				Candidates: []research.Candidate{{Tier: "0", Source: "classifier_chain"}},
+			},
+			wantSub: "entity_id required",
+		},
+		{
+			name: "candidate bad tier",
+			output: research.ClassifierOutput{
+				Topic:      "x",
+				Candidates: []research.Candidate{{EntityID: "e", Tier: "bogus", Source: "x"}},
+			},
+			wantSub: "tier",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.output.Validate()
+			if err == nil {
+				t.Fatalf("Validate = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("Validate error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
 func TestRouteDecision_RoundTripThroughDecoder(t *testing.T) {
 	original := &research.RouteDecision{
 		Action: research.ActionDecompose,
