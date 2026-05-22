@@ -43,6 +43,11 @@ const (
 	// downstream observation.
 	Sample = Namespace + "Sample"
 
+	// SamplingFeature — a spatial / temporal proxy a Sample is
+	// drawn from. Carries the geometry and time bounds the Sample
+	// itself doesn't own directly. SOSA §3.10.
+	SamplingFeature = Namespace + "SamplingFeature"
+
 	// Sampler — the device or method that produces a Sample.
 	Sampler = Namespace + "Sampler"
 
@@ -110,6 +115,13 @@ const (
 	// ObservedProperty binds an Observation to the
 	// ObservableProperty it measured.
 	ObservedProperty = Namespace + "observedProperty"
+
+	// HasLocation binds a Feature-of-Interest (System, Sensor,
+	// Sample, etc.) to a Geo-Feature describing its spatial extent.
+	// W3C SSN/SOSA recommendation 2017 §7. Object is typically a
+	// GeoJSON-shaped Point / Polygon / LineString string carried
+	// verbatim through the triple set.
+	HasLocation = Namespace + "hasLocation"
 )
 
 // SSN namespace identifiers. SSN is the systems/deployment overlay

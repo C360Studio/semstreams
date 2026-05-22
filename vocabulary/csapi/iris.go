@@ -25,6 +25,24 @@ const (
 	// ResultTimeRange) and a result-type discriminator (ResultType).
 	// CS API v1.0 §10.
 	Datastream = Namespace + "Datastream"
+
+	// ControlStream — a stream of Commands sent to one System
+	// (typically an Actuator-bearing platform) for one
+	// ActuatableProperty. CS API v1.0 Part 2 §14. Draft surface;
+	// IRI swaps to the canonical spec form once published.
+	ControlStream = Namespace + "ControlStream"
+
+	// Command — an individual instruction issued through a
+	// ControlStream targeting an ActuatableProperty. CS API v1.0
+	// Part 2 §15. Draft surface; IRI may swap when the spec
+	// publishes.
+	Command = Namespace + "Command"
+
+	// SystemEvent — a discrete notification about a System
+	// (deployment lifecycle, configuration change, alert). Used
+	// by /systems/{id}/events. CS API v1.0 Part 2 §16. Draft
+	// surface; IRI may swap when the spec publishes.
+	SystemEvent = Namespace + "SystemEvent"
 )
 
 // iris is the canonical set of IRIs this package surfaces, indexed
@@ -33,13 +51,19 @@ const (
 // iris_test.go fails loud if these drift apart.
 var iris = map[string]string{
 	// Classes
-	Prefix + ":Datastream": Datastream,
+	Prefix + ":Datastream":    Datastream,
+	Prefix + ":ControlStream": ControlStream,
+	Prefix + ":Command":       Command,
+	Prefix + ":SystemEvent":   SystemEvent,
 
 	// Predicates
 	Prefix + ":producedBy":          ProducedBy,
 	Prefix + ":resultTimeRange":     ResultTimeRange,
 	Prefix + ":phenomenonTimeRange": PhenomenonTimeRange,
 	Prefix + ":resultType":          ResultType,
+	Prefix + ":controlsSystem":      ControlsSystem,
+	Prefix + ":partOfControlStream": PartOfControlStream,
+	Prefix + ":eventForSystem":      EventForSystem,
 }
 
 var reverseIRIs = func() map[string]string {
