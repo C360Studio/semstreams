@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/retry"
 )
 
 const (
@@ -284,23 +285,22 @@ func (c *Component) entityExists(ctx context.Context, entityID string) (bool, er
 	return false, err
 }
 
-// handleEntityCreate enforces create-or-fail semantics: returns
-// Success=false with an "entity already exists" error if the entity
-// ID is already present. CS API §7.6 (POST is strictly create) maps
-// that error to HTTP 409 Conflict — the path semconnect Stage 8 had
-// to fall back from when only triple.add_batch (upsert) was wired.
+// handleEntityCreate enforces create-or-fail semantics atomically:
+// returns Success=false with an "entity already exists" error if the
+// entity ID is already present. CS API §7.6 (POST is strictly create)
+// maps that error to HTTP 409 Conflict — the path semconnect Stage 8
+// had to fall back from when only triple.add_batch (upsert) was wired.
 //
-// PR-A: existence check is a Get followed by CreateEntity (Put). The
-// TOCTOU window between the two means concurrent creates of the same
-// ID are last-writer-wins instead of strict create-or-fail. PR-B will
-// switch to the atomic KV Create primitive (natsclient.KVStore.Create
-// returns ErrKVKeyExists) which closes the window.
+// PR-B: uses natsclient.KVStore.Create via Component.CreateEntityStrict
+// for atomic create-or-fail. Concurrent creates of the same ID see
+// exactly one winner; losers get ErrKVKeyExists. The PR-A
+// exists-check + Put pattern is gone; no TOCTOU window remains.
 //
 // The Entity field in the success response is read back from storage
 // so it reflects framework-injected triples (hierarchy / referential
 // integrity stubs); the caller-supplied req.Entity is NOT echoed
-// because CreateEntity may mutate it in place (entity.Triples append
-// in component.go).
+// because CreateEntityStrict may mutate it in place (entity.Triples
+// append in component.go's hierarchy inference path).
 func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -311,17 +311,11 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 		return marshalCreateEntityError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
-	exists, err := c.entityExists(ctx, req.Entity.ID)
-	if err != nil {
-		return marshalCreateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("existence check failed: %v", err))
-	}
-	if exists {
-		return marshalCreateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("entity already exists: %s", req.Entity.ID))
-	}
-
-	if err := c.CreateEntity(ctx, req.Entity); err != nil {
+	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyExists) {
+			return marshalCreateEntityError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity already exists: %s", req.Entity.ID))
+		}
 		return marshalCreateEntityError(req.TraceID, req.RequestID, err.Error())
 	}
 
@@ -349,10 +343,13 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 // the request's Triples; Entity carries provenance metadata). When
 // Triples is nil/empty, Entity.Triples is written as-is.
 //
+// Atomicity matches handleEntityCreate: CreateEntityStrict is used
+// for atomic create-or-fail (returns ErrKVKeyExists on duplicate ID).
+//
 // TriplesAdded in the response is the count on the *stored* entity
 // after the write, which may exceed len(req.Triples) when the
 // framework injects hierarchy / referential-integrity triples per
-// component.go:CreateEntity. Callers reasoning about provenance
+// component.go:createEntity. Callers reasoning about provenance
 // should compare req.Triples against stored.Triples explicitly rather
 // than treating TriplesAdded as authoritative.
 func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
@@ -365,21 +362,15 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
-	exists, err := c.entityExists(ctx, req.Entity.ID)
-	if err != nil {
-		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
-			fmt.Sprintf("existence check failed: %v", err))
-	}
-	if exists {
-		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
-			fmt.Sprintf("entity already exists: %s", req.Entity.ID))
-	}
-
 	if len(req.Triples) > 0 {
 		req.Entity.Triples = req.Triples
 	}
 
-	if err := c.CreateEntity(ctx, req.Entity); err != nil {
+	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyExists) {
+			return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity already exists: %s", req.Entity.ID))
+		}
 		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
 	}
 
@@ -463,24 +454,38 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 
 // handleEntityUpdateWithTriples applies a triple-set delta to an
 // existing entity: appends AddTriples, removes triples whose Predicate
-// is named in RemoveTriples, and writes the result via CAS. Entity
-// metadata (MessageType, Version, StorageRef) from the request also
-// flows through.
+// is named in RemoveTriples, and writes the result via CAS-with-retry.
+// Entity metadata (MessageType, Version, StorageRef) from the request
+// flows through verbatim; the merged triple set replaces what's in
+// req.Entity.Triples.
 //
-// PR-A: the read-modify-write sequence is CAS-protected against
-// concurrent delete (Update at the read revision fails with
-// ErrKVRevisionMismatch if the entity was modified or deleted
-// in-between). A concurrent triple add/remove from another writer
-// also surfaces as the same conflict, which the caller may retry.
-// The merge logic itself runs on stale data when a conflict happens
-// — that's the residual scope semconnect Stage 27 flagged and PR-B
-// will close by moving the delta apply inside an UpdateWithRetry
-// loop, eliminating the partial-erasure window in the
-// delete-all + re-add downstream shim.
+// PR-B: the delta apply runs inside natsclient.KVStore.UpdateWithRetry,
+// so concurrent writes that bump the entity revision between read
+// and write trigger a re-fetch + re-apply of the delta against the
+// fresh state. Closes the partial-erasure window semconnect Stage 27
+// flagged in the cs-api delete-all + re-add shim: a concurrent
+// triple add from another writer no longer makes the delta drop work
+// silently.
+//
+// Must-exist contract is preserved: if the entity is absent on the
+// first attempt OR gets deleted between attempts, the update
+// function returns retry.NonRetryable(ErrKVKeyNotFound) and the
+// handler surfaces "entity not found" — same shape semconnect maps
+// to HTTP 404. CAS-conflict-without-delete (another writer modified
+// the entity) is silently retried up to the bucket's configured
+// MaxAttempts; the caller sees the final successful state in the
+// response.
 //
 // Unknown predicates in RemoveTriples are silently ignored (not
 // "404'd"); the contract is "remove if present" not "predicate must
 // exist".
+//
+// Retry exhaustion: on the unlikely path where every retry attempt
+// hits a CAS conflict and MaxAttempts is reached, UpdateWithRetry
+// returns natsclient.ErrKVMaxRetriesExceeded. The handler surfaces
+// it verbatim through the body-prefix error convention; downstream
+// gateways may retry the whole request or escalate. Distinct from
+// "entity not found", which is the NonRetryable absence path.
 func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -491,46 +496,68 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
-	current, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	// PR-B: the delta apply runs *inside* UpdateWithRetry's update
+	// function, so each retry re-applies AddTriples/RemoveTriples
+	// against the fresh current state. PR-A read once then CAS'd,
+	// losing concurrent triples on the retry path.
+	//
+	// triplesRemoved is captured by the closure and assigned on each
+	// attempt; the LAST attempt (the one that succeeded or NonRetryable'd)
+	// owns the final value. UpdateWithRetry invokes updateFn at least
+	// once and at most retryConfig.MaxAttempts times.
+	var triplesRemoved int
+	err := c.entityBucket.UpdateWithRetry(ctx, req.Entity.ID, func(current []byte) ([]byte, error) {
+		// Must-exist contract: an empty current value means the entity
+		// is absent (either never created OR deleted between attempts).
+		// retry.NonRetryable stops the retry loop and surfaces the
+		// sentinel for the handler to map to "entity not found".
+		if len(current) == 0 {
+			return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
+		}
+
+		var currentState graph.EntityState
+		if err := json.Unmarshal(current, &currentState); err != nil {
+			return nil, retry.NonRetryable(
+				fmt.Errorf("unmarshal current entity: %w", err))
+		}
+
+		// Re-apply the delta on each attempt: drop triples whose
+		// Predicate appears in RemoveTriples, then append AddTriples.
+		// triplesRemoved is reset each attempt so it reflects the
+		// final successful apply.
+		triplesRemoved = 0
+		merged := currentState.Triples
+		if len(req.RemoveTriples) > 0 {
+			removeSet := make(map[string]struct{}, len(req.RemoveTriples))
+			for _, p := range req.RemoveTriples {
+				removeSet[p] = struct{}{}
+			}
+			kept := make([]message.Triple, 0, len(currentState.Triples))
+			for _, t := range currentState.Triples {
+				if _, drop := removeSet[t.Predicate]; drop {
+					triplesRemoved++
+					continue
+				}
+				kept = append(kept, t)
+			}
+			merged = kept
+		}
+		if len(req.AddTriples) > 0 {
+			merged = append(merged, req.AddTriples...)
+		}
+
+		// Build the new entity: caller's metadata (req.Entity) +
+		// merged triples. Shallow copy so we don't mutate the
+		// caller-owned pointer (see PR-A go-reviewer F2 finding).
+		newEntity := *req.Entity
+		newEntity.Triples = merged
+
+		return json.Marshal(&newEntity)
+	})
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
 				fmt.Sprintf("entity not found: %s", req.Entity.ID))
-		}
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
-			fmt.Sprintf("fetch current entity failed: %v", err))
-	}
-
-	// Build the merged triple set: start from current.Triples, drop
-	// any whose Predicate appears in RemoveTriples, then append
-	// req.AddTriples. The merged set replaces req.Entity.Triples so
-	// metadata fields (MessageType, Version, StorageRef) flow through.
-	removed := 0
-	if len(req.RemoveTriples) > 0 {
-		removeSet := make(map[string]struct{}, len(req.RemoveTriples))
-		for _, p := range req.RemoveTriples {
-			removeSet[p] = struct{}{}
-		}
-		kept := make([]message.Triple, 0, len(current.Triples))
-		for _, t := range current.Triples {
-			if _, drop := removeSet[t.Predicate]; drop {
-				removed++
-				continue
-			}
-			kept = append(kept, t)
-		}
-		current.Triples = kept
-	}
-	if len(req.AddTriples) > 0 {
-		current.Triples = append(current.Triples, req.AddTriples...)
-	}
-
-	req.Entity.Triples = current.Triples
-
-	if err := c.updateEntityAtRevision(ctx, req.Entity, currentRev); err != nil {
-		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
-			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
-				fmt.Sprintf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
 		}
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
 	}
@@ -551,7 +578,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		},
 		Entity:         stored,
 		TriplesAdded:   len(req.AddTriples),
-		TriplesRemoved: removed,
+		TriplesRemoved: triplesRemoved,
 		Version:        int64(stored.Version),
 	})
 }
