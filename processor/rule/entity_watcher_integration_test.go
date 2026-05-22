@@ -132,10 +132,23 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 			time.Sleep(20 * time.Millisecond) // Less than debounce delay
 		}
 
-		// Wait for debounce to fire (100ms + buffer)
-		time.Sleep(200 * time.Millisecond)
+		// Wait for exactly one trigger to fire (the coalesced final state).
+		// Explicit synchronization replaces the previous wall-clock budget,
+		// which flaked under Docker pressure when the watcher took >200ms to
+		// receive the puts. See issue #107.
+		require.Eventually(t, func() bool {
+			triggerMu.Lock()
+			defer triggerMu.Unlock()
+			return triggerCount >= 1
+		}, 2*time.Second, 20*time.Millisecond,
+			"expected at least 1 trigger from the coalesced rapid-updates burst")
 
-		// Should trigger only once with final state (80 > 75)
+		// Hold past the debounce window to confirm no further triggers fire —
+		// the absence check still needs a wall-clock budget (it asserts a
+		// negative). The 300ms window is 3x the debounce delay, comfortable
+		// under load while staying fast in steady state.
+		time.Sleep(300 * time.Millisecond)
+
 		triggerMu.Lock()
 		triggers := triggerCount
 		triggerMu.Unlock()
@@ -165,8 +178,11 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		err = kv.Delete(ctx, entityID)
 		require.NoError(t, err)
 
-		// Wait past debounce period
-		time.Sleep(150 * time.Millisecond)
+		// Wait past debounce period AND a safety buffer for the watcher to
+		// observe both events under Docker pressure. This is an absence
+		// assertion (no triggers fired), so a wall-clock budget is unavoidable;
+		// we use 3x debounce delay + 100ms safety to stay reliable under load.
+		time.Sleep(400 * time.Millisecond)
 
 		// No trigger should have occurred (evaluation canceled)
 		triggerMu.Lock()
@@ -193,13 +209,13 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		_, err = kv.Put(ctx, entityID, stateJSON)
 		require.NoError(t, err)
 
-		// Wait for debounce
-		time.Sleep(200 * time.Millisecond)
-
-		triggerMu.Lock()
-		triggers1 := triggerCount
-		triggerMu.Unlock()
-		assert.Equal(t, int64(1), triggers1, "First update should trigger")
+		// Wait for the first trigger to fire — explicit synchronization
+		// replaces the previous wall-clock budget. Per #107.
+		require.Eventually(t, func() bool {
+			triggerMu.Lock()
+			defer triggerMu.Unlock()
+			return triggerCount >= 1
+		}, 2*time.Second, 20*time.Millisecond, "First update should trigger")
 
 		// Second update after settling
 		state = createEntityStateForDebounce(entityID, 85.0)
@@ -209,13 +225,19 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		_, err = kv.Put(ctx, entityID, stateJSON)
 		require.NoError(t, err)
 
-		// Wait for second debounce
-		time.Sleep(200 * time.Millisecond)
+		// Wait for the second trigger.
+		require.Eventually(t, func() bool {
+			triggerMu.Lock()
+			defer triggerMu.Unlock()
+			return triggerCount >= 2
+		}, 2*time.Second, 20*time.Millisecond,
+			"Second update should trigger new evaluation")
 
 		triggerMu.Lock()
 		triggers2 := triggerCount
 		triggerMu.Unlock()
-		assert.Equal(t, int64(2), triggers2, "Second update should trigger new evaluation")
+		assert.Equal(t, int64(2), triggers2,
+			"Should be exactly 2 triggers — guards against runaway re-evaluation")
 	})
 }
 

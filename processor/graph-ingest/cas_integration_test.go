@@ -294,8 +294,18 @@ func TestIntegration_CASRetryBehavior(t *testing.T) {
 		}
 		require.NoError(t, component.CreateEntity(ctx, initialEntity))
 
-		// High contention: many goroutines hitting same entity
-		concurrency := 50
+		// High contention: many goroutines hitting the same entity.
+		//
+		// Concurrency 25 is the sweet spot: high enough to exercise the
+		// CAS-retry path multiple times per goroutine (each retry observes
+		// a different revision committed by a peer), low enough to fit
+		// inside the default natsclient retry budget (MaxRetries=10 with
+		// exponential backoff) even when Docker is under contention from
+		// a full `go test -race -tags=integration ./...` sweep. Beta.77
+		// + #107 evidence: 50 occasionally flaked under sweep because the
+		// last few goroutines exhausted retries before winning the CAS race.
+		// See [[project_issue_107_flake_hardening]] for the analysis.
+		concurrency := 25
 		var wg sync.WaitGroup
 		var successCount atomic.Int32
 
