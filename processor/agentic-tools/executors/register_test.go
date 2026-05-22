@@ -358,7 +358,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"bash", "web_search", "http_request",
 		"read_loop_result", "decide", "emit_diagnosis",
 		"write_todos", "scratchpad",
-		"summarize_graph", "search_graph", "flow_monitor",
+		"summarize_graph", "search_graph", "research_graph", "flow_monitor",
 		"github", "graph_query",
 		"rules", "flows", "personas", "flow_templates",
 		"component_catalog",

@@ -97,6 +97,7 @@ var BuiltinGroupKeys = []string{
 	"scratchpad",
 	"summarize_graph",
 	"search_graph",
+	"research_graph",
 	"flow_monitor",
 	// Multi-tool registrations: key is the register-function's domain
 	"github",            // registerGitHub — github_* tools
@@ -183,6 +184,9 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		// required. See project_graph_tools_gateway_first_plan memory.
 		gate("summarize_graph", func() error { return registerSummarizeGraph(reg, deps.NATSClient, logger) })
 		gate("search_graph", func() error { return registerSearchGraph(reg, deps.NATSClient, logger) })
+		gate("research_graph", func() error {
+			return registerResearchGraph(ctx, reg, deps.NATSClient, deps.Platform, logger, loopsBucket)
+		})
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;
