@@ -59,6 +59,13 @@ const (
 	// PredCharacteristicValue carries a characteristic-list
 	// entry's value (physical property of the device).
 	PredCharacteristicValue = "sensorml.characteristic.value"
+
+	// PredPosition carries the SensorML §7.1.6 position field
+	// verbatim as a GeoJSON-shaped string (Point / Polygon /
+	// LineString). Maps to sosa:hasLocation. The Object value is
+	// the raw GeoJSON-shaped JSON text (string) — consumers parse
+	// it as GeoJSON when they need typed geometry. See issue #114.
+	PredPosition = "sensorml.process.position"
 )
 
 // init registers every dotted predicate this package emits with
@@ -94,6 +101,7 @@ func init() {
 		vocabulary.WithIRI("http://www.w3.org/ns/ssn/hasProperty"))
 	vocabulary.Register(PredCharacteristicValue,
 		vocabulary.WithIRI("http://www.w3.org/ns/ssn/hasProperty"))
+	vocabulary.Register(PredPosition, vocabulary.WithIRI(sosa.HasLocation))
 }
 
 // processClassIRI returns the SOSA class IRI that best matches
