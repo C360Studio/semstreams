@@ -12,9 +12,12 @@ import (
 )
 
 // LoadFromDirectory walks <root>/<role>/*.md and upserts each file
-// into the persona manager as a fragment. Fragment ID is derived
-// from the filename stem (e.g. "00-identity.md" -> "00-identity");
-// role is derived from the immediate parent directory name.
+// into the persona manager as a fragment. Role is derived from the
+// immediate parent directory name. Fragment ID is the role and the
+// filename stem joined with "/" (e.g. ops/00-identity.md ->
+// "ops/00-identity") so identically-named files across role directories
+// stay distinct in the manager and downstream prompt registry — see
+// issue #124 for why the un-prefixed stem caused silent overwrites.
 //
 // Source-of-truth semantics: files in this directory are the durable
 // source of truth. Every call overwrites any KV entry whose fragment ID
@@ -150,8 +153,14 @@ func walkFragments(ctx context.Context, root string, upsert func(context.Context
 			return nil
 		}
 
+		// Namespace the persisted ID by role so identically-named files
+		// across role directories (e.g. coordinator/00-identity.md and
+		// researcher/00-identity.md) survive upsert without overwriting
+		// each other. Manager.Upsert + Registry.upsertLocked both dedup
+		// on ID; un-namespaced IDs silently dropped all but the
+		// alphabetically-last role's content. See issue #124.
 		p := &Persona{
-			ID:      fragID,
+			ID:      role + "/" + fragID,
 			Content: string(data),
 			Roles:   []string{role},
 		}
