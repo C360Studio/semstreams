@@ -56,6 +56,42 @@ Full-featured deployment with external ML services for embeddings and LLM enhanc
 - `semembed:8081` - Embedding service
 - `seminstruct:8083` - LLM instruction service
 
+## Graph-Backend Deployments (`graph-backend.json`)
+
+Some downstream consumers — typically gateways or sister-repos that publish mutations directly via `graph.mutation.triple.*` request/reply and read via `graph.index.query.*` / `graph.query.entity` / `graph.spatial.query.*` — need the framework as a **graph backend**, not as a full source-data pipeline.
+
+`configs/graph-backend.json` wires only the five graph processors plus the minimum services:
+
+- `graph-ingest` — mutation responder (auto-wires `graph.mutation.triple.{add,add_batch,remove}` request handlers regardless of input port declarations)
+- `graph-index` — entity-state KV watcher → predicate / outgoing / incoming / alias index responders
+- `graph-index-spatial` — entity-state KV watcher → spatial query responder
+- `graph-index-temporal` — entity-state KV watcher → temporal query responder
+- `graph-query` — `graph.query.>` request/reply responder
+
+Plus `service-manager` + `component-manager` only. No `udp`, `iot_sensor`, `document_processor`, `objectstore`, `rule`, `graph-gateway`, file inputs/outputs — those are all part of the source-data pipeline that a gateway-backed deployment does not use.
+
+### Dummy input port on `graph-ingest`
+
+`graph-ingest.Config.Validate()` requires `len(Ports.Inputs) >= 1` even when the component is responding to mutation handlers rather than reading from a JetStream pipeline. The example uses a benign dummy:
+
+```json
+{"name": "unused_in", "subject": "_graph_backend.unused.ingest", "type": "nats"}
+```
+
+The `nats` port type (vs `jetstream`) is the key — declaring a `jetstream` input would force `EnsureStream` for a stream that never receives publishes.
+
+### Port types — when to use which
+
+| Type | Purpose | Stream / subject requirement |
+|------|---------|------------------------------|
+| `jetstream` | Durable JetStream subscription; messages persisted to a stream | Stream must exist (auto-created by `EnsureStream`); messages are durable |
+| `nats` | Core NATS subscription; no persistence, ephemeral fan-out | Subject can be any; no stream lifecycle |
+| `kv-watch` | Watch a NATS KV bucket for changes; receives every put + delete | Bucket must exist (auto-created when listed in `services`) |
+| `kv` / `kv-write` | Write into a NATS KV bucket | Bucket must exist |
+| `nats-request` | Reply to NATS request/reply messages on the subject | No stream; subject is a request endpoint |
+
+`graph-ingest`'s `graph.mutation.*` handlers are wired automatically by `setupMutationHandlers` — they do not need to be declared as ports. Same for `graph-query`'s `graph.query.>` handlers (these DO appear as `nats-request` ports for documentation, but the component would still respond if the port were absent).
+
 ## Graph Component Architecture
 
 The graph processing layer uses a modular component architecture with KV-watch based event flow:
