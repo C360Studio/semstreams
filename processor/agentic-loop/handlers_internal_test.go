@@ -241,10 +241,10 @@ func TestToolNames(t *testing.T) {
 	}))
 }
 
-// TestHasTerminalToolCall covers the #133 terminal-tool detection helper.
+// TestHasDecideToolCall covers the #133 decide-detection helper.
 // Returns true on any tool_call step naming `decide`; false otherwise
 // (model_call steps, other tool names, context_compaction, empty trajectory).
-func TestHasTerminalToolCall(t *testing.T) {
+func TestHasDecideToolCall(t *testing.T) {
 	cases := []struct {
 		name  string
 		steps []agentic.TrajectoryStep
@@ -291,7 +291,7 @@ func TestHasTerminalToolCall(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, hasTerminalToolCall(tc.steps))
+			assert.Equal(t, tc.want, hasDecideToolCall(tc.steps))
 		})
 	}
 }

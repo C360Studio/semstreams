@@ -1082,8 +1082,8 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// triples ride the same publish budget as the loop completion
 		// stamp and downstream rules see them on the same KV revision
 		// the agent.complete.* event refers to.
-		if result.SyntheticDecide != nil && c.graphWriter != nil {
-			c.graphWriter.WriteSyntheticDecide(ctx, result.SyntheticDecide.LoopID, result.SyntheticDecide.Reason)
+		if result.SyntheticDecide != nil {
+			c.stampSyntheticDecideWithBudget(ctx, result.SyntheticDecide)
 		}
 	}
 
@@ -1107,6 +1107,31 @@ func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID st
 			"state", "complete")
 		if c.metrics != nil {
 			c.metrics.recordGraphWritePublishTimeout("complete")
+		}
+	}
+}
+
+// stampSyntheticDecideWithBudget invokes WriteSyntheticDecide under the
+// graphWritePublishBudget. Records a Prom timeout when the budget
+// expires before the writer returns; publish proceeds either way. Same
+// shape as stampLoopCompletionWithBudget — the synthetic-decide triples
+// must reach the graph before downstream rules wake on the
+// agent.complete.* event, otherwise the recovery rule fires before
+// coordinator.next_action="needs_clarification" is visible.
+func (c *Component) stampSyntheticDecideWithBudget(ctx context.Context, req *SyntheticDecideRequest) {
+	if c.graphWriter == nil {
+		return
+	}
+	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
+		c.graphWriter.WriteSyntheticDecide(bctx, req.LoopID, req.Reason)
+	})
+	if timedOut {
+		c.logger.Warn("graph write budget expired before synthetic decide stamp returned; publishing agent.complete anyway",
+			"loop_id", req.LoopID,
+			"budget", graphWritePublishBudget,
+			"state", "synthetic_decide")
+		if c.metrics != nil {
+			c.metrics.recordGraphWritePublishTimeout("synthetic_decide")
 		}
 	}
 }

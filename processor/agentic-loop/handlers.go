@@ -1502,14 +1502,21 @@ func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason
 	return nil
 }
 
-// hasTerminalToolCall scans a trajectory's steps for any tool_call to a
-// recognised terminal tool. v1 recognises `decide` only — the canonical
-// coordinator terminal. Additional terminal tool names (submit_work,
-// product-specific) can be added when those flows materialise. Used by
-// the terminal-tool-less synthesis path (#133): when this returns false
-// on a completed loop and Config.SynthesizeTerminalOnCompletion is on,
-// the framework synthesizes a needs_clarification decide.
-func hasTerminalToolCall(steps []agentic.TrajectoryStep) bool {
+// hasDecideToolCall scans a trajectory's steps for any tool_call to
+// `decide`. Narrow by design — `submit_work` and other terminal tools
+// also drive completion via StopLoop, but synthesis is specifically the
+// coordinator-decide recovery path (the wedge shape is "coordinator
+// completed without emitting a coordinator.next_action triple"). Used
+// by the terminal-tool-less synthesis path (#133): when this returns
+// false on a completed loop and Config.SynthesizeTerminalOnCompletion
+// is on, the framework synthesizes a needs_clarification decide.
+// Broadening to a wider terminal-tool set is a separate decision (the
+// rule pack opting into synthesis should not implicitly assume any tool
+// that calls StopLoop is a decide-equivalent — a submit_work or future
+// emit_diagnosis terminal would be a content-bearing terminal, not a
+// routing decision, and would not want a synth decide overwriting its
+// successful completion).
+func hasDecideToolCall(steps []agentic.TrajectoryStep) bool {
 	for _, s := range steps {
 		if s.StepType == "tool_call" && s.ToolName == "decide" {
 			return true
@@ -1579,7 +1586,7 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	// persona prose enforcing a decide call; the synth keeps downstream
 	// rules matching on coordinator.next_action rather than wedging the
 	// chain. Off by default; new flows targeting flash/sub-30B opt in.
-	if h.config.SynthesizeTerminalOnCompletion && !hasTerminalToolCall(trajectorySteps) {
+	if h.config.SynthesizeTerminalOnCompletion && !hasDecideToolCall(trajectorySteps) {
 		result.SyntheticDecide = &SyntheticDecideRequest{
 			LoopID: loopID,
 			Reason: responseContent,
