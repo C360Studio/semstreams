@@ -1296,6 +1296,167 @@ func TestAction_PublishAgent_EmptyToolChoice(t *testing.T) {
 	assert.Nil(t, task.ToolChoice, "ToolChoice should remain nil when action.ToolChoice unset")
 }
 
+// --- #134 / ADR-046 Phase 1: for_each iteration tests ---
+
+// TestAction_PublishAgent_ForEach_DispatchesPerItem verifies the core
+// fan-out contract: a publish_agent with for_each over a list-typed
+// triple dispatches one TaskMessage per item with $<for_each_var>
+// bound to the current value. Each TaskMessage carries the
+// substituted prompt + a distinct task ID.
+func TestAction_PublishAgent_ForEach_DispatchesPerItem(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	// Trigger entity carries the subtopics list as a JSON-encoded
+	// triple Object — the wire shape the decide tool emits.
+	ec := &ExecutionContext{
+		EntityID: "acme.ops.robot.gcs.coordinator.001",
+		Entity: &gtypes.EntityState{
+			Triples: []message.Triple{
+				{
+					Predicate: "coordinator.decision.subtopics",
+					Object:    `["hydraulics","pneumatics","electrics"]`,
+				},
+			},
+		},
+	}
+
+	action := Action{
+		Type:       ActionTypePublishAgent,
+		Subject:    "agent.task.investigator",
+		Role:       "researcher-investigate",
+		Model:      "mock-model",
+		Prompt:     "Investigate subtopic: $subtopic",
+		ForEach:    "$entity.triple.coordinator.decision.subtopics",
+		ForEachVar: "subtopic",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, ec))
+	require.Len(t, mock.published, 3, "one TaskMessage per subtopic")
+
+	decoder := newActionsTestDecoder(t)
+	seen := make([]string, 0, 3)
+	for _, msg := range mock.published {
+		baseMsg, err := decoder.Decode(msg.data)
+		require.NoError(t, err)
+		task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+		require.True(t, ok)
+		seen = append(seen, task.Prompt)
+	}
+	assert.Equal(t, []string{
+		"Investigate subtopic: hydraulics",
+		"Investigate subtopic: pneumatics",
+		"Investigate subtopic: electrics",
+	}, seen, "prompt must reflect per-iteration substitution")
+}
+
+// TestAction_PublishAgent_ForEach_EmptyListNoDispatch verifies the
+// degenerate case: an empty list (decomposer found nothing) produces
+// zero dispatches and no error. Lets rule authors write
+// for_each-driven flows without special-casing the empty path.
+func TestAction_PublishAgent_ForEach_EmptyListNoDispatch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	ec := &ExecutionContext{
+		EntityID: "e.1",
+		Entity: &gtypes.EntityState{
+			Triples: []message.Triple{
+				{Predicate: "coordinator.decision.subtopics", Object: `[]`},
+			},
+		},
+	}
+
+	action := Action{
+		Type:       ActionTypePublishAgent,
+		Subject:    "agent.task.x",
+		Role:       "researcher",
+		Model:      "mock-model",
+		Prompt:     "p $subtopic",
+		ForEach:    "$entity.triple.coordinator.decision.subtopics",
+		ForEachVar: "subtopic",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, ec))
+	assert.Empty(t, mock.published, "empty list should produce no dispatches")
+}
+
+// TestAction_PublishAgent_ForEach_MissingVarErrors verifies the
+// authoring guard: setting ForEach without ForEachVar is a hard
+// error (template substitution wouldn't have anything to bind to).
+func TestAction_PublishAgent_ForEach_MissingVarErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.x",
+		Role:    "researcher",
+		Model:   "mock-model",
+		Prompt:  "p",
+		ForEach: "$entity.triple.subtopics",
+		// ForEachVar deliberately omitted
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "for_each_var is required")
+}
+
+// TestAction_PublishAgent_ForEach_NonListDegeneratesToSingle verifies
+// that a ForEach reference pointing at a non-list (scalar string
+// predicate, missing triple) degenerates to a single dispatch with
+// the iter-var unbound. The unresolved $<varName> in the Prompt
+// surfaces via the standard unresolved-template warning — author
+// error stays loud, doesn't silently no-op.
+func TestAction_PublishAgent_ForEach_NonListDegeneratesToSingle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	ec := &ExecutionContext{
+		EntityID: "e.1",
+		Entity: &gtypes.EntityState{
+			Triples: []message.Triple{
+				{Predicate: "agent.role", Object: "researcher"},
+			},
+		},
+	}
+
+	action := Action{
+		Type:       ActionTypePublishAgent,
+		Subject:    "agent.task.x",
+		Role:       "researcher",
+		Model:      "mock-model",
+		Prompt:     "investigate $x",            // intentionally references unbound iter-var
+		ForEach:    "$entity.triple.agent.role", // scalar, not list
+		ForEachVar: "x",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, ec))
+	require.Len(t, mock.published, 1, "non-list reference degenerates to single dispatch")
+
+	// Verify the literal $<varName> token reached the dispatched
+	// prompt — that's the contract for "author error stays loud."
+	// Without an overlay binding, substitution leaves $x verbatim,
+	// the unresolved-template warning fires, and the operator sees
+	// the predicate-name typo (or whatever caused the non-list
+	// resolution) in the dispatched task body.
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+	assert.Equal(t, "investigate $x", task.Prompt,
+		"iter-var must remain unbound on degenerate path so the unresolved-template warning surfaces the author error")
+}
+
 // TestAction_PublishAgent_RelatedLoops verifies that
 // action.RelatedLoops threads onto TaskMessage.Metadata under
 // agentic.MetadataKeyRelatedLoops as a map[string]any (the JSON wire

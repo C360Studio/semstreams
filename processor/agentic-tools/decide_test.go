@@ -479,10 +479,13 @@ func TestNormaliseActionForSAP(t *testing.T) {
 	}
 }
 
-// TestDecideExecutor_HappyPath verifies a valid decide call emits the two
-// expected triples on the coordinator's loop entity, returns StopLoop=true,
-// and puts the full args in the tool result Content so downstream agents
-// can fetch subtopics via read_loop_result.
+// TestDecideExecutor_HappyPath verifies a valid decide call emits the
+// expected triples on the coordinator's loop entity, returns
+// StopLoop=true, and puts the full args in the tool result Content so
+// downstream agents can fetch subtopics via read_loop_result. ADR-046
+// Phase 1 added a third triple (CoordinatorDecisionSubtopics) on the
+// fan_out path so downstream rules can iterate via for_each without an
+// out-of-band read of the loop's Result.
 func TestDecideExecutor_HappyPath(t *testing.T) {
 	pub := &recordingPublisher{}
 	e := newDecideExecutor(pub)
@@ -507,8 +510,11 @@ func TestDecideExecutor_HappyPath(t *testing.T) {
 		t.Errorf("expected StopLoop=true")
 	}
 
-	if len(pub.triples) != 2 {
-		t.Fatalf("expected 2 triples published, got %d", len(pub.triples))
+	// next_action + reason + subtopics — three triples on fan_out with
+	// non-empty subtopics. The third (subtopics) shipped in ADR-046
+	// Phase 1; the test pre-dates it.
+	if len(pub.triples) != 3 {
+		t.Fatalf("expected 3 triples (next_action + reason + subtopics), got %d", len(pub.triples))
 	}
 
 	wantSubject := "acme.test.agent.agentic-loop.execution.loop-abc"
@@ -755,4 +761,105 @@ func TestDecideExecutor_LoopEntityIDFormat(t *testing.T) {
 	}
 	// Sanity: no fmt.Sprint-shaped junk in the subject.
 	_ = fmt.Sprintf("%s", want)
+}
+
+// --- #134 / ADR-046 Phase 1: subtopics-triple emission tests ---
+
+// TestDecideExecutor_StampsSubtopicsTriple verifies the new ADR-046
+// Phase 1 emission: when args.Subtopics is non-empty, the decide tool
+// stamps coordinator.decision.subtopics as a JSON-encoded []string
+// triple alongside the canonical next_action + reason triples. Lets
+// downstream rules iterate via for_each without out-of-band read of
+// the loop's Result JSON.
+func TestDecideExecutor_StampsSubtopicsTriple(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	_, _ = e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Arguments: map[string]any{
+			"action":    "fan_out",
+			"reason":    "researcher produced three subtopics",
+			"subtopics": []any{"hydraulics", "pneumatics", "electrics"},
+		},
+	})
+
+	// Expect three triples on the AtomicBatch path: next_action, reason,
+	// subtopics. (Allowlist not set, so no SAP-coerced triple.)
+	if got := len(pub.triples); got != 3 {
+		t.Fatalf("triple count = %d, want 3 (next_action + reason + subtopics)", got)
+	}
+
+	var subtopicsTriple *message.Triple
+	for i := range pub.triples {
+		if pub.triples[i].Predicate == agvocab.CoordinatorDecisionSubtopics {
+			subtopicsTriple = &pub.triples[i]
+		}
+	}
+	if subtopicsTriple == nil {
+		t.Fatalf("no CoordinatorDecisionSubtopics triple emitted; got predicates: %v", tripPredicates(pub.triples))
+	}
+
+	// The Object must be a JSON-encoded []string so the for_each
+	// substitution layer can parse it back.
+	encoded, ok := subtopicsTriple.Object.(string)
+	if !ok {
+		t.Fatalf("Subtopics triple Object = %T, want string (JSON-encoded)", subtopicsTriple.Object)
+	}
+	var decoded []string
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("Subtopics triple Object failed to parse as []string: %v (object: %q)", err, encoded)
+	}
+	wantSubtopics := []string{"hydraulics", "pneumatics", "electrics"}
+	if len(decoded) != len(wantSubtopics) {
+		t.Errorf("decoded subtopics len = %d, want %d", len(decoded), len(wantSubtopics))
+	}
+	for i := range wantSubtopics {
+		if i < len(decoded) && decoded[i] != wantSubtopics[i] {
+			t.Errorf("subtopic[%d] = %q, want %q", i, decoded[i], wantSubtopics[i])
+		}
+	}
+
+	// Source attribution preserved.
+	if got, want := subtopicsTriple.Source, decideToolSource; got != want {
+		t.Errorf("source = %q, want %q", got, want)
+	}
+}
+
+// TestDecideExecutor_OmitsSubtopicsTripleWhenEmpty verifies back-compat:
+// a decide call without subtopics (action=done, retry, etc.) emits ONLY
+// the next_action + reason triples. The CoordinatorDecisionSubtopics
+// triple is opt-in via args.Subtopics being non-empty.
+func TestDecideExecutor_OmitsSubtopicsTripleWhenEmpty(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutor(pub)
+
+	_, _ = e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Arguments: map[string]any{
+			"action": "done",
+			"reason": "all subtasks complete",
+			// subtopics deliberately omitted
+		},
+	})
+
+	for _, tr := range pub.triples {
+		if tr.Predicate == agvocab.CoordinatorDecisionSubtopics {
+			t.Errorf("CoordinatorDecisionSubtopics triple should not emit when args.Subtopics is empty")
+		}
+	}
+}
+
+// tripPredicates is a tiny helper to format the predicate set from a
+// triple slice for assertion error messages.
+func tripPredicates(triples []message.Triple) []string {
+	out := make([]string, len(triples))
+	for i, tr := range triples {
+		out[i] = tr.Predicate
+	}
+	return out
 }
