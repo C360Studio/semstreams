@@ -258,19 +258,21 @@ func (f *BaseRuleFactory) ValidateExpression(def Definition) error {
 	return nil
 }
 
-// isValidOperator checks if an operator is valid
+// isValidOperator checks if an operator is valid.
+//
+// Derives the valid set from the evaluator's actual registered
+// operators (#149 follow-up to the #147 split-brain finding).
+// Pre-#149 this hardcoded a string list that drifted from the
+// evaluator's operator map — length_eq / length_gt / length_lt /
+// array_contains were validator-listed but never wired in the
+// evaluator. Rules using them passed config validation and failed
+// at fire time with "unsupported operator". Deriving from
+// expression.RegisteredOperators() makes the validator's set match
+// the evaluator's wiring by construction: an operator declared in
+// expression/types.go but never wired in NewExpressionEvaluator
+// is rejected by the validator at config-load time, not by a
+// runtime error after the rule fires.
 func isValidOperator(op string) bool {
-	validOps := []string{
-		"eq", "ne", "lt", "lte", "gt", "gte",
-		"contains", "starts_with", "ends_with", "regex",
-		"in", "not_in", "between",
-		"length_eq", "length_gt", "length_lt", "array_contains",
-		"transition",
-	}
-	for _, valid := range validOps {
-		if op == valid {
-			return true
-		}
-	}
-	return false
+	_, ok := expression.RegisteredOperators()[op]
+	return ok
 }

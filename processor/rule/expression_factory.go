@@ -140,8 +140,18 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 		return false
 	}
 
-	// Build LogicalExpression from rule conditions
+	// Build LogicalExpression from rule conditions. Substitute
+	// $-prefixed string Values against the entity before evaluation
+	// — without this, a condition `value: "$entity.triple.foo.length"`
+	// reaches the operator as the literal template and coerce-errors.
+	// See SubstituteConditionValues for the contract; #149 surfaced
+	// the gap during reference-pack integration testing.
+	ec := &ExecutionContext{
+		EntityID: entityState.ID,
+		Entity:   entityState,
+	}
 	expr := r.buildLogicalExpression()
+	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
 
 	// Use the expression.Evaluator for direct triple evaluation
 	result, err := r.evaluator.Evaluate(entityState, expr)

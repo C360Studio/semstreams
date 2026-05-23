@@ -224,8 +224,13 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 		prevFields["$prev."+field] = prevValue
 	}
 
+	// #149: substitute $-prefixed string Values in conditions
+	// against the entity before evaluation. Without this, a condition
+	// `value: "$entity.triple.foo.length"` reaches the operator as
+	// the literal template and coerce-errors at runtime.
+	ec := &ExecutionContext{EntityID: entityID, Entity: entity}
 	expr := expression.LogicalExpression{
-		Conditions: ruleDef.Conditions,
+		Conditions: SubstituteConditionValues(ruleDef.Conditions, ec),
 		Logic:      ruleDef.Logic,
 	}
 	if expr.Logic == "" {
@@ -468,8 +473,21 @@ func (e *StatefulEvaluator) evaluateWhen(
 	stateFields expression.StateFields,
 	messageFields expression.MessageFields,
 ) (bool, error) {
+	// #149: substitute $-prefixed string Values in conditions before
+	// evaluation. evaluateWhen runs per-action when-clauses; the same
+	// substitution semantics that apply to top-level conditions apply
+	// here.
+	entityID := ""
+	if entity != nil {
+		entityID = entity.ID
+	}
+	ec := &ExecutionContext{
+		EntityID:    entityID,
+		Entity:      entity,
+		MessageData: map[string]any(messageFields),
+	}
 	expr := expression.LogicalExpression{
-		Conditions: conditions,
+		Conditions: SubstituteConditionValues(conditions, ec),
 		Logic:      expression.LogicAnd,
 	}
 	return e.exprEvaluator.EvaluateWithStateAndMessage(entity, stateFields, messageFields, expr)

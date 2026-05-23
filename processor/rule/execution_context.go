@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
 // unresolvedTemplateVarRe matches any $entity.*, $related.*, $state.*,
@@ -26,6 +27,26 @@ import (
 // at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
 // doesn't over-match.
 var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller|message)\.\w[\w.]*`)
+
+// tripleLengthRe matches list-length suffix references on entity or
+// related triples (#149 / ADR-046 Phase 1 follow-up):
+//
+//	$entity.triple.<predicate>.length
+//	$related.triple.<predicate>.length
+//
+// Capture group 1 is the namespace ("entity" or "related"); group 2 is
+// the predicate name (which may itself contain dots — e.g.
+// `coordinator.decision.subtopics`). The trailing `\b` ensures we don't
+// match a predicate that genuinely ends in `.length` as a substring of
+// a longer token.
+//
+// Edge case: a predicate genuinely named `<foo>.length` would collide.
+// The substitution prefers the suffix interpretation (count semantics)
+// over the predicate-name interpretation because the count form is
+// the documented use case and a literal `.length` predicate is rare;
+// authors who need the literal can write the value into their template
+// directly. Worth documenting if it ever becomes an issue in practice.
+var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.length\b`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -179,6 +200,14 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 		result = strings.ReplaceAll(result, "$state.max_iterations", fmt.Sprintf("%d", ec.State.MaxIterations))
 	}
 
+	// List-length substitutions (#149). Resolved BEFORE the generic
+	// triple substitution below, because the generic path would
+	// stringify the list Object as `[a b c]` first, after which the
+	// `.length` suffix would be orphaned (`[a b c].length`) and
+	// trip the unresolved-template warning instead of resolving to
+	// the count. Pre-passing keeps the suffix semantic correct.
+	result = ec.applyTripleLengthSubstitutions(result)
+
 	// Entity triple substitutions (e.g., $entity.triple.agent.role → triple value)
 	if ec.Entity != nil {
 		for _, triple := range ec.Entity.Triples {
@@ -216,6 +245,117 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	ec.warnUnresolvedTemplateVars(template, result)
 
 	return result
+}
+
+// SubstituteConditionValues returns a copy of conds with each
+// string-typed Value field run through ec.SubstituteVariables.
+// Non-string Values pass through unchanged. Required so rule
+// authors can write `value: "$entity.triple.foo.length"` and have
+// it resolve before the operator sees it — without this, condition
+// values flow from JSON straight to applyOperator, which then
+// coerce-errors on the literal template string.
+//
+// Caught by the example-fan-out integration test on #149's first
+// cut: rule 03's `value: "$entity.triple.coordinator.decision.subtopics.length"`
+// was reaching length_eq's compareValue as the literal template,
+// not as the substituted integer. Pre-existing latent gap surfaced
+// the moment a reference config tried to use substitution in a
+// condition value. The fix lives here rather than in the evaluator
+// because substitution semantics belong with the rule package's
+// ExecutionContext, not with the pure expression evaluator.
+//
+// Nil ec is a no-op pass-through (test harnesses that drive
+// Evaluate directly without an EC still work).
+func SubstituteConditionValues(conds []expression.ConditionExpression, ec *ExecutionContext) []expression.ConditionExpression {
+	if ec == nil || len(conds) == 0 {
+		return conds
+	}
+	out := make([]expression.ConditionExpression, len(conds))
+	for i, c := range conds {
+		out[i] = c
+		s, ok := c.Value.(string)
+		if !ok || !strings.Contains(s, "$") {
+			continue
+		}
+		out[i].Value = ec.SubstituteVariables(s)
+	}
+	return out
+}
+
+// applyTripleLengthSubstitutions replaces every
+// `$entity.triple.<predicate>.length` and
+// `$related.triple.<predicate>.length` token in template with the
+// decimal-string integer count of triples whose Object is a list
+// (using the same shape truth-table as coerceTripleObjectToStrings).
+// #149 — closes the dynamic-counter join gap so `length_eq` rules can
+// compare against the source-list size rather than a hardcoded N.
+//
+// Resolution semantics:
+//   - Predicate found, Object is list-shaped → integer count.
+//   - Predicate found, Object is non-list (scalar string, etc.) →
+//     log Warn at substitution time + leave the token verbatim. The
+//     existing unresolved-template warning then trips at the end of
+//     substitution, surfacing the author error.
+//   - Predicate not found on the entity → "0". Mirrors #148's array-
+//     operator "missing predicate ⇒ empty array" semantic so a join
+//     rule that fires "before any work spawned" is a legitimate
+//     authoring intent.
+//   - Entity / Related nil for the referenced namespace → "0" with
+//     a Debug log (no entity in scope is a message-path rule shape,
+//     not an authoring error).
+//
+// Idempotent: returns template unchanged when no `.length` tokens
+// match. Safe to call when ec.Entity / ec.Related are nil.
+func (ec *ExecutionContext) applyTripleLengthSubstitutions(template string) string {
+	return tripleLengthRe.ReplaceAllStringFunc(template, func(match string) string {
+		parts := tripleLengthRe.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match // defensive — shouldn't happen given the regex
+		}
+		namespace, predicate := parts[1], parts[2]
+
+		var entity *gtypes.EntityState
+		switch namespace {
+		case "entity":
+			entity = ec.Entity
+		case "related":
+			entity = ec.Related
+		}
+		if entity == nil {
+			slog.Default().Debug("triple-length substitution: target entity nil; resolving to 0",
+				slog.String("token", match),
+				slog.String("namespace", namespace),
+				slog.String("rule_id", ec.RuleID()))
+			return "0"
+		}
+		for _, triple := range entity.Triples {
+			if triple.Predicate != predicate {
+				continue
+			}
+			items, ok := coerceTripleObjectToStrings(triple.Object)
+			if !ok {
+				// Loud Warn + self-describing sentinel. Cannot leave
+				// the token verbatim because the generic triple-
+				// substitution loop below would still match the
+				// inner `$entity.triple.<predicate>` substring and
+				// stringify the Object, leaving a nonsense
+				// `<value>.length` in the output. The sentinel starts
+				// with `[` (no `$` prefix) so it survives the generic
+				// loop AND is visible in any prompt/subject the
+				// operator inspects.
+				slog.Default().Warn("triple-length substitution: Object is not list-shaped; replacing token with error sentinel",
+					slog.String("token", match),
+					slog.String("predicate", predicate),
+					slog.String("object_type", fmt.Sprintf("%T", triple.Object)),
+					slog.String("rule_id", ec.RuleID()),
+					slog.String("hint", "the .length suffix requires the triple Object to be []string, []any, or a JSON-encoded list string — see coerceTripleObjectToStrings"))
+				return fmt.Sprintf("[ERROR_LENGTH_NOT_LIST:%s]", predicate)
+			}
+			return fmt.Sprintf("%d", len(items))
+		}
+		// Predicate not present → 0 (mirrors #148 array-op semantics).
+		return "0"
+	})
 }
 
 // ResolveListValue extracts a list-typed value from a substitution

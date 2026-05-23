@@ -2,7 +2,7 @@
   "id": "synthesize_when_all_gathers_complete",
   "type": "expression",
   "name": "Synthesize When All Gathers Complete",
-  "description": "Fires on the parent coordinator loop entity when the gather.completed_subtopic counter has accumulated as many triples as the source subtopics list. This is the join half of the ADR-046 Phase 1 fan-out pattern: each investigator completion stamps a triple via rule 02; rule 03 matches via length_eq once the count equals the expected. The expected count is currently pinned (3 in this example) — operators forking this pack should match their decomposer's typical fan-out size. A future improvement: a list-length substitution like $entity.triple.coordinator.decision.subtopics.length so the condition tracks the source list dynamically.",
+  "description": "Fires on the parent coordinator loop entity when the gather.completed_child counter has accumulated as many triples as the source subtopics list. Join half of the ADR-046 Phase 1 fan-out pattern: each investigator completion stamps a triple via rule 02; rule 03 matches via length_eq once the count equals the expected. Expected count is resolved dynamically from $entity.triple.coordinator.decision.subtopics.length (#149) so the pack works for any decomposer fan-out width (N=1 degenerate-serial, N=4 typical, N=10 deep) without per-width forking. The substitution stringifies the integer; length_eq's coerceToInt handles the string-encoded form transparently.",
   "enabled": true,
   "cooldown": "5s",
   "conditions": [
@@ -14,7 +14,7 @@
     {
       "field": "gather.completed_child",
       "operator": "length_eq",
-      "value": 3
+      "value": "$entity.triple.coordinator.decision.subtopics.length"
     }
   ],
   "logic": "and",

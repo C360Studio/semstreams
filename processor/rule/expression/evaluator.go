@@ -52,6 +52,39 @@ func NewExpressionEvaluator() *Evaluator {
 	return evaluator
 }
 
+// RegisteredOperators returns the set of operator names a freshly-
+// constructed Evaluator knows how to evaluate, INCLUDING the
+// special-cased OpTransition (which evaluateConditionWithStateAndMessage
+// dispatches outside the regular operator map). Intended for the
+// rule-config validator at load time so the validator's "is this
+// operator name supported" check derives from the evaluator's actual
+// wiring rather than a hardcoded list — #147 surfaced the
+// split-brain class where length_eq / length_gt / length_lt /
+// array_contains were validator-listed but evaluator-unregistered,
+// causing rules to pass config validation and fail at fire time
+// with "unsupported operator". Deriving the validator's set from
+// the same construction path the evaluator uses prevents the class
+// structurally.
+//
+// The set is computed by spinning up a throwaway evaluator and
+// reading its operator map. Cheap (no I/O); typical validator paths
+// call this at boot, not per-rule.
+func RegisteredOperators() map[string]struct{} {
+	ev := NewExpressionEvaluator()
+	out := make(map[string]struct{}, len(ev.operators)+1)
+	for op := range ev.operators {
+		out[op] = struct{}{}
+	}
+	// OpTransition is dispatched specially in
+	// evaluateConditionWithStateAndMessage (uses $prev.* state
+	// fields outside the regular operator-func signature) so it's
+	// not in the operators map but IS a valid operator the
+	// evaluator recognises. Add it explicitly so the validator
+	// accepts it.
+	out[OpTransition] = struct{}{}
+	return out
+}
+
 // isArrayOperator reports whether the named operator takes its
 // fieldValue as a collection (resolves via GetFieldValuesAll) rather
 // than a scalar (GetFieldValue first-match). Array operators count
