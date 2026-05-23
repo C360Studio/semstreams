@@ -36,6 +36,7 @@ import (
 	jsongeneric "github.com/c360studio/semstreams/processor/json_generic"
 	jsonmap "github.com/c360studio/semstreams/processor/json_map"
 	oasfgenerator "github.com/c360studio/semstreams/processor/oasf-generator"
+	researchclassify "github.com/c360studio/semstreams/processor/research-graph-classify"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/storage/objectstore"
 )
@@ -187,6 +188,13 @@ func registerSemanticLayer(registry *component.Registry) error {
 	// Query coordinator (orchestrates queries across components)
 	if err := graphquery.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "graph-query component registration")
+	}
+
+	// Research graph chain (ADR-045): nl_classify stage. Subsequent
+	// PRs add route_search, execute_subqueries, assess_sufficiency,
+	// and synthesize_answer.
+	if err := researchclassify.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-classify component registration")
 	}
 
 	// Statistical/Semantic tier components (enabled via config)

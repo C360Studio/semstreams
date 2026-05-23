@@ -37,6 +37,13 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Description: "ADR-045 route_search component decision: one of four routing actions",
 			Factory:     func() any { return &RouteDecision{} },
 		},
+		{
+			Domain:      Domain,
+			Category:    CategoryClassifierOutput,
+			Version:     SchemaVersion,
+			Description: "ADR-045 nl_classify component output: classifier hints + initial candidate set",
+			Factory:     func() any { return &ClassifierOutput{} },
+		},
 	}
 
 	var errs []error
