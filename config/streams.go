@@ -122,6 +122,84 @@ var flowsStreamConfig = StreamConfig{
 	Replicas: 1,
 }
 
+// VerifyJetStreamLimits reads the operator's MaxMemory / MaxFileStore
+// hints from cfg.NATS.JetStream and logs a Warn for each value that
+// exceeds the server's actual account limit. JetStream account limits
+// are server-side configuration (nats.conf or jetstream-domain
+// configuration); the nats.go SDK exposes AccountInfo as read-only, so
+// the framework cannot push the operator's intent — but it CAN surface
+// the gap loudly so an operator who set max_file_store: 10GB in the
+// framework config but didn't update nats.conf isn't left wondering
+// why stream-create fails with "insufficient storage resources" at
+// runtime (#101). Zero or unset values skip the check.
+//
+// Best-effort: a failure to fetch AccountInfo (server down, JetStream
+// disabled, AccountInfo unsupported) logs at Debug and returns nil —
+// the check is diagnostic, not gating. EnsureStreams runs anyway and
+// any actual capacity miss surfaces as a CreateStream error there.
+func (sm *StreamsManager) VerifyJetStreamLimits(ctx context.Context, cfg *Config) error {
+	configured := cfg.NATS.JetStream
+	// Skip when JetStream itself is disabled in the framework config —
+	// no AccountInfo to query meaningfully.
+	if !configured.Enabled {
+		return nil
+	}
+	// Skip when neither limit is set — nothing to compare against.
+	if configured.MaxMemory <= 0 && configured.MaxFileStore <= 0 {
+		return nil
+	}
+
+	js, err := sm.natsClient.JetStream()
+	if err != nil {
+		sm.logger.Debug("VerifyJetStreamLimits: JetStream context unavailable; skipping limit verification",
+			"error", err)
+		return nil
+	}
+
+	infoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	info, err := js.AccountInfo(infoCtx)
+	if err != nil {
+		sm.logger.Debug("VerifyJetStreamLimits: AccountInfo() failed; skipping limit verification",
+			"error", err,
+			"hint", "diagnostic-only — EnsureStreams will surface any real capacity miss")
+		return nil
+	}
+
+	if jetStreamLimitExceeds(configured.MaxMemory, info.Limits.MaxMemory) {
+		sm.logger.Warn("nats.jetstream.max_memory exceeds server limit",
+			"configured", configured.MaxMemory,
+			"server_limit", info.Limits.MaxMemory,
+			"hint", "JetStream account limits are server-side config (nats.conf 'jetstream { max_memory_store: N }'). The framework config block is a verification hint, not a control surface — update nats.conf and restart the server, or lower the framework config to match.")
+	}
+	if jetStreamLimitExceeds(configured.MaxFileStore, info.Limits.MaxStore) {
+		sm.logger.Warn("nats.jetstream.max_file_store exceeds server limit",
+			"configured", configured.MaxFileStore,
+			"server_limit", info.Limits.MaxStore,
+			"hint", "JetStream account limits are server-side config (nats.conf 'jetstream { max_file_store: N }'). The framework config block is a verification hint, not a control surface — update nats.conf and restart the server, or lower the framework config to match.")
+	}
+	return nil
+}
+
+// jetStreamLimitExceeds is the pure predicate behind
+// VerifyJetStreamLimits's per-field gap check. Returns true when an
+// operator-configured limit is set (>0) AND the server reports a
+// finite limit (!= -1, the AccountLimits sentinel for "unlimited") AND
+// the configured value exceeds the server's. Extracted so the predicate
+// is unit-testable without standing up a NATS server (the integration
+// test against the testcontainers nats-server only exercises the
+// unlimited-server early-return branch, since testcontainers reports
+// -1 / -1 by default).
+func jetStreamLimitExceeds(configured, serverLimit int64) bool {
+	if configured <= 0 {
+		return false
+	}
+	if serverLimit == -1 {
+		return false
+	}
+	return configured > serverLimit
+}
+
 // EnsureStreams creates all required JetStream streams based on:
 // 1. System streams (LOGS for out-of-band logging)
 // 2. Explicit streams defined in config.Streams (highest priority)

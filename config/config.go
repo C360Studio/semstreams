@@ -138,12 +138,35 @@ type NATSTLSConfig struct {
 	CAFile   string `json:"ca_file,omitempty"`
 }
 
-// JetStreamConfig for JetStream settings
+// JetStreamConfig for JetStream settings. Per #101, fields below are
+// either verification hints (MaxMemory/MaxFileStore) or reserved for
+// future plumbing (Domain/RetentionPolicy/ReplicationFactor); JetStream
+// account limits are exclusively server-side configuration via
+// nats.conf — the nats.go SDK exposes AccountInfo as read-only and
+// offers no client-side mutation surface, so the framework cannot push
+// operator intent. What it CAN do is compare configured-vs-server at
+// boot and Warn on gap (see StreamsManager.VerifyJetStreamLimits) so an
+// operator who set max_file_store: 10GB in the framework config but
+// didn't update nats.conf isn't left wondering why stream-create
+// eventually fails with "insufficient storage resources".
 type JetStreamConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Domain            string `json:"domain,omitempty"`
-	MaxMemory         int64  `json:"max_memory,omitempty"`
-	MaxFileStore      int64  `json:"max_file_store,omitempty"`
+	Enabled bool   `json:"enabled"`
+	Domain  string `json:"domain,omitempty"`
+	// MaxMemory is the operator's expected server-side
+	// max_memory_store limit. VerifyJetStreamLimits Warns at boot if
+	// this exceeds the server's actual AccountInfo.Limits.MaxMemory.
+	// 0 disables the check (the default for operators who manage
+	// JetStream sizing entirely via nats.conf without surfacing intent
+	// in the framework config).
+	MaxMemory int64 `json:"max_memory,omitempty"`
+	// MaxFileStore is the operator's expected server-side
+	// max_file_store limit. Same Warn-on-gap semantics as MaxMemory.
+	MaxFileStore int64 `json:"max_file_store,omitempty"`
+	// RetentionPolicy and ReplicationFactor are reserved for future
+	// per-stream-default plumbing — they're per-stream concepts in
+	// JetStream, not account-level, so the framework would have to
+	// route them through StreamConfig defaults rather than at this
+	// level. Not currently honored anywhere.
 	RetentionPolicy   string `json:"retention_policy,omitempty"`
 	ReplicationFactor int    `json:"replication_factor,omitempty"`
 }

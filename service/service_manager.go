@@ -37,6 +37,15 @@ type Manager struct {
 	httpMiddleware []HTTPMiddleware // applied outermost-first; see ADR-030 Phase 1
 	config         ManagerConfig
 
+	// Optional dedicated health-port listener (#100). Operators set
+	// cmd/semstreams's -health-port (or SEMSTREAMS_HEALTH_PORT env) to
+	// bind a parallel listener serving ONLY /health and /healthz — a
+	// lightweight surface for Docker/k8s probes that is independent of
+	// the service-manager UI port. Zero means disabled (the default).
+	// Both endpoints reuse the Manager's existing handleSystemHealth /
+	// handleLiveness handlers; no separate health logic.
+	healthServer *http.Server
+
 	// Track if we're the instance managing HTTP
 	isHTTPManager bool
 
@@ -420,6 +429,17 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 	m.services = make(map[string]Service)
 	m.order = nil
 	m.mu.Unlock()
+
+	// Stop the dedicated health listener first (cheap shutdown, no
+	// pending requests to drain at scale). No-op when not started.
+	// #100: production shutdown runs through StopAll (cmd/semstreams's
+	// shutdown() calls manager.StopAll, NOT manager.Stop), so the
+	// teardown has to live here to actually free the port on graceful
+	// drain. Log-and-continue: health-listener shutdown failure must
+	// not block the main HTTP server shutdown.
+	if err := m.StopHealthListener(); err != nil {
+		logger.Warn("dedicated health listener stop failed; continuing main shutdown", "error", err)
+	}
 
 	// Stop the HTTP server if running
 	// This was missing and causing containers to not shutdown cleanly!
@@ -818,6 +838,18 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) Stop(timeout time.Duration) error {
 	// Config watching is now handled by Manager, no need to stop it here
 
+	// Stop the dedicated health listener first (cheaper shutdown, no
+	// pending requests to drain at scale). No-op when not started.
+	if err := m.StopHealthListener(); err != nil {
+		// Log-and-continue — health listener shutdown failure must not
+		// block the main HTTP server shutdown.
+		logger := m.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn("dedicated health listener stop failed; continuing main shutdown", "error", err)
+	}
+
 	// Stop HTTP server if running
 	if m.isHTTPManager {
 		if err := m.stopHTTPServer(); err != nil {
@@ -1002,6 +1034,91 @@ func (m *Manager) startHTTPServer() error {
 		}
 	}()
 
+	return nil
+}
+
+// StartHealthListener binds a dedicated /health + /healthz listener on
+// the given port. Intended for Docker / Kubernetes probes that want a
+// stable port independent of the service-manager UI's HTTPPort (#100).
+// Port 0 is a no-op (disabled — the default for the -health-port flag).
+//
+// The listener serves the SAME handler functions as the main HTTP mux's
+// /health and /healthz routes; it reads m.services / m.natsClient under
+// the same m.mu locks. Failure to bind logs at Warn level but does NOT
+// fail the boot — the main /health on HTTPPort is the authoritative
+// health surface; this dedicated listener is convenience-only.
+//
+// Idempotent: calling twice with the same non-zero port returns an
+// error rather than re-binding; callers should call StopHealthListener
+// first if they need to switch ports at runtime.
+func (m *Manager) StartHealthListener(port int) error {
+	if port == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.healthServer != nil {
+		return fmt.Errorf("health listener already started; call StopHealthListener before re-binding")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", m.handleSystemHealth)
+	mux.HandleFunc("/healthz", m.handleLiveness)
+
+	m.healthServer = &http.Server{
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: mux,
+		BaseContext: func(_ net.Listener) context.Context {
+			if m.lifecycleCtx != nil {
+				return m.lifecycleCtx
+			}
+			return context.Background()
+		},
+		// Health probes are short-lived; keep timeouts tight so a
+		// misbehaving probe client can't pin a goroutine.
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
+
+	server := m.healthServer
+	logger := m.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("Starting dedicated health listener", "port", port, "routes", []string{"/health", "/healthz"})
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Warn("dedicated health listener error", "port", port, "error", err)
+		}
+	}()
+	return nil
+}
+
+// StopHealthListener gracefully shuts down the dedicated health-port
+// listener if one was started. No-op when the listener is not running.
+// Same 5s graceful-shutdown budget as stopHTTPServer.
+func (m *Manager) StopHealthListener() error {
+	m.mu.Lock()
+	server := m.healthServer
+	m.healthServer = nil
+	m.mu.Unlock()
+
+	if server == nil {
+		return nil
+	}
+
+	logger := m.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Warn("dedicated health listener shutdown failed", "error", err)
+		return fmt.Errorf("shutdown dedicated health listener: %w", err)
+	}
 	return nil
 }
 
