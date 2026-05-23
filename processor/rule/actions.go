@@ -65,7 +65,25 @@ type Action struct {
 	// Type specifies the action type (publish, add_triple, remove_triple, update_triple, publish_agent)
 	Type string `json:"type"`
 
-	// Subject is the NATS subject for publish actions
+	// Subject serves two roles depending on action type:
+	//   - publish / publish_agent: the NATS subject the message is sent to.
+	//   - add_triple / update_triple / remove_triple (#147 / ADR-046
+	//     Phase 1 join gap): override target entity ID the triple is
+	//     written to. Substitution-resolved. Empty defaults to the
+	//     trigger entity (ec.EntityID) — back-compat for rules that
+	//     stamp on themselves. Non-empty Subject that resolves to an
+	//     empty string after substitution is an authoring error
+	//     (returned from Execute, not silently coerced to EntityID —
+	//     matches the discipline from PR #138 for_each resolver where
+	//     silent fallback would mask typos in $entity.triple.*
+	//     references).
+	//
+	// The two roles don't overlap operationally — publish writes a
+	// NATS subject; triple-writes don't take a NATS subject — so the
+	// shared field keeps the Action surface narrow. Tools that ride
+	// the rule-engine path (#147's reference config) document
+	// "subject = parent loop entity ID" right at the rule definition,
+	// which is the readable shape for the counter pattern.
 	Subject string `json:"subject,omitempty"`
 
 	// Predicate is the relationship type for triple actions
@@ -432,11 +450,60 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 	}
 }
 
+// resolveTripleSubject returns the entity ID a triple-write action
+// (add_triple / update_triple / remove_triple) should target. #147 /
+// ADR-046 Phase 1 join gap: lets a rule stamp a triple onto an
+// entity other than its trigger (e.g. stamping a per-child completion
+// counter onto the parent loop entity from a child-completion rule).
+//
+// Semantics:
+//   - Empty action.Subject → fall back to ec.EntityID (back-compat).
+//   - Non-empty action.Subject → substitution-resolved.
+//   - Substitution-resolved to an empty string → authoring error.
+//     Silent fallback to ec.EntityID would mask typos in
+//     $entity.triple.* references — same loudness discipline as
+//     PR #138's for_each resolver.
+//
+// Phase-2 footgun note: the unresolved-token check uses
+// `unresolvedTemplateVarRe`, which only catches framework-namespace
+// tokens ($entity|related|state|schedule|caller|message). Iter-vars
+// from `for_each` ($subtopic, $node, etc.) are NOT in the regex
+// because today `for_each` is only consumed by `publish_agent`. If
+// ADR-046 Phase 2 (#139) extends `for_each` to triple-writes, this
+// helper would silently accept a bare iter-var literal that didn't
+// resolve and write a triple to an entity literally named
+// "$subtopic". Either broaden the regex when that lands or have the
+// for_each-on-triple-writes path validate iter-var presence
+// upstream.
+func resolveTripleSubject(action Action, ec *ExecutionContext) (string, error) {
+	if action.Subject == "" {
+		return ec.EntityID, nil
+	}
+	resolved := ec.SubstituteVariables(action.Subject)
+	if resolved == "" {
+		return "", fmt.Errorf("action.subject %q resolved to empty after substitution; refusing to fall back to trigger entity (likely a typo or a $entity.triple.* reference that the trigger entity didn't carry at fire time)", action.Subject)
+	}
+	// SubstituteVariables leaves unresolved $entity.*/$related.*/etc.
+	// tokens in the output verbatim (logs a Warn but doesn't error).
+	// Treat surviving tokens as resolution failure — falling back to
+	// ec.EntityID would mask the typo + writing the triple onto an
+	// entity whose ID literally contains "$entity.triple.foo" is
+	// strictly worse than refusing. Same loudness discipline as the
+	// for_each resolver in PR #138.
+	if leftovers := unresolvedTemplateVarRe.FindAllString(resolved, -1); len(leftovers) > 0 {
+		return "", fmt.Errorf("action.subject %q has unresolved template variables %v after substitution (likely a typo or a reference that the trigger entity didn't carry at fire time); refusing to write triple with garbled subject", action.Subject, leftovers)
+	}
+	return resolved, nil
+}
+
 // ExecuteAddTriple executes an add_triple action, creating a new semantic triple.
 // Returns the created triple and any error that occurred.
 // If a TripleMutator is configured, the triple is persisted via NATS request/response.
 func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec *ExecutionContext) (message.Triple, error) {
-	entityID := ec.EntityID
+	entityID, err := resolveTripleSubject(action, ec)
+	if err != nil {
+		return message.Triple{}, fmt.Errorf("resolve add_triple subject: %w", err)
+	}
 
 	// Validate predicate is present
 	if action.Predicate == "" {
@@ -504,7 +571,10 @@ func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec
 // ExecuteRemoveTriple executes a remove_triple action, removing a semantic triple.
 // If a TripleMutator is configured, the triple is removed via NATS request/response.
 func (e *ActionExecutor) ExecuteRemoveTriple(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID := ec.EntityID
+	entityID, err := resolveTripleSubject(action, ec)
+	if err != nil {
+		return fmt.Errorf("resolve remove_triple subject: %w", err)
+	}
 
 	// Validate predicate is present
 	if action.Predicate == "" {
@@ -638,7 +708,10 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 // since triples are identified by (subject, predicate, object) - changing any of those
 // creates a different triple.
 func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID := ec.EntityID
+	entityID, err := resolveTripleSubject(action, ec)
+	if err != nil {
+		return fmt.Errorf("resolve update_triple subject: %w", err)
+	}
 
 	// Validate predicate is present
 	if action.Predicate == "" {

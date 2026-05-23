@@ -9,10 +9,26 @@ import (
 
 // ConditionExpression represents a single field/operator/value condition
 type ConditionExpression struct {
-	Field    string      `json:"field"`          // Predicate field (e.g., "robotics.battery.level")
-	Operator string      `json:"operator"`       // Comparison operator (e.g., "lte", "eq", "contains")
-	Value    interface{} `json:"value"`          // Comparison value (20.0, "active", true)
-	Required bool        `json:"required"`       // If false, missing field doesn't fail evaluation
+	Field    string      `json:"field"`    // Predicate field (e.g., "robotics.battery.level")
+	Operator string      `json:"operator"` // Comparison operator (e.g., "lte", "eq", "contains")
+	Value    interface{} `json:"value"`    // Comparison value (20.0, "active", true)
+	// Required: when true, a missing field causes evaluation to error
+	// rather than silently match false. Scalar operators (eq, lt,
+	// contains, ...) honour this strictly: missing predicate +
+	// Required=true → EvaluationError.
+	//
+	// Array operators (length_eq, length_gt, length_lt, array_contains
+	// — see isArrayOperator) DELIBERATELY DIVERGE: a missing predicate
+	// resolves to an empty array (`[]interface{}{}`) and the operator
+	// runs against it. length_eq with value=0 then matches; length_gt
+	// with value=N>0 doesn't; array_contains returns false. This is
+	// the intended semantic for the #147 / ADR-046 Phase 1 counter
+	// pattern, where a join rule wanting "fire before any children
+	// complete" is a legitimate authoring intent. Authors who want
+	// "this predicate MUST exist on the entity" should pair the array
+	// operator with a separate scalar eq/exists condition over the
+	// same field.
+	Required bool        `json:"required"`
 	From     interface{} `json:"from,omitempty"` // For transition operator: allowed previous value(s)
 }
 
@@ -34,6 +50,16 @@ type OperatorFunc func(fieldValue, compareValue interface{}) (bool, error)
 // TypeDetector determines field type and extracts values from entity state
 type TypeDetector interface {
 	GetFieldValue(entityState *gtypes.EntityState, field string) (value interface{}, exists bool, err error)
+	// GetFieldValuesAll returns every triple Object matching the given
+	// predicate as a []interface{}. Used by array operators (length_eq,
+	// length_gt, length_lt, array_contains — see isArrayOperator) where
+	// the natural semantics are "how many triples carry this predicate"
+	// rather than "what is the first triple's Object". Returns
+	// (nil, false) when no triple matches. #147 / ADR-046 Phase 1 join
+	// gap: the counter pattern stamps N triples with the same
+	// predicate keyed by child ID; the join rule counts them via
+	// length_eq on this multi-valued path.
+	GetFieldValuesAll(entityState *gtypes.EntityState, field string) (values []interface{}, exists bool, err error)
 	DetectFieldType(value interface{}) FieldType
 }
 
