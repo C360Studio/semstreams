@@ -55,41 +55,62 @@ var rulesStampedPredicates = map[string]string{
 }
 
 // loadFrameworkStampedPredicates returns the set of predicates the
-// framework actually stamps, discovered by scanning the agentic
-// vocabulary package's constant declarations. Approximate — picks
-// up everything declared in vocabulary/agentic/predicates.go.
-// Operator-side predicates would still need to be in the allowlist.
+// framework declares across every vocabulary/*/predicates.go file.
+// Discovered by walking all subdirectories of vocabulary/ and
+// scanning for `Const = "predicate.shape"` declarations. Approximate
+// but covers the agentic, sosa, csapi, oasf, oms, swe, governance
+// packages without forcing reference-config authors to pick one
+// vocab per pack. Operator-side predicates (stamped by rules
+// themselves, not framework code) still need an entry in the
+// rulesStampedPredicates allowlist.
+//
+// Reviewer recommendation 3 on PR #150: original scoping to
+// vocabulary/agentic/predicates.go only would force false-positive
+// allowlist entries for any future pack using CS API or SOSA
+// predicates as triple references. Widened to all sibling packages
+// to keep the lint useful as packs scale.
 func loadFrameworkStampedPredicates(t *testing.T) map[string]struct{} {
 	t.Helper()
-	const vocabFile = "vocabulary/agentic/predicates.go"
-	// Walk up from cwd until we find the vocab file (tests can be
-	// invoked from arbitrary working directories).
 	root := mustFindRepoRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, vocabFile))
-	if err != nil {
-		t.Fatalf("reading %s: %v", vocabFile, err)
-	}
+	vocabRoot := filepath.Join(root, "vocabulary")
 
 	// Grep for string constant declarations: lines like
 	//   `Foo = "predicate.name"`
 	// in the const block. Captures the right-hand side value.
 	constRe := regexp.MustCompile(`^\s*\w+\s*=\s*"([\w.\-/:]+)"\s*$`)
 	out := make(map[string]struct{})
-	for line := range strings.SplitSeq(string(data), "\n") {
-		m := constRe.FindStringSubmatch(line)
-		if m == nil {
-			continue
+
+	walkErr := filepath.WalkDir(vocabRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		val := m[1]
-		// Only count predicate-shaped strings (dotted lowercase).
-		// Skip IRIs (contain `/` or `:`) and entity-ID samples.
-		if strings.ContainsAny(val, "/:") {
-			continue
+		if d.IsDir() || filepath.Base(path) != "predicates.go" {
+			return nil
 		}
-		out[val] = struct{}{}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		for line := range strings.SplitSeq(string(data), "\n") {
+			m := constRe.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			val := m[1]
+			// Only count predicate-shaped strings (dotted lowercase).
+			// Skip IRIs (contain `/` or `:`) and entity-ID samples.
+			if strings.ContainsAny(val, "/:") {
+				continue
+			}
+			out[val] = struct{}{}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walking %s: %v", vocabRoot, walkErr)
 	}
 	if len(out) == 0 {
-		t.Fatalf("no predicates discovered in %s — scanner regex likely broken", vocabFile)
+		t.Fatalf("no predicates discovered under %s — scanner walker likely broken", vocabRoot)
 	}
 	return out
 }

@@ -266,6 +266,14 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 //
 // Nil ec is a no-op pass-through (test harnesses that drive
 // Evaluate directly without an EC still work).
+//
+// ConditionExpression.From is intentionally NOT substituted today.
+// `from` is consumed only by OpTransition (which compares against
+// $prev.* state fields outside the regular operator path), and no
+// production rule today uses substituted templates in From. If a
+// transition rule needs `from: "$entity.triple.X"` semantics in
+// the future, extend this helper to also substitute string-typed
+// From values — the change is local.
 func SubstituteConditionValues(conds []expression.ConditionExpression, ec *ExecutionContext) []expression.ConditionExpression {
 	if ec == nil || len(conds) == 0 {
 		return conds

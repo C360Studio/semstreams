@@ -14,7 +14,6 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
 // #149 follow-up — the integration test that would have caught both
@@ -101,15 +100,14 @@ func TestExampleFanOutPack_EndToEnd_DynamicCount(t *testing.T) {
 	)
 
 	rule01, rule02, rule03 := loadExampleFanOutRules(t)
-	ev := expression.NewExpressionEvaluator()
 
 	subtopics, coordinatorEntity := buildCoordinatorWithSubtopics(t, n)
 
 	// --- Phase 1: rule 01 spawns N investigators in parallel ---
-	taskIDs := phase1SpawnInvestigators(t, ev, rule01, coordinatorEntityID, coordinatorEntity, subtopics, n)
+	taskIDs := phase1SpawnInvestigators(t, rule01, coordinatorEntityID, coordinatorEntity, subtopics, n)
 
 	// --- Phase 2: each investigator completes; rule 02 stamps counter on parent ---
-	stampedTriples := phase2StampCompletions(t, ev, rule02, coordinatorEntityID, taskIDs)
+	stampedTriples := phase2StampCompletions(t, rule02, coordinatorEntityID, taskIDs)
 
 	// --- Phase 3: rule 03 fires on coordinator now that counter ==
 	// subtopics-list length. This is the part #149 enables: the
@@ -117,7 +115,7 @@ func TestExampleFanOutPack_EndToEnd_DynamicCount(t *testing.T) {
 	// subtopics.length (= N) dynamically. Pre-#149 with N=5, rule 03's
 	// pinned value=3 wouldn't match — synthesizer never spawns.
 	coordinatorEntity.Triples = append(coordinatorEntity.Triples, stampedTriples...)
-	phase3FireJoin(t, ev, rule03, coordinatorEntityID, coordinatorEntity)
+	phase3FireJoin(t, rule03, coordinatorEntityID, coordinatorEntity)
 }
 
 // buildCoordinatorWithSubtopics constructs the canonical fan-out
@@ -147,9 +145,17 @@ func buildCoordinatorWithSubtopics(t *testing.T, n int) ([]string, *gtypes.Entit
 // the N spawned investigators (extracted from the published
 // TaskMessages). Per-iteration $subtopic substitution into each
 // prompt is asserted along the way.
+//
+// Drives the production wire ExpressionRule.EvaluateEntityState —
+// NOT the helper-direct path — so the test locks the actual
+// production call chain. A future refactor that removes the
+// substitution wire from EvaluateEntityState fails this test
+// rather than silently shipping broken (reviewer-found gap on
+// PR #150's first cut: helper-direct testing reproduced the exact
+// "tests piece, not pattern" class the structural fixes claim to
+// close).
 func phase1SpawnInvestigators(
 	t *testing.T,
-	ev *expression.Evaluator,
 	rule01 Definition,
 	coordinatorEntityID string,
 	coordinator *gtypes.EntityState,
@@ -157,15 +163,20 @@ func phase1SpawnInvestigators(
 	n int,
 ) []string {
 	t.Helper()
-	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
-	match, err := ev.Evaluate(coordinator, expression.LogicalExpression{
-		Conditions: rule01.Conditions, Logic: rule01.Logic,
-	})
+	// EntityState.ID is what EvaluateEntityState uses for logging
+	// and the substitution helper builds its EC from; set it
+	// explicitly so the wire mirrors what the production
+	// entity-watcher path would have populated.
+	coordinator.ID = coordinatorEntityID
+
+	rule, err := NewExpressionRule(rule01)
 	require.NoError(t, err)
-	require.True(t, match, "rule 01 conditions must match a coordinator with next_action=fan_out")
+	require.True(t, rule.EvaluateEntityState(coordinator),
+		"rule 01 EvaluateEntityState must match a coordinator with next_action=fan_out (drives the production wire including SubstituteConditionValues)")
 
 	publisher := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, publisher)
+	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
 	for _, action := range rule01.OnEnter {
 		require.NoError(t, executor.Execute(context.Background(), action, ec))
 	}
@@ -189,7 +200,6 @@ func phase1SpawnInvestigators(
 // triple set before running the join condition.
 func phase2StampCompletions(
 	t *testing.T,
-	ev *expression.Evaluator,
 	rule02 Definition,
 	coordinatorEntityID string,
 	taskIDs []string,
@@ -197,9 +207,13 @@ func phase2StampCompletions(
 	t.Helper()
 	mutator := &mockTripleMutator{}
 	executor := NewActionExecutorFull(nil, mutator, nil)
+	rule, err := NewExpressionRule(rule02)
+	require.NoError(t, err)
 
 	for i, taskID := range taskIDs {
+		invID := fmt.Sprintf("acme.research.agent.agentic-loop.execution.inv-%d", i)
 		investigator := &gtypes.EntityState{
+			ID: invID,
 			Triples: []message.Triple{
 				{Predicate: "agent.loop.role", Object: "investigator"},
 				{Predicate: "agent.loop.outcome", Object: "success"},
@@ -207,15 +221,10 @@ func phase2StampCompletions(
 				{Predicate: "agent.loop.task", Object: taskID},
 			},
 		}
-		ec := &ExecutionContext{
-			EntityID: fmt.Sprintf("acme.research.agent.agentic-loop.execution.inv-%d", i),
-			Entity:   investigator,
-		}
-		match, err := ev.Evaluate(investigator, expression.LogicalExpression{
-			Conditions: rule02.Conditions, Logic: rule02.Logic,
-		})
-		require.NoError(t, err, "rule 02 condition eval for child %d", i)
-		require.True(t, match, "rule 02 conditions must match a successful investigator")
+		ec := &ExecutionContext{EntityID: invID, Entity: investigator}
+
+		require.True(t, rule.EvaluateEntityState(investigator),
+			"rule 02 EvaluateEntityState must match a successful investigator (child %d)", i)
 
 		for _, action := range rule02.OnEnter {
 			require.NoError(t, executor.Execute(context.Background(), action, ec),
@@ -244,23 +253,20 @@ func phase2StampCompletions(
 // on the rule's value field resolves to N before the operator runs.
 func phase3FireJoin(
 	t *testing.T,
-	ev *expression.Evaluator,
 	rule03 Definition,
 	coordinatorEntityID string,
 	coordinator *gtypes.EntityState,
 ) {
 	t.Helper()
-	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
-	match, err := ev.Evaluate(coordinator, expression.LogicalExpression{
-		Conditions: SubstituteConditionValues(rule03.Conditions, ec),
-		Logic:      rule03.Logic,
-	})
+	coordinator.ID = coordinatorEntityID
+	rule, err := NewExpressionRule(rule03)
 	require.NoError(t, err)
-	require.True(t, match,
-		"rule 03 conditions must match when len(gather.completed_child) == .length(coordinator.decision.subtopics) — verifies #149 .length substitution + #147 array operator wiring")
+	require.True(t, rule.EvaluateEntityState(coordinator),
+		"rule 03 EvaluateEntityState must match when len(gather.completed_child) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
 
 	publisher := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, publisher)
+	ec := &ExecutionContext{EntityID: coordinatorEntityID, Entity: coordinator}
 	for _, action := range rule03.OnEnter {
 		require.NoError(t, executor.Execute(context.Background(), action, ec))
 	}
@@ -299,15 +305,11 @@ func TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin(t *testing.
 	}
 	coordinator := &gtypes.EntityState{Triples: triples}
 
-	ev := expression.NewExpressionEvaluator()
-	evalEC := &ExecutionContext{EntityID: "acme.research.agent.agentic-loop.execution.coord-x", Entity: coordinator}
-	match, err := ev.Evaluate(coordinator, expression.LogicalExpression{
-		Conditions: SubstituteConditionValues(rule03.Conditions, evalEC),
-		Logic:      rule03.Logic,
-	})
+	coordinator.ID = "acme.research.agent.agentic-loop.execution.coord-x"
+	rule, err := NewExpressionRule(rule03)
 	require.NoError(t, err)
-	assert.False(t, match,
-		"rule 03 must NOT fire at N-1 completions — premature synthesis would lose the slowest child's findings")
+	assert.False(t, rule.EvaluateEntityState(coordinator),
+		"rule 03 EvaluateEntityState must NOT match at N-1 completions — premature synthesis would lose the slowest child's findings. Drives the production wire so a future refactor that removes the substitution helper from EvaluateEntityState fails this test rather than silently shipping broken.")
 }
 
 // extractTask decodes a published agent.task.* envelope into the
