@@ -177,7 +177,7 @@ func run() error {
 	}
 
 	// 12. Run application with signal handling
-	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
+	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout, cliCfg.HealthPort)
 }
 
 // parseCLI parses and validates CLI flags.
@@ -237,6 +237,15 @@ func ensureStreamsWithSpinner(ctx context.Context, cfg *config.Config, natsClien
 	// Use a quiet logger for stream creation (we have the spinner for feedback)
 	quietLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	streamsManager := config.NewStreamsManager(natsClient, quietLogger)
+
+	// #101: diagnostic verification of operator-configured JetStream
+	// account limits against the server's actual limits. Best-effort
+	// (Debug on internal failure); a real gap surfaces as a Warn so
+	// operators see it before EnsureStreams hits a CreateStream error.
+	if err := streamsManager.VerifyJetStreamLimits(ctx, cfg); err != nil {
+		spinner.StopWithError(err)
+		return fmt.Errorf("verify jetstream limits: %w", err)
+	}
 
 	if err := streamsManager.EnsureStreams(ctx, cfg); err != nil {
 		spinner.StopWithError(err)
@@ -475,8 +484,11 @@ func createServiceIfEnabled(
 	return nil
 }
 
-// runWithSignalHandling starts services and handles shutdown signals
-func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdownTimeout time.Duration) error {
+// runWithSignalHandling starts services and handles shutdown signals.
+// healthPort is the optional dedicated health-port listener (#100); 0
+// disables it. The listener is bound AFTER StartAll succeeds so it never
+// reports "healthy" while services are still spinning up.
+func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdownTimeout time.Duration, healthPort int) error {
 	slog.Debug("Setting up signal handling")
 	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer signalCancel()
@@ -486,6 +498,17 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 		return fmt.Errorf("start services: %w", err)
 	}
 	slog.Info("All services started successfully")
+
+	// Optional dedicated health-port listener (#100). Binds /health and
+	// /healthz on a port independent of the service-manager UI's
+	// HTTPPort — convenience for Docker / k8s probes. Zero is a no-op
+	// (the default). Bind failure logs at Warn level inside the manager;
+	// boot continues since the service-manager's main /health is the
+	// authoritative health surface.
+	if err := manager.StartHealthListener(healthPort); err != nil {
+		slog.Warn("dedicated health listener failed to start; continuing without it",
+			"port", healthPort, "error", err)
+	}
 
 	<-signalCtx.Done()
 	slog.Info("Received shutdown signal")

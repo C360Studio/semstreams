@@ -1,0 +1,150 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+)
+
+// TestStartHealthListener_BindsHealthAndHealthz verifies that
+// StartHealthListener binds /health and /healthz on the requested port
+// and routes them to the Manager's existing handler functions. Closes
+// the loop on #100 — the -health-port flag is no longer dead code.
+func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
+	// Pass nil NATS so handleSystemHealth skips the NATS branch — the
+	// in-suite mockNATSClient creates an empty natsclient.Client whose
+	// internal fields are nil and panic on GetStatus(). Health listener
+	// behaviour is orthogonal to NATS readiness anyway; aggregating zero
+	// sub-statuses returns a healthy aggregate by the health package's
+	// rule (no sub-statuses = trivially healthy).
+	deps := createTestServiceDependencies(nil)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
+
+	port := freePort(t)
+	if err := manager.StartHealthListener(port); err != nil {
+		t.Fatalf("StartHealthListener(%d) error = %v", port, err)
+	}
+	t.Cleanup(func() {
+		if err := manager.StopHealthListener(); err != nil {
+			t.Errorf("StopHealthListener cleanup error = %v", err)
+		}
+	})
+
+	// Wait briefly for the listener to come up. ListenAndServe is async
+	// in a goroutine; we poll until the port is reachable to keep the
+	// test deterministic without a wall-clock sleep.
+	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForListener(t, addr+"/healthz", 3*time.Second)
+
+	// /healthz is the liveness probe — should always 200 once the
+	// listener is up. No service state required.
+	resp, err := http.Get(addr + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz error = %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /healthz status = %d, want 200", resp.StatusCode)
+	}
+
+	// /health aggregates service + NATS status. The mock NATS reports
+	// connected, no services registered, so the aggregate is healthy.
+	resp, err = http.Get(addr + "/health")
+	if err != nil {
+		t.Fatalf("GET /health error = %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /health status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestStartHealthListener_ZeroIsNoOp verifies the default disabled
+// path: port 0 (the flag's "0 to disable" sentinel) is a no-op, no
+// listener bound, no error returned. Back-compat — operators with the
+// flag unset see no change.
+func TestStartHealthListener_ZeroIsNoOp(t *testing.T) {
+	// Pass nil NATS so handleSystemHealth skips the NATS branch — the
+	// in-suite mockNATSClient creates an empty natsclient.Client whose
+	// internal fields are nil and panic on GetStatus(). Health listener
+	// behaviour is orthogonal to NATS readiness anyway; aggregating zero
+	// sub-statuses returns a healthy aggregate by the health package's
+	// rule (no sub-statuses = trivially healthy).
+	deps := createTestServiceDependencies(nil)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
+
+	if err := manager.StartHealthListener(0); err != nil {
+		t.Errorf("StartHealthListener(0) error = %v, want nil (no-op)", err)
+	}
+	if manager.healthServer != nil {
+		t.Error("healthServer should remain nil when port is 0")
+	}
+	// Stop should also be a no-op when no listener was started.
+	if err := manager.StopHealthListener(); err != nil {
+		t.Errorf("StopHealthListener with no listener error = %v, want nil", err)
+	}
+}
+
+// TestStartHealthListener_DoubleStartErrors verifies the idempotency
+// guard: calling twice with a non-zero port returns an error rather
+// than silently re-binding (which would either fail at bind time with
+// a confusing OS error or leak the first listener).
+func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
+	// Pass nil NATS so handleSystemHealth skips the NATS branch — the
+	// in-suite mockNATSClient creates an empty natsclient.Client whose
+	// internal fields are nil and panic on GetStatus(). Health listener
+	// behaviour is orthogonal to NATS readiness anyway; aggregating zero
+	// sub-statuses returns a healthy aggregate by the health package's
+	// rule (no sub-statuses = trivially healthy).
+	deps := createTestServiceDependencies(nil)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
+
+	port := freePort(t)
+	if err := manager.StartHealthListener(port); err != nil {
+		t.Fatalf("first StartHealthListener error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.StopHealthListener() })
+
+	if err := manager.StartHealthListener(port); err == nil {
+		t.Error("second StartHealthListener should error; got nil")
+	}
+}
+
+// freePort asks the kernel for an unused TCP port. Used by tests that
+// need a real port without colliding under parallel test runs.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen for free port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port
+}
+
+// waitForListener polls url with short HTTP GETs until one succeeds or
+// the budget expires. Avoids brittle sleep-based readiness in tests.
+func waitForListener(t *testing.T, url string, budget time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_ = resp.Body.Close()
+			return
+		}
+		// Short, bounded backoff under the overall budget — not a
+		// wall-clock sleep that scales with system pressure.
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-context.Background().Done():
+			return
+		}
+	}
+	t.Fatalf("listener at %s never came up within %s", url, budget)
+}

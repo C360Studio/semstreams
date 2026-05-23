@@ -54,9 +54,15 @@ func parseFlags() *CLIConfig {
 		getEnvDuration("SEMSTREAMS_SHUTDOWN_TIMEOUT", 30*time.Second),
 		"Graceful shutdown timeout (env: SEMSTREAMS_SHUTDOWN_TIMEOUT)")
 
+	// Default is 0 (disabled). When set, binds a dedicated /health +
+	// /healthz listener on this port independent of the service-manager
+	// UI's HTTP port — convenience for Docker / Kubernetes probes that
+	// want a stable, lightweight health surface. The service-manager's
+	// main HTTP server still serves /health on services.service-manager.
+	// config.http_port; this flag is additive.
 	flag.IntVar(&cfg.HealthPort, "health-port",
-		getEnvInt("SEMSTREAMS_HEALTH_PORT", 8080),
-		"Health check port, 0 to disable (env: SEMSTREAMS_HEALTH_PORT)")
+		getEnvInt("SEMSTREAMS_HEALTH_PORT", 0),
+		"Dedicated /health + /healthz listener port, 0 to disable (env: SEMSTREAMS_HEALTH_PORT). Independent of services.service-manager.config.http_port.")
 
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Show version information")
 	flag.BoolVar(&cfg.ShowVersion, "v", false, "Show version information")

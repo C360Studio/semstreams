@@ -10,10 +10,42 @@ import (
 
 // Mutation Response Types
 
-// MutationResponse is the base response for all mutations
+// MutationResponse is the base response for all mutations.
+//
+// Three response shapes for entity-mutation handlers (#120):
+//
+//   - Success=true, Degraded=false → write committed, payload fully
+//     populated (Entity, KVRevision, Version, TriplesAdded all
+//     authoritative). Callers can rely on the response as the
+//     post-write source of truth.
+//
+//   - Success=true, Degraded=true → write committed durably, but the
+//     post-write read-back failed (context cancellation, JetStream
+//     node failover, bucket re-keyed). Entity may be nil and
+//     KVRevision may be 0; Error carries the read-back failure
+//     reason. **Callers MUST NOT retry** — a retry on create returns
+//     409 Conflict (the entity is there), and on update returns CAS
+//     mismatch (the revision moved). Either fetch the entity through
+//     a separate read path to recover the post-write state, or
+//     accept the write-without-echo and continue.
+//
+//   - Success=false → write did NOT commit. Error carries the
+//     pre-write failure reason. Callers MAY retry per the Error
+//     semantics (transient transport errors are safe to retry;
+//     validation errors are not).
+//
+// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch)
+// don't use Degraded today — they have no post-write read-back step.
+// The field stays nil for those paths.
 type MutationResponse struct {
-	Success    bool   `json:"success"`
-	Error      string `json:"error,omitempty"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	// Degraded is true when the write committed but the post-write
+	// read-back failed. See type docstring for the full three-state
+	// contract. Only entity-mutation handlers populate this; nil on
+	// triple-mutation responses. Omitted in JSON when false (the
+	// common case).
+	Degraded   bool   `json:"degraded,omitempty"`
 	TraceID    string `json:"trace_id,omitempty"`
 	RequestID  string `json:"request_id,omitempty"`
 	Timestamp  int64  `json:"timestamp"`             // Unix nano timestamp
