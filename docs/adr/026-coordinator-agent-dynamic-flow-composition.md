@@ -16,6 +16,13 @@ broader than dynamic flow composition: it is the **judgment role** in
 the three-layer orchestration architecture (ADR-028). Dynamic flow
 composition is one of its capabilities, not its definition.
 
+**Milestone 2 (parallel flow composition) split into its own ADR
+2026-05-23**: see [ADR-046](046-parallel-fan-out-and-gated-dag-dispatch.md)
+for the two-phase plan. Phase 1 (`for_each` declarative iteration)
+shipped in v1.0.0-beta.82; Phase 2 (`fan_out_gated` lifted from
+semspec's scenario-orchestrator pattern) tracked at GH #139. Future
+references to "ADR-026 milestone 2" should point at ADR-046.
+
 ## Role within the three-layer orchestration architecture
 
 Semstreams commits to rule skeleton + coordinator agent + ops agent (ADR-028). The coordinator is **Layer 3 — Judgment**. Its purpose:
