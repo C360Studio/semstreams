@@ -125,6 +125,12 @@
       "default": "AGENT",
       "category": "advanced"
     },
+    "synthesize_terminal_on_completion": {
+      "type": "boolean",
+      "description": "Synthesize decide(needs_clarification) when a loop completes without a terminal tool call (#133). Belt-and-suspenders recovery for cheap-model substrates where models occasionally return text-only at completion despite persona prose",
+      "default": false,
+      "category": "advanced"
+    },
     "timeout": {
       "type": "string",
       "description": "Timeout duration for loop execution (e.g. 120s or 5m)",

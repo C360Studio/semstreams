@@ -1619,6 +1619,107 @@ func TestHandleModelResponse_Complete_PopulatesTokenFields(t *testing.T) {
 	}
 }
 
+// --- #133 terminal-tool-less synthesis tests ---
+
+// TestHandleCompleteResponse_SyntheticDecide_OptInTextOnly verifies that
+// when Config.SynthesizeTerminalOnCompletion=true AND the model returns
+// text-only at completion (no `decide` in the trajectory), the handler
+// populates result.SyntheticDecide with the loop ID and the model's text
+// content. The Component-side branch in persistHandlerResult routes this
+// through graphWriter.WriteSyntheticDecide to stamp the canonical
+// coordinator.next_action + reason + synthetic triples.
+func TestHandleCompleteResponse_SyntheticDecide_OptInTextOnly(t *testing.T) {
+	cfg := createTestConfig()
+	cfg.SynthesizeTerminalOnCompletion = true
+	handler := agenticloop.NewMessageHandler(cfg)
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-synth-textonly",
+		Role:   "researcher-research-gather",
+		Model:  "gemini-2.5-flash",
+		Prompt: "Investigate hydraulic actuators",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	// Model completes with text-only — no tool_calls. This is the
+	// cheap-model substrate wedge SemTeams smoke6 surfaced on
+	// 2026-05-22: the model summarises in prose rather than calling
+	// `decide`, the loop transitions to complete cleanly, and no
+	// coordinator.next_action triple ever fires.
+	response := agentic.AgentResponse{
+		RequestID: "req-textonly",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "Here is my summary: hydraulic actuators come in three families...",
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	if result.State != agentic.LoopStateComplete {
+		t.Fatalf("State = %s, want complete", result.State)
+	}
+	if result.SyntheticDecide == nil {
+		t.Fatal("SyntheticDecide should be non-nil on terminal-tool-less completion with opt-in flag set")
+	}
+	if result.SyntheticDecide.LoopID != loopID {
+		t.Errorf("SyntheticDecide.LoopID = %q, want %q", result.SyntheticDecide.LoopID, loopID)
+	}
+	if result.SyntheticDecide.Reason != response.Message.Content {
+		t.Errorf("SyntheticDecide.Reason = %q, want raw model text %q (prefix is added by graphWriter)", result.SyntheticDecide.Reason, response.Message.Content)
+	}
+}
+
+// TestHandleCompleteResponse_SyntheticDecide_DefaultOff verifies that with
+// the default Config (SynthesizeTerminalOnCompletion=false), a terminal-
+// tool-less completion does NOT populate SyntheticDecide. Back-compat:
+// existing flows keep their pre-#133 behaviour (loop completes cleanly,
+// no synthetic triples emitted).
+func TestHandleCompleteResponse_SyntheticDecide_DefaultOff(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-synth-default-off",
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "Test",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	response := agentic.AgentResponse{
+		RequestID: "req-default-off",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "All done",
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	if result.State != agentic.LoopStateComplete {
+		t.Fatalf("State = %s, want complete", result.State)
+	}
+	if result.SyntheticDecide != nil {
+		t.Errorf("SyntheticDecide should remain nil with default opt-in flag false; got %+v", result.SyntheticDecide)
+	}
+}
+
 // --- Per-task tools tests ---
 
 func TestHandleTask_PerTaskTools(t *testing.T) {

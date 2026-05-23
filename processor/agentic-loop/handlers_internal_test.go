@@ -240,3 +240,58 @@ func TestToolNames(t *testing.T) {
 		{Name: "b"},
 	}))
 }
+
+// TestHasDecideToolCall covers the #133 decide-detection helper.
+// Returns true on any tool_call step naming `decide`; false otherwise
+// (model_call steps, other tool names, context_compaction, empty trajectory).
+func TestHasDecideToolCall(t *testing.T) {
+	cases := []struct {
+		name  string
+		steps []agentic.TrajectoryStep
+		want  bool
+	}{
+		{
+			name:  "empty",
+			steps: nil,
+			want:  false,
+		},
+		{
+			name: "model_call only",
+			steps: []agentic.TrajectoryStep{
+				{StepType: "model_call"},
+				{StepType: "model_call"},
+			},
+			want: false,
+		},
+		{
+			name: "non-decide tool_calls only",
+			steps: []agentic.TrajectoryStep{
+				{StepType: "tool_call", ToolName: "web_search"},
+				{StepType: "tool_call", ToolName: "scratchpad"},
+				{StepType: "tool_call", ToolName: "bash"},
+			},
+			want: false,
+		},
+		{
+			name: "decide present mid-trajectory",
+			steps: []agentic.TrajectoryStep{
+				{StepType: "tool_call", ToolName: "web_search"},
+				{StepType: "tool_call", ToolName: "decide"},
+				{StepType: "model_call"},
+			},
+			want: true,
+		},
+		{
+			name: "decide as model_call StepType ignored (only tool_calls count)",
+			steps: []agentic.TrajectoryStep{
+				{StepType: "model_call", ToolName: "decide"},
+			},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, hasDecideToolCall(tc.steps))
+		})
+	}
+}
