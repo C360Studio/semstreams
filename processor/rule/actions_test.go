@@ -1216,6 +1216,86 @@ func TestAction_PublishAgent_EmptyResponseFormat(t *testing.T) {
 	assert.Nil(t, task.ResponseFormat, "ResponseFormat should remain nil when action.ResponseFormat unset")
 }
 
+// TestAction_PublishAgent_ToolChoice verifies that action.ToolChoice
+// threads onto TaskMessage.ToolChoice as a pointer pass-through.
+// ADR-023 + #132. Both Mode "required" and Mode "function" round-trip
+// through the BaseMessage envelope.
+func TestAction_PublishAgent_ToolChoice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tc   *agentic.ToolChoice
+	}{
+		{
+			name: "required",
+			tc:   &agentic.ToolChoice{Mode: "required"},
+		},
+		{
+			name: "function",
+			tc:   &agentic.ToolChoice{Mode: "function", FunctionName: "decide"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			mock := &mockPublisher{}
+			executor := NewActionExecutorFull(nil, nil, mock)
+
+			action := Action{
+				Type:       ActionTypePublishAgent,
+				Subject:    "agent.task.test",
+				Role:       "researcher",
+				Model:      "mock-model",
+				Prompt:     "p",
+				ToolChoice: tt.tc,
+			}
+
+			require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+			require.Len(t, mock.published, 1)
+
+			baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+			require.NoError(t, err)
+			task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+			require.True(t, ok)
+
+			require.NotNil(t, task.ToolChoice, "ToolChoice should round-trip onto TaskMessage")
+			assert.Equal(t, tt.tc.Mode, task.ToolChoice.Mode)
+			assert.Equal(t, tt.tc.FunctionName, task.ToolChoice.FunctionName)
+		})
+	}
+}
+
+// TestAction_PublishAgent_EmptyToolChoice verifies that an unset
+// ToolChoice leaves TaskMessage.ToolChoice nil (back-compat: existing
+// flows that don't opt in keep model-decides "auto" behaviour).
+func TestAction_PublishAgent_EmptyToolChoice(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// ToolChoice omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Nil(t, task.ToolChoice, "ToolChoice should remain nil when action.ToolChoice unset")
+}
+
 // TestAction_PublishAgent_RelatedLoops verifies that
 // action.RelatedLoops threads onto TaskMessage.Metadata under
 // agentic.MetadataKeyRelatedLoops as a map[string]any (the JSON wire

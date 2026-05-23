@@ -659,6 +659,19 @@ const (
 	// Example: "fan-out|fan_out"
 	// DataType: string
 	CoordinatorDecisionSAPCoerced = "coordinator.decision.sap_coerced"
+
+	// CoordinatorDecisionSynthetic is set to "true" when the framework
+	// synthesizes a decide on terminal-tool-less completion (#133). The
+	// model finished its loop with a text-only response — no `decide`
+	// tool_call appeared in the trajectory — so agentic-loop emits the
+	// canonical next_action + reason triples (needs_clarification +
+	// "[synthetic-no-terminal] {model text}") plus this marker so
+	// downstream rule authors can distinguish a model-emitted
+	// needs_clarification from a framework-synthesized one. Opt-in via
+	// Config.SynthesizeTerminalOnCompletion.
+	// Example: "true"
+	// DataType: string
+	CoordinatorDecisionSynthetic = "coordinator.decision.synthetic"
 )
 
 // Ops Predicates

@@ -50,6 +50,25 @@ type HandlerResult struct {
 	// FailureState contains enriched failure data for graph emission.
 	// Populated when a loop fails, mirrors CompletionState for the failure path.
 	FailureState *agentic.LoopFailedEvent
+	// SyntheticDecide is populated when handleCompleteResponse detects a
+	// terminal-tool-less completion AND Config.SynthesizeTerminalOnCompletion
+	// is true (#133). Component reads this and routes through graphWriter
+	// to stamp coordinator.next_action="needs_clarification",
+	// coordinator.decision.reason="[synthetic-no-terminal] ...", and
+	// coordinator.decision.synthetic="true" atomically on the loop entity.
+	// Nil means either the loop terminated through a real decide call or
+	// the synthesis opt-in is off; either way, no synthetic triples.
+	SyntheticDecide *SyntheticDecideRequest
+}
+
+// SyntheticDecideRequest carries the data needed for graphWriter to stamp
+// the synthetic decide triples (#133). LoopID identifies the loop entity;
+// Reason is the model's final text content, used as the
+// coordinator.decision.reason payload (prefixed by graphWriter so the
+// "synthetic" provenance is impossible to miss in operator dashboards).
+type SyntheticDecideRequest struct {
+	LoopID string
+	Reason string
 }
 
 // MessageHandler handles incoming messages and coordinates loop execution
@@ -1483,6 +1502,22 @@ func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason
 	return nil
 }
 
+// hasTerminalToolCall scans a trajectory's steps for any tool_call to a
+// recognised terminal tool. v1 recognises `decide` only — the canonical
+// coordinator terminal. Additional terminal tool names (submit_work,
+// product-specific) can be added when those flows materialise. Used by
+// the terminal-tool-less synthesis path (#133): when this returns false
+// on a completed loop and Config.SynthesizeTerminalOnCompletion is on,
+// the framework synthesizes a needs_clarification decide.
+func hasTerminalToolCall(steps []agentic.TrajectoryStep) bool {
+	for _, s := range steps {
+		if s.StepType == "tool_call" && s.ToolName == "decide" {
+			return true
+		}
+	}
+	return false
+}
+
 // handleCompleteResponse processes completion responses.
 // It enriches the completion event with full context for rules-based orchestration.
 func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID string, entity agentic.LoopEntity, responseContent string) error {
@@ -1519,14 +1554,36 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 		Metadata:    entity.Metadata,
 	}
 
-	// Pull token totals from trajectory for cost tracking
+	// Pull token totals from trajectory for cost tracking. Also doubles as
+	// the source-of-truth for the #133 terminal-tool-less check below —
+	// scanning the same trajectory snapshot here avoids a second
+	// trajectoryManager.GetTrajectory round-trip and keeps the cost +
+	// synthesis decisions consistent on the same step set.
+	var trajectorySteps []agentic.TrajectoryStep
 	if traj, trajErr := h.trajectoryManager.GetTrajectory(loopID); trajErr == nil {
 		completion.TokensIn = traj.TotalTokensIn
 		completion.TokensOut = traj.TotalTokensOut
+		trajectorySteps = traj.Steps
 	} else {
 		h.logger.Warn("trajectory unavailable for cost tracking",
 			slog.String("loop_id", loopID),
 			slog.String("error", trajErr.Error()))
+	}
+
+	// Terminal-tool-less completion synthesis (#133). When the loop
+	// reaches state=complete WITHOUT a `decide` tool_call in the
+	// trajectory AND opt-in via Config.SynthesizeTerminalOnCompletion,
+	// surface a SyntheticDecideRequest on the result so Component routes
+	// it through graphWriter. Cheap-model substrate recovery: small
+	// models occasionally return text-only at completion despite
+	// persona prose enforcing a decide call; the synth keeps downstream
+	// rules matching on coordinator.next_action rather than wedging the
+	// chain. Off by default; new flows targeting flash/sub-30B opt in.
+	if h.config.SynthesizeTerminalOnCompletion && !hasTerminalToolCall(trajectorySteps) {
+		result.SyntheticDecide = &SyntheticDecideRequest{
+			LoopID: loopID,
+			Reason: responseContent,
+		}
 	}
 
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")

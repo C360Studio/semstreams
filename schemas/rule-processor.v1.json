@@ -147,6 +147,20 @@
                   "type": "string",
                   "description": "subject"
                 },
+                "tool_choice": {
+                  "type": "object",
+                  "description": "tool_choice",
+                  "properties": {
+                    "function_name": {
+                      "type": "string",
+                      "description": "function_name"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "mode"
+                    }
+                  }
+                },
                 "tools": {
                   "type": "array",
                   "description": "tools",
@@ -387,6 +401,20 @@
                   "type": "string",
                   "description": "subject"
                 },
+                "tool_choice": {
+                  "type": "object",
+                  "description": "tool_choice",
+                  "properties": {
+                    "function_name": {
+                      "type": "string",
+                      "description": "function_name"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "mode"
+                    }
+                  }
+                },
                 "tools": {
                   "type": "array",
                   "description": "tools",
@@ -545,6 +573,20 @@
                   "type": "string",
                   "description": "subject"
                 },
+                "tool_choice": {
+                  "type": "object",
+                  "description": "tool_choice",
+                  "properties": {
+                    "function_name": {
+                      "type": "string",
+                      "description": "function_name"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "mode"
+                    }
+                  }
+                },
                 "tools": {
                   "type": "array",
                   "description": "tools",
@@ -702,6 +744,20 @@
                 "subject": {
                   "type": "string",
                   "description": "subject"
+                },
+                "tool_choice": {
+                  "type": "object",
+                  "description": "tool_choice",
+                  "properties": {
+                    "function_name": {
+                      "type": "string",
+                      "description": "function_name"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "mode"
+                    }
+                  }
                 },
                 "tools": {
                   "type": "array",
@@ -879,6 +935,20 @@
                 "subject": {
                   "type": "string",
                   "description": "subject"
+                },
+                "tool_choice": {
+                  "type": "object",
+                  "description": "tool_choice",
+                  "properties": {
+                    "function_name": {
+                      "type": "string",
+                      "description": "function_name"
+                    },
+                    "mode": {
+                      "type": "string",
+                      "description": "mode"
+                    }
+                  }
                 },
                 "tools": {
                   "type": "array",

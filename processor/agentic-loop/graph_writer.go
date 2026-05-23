@@ -19,9 +19,28 @@ import (
 )
 
 const (
-	graphMutationSubject = "graph.mutation.triple.add"
-	graphWriterTimeout   = 5 * time.Second
-	graphWriterSource    = "agentic-loop"
+	graphMutationSubject      = "graph.mutation.triple.add"
+	graphMutationBatchSubject = "graph.mutation.triple.add_batch"
+	graphWriterTimeout        = 5 * time.Second
+	graphWriterSource         = "agentic-loop"
+	// syntheticDecideSource is the Source on triples emitted by
+	// WriteSyntheticDecide (#133). Distinct from graphWriterSource
+	// ("agentic-loop") and decideToolSource ("coordinator-decide") so
+	// operator dashboards can attribute provenance — these triples come
+	// from the framework's terminal-tool-less synthesis, not from a
+	// model-emitted decide.
+	syntheticDecideSource = "agentic-loop-synthetic-decide"
+	// syntheticDecideReasonMaxBytes caps the size of the model's text
+	// content carried in the synthetic decide's reason triple. Matches
+	// maxPromptTripleBytes — the reason behaves like a prompt fragment
+	// (BM25/NL-search-relevant text on the loop entity), not a payload.
+	syntheticDecideReasonMaxBytes = 8 * 1024
+	// syntheticDecideReasonPrefix marks the reason as framework-emitted
+	// per the #133 contract. Downstream rules / operators can branch on
+	// the prefix to distinguish model-emitted needs_clarification from
+	// framework-synthesized ones; the coordinator.decision.synthetic
+	// triple is the structured marker for rule matching.
+	syntheticDecideReasonPrefix = "[synthetic-no-terminal] "
 
 	// maxPromptTripleBytes caps the size of the user prompt stored as the
 	// agent.loop.description triple, including the truncation marker. Full
@@ -100,6 +119,111 @@ func (w *graphWriter) writeTriple(ctx context.Context, triple message.Triple) er
 	}
 
 	return nil
+}
+
+// writeBatch marshals and sends a batch of triples atomically per-Subject
+// via NATS request/response. Used by WriteSyntheticDecide (#133) — the
+// three synthetic triples share one loop entity Subject so all-or-nothing
+// CAS semantics keep downstream rule-matching consistent (next_action +
+// reason + synthetic land together or not at all).
+func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) error {
+	if len(triples) == 0 {
+		return nil
+	}
+	req := gtypes.AddTriplesBatchRequest{Triples: triples}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal batch request: %w", err)
+	}
+
+	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationBatchSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
+	if err != nil {
+		return fmt.Errorf("NATS batch request failed: %w", err)
+	}
+
+	var resp gtypes.AddTriplesBatchResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("unmarshal batch response: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("batch mutation failed: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// WriteSyntheticDecide stamps the synthetic decide triples (#133) onto
+// the loop entity when handleCompleteResponse detected a terminal-tool-
+// less completion. Three atomic triples on the loop entity:
+//
+//   - coordinator.decision.next_action = "needs_clarification" so
+//     existing recovery rules (e.g. SemTeams' needs-clarification-
+//     replan) match without changes.
+//   - coordinator.decision.reason = "[synthetic-no-terminal] {model
+//     text, truncated to 8KiB}" so operators can see the model's last
+//     output that bypassed the terminal contract.
+//   - coordinator.decision.synthetic = "true" so rule authors can
+//     branch on framework-emitted vs model-emitted needs_clarification
+//     (e.g. route synthetics straight to coordinator; model-emitted
+//     through plan retry first).
+//
+// Routed through writeBatch so all three triples land atomically — a
+// partial write would corrupt the rule-matching contract.
+func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelText string) {
+	if w.natsClient == nil {
+		return
+	}
+	if w.platform.Org == "" || w.platform.Platform == "" {
+		w.logger.Warn("graph_writer: cannot write synthetic decide, platform identity missing",
+			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
+		return
+	}
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
+	if err != nil {
+		w.logger.Warn("graph_writer: cannot construct loop entity ID for synthetic decide",
+			"loop_id", loopID, "error", err)
+		return
+	}
+
+	now := time.Now()
+	reason := syntheticDecideReasonPrefix + truncateForTriple(modelText, syntheticDecideReasonMaxBytes-len(syntheticDecideReasonPrefix))
+	triples := []message.Triple{
+		{
+			Subject:    loopEntityID,
+			Predicate:  agvocab.CoordinatorNextAction,
+			Object:     "needs_clarification",
+			Source:     syntheticDecideSource,
+			Timestamp:  now,
+			Confidence: 1.0,
+		},
+		{
+			Subject:    loopEntityID,
+			Predicate:  agvocab.CoordinatorDecisionReason,
+			Object:     reason,
+			Source:     syntheticDecideSource,
+			Timestamp:  now,
+			Confidence: 1.0,
+		},
+		{
+			Subject:    loopEntityID,
+			Predicate:  agvocab.CoordinatorDecisionSynthetic,
+			Object:     "true",
+			Source:     syntheticDecideSource,
+			Timestamp:  now,
+			Confidence: 1.0,
+		},
+	}
+
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write synthetic decide triples",
+			"loop_id", loopID, "loop_entity_id", loopEntityID, "error", err)
+		return
+	}
+	w.logger.Info("graph_writer: stamped synthetic decide on terminal-tool-less completion",
+		"loop_id", loopID,
+		"loop_entity_id", loopEntityID,
+		"hint", "model returned text-only at completion — consider setting tool_choice='required' on the rule (#132) to prevent recurrence; high prevalence of this triple signals model/persona mismatch")
 }
 
 // WriteModelEndpoints emits triples for every endpoint in the model registry.

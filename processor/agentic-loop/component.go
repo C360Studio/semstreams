@@ -1077,6 +1077,14 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
 		}
 		c.writeTrajectoryToGraph(ctx, result.LoopID)
+		// Terminal-tool-less synthesis (#133). Detected in
+		// handleCompleteResponse; emitted here on the graph path so the
+		// triples ride the same publish budget as the loop completion
+		// stamp and downstream rules see them on the same KV revision
+		// the agent.complete.* event refers to.
+		if result.SyntheticDecide != nil && c.graphWriter != nil {
+			c.graphWriter.WriteSyntheticDecide(ctx, result.SyntheticDecide.LoopID, result.SyntheticDecide.Reason)
+		}
 	}
 
 	c.publishResults(ctx, result)

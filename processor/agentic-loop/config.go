@@ -59,7 +59,17 @@ type Config struct {
 	Consumer             ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context              ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
 	ToolCallGovernance   ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"`
-	Ports                *component.PortConfig    `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
+	// SynthesizeTerminalOnCompletion enables the framework to synthesize a
+	// decide(needs_clarification) when a loop completes without a terminal
+	// tool call (#133). Cheap-model substrate recovery: when a small model
+	// returns text-only at completion despite persona prose enforcing a
+	// decide call, the framework stamps coordinator.next_action +
+	// coordinator.decision.reason + coordinator.decision.synthetic="true"
+	// on the loop entity so existing recovery rules match. Default false
+	// for back-compat — new deployments targeting cheap-model substrates
+	// should opt in.
+	SynthesizeTerminalOnCompletion bool                  `json:"synthesize_terminal_on_completion,omitempty" schema:"type:bool,description:Synthesize decide(needs_clarification) when a loop completes without a terminal tool call (#133). Belt-and-suspenders recovery for cheap-model substrates where models occasionally return text-only at completion despite persona prose,default:false,category:advanced"`
+	Ports                          *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Port configuration for inputs and outputs,category:basic"`
 }
 
 // ToolCallGovernanceConfig configures subject-mode tool-call governance

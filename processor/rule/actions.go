@@ -131,6 +131,21 @@ type Action struct {
 	// model that honours response_format.
 	ResponseFormat *agentic.ResponseFormat `json:"response_format,omitempty"`
 
+	// ToolChoice constrains the spawned loop's tool selection per
+	// iteration. ADR-023. When non-nil, executePublishAgent stamps it
+	// onto the TaskMessage.ToolChoice; the agentic-loop caches it and
+	// threads it onto every AgentRequest in the loop. Nil leaves
+	// model-decides ("auto") behaviour unchanged.
+	//
+	// Primary use case is the cheap-model substrate (gemini-2.5-flash,
+	// small local models) where the model routinely completes a loop
+	// with text-only output despite persona prose enforcing a terminal
+	// tool call. Mode "required" forces _some_ tool every iteration;
+	// Mode "function" with FunctionName forces a specific tool (use on
+	// the terminal-forcing iteration where a structured decision is
+	// expected). Validation runs as part of TaskMessage.Validate().
+	ToolChoice *agentic.ToolChoice `json:"tool_choice,omitempty"`
+
 	// RelatedLoops is cross-arc loop-ID lineage threaded onto the
 	// spawned task so a downstream role can read_loop_result against
 	// upstream loops without the IDs being baked into the prompt. Map
@@ -724,6 +739,21 @@ func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec 
 	task.Metadata[agentic.MetadataKeyRelatedLoops] = resolved
 }
 
+// stampPerSpawnLLMKnobs threads the rule.Action's per-spawn LLM
+// constraints (ResponseFormat — ADR-034; ToolChoice — ADR-023) onto
+// the TaskMessage. The agentic-loop caches each on initial build and
+// threads it onto every AgentRequest in the loop. Nil on either side
+// is a no-op (back-compat: pre-opt-in flows keep their pre-existing
+// tool-calling / model-decides behaviour).
+func stampPerSpawnLLMKnobs(task *agentic.TaskMessage, action Action) {
+	if action.ResponseFormat != nil {
+		task.ResponseFormat = action.ResponseFormat
+	}
+	if action.ToolChoice != nil {
+		task.ToolChoice = action.ToolChoice
+	}
+}
+
 // executePublishAgent executes a publish_agent action, triggering an agentic loop.
 // It publishes a TaskMessage to the specified NATS subject.
 func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action, ec *ExecutionContext) error {
@@ -808,15 +838,7 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		task.Metadata[agentic.MetadataKeyDecideActionAllowlist] = allowlist
 	}
 
-	// Per-spawn structured-output constraint. ADR-034. Pass-through:
-	// rule.Action.ResponseFormat → TaskMessage.ResponseFormat. The
-	// agentic-loop caches it on initial build and threads it onto every
-	// AgentRequest in the loop. Nil leaves tool-calling behaviour
-	// unchanged. No substitution applied — the schema body is structured
-	// JSON, not a template.
-	if action.ResponseFormat != nil {
-		task.ResponseFormat = action.ResponseFormat
-	}
+	stampPerSpawnLLMKnobs(&task, action)
 
 	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
 	// Metadata stamping pattern. See stampRelatedLoops for the why.
