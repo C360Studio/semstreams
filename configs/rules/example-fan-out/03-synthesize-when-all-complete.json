@@ -1,0 +1,31 @@
+{
+  "id": "synthesize_when_all_gathers_complete",
+  "type": "expression",
+  "name": "Synthesize When All Gathers Complete",
+  "description": "Fires on the parent coordinator loop entity when the gather.completed_subtopic counter has accumulated as many triples as the source subtopics list. This is the join half of the ADR-046 Phase 1 fan-out pattern: each investigator completion stamps a triple via rule 02; rule 03 matches via length_eq once the count equals the expected. The expected count is currently pinned (3 in this example) — operators forking this pack should match their decomposer's typical fan-out size. A future improvement: a list-length substitution like $entity.triple.coordinator.decision.subtopics.length so the condition tracks the source list dynamically.",
+  "enabled": true,
+  "cooldown": "5s",
+  "conditions": [
+    {
+      "field": "agent.loop.role",
+      "operator": "eq",
+      "value": "coordinator"
+    },
+    {
+      "field": "gather.completed_child",
+      "operator": "length_eq",
+      "value": 3
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "publish_agent",
+      "subject": "agent.task.synthesis",
+      "role": "synthesizer",
+      "model": "general",
+      "tools": ["read_loop_result"],
+      "prompt": "All investigators have reported. The coordinator loop is $entity.id; call read_loop_result on each investigator child to fetch their findings (their loop ids are linked via agent.loop.parent on this entity). Produce a structured synthesis with: 1) one-paragraph summary, 2) per-subtopic key findings, 3) confidence assessment, 4) gaps."
+    }
+  ]
+}

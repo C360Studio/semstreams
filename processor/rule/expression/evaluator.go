@@ -4,6 +4,7 @@ package expression
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -39,7 +40,30 @@ func NewExpressionEvaluator() *Evaluator {
 	evaluator.operators[OpEndsWith] = operatorEndsWith
 	evaluator.operators[OpRegexMatch] = operatorRegex
 
+	// Register array operators (#147 — closes the split-brain validator/
+	// runtime gap where these were listed by isValidOperator but never
+	// wired). Used by ADR-046 Phase 1 join pattern: length_eq counts
+	// per-child completion triples on the parent loop entity.
+	evaluator.operators[OpLengthEq] = operatorLengthEq
+	evaluator.operators[OpLengthGt] = operatorLengthGt
+	evaluator.operators[OpLengthLt] = operatorLengthLt
+	evaluator.operators[OpArrayContains] = operatorArrayContains
+
 	return evaluator
+}
+
+// isArrayOperator reports whether the named operator takes its
+// fieldValue as a collection (resolves via GetFieldValuesAll) rather
+// than a scalar (GetFieldValue first-match). Array operators count
+// or check membership across the full set of triples carrying a
+// given predicate; scalar operators see only the first match.
+// #147 / ADR-046 Phase 1 counter pattern.
+func isArrayOperator(op string) bool {
+	switch op {
+	case OpLengthEq, OpLengthGt, OpLengthLt, OpArrayContains:
+		return true
+	}
+	return false
 }
 
 // Evaluate evaluates a logical expression against an entity state.
@@ -156,7 +180,35 @@ func (e *Evaluator) evaluateConditionWithStateAndMessage(entityState *gtypes.Ent
 	//    Entity-path (entity non-nil): triples first, fall through to
 	//    messageFields if not present.
 	//    Message-path (entity nil): messageFields only.
+	//    Array operators (#147 — length_eq, length_gt, length_lt,
+	//    array_contains) resolve via GetFieldValuesAll so they see
+	//    EVERY matching triple, not just the first. The counter
+	//    pattern stamps N triples with the same predicate keyed by
+	//    child ID; the join rule needs all N to count correctly.
 	if entityState != nil {
+		if isArrayOperator(condition.Operator) {
+			values, exists, err := e.typeDetector.GetFieldValuesAll(entityState, condition.Field)
+			if err != nil {
+				return false, &EvaluationError{
+					Field:    condition.Field,
+					Operator: condition.Operator,
+					Message:  "failed to get field values",
+					Err:      err,
+				}
+			}
+			if exists {
+				return e.applyOperator(condition, values)
+			}
+			// Predicate carries zero matching triples — array
+			// operators get a zero-length array rather than
+			// "field missing." length_eq with value=0 is a legit
+			// match (no children completed yet); array_contains
+			// returns false on empty. Fall through to messageFields
+			// only when the entity entirely lacks the predicate AND
+			// the operator is non-array; for array ops we want the
+			// "empty list" semantic.
+			return e.applyOperator(condition, []interface{}{})
+		}
 		fieldValue, exists, err := e.typeDetector.GetFieldValue(entityState, condition.Field)
 		if err != nil {
 			return false, &EvaluationError{
@@ -305,6 +357,27 @@ func (d *defaultTypeDetector) GetFieldValue(entityState *gtypes.EntityState, fie
 	return nil, false, nil
 }
 
+// GetFieldValuesAll collects every triple Object matching the
+// predicate, in trigger-time order. #147 / ADR-046 Phase 1 counter
+// pattern: rule stamps N triples with the same predicate keyed by
+// child ID; the join rule's length_eq operator needs all N to count.
+// Returns (nil, false) when no triple matches.
+func (d *defaultTypeDetector) GetFieldValuesAll(entityState *gtypes.EntityState, field string) ([]interface{}, bool, error) {
+	if entityState == nil {
+		return nil, false, nil
+	}
+	var values []interface{}
+	for _, triple := range entityState.Triples {
+		if triple.Predicate == field {
+			values = append(values, triple.Object)
+		}
+	}
+	if len(values) == 0 {
+		return nil, false, nil
+	}
+	return values, true, nil
+}
+
 // DetectFieldType determines the Go type of a field value
 func (d *defaultTypeDetector) DetectFieldType(value interface{}) FieldType {
 	switch value.(type) {
@@ -439,6 +512,110 @@ func operatorBetween(fieldValue, compareValue interface{}) (bool, error) {
 		return false, nil
 	}
 	return operatorLessThanEqual(fieldValue, arr[1])
+}
+
+// coerceToInt extracts an int from a comparison value. Accepts the
+// JSON-unmarshal float64 default, plus the common int widths, plus
+// strings (rule configs sometimes carry numeric literals as strings
+// when loaded from substitution paths that pre-stringify). Returns
+// an error for anything else so authoring mistakes surface loudly.
+func coerceToInt(v interface{}) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int64:
+		return int(n), nil
+	case int32:
+		return int(n), nil
+	case float64:
+		return int(n), nil
+	case float32:
+		return int(n), nil
+	case string:
+		i, err := strconv.Atoi(n)
+		if err != nil {
+			return 0, fmt.Errorf("cannot parse %q as integer: %w", n, err)
+		}
+		return i, nil
+	default:
+		return 0, fmt.Errorf("expected integer-coercible value, got %T", v)
+	}
+}
+
+// arrayLen returns the length of a field value resolved via
+// GetFieldValuesAll. The resolver returns []interface{}, but
+// stateFields / messageFields paths may pass other shapes — handle
+// the common ones loudly.
+func arrayLen(fieldValue interface{}) (int, error) {
+	switch v := fieldValue.(type) {
+	case nil:
+		return 0, nil
+	case []interface{}:
+		return len(v), nil
+	case []string:
+		return len(v), nil
+	case string:
+		// A single scalar triple Object that arrived through the
+		// non-array resolution path. Length-of-one semantics so a
+		// rule that expects exactly-one-completion-stamp still
+		// matches without authors having to special-case.
+		return 1, nil
+	default:
+		return 0, fmt.Errorf("length operator requires array-shaped field, got %T", fieldValue)
+	}
+}
+
+func operatorLengthEq(fieldValue, compareValue interface{}) (bool, error) {
+	got, err := arrayLen(fieldValue)
+	if err != nil {
+		return false, err
+	}
+	want, err := coerceToInt(compareValue)
+	if err != nil {
+		return false, fmt.Errorf("length_eq compare value: %w", err)
+	}
+	return got == want, nil
+}
+
+func operatorLengthGt(fieldValue, compareValue interface{}) (bool, error) {
+	got, err := arrayLen(fieldValue)
+	if err != nil {
+		return false, err
+	}
+	want, err := coerceToInt(compareValue)
+	if err != nil {
+		return false, fmt.Errorf("length_gt compare value: %w", err)
+	}
+	return got > want, nil
+}
+
+func operatorLengthLt(fieldValue, compareValue interface{}) (bool, error) {
+	got, err := arrayLen(fieldValue)
+	if err != nil {
+		return false, err
+	}
+	want, err := coerceToInt(compareValue)
+	if err != nil {
+		return false, fmt.Errorf("length_lt compare value: %w", err)
+	}
+	return got < want, nil
+}
+
+// operatorArrayContains reports whether the array fieldValue contains
+// an item equal to compareValue. Equality is compareValues == 0 to
+// match the cross-type-coercion semantics the rest of the evaluator
+// uses for `in` / `eq`. Scalar fieldValue degenerates to a
+// single-element array (so a rule that expects one specific value can
+// match without special-casing whether the predicate fired once or
+// multiple times).
+func operatorArrayContains(fieldValue, compareValue interface{}) (bool, error) {
+	arr := normalizeToSlice(fieldValue)
+	for _, item := range arr {
+		if compareValues(item, compareValue) == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func operatorRegex(fieldValue, compareValue interface{}) (bool, error) {

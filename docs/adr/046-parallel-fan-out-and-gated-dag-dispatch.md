@@ -120,10 +120,22 @@ Constraints:
   who need a cap set it on the JetStream consumer.
 - No framework-side join. The coordinator-as-counter pattern (issue
   #134 Option 3) handles join semantics rule-side: a downstream rule
-  fires on each child completion, queries the graph for sibling
-  completion count, emits `synthesize` when count == expected. This
-  is the same pattern that ships today for sequential fan-out; the
-  only thing that changes is spawn parallelism.
+  fires on each child completion, stamps a counter triple onto the
+  parent loop entity, and a separate rule matches via `length_eq`
+  when the counter equals the expected size. Worked example:
+  [`configs/rules/example-fan-out/`](../../configs/rules/example-fan-out/README.md).
+  **Note (#147)**: this pattern needs the `subject` override on
+  triple-write actions (`add_triple` / `update_triple` /
+  `remove_triple`) and the array operators (`length_eq`,
+  `length_gt`, `length_lt`, `array_contains`) registered. Both
+  shipped in beta.83 alongside this amendment. Prior to #147 the
+  initial Phase 1 implementation in beta.82 documented the counter
+  pattern but the primitives needed to write it didn't yet exist —
+  a documentation-vs-reality discipline failure caught by semteams
+  during their research-pack wiring. The sequential pattern that
+  shipped before parallel fan-out is **coordinator-as-iterator**
+  (the coordinator respawns and re-judges on each child completion),
+  not the counter pattern; the two are distinct join shapes.
 
 Forward-compat: a future `fan_out_gated` action (Phase 2) is additive.
 Rule packs that use Phase 1's `for_each` for no-deps flows don't need
