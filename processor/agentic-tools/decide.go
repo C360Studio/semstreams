@@ -296,6 +296,36 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 		})
 	}
 
+	// ADR-046 Phase 1: stamp subtopics as a triple so a downstream rule
+	// can iterate via for_each. JSON-encoded []string keeps the Object
+	// scalar-typed (graph-ingest's per-triple validators assume scalar
+	// Objects); the for_each substitution layer parses it back to
+	// []string at resolution time. Skip on empty/nil subtopics — the
+	// decoder pattern is "missing predicate ⇒ no fan-out target,"
+	// which lines up with how rules match on optional triples.
+	if len(args.Subtopics) > 0 {
+		subtopicsJSON, marshalErr := json.Marshal(args.Subtopics)
+		if marshalErr != nil {
+			// Failure to marshal a string slice is a programmer bug, not
+			// an LLM-driven error — log loudly and continue without the
+			// triple. The next_action + reason triples still publish so
+			// rule matching on those is not blocked.
+			e.logger.Warn("decide tool failed to marshal subtopics for triple emission",
+				"loop_id", call.LoopID,
+				"subtopic_count", len(args.Subtopics),
+				"error", marshalErr)
+		} else {
+			triples = append(triples, message.Triple{
+				Subject:    loopEntityID,
+				Predicate:  agvocab.CoordinatorDecisionSubtopics,
+				Object:     string(subtopicsJSON),
+				Source:     decideToolSource,
+				Timestamp:  now,
+				Confidence: 1.0,
+			})
+		}
+	}
+
 	// Atomic batch publish: all triples share loopEntityID, so the
 	// graph-ingest per-Subject CAS handler applies them as one unit.
 	// Pre-2026-05-13 this was a per-triple loop that could leave the

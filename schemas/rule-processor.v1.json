@@ -69,6 +69,14 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "for_each": {
+                  "type": "string",
+                  "description": "for_each"
+                },
+                "for_each_var": {
+                  "type": "string",
+                  "description": "for_each_var"
+                },
                 "id": {
                   "type": "string",
                   "description": "id"
@@ -323,6 +331,14 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "for_each": {
+                  "type": "string",
+                  "description": "for_each"
+                },
+                "for_each_var": {
+                  "type": "string",
+                  "description": "for_each_var"
+                },
                 "id": {
                   "type": "string",
                   "description": "id"
@@ -495,6 +511,14 @@
                   "type": "object",
                   "description": "context_data"
                 },
+                "for_each": {
+                  "type": "string",
+                  "description": "for_each"
+                },
+                "for_each_var": {
+                  "type": "string",
+                  "description": "for_each_var"
+                },
                 "id": {
                   "type": "string",
                   "description": "id"
@@ -666,6 +690,14 @@
                 "context_data": {
                   "type": "object",
                   "description": "context_data"
+                },
+                "for_each": {
+                  "type": "string",
+                  "description": "for_each"
+                },
+                "for_each_var": {
+                  "type": "string",
+                  "description": "for_each_var"
                 },
                 "id": {
                   "type": "string",
@@ -857,6 +889,14 @@
                 "context_data": {
                   "type": "object",
                   "description": "context_data"
+                },
+                "for_each": {
+                  "type": "string",
+                  "description": "for_each"
+                },
+                "for_each_var": {
+                  "type": "string",
+                  "description": "for_each_var"
                 },
                 "id": {
                   "type": "string",

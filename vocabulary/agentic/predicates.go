@@ -660,6 +660,21 @@ const (
 	// DataType: string
 	CoordinatorDecisionSAPCoerced = "coordinator.decision.sap_coerced"
 
+	// CoordinatorDecisionSubtopics carries the list of subtopics from a
+	// coordinator's fan-out decision as a JSON-encoded []string. ADR-046
+	// Phase 1 (#134). Emitted by the decide tool when args.Subtopics is
+	// non-empty so a downstream rule can iterate the list via
+	// `for_each: "$entity.triple.coordinator.decision.subtopics"`
+	// without the rule author having to read the loop's Result JSON
+	// out-of-band. The Object stays string-typed on the wire
+	// (JSON-encoded) so it round-trips through graph-ingest's per-triple
+	// validators which assume scalar Object types; the for_each
+	// substitution layer parses the JSON back into []string at
+	// resolution time.
+	// Example: `["hydraulics", "pneumatics", "electrics"]`
+	// DataType: string (JSON-encoded []string)
+	CoordinatorDecisionSubtopics = "coordinator.decision.subtopics"
+
 	// CoordinatorDecisionSynthetic is set to "true" when the framework
 	// synthesizes a decide on terminal-tool-less completion (#133). The
 	// model finished its loop with a text-only response — no `decide`

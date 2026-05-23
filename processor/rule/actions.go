@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -255,6 +257,40 @@ type Action struct {
 	// "$caller.id denied: insufficient role $caller.role" or
 	// "$caller.id approved for tool $message.tool_name").
 	Reason string `json:"reason,omitempty"`
+
+	// ForEach is a substitution-resolvable reference to a list-typed
+	// value the action iterates over. Each iteration binds the current
+	// item to the variable named in ForEachVar and re-runs the action's
+	// body with that overlay applied to all substituted strings
+	// (Prompt, Properties, related_loops values, Subject template).
+	// ADR-046 Phase 1; only publish_agent honours this today.
+	//
+	// Example shape: ForEach=`$entity.triple.coordinator.decision.subtopics`,
+	// ForEachVar=`subtopic`. When the trigger entity has that triple set
+	// to ["hydraulics", "pneumatics", "electrics"], the rule spawns
+	// three publish_agent dispatches with $subtopic bound to each value
+	// in turn. Iterations are independent by contract — no DependsOn
+	// edges in Phase 1 (gated-DAG dispatch is Phase 2). Each iteration
+	// is a non-blocking NATS publish; the agentic-loop's JetStream
+	// consumer parallelism gives N concurrent loop executions
+	// automatically.
+	//
+	// Empty/unset disables iteration (back-compat: existing rules with
+	// no ForEach fire exactly once, current behaviour).
+	//
+	// Resolution: the substitution layer extracts list-typed triple
+	// objects as []any; non-list resolution (string, missing triple)
+	// is logged and treated as a single-element list containing the
+	// resolved value so author errors surface loudly rather than
+	// silently no-op. Empty list resolves to zero iterations (no
+	// dispatch) — a valid degenerate case (decomposer found nothing).
+	ForEach string `json:"for_each,omitempty"`
+
+	// ForEachVar names the per-iteration substitution variable the
+	// resolved ForEach item binds to. Referenced as `$<name>` in any
+	// substituted string on the action body. Required when ForEach is
+	// set; ignored otherwise.
+	ForEachVar string `json:"for_each_var,omitempty"`
 }
 
 // ParseTTL parses the TTL string into a duration.
@@ -719,13 +755,15 @@ func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefiniti
 
 // stampRelatedLoops writes the cross-arc loop-ID lineage map onto
 // the TaskMessage.Metadata under agentic.MetadataKeyRelatedLoops.
-// Each value goes through ec.SubstituteVariables so rule authors can
-// declare `"researcher": "$entity.triple.research_loop_id"` and the
-// resolved loop ID flows through. String-to-string by design — see
-// agentic.MetadataKeyRelatedLoops. Empty/nil RelatedLoops is a no-op
-// (back-compat: pre-existing flows that don't opt in see no
-// Metadata change).
-func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext) {
+// Each value goes through ec.SubstituteVariablesWithIterVar so rule
+// authors can declare `"researcher": "$entity.triple.research_loop_id"`
+// and the resolved loop ID flows through, with the for_each iter-var
+// (ADR-046 Phase 1) also bound when set so authors can thread the
+// current item into a related-loop label if a use case arises.
+// String-to-string by design — see agentic.MetadataKeyRelatedLoops.
+// Empty/nil RelatedLoops is a no-op (back-compat: pre-existing flows
+// that don't opt in see no Metadata change).
+func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext, iterVarName, iterVarValue string) {
 	if len(related) == 0 {
 		return
 	}
@@ -734,7 +772,7 @@ func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec 
 	}
 	resolved := make(map[string]any, len(related))
 	for label, loopID := range related {
-		resolved[label] = ec.SubstituteVariables(loopID)
+		resolved[label] = ec.SubstituteVariablesWithIterVar(loopID, iterVarName, iterVarValue)
 	}
 	task.Metadata[agentic.MetadataKeyRelatedLoops] = resolved
 }
@@ -754,11 +792,51 @@ func stampPerSpawnLLMKnobs(task *agentic.TaskMessage, action Action) {
 	}
 }
 
-// executePublishAgent executes a publish_agent action, triggering an agentic loop.
-// It publishes a TaskMessage to the specified NATS subject.
+// diagnoseForEachResolutionFailure returns a short human-readable
+// reason string describing why ResolveListValue returned ok=false on
+// the given reference. Three possibilities the resolver can fail on:
+// (a) reference uses a namespace Phase 1 doesn't support, (b) the
+// target entity is nil (message-path rule with no trigger entity),
+// (c) the predicate is missing from the entity at fire-time, or (d)
+// the Object exists but isn't list-shaped. Used in the for_each
+// non-list Warn so operators don't have to retrace the resolver to
+// figure out which sub-condition failed.
+func diagnoseForEachResolutionFailure(reference string, ec *ExecutionContext) string {
+	const entityPrefix = "$entity.triple."
+	const relatedPrefix = "$related.triple."
+	var entity *gtypes.EntityState
+	var predicate string
+	switch {
+	case strings.HasPrefix(reference, entityPrefix):
+		entity = ec.Entity
+		predicate = strings.TrimPrefix(reference, entityPrefix)
+	case strings.HasPrefix(reference, relatedPrefix):
+		entity = ec.Related
+		predicate = strings.TrimPrefix(reference, relatedPrefix)
+	default:
+		return "unsupported namespace (Phase 1 supports $entity.triple.* and $related.triple.* only)"
+	}
+	if entity == nil {
+		return "trigger entity is nil (message-path rule with no entity in scope?)"
+	}
+	for _, triple := range entity.Triples {
+		if triple.Predicate == predicate {
+			return fmt.Sprintf("predicate found but Object shape %T is not list-coercible", triple.Object)
+		}
+	}
+	return fmt.Sprintf("predicate %q not present on entity at fire time (typo or race with late triple arrival)", predicate)
+}
+
+// executePublishAgent executes a publish_agent action, triggering an
+// agentic loop. ADR-046 Phase 1: when action.ForEach is set, the body
+// runs once per resolved list item with $<ForEachVar> bound to the
+// current value. Otherwise it runs exactly once with no iter-var
+// overlay (current behaviour). Each iteration is a non-blocking NATS
+// publish; the agentic-loop's JetStream consumer gives N concurrent
+// loop executions for free.
 func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID := ec.EntityID
-	// Validate required fields
+	// Validate required fields up front, before any iteration —
+	// missing fields are an authoring error, not a per-item failure.
 	if action.Subject == "" {
 		return errors.New("subject is required for publish_agent action")
 	}
@@ -772,9 +850,71 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		return errors.New("prompt is required for publish_agent action")
 	}
 
-	// Substitute variables in subject and prompt
-	subject := ec.SubstituteVariables(action.Subject)
-	prompt := ec.SubstituteVariables(action.Prompt)
+	// ADR-046 Phase 1: for_each iteration. Resolve the list once,
+	// then dispatch one TaskMessage per item with the iter-var
+	// overlay bound. Empty list resolves to zero dispatches (a valid
+	// degenerate case: decomposer found nothing). Missing/invalid
+	// list reference logs at Warn and degenerates to a single
+	// dispatch with the iter-var unbound — author error stays loud
+	// (the unresolved-template warning trips on $<ForEachVar>
+	// references) rather than silently no-op.
+	if action.ForEach != "" {
+		if action.ForEachVar == "" {
+			return errors.New("for_each_var is required when for_each is set on publish_agent action")
+		}
+		items, ok := ec.ResolveListValue(action.ForEach)
+		if !ok {
+			if e.logger != nil {
+				// Diagnostic surface: which sub-condition failed so the
+				// operator doesn't have to retrace ResolveListValue's
+				// branches. Three possibilities — entity nil
+				// (message-path rule with no trigger entity), predicate
+				// missing (race with late triple arrival or typo), or
+				// Object shape wrong (scalar string where a list was
+				// expected). The for_each_resolution_failure_reason
+				// field lets dashboard grouping pivot on the cause.
+				e.logger.Warn("publish_agent for_each: list reference did not resolve to a list; degenerating to single dispatch with iter-var unbound",
+					"for_each", action.ForEach,
+					"for_each_var", action.ForEachVar,
+					"rule_id", ec.RuleID(),
+					"entity_id", ec.EntityID,
+					"for_each_resolution_failure_reason", diagnoseForEachResolutionFailure(action.ForEach, ec),
+					"hint", "verify the predicate name + that it carries a list-typed Object (decide stamps coordinator.decision.subtopics as a JSON-encoded []string)")
+			}
+			return e.publishAgentOnce(ctx, action, ec, "", "")
+		}
+		if len(items) == 0 {
+			if e.logger != nil {
+				e.logger.Info("publish_agent for_each: empty list — no dispatches",
+					"for_each", action.ForEach,
+					"rule_id", ec.RuleID(),
+					"entity_id", ec.EntityID)
+			}
+			return nil
+		}
+		for _, item := range items {
+			if err := e.publishAgentOnce(ctx, action, ec, action.ForEachVar, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return e.publishAgentOnce(ctx, action, ec, "", "")
+}
+
+// publishAgentOnce is the per-iteration publish-agent body. Carries
+// the iter-var overlay (empty varName disables it — the non-for_each
+// path passes "" / ""). Extracted from executePublishAgent so the
+// for_each loop can call it N times without duplicating the publish
+// + state-stamp logic.
+func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) error {
+	entityID := ec.EntityID
+
+	// Substitute variables in subject and prompt — iter-var overlay
+	// applies to all substituted strings on this iteration.
+	subject := ec.SubstituteVariablesWithIterVar(action.Subject, iterVarName, iterVarValue)
+	prompt := ec.SubstituteVariablesWithIterVar(action.Prompt, iterVarName, iterVarValue)
 
 	// Generate a unique task ID
 	taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())
@@ -785,8 +925,8 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 		Role:         action.Role,
 		Model:        action.Model,
 		Prompt:       prompt,
-		WorkflowSlug: ec.SubstituteVariables(action.WorkflowSlug),
-		WorkflowStep: ec.SubstituteVariables(action.WorkflowStep),
+		WorkflowSlug: ec.SubstituteVariablesWithIterVar(action.WorkflowSlug, iterVarName, iterVarValue),
+		WorkflowStep: ec.SubstituteVariablesWithIterVar(action.WorkflowStep, iterVarName, iterVarValue),
 	}
 
 	// Inherit ParentLoopID when the trigger entity is a loop execution. Without
@@ -842,7 +982,7 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 
 	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
 	// Metadata stamping pattern. See stampRelatedLoops for the why.
-	stampRelatedLoops(&task, action.RelatedLoops, ec)
+	stampRelatedLoops(&task, action.RelatedLoops, ec, iterVarName, iterVarValue)
 
 	if e.logger != nil {
 		e.logger.Debug("Triggering agent task",

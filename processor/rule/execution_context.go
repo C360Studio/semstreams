@@ -2,6 +2,7 @@
 package rule
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -125,6 +126,38 @@ func (ec *ExecutionContext) RuleID() string {
 // feed the result into an identifier (KV key, NATS subject) will then
 // get a loud failure instead of mysteriously wrong behaviour.
 func (ec *ExecutionContext) SubstituteVariables(template string) string {
+	return ec.substituteVariablesWith(template, nil)
+}
+
+// SubstituteVariablesWithIterVar runs substitution with an extra
+// single-variable overlay bound for the duration of the call. ADR-046
+// Phase 1: for_each iteration in publish_agent passes the current
+// item value as `varName`, which substitutes `$<varName>` in the
+// template. Other namespaces ($entity, $message, $state, etc.) resolve
+// as usual. Empty varName degenerates to SubstituteVariables — useful
+// for callers that conditionally bind a var.
+func (ec *ExecutionContext) SubstituteVariablesWithIterVar(template, varName, value string) string {
+	if varName == "" {
+		return ec.SubstituteVariables(template)
+	}
+	return ec.substituteVariablesWith(template, map[string]string{varName: value})
+}
+
+// substituteVariablesWith is the shared implementation under
+// SubstituteVariables and SubstituteVariablesWithIterVar. The overlay
+// map (nil when no iter-var is bound) carries names without the leading
+// `$` — substitution writes `$<name>` → value as a plain string-replace.
+// Overlay variables apply before the unresolved-template warning, so a
+// matched iter-var doesn't trip the warning even if the name doesn't
+// belong to a recognised framework namespace.
+//
+// Phase 1 (#134 / ADR-046) ships a single overlay key — the for_each
+// iter-var. Phase 2 (gated-DAG dispatch) may introduce multi-key
+// overlays (e.g. $item + $index); when it does, the iteration order
+// here becomes load-bearing for prefix-shadowing cases ($i vs $item
+// would collide). Phase 2 must either sort keys longest-first before
+// substitution or namespace its overlay keys to avoid the foot.
+func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map[string]string) string {
 	result := template
 
 	// Time substitutions
@@ -169,9 +202,122 @@ func (ec *ExecutionContext) SubstituteVariables(template string) string {
 	// unresolved-template warning below.
 	result = applyMessageSubstitutions(result, ec.MessageData)
 
+	// Iter-var overlay (ADR-046 Phase 1 for_each). Applied last so an
+	// iter-var token like $subtopic resolves even if the operator
+	// accidentally chose a name that overlaps a framework namespace —
+	// last-write-wins is the predictable behaviour. Iter-vars are
+	// always present-or-absent (the for_each loop never binds nil);
+	// missing tokens behave the same as any other unresolved template
+	// variable and trip the warning below.
+	for name, value := range overlay {
+		result = strings.ReplaceAll(result, "$"+name, value)
+	}
+
 	ec.warnUnresolvedTemplateVars(template, result)
 
 	return result
+}
+
+// ResolveListValue extracts a list-typed value from a substitution
+// reference. ADR-046 Phase 1 for_each uses this — the rule author
+// writes `for_each: "$entity.triple.coordinator.decision.subtopics"`
+// and the framework needs the list shape preserved (not stringified
+// via fmt.Sprintf as SubstituteVariables would do).
+//
+// Supported reference shapes:
+//
+//   - "$entity.triple.<predicate>" — triple object on the trigger
+//     entity. The Object field is stored as `any`, so a list-shaped
+//     value (e.g. set by a tool that stamped []string) round-trips as
+//     []any after JSON unmarshal. JSON-encoded string lists (e.g.
+//     `"[\"a\",\"b\"]"`) are parsed transparently.
+//   - "$related.triple.<predicate>" — same on the related entity.
+//
+// Other namespaces ($message.*, $state.*, etc.) are not supported in
+// Phase 1 — the use case is decomposer-emitted subtopics on the
+// trigger entity. Adding namespaces is additive when needed.
+//
+// Returns (items, true) on successful list resolution. (nil, false)
+// when the reference resolved but the value isn't list-shaped (e.g.
+// the operator referenced a string predicate); the caller logs and
+// treats this as a single-iteration degenerate case so author errors
+// surface loudly rather than as a silent no-op. (nil, true) when the
+// reference resolved to an empty list — a valid no-iteration case.
+func (ec *ExecutionContext) ResolveListValue(reference string) ([]string, bool) {
+	if !strings.HasPrefix(reference, "$entity.triple.") && !strings.HasPrefix(reference, "$related.triple.") {
+		return nil, false
+	}
+	var entity *gtypes.EntityState
+	var predicate string
+	switch {
+	case strings.HasPrefix(reference, "$entity.triple."):
+		entity = ec.Entity
+		predicate = strings.TrimPrefix(reference, "$entity.triple.")
+	case strings.HasPrefix(reference, "$related.triple."):
+		entity = ec.Related
+		predicate = strings.TrimPrefix(reference, "$related.triple.")
+	}
+	if entity == nil {
+		return nil, false
+	}
+	for _, triple := range entity.Triples {
+		if triple.Predicate != predicate {
+			continue
+		}
+		return coerceTripleObjectToStrings(triple.Object)
+	}
+	return nil, false
+}
+
+// coerceTripleObjectToStrings extracts a []string from a triple's
+// Object field. Handles the three concrete shapes that round-trip
+// through JSON: native []any (typical after JSON unmarshal of a list),
+// []string (Go-constructed entity states in tests), and string-typed
+// JSON-encoded list (the wire shape if a tool stamps the list as a
+// JSON string for transport compactness — coordinator.decision.subtopics
+// uses this so the triple Object stays primitive-typed on the wire).
+// Returns (nil, false) on any other shape — the caller treats that as
+// "author referenced a non-list predicate" and logs.
+//
+// Non-string items in []any / parsed JSON lists are stringified via
+// fmt.Sprintf("%v", item) — intended use case is string lists (the
+// decide tool's []string subtopics, future similar emissions).
+// Numeric / bool lists work but cross a silent type boundary; if a
+// rule author iterates `[1, 2, 3]` they get `["1", "2", "3"]` bound to
+// the iter-var without warning. Acceptable for Phase 1 because no
+// production caller emits non-string lists today; revisit if that
+// changes.
+func coerceTripleObjectToStrings(obj any) ([]string, bool) {
+	switch v := obj.(type) {
+	case []string:
+		return v, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, fmt.Sprintf("%v", item))
+		}
+		return out, true
+	case string:
+		// JSON-encoded list fallback. Tools that stamp lists as a
+		// triple via the canonical wire path (json.Marshal of
+		// []string) produce this shape. Bail to "not a list" only on
+		// a parse failure; trim whitespace first so leading/trailing
+		// space doesn't fail the bracket-prefix sniff.
+		trimmed := strings.TrimSpace(v)
+		if !strings.HasPrefix(trimmed, "[") {
+			return nil, false
+		}
+		var parsed []any
+		if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+			return nil, false
+		}
+		out := make([]string, 0, len(parsed))
+		for _, item := range parsed {
+			out = append(out, fmt.Sprintf("%v", item))
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // warnUnresolvedTemplateVars logs a warning when any $entity/$related/$state
