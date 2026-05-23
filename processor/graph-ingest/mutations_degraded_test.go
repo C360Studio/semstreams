@@ -94,8 +94,8 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 			if mr.KVRevision != 0 {
 				t.Errorf("KVRevision = %d, want 0 (no read-back to source the revision from)", mr.KVRevision)
 			}
-			if !strings.Contains(mr.Error, "post-write read-back failed") {
-				t.Errorf("Error = %q, want it to start with 'post-write read-back failed'", mr.Error)
+			if !strings.HasPrefix(mr.Error, degradedReadbackErrPrefix) {
+				t.Errorf("Error = %q, want prefix %q", mr.Error, degradedReadbackErrPrefix)
 			}
 			if !strings.Contains(mr.Error, readbackErr) {
 				t.Errorf("Error = %q, want it to include the underlying read-back reason %q", mr.Error, readbackErr)

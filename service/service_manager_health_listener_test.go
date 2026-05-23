@@ -113,6 +113,49 @@ func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
 	}
 }
 
+// TestStopAll_TearsDownHealthListener verifies the #100 production
+// shutdown contract: cmd/semstreams/main.go's shutdown() calls
+// manager.StopAll, NOT manager.Stop, so the dedicated health-port
+// listener must be torn down by StopAll (otherwise the port stays
+// bound until process exit and graceful-drain semantics are broken).
+// Reviewer-found blocker on the original PR — keeps regression
+// coverage on the path the reviewer was right to flag.
+func TestStopAll_TearsDownHealthListener(t *testing.T) {
+	deps := createTestServiceDependencies(nil)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
+
+	port := freePort(t)
+	if err := manager.StartHealthListener(port); err != nil {
+		t.Fatalf("StartHealthListener(%d) error = %v", port, err)
+	}
+
+	// Sanity: listener is up before shutdown.
+	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitForListener(t, addr+"/healthz", 3*time.Second)
+
+	// StopAll is the production shutdown entry point. It must tear
+	// down the dedicated health listener as part of its sequence.
+	if err := manager.StopAll(5 * time.Second); err != nil {
+		t.Fatalf("StopAll error = %v", err)
+	}
+
+	// Port should be free now — re-binding it succeeds. Poll briefly
+	// since Shutdown returns once the listener stops accepting but the
+	// OS may take a moment to release the port (TIME_WAIT etc.).
+	deadline := time.Now().Add(3 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			_ = l.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("port %d never freed after StopAll within 3s; last bind error: %v", port, lastErr)
+}
+
 // freePort asks the kernel for an unused TCP port. Used by tests that
 // need a real port without colliding under parallel test runs.
 func freePort(t *testing.T) int {

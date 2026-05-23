@@ -139,6 +139,11 @@ var flowsStreamConfig = StreamConfig{
 // any actual capacity miss surfaces as a CreateStream error there.
 func (sm *StreamsManager) VerifyJetStreamLimits(ctx context.Context, cfg *Config) error {
 	configured := cfg.NATS.JetStream
+	// Skip when JetStream itself is disabled in the framework config —
+	// no AccountInfo to query meaningfully.
+	if !configured.Enabled {
+		return nil
+	}
 	// Skip when neither limit is set — nothing to compare against.
 	if configured.MaxMemory <= 0 && configured.MaxFileStore <= 0 {
 		return nil

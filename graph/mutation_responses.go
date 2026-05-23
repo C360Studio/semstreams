@@ -29,6 +29,10 @@ import (
 //     a separate read path to recover the post-write state, or
 //     accept the write-without-echo and continue.
 //
+//     Gateways translating this state to HTTP SHOULD return 200 OK
+//     with the Degraded flag echoed in the response body; do NOT
+//     return 202 Accepted — the write is COMMITTED, not pending.
+//
 //   - Success=false → write did NOT commit. Error carries the
 //     pre-write failure reason. Callers MAY retry per the Error
 //     semantics (transient transport errors are safe to retry;

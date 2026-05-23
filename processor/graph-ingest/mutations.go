@@ -703,16 +703,25 @@ func marshalUpdateEntityWithTriplesError(traceID, requestID, msg string) ([]byte
 // failed (context cancellation, JetStream node failover, bucket
 // re-keyed). Caller-visible contract: Success=true, Degraded=true,
 // Entity=nil, KVRevision=0, Error carries the read-back failure
-// reason. The triple-rich response shapes also zero out
-// TriplesAdded/TriplesRemoved/Version since those are derived from
-// the same stored entity we couldn't read back.
+// reason prefixed by degradedReadbackErrPrefix. The triple-rich
+// response shapes also zero out TriplesAdded/TriplesRemoved/Version
+// since those are derived from the same stored entity we couldn't
+// read back.
+
+// degradedReadbackErrPrefix is the canonical prefix on the Error field
+// of any degraded-success mutation response. Extracted as a constant
+// so the four marshalers below and the regression test in
+// mutations_degraded_test.go can both reference the same source of
+// truth — a future refactor of the wording lands in one place rather
+// than five.
+const degradedReadbackErrPrefix = "post-write read-back failed: "
 
 func marshalCreateEntityDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.CreateEntityResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:   true,
 			Degraded:  true,
-			Error:     fmt.Sprintf("post-write read-back failed: %s", readbackErr),
+			Error:     degradedReadbackErrPrefix + readbackErr,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,
@@ -725,7 +734,7 @@ func marshalCreateEntityWithTriplesDegraded(traceID, requestID, readbackErr stri
 		MutationResponse: graph.MutationResponse{
 			Success:   true,
 			Degraded:  true,
-			Error:     fmt.Sprintf("post-write read-back failed: %s", readbackErr),
+			Error:     degradedReadbackErrPrefix + readbackErr,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,
@@ -738,7 +747,7 @@ func marshalUpdateEntityDegraded(traceID, requestID, readbackErr string) ([]byte
 		MutationResponse: graph.MutationResponse{
 			Success:   true,
 			Degraded:  true,
-			Error:     fmt.Sprintf("post-write read-back failed: %s", readbackErr),
+			Error:     degradedReadbackErrPrefix + readbackErr,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,
@@ -751,7 +760,7 @@ func marshalUpdateEntityWithTriplesDegraded(traceID, requestID, readbackErr stri
 		MutationResponse: graph.MutationResponse{
 			Success:   true,
 			Degraded:  true,
-			Error:     fmt.Sprintf("post-write read-back failed: %s", readbackErr),
+			Error:     degradedReadbackErrPrefix + readbackErr,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,

@@ -430,6 +430,17 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 	m.order = nil
 	m.mu.Unlock()
 
+	// Stop the dedicated health listener first (cheap shutdown, no
+	// pending requests to drain at scale). No-op when not started.
+	// #100: production shutdown runs through StopAll (cmd/semstreams's
+	// shutdown() calls manager.StopAll, NOT manager.Stop), so the
+	// teardown has to live here to actually free the port on graceful
+	// drain. Log-and-continue: health-listener shutdown failure must
+	// not block the main HTTP server shutdown.
+	if err := m.StopHealthListener(); err != nil {
+		logger.Warn("dedicated health listener stop failed; continuing main shutdown", "error", err)
+	}
+
 	// Stop the HTTP server if running
 	// This was missing and causing containers to not shutdown cleanly!
 	if m.isHTTPManager {
