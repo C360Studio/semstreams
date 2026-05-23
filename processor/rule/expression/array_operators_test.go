@@ -185,6 +185,37 @@ func TestEvaluator_ArrayContainsEndToEnd(t *testing.T) {
 	assert.False(t, got)
 }
 
+// TestRegisteredOperators_NoSplitBrainBetweenDeclarationsAndWiring
+// is the structural anti-foot for the #147 split-brain class.
+// Iterates every Op* constant declared in expression/types.go and
+// asserts each is registered in the evaluator's operator map (or is
+// OpTransition, which is dispatched specially). A future contributor
+// adding a constant without wiring fails this test at PR time
+// instead of shipping a "validator accepts, evaluator rejects"
+// runtime surprise.
+func TestRegisteredOperators_NoSplitBrainBetweenDeclarationsAndWiring(t *testing.T) {
+	t.Parallel()
+	// Every Op* constant declared in types.go. When a new constant
+	// is added, this list must be extended in the same PR — that's
+	// the structural intent (additions don't ship until the wiring
+	// is verified).
+	declared := []string{
+		OpEqual, OpNotEqual,
+		OpLessThan, OpLessThanEqual, OpGreaterThan, OpGreaterThanEqual,
+		OpContains, OpStartsWith, OpEndsWith, OpRegexMatch,
+		OpIn, OpNotIn, OpBetween,
+		OpLengthEq, OpLengthGt, OpLengthLt, OpArrayContains,
+		OpTransition,
+	}
+	registered := RegisteredOperators()
+	for _, op := range declared {
+		_, ok := registered[op]
+		assert.True(t, ok,
+			"operator %q is declared in types.go but not registered in NewExpressionEvaluator — #147 split-brain class. Either add evaluator.operators[%s] = operator%sFunc OR remove the constant from types.go if it's not actually supported.",
+			op, op, op)
+	}
+}
+
 // TestIsArrayOperator covers the resolver-dispatch predicate. Locked
 // in so a future operator addition can be reviewed against the
 // truth table.

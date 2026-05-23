@@ -112,7 +112,21 @@ func (r *ExpressionRule) Evaluate(messages []message.Message) bool {
 		return false
 	}
 
-	result, err := r.evaluator.EvaluateWithStateAndMessage(nil, nil, expression.MessageFields(data), r.buildLogicalExpression())
+	// #149 / #150 reviewer-rec-1: substitute $-prefixed string Values
+	// against the message payload before evaluation. Without this, a
+	// condition `value: "$message.expected_count"` reaches the
+	// operator as the literal template and coerce-errors. Wired here
+	// for symmetry with EvaluateEntityState; the message-path didn't
+	// have a production caller using substituted values today, but
+	// the asymmetry was exactly the "same shape behaves differently
+	// depending on context" class the structural fixes claim to
+	// close. MessageData carries the payload; Entity is nil on this
+	// path so $entity.triple.* substitutions resolve to leftovers
+	// (loud Warn via the unresolved-template path).
+	ec := &ExecutionContext{MessageData: data}
+	expr := r.buildLogicalExpression()
+	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
+	result, err := r.evaluator.EvaluateWithStateAndMessage(nil, nil, expression.MessageFields(data), expr)
 	if err != nil {
 		slog.Debug("ExpressionRule: message-path evaluation error",
 			"rule", r.name,
@@ -140,8 +154,18 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 		return false
 	}
 
-	// Build LogicalExpression from rule conditions
+	// Build LogicalExpression from rule conditions. Substitute
+	// $-prefixed string Values against the entity before evaluation
+	// — without this, a condition `value: "$entity.triple.foo.length"`
+	// reaches the operator as the literal template and coerce-errors.
+	// See SubstituteConditionValues for the contract; #149 surfaced
+	// the gap during reference-pack integration testing.
+	ec := &ExecutionContext{
+		EntityID: entityState.ID,
+		Entity:   entityState,
+	}
 	expr := r.buildLogicalExpression()
+	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
 
 	// Use the expression.Evaluator for direct triple evaluation
 	result, err := r.evaluator.Evaluate(entityState, expr)

@@ -53,7 +53,9 @@ rule 02 fires 3× as each investigator completes:
   ↓
 coordinator entity accumulates 3 gather.completed_child triples (one per distinct TaskID)
   ↓
-rule 03 matches when length_eq(gather.completed_child, 3) → spawn synthesizer
+rule 03 matches when length_eq(gather.completed_child, $entity.triple.coordinator.decision.subtopics.length) → spawn synthesizer
+  (the .length suffix — #149 — resolves to the integer count of the source subtopics list,
+   so the pack works for any decomposer fan-out width without per-width forking)
 synthesizer walks coordinator's children via agent.loop.parent + calls read_loop_result per child
 ```
 
@@ -79,12 +81,6 @@ has a unique TaskID stamped as `agent.loop.task` at spawn time
 
 ## What this pack doesn't cover
 
-- **Dynamic expected-count in rule 03.** Currently the join rule
-  pins `length_eq` to a hardcoded `3`. Real consumers forking the
-  pack have to update this to match their decomposer's typical
-  fan-out size. A future improvement worth filing: a list-length
-  substitution like `$entity.triple.coordinator.decision.subtopics.length`
-  so the condition tracks the source list dynamically.
 - **DAG edges between subtasks.** No depends_on, no priority order.
   See [ADR-046 Phase 2](../../docs/adr/046-parallel-fan-out-and-gated-dag-dispatch.md)
   / GH #139 for the gated-DAG dispatch pattern.
