@@ -1,5 +1,25 @@
 # Workflow Primitives Design Exercise — Decision
 
+> **SUPERSEDED BY [ADR-047](../adr/047-lifecycle-harness-substrate.md)** —
+> 2026-05-24. The C+ recommendation below was the honest output of the
+> design exercise's first pass, drafted before the "+component" axis was
+> properly examined. User pushback ("you appear to be hand waving the
+> +components in each of your cases") triggered a deeper research turn
+> that surfaced ~7,840 LOC of hand-rolled workflow harness in
+> `semspec/workflow/` — strong cross-consumer evidence the harness shape
+> IS framework territory. Revised outcome is **B' — Constrained
+> Workflow Primitive (Lifecycle Harness Substrate)**, codified in
+> ADR-047.
+>
+> This document is preserved as the design-process record. The
+> sketches, evidence matrix, and reasoning remain valid as the first-pass
+> analysis; the **recommendation section is no longer the canonical
+> position** — ADR-047 is. Follow-on research is captured in:
+> [robotic sketch](workflow-primitives-robotic-sketch.md),
+> [semconnect sketch](workflow-primitives-semconnect-sketch.md),
+> [semspec mapping](workflow-primitives-semspec-mapping.md),
+> [design resolutions](workflow-primitives-design-resolutions.md).
+
 **Status**: Draft decision document, 2026-05-24. Resolves the open question from
 [`workflow-primitives-design-exercise.md`](workflow-primitives-design-exercise.md).
 Recommends **outcome C+** — BoundedDispatcher ships now as a deliberately
