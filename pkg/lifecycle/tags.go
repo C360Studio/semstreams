@@ -178,6 +178,31 @@ func parseStructTags(v reflect.Value) (*structMeta, error) {
 			sm.PhaseField = meta
 		}
 
+		// json:"-" + lifecycle:"operator_writable" is a wire/harness
+		// contradiction: the operator-patch JSON can't reach a field
+		// json-tagged "-", so claiming it's operator-writable is
+		// guaranteed-broken at runtime. The internal Match path can
+		// still see the field (it reflects directly, not through
+		// json.Unmarshal), but operator-patch routing is the
+		// load-bearing reason for the tag — reject at startup.
+		if meta.OperatorWritable {
+			if jsonTag, ok := field.Tag.Lookup("json"); ok {
+				if name, _, _ := strings.Cut(jsonTag, ","); name == "-" {
+					return nil, fmt.Errorf("lifecycle: field %s tagged operator_writable but json:%q means the wire can't reach it",
+						field.Name, "-")
+				}
+			}
+		}
+
+		// Field-name collision (e.g. Foo + FOO both falling back to
+		// "foo", or a tagged json name colliding with another field's
+		// fallback) silently aliases two fields to the same operator-
+		// patch routing target. Reject at parse time so the wiring bug
+		// surfaces at app startup, not at first patch in prod.
+		if existing, dup := sm.FieldsByJSONName[jsonName]; dup {
+			return nil, fmt.Errorf("lifecycle: fields %s and %s on struct %s both resolve to JSON name %q — rename one or set distinct json: tags",
+				existing.FieldName, field.Name, t.Name(), jsonName)
+		}
 		sm.FieldsByJSONName[jsonName] = meta
 	}
 

@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -94,7 +95,7 @@ func TestParseStructTags_DuplicateID(t *testing.T) {
 		Phase string `json:"phase" lifecycle:"phase"`
 	}
 	_, err := parseStructTags(reflect.ValueOf(&doubleID{}))
-	if err == nil || !contains(err.Error(), "multiple fields tagged") {
+	if err == nil || !strings.Contains(err.Error(), "multiple fields tagged") {
 		t.Fatalf("expected duplicate-id error, got %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestParseStructTags_DuplicatePhase(t *testing.T) {
 		B  string `json:"b" lifecycle:"phase"`
 	}
 	_, err := parseStructTags(reflect.ValueOf(&doublePhase{}))
-	if err == nil || !contains(err.Error(), "multiple fields tagged") {
+	if err == nil || !strings.Contains(err.Error(), "multiple fields tagged") {
 		t.Fatalf("expected duplicate-phase error, got %v", err)
 	}
 }
@@ -118,7 +119,7 @@ func TestParseStructTags_UnknownTagValue(t *testing.T) {
 		Junk  string `json:"junk" lifecycle:"frobnicate"`
 	}
 	_, err := parseStructTags(reflect.ValueOf(&weirdTag{}))
-	if err == nil || !contains(err.Error(), "frobnicate") {
+	if err == nil || !strings.Contains(err.Error(), "frobnicate") {
 		t.Fatalf("expected unknown-tag-value error mentioning 'frobnicate', got %v", err)
 	}
 }
@@ -173,5 +174,54 @@ func TestParseStructTags_RejectsNonStruct(t *testing.T) {
 	_, err := parseStructTags(reflect.ValueOf(&x))
 	if err == nil {
 		t.Fatal("non-struct must be rejected")
+	}
+}
+
+func TestParseStructTags_RejectsJSONNameCollision(t *testing.T) {
+	// Foo (no json tag) → "foo"; FOO (no json tag) → "foo".
+	// Both fall back to the same resolved JSON name. Without the
+	// collision check, the second-visited field would silently
+	// overwrite the first in FieldsByJSONName — and if one is
+	// tagged operator_writable while the other isn't, operator-
+	// patch routing aliases. Reject at parse time so the wiring
+	// bug surfaces at app startup, not at first patch in prod.
+	type colliding struct {
+		ID    string `json:"id" lifecycle:"id"`
+		Phase string `json:"phase" lifecycle:"phase"`
+		Foo   string
+		FOO   string `lifecycle:"operator_writable"`
+	}
+	_, err := parseStructTags(reflect.ValueOf(&colliding{}))
+	if err == nil {
+		t.Fatal("colliding JSON field names must be rejected")
+	}
+	// Error must name both Go field names AND the collided JSON
+	// name so the operator can locate the bug in their struct
+	// definition without a debugger pass.
+	msg := err.Error()
+	for _, want := range []string{"Foo", "FOO", "foo"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("collision error should mention %q (got %q)", want, msg)
+		}
+	}
+}
+
+func TestParseStructTags_RejectsJSONDashPlusOperatorWritable(t *testing.T) {
+	// json:"-" + lifecycle:"operator_writable" is a wire/harness
+	// contradiction — operator patches arrive via JSON, but
+	// json:"-" tells encoding/json to skip the field, so the
+	// patch routing is guaranteed-broken at runtime. Catch it
+	// at parse time, not on the first 403 in operator land.
+	type wireUnreachableButOperatorWritable struct {
+		ID         string `json:"id" lifecycle:"id"`
+		Phase      string `json:"phase" lifecycle:"phase"`
+		HiddenButW string `json:"-" lifecycle:"operator_writable"`
+	}
+	_, err := parseStructTags(reflect.ValueOf(&wireUnreachableButOperatorWritable{}))
+	if err == nil {
+		t.Fatal("json:\"-\" + operator_writable must be rejected as a wire/harness contradiction")
+	}
+	if !strings.Contains(err.Error(), "HiddenButW") {
+		t.Errorf("rejection should name the offending field, got %q", err)
 	}
 }

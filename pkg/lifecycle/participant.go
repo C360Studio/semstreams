@@ -34,6 +34,16 @@ type Participant interface {
 	// Phase returns the current lifecycle phase (e.g. "planning",
 	// "flying", "completed"). Must be a key in the Transitions
 	// table registered for this Workflow.
+	//
+	// TODO(manager): Manager.Get / Manager.List should validate that
+	// the returned Phase is actually declared in the registered
+	// Transitions table for this workflow type, and surface drift
+	// loudly (degraded-wrapper or error per the Degraded-bool
+	// precedent from PR #137 / GH #120). Without that check, an
+	// entity whose Phase() returns "completed-with-typo" silently
+	// reads as terminal forever (Transitions.IsTerminal defaults
+	// unknown phases to terminal as a defensive fallback) and never
+	// surfaces in Active=true lists where an operator would notice.
 	Phase() string
 
 	// IsTerminal returns true when the entity is in a phase with no
@@ -66,6 +76,45 @@ type Participant interface {
 	ParentEntityID() string
 }
 
+// TransitionSource identifies what caused a phase transition. Closed
+// set of typed constants — Manager.Transition takes a TransitionSource
+// parameter, and rule actions / operator API / component direct calls
+// each pass the appropriate constant rather than authoring a string
+// literal at the call site (typos like "oprator" silently break
+// dashboard filtering otherwise).
+//
+// Wire-compatible with string serialization: string(TransitionSourceRule)
+// is "rule", round-trips through JSON / KV as-is.
+type TransitionSource string
+
+// Defined TransitionSource values. The set is closed; adding a new
+// kind requires both a constant here and a Manager call site that
+// produces it.
+const (
+	// TransitionSourceRule is set when a rule action invoked
+	// Manager.Transition (the common case for state-machine
+	// progression driven by the rule engine).
+	TransitionSourceRule TransitionSource = "rule"
+
+	// TransitionSourceOperator is set when the operator API
+	// (POST /workflows/{type}/{id}/transition) invoked
+	// Manager.Transition. Audit trails distinguish operator-
+	// initiated transitions from automated ones via this value.
+	TransitionSourceOperator TransitionSource = "operator"
+
+	// TransitionSourceComponent is set when a component invoked
+	// Manager.Transition directly (rare; usually rules orchestrate
+	// transitions and components only call Update / Complete /
+	// Fail). Reserved for cases where the component's work IS the
+	// transition (e.g. landing-executor → landed phase).
+	TransitionSourceComponent TransitionSource = "component"
+
+	// TransitionSourceFramework is set by Manager.Create,
+	// Manager.Complete, and Manager.Fail — i.e. the harness's own
+	// transition-emitting operations rather than caller-driven ones.
+	TransitionSourceFramework TransitionSource = "framework"
+)
+
 // TransitionEvent is one entry in an entity's phase-transition
 // history. Manager.History returns these in chronological order.
 //
@@ -87,16 +136,11 @@ type TransitionEvent struct {
 	// — so it's authoritative across restarts and clock skew.
 	At time.Time
 
-	// Triggered identifies what caused the transition. One of:
-	//   "rule"      — a rule action invoked Manager.Transition
-	//   "operator"  — an operator API call invoked Manager.Transition
-	//   "component" — a component invoked Manager.Transition directly
-	//   "framework" — Create / Complete / Fail (auto-classified)
-	//
-	// Operator dashboards can filter / color-code by this field;
-	// audit trails distinguish operator-initiated from automated
-	// transitions.
-	Triggered string
+	// Triggered identifies what caused the transition. Closed set
+	// of values defined by TransitionSource. Operator dashboards
+	// can filter / color-code by this field; audit trails
+	// distinguish operator-initiated from automated transitions.
+	Triggered TransitionSource
 
 	// Note is an optional free-text annotation. Manager.Fail uses
 	// this to carry the failure reason; Manager.Transition can pass

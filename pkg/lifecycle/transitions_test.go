@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -44,7 +45,7 @@ func TestTransitions_Validate_RejectsUndeclaredTarget(t *testing.T) {
 	if !errors.Is(err, ErrInvalidTransitionsTable) {
 		t.Fatalf("undeclared target should error, got %v", err)
 	}
-	if err.Error() == "" || !contains(err.Error(), "exploded") {
+	if err.Error() == "" || !strings.Contains(err.Error(), "exploded") {
 		t.Errorf("error should mention the undeclared phase %q for operator debugging, got %q",
 			"exploded", err)
 	}
@@ -152,16 +153,4 @@ func TestTransitions_TerminalPhases_StableSorted(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("TerminalPhases() = %v, want %v (sorted)", got, want)
 	}
-}
-
-// contains is a tiny test-only helper. strings.Contains would do but
-// avoiding the import in *_test.go for a single use keeps the file
-// dependency-light.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
