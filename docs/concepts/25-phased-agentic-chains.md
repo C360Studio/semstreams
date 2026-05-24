@@ -16,15 +16,13 @@ If you're building a multi-step agentic workflow on semstreams, **read
 this first**. Most of the primitives you need already ship; the gaps
 that remain are scoped and tracked.
 
-> **Note 2026-05-24**: a broader framework question is in active design
-> review — whether semstreams should grow workflow primitives as a
-> first-class layer (named workflow instances, lifecycle tracking,
-> versioning, introspection) on top of the rules engine. See
-> [`docs/proposals/workflow-primitives-design-exercise.md`](../proposals/workflow-primitives-design-exercise.md).
-> This concept doc remains accurate for sequential agentic chains
-> regardless of that exercise's outcome; if workflow primitives ship,
-> the phased-agentic-chain pattern becomes one workflow shape within
-> a broader workflow-primitives picture.
+> **Note 2026-05-24**: The workflow-primitives design exercise
+> [resolved as outcome C+](../proposals/workflow-primitives-decision.md):
+> `BoundedDispatcher` ships as substrate, `.triples` completes the
+> rule-engine multi-valued primitive set, and first-class workflow
+> primitives are explicitly out of scope at this time. The
+> phased-agentic-chain pattern remains the canonical shape for
+> multi-step agentic workflows on semstreams.
 
 ## Why this pattern exists
 
