@@ -191,7 +191,11 @@ Tiers only affect entities with text content. Telemetry-only entities cluster vi
 
 ## Orchestration Boundaries
 
-Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Components** (execute work). There is no separate workflow engine — `processor/reactive/` was retired. Multi-step patterns are expressed as coordinated rule sets firing components, with per-action `MaxIterations` providing iteration caps and entity triples + existing KV buckets + ObjectStore providing durable state.
+Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Components** (execute work). There is no separate workflow engine — no DSL, no state-machine runtime, no separate event bus; `processor/reactive/` was retired (2026-03-12). Multi-step patterns are expressed as coordinated rule sets firing components, with per-action `MaxIterations` providing iteration caps and entity triples + KV buckets + ObjectStore providing durable state.
+
+For workflow-shaped patterns (named instance with lifecycle, restart recovery, operator visibility), components compose the **Lifecycle harness** substrate (`pkg/lifecycle`, ADR-047): apps declare state structs implementing `Participant`; the framework provides KV-backed `Manager` (Get/Create/Update/Transition/Complete/Fail), rule integration (`lifecycle_*` actions + `$entity.lifecycle.*` substitutions), and an operator gateway API (`GET /workflows`, history via KV revision replay, operator-writable patches via struct tags). The harness is **substrate convention, not a workflow engine** — apps own work logic, state schema, and phase transitions; the framework provides KV storage, restart recovery, audit history, and a uniform operator API across products. **Lifecycle participation is a property of the ENTITY, not the COMPONENT or REQUEST** — short-lived handlers (HTTP, single-purpose processors) can read/write Participant-implementing entities without claiming participation; long-lived participants (mission-planner, calibration-orchestrator, requirement-executor) implement `Participant` and use `Manager`.
+
+For bounded-concurrency parallel work inside components, compose **BoundedDispatcher** (`pkg/dispatch`, ADR-048) — a KV-twofer-aware bounded worker pool wrapping `pkg/worker.Pool`. NOT for at-the-rule-layer fan-out (use rules' `for_each` for that).
 
 | Pattern | Use |
 |---------|-----|
@@ -199,14 +203,16 @@ Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Compon
 | A → B → C → D (no loop) | Rule chain (one rule per transition) |
 | A → if X then B else C | One rule, action-level `when` clauses (ADR-041) |
 | A → B → A → B... (max N times) | Rule chain with per-action `MaxIterations` cap |
-| Fan-out + fan-in synchronization | Fan-out rule + synchronizer-key rule |
+| Fan-out + fan-in synchronization | Fan-out rule (`for_each`) + counter-based join (`.length` / `.triples` / `length_eq`) |
+| Named instance with lifecycle (mission, sensor, scenario, plan, request) | Lifecycle harness `Participant` — ADR-047 |
+| Bounded parallel work inside a component | BoundedDispatcher — ADR-048 |
 | Execute LLM call, graph query, file I/O, etc. | Component |
 
-**Key rules**: Rules trigger, they don't do work inline. Components execute, they don't know their caller. State ownership is exclusive — domain entities in `ENTITY_STATES` (only `graph-ingest` writes), operational results in component-specific KV (e.g., `AGENT_LOOPS` with `COMPLETE_*` prefix), events in JetStream streams, bulky payloads in ObjectStore via `ContentStorable` with ref-triples on the owning entity.
+**Key rules**: Rules trigger, they don't do work inline. Components execute, they don't know their caller. State ownership is exclusive — domain entities in `ENTITY_STATES` (only `graph-ingest` writes), operational results in component-specific KV (e.g., `AGENT_LOOPS` with `COMPLETE_*` prefix), Lifecycle-managed instances in workflow-type KV buckets (e.g., `MISSIONS`, `CSAPI_SYSTEMS`, declared at `Manager.Register` time), events in JetStream streams, bulky payloads in ObjectStore via `ContentStorable` with ref-triples on the owning entity.
 
-**Engine gaps file as engine work, not app-side state plumbing.** semspec's 7,264 LOC of `workflow/reactive/` (the "semspec trap") is the cautionary tale — app-side state machines around rule-engine limitations become migration blockers the framework can't help dig out of. If a pattern needs a primitive the rule engine doesn't have, propose adding it; don't carve out a parallel path.
+**Engine gaps file as engine work, not app-side state plumbing.** semspec's retired `workflow/reactive/` (7,264 LOC) is the cautionary tale on the engine-shape axis; semspec's `workflow/` package (~7,840 LOC of convention hand-rolled because the framework didn't provide one) is the cautionary tale on the convention-shape axis — both are migration blockers when carried per-consumer. The Lifecycle harness exists specifically to retire the next-instance of the second pattern (cross-consumer convention reinvention). If a rule-engine, harness, or substrate primitive is missing, propose adding it; don't carve out a parallel path.
 
-Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog. For multi-step agentic workflows specifically (rule chains spawning agent phases), see [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md) — the application of these discipline patterns to the agentic-loop substrate, with the substrate-vs-capability-vs-application split and the inventory of framework primitives that support it.
+Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog. For multi-step agentic workflows specifically (rule chains spawning agent phases), see [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md). For Lifecycle-shaped workflows, see [ADR-047](docs/adr/047-lifecycle-harness-substrate.md). For bounded-concurrency parallel work, see [ADR-048](docs/adr/048-bounded-dispatcher-and-triples-substrate.md).
 
 ### Rules don't carry payloads
 
