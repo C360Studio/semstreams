@@ -73,6 +73,43 @@ It is a **substrate convention layer** that lets consumers declare
 workflow-shaped entities and get framework infrastructure (KV
 storage, restart recovery, operator API, rule integration) for free.
 
+### Participation is per-entity, not per-deployment
+
+semstreams is general-purpose stream-processing infrastructure;
+the Lifecycle harness has zero dependencies on agentic-loop or any
+other consumer class. Apps that ship no agentic features at all
+(pure UDP-ingest + processor + HTTP-egress deployments) get the
+full harness benefit by implementing `Participant` on their domain
+state structs. The `pkg/lifecycle` package MUST NOT import any
+`processor/agentic-*` package — verified by import lint at PR-1
+land time.
+
+`Participant` is opt-in per ENTITY-TYPE. Within a single app:
+
+- Entity types with declared phases + restart recovery + operator
+  visibility needs (drone missions, sensor lifecycles, manufacturing
+  batches, scenario executions, API request lifecycles) implement
+  `Participant` and use `Manager`.
+- Entity types without that shape (raw telemetry samples, log
+  entries, agent loops whose lifecycle is per-iteration LLM
+  judgment rather than declared state-machine phases, transient
+  inputs) stay outside the harness — they pay zero cost and the
+  harness imposes no requirements on them.
+
+Agentic-loop intentionally stays outside `Participant` in this
+bundle: its lifecycle shape (per-iteration model judgment, dynamic
+trajectory) doesn't fit the declared-transitions-table abstraction
+cleanly. This is an entity-shape fit decision, not a framework
+constraint — a future agentic role with declared phases could
+implement `Participant` if the fit emerges. The 3 vestigial
+`pkg/workflow` lines in agentic-loop are deleted in PR 2 because
+they were never load-bearing, not because agentic-loop is being
+excluded from harness participation as a matter of principle.
+
+Apps must NOT assume the harness implies an agentic dependency,
+and apps using the harness do NOT pull in agentic-loop or any
+other consumer-class package.
+
 ### Greenfield assumption
 
 `pkg/workflow` (the dormant existing surface) is unused except for

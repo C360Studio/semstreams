@@ -307,12 +307,46 @@ that powers `.length`:
   `$related.triple.X.triples` substitution paths
 - Resolve to the slice of values (already typed `[]any` after
   `for_each`'s multi-valued resolution shipped in beta.82)
-- For string-context substitution (e.g., inside a prompt),
-  serialize as comma-separated or JSON array depending on caller
-  convention
+- For string-context substitution (e.g., inside a prompt or a
+  property value), serialize as a **JSON array** —
+  `["a","b","c"]` — never CSV. JSON wins because it matches the
+  existing graph encoding for list-typed predicates (e.g.
+  `coordinator.decision.subtopics`, see
+  `vocabulary/agentic/predicates.go:677`) and because CSV
+  ambiguity on commas-in-values is a latent production-bug class
+  the framework refuses to introduce. There is no operator-config
+  flag for serialization — one canonical format, period.
 - For typed-context substitution (e.g., inside a condition
   operator like `array_contains` or `length_eq`), pass through
-  as `[]any`
+  as `[]any` — no string serialization happens.
+
+#### Persona-prose convention for `.triples` recipients
+
+When a rule threads a `.triples`-substituted value into a
+downstream agent's prompt or property, the agent's persona MUST
+include the canonical parse instruction (one templated sentence
+per consuming role):
+
+> *"The property `<field_name>` contains a JSON array of
+> `<item_type>` (e.g. `["loop_a","loop_b","loop_c"]`). Parse it
+> as JSON and iterate each item."*
+
+The framework guarantees JSON-array format; consumer prose
+guarantees the parse expectation. This converts "cognitive load on
+every consumer" into one copy-pasteable sentence, per the
+discipline in [[feedback_persona_prose_needs_decision_criteria]].
+
+**Known limitation — cheap-model substrate:** The JSON-parse step
+assumes a reliable JSON-parsing model. Frontier models (the
+`general` model class in this codebase) handle this trivially.
+Cheap-model substrate (the `decide`-class roles from the beta.80
+cheap-model bundle) may not — silent malformed-parse is a real
+failure surface. When a `.triples`-threaded value flows into a
+cheap-model context, prefer static-N + AND-composition patterns
+(or upgrade the recipient role to `general`). Operator guidance:
+if a cheap-model role consumes `.triples`, instrument the
+trajectory for "did the model successfully iterate every item?"
+before relying on the pattern in production.
 
 Test coverage extends `test/reference_configs_test.go` (the
 beta.84 lint) — any reference config using `.triples` must
@@ -404,12 +438,14 @@ ADR-048)"**
 3. **Should `.triples` substitution support `.triples.length`?**
    It would be `.length` of the resolved list. Lean YES for
    symmetry; semantically equivalent to `.length` directly.
-4. **JSON-vs-CSV serialization of `.triples` in string context**:
-   the safer default is JSON array (`["a","b","c"]`); CSV
-   (`a,b,c`) is more LLM-friendly but ambiguous with commas-in-
-   values. Lean JSON; document.
+4. ~~**JSON-vs-CSV serialization of `.triples` in string context**~~
+   **RESOLVED** — JSON array, no operator-config flag, canonical
+   persona-prose template + cheap-model limitation documented in
+   the Implementation section above. CSV rejected because
+   commas-in-values is a latent production-bug class the framework
+   refuses to introduce.
 
-These resolve during PR drafting.
+Open questions 1-3 resolve during PR drafting.
 
 ## Migration path
 
