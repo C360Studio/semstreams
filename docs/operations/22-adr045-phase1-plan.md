@@ -18,8 +18,60 @@ green Phase 1 reference flow.
 2. [docs/concepts/14](../concepts/14-orchestration-layers.md) — the
    canonical "How we do workflows in semstreams" pattern catalog this
    plan instantiates.
-3. This doc — the PR sequence and per-PR checklist.
-4. Per-PR design notes (filed as PR description) as each ships.
+3. [docs/concepts/25](../concepts/25-phased-agentic-chains.md) — the
+   phased-agentic-chain pattern this plan is the first reference
+   instance of. Substrate-vs-capability-vs-application split, the
+   primitive inventory, two-layer dispatch, and the discipline
+   memories that apply to every phase design.
+4. This doc — the PR sequence and per-PR checklist.
+5. Per-PR design notes (filed as PR description) as each ships.
+
+## Amendment 2026-05-23 (discipline application from concept doc 25)
+
+After `docs/concepts/25-phased-agentic-chains.md` and the two new
+discipline memories (`feedback_tool_signature_intent_not_structure`,
+`feedback_persona_prose_needs_decision_criteria`) shipped, the plan
+gets the following revisions before PR 3+ continues. These are
+Phase-1-implementation disciplines, independent of the broader
+workflow-primitives design exercise (`docs/proposals/workflow-primitives-design-exercise.md`)
+that gates ADR-046 Phase 2 + #151 — Phase 1 PRs 3-6 are unaffected by
+that exercise.
+
+- **PR 3 `route_decision.args` reshaped** per intent-not-structure
+  discipline. Specifically: `decompose` no longer asks the model for
+  typed sub-query objects (entity_state / predicate_walk / temporal /
+  spatial); model emits decomposition *intent* (axes, focus, scope),
+  backend constructs typed sub-queries. `walk_seeds` no longer asks
+  for full 6-part entity IDs (model can't spell them reliably); model
+  emits seed references (names, partial IDs, or indices into the
+  classifier output candidate set), backend resolves to full IDs via
+  the entity index. Wire-format change; must land before PR 3 ships
+  to avoid schema migration later. See revised PR 3 deliverables
+  below.
+- **PR 3 persona prose** for `route_search` follows
+  `feedback_persona_prose_needs_decision_criteria` — per-action
+  purpose framing, decision-axis framing (no magic-number
+  thresholds), concrete examples for non-obvious choice points
+  (decompose vs walk_seeds vs retighten can look similar from
+  classifier-output shape alone), anti-ceremony nudges, negative-shape
+  definition for `synthesize_directly`. The PR description walks
+  through which sentence carries which pattern.
+- **PR 3 (and PR 5) `action_allowlist`** on each `publish_agent`
+  constrains the spawned role's terminal vocabulary. SAP coercion
+  metric (`action_allowlist_sap_coerced_total`) is the drift
+  telemetry that should inform prompt iteration post-merge.
+- **PR 6 reference flow positioning** — `configs/flows/research-graph-pipeline.yaml`
+  is a *reference example* showing how to compose the five components,
+  not canonical config every operator must enable. Components ship as
+  substrate; chain wiring is application-shaped. Either move under
+  `configs/examples/` or doc-comment the file accordingly. The
+  components themselves remain canonical semstreams primitives.
+- **Phase-2 cleanup candidate**: PR 1 shipped `budget_tokens` and
+  `max_iterations` on the agent-facing `research_graph` tool. These
+  are operator policy (role-default config), not agent intent. Agent
+  doesn't know what budget to set. Backend should override with
+  role-config and ignore agent-emitted values. Schema migration in
+  Phase 2 removes them from the agent-facing tool.
 
 ## Scope
 
@@ -230,12 +282,49 @@ the chain's "not just a better classifier" argument.
     (candidates with entities, scores, snippets)
   - Output: route_decision (action ∈ enum + args + rationale)
   - Structured-emit mode per ADR-035 strict tool calling
-- **Action arg schemas** per action:
+- **Action arg schemas** per action (revised per `feedback_tool_signature_intent_not_structure`):
   - `synthesize_directly`: no args (use classifier output as evidence)
-  - `retighten`: refined topic / hint adjustments
-  - `walk_seeds`: list of seed entity IDs to expand
-  - `decompose`: list of typed sub-queries (entity_state /
-    predicate_walk / temporal_range / spatial_polygon)
+  - `retighten`: refined topic / hint adjustments — same shape as
+    the original `research_intent.hints` map; model expresses what to
+    tighten, backend re-runs `nl_classify` with merged hints
+  - `walk_seeds`: list of **seed references** (candidate-set indices
+    OR partial entity names) — model picks seeds from the candidates
+    the classifier surfaced, backend resolves to full 6-part entity
+    IDs via the entity index. Model must NOT be asked to emit full
+    `org.platform.domain.system.type.instance` strings; small models
+    can't spell them reliably and shouldn't have to
+  - `decompose`: **decomposition intent** — `{axes: []string, focus:
+    string, scope?: {temporal?, spatial?}}`. Model emits the
+    *direction* of the decomposition (e.g., axes=["component",
+    "failure_mode"], focus="hover anomalies", scope={temporal:
+    "last_24h"}); `execute_subqueries` constructs the typed sub-query
+    list (entity_state / predicate_walk / temporal_range /
+    spatial_polygon) deterministically from the intent. This keeps
+    the typed-sub-query schema as a backend contract, not an
+    agent-facing schema the model must reproduce correctly under
+    strict-mode validation.
+
+- **Persona prose discipline** per `feedback_persona_prose_needs_decision_criteria`:
+  - Per-action purpose framing (one-liner per routing action before
+    procedure)
+  - Decision-axis framing for choice points ("when the classifier
+    surfaced N+ high-confidence candidates and the topic is one of
+    them" beats "when classifier_top_score > 0.8")
+  - Concrete examples for the non-obvious choice points (decompose vs
+    walk_seeds vs retighten can look similar from classifier-output
+    shape alone — show one example per)
+  - Anti-ceremony nudge if any action skews "tool of last resort"
+    (likely `decompose` — model defaults to it as the "safe
+    expensive" choice; if `walk_seeds` is the right cheaper option,
+    say so explicitly)
+  - Negative-shape definition for `synthesize_directly` (when NOT to
+    short-circuit — "if the candidates don't cover the topic's named
+    actors, even a clean top-score isn't sufficient")
+- **`action_allowlist`** on the `publish_agent` rule action spawning
+  `route_search`: the four routing actions plus any agreed-on punt
+  action. SAP coercion metric (`action_allowlist_sap_coerced_total`)
+  is the drift telemetry — if it rises post-merge, persona prompt is
+  drifting; iterate the prompt, not the cap.
 - **Governance integration** per ADR-039: the LLM call goes through
   the same rule-driven governance layer as any other agent LLM call.
 - **`route_decision`** authored predicates default to
@@ -419,8 +508,20 @@ tested.
 ### Deliverables
 
 - **`configs/flows/research-graph-pipeline.yaml`** reference flow:
+  - **Positioning** (per concept doc 25 + substrate-vs-app split): this
+    file is a *reference example* showing how the five components
+    compose into a phased agentic chain, not canonical config every
+    operator must enable. The five components are framework
+    substrate; this specific chain wiring is application-shaped.
+    Document this in the file's header doc-comment so future readers
+    don't treat the chain config as canonical. Consider relocating
+    under `configs/examples/` once that convention exists.
   - All five components instantiated.
   - All seven rules (R0–R6 plus the continuation rule R-cont).
+  - Each `publish_agent` rule action declares `action_allowlist`
+    constraining the spawned role's terminal vocabulary (per concept
+    doc 25 + the semteams gatherer-chain pattern). SAP coercion
+    metric monitored as drift telemetry.
   - `entity_watch_buckets` config for AGENT_LOOPS patterns.
   - Per-action `MaxIterations`: 2 on R2's retighten branch, 5 on
     R4's refine branch.
@@ -611,3 +712,16 @@ operator signal.
 - Memory: `feedback_e2e_required_for_breaking_changes`
 - Memory: `feedback_per_loop_vs_per_role_safety`
 - Memory: `feedback_frontier_floor_changes_role_split_calculus`
+- Memory: `feedback_tool_signature_intent_not_structure` — the
+  discipline driving the PR 3 `route_decision.args` revision (and the
+  PR 1 Phase-2 cleanup candidate for `budget_tokens` / `max_iterations`)
+- Memory: `feedback_persona_prose_needs_decision_criteria` — the
+  discipline driving PR 3's `route_search` prompt design
+- [docs/concepts/25-phased-agentic-chains.md](../concepts/25-phased-agentic-chains.md)
+  — the pattern doc this plan is the first reference instance of;
+  also home of the substrate-vs-capability-vs-application split that
+  motivates the PR 6 reference-flow positioning
+- [docs/proposals/workflow-primitives-design-exercise.md](../proposals/workflow-primitives-design-exercise.md)
+  — the broader workflow-primitives-vs-not framework question that
+  gates ADR-046 Phase 2 + #151. ADR-045 Phase 1 PRs 3-6 are
+  unaffected by that exercise.
