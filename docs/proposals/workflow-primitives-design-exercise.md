@@ -1,6 +1,8 @@
 # Workflow Primitives Design Exercise
 
-**Status**: Proposed — 2026-05-24. Pre-ADR. Resolution gates resumption of ADR-046 Phase 2, GH #151, and any new rule-engine primitive work for fan-out / parallel / lifecycle patterns.
+**Status**: **RESOLVED — 2026-05-24** by [`workflow-primitives-decision.md`](workflow-primitives-decision.md). Outcome **C+**: BoundedDispatcher ships as substrate primitive + `.triples` enumeration primitive closes the rule-engine multi-valued set; `pkg/workflow` gets a 2026-08-24 wire-it-or-cut-it sunset clock; workflow-primitives-as-first-class deferred to a second design exercise gated on cross-consumer production evidence. The exercise below is preserved as the running record of how the decision was made.
+
+**Original status**: Proposed — 2026-05-24. Pre-ADR. Resolution gates resumption of ADR-046 Phase 2, GH #151, and any new rule-engine primitive work for fan-out / parallel / lifecycle patterns.
 
 **Supersedes** the rules-engine-primitive-mapping framing in `project_rules_engine_design_review` memory (the original pause-point analysis). That memo correctly diagnosed the five-tag pile (beta.80–beta.84) and identified the design-review pause point. This proposal broadens the question: workflow primitives should be considered as a deliberate framework concern rather than ruled out by dogma.
 
