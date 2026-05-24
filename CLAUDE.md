@@ -206,7 +206,7 @@ Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Compon
 
 **Engine gaps file as engine work, not app-side state plumbing.** semspec's 7,264 LOC of `workflow/reactive/` (the "semspec trap") is the cautionary tale — app-side state machines around rule-engine limitations become migration blockers the framework can't help dig out of. If a pattern needs a primitive the rule engine doesn't have, propose adding it; don't carve out a parallel path.
 
-Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog.
+Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog. For multi-step agentic workflows specifically (rule chains spawning agent phases), see [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md) — the application of these discipline patterns to the agentic-loop substrate, with the substrate-vs-capability-vs-application split and the inventory of framework primitives that support it.
 
 ### Rules don't carry payloads
 
