@@ -24,6 +24,11 @@ import (
 type kvMockStore struct {
 	mu      sync.RWMutex
 	entries map[string]*kvMockEntry
+	// history tracks every write (Put/Update/Delete) per key in
+	// chronological order. Mirrors jetstream's revision-stream
+	// preservation; History() returns slice copies from this map.
+	// Populated by appendHistory from Create/Update/Delete.
+	history map[string][]kvEntry
 	// nextRevision is a monotonically-increasing counter, NOT
 	// per-key. Mirrors jetstream's stream-level sequence semantics
 	// (every write across the bucket increments the global stream
@@ -65,6 +70,7 @@ func newKVMockStore(clock func() time.Time) *kvMockStore {
 	}
 	return &kvMockStore{
 		entries: make(map[string]*kvMockEntry),
+		history: make(map[string][]kvEntry),
 		clock:   clock,
 	}
 }
@@ -100,6 +106,17 @@ func (s *kvMockStore) Create(_ context.Context, key string, value []byte) (uint6
 		createdAt:  now,
 		revisionAt: now,
 	}
+	// History snapshot — copy the value bytes so subsequent
+	// Update mutations to the live entry don't retroactively
+	// rewrite this revision's recorded value.
+	histVal := make([]byte, len(stored))
+	copy(histVal, stored)
+	s.appendHistory(key, kvEntry{
+		Key:       key,
+		Value:     histVal,
+		Revision:  s.nextRevision,
+		CreatedAt: now,
+	})
 	return s.nextRevision, nil
 }
 
@@ -121,6 +138,15 @@ func (s *kvMockStore) Update(_ context.Context, key string, value []byte, expect
 	entry.revisionAt = s.clock()
 	// createdAt is intentionally NOT touched here — see the type
 	// comment for the rationale.
+	// History snapshot — see Create for the value-copy rationale.
+	histVal := make([]byte, len(stored))
+	copy(histVal, stored)
+	s.appendHistory(key, kvEntry{
+		Key:       key,
+		Value:     histVal,
+		Revision:  s.nextRevision,
+		CreatedAt: entry.revisionAt,
+	})
 	return s.nextRevision, nil
 }
 
@@ -138,5 +164,119 @@ func (s *kvMockStore) Delete(_ context.Context, key string) error {
 	entry.deleted = true
 	entry.revision = s.nextRevision
 	entry.revisionAt = s.clock()
+	// Append a tombstone snapshot to history so History() can
+	// surface the delete event. Real jetstream preserves the
+	// delete marker in the revision stream; the mock has to
+	// snapshot explicitly because the live entries map only
+	// holds the latest state.
+	s.appendHistory(key, kvEntry{
+		Key:       key,
+		Value:     nil,
+		Revision:  s.nextRevision,
+		CreatedAt: entry.revisionAt,
+		IsDelete:  true,
+	})
 	return nil
+}
+
+// ListKeys returns all keys currently present (non-deleted) in
+// sorted order. Sorted output keeps List's iteration deterministic
+// across processes so paginated operator queries don't see flap.
+func (s *kvMockStore) ListKeys(_ context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.entries))
+	for k, entry := range s.entries {
+		if !entry.deleted {
+			keys = append(keys, k)
+		}
+	}
+	// Cheap stable order — sort.Strings rather than introducing
+	// a sort import here when one's already in scope elsewhere.
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
+			keys[j-1], keys[j] = keys[j], keys[j-1]
+		}
+	}
+	return keys, nil
+}
+
+// History returns every revision of the given key in chronological
+// order (oldest first). Includes delete-marker entries with
+// IsDelete=true. Returns errKVKeyNotFound if the key has never
+// existed (no history records at all).
+func (s *kvMockStore) History(_ context.Context, key string) ([]kvEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hist, ok := s.history[key]
+	if !ok || len(hist) == 0 {
+		return nil, errKVKeyNotFound
+	}
+	// Defensive copy so callers iterating concurrently with
+	// future writes don't see the slice grow under them.
+	out := make([]kvEntry, len(hist))
+	copy(out, hist)
+	return out, nil
+}
+
+// Watch returns a channel emitting every KV write that lands
+// after the snapshot replay. The mock's snapshot is the current
+// live state (non-deleted entries); subsequent writes go through
+// the watcher.
+//
+// The mock does NOT track watchers across calls — each call gets
+// a fresh channel that delivers the snapshot then closes on ctx.
+// Real jetstream's Watch handles concurrent watchers via NATS
+// pub-sub; integration tests cover that behavior. For unit tests,
+// the snapshot-then-close shape is enough to verify Manager.Watch
+// processes entries correctly.
+func (s *kvMockStore) Watch(ctx context.Context) (<-chan kvEntry, error) {
+	out := make(chan kvEntry, 16)
+	// Snapshot under read-lock; deliver outside the lock so
+	// listeners don't pin the mock during slow consumers.
+	s.mu.RLock()
+	snapshot := make([]kvEntry, 0, len(s.entries))
+	for k, entry := range s.entries {
+		if entry.deleted {
+			continue
+		}
+		// Defensive value copy — same contract as Get.
+		val := make([]byte, len(entry.value))
+		copy(val, entry.value)
+		snapshot = append(snapshot, kvEntry{
+			Key:       k,
+			Value:     val,
+			Revision:  entry.revision,
+			CreatedAt: entry.revisionAt,
+		})
+	}
+	s.mu.RUnlock()
+
+	go func() {
+		defer close(out)
+		for _, entry := range snapshot {
+			select {
+			case out <- entry:
+			case <-ctx.Done():
+				return
+			}
+		}
+		// Live updates beyond the snapshot are NOT delivered by
+		// the mock — production NATS would stream them. The
+		// integration-test slice covers that path. For unit
+		// tests, the snapshot is enough to verify Manager.Watch's
+		// decode + dispatch shape.
+		<-ctx.Done()
+	}()
+	return out, nil
+}
+
+// appendHistory records a snapshot of the current entry state in
+// the per-key history slice. Called from Create/Update/Delete to
+// build up the revision stream. Caller holds s.mu (write lock).
+func (s *kvMockStore) appendHistory(key string, entry kvEntry) {
+	if s.history == nil {
+		s.history = make(map[string][]kvEntry)
+	}
+	s.history[key] = append(s.history[key], entry)
 }

@@ -131,3 +131,84 @@ func (s *kvNATSStore) Delete(ctx context.Context, key string) error {
 	}
 	return nil
 }
+
+func (s *kvNATSStore) ListKeys(ctx context.Context) ([]string, error) {
+	// jetstream's ListKeys returns a streaming KeyLister to avoid
+	// holding the whole keyset in memory for huge buckets. v1
+	// collects to a slice for the simpler Manager.List contract;
+	// the v2 secondary-index work (ADR-047 § KV indexing) replaces
+	// this scan path for high-cardinality workflows.
+	lister, err := s.bucket.ListKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: KV ListKeys %s: %w", s.name, err)
+	}
+	defer lister.Stop()
+	var keys []string
+	for key := range lister.Keys() {
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func (s *kvNATSStore) History(ctx context.Context, key string) ([]kvEntry, error) {
+	entries, err := s.bucket.History(ctx, key)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, errKVKeyNotFound
+		}
+		return nil, fmt.Errorf("lifecycle: KV History %s/%s: %w", s.name, key, err)
+	}
+	out := make([]kvEntry, len(entries))
+	for i, entry := range entries {
+		// Operation distinguishes Put/Delete/Purge. Anything
+		// other than Put is a tombstone-shaped event for History
+		// consumers.
+		op := entry.Operation()
+		out[i] = kvEntry{
+			Key:       entry.Key(),
+			Value:     entry.Value(),
+			Revision:  entry.Revision(),
+			CreatedAt: entry.Created(),
+			IsDelete:  op == jetstream.KeyValueDelete || op == jetstream.KeyValuePurge,
+		}
+	}
+	return out, nil
+}
+
+func (s *kvNATSStore) Watch(ctx context.Context) (<-chan kvEntry, error) {
+	watcher, err := s.bucket.WatchAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: KV WatchAll %s: %w", s.name, err)
+	}
+	out := make(chan kvEntry, 16)
+	go func() {
+		// Channel-close on goroutine exit; caller treats close
+		// as "stop iterating" per the kvStore.Watch contract.
+		defer close(out)
+		defer func() { _ = watcher.Stop() }()
+		for entry := range watcher.Updates() {
+			if entry == nil {
+				// jetstream signals end-of-bootstrap with a nil
+				// entry; we don't expose that signal at the
+				// kvStore layer — Manager.Watch doesn't need it
+				// (it processes each entry uniformly). Skip the
+				// nil and keep iterating.
+				continue
+			}
+			op := entry.Operation()
+			ev := kvEntry{
+				Key:       entry.Key(),
+				Value:     entry.Value(),
+				Revision:  entry.Revision(),
+				CreatedAt: entry.Created(),
+				IsDelete:  op == jetstream.KeyValueDelete || op == jetstream.KeyValuePurge,
+			}
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
