@@ -37,14 +37,23 @@ type kvMockStore struct {
 }
 
 // kvMockEntry is the per-key in-memory record. Tracks value +
-// revision + creation time. A nil value represents a delete marker
-// (so History could surface the tombstone if needed by the query-ops
-// surface in the next commit).
+// revision + creation time + latest-revision time. A nil value
+// represents a delete marker (so History could surface the tombstone
+// if needed by the query-ops surface in the next commit).
+//
+// createdAt is IMMUTABLE after Create — mirrors real jetstream
+// where the first-create timestamp is preserved across subsequent
+// Update writes. revisionAt advances per write. The next commit's
+// History query op uses createdAt to surface "when did this entity
+// first appear" and revisionAt to surface "when was each revision
+// written" — keeping them distinct here so the mock doesn't diverge
+// from real jetstream semantics under integration-test rewrites.
 type kvMockEntry struct {
-	value     []byte
-	revision  uint64
-	createdAt time.Time
-	deleted   bool
+	value      []byte
+	revision   uint64
+	createdAt  time.Time // immutable post-Create
+	revisionAt time.Time // re-set on every write
+	deleted    bool
 }
 
 // newKVMockStore constructs a fresh in-memory store. The optional
@@ -84,10 +93,12 @@ func (s *kvMockStore) Create(_ context.Context, key string, value []byte) (uint6
 	s.nextRevision++
 	stored := make([]byte, len(value))
 	copy(stored, value)
+	now := s.clock()
 	s.entries[key] = &kvMockEntry{
-		value:     stored,
-		revision:  s.nextRevision,
-		createdAt: s.clock(),
+		value:      stored,
+		revision:   s.nextRevision,
+		createdAt:  now,
+		revisionAt: now,
 	}
 	return s.nextRevision, nil
 }
@@ -107,7 +118,9 @@ func (s *kvMockStore) Update(_ context.Context, key string, value []byte, expect
 	copy(stored, value)
 	entry.value = stored
 	entry.revision = s.nextRevision
-	entry.createdAt = s.clock()
+	entry.revisionAt = s.clock()
+	// createdAt is intentionally NOT touched here — see the type
+	// comment for the rationale.
 	return s.nextRevision, nil
 }
 
@@ -124,6 +137,6 @@ func (s *kvMockStore) Delete(_ context.Context, key string) error {
 	entry.value = nil
 	entry.deleted = true
 	entry.revision = s.nextRevision
-	entry.createdAt = s.clock()
+	entry.revisionAt = s.clock()
 	return nil
 }

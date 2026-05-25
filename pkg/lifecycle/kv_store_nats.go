@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -73,28 +75,47 @@ func (s *kvNATSStore) Create(ctx context.Context, key string, value []byte) (uin
 func (s *kvNATSStore) Update(ctx context.Context, key string, value []byte, expectedRevision uint64) (uint64, error) {
 	rev, err := s.bucket.Update(ctx, key, value, expectedRevision)
 	if err != nil {
-		// jetstream surfaces CAS conflicts as a wrong-revision
-		// error (no dedicated sentinel — pattern matched by
-		// natsclient consumers elsewhere). Substring-classify
-		// against jetstream's error text is fragile; the safer
-		// classifier is "any non-found error on Update with a
-		// non-zero expectedRevision is a CAS conflict OR a key-
-		// gone-during-update." Both reduce to "Manager retries
-		// via Get + mutator + Update under updateRetries budget."
+		// Classifier hierarchy — narrow to known shapes, refuse to
+		// silently wrap transport/cancellation errors as CAS
+		// conflicts (Manager.Update would otherwise retry a real
+		// network timeout up to updateRetries=5 times, amplifying
+		// one failed write into five).
 		//
-		// TODO(integration-test): the testcontainers slice should
-		// exercise this exact path and assert errKVRevisionMismatch
-		// classification against real jetstream sentinels — if
-		// jetstream adds a dedicated CAS-conflict error in a future
-		// release, swap this classifier to errors.Is.
+		// 1) Context errors propagate unwrapped — caller cancelled
+		//    or timed out, retrying makes no sense.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 0, fmt.Errorf("lifecycle: KV Update %s/%s: %w", s.name, key, err)
+		}
+		// 2) Transport-level failures propagate unwrapped — these
+		//    are NOT CAS conflicts; retrying without backoff just
+		//    re-hammers a degraded connection.
+		if errors.Is(err, nats.ErrTimeout) || errors.Is(err, nats.ErrNoResponders) ||
+			errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
+			return 0, fmt.Errorf("lifecycle: KV Update %s/%s (transport): %w", s.name, key, err)
+		}
+		// 3) Key gone during Update (deleted by concurrent writer)
+		//    surfaces as ErrEntityNotFound at the Manager layer.
 		if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
 			return 0, errKVKeyNotFound
 		}
-		// Default to CAS-conflict classification — Manager.Update's
-		// retry loop is the right response for the common case
-		// (concurrent writer beat us). Real-error paths surface
-		// via the wrapped error after retries exhaust.
-		return 0, fmt.Errorf("%w: %w", errKVRevisionMismatch, err)
+		// 4) Known CAS-shape errors — jetstream models CAS-fail-on-
+		//    Update as ErrKeyExists internally (same "next revision
+		//    write would collide" shape as Create on existing key).
+		//    Plus substring fallback against the canonical "wrong
+		//    last sequence" message jetstream emits today, so this
+		//    classifier doesn't silently regress if the sentinel
+		//    coverage drifts. TODO(integration-test): pin this
+		//    against real jetstream in the testcontainers slice;
+		//    swap to a dedicated sentinel if/when jetstream adds one.
+		if errors.Is(err, jetstream.ErrKeyExists) ||
+			strings.Contains(err.Error(), "wrong last sequence") {
+			return 0, fmt.Errorf("%w: %w", errKVRevisionMismatch, err)
+		}
+		// 5) Default — surface the raw error wrapped, NOT classified
+		//    as CAS. Unclassified errors hitting Manager.Update's
+		//    retry loop will fail-fast (the retry only triggers on
+		//    errors.Is(errKVRevisionMismatch)).
+		return 0, fmt.Errorf("lifecycle: KV Update %s/%s: %w", s.name, key, err)
 	}
 	return rev, nil
 }

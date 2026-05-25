@@ -48,6 +48,15 @@ type registration struct {
 	structMeta  *structMeta
 	bucket      string
 	store       kvStore
+
+	// keySample is a cached factory instance held solely to
+	// dispatch the KVKey(entityID) method without allocating a
+	// fresh Participant per Get/Update. Per ADR-047's KVKey
+	// contract, KVKey must be a pure function of entityID — no
+	// per-instance struct state is consulted — so sharing one
+	// sample across all calls is safe even under concurrency
+	// (KVKey is read-only on the receiver).
+	keySample Participant
 }
 
 // NewManager constructs a Manager that talks to NATS via the given
@@ -145,6 +154,10 @@ func (m *Manager) Register(workflow string, factory func() Participant, transiti
 			ErrWorkflowNotRegistered, workflow)
 	}
 
+	if sample.Workflow() == "" {
+		return fmt.Errorf("%w: factory for workflow %q returned empty Workflow() — must match the registered name",
+			ErrWorkflowNotRegistered, workflow)
+	}
 	if sample.Workflow() != workflow {
 		return fmt.Errorf("%w: factory for workflow %q returns Workflow()=%q (mismatch — factory's Workflow() must match the registered name)",
 			ErrWorkflowNotRegistered, workflow, sample.Workflow())
@@ -169,6 +182,7 @@ func (m *Manager) Register(workflow string, factory func() Participant, transiti
 		structMeta:  structMeta,
 		bucket:      bucket,
 		store:       store,
+		keySample:   sample,
 	}
 	m.logger.Info("lifecycle: registered workflow",
 		slog.String("workflow", workflow),
@@ -309,7 +323,7 @@ func (m *Manager) Update(ctx context.Context, workflow, entityID string, mutator
 	if err != nil {
 		return err
 	}
-	for attempt := 0; attempt < updateRetries; attempt++ {
+	for range updateRetries {
 		current, revision, err := m.getWithRevision(ctx, reg, entityID)
 		if err != nil {
 			return err
@@ -444,13 +458,33 @@ func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
 	// Sorted terminals filtered to those reachable from current
 	// phase. Deterministic + sorted means apps see the same
 	// target across processes given the same table.
-	for _, terminal := range reg.transitions.TerminalPhases() {
+	terminals := reg.transitions.TerminalPhases()
+	var reachable []string
+	for _, terminal := range terminals {
 		if slices.Contains(outEdges, terminal) {
-			return m.Transition(ctx, workflow, entityID, terminal, TransitionSourceFramework, "")
+			reachable = append(reachable, terminal)
 		}
 	}
-	return fmt.Errorf("%w: workflow=%q entity_id=%q phase=%q has no edge to any terminal phase (declared terminals: %v)",
-		ErrInvalidTransition, reg.workflow, entityID, from, reg.transitions.TerminalPhases())
+	if len(reachable) == 0 {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q phase=%q has no edge to any terminal phase (declared terminals: %v)",
+			ErrInvalidTransition, reg.workflow, entityID, from, terminals)
+	}
+	// When MORE than one terminal is reachable from the current
+	// phase, Complete's sorted-pick is ambiguous-looking — apps
+	// probably wanted semantic distinction (success vs failure vs
+	// abort) and grabbed the convenience helper. Loud-warn so the
+	// footgun is visible in operator logs without breaking the
+	// caller. Single-reachable terminals are unambiguous and don't
+	// warn.
+	if len(reachable) > 1 {
+		m.logger.Warn("lifecycle: Complete selection is ambiguous — multiple terminals reachable from current phase; consider Transition for explicit selection",
+			slog.String("workflow", reg.workflow),
+			slog.String("entity_id", entityID),
+			slog.String("from", from),
+			slog.String("picked", reachable[0]),
+			slog.Any("alternatives", reachable[1:]))
+	}
+	return m.Transition(ctx, workflow, entityID, reachable[0], TransitionSourceFramework, "")
 }
 
 // Fail transitions the entity to a terminal phase, carrying the
@@ -475,33 +509,27 @@ func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) e
 		return fmt.Errorf("%w: workflow %q does not declare a %q phase; call Transition with your preferred error-state phase instead",
 			ErrInvalidTransition, reg.workflow, failedPhase)
 	}
-	// Note: reason is intended for the TransitionEvent.Note in the
-	// History stream, which lands in the next commit. For now the
-	// transition itself goes through; persistence of the reason
-	// will require the history-emission path in Update/Transition.
-	_ = reason
+	// reason flows to Transition.note below; the slog audit inside
+	// Transition picks it up. Full TransitionEvent persistence
+	// (History) lands in the next commit on this branch.
 	return m.Transition(ctx, workflow, entityID, failedPhase, TransitionSourceFramework, reason)
 }
 
 // setPhaseField writes newPhase into the Phase field on p via the
 // cached structMeta's PhaseField metadata. Returns an error if the
 // field index can't be resolved (shouldn't happen at runtime since
-// parseStructTags already validated PhaseField presence at Register
-// time).
+// parseStructTags validated PhaseField presence at Register time).
 //
-// Bounded reflect cost: one FieldByName per call (cached lookup is
-// PR 1b's field-index-cache concern). Acceptable because Transition
-// is a coordinator-frequency operation, not a per-message hotpath.
+// Uses reflect.Value.FieldByIndex with the cached FieldIndex slice
+// from parseStructTags — constant-time indexed access, not the
+// linear FieldByName walk. The reflect cost per Transition is one
+// indirect SetString, no map lookup.
 func setPhaseField(p Participant, sm *structMeta, newPhase string) error {
 	rv := reflect.ValueOf(p)
 	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
-	field := rv.FieldByName(sm.PhaseField.FieldName)
-	if !field.IsValid() {
-		return fmt.Errorf("lifecycle: phase field %q not found on Participant (registration validation should have caught this)",
-			sm.PhaseField.FieldName)
-	}
+	field := rv.FieldByIndex(sm.PhaseField.FieldIndex)
 	if !field.CanSet() {
 		return fmt.Errorf("lifecycle: phase field %q is not settable (Participant must be a pointer to a struct with exported phase field)",
 			sm.PhaseField.FieldName)
@@ -514,34 +542,13 @@ func setPhaseField(p Participant, sm *structMeta, newPhase string) error {
 	return nil
 }
 
-// keyForEntity returns the KV key for the entity. The Participant
-// declares its own KV key shape via the KVKey() method; this helper
-// is a single indirection so the Manager doesn't sprinkle p.KVKey()
-// calls through every op.
+// keyForEntity returns the KV key for the given entity ID in the
+// workflow's bucket. Pure dispatch — no allocation, no reflect.
 //
-// Resolving the key requires a Participant instance, but the
-// Manager often has only an EntityID string at the call site. Two
-// resolution patterns:
-//   - Caller has Participant in hand (Create, Update mutator):
-//     use p.KVKey() directly
-//   - Caller has only EntityID (Get, Transition pre-Get):
-//     fabricate a factory instance, set its ID field, call KVKey()
-//
-// This helper is the second path. The factory instance is discarded
-// after the KVKey() read, so no state escapes.
+// ADR-047's KVKey(entityID string) signature makes the key a pure
+// function of entityID, so the cached keySample (one instance per
+// registration, populated at Register time) can serve every call.
+// The receiver state isn't consulted; only the entityID arg.
 func keyForEntity(entityID string, reg *registration) string {
-	// Fabricate a factory instance, set its ID field via reflection,
-	// call KVKey(). The ID-field setter is bounded reflect (one
-	// SetString per call); KVKey() is a method call on the user's
-	// own code. The factory-allocated struct is discarded after.
-	sample := reg.factory()
-	rv := reflect.ValueOf(sample)
-	if rv.Kind() == reflect.Pointer {
-		rv = rv.Elem()
-	}
-	idField := rv.FieldByName(reg.structMeta.IDField.FieldName)
-	if idField.IsValid() && idField.CanSet() && idField.Kind() == reflect.String {
-		idField.SetString(entityID)
-	}
-	return sample.KVKey()
+	return reg.keySample.KVKey(entityID)
 }

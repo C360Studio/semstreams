@@ -15,6 +15,15 @@ type fieldMeta struct {
 	// FieldName is the Go struct field name (e.g. "OwnerOrgID").
 	FieldName string
 
+	// FieldIndex is the reflect index path to the field (suitable
+	// for reflect.Value.FieldByIndex). Cached at parse time so
+	// runtime callers (setPhaseField, Match comparisons) avoid the
+	// FieldByName linear-walk cost per call. The slice form
+	// supports embedded-struct paths if the harness ever needs to
+	// reach into embedded types; today every Participant field is
+	// at top level so the slice always has length 1.
+	FieldIndex []int
+
 	// JSONName is the JSON wire-field name (per the field's `json:`
 	// tag, falling back to the lowercased Go field name). Used by
 	// operator-patch routing because operator patches arrive as JSON
@@ -120,8 +129,9 @@ func parseStructTags(v reflect.Value) (*structMeta, error) {
 		jsonName := jsonNameForField(field)
 
 		meta := &fieldMeta{
-			FieldName: field.Name,
-			JSONName:  jsonName,
+			FieldName:  field.Name,
+			FieldIndex: []int{i},
+			JSONName:   jsonName,
 		}
 
 		tag, hasTag := field.Tag.Lookup("lifecycle")

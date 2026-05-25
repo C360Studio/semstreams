@@ -59,13 +59,23 @@ type Participant interface {
 	// provision their own buckets per their deployment topology.
 	KVBucket() string
 
-	// KVKey returns the KV key shape for this instance within the
-	// bucket. Apps choose the convention — common shapes include
-	// the bare EntityID, a slug-prefixed key (e.g. "mission.<id>"),
-	// or a multi-segment key for partitioned access. Whatever the
-	// app picks, it must be stable for the instance's lifetime
-	// (the harness uses it for both reads and writes).
-	KVKey() string
+	// KVKey returns the KV key shape for the given entity ID within
+	// the bucket. Apps choose the convention — common shapes include
+	// the bare entityID, a workflow-prefixed key (e.g. "mission."+id),
+	// or a multi-segment key for partitioned access.
+	//
+	// IMPORTANT: KVKey is a pure function of entityID. Implementations
+	// MUST NOT read other fields of the Participant struct — Manager
+	// caches one sample instance per registration and calls KVKey on
+	// it with the resolved entityID, so per-instance struct state
+	// (Phase, OwnerOrgID, etc.) is not populated at the call site.
+	// Apps needing multi-field key derivation should encode the
+	// extra context into the entityID itself (e.g. "<slug>.<id>")
+	// or capture immutable workflow-level state in package vars at
+	// Register time. This signature shape was chosen to keep
+	// Manager.Get/Create/Update reflect-free in the per-message
+	// hotpath — see ADR-047's "Participation is per-entity" section.
+	KVKey(entityID string) string
 
 	// ParentEntityID returns the parent workflow instance's EntityID,
 	// or empty string for root workflows. Enables parent/child

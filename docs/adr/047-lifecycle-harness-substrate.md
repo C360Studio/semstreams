@@ -136,8 +136,8 @@ type Participant interface {
     Workflow() string         // workflow type identifier
     Phase() string            // current lifecycle phase
     IsTerminal() bool         // true if entity is in terminal phase
-    KVBucket() string         // KV bucket this entity lives in
-    KVKey() string            // KV key shape for this entity
+    KVBucket() string                  // KV bucket this entity lives in
+    KVKey(entityID string) string      // KV key shape for the given entity ID
 
     // ParentEntityID returns the parent workflow instance ID, or
     // empty for root workflows. Enables parent/child workflow

@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -20,13 +21,32 @@ type missionState struct {
 	ParentMissionF string `json:"parent_mission,omitempty"`
 }
 
-func (m *missionState) EntityID() string       { return m.EntityIDF }
-func (m *missionState) Workflow() string       { return "mission" }
-func (m *missionState) Phase() string          { return m.PhaseF }
-func (m *missionState) IsTerminal() bool       { return missionTransitions.IsTerminal(m.PhaseF) }
-func (m *missionState) KVBucket() string       { return "MISSIONS" }
-func (m *missionState) KVKey() string          { return "mission." + m.EntityIDF }
-func (m *missionState) ParentEntityID() string { return m.ParentMissionF }
+func (m *missionState) EntityID() string             { return m.EntityIDF }
+func (m *missionState) Workflow() string             { return "mission" }
+func (m *missionState) Phase() string                { return m.PhaseF }
+func (m *missionState) IsTerminal() bool             { return missionTransitions.IsTerminal(m.PhaseF) }
+func (m *missionState) KVBucket() string             { return "MISSIONS" }
+func (m *missionState) KVKey(entityID string) string { return "mission." + entityID }
+func (m *missionState) ParentEntityID() string       { return m.ParentMissionF }
+
+// valueMission is the deliberately-broken Participant shape for the
+// "factory must return pointer" Register-time rejection test. Value-
+// receiver methods + factory-returns-by-value. NOT a usable
+// Participant in production — exists solely so the test fixture
+// reaches the rv.Kind() != reflect.Pointer rejection path in
+// Manager.Register.
+type valueMission struct {
+	EntityIDF string `json:"entity_id" lifecycle:"id"`
+	PhaseF    string `json:"phase" lifecycle:"phase"`
+}
+
+func (v valueMission) EntityID() string             { return v.EntityIDF }
+func (v valueMission) Workflow() string             { return "value-mission" }
+func (v valueMission) Phase() string                { return v.PhaseF }
+func (v valueMission) IsTerminal() bool             { return false }
+func (v valueMission) KVBucket() string             { return "MISSIONS" }
+func (v valueMission) KVKey(entityID string) string { return "v." + entityID }
+func (v valueMission) ParentEntityID() string       { return "" }
 
 var missionTransitions = Transitions{
 	"planning":  {"flying", "aborted"},
@@ -104,43 +124,28 @@ func TestManager_Register_RejectsFactoryReturningNil(t *testing.T) {
 }
 
 func TestManager_Register_RejectsFactoryReturningValue(t *testing.T) {
-	// json.Unmarshal can't populate value-typed Participants; the
-	// reflect SetString on the phase field would also panic on a
-	// non-addressable value. Reject at Register time so the wiring
-	// bug surfaces at startup.
-	type valueMission struct{ missionState }
-	type valueImpl struct {
-		MissionState valueMission
-	}
-	_ = valueImpl{}
-	// Constructing a value-typed Participant requires a non-pointer
-	// return. The Participant interface is satisfied by missionState
-	// (value receiver methods would work but we use pointer
-	// receivers); valueFactory returns the value directly, not a
-	// pointer.
-	valueFactory := func() Participant {
-		// missionState's methods are pointer-receiver, so we have
-		// to return *missionState via a dereference trick — but
-		// the simpler shape is: a separate type that implements
-		// Participant with value receivers, intentionally NOT
-		// returning a pointer. For this test the goal is just to
-		// trigger the "non-pointer factory return" rejection.
-		var ms = missionState{}
-		// reflect.ValueOf(ms).Kind() == reflect.Struct, not Pointer.
-		// We need to return ms as Participant, but missionState's
-		// methods are on the pointer receiver. Cast through any:
-		type valueParticipant struct{ s missionState }
-		// Simpler: just define an inline type with value receivers.
-		// Skip the gymnastics — return missionState by value.
-		_ = ms
-		return nil // can't easily express value-typed Participant inline
-	}
+	// Value-typed Participant returns from the factory are rejected
+	// at Register time. json.Unmarshal can't populate value
+	// receivers (no addressability), and reflect.Value.SetString on
+	// the phase field would panic on a non-pointer. Catching this
+	// at Register surfaces the wiring bug at startup, not at the
+	// first Get/Transition attempt in prod.
+	//
+	// Uses the package-scoped valueMission fixture (value-receiver
+	// methods, factory returns by value) so the test exercises the
+	// REAL "non-pointer factory return" code path at manager.go's
+	// rv.Kind() != reflect.Pointer check.
 	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
 		return newKVMockStore(nil), nil
 	})
-	err := mgr.Register("mission", valueFactory, missionTransitions)
+	err := mgr.Register("value-mission", func() Participant {
+		return valueMission{EntityIDF: "x", PhaseF: "planning"}
+	}, missionTransitions)
 	if err == nil {
-		t.Fatal("nil-returning factory must error (this is the simplest hostile shape)")
+		t.Fatal("value-typed factory return must be rejected")
+	}
+	if !strings.Contains(err.Error(), "pointer") {
+		t.Errorf("rejection should mention 'pointer' for operator debugging, got %q", err)
 	}
 }
 
@@ -284,6 +289,110 @@ func TestManager_Update_RetriesOnCASConflict(t *testing.T) {
 	got, _ := mgr.Get(context.Background(), "mission", "u-3")
 	if got.(*missionState).OwnerOrgIDF != "after-retry" {
 		t.Errorf("retry didn't apply final mutation: %+v", got)
+	}
+}
+
+func TestManager_Update_ConcurrentMutationsSerialize(t *testing.T) {
+	// N goroutines mutate the same entity concurrently. Each
+	// appends a unique tag to the OwnerOrgIDF field. After all
+	// goroutines return, the final field value must contain
+	// every tag (none lost to silent CAS-conflict drops) and no
+	// duplicates (the CAS retry loop must read-then-write
+	// atomically — read-stale-then-write-stale would either
+	// double-append or drop entries).
+	//
+	// N is bounded by updateRetries because of the convergence
+	// arithmetic: with N writers, the worst-case loser needs
+	// up to N-1 retries (each "round" of retries advances exactly
+	// one writer). Using N == updateRetries-1 keeps the test
+	// reliably non-flaky while still exercising the full CAS-
+	// retry serialization path. The "what happens under
+	// budget-exhaustion contention" case is covered separately
+	// by TestManager_Update_ExhaustsRetriesUnderPersistentConflict.
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "concurrent", "planning")
+
+	const goroutines = updateRetries - 1
+	tags := make([]string, goroutines)
+	for i := range goroutines {
+		tags[i] = fmt.Sprintf("tag-%02d", i)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := range goroutines {
+		go func(tag string) {
+			defer wg.Done()
+			err := mgr.Update(context.Background(), "mission", "concurrent", func(p Participant) error {
+				ms := p.(*missionState)
+				if ms.OwnerOrgIDF == "" {
+					ms.OwnerOrgIDF = tag
+				} else {
+					ms.OwnerOrgIDF = ms.OwnerOrgIDF + "," + tag
+				}
+				return nil
+			})
+			if err != nil {
+				t.Errorf("concurrent Update %q: %v", tag, err)
+			}
+		}(tags[i])
+	}
+	wg.Wait()
+
+	got, err := mgr.Get(context.Background(), "mission", "concurrent")
+	if err != nil {
+		t.Fatalf("Get after concurrent updates: %v", err)
+	}
+	final := got.(*missionState).OwnerOrgIDF
+	parts := strings.Split(final, ",")
+	if len(parts) != goroutines {
+		t.Fatalf("expected %d tags in final value, got %d: %q", goroutines, len(parts), final)
+	}
+	seen := make(map[string]int, goroutines)
+	for _, part := range parts {
+		seen[part]++
+	}
+	if len(seen) != goroutines {
+		t.Errorf("expected %d distinct tags, got %d (dup detection): %v", goroutines, len(seen), seen)
+	}
+	for _, tag := range tags {
+		if seen[tag] != 1 {
+			t.Errorf("tag %q appeared %d times, expected 1", tag, seen[tag])
+		}
+	}
+}
+
+func TestManager_Update_MutatorCanSetPhaseDirectly(t *testing.T) {
+	// Current behavior: Manager.Update's mutator can mutate the
+	// Phase field directly without going through Transition. This
+	// bypasses the transitions-table validation that Transition
+	// applies. This test LOCKS the current behavior — either it
+	// continues to be allowed (apps that need it have an escape
+	// hatch) OR a future change deliberately closes it (and
+	// updates the test).
+	//
+	// Discipline call: apps SHOULD use Transition for phase
+	// changes; the convenience of mutator-can-do-anything is
+	// occasionally useful for state-recovery shims (e.g. clearing
+	// drift on a known-corrupt instance). Documented here so the
+	// behavior isn't ambiguous in either direction.
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "direct", "planning")
+
+	err := mgr.Update(context.Background(), "mission", "direct", func(p Participant) error {
+		// Skip from planning to completed — not a declared edge
+		// in the transitions table, but Update doesn't validate
+		// edges (Transition does). The Update succeeds.
+		ms := p.(*missionState)
+		ms.PhaseF = "completed"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("mutator setting Phase directly should succeed (Update doesn't validate edges): %v", err)
+	}
+	got, _ := mgr.Get(context.Background(), "mission", "direct")
+	if got.Phase() != "completed" {
+		t.Errorf("direct Phase mutation didn't persist: %q", got.Phase())
 	}
 }
 
