@@ -249,6 +249,24 @@ func (m *Manager) getWithRevision(ctx context.Context, reg *registration, entity
 		return nil, 0, fmt.Errorf("lifecycle: unmarshal entity %q (workflow %q): %w",
 			entityID, reg.workflow, err)
 	}
+	// Drift detection — resolves the TODO(manager) marker on
+	// Participant.Phase. An entity whose Phase isn't in the
+	// registered Transitions table is silently treated as
+	// terminal by Transitions.IsTerminal (defensive default), so
+	// it never appears in Active=true lists where an operator
+	// would notice it. Surface the drift loudly via Warn so the
+	// log signal makes the silent degradation visible. Apps
+	// wanting structured detection rather than log-scraping can
+	// add a Degraded-bool wrapper in a future API extension —
+	// log-only is the v1 surface (see reviewer m2 on PR 1b core
+	// + the Degraded-bool precedent from PR #137 / GH #120).
+	if _, declared := reg.transitions[target.Phase()]; !declared {
+		m.logger.Warn("lifecycle: entity phase not declared in transitions table — silent drift detected",
+			slog.String("workflow", reg.workflow),
+			slog.String("entity_id", entityID),
+			slog.String("phase", target.Phase()),
+			slog.Any("declared_phases", reg.transitions.Phases()))
+	}
 	return target, revision, nil
 }
 

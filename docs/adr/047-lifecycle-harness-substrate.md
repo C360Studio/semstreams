@@ -352,6 +352,49 @@ match_field)` for fast filter resolution at scale. Indexable fields
 opt-in via struct tag (`lifecycle:"indexable"`). Triggered when an
 operator demonstrates a bottleneck — not before.
 
+### Scaling cliff (operator guidance)
+
+The v1 linear-scan paths in `Manager.List`, `Manager.Children`, and
+`Manager.Ancestors` are O(bucket-size) per call. Two scaling cliffs
+operators should know about:
+
+- **`Manager.List` with `Match`**: ~10K active instances per
+  workflow is the rough threshold where the per-call scan cost
+  starts mattering for operator-dashboard responsiveness. Cheap
+  filters (`Phase`, `Active`, `UpdatedAfter`) are applied before
+  `Match`'s reflection step, so workflows whose dashboards
+  predominantly filter on phase will scale further. File a
+  bottleneck issue when an operator observes List-call latency
+  in dashboard refresh; the v2 secondary-index work consumes
+  `lifecycle:"indexable"`-tagged fields and is the upgrade path.
+- **`Manager.Ancestors` and `Manager.Children`**: cross-workflow
+  scans are O(sum-of-bucket-sizes) per call because they walk
+  every registered workflow's bucket. Apps with deep parent-
+  child chains in high-cardinality workflows feel this; apps
+  whose parent-child relationships stay within a single workflow
+  should prefer `List(workflow, Match{"parent_field": parentID})`
+  for the children case (stays within one bucket and benefits
+  from the v2 secondary index when it lands).
+
+Neither `Manager.Get` nor `Manager.Update` is in this scaling
+class — they're O(1) per call, suitable for per-message
+coordinator hotpaths. `List`/`Watch`/`History`/`Children`/
+`Ancestors` are operator-API-shaped (dashboard refresh, debugging,
+audit) not per-message-shaped.
+
+### Phase drift detection
+
+`Manager.Get` (and the `Get` path used by `List`) validate that the
+loaded entity's `Phase()` is declared in the registered
+`Transitions` table. Drift surfaces as a `slog.Warn` log line
+naming the entity, the undeclared phase, and the declared phase
+set. Detection is log-only in v1 — apps wanting structured drift
+detection (e.g. a `Degraded bool` field on the returned wrapper)
+add it as a future API extension. The log signal is enough to
+make the silent degradation visible without a wire-format change;
+the `Degraded`-bool precedent (PR #137 / GH #120) is the
+upgrade path when an operator demonstrates the need.
+
 ### Migration from `pkg/workflow`
 
 Greenfield rip-and-replace:

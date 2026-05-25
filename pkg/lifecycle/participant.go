@@ -35,15 +35,15 @@ type Participant interface {
 	// "flying", "completed"). Must be a key in the Transitions
 	// table registered for this Workflow.
 	//
-	// TODO(manager): Manager.Get / Manager.List should validate that
-	// the returned Phase is actually declared in the registered
-	// Transitions table for this workflow type, and surface drift
-	// loudly (degraded-wrapper or error per the Degraded-bool
-	// precedent from PR #137 / GH #120). Without that check, an
-	// entity whose Phase() returns "completed-with-typo" silently
-	// reads as terminal forever (Transitions.IsTerminal defaults
-	// unknown phases to terminal as a defensive fallback) and never
-	// surfaces in Active=true lists where an operator would notice.
+	// Drift detection: Manager.Get / Manager.List emit a Warn log
+	// when Phase() returns a value not declared in the registered
+	// Transitions table — the entity is silently degraded
+	// (Transitions.IsTerminal defaults unknown phases to terminal
+	// as a defensive fallback) but the log signal makes the
+	// degradation visible to operators. Apps wanting structured
+	// detection rather than log-scraping can add a Degraded-bool
+	// wrapper in a future API extension; log-only is the v1
+	// surface.
 	Phase() string
 
 	// IsTerminal returns true when the entity is in a phase with no

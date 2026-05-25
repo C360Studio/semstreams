@@ -259,3 +259,237 @@ func TestManager_History_UnknownWorkflow(t *testing.T) {
 		t.Fatalf("History on unregistered workflow should error ErrWorkflowNotRegistered, got %v", err)
 	}
 }
+
+// --- UpdateFromOperator ---
+
+func TestManager_UpdateFromOperator_HappyPath(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "ufo-1", "planning")
+
+	err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-1", map[string]any{
+		"owner_org_id": "newcorp",
+	})
+	if err != nil {
+		t.Fatalf("UpdateFromOperator: %v", err)
+	}
+	got, _ := mgr.Get(context.Background(), "mission", "ufo-1")
+	if got.(*missionState).OwnerOrgIDF != "newcorp" {
+		t.Errorf("patch didn't apply: %+v", got)
+	}
+}
+
+func TestManager_UpdateFromOperator_RejectsNonOperatorWritableField(t *testing.T) {
+	// Phase is tagged readonly (implicit via lifecycle:"phase").
+	// Patch must be rejected with ErrFieldNotOperatorWritable.
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "ufo-2", "planning")
+
+	err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-2", map[string]any{
+		"phase": "flying", // not operator_writable
+	})
+	if !errors.Is(err, ErrFieldNotOperatorWritable) {
+		t.Fatalf("operator patch of phase should error ErrFieldNotOperatorWritable, got %v", err)
+	}
+}
+
+func TestManager_UpdateFromOperator_RejectsUnknownKey(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "ufo-3", "planning")
+
+	err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-3", map[string]any{
+		"frobnicator_count": 42,
+	})
+	if err == nil || !strings.Contains(err.Error(), "frobnicator_count") {
+		t.Fatalf("unknown patch key should reject naming the key, got %v", err)
+	}
+}
+
+func TestManager_UpdateFromOperator_RejectsTypeMismatch(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "ufo-4", "planning")
+
+	err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-4", map[string]any{
+		"owner_org_id": 42, // int, but field is string
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot assign") {
+		t.Fatalf("type-mismatched patch should reject with assign-mention, got %v", err)
+	}
+}
+
+func TestManager_UpdateFromOperator_EmptyPatchIsNoOp(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "ufo-5", "planning")
+
+	if err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-5", nil); err != nil {
+		t.Errorf("nil patch should be no-op, got %v", err)
+	}
+	if err := mgr.UpdateFromOperator(context.Background(), "mission", "ufo-5", map[string]any{}); err != nil {
+		t.Errorf("empty patch should be no-op, got %v", err)
+	}
+}
+
+// --- Children ---
+
+func TestManager_Children_FindsByParentEntityID(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "parent", PhaseF: "planning"}))
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "child-1", PhaseF: "planning", ParentMissionF: "parent"}))
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "child-2", PhaseF: "planning", ParentMissionF: "parent"}))
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "orphan", PhaseF: "planning"}))
+
+	got, err := mgr.Children(context.Background(), "parent")
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 children, got %d: %+v", len(got), got)
+	}
+	seen := make(map[string]bool)
+	for _, p := range got {
+		seen[p.EntityID()] = true
+	}
+	for _, want := range []string{"child-1", "child-2"} {
+		if !seen[want] {
+			t.Errorf("Children missing %q", want)
+		}
+	}
+}
+
+func TestManager_Children_EmptyWhenNoChildren(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "alone", "planning")
+	got, err := mgr.Children(context.Background(), "alone")
+	if err != nil {
+		t.Fatalf("Children: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 children, got %d", len(got))
+	}
+}
+
+// --- Ancestors ---
+
+func TestManager_Ancestors_WalksParentChain(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "root", PhaseF: "planning"}))
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "mid", PhaseF: "planning", ParentMissionF: "root"}))
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "leaf", PhaseF: "planning", ParentMissionF: "mid"}))
+
+	got, err := mgr.Ancestors(context.Background(), "leaf")
+	if err != nil {
+		t.Fatalf("Ancestors: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 ancestors (mid, root), got %d: %+v", len(got), got)
+	}
+	if got[0].EntityID() != "mid" || got[1].EntityID() != "root" {
+		t.Errorf("Ancestors order wrong; want [mid, root], got [%s, %s]",
+			got[0].EntityID(), got[1].EntityID())
+	}
+}
+
+func TestManager_Ancestors_EmptyForRoot(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "rootless", "planning")
+	got, err := mgr.Ancestors(context.Background(), "rootless")
+	if err != nil {
+		t.Fatalf("Ancestors: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 ancestors for root entity, got %d", len(got))
+	}
+}
+
+func TestManager_Ancestors_NotFoundForMissingEntity(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	_, err := mgr.Ancestors(context.Background(), "never-existed")
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("Ancestors on missing entity should error ErrEntityNotFound, got %v", err)
+	}
+}
+
+func TestManager_Ancestors_TruncatesOnBrokenChain(t *testing.T) {
+	// Parent reference points to an entity that doesn't exist —
+	// walk truncates loudly via Warn log, returns what it found.
+	mgr, _ := newTestManager(t)
+	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "orphan", PhaseF: "planning", ParentMissionF: "missing-parent"}))
+	got, err := mgr.Ancestors(context.Background(), "orphan")
+	if err != nil {
+		t.Fatalf("Ancestors with broken chain should not error, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("broken-chain walk should return empty, got %d entries", len(got))
+	}
+}
+
+// --- WorkflowDefinition introspection ---
+
+func TestManager_GetWorkflowDefinition_HappyPath(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	def, err := mgr.GetWorkflowDefinition("mission")
+	if err != nil {
+		t.Fatalf("GetWorkflowDefinition: %v", err)
+	}
+	if def.Workflow != "mission" {
+		t.Errorf("Workflow wrong: %q", def.Workflow)
+	}
+	if def.KVBucket != "MISSIONS" {
+		t.Errorf("KVBucket wrong: %q", def.KVBucket)
+	}
+	if len(def.Transitions) != len(missionTransitions) {
+		t.Errorf("Transitions count wrong: %d vs %d", len(def.Transitions), len(missionTransitions))
+	}
+	// Sorted output for operator-dashboard stability (PR 1a lock-in).
+	wantFields := []string{"owner_org_id"}
+	if len(def.OperatorWritableFields) != len(wantFields) {
+		t.Errorf("OperatorWritableFields count wrong: got %v, want %v",
+			def.OperatorWritableFields, wantFields)
+	}
+}
+
+func TestManager_GetWorkflowDefinition_UnknownWorkflow(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	_, err := mgr.GetWorkflowDefinition("never-registered")
+	if !errors.Is(err, ErrWorkflowNotRegistered) {
+		t.Fatalf("expected ErrWorkflowNotRegistered, got %v", err)
+	}
+}
+
+func TestManager_ListWorkflows_SortedByName(t *testing.T) {
+	// Register two workflows, verify sorted output.
+	store := newKVMockStore(nil)
+	mgr := newManagerForTest(nil, func(_ string) (kvStore, error) {
+		return store, nil
+	})
+	must(t, mgr.Register("mission", missionFactory, missionTransitions))
+	must(t, mgr.Register("alt", func() Participant { return &altParticipant{} },
+		Transitions{"a": {"b"}, "b": {}}))
+
+	defs := mgr.ListWorkflows()
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 workflow defs, got %d", len(defs))
+	}
+	if defs[0].Workflow != "alt" || defs[1].Workflow != "mission" {
+		t.Errorf("ListWorkflows should be sorted by name; got [%q, %q]",
+			defs[0].Workflow, defs[1].Workflow)
+	}
+}
+
+// altParticipant is a minimal second Participant impl for the
+// ListWorkflows-sorted-output test. Shares the bucket with
+// mission (deliberate — keeps the test fixture simple); apps
+// in production would use separate buckets. Top-level fields
+// only — parseStructTags doesn't recurse into nested struct
+// types per the foundation contract.
+type altParticipant struct {
+	EntityIDF string `json:"entity_id" lifecycle:"id"`
+	PhaseF    string `json:"phase" lifecycle:"phase"`
+}
+
+func (a *altParticipant) EntityID() string             { return a.EntityIDF }
+func (a *altParticipant) Workflow() string             { return "alt" }
+func (a *altParticipant) Phase() string                { return a.PhaseF }
+func (a *altParticipant) IsTerminal() bool             { return a.PhaseF == "b" }
+func (a *altParticipant) KVBucket() string             { return "MISSIONS" }
+func (a *altParticipant) KVKey(entityID string) string { return "alt." + entityID }
+func (a *altParticipant) ParentEntityID() string       { return "" }

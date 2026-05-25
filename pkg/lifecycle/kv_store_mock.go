@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -191,13 +192,7 @@ func (s *kvMockStore) ListKeys(_ context.Context) ([]string, error) {
 			keys = append(keys, k)
 		}
 	}
-	// Cheap stable order — sort.Strings rather than introducing
-	// a sort import here when one's already in scope elsewhere.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
-			keys[j-1], keys[j] = keys[j], keys[j-1]
-		}
-	}
+	sort.Strings(keys)
 	return keys, nil
 }
 

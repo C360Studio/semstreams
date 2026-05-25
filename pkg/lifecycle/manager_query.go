@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -176,6 +177,247 @@ func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participan
 		}
 	}()
 	return out, nil
+}
+
+// UpdateFromOperator applies a patch map to the entity, validating
+// that every patched field is tagged `lifecycle:"operator_writable"`
+// in the registered state struct. Default-deny: fields without the
+// tag are rejected with ErrFieldNotOperatorWritable. The patch is
+// applied atomically under Manager.Update's CAS-retry contract.
+//
+// Patch values are STRICT-typed against the target field's concrete
+// type (reflect.Type.AssignableTo); a Go-typed mismatch (e.g. int
+// against a uint32 field) is rejected. HTTP gateway components
+// (PR 3 of the ADR-047 bundle) handle query-string-to-Go-type
+// coercion at the wire boundary — that is the right place for
+// permissive parsing of operator-supplied values, NOT inside
+// UpdateFromOperator.
+//
+// Returns ErrEntityNotFound if the entity doesn't exist (same as
+// Update). Returns ErrFieldNotOperatorWritable for the first
+// disallowed key encountered. Returns a wrapped type-mismatch
+// error for the first incompatible patch value.
+func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error {
+	if len(patch) == 0 {
+		return nil // no-op patch is success — operators sometimes
+		// hit endpoints with empty bodies and shouldn't see errors
+	}
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return err
+	}
+
+	// Pre-validate the entire patch against operator_writable +
+	// type compatibility BEFORE the Update mutator runs. Rejecting
+	// late inside the mutator would cost a KV round-trip for a
+	// patch that was never going to apply.
+	plan := make([]operatorPatchSpec, 0, len(patch))
+	for key, value := range patch {
+		field, ok := reg.structMeta.FieldsByJSONName[key]
+		if !ok {
+			return fmt.Errorf("lifecycle: UpdateFromOperator key %q does not match any field on workflow %q",
+				key, reg.workflow)
+		}
+		if !field.OperatorWritable {
+			return fmt.Errorf("%w: workflow=%q field=%q",
+				ErrFieldNotOperatorWritable, reg.workflow, key)
+		}
+		plan = append(plan, operatorPatchSpec{
+			field:    field,
+			wantVal:  value,
+			jsonName: key,
+		})
+	}
+
+	return m.Update(ctx, workflow, entityID, func(p Participant) error {
+		rv := reflect.ValueOf(p)
+		if rv.Kind() == reflect.Pointer {
+			rv = rv.Elem()
+		}
+		for _, spec := range plan {
+			target := rv.FieldByIndex(spec.field.FieldIndex)
+			patchVal := reflect.ValueOf(spec.wantVal)
+			// nil-valued patches set the field to its zero
+			// value — matches operator intent "clear this field."
+			if !patchVal.IsValid() {
+				target.SetZero()
+				continue
+			}
+			if !patchVal.Type().AssignableTo(target.Type()) {
+				return fmt.Errorf("lifecycle: UpdateFromOperator field %q: cannot assign %v to %v",
+					spec.jsonName, patchVal.Type(), target.Type())
+			}
+			target.Set(patchVal)
+		}
+		return nil
+	})
+}
+
+// operatorPatchSpec is the pre-validated, per-patch-key wiring
+// resolved at the top of UpdateFromOperator. Cached locally rather
+// than computed inside the mutator so CAS-retry doesn't re-validate
+// on every iteration.
+type operatorPatchSpec struct {
+	field    *fieldMeta
+	wantVal  any
+	jsonName string
+}
+
+// Children returns Participants whose ParentEntityID() equals the
+// given parentEntityID, across ALL registered workflows. v1
+// implementation is a linear scan over every registered workflow's
+// bucket; complexity is O(sum-of-bucket-sizes) per call.
+//
+// Cross-workflow semantics: a parent in workflow A can have
+// children in workflow B (e.g. semspec's Plan-owns-Requirements
+// pattern — Plan and Requirement are distinct workflows). Children
+// returns all of them merged into one slice; sort caller-side if
+// needed.
+//
+// Scaling consideration: high parent-child fan-out apps should
+// prefer List(workflow, Match{"parent_field": parentID}) where
+// parent_field is the JSON name of the ParentEntityID-backing
+// struct field. That stays within one workflow's bucket and works
+// with the v2 secondary-index path when it lands. Children is the
+// generic helper for the cross-workflow case; List + Match is the
+// scaling-friendly path for the common intra-workflow case.
+func (m *Manager) Children(ctx context.Context, parentEntityID string) ([]Participant, error) {
+	m.mu.RLock()
+	regs := make([]*registration, 0, len(m.registrations))
+	for _, reg := range m.registrations {
+		regs = append(regs, reg)
+	}
+	m.mu.RUnlock()
+
+	var out []Participant
+	for _, reg := range regs {
+		participants, err := m.List(ctx, reg.workflow, ListOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle: Children scan workflow %q: %w", reg.workflow, err)
+		}
+		for _, p := range participants {
+			if p.ParentEntityID() == parentEntityID {
+				out = append(out, p)
+			}
+		}
+	}
+	return out, nil
+}
+
+// Ancestors returns Participants walking from the given entityID
+// up the parent chain, ROOT-FIRST (the entity itself is NOT
+// included; ancestors[0] is the immediate parent, ancestors[last]
+// is the root). Stops when ParentEntityID() returns empty string
+// or when a parent can't be resolved (logged + walk truncated).
+//
+// Cross-workflow: each ancestor may be in a different workflow
+// than the starting entity. v1 implementation resolves each
+// ancestor by scanning every registered workflow's bucket for the
+// entityID — O(workflows × bucket-size) per ancestor lookup. Apps
+// with deep parent chains in high-cardinality workflows feel this;
+// the v2 secondary-index work (ADR-047 § KV indexing) makes the
+// per-ancestor lookup constant-time.
+//
+// Returns empty slice (not error) for entities with no parent
+// (already at root). Returns ErrEntityNotFound if the starting
+// entityID itself can't be resolved.
+func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant, error) {
+	current, err := m.findByEntityID(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+	var out []Participant
+	parentID := current.ParentEntityID()
+	for parentID != "" {
+		parent, err := m.findByEntityID(ctx, parentID)
+		if err != nil {
+			if errors.Is(err, ErrEntityNotFound) {
+				// Truncate the walk loudly — the chain is
+				// broken (parent referenced but deleted or
+				// never created). Log so operators see the
+				// dangling ref; return what we have.
+				m.logger.Warn("lifecycle: Ancestors walk truncated — parent not found",
+					slog.String("starting_entity", entityID),
+					slog.String("missing_parent", parentID))
+				return out, nil
+			}
+			return nil, err
+		}
+		out = append(out, parent)
+		parentID = parent.ParentEntityID()
+	}
+	return out, nil
+}
+
+// findByEntityID resolves an entityID to a Participant by scanning
+// every registered workflow's bucket. Returns ErrEntityNotFound if
+// the ID isn't present in any bucket.
+//
+// Internal helper for Ancestors; not exposed publicly because the
+// linear-scan cost across all workflows is bounded only by the
+// total instance count. Apps wanting "which workflow does this ID
+// belong to" should track that mapping themselves.
+func (m *Manager) findByEntityID(ctx context.Context, entityID string) (Participant, error) {
+	m.mu.RLock()
+	regs := make([]*registration, 0, len(m.registrations))
+	for _, reg := range m.registrations {
+		regs = append(regs, reg)
+	}
+	m.mu.RUnlock()
+
+	for _, reg := range regs {
+		p, err := m.Get(ctx, reg.workflow, entityID)
+		if err == nil {
+			return p, nil
+		}
+		if !errors.Is(err, ErrEntityNotFound) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("%w: entity_id=%q (scanned %d workflows)",
+		ErrEntityNotFound, entityID, len(regs))
+}
+
+// GetWorkflowDefinition returns the WorkflowDef for the given
+// workflow type, suitable for operator-dashboard introspection
+// (state-machine diagram rendering, patchable-field listing, etc.).
+//
+// Returns ErrWorkflowNotRegistered if the workflow isn't registered.
+func (m *Manager) GetWorkflowDefinition(workflow string) (WorkflowDef, error) {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return WorkflowDef{}, err
+	}
+	return WorkflowDef{
+		Workflow:               reg.workflow,
+		Transitions:            reg.transitions,
+		KVBucket:               reg.bucket,
+		OperatorWritableFields: reg.structMeta.OperatorWritableJSONNames(),
+	}, nil
+}
+
+// ListWorkflows returns the WorkflowDef for every registered
+// workflow type, sorted by workflow name for deterministic
+// operator-dashboard output across restarts.
+func (m *Manager) ListWorkflows() []WorkflowDef {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.registrations))
+	for name := range m.registrations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]WorkflowDef, 0, len(names))
+	for _, name := range names {
+		reg := m.registrations[name]
+		out = append(out, WorkflowDef{
+			Workflow:               reg.workflow,
+			Transitions:            reg.transitions,
+			KVBucket:               reg.bucket,
+			OperatorWritableFields: reg.structMeta.OperatorWritableJSONNames(),
+		})
+	}
+	return out
 }
 
 // History returns the phase-transition history for the entity at
