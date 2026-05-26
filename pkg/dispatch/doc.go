@@ -50,7 +50,11 @@
 //	if err != nil {
 //	    return fmt.Errorf("dispatch new: %w", err)
 //	}
-//	defer d.Stop(context.Background())
+//	defer func() {
+//	    if err := d.Stop(context.Background()); err != nil {
+//	        c.logger.Warn("dispatch stop", slog.String("error", err.Error()))
+//	    }
+//	}()
 //
 //	for _, req := range filterReady(...) {
 //	    if err := d.Submit(req); err != nil {

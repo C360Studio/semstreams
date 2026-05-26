@@ -159,16 +159,19 @@ func (w *completionWatcher[W]) handleUpdate(entry jetstream.KeyValueEntry) {
 	}
 
 	// OnComplete may take time (logging, downstream notification);
-	// don't hold any locks during the call. The map cleanup is
-	// after OnComplete returns so a panic in OnComplete leaves the
-	// tracking entry intact for a (manual or process-restart)
-	// re-attempt. If that's the wrong policy, a deferred forget
-	// inside OnComplete-guarded recover would change it; for v1
-	// the "keep entry on panic" semantics matches "OnComplete
-	// errors leave the tracking observable to the next Submit/Stop
-	// path."
+	// don't hold any locks during the call. Symmetric "completion-
+	// attempt fired" policy: the tracking entry is dropped after
+	// OnComplete returns regardless of whether OnComplete errored
+	// — the completion signal was observed, and the dispatcher's
+	// contract is "fire OnComplete once per matching KV write,"
+	// not "fire until OnComplete succeeds." Callers wanting retry
+	// semantics handle them inside OnComplete or by re-submitting.
+	// Panics: NOT recovered here; they propagate up the watcher
+	// goroutine and crash the process (matches Go convention —
+	// uncaught panics in framework goroutines are programming
+	// errors, not runtime conditions to swallow).
 	if err := w.onComplete(w.ctx, work); err != nil {
-		w.logger.Warn("dispatch: OnComplete returned error",
+		w.logger.Warn("dispatch: OnComplete returned error (tracking entry dropped anyway — completion signal was observed)",
 			slog.String("key", key),
 			slog.String("error", err.Error()))
 	}

@@ -190,15 +190,32 @@ func (d *BoundedDispatcher[W]) Submit(work W) error {
 // canceling the caller's own context and letting Process see the
 // cancellation.
 func (d *BoundedDispatcher[W]) Stop(ctx context.Context) error {
-	// Compute pool-stop timeout from the context's deadline if
-	// present; fall back to a reasonable default otherwise. The
+	// Compute pool-stop timeout from the context's deadline. The
 	// underlying pool.Stop takes a duration not a ctx (legacy API),
 	// so this is the translation layer.
-	timeout := 30 * time.Second
+	//
+	// Three cases:
+	//   - ctx has a deadline in the future → use the remaining time
+	//   - ctx has a deadline already in the past → honor caller's
+	//     intent ("stop immediately") by passing 0 to pool.Stop;
+	//     it will return ErrStopTimeout almost immediately, the
+	//     watcher still stops below
+	//   - ctx has no deadline (context.Background or context.TODO)
+	//     → fall back to a reasonable 30s default; Debug log so
+	//     operators tracing slow shutdowns can correlate
+	const noDeadlineDefault = 30 * time.Second
+	var timeout time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
 			timeout = remaining
 		}
+		// remaining <= 0 → timeout stays 0 → pool.Stop hits its
+		// timeout branch immediately (caller's stated intent).
+	} else {
+		timeout = noDeadlineDefault
+		d.logger.Debug("dispatch: Stop using default pool-stop timeout (no ctx deadline)",
+			slog.Duration("timeout", timeout))
 	}
 	if err := d.pool.Stop(timeout); err != nil && !errors.Is(err, worker.ErrPoolStopped) {
 		// Pool stop error — log but continue to shut down the

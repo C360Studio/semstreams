@@ -70,7 +70,11 @@ func TestIntegration_CompletionWatcherFiresOnKVWrite(t *testing.T) {
 		},
 	}, Deps{NATSClient: client})
 	require.NoError(t, err)
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Logf("dispatcher stop: %v", err)
+		}
+	}()
 
 	// Submit a work item — registers tracking for key
 	// "completion.task-001".
@@ -117,7 +121,11 @@ func TestIntegration_CompletionWatcherIgnoresUntrackedWrites(t *testing.T) {
 		},
 	}, Deps{NATSClient: client})
 	require.NoError(t, err)
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Logf("dispatcher stop: %v", err)
+		}
+	}()
 
 	// Give the watcher a moment to process bootstrap.
 	time.Sleep(500 * time.Millisecond)
@@ -159,7 +167,11 @@ func TestIntegration_CompletionWatcherSubmitBeforeProcessRace(t *testing.T) {
 		},
 	}, Deps{NATSClient: client})
 	require.NoError(t, err)
-	defer d.Stop(context.Background())
+	defer func() {
+		if err := d.Stop(context.Background()); err != nil {
+			t.Logf("dispatcher stop: %v", err)
+		}
+	}()
 
 	const N = 20
 	var wg sync.WaitGroup
