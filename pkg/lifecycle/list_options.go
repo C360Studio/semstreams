@@ -1,12 +1,10 @@
 package lifecycle
 
-import "time"
-
 // ListOptions parameterizes Manager.List queries against a registered
 // workflow type. All fields are optional; the zero value lists every
 // instance in the workflow's KV bucket (subject to Limit / Offset).
 //
-// Match semantics:
+// Filter semantics:
 //
 //   - Phase filters to entries whose Participant.Phase() equals the
 //     given value. Empty string means any phase.
@@ -16,10 +14,6 @@ import "time"
 //     terminal status — to list only terminal entries, set
 //     ListOptions.Phase to a specific terminal phase OR add a Match
 //     entry on a field that distinguishes them.
-//
-//   - UpdatedAfter filters to entries whose KV revision timestamp is
-//     strictly later than the given time. Useful for incremental
-//     pagination of large active sets.
 //
 //   - Match is a field-equality map; key is the JSON field name (per
 //     `json:` struct tag), value is the expected value. Multi-tenancy
@@ -63,6 +57,20 @@ import "time"
 // hitting this cliff (~10K active instances is a reasonable guideline
 // — file when an operator demonstrates the bottleneck) trigger the
 // v2 secondary index work; the API stays stable across the migration.
+//
+// # Dropped from v1 surface — UpdatedAfter time.Time
+//
+// An earlier draft exposed UpdatedAfter for incremental pagination
+// of large active sets ("show me changes since T"). It was removed
+// before v1 ship because plumbing the per-entity revision timestamp
+// from the kvStore layer into the filter chain required widening
+// kvStore.Get's return signature to leak store-layer concerns
+// (CreatedAt) into the Participant model. Apps that need
+// since-timestamp pagination today should store their own
+// LastUpdatedAt unix-timestamp field on the state struct and Match
+// against it. v2 secondary indexing will add the filter back as a
+// first-class API when an operator demonstrates the need; the API
+// stays additive across that migration.
 type ListOptions struct {
 	// Phase filters to instances whose current phase equals this
 	// value. Empty string means any phase.
@@ -73,10 +81,6 @@ type ListOptions struct {
 	// terminal instances, use Phase with a specific terminal phase
 	// or Match on a discriminating field.
 	Active bool
-
-	// UpdatedAfter filters to instances whose last KV write happened
-	// strictly after this time. Zero value disables the filter.
-	UpdatedAfter time.Time
 
 	// Match is a field-equality map (JSON field name → expected value).
 	// Multi-tenancy and other app-specific filters live here. Field

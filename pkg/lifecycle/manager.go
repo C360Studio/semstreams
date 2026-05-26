@@ -35,6 +35,17 @@ type Manager struct {
 
 	mu            sync.RWMutex
 	registrations map[string]*registration
+
+	// driftSeen memoizes phase-drift Warn-log emissions so List
+	// callers polling at dashboard frequencies don't generate
+	// N×interval log lines per drifted entity. Keyed by
+	// "<workflow>|<entityID>|<phase>" — re-logs only when the
+	// entity transitions into a NEW drifted phase, never on
+	// repeated observation of the same drift state. Memory is
+	// bounded by total distinct (entity, phase) drift tuples.
+	// sync.Map (not sync.Mutex+map) because the read path
+	// dominates: Get/List are read-heavy.
+	driftSeen sync.Map
 }
 
 // registration holds the per-workflow-type state Manager needs at
@@ -261,11 +272,20 @@ func (m *Manager) getWithRevision(ctx context.Context, reg *registration, entity
 	// log-only is the v1 surface (see reviewer m2 on PR 1b core
 	// + the Degraded-bool precedent from PR #137 / GH #120).
 	if _, declared := reg.transitions[target.Phase()]; !declared {
-		m.logger.Warn("lifecycle: entity phase not declared in transitions table — silent drift detected",
-			slog.String("workflow", reg.workflow),
-			slog.String("entity_id", entityID),
-			slog.String("phase", target.Phase()),
-			slog.Any("declared_phases", reg.transitions.Phases()))
+		// De-dup the Warn per (workflow, entityID, phase) tuple so
+		// List callers polling at dashboard frequencies don't
+		// flood the log substrate with N×interval drift events
+		// per stuck entity. The same drift triggers exactly one
+		// Warn per process; transitioning into a NEW drifted
+		// phase re-logs.
+		driftKey := reg.workflow + "|" + entityID + "|" + target.Phase()
+		if _, alreadyLogged := m.driftSeen.LoadOrStore(driftKey, struct{}{}); !alreadyLogged {
+			m.logger.Warn("lifecycle: entity phase not declared in transitions table — silent drift detected (logged once per process per drift state)",
+				slog.String("workflow", reg.workflow),
+				slog.String("entity_id", entityID),
+				slog.String("phase", target.Phase()),
+				slog.Any("declared_phases", reg.transitions.Phases()))
+		}
 	}
 	return target, revision, nil
 }
@@ -321,7 +341,7 @@ const updateRetries = 5
 //  1. Get current state + revision
 //  2. Call mutator(participant) — mutator mutates the pointer in place
 //  3. Marshal + KV.Update with the revision
-//  4. On ErrKVRevisionMismatch, retry from step 1 (up to updateRetries)
+//  4. On CAS conflict, retry from step 1 (up to updateRetries)
 //
 // mutator errors abort the update immediately with the wrapped error
 // — no retry, no KV write. The mutator must NOT call Manager methods
@@ -331,8 +351,9 @@ const updateRetries = 5
 // Returns ErrEntityNotFound if the entity doesn't exist at any
 // point during the retry budget. Returns the wrapped mutator error
 // if the closure rejected the proposed change. Returns
-// ErrKVRevisionMismatch if the retry budget exhausted under
-// persistent contention.
+// ErrUpdateRetriesExhausted if the retry budget exhausted under
+// persistent contention — callers wanting application-layer retry
+// branch on errors.Is(err, ErrUpdateRetriesExhausted).
 func (m *Manager) Update(ctx context.Context, workflow, entityID string, mutator func(Participant) error) error {
 	if mutator == nil {
 		return errors.New("lifecycle: Update requires non-nil mutator")
@@ -368,7 +389,7 @@ func (m *Manager) Update(ctx context.Context, workflow, entityID string, mutator
 		return nil
 	}
 	return fmt.Errorf("%w: workflow=%q entity_id=%q after %d retries",
-		errKVRevisionMismatch, reg.workflow, entityID, updateRetries)
+		ErrUpdateRetriesExhausted, reg.workflow, entityID, updateRetries)
 }
 
 // Transition moves the entity at entityID from its current phase to

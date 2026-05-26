@@ -412,8 +412,8 @@ func TestManager_Update_ExhaustsRetriesUnderPersistentConflict(t *testing.T) {
 	err := mgr.Update(context.Background(), "mission", "u-4", func(_ Participant) error {
 		return nil
 	})
-	if err == nil || !errors.Is(err, errKVRevisionMismatch) {
-		t.Fatalf("persistent conflict should exhaust retries with CAS error, got %v", err)
+	if err == nil || !errors.Is(err, ErrUpdateRetriesExhausted) {
+		t.Fatalf("persistent conflict should exhaust retries with ErrUpdateRetriesExhausted, got %v", err)
 	}
 	if alwaysConflict.updateCalls != updateRetries {
 		t.Errorf("expected exactly %d Update attempts, got %d", updateRetries, alwaysConflict.updateCalls)

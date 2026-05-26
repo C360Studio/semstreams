@@ -166,34 +166,48 @@ func (m *Manager) Register(
 ) error
 
 // ---- Lifecycle operations ----
+//
+// All ops take an explicit workflow string. The workflow argument
+// disambiguates entity IDs that may collide across registered
+// workflow types within a single Manager — the harness does NOT
+// derive workflow from entityID, since multi-workflow buckets and
+// per-workflow ID conventions both exist in practice.
 
-func (m *Manager) Get(ctx context.Context, entityID string) (Participant, error)
+func (m *Manager) Get(ctx context.Context, workflow, entityID string) (Participant, error)
 func (m *Manager) Create(ctx context.Context, initial Participant) error
-func (m *Manager) Update(ctx context.Context, entityID string,
+func (m *Manager) Update(ctx context.Context, workflow, entityID string,
     mutator func(Participant) error) error
-func (m *Manager) UpdateFromOperator(ctx context.Context, entityID string,
+func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID string,
     patch map[string]any) error
-func (m *Manager) Transition(ctx context.Context, entityID, newPhase string) error
-func (m *Manager) Complete(ctx context.Context, entityID string) error
-func (m *Manager) Fail(ctx context.Context, entityID, reason string) error
+func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase string,
+    source TransitionSource, note string) error
+func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
+func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) error
 
 // ---- Query operations ----
 
 type ListOptions struct {
-    Phase        string
-    Active       bool
-    UpdatedAfter time.Time
-    Match        map[string]any
-    Limit        int
-    Offset       int
+    Phase  string
+    Active bool
+    Match  map[string]any
+    Limit  int
+    Offset int
 }
 
 func (m *Manager) List(ctx context.Context, workflow string,
     opts ListOptions) ([]Participant, error)
-func (m *Manager) Watch(ctx context.Context, workflow string) <-chan Participant
-func (m *Manager) History(ctx context.Context, entityID string) ([]TransitionEvent, error)
+func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participant, error)
+func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error)
 
 // ---- Parent/child relationships ----
+//
+// Children and Ancestors scan across ALL registered workflows
+// (a parent in workflow A may have children in workflow B — e.g.
+// semspec's Plan-owns-Requirements). Complexity is
+// O(sum-of-bucket-sizes) per call; apps with intra-workflow
+// parent-child relationships should prefer
+// List(workflow, Match{"parent_field": parentID}) which stays
+// within one bucket.
 
 func (m *Manager) Children(ctx context.Context, parentEntityID string) ([]Participant, error)
 func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant, error)
@@ -201,9 +215,10 @@ func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant
 // ---- Workflow introspection ----
 
 type WorkflowDef struct {
-    Workflow    string
-    Transitions Transitions
-    Schema      *jsonschema.Schema  // optional, derived from struct tags
+    Workflow               string
+    Transitions            Transitions
+    KVBucket               string
+    OperatorWritableFields []string // sorted JSON field names
 }
 
 func (m *Manager) GetWorkflowDefinition(workflow string) (WorkflowDef, error)
@@ -361,7 +376,7 @@ operators should know about:
 - **`Manager.List` with `Match`**: ~10K active instances per
   workflow is the rough threshold where the per-call scan cost
   starts mattering for operator-dashboard responsiveness. Cheap
-  filters (`Phase`, `Active`, `UpdatedAfter`) are applied before
+  filters (`Phase`, `Active`) are applied before
   `Match`'s reflection step, so workflows whose dashboards
   predominantly filter on phase will scale further. File a
   bottleneck issue when an operator observes List-call latency

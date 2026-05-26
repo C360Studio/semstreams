@@ -52,4 +52,24 @@ var (
 	// Transitions table is internally inconsistent (e.g. an out-edge
 	// references a phase not declared as a key). Catches typos at startup.
 	ErrInvalidTransitionsTable = errors.New("lifecycle: invalid transitions table")
+
+	// ErrUpdateRetriesExhausted is returned by Manager.Update (and
+	// any Update-using caller — Transition, Complete, Fail,
+	// UpdateFromOperator) when the per-call CAS-conflict retry
+	// budget (updateRetries) is consumed under persistent contention.
+	//
+	// Operationally this signals one of:
+	//   - A stuck rule writing to the same entity in a tight loop
+	//   - An upstream system hammering the same key past framework
+	//     capacity
+	//   - Misconfigured per-entity fan-in (multiple coordinators
+	//     racing on one state)
+	//
+	// Callers wanting application-layer retry semantics distinct
+	// from the framework's bounded retry can branch on
+	// errors.Is(err, lifecycle.ErrUpdateRetriesExhausted) and apply
+	// their own backoff + retry policy. Operators benefit from
+	// dashboards / metrics / alerts differentiating budget exhaustion
+	// from other Update failure classes.
+	ErrUpdateRetriesExhausted = errors.New("lifecycle: Update retry budget exhausted (persistent CAS contention)")
 )

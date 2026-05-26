@@ -25,7 +25,7 @@ import (
 //
 // Filter ordering (cheap → expensive) so Match's reflect-based
 // comparisons only run on candidates that already passed the
-// cheap Phase / Active / UpdatedAfter filters. This is the
+// cheap Phase / Active method-call filters. This is the
 // reviewer-recommended optimization to keep reflect cost bounded.
 //
 // Returned slice ownership: each Participant is a fresh instance
@@ -140,6 +140,18 @@ func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) (
 // react to deletions should use the kvStore primitive directly
 // via a follow-up tool — Watch's contract is "current Participants
 // you can read."
+//
+// CALLER MUST CANCEL ctx when done iterating. The watcher
+// goroutine and its underlying jetstream subscription pin until
+// ctx.Done(); a caller that simply stops reading the channel
+// without canceling leaks the goroutine and the NATS subscription
+// until the next write-then-block triggers buffer back-pressure.
+// Pattern:
+//
+//	ctx, cancel := context.WithCancel(parentCtx)
+//	defer cancel()
+//	ch, err := mgr.Watch(ctx, workflow)
+//	// ...drain ch...
 func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participant, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
@@ -366,7 +378,10 @@ func (m *Manager) findByEntityID(ctx context.Context, entityID string) (Particip
 	m.mu.RUnlock()
 
 	for _, reg := range regs {
-		p, err := m.Get(ctx, reg.workflow, entityID)
+		// Use getFromRegistration directly — m.Get would re-take
+		// the registrations RLock once per workflow to re-resolve
+		// reg by name. The snapshot above is sufficient.
+		p, err := m.getFromRegistration(ctx, reg, entityID)
 		if err == nil {
 			return p, nil
 		}
