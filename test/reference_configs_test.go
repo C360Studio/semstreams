@@ -36,9 +36,11 @@ import (
 // tripleRefRe matches both $entity.triple.* and $related.triple.*
 // references in any string field of a config. Capture group 1 is
 // the predicate path. Stops on whitespace, quote, brace, comma, or
-// `.length` suffix so we capture the predicate name without the
-// suffix (the suffix is handled by the #149 substitution layer).
-var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:\.length\b|[^\w.]|$)`)
+// any of the supported `.length` / `.triples` suffixes so we capture
+// the predicate name without the suffix (suffixes are handled by
+// the substitution layer — `.length` from #149, `.triples` from
+// ADR-048 PR 4).
+var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:\.(?:length|triples)\b|[^\w.]|$)`)
 
 // rulesStampedPredicates is the allowlist of predicates that rules
 // stamp on entities themselves (via add_triple / update_triple etc.)

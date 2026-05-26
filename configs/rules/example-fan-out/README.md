@@ -34,9 +34,13 @@ as ADR-046 Phase 2 (`fan_out_gated`, GH #139).
   (ADR-028).
 - `03-synthesize-when-all-complete.json` — fires on the parent loop
   entity when `gather.completed_child` has length equal to the
-  source list length. `length_eq` against an integer pin to the
-  expected count (operators picking up the source list as a length
-  reference is a future-improvement).
+  source list length. The synthesizer is spawned with the sibling
+  loop IDs threaded as a JSON-array property
+  (`sibling_loop_ids: $entity.triple.gather.completed_child.triples`,
+  ADR-048 PR 4). The persona prose teaches the synthesizer to parse
+  the JSON and iterate — no graph-query tool needed, and the
+  chain-agents-no-graph discipline (per ADR-041 addendum) stays
+  intact.
 
 ## Wire-shape summary
 
@@ -56,7 +60,7 @@ coordinator entity accumulates 3 gather.completed_child triples (one per distinc
 rule 03 matches when length_eq(gather.completed_child, $entity.triple.coordinator.decision.subtopics.length) → spawn synthesizer
   (the .length suffix — #149 — resolves to the integer count of the source subtopics list,
    so the pack works for any decomposer fan-out width without per-width forking)
-synthesizer walks coordinator's children via agent.loop.parent + calls read_loop_result per child
+synthesizer receives sibling_loop_ids as JSON array property → parses JSON → read_loop_result per ID
 ```
 
 The third triple's stamp wakes rule 03 since graph-ingest's per-Subject
