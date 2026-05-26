@@ -73,6 +73,43 @@ It is a **substrate convention layer** that lets consumers declare
 workflow-shaped entities and get framework infrastructure (KV
 storage, restart recovery, operator API, rule integration) for free.
 
+### Participation is per-entity, not per-deployment
+
+semstreams is general-purpose stream-processing infrastructure;
+the Lifecycle harness has zero dependencies on agentic-loop or any
+other consumer class. Apps that ship no agentic features at all
+(pure UDP-ingest + processor + HTTP-egress deployments) get the
+full harness benefit by implementing `Participant` on their domain
+state structs. The `pkg/lifecycle` package MUST NOT import any
+`processor/agentic-*` package — verified by import lint at PR-1
+land time.
+
+`Participant` is opt-in per ENTITY-TYPE. Within a single app:
+
+- Entity types with declared phases + restart recovery + operator
+  visibility needs (drone missions, sensor lifecycles, manufacturing
+  batches, scenario executions, API request lifecycles) implement
+  `Participant` and use `Manager`.
+- Entity types without that shape (raw telemetry samples, log
+  entries, agent loops whose lifecycle is per-iteration LLM
+  judgment rather than declared state-machine phases, transient
+  inputs) stay outside the harness — they pay zero cost and the
+  harness imposes no requirements on them.
+
+Agentic-loop intentionally stays outside `Participant` in this
+bundle: its lifecycle shape (per-iteration model judgment, dynamic
+trajectory) doesn't fit the declared-transitions-table abstraction
+cleanly. This is an entity-shape fit decision, not a framework
+constraint — a future agentic role with declared phases could
+implement `Participant` if the fit emerges. The 3 vestigial
+`pkg/workflow` lines in agentic-loop are deleted in PR 2 because
+they were never load-bearing, not because agentic-loop is being
+excluded from harness participation as a matter of principle.
+
+Apps must NOT assume the harness implies an agentic dependency,
+and apps using the harness do NOT pull in agentic-loop or any
+other consumer-class package.
+
 ### Greenfield assumption
 
 `pkg/workflow` (the dormant existing surface) is unused except for
@@ -99,8 +136,8 @@ type Participant interface {
     Workflow() string         // workflow type identifier
     Phase() string            // current lifecycle phase
     IsTerminal() bool         // true if entity is in terminal phase
-    KVBucket() string         // KV bucket this entity lives in
-    KVKey() string            // KV key shape for this entity
+    KVBucket() string                  // KV bucket this entity lives in
+    KVKey(entityID string) string      // KV key shape for the given entity ID
 
     // ParentEntityID returns the parent workflow instance ID, or
     // empty for root workflows. Enables parent/child workflow
@@ -129,34 +166,48 @@ func (m *Manager) Register(
 ) error
 
 // ---- Lifecycle operations ----
+//
+// All ops take an explicit workflow string. The workflow argument
+// disambiguates entity IDs that may collide across registered
+// workflow types within a single Manager — the harness does NOT
+// derive workflow from entityID, since multi-workflow buckets and
+// per-workflow ID conventions both exist in practice.
 
-func (m *Manager) Get(ctx context.Context, entityID string) (Participant, error)
+func (m *Manager) Get(ctx context.Context, workflow, entityID string) (Participant, error)
 func (m *Manager) Create(ctx context.Context, initial Participant) error
-func (m *Manager) Update(ctx context.Context, entityID string,
+func (m *Manager) Update(ctx context.Context, workflow, entityID string,
     mutator func(Participant) error) error
-func (m *Manager) UpdateFromOperator(ctx context.Context, entityID string,
+func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID string,
     patch map[string]any) error
-func (m *Manager) Transition(ctx context.Context, entityID, newPhase string) error
-func (m *Manager) Complete(ctx context.Context, entityID string) error
-func (m *Manager) Fail(ctx context.Context, entityID, reason string) error
+func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase string,
+    source TransitionSource, note string) error
+func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
+func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) error
 
 // ---- Query operations ----
 
 type ListOptions struct {
-    Phase        string
-    Active       bool
-    UpdatedAfter time.Time
-    Match        map[string]any
-    Limit        int
-    Offset       int
+    Phase  string
+    Active bool
+    Match  map[string]any
+    Limit  int
+    Offset int
 }
 
 func (m *Manager) List(ctx context.Context, workflow string,
     opts ListOptions) ([]Participant, error)
-func (m *Manager) Watch(ctx context.Context, workflow string) <-chan Participant
-func (m *Manager) History(ctx context.Context, entityID string) ([]TransitionEvent, error)
+func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participant, error)
+func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error)
 
 // ---- Parent/child relationships ----
+//
+// Children and Ancestors scan across ALL registered workflows
+// (a parent in workflow A may have children in workflow B — e.g.
+// semspec's Plan-owns-Requirements). Complexity is
+// O(sum-of-bucket-sizes) per call; apps with intra-workflow
+// parent-child relationships should prefer
+// List(workflow, Match{"parent_field": parentID}) which stays
+// within one bucket.
 
 func (m *Manager) Children(ctx context.Context, parentEntityID string) ([]Participant, error)
 func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant, error)
@@ -164,9 +215,10 @@ func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant
 // ---- Workflow introspection ----
 
 type WorkflowDef struct {
-    Workflow    string
-    Transitions Transitions
-    Schema      *jsonschema.Schema  // optional, derived from struct tags
+    Workflow               string
+    Transitions            Transitions
+    KVBucket               string
+    OperatorWritableFields []string // sorted JSON field names
 }
 
 func (m *Manager) GetWorkflowDefinition(workflow string) (WorkflowDef, error)
@@ -314,6 +366,49 @@ v2 (deferred): secondary index keyed by `(workflow, phase,
 match_field)` for fast filter resolution at scale. Indexable fields
 opt-in via struct tag (`lifecycle:"indexable"`). Triggered when an
 operator demonstrates a bottleneck — not before.
+
+### Scaling cliff (operator guidance)
+
+The v1 linear-scan paths in `Manager.List`, `Manager.Children`, and
+`Manager.Ancestors` are O(bucket-size) per call. Two scaling cliffs
+operators should know about:
+
+- **`Manager.List` with `Match`**: ~10K active instances per
+  workflow is the rough threshold where the per-call scan cost
+  starts mattering for operator-dashboard responsiveness. Cheap
+  filters (`Phase`, `Active`) are applied before
+  `Match`'s reflection step, so workflows whose dashboards
+  predominantly filter on phase will scale further. File a
+  bottleneck issue when an operator observes List-call latency
+  in dashboard refresh; the v2 secondary-index work consumes
+  `lifecycle:"indexable"`-tagged fields and is the upgrade path.
+- **`Manager.Ancestors` and `Manager.Children`**: cross-workflow
+  scans are O(sum-of-bucket-sizes) per call because they walk
+  every registered workflow's bucket. Apps with deep parent-
+  child chains in high-cardinality workflows feel this; apps
+  whose parent-child relationships stay within a single workflow
+  should prefer `List(workflow, Match{"parent_field": parentID})`
+  for the children case (stays within one bucket and benefits
+  from the v2 secondary index when it lands).
+
+Neither `Manager.Get` nor `Manager.Update` is in this scaling
+class — they're O(1) per call, suitable for per-message
+coordinator hotpaths. `List`/`Watch`/`History`/`Children`/
+`Ancestors` are operator-API-shaped (dashboard refresh, debugging,
+audit) not per-message-shaped.
+
+### Phase drift detection
+
+`Manager.Get` (and the `Get` path used by `List`) validate that the
+loaded entity's `Phase()` is declared in the registered
+`Transitions` table. Drift surfaces as a `slog.Warn` log line
+naming the entity, the undeclared phase, and the declared phase
+set. Detection is log-only in v1 — apps wanting structured drift
+detection (e.g. a `Degraded bool` field on the returned wrapper)
+add it as a future API extension. The log signal is enough to
+make the silent degradation visible without a wire-format change;
+the `Degraded`-bool precedent (PR #137 / GH #120) is the
+upgrade path when an operator demonstrates the need.
 
 ### Migration from `pkg/workflow`
 
