@@ -71,6 +71,27 @@ file it as engine work. Don't build app-side state machines around it
 | Rule engine | Trigger conditions, action sequencing, iteration caps, condition evaluation | Work execution, business logic, payload semantics |
 | Component | Work execution, internal state machine, output emission | Caller identity, multi-step coordination, cross-component sequencing |
 
+### Substrate primitives (used by both layers)
+
+Substrate primitives are framework-provided types that components
+compose internally and rule actions reference via substitution. They
+are NOT a third layer — they sit below the two orchestration layers
+as shared infrastructure.
+
+| Primitive | Package | Use |
+|---|---|---|
+| **Lifecycle harness** (ADR-047) | `pkg/lifecycle` | Convention layer for named-instance entities with declared phases, restart recovery, operator visibility (drone missions, sensor lifecycles, scenario executions, plan/requirement). Apps implement `Participant` on state structs; framework provides `Manager` with KV-backed Get/Create/Update/Transition/Complete/Fail + List/Watch/History/Children/Ancestors. **Not a workflow engine** — orchestration stays in the rule engine. |
+| **BoundedDispatcher** (ADR-048) | `pkg/dispatch` | Bounded-concurrency parallel work primitive for component-internal fan-out. Wraps `pkg/worker.Pool[T]` with optional KV-twofer-aware completion handling. Use when a component does internal parallel work over a known list of items; bounded concurrency required; optionally KV-signaled async completion. **NOT for at-the-rule-layer fan-out** — that's `for_each` on `rule.Action`. |
+| **`.triples` enumeration** (ADR-048) | `processor/rule` substitution | Plural-substitution suffix mirroring `.length`. `$entity.triple.<predicate>.triples` resolves to a JSON-encoded array string of all element values across all matching triples (handles both N-triples-with-scalar-Objects and one-triple-with-list-Object patterns). Composes with `for_each` to enumerate child entities + array operators like `array_contains` / `length_eq`. Consumers parse the JSON string per the canonical persona-prose template (ADR-048). **Asymmetry vs `.length`**: `.triples` best-effort-stringifies scalar Objects (Pattern A) into JSON array elements; `.length` returns an error sentinel on scalar Objects because it was designed for Pattern B (single triple with list Object) before Pattern A existed. Both are defensible in isolation — `.length` is for "count of elements in a list-typed triple," `.triples` is for "collect everything that could be enumerated." |
+
+**"Rules sequence, components parallelize"**: rules are single-
+threaded per evaluation (MaxAckPending=1 on `agent.task` consumers
+is the substrate's serial-per-consumer commitment); components
+compose `pkg/dispatch.BoundedDispatcher` internally when they need
+parallel work. Trying to make rules drive parallelism via
+agent-loop fan-out fights the substrate; see ADR-045's
+`execute_subqueries` for the canonical pattern.
+
 ## Signal kinds the rule engine watches
 
 Three kinds of signals fire rules:

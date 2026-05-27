@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -272,6 +273,59 @@ func phase3FireJoin(
 	}
 	require.Len(t, publisher.published, 1,
 		"rule 03 must dispatch exactly one synthesizer when all children are accounted for")
+
+	// ADR-048 PR 4 — assert the new `.triples` prompt-substitution
+	// works end-to-end through the production wire. Rule 03's
+	// prompt template now includes
+	// `$entity.triple.gather.completed_child.triples`; the
+	// substitution should inline a JSON array of N strings (one
+	// per child TaskID accumulated on the coordinator entity) into
+	// the natural-language prompt.
+	//
+	// This closes the reviewer's soft gap on `.triples` × for_each
+	// round-trip end-to-end coverage. The for_each fan-out happens
+	// in rule 01 (test phase 1), the per-child counter stamping in
+	// rule 02 (phase 2), and the .triples enumeration consumption
+	// in rule 03 (here). All three phases drive the production wire
+	// per [[feedback_integration_tests_must_drive_production_wire]].
+	//
+	// NOTE: switched from properties-substitution to prompt-
+	// substitution because publish_agent does NOT today thread
+	// action.Properties into TaskMessage.Metadata (the publish
+	// action does; publish_agent doesn't). Filing as a follow-up
+	// to land in a separate PR. Prompt-substitution works today
+	// and ships the .triples primitive that semteams needs;
+	// properties-threading-on-publish_agent is the higher-fidelity
+	// pattern for later.
+	task := extractTask(t, publisher.published[0].data)
+	expected := make(map[string]struct{}, len(coordinator.Triples))
+	for _, tr := range coordinator.Triples {
+		if tr.Predicate == "gather.completed_child" {
+			expected[fmt.Sprintf("%v", tr.Object)] = struct{}{}
+		}
+	}
+	// Parse the JSON array out of the prompt. The substitution
+	// produces `["taskID1","taskID2",...]` inlined into the prompt
+	// text — extract the JSON array and assert every stamped
+	// TaskID is present, in any order.
+	openBracket := strings.Index(task.Prompt, "[")
+	closeBracket := strings.Index(task.Prompt[openBracket:], "]")
+	require.Greater(t, openBracket, 0,
+		"prompt should contain a JSON array from .triples substitution; got %q", task.Prompt)
+	require.Greater(t, closeBracket, 0,
+		"prompt should contain a closing bracket for the JSON array; got %q", task.Prompt)
+	jsonArr := task.Prompt[openBracket : openBracket+closeBracket+1]
+	var parsed []string
+	require.NoError(t, json.Unmarshal([]byte(jsonArr), &parsed),
+		"prompt JSON array must be valid JSON the consumer can parse per the canonical persona-prose template")
+	require.Len(t, parsed, len(expected),
+		"JSON array length should match the count of gather.completed_child triples on the coordinator")
+	for _, got := range parsed {
+		_, found := expected[got]
+		require.True(t, found,
+			"prompt JSON element %q should match a stamped TaskID; expected one of %v",
+			got, expected)
+	}
 }
 
 // TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin

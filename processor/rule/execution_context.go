@@ -48,6 +48,39 @@ var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|sche
 // directly. Worth documenting if it ever becomes an issue in practice.
 var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.length\b`)
 
+// tripleTriplesRe matches list-enumeration suffix references on
+// entity or related triples (ADR-048 / PR 4 of the lifecycle bundle):
+//
+//	$entity.triple.<predicate>.triples
+//	$related.triple.<predicate>.triples
+//
+// Mirrors tripleLengthRe's structure — capture group 1 is the
+// namespace ("entity" or "related"); group 2 is the predicate name
+// (which may itself contain dots — e.g. `gather.completed_child`).
+// Trailing `\b` ensures we don't match a predicate genuinely ending
+// in `.triples` as a substring of a longer token.
+//
+// Semantic: collects ALL element values across all matching triples,
+// then renders as a JSON-encoded array string in string context. The
+// JSON format is decided in ADR-048 (never CSV — commas-in-values is
+// a latent production-bug class the framework refuses to introduce).
+//
+// Handles both multi-valued triple patterns:
+//
+//   - Pattern A — N triples with the same predicate, each Object is
+//     scalar (e.g. gather.completed_child = N entries of distinct
+//     TaskIDs). Each triple contributes one element.
+//   - Pattern B — single triple with list-shaped Object (e.g.
+//     coordinator.decision.subtopics = JSON-encoded []string).
+//     The triple contributes all elements of its list.
+//
+// Mixed-shape (some triples scalar, some list) is tolerable: scalars
+// contribute themselves, lists expand. Empty result (predicate not
+// present) → "[]" (JSON empty array). Apps consuming the substituted
+// value in a prompt or property MUST parse it as JSON per the
+// canonical persona-prose template in ADR-048.
+var tripleTriplesRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.triples\b`)
+
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
 // actions with the full entity state and match state for richer execution logic.
@@ -208,6 +241,12 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	// the count. Pre-passing keeps the suffix semantic correct.
 	result = ec.applyTripleLengthSubstitutions(result)
 
+	// List-enumeration substitutions (ADR-048). Same pre-pass
+	// discipline as .length — runs before the generic triple
+	// substitution so the suffix semantic is preserved against
+	// list-Object stringification.
+	result = ec.applyTripleTriplesSubstitutions(result)
+
 	// Entity triple substitutions (e.g., $entity.triple.agent.role → triple value)
 	if ec.Entity != nil {
 		for _, triple := range ec.Entity.Triples {
@@ -364,6 +403,126 @@ func (ec *ExecutionContext) applyTripleLengthSubstitutions(template string) stri
 		// Predicate not present → 0 (mirrors #148 array-op semantics).
 		return "0"
 	})
+}
+
+// applyTripleTriplesSubstitutions replaces every
+// `$entity.triple.<predicate>.triples` and
+// `$related.triple.<predicate>.triples` token with a JSON-encoded
+// array string of all element values across all matching triples.
+// ADR-048 — the consumer-side enumeration primitive that closes
+// the GH #151 fan-out join gap.
+//
+// Resolution semantics:
+//
+//   - Predicate found, N triples with scalar Objects (Pattern A,
+//     e.g. gather.completed_child) → JSON array of N strings.
+//   - Predicate found, single triple with list-shaped Object
+//     (Pattern B, e.g. coordinator.decision.subtopics) → JSON array
+//     of the list's elements.
+//   - Predicate found, mixed shapes (some scalar, some list) →
+//     scalars contribute themselves, lists expand. Tolerated; weird
+//     in practice.
+//   - Predicate NOT present on the entity → "[]" (JSON empty
+//     array). Mirrors the .length substitution's "missing predicate
+//     → 0" semantic — a join rule firing before any work has
+//     accumulated is a legitimate authoring intent.
+//   - Entity / Related nil for the referenced namespace → "[]" with
+//     a Debug log (message-path rule shape, not an author error).
+//   - Non-list scalar Object that fails coerceTripleObjectToStrings
+//     gets stringified via fmt.Sprintf("%v", obj) — consistent with
+//     coerceTripleObjectToStrings's handling of []any non-string
+//     elements. Same value vs error trade-off as .length, but tipped
+//     toward "best-effort string" here because the resulting list is
+//     the value flowing into a downstream prompt — emitting [] would
+//     silently drop data, while stringifying gives the consumer
+//     something to parse.
+//
+// Idempotent: returns template unchanged when no `.triples` tokens
+// match. Safe to call when ec.Entity / ec.Related are nil.
+//
+// Output is ALWAYS valid JSON. Consumers MUST parse it as JSON per
+// the canonical persona-prose template documented in ADR-048
+// (cheap-model substrate limitation noted there — small models may
+// silently mis-parse; prefer static-N + AND-composition or upgrade
+// the recipient role to general-class model).
+func (ec *ExecutionContext) applyTripleTriplesSubstitutions(template string) string {
+	return tripleTriplesRe.ReplaceAllStringFunc(template, func(match string) string {
+		parts := tripleTriplesRe.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match // defensive — shouldn't happen given the regex
+		}
+		namespace, predicate := parts[1], parts[2]
+
+		var entity *gtypes.EntityState
+		switch namespace {
+		case "entity":
+			entity = ec.Entity
+		case "related":
+			entity = ec.Related
+		}
+		if entity == nil {
+			slog.Default().Debug("triple-triples substitution: target entity nil; resolving to []",
+				slog.String("token", match),
+				slog.String("namespace", namespace),
+				slog.String("rule_id", ec.RuleID()))
+			return "[]"
+		}
+		values := collectPredicateValues(entity, predicate)
+		// Empty list is a valid result — render as "[]" so a downstream
+		// JSON parser sees a real empty array, not the Go zero value
+		// "null" from json.Marshal on a nil slice.
+		if len(values) == 0 {
+			return "[]"
+		}
+		encoded, err := json.Marshal(values)
+		if err != nil {
+			// json.Marshal on []string can't fail under normal
+			// conditions; defensive fallback to error sentinel that
+			// won't pass the unresolved-template-var regex but will
+			// surface in any downstream parser as malformed.
+			slog.Default().Warn("triple-triples substitution: JSON encode failed (should be impossible)",
+				slog.String("token", match),
+				slog.String("predicate", predicate),
+				slog.String("error", err.Error()),
+				slog.String("rule_id", ec.RuleID()))
+			return fmt.Sprintf("[ERROR_TRIPLES_ENCODE:%s]", predicate)
+		}
+		return string(encoded)
+	})
+}
+
+// collectPredicateValues iterates every triple on entity matching
+// predicate and produces a flat []string of element values. List-
+// shaped Objects (Pattern B) contribute all their elements; scalar
+// Objects (Pattern A) contribute themselves via fmt.Sprintf("%v",
+// obj).
+//
+// Returns nil for "no matching triples"; callers distinguish nil
+// from empty as needed (the JSON-encoding path renders both as "[]"
+// per consumer-facing contract).
+func collectPredicateValues(entity *gtypes.EntityState, predicate string) []string {
+	if entity == nil {
+		return nil
+	}
+	var out []string
+	for _, triple := range entity.Triples {
+		if triple.Predicate != predicate {
+			continue
+		}
+		if items, ok := coerceTripleObjectToStrings(triple.Object); ok {
+			// Pattern B (one triple, list Object) OR Pattern A
+			// triple whose Object happens to be a list shape.
+			out = append(out, items...)
+			continue
+		}
+		// Pattern A: scalar Object. Stringify and contribute as
+		// a single element. fmt.Sprintf("%v") matches the
+		// coerceTripleObjectToStrings []any path's handling of
+		// non-string elements, so the formatting is consistent
+		// across the two paths.
+		out = append(out, fmt.Sprintf("%v", triple.Object))
+	}
+	return out
 }
 
 // ResolveListValue extracts a list-typed value from a substitution
