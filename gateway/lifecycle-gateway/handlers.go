@@ -383,7 +383,7 @@ func (c *Component) handleOperatorTransition(w http.ResponseWriter, r *http.Requ
 // blocking the watcher (slow consumer → loud close per ADR-047's
 // loud-fail discipline).
 func (c *Component) handleWebSocket(w http.ResponseWriter, r *http.Request, workflow string) {
-	if !c.config.EnableWebSocket {
+	if !c.config.wsEnabled() {
 		c.writeError(w, http.StatusForbidden,
 			"websocket streaming disabled (set enable_websocket=true in config)")
 		c.recordRequest(false, "websocket disabled")

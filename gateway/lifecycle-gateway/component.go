@@ -40,8 +40,14 @@ type Config struct {
 	// EnableWebSocket toggles the WS upgrade path for
 	// {prefix}/{type}?stream=true. Default true. Operators that
 	// don't need live updates (purely poll-based dashboards) can
-	// disable it to remove the upgrade-handler surface.
-	EnableWebSocket bool `json:"enable_websocket" schema:"type:bool,description:Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true. Set to false to disable live-update streaming and keep the gateway poll-only.,category:basic"`
+	// disable it by setting `"enable_websocket": false` in config.
+	//
+	// Pointer type (vs bare bool) so ApplyDefaults can distinguish
+	// "field absent from config" (→ default true) from "field
+	// explicitly set to false" (→ disable). Matches the
+	// MaxIterations precedent in processor/rule/actions.go.
+	// Callers read via the wsEnabled() helper, never field-direct.
+	EnableWebSocket *bool `json:"enable_websocket,omitempty" schema:"type:bool,description:Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true when omitted. Set to false to disable live-update streaming and keep the gateway poll-only.,category:basic"`
 
 	// MaxBodyBytes caps the size of operator-supplied JSON bodies on
 	// POST {type}/{id}/state and POST {type}/{id}/transition (S2
@@ -85,6 +91,11 @@ const DefaultMaxBodyBytes int64 = 1 << 20
 // ApplyDefaults populates omitted fields. Called by the factory
 // before Validate so operator-provided values stay sticky and
 // unset fields fall back to framework conventions.
+//
+// EnableWebSocket is the only nullable field: nil means "operator
+// omitted the key" → resolve to true. A non-nil pointer (even to
+// false) is honored as-is. Same shape as MaxIterations in
+// processor/rule/actions.go.
 func (c *Config) ApplyDefaults() {
 	if c.PathPrefix == "" {
 		c.PathPrefix = "workflows"
@@ -92,25 +103,30 @@ func (c *Config) ApplyDefaults() {
 	if c.MaxBodyBytes <= 0 {
 		c.MaxBodyBytes = DefaultMaxBodyBytes
 	}
-	// EnableWebSocket defaults to true via inverted-default trick:
-	// the JSON unmarshal-default for a bool is false, but the
-	// framework convention is "WebSocket on by default" because the
-	// canonical operator-dashboard pattern uses live updates. Apps
-	// that genuinely want it off must set EnableWebSocket=false
-	// AND tag the config with a non-default marker (today, since
-	// false IS the JSON default, we can't distinguish "not set" from
-	// "set to false"). Operator-facing docs explicitly state the
-	// default-true convention; the `*bool` pointer-field upgrade is
-	// listed in `[[project_adr_047_048_bundle_progress]]` for a
-	// fast-follow after the bundle tag if operators surface confusion.
+	if c.EnableWebSocket == nil {
+		v := true
+		c.EnableWebSocket = &v
+	}
+}
+
+// wsEnabled returns the effective EnableWebSocket value. nil pointer
+// (operator omitted the key) is treated as true to match the
+// documented default; a non-nil pointer is dereferenced. Centralized
+// so callers never field-access the pointer directly.
+func (c *Config) wsEnabled() bool {
+	if c.EnableWebSocket == nil {
+		return true
+	}
+	return *c.EnableWebSocket
 }
 
 // DefaultConfig returns a Config ready for use in tests +
 // reasonable-default deployments.
 func DefaultConfig() Config {
+	t := true
 	return Config{
 		PathPrefix:      "workflows",
-		EnableWebSocket: true,
+		EnableWebSocket: &t,
 		MaxBodyBytes:    DefaultMaxBodyBytes,
 	}
 }
@@ -276,7 +292,7 @@ func (c *Component) Start(ctx context.Context) error {
 	// Loud-log the security-sensitive default-permissive origin
 	// policy so operators see the choice in their startup logs
 	// rather than discovering it after a cross-origin incident.
-	if c.config.EnableWebSocket && len(c.config.AllowedOrigins) == 0 {
+	if c.config.wsEnabled() && len(c.config.AllowedOrigins) == 0 {
 		c.logger.Warn("lifecycle-gateway: WebSocket origin check is default-permissive",
 			slog.String("policy", "AllowedOrigins is empty; cross-origin upgrades will be accepted"),
 			slog.String("hint", "set allowed_origins in config to enforce an explicit allowlist"))
@@ -364,7 +380,7 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 
 	c.logger.Info("lifecycle-gateway routes registered",
 		slog.String("root", root),
-		slog.Bool("websocket_enabled", c.config.EnableWebSocket))
+		slog.Bool("websocket_enabled", c.config.wsEnabled()))
 }
 
 // recordRequest tracks a request outcome for metrics.

@@ -687,7 +687,8 @@ func TestWebSocket_DisabledReturns403(t *testing.T) {
 	mgr.registerWorkflow("mission", lifecycle.Transitions{"planning": {}})
 
 	cfg := DefaultConfig()
-	cfg.EnableWebSocket = false
+	f := false
+	cfg.EnableWebSocket = &f
 	comp := &Component{
 		name:    ComponentName,
 		config:  cfg,
@@ -706,6 +707,78 @@ func TestWebSocket_DisabledReturns403(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected 403 when WS disabled, got %d", resp.StatusCode)
+	}
+}
+
+// --- Config.EnableWebSocket pointer-field semantics (N9) ---
+
+// TestConfig_EnableWebSocket_UnsetResolvesTrue locks the
+// pointer-field invariant: an operator who omits `enable_websocket`
+// from config must get the framework-default (true), NOT a JSON-zero
+// false. ApplyDefaults distinguishes unset (nil) from explicit-false
+// via the pointer type.
+func TestConfig_EnableWebSocket_UnsetResolvesTrue(t *testing.T) {
+	t.Parallel()
+	var cfg Config // pointer is nil → "field absent from config"
+	cfg.ApplyDefaults()
+	if cfg.EnableWebSocket == nil {
+		t.Fatalf("ApplyDefaults should populate EnableWebSocket")
+	}
+	if !cfg.wsEnabled() {
+		t.Errorf("unset EnableWebSocket should resolve to true (framework default)")
+	}
+}
+
+func TestConfig_EnableWebSocket_ExplicitFalseHonored(t *testing.T) {
+	t.Parallel()
+	f := false
+	cfg := Config{EnableWebSocket: &f}
+	cfg.ApplyDefaults()
+	if cfg.EnableWebSocket == nil || *cfg.EnableWebSocket {
+		t.Errorf("explicit false must NOT be overridden by ApplyDefaults, got %v", cfg.EnableWebSocket)
+	}
+	if cfg.wsEnabled() {
+		t.Errorf("wsEnabled() should reflect explicit false")
+	}
+}
+
+func TestConfig_EnableWebSocket_ExplicitTrueHonored(t *testing.T) {
+	t.Parallel()
+	tr := true
+	cfg := Config{EnableWebSocket: &tr}
+	cfg.ApplyDefaults()
+	if cfg.EnableWebSocket == nil || !*cfg.EnableWebSocket {
+		t.Errorf("explicit true must survive ApplyDefaults, got %v", cfg.EnableWebSocket)
+	}
+}
+
+// TestConfig_EnableWebSocket_JSONUnmarshal_AbsentResolvesTrue exercises
+// the round-trip authors actually use: parse JSON config that omits
+// the key, then ApplyDefaults → wsEnabled() returns true.
+func TestConfig_EnableWebSocket_JSONUnmarshal_AbsentResolvesTrue(t *testing.T) {
+	t.Parallel()
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"path_prefix":"workflows"}`), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.EnableWebSocket != nil {
+		t.Errorf("absent key should unmarshal to nil pointer, got %v", *cfg.EnableWebSocket)
+	}
+	cfg.ApplyDefaults()
+	if !cfg.wsEnabled() {
+		t.Errorf("absent + ApplyDefaults should resolve true")
+	}
+}
+
+func TestConfig_EnableWebSocket_JSONUnmarshal_ExplicitFalseSurvivesDefaults(t *testing.T) {
+	t.Parallel()
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"enable_websocket":false}`), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	cfg.ApplyDefaults()
+	if cfg.wsEnabled() {
+		t.Errorf("explicit false in JSON must survive ApplyDefaults")
 	}
 }
 

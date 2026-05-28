@@ -15,7 +15,7 @@
     },
     "enable_websocket": {
       "type": "boolean",
-      "description": "Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true. Set to false to disable live-update streaming and keep the gateway poll-only.",
+      "description": "Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true when omitted. Set to false to disable live-update streaming and keep the gateway poll-only.",
       "category": "basic"
     },
     "max_body_bytes": {
