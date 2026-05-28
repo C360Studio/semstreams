@@ -357,11 +357,12 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
+		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
 			fmt.Sprintf("invalid request: %v", err))
 	}
 	if req.Entity == nil {
-		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
+		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
+			"entity cannot be nil")
 	}
 
 	if len(req.Triples) > 0 {
@@ -370,7 +371,7 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
-			return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID,
+			return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityExists,
 				fmt.Sprintf("entity already exists: %s", req.Entity.ID))
 		}
 		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
@@ -492,11 +493,12 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
 			fmt.Sprintf("invalid request: %v", err))
 	}
 	if req.Entity == nil {
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
+		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
+			"entity cannot be nil")
 	}
 
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
@@ -570,7 +572,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	})
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityNotFound,
 				fmt.Sprintf("entity not found: %s", req.Entity.ID))
 		}
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
@@ -620,7 +622,7 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	current, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityNotFound,
 				fmt.Sprintf("entity not found: %s", req.Entity.ID))
 		}
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
@@ -629,7 +631,7 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 
 	// CAS-on-condition: caller's expected rev must match what we just read.
 	if currentRev != req.ExpectedRevision {
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeRevisionMismatch,
 			fmt.Sprintf("revision mismatch: expected %d, current %d", req.ExpectedRevision, currentRev))
 	}
 
@@ -668,7 +670,7 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	// check passed.
 	if err := c.updateEntityAtRevision(ctx, &newEntity, req.ExpectedRevision); err != nil {
 		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
-			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeRevisionMismatch,
 				fmt.Sprintf("revision mismatch: concurrent modification of %s (expected revision %d)",
 					req.Entity.ID, req.ExpectedRevision))
 		}
@@ -775,10 +777,15 @@ func marshalCreateEntityError(traceID, requestID, msg string) ([]byte, error) {
 }
 
 func marshalCreateEntityWithTriplesError(traceID, requestID, msg string) ([]byte, error) {
+	return marshalCreateEntityWithTriplesErrorCoded(traceID, requestID, graph.ErrorCodeInternal, msg)
+}
+
+func marshalCreateEntityWithTriplesErrorCoded(traceID, requestID, code, msg string) ([]byte, error) {
 	return json.Marshal(graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:   false,
 			Error:     msg,
+			ErrorCode: code,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,
@@ -799,10 +806,15 @@ func marshalUpdateEntityError(traceID, requestID, msg string) ([]byte, error) {
 }
 
 func marshalUpdateEntityWithTriplesError(traceID, requestID, msg string) ([]byte, error) {
+	return marshalUpdateEntityWithTriplesErrorCoded(traceID, requestID, graph.ErrorCodeInternal, msg)
+}
+
+func marshalUpdateEntityWithTriplesErrorCoded(traceID, requestID, code, msg string) ([]byte, error) {
 	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
 			Success:   false,
 			Error:     msg,
+			ErrorCode: code,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,

@@ -16,6 +16,7 @@ package lifecycle
 import (
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // Workflow declares a workflow type to Manager.Register. All fields
@@ -167,6 +168,15 @@ func (w *Workflow) validate() error {
 	if w.EntityIDPattern == "" {
 		return fmt.Errorf("%w: workflow %q EntityIDPattern is required",
 			ErrWorkflowNotRegistered, w.Name)
+	}
+	// EntityIDPattern must be 6-segment to match the federated EntityID
+	// contract (org.platform.domain.system.type.instance — pkg/types.EntityID
+	// + CLAUDE.md). Per ADR-049 reviewer B5 a 5-segment pattern silently
+	// fails to match any real entity ID; the prior code hit this on the
+	// e2e mission pattern. Fail loudly at Register time.
+	if segs := strings.Split(w.EntityIDPattern, "."); len(segs) != 6 {
+		return fmt.Errorf("%w: workflow %q EntityIDPattern %q has %d segments (expected 6 per federated EntityID contract org.platform.domain.system.type.instance)",
+			ErrWorkflowNotRegistered, w.Name, w.EntityIDPattern, len(segs))
 	}
 	if w.PhasePredicate == "" {
 		return fmt.Errorf("%w: workflow %q PhasePredicate is required",

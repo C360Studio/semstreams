@@ -44,6 +44,12 @@ import (
 type MutationResponse struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+	// ErrorCode is a stable, machine-readable identifier for the
+	// failure class. Use the ErrorCode* constants in this package
+	// for the closed set of well-known codes; callers branch on
+	// ErrorCode rather than substring-matching Error. Empty when
+	// Success=true OR for legacy/unclassified errors.
+	ErrorCode string `json:"error_code,omitempty"`
 	// Degraded is true when the write committed but the post-write
 	// read-back failed. See type docstring for the full three-state
 	// contract. Only entity-mutation handlers populate this; nil on
@@ -55,6 +61,40 @@ type MutationResponse struct {
 	Timestamp  int64  `json:"timestamp"`             // Unix nano timestamp
 	KVRevision uint64 `json:"kv_revision,omitempty"` // KV bucket revision after write
 }
+
+// Stable error codes for MutationResponse.ErrorCode. Callers branch on
+// these rather than substring-matching Error. The set is closed —
+// adding a new value requires updating both this declaration and the
+// handler call sites in processor/graph-ingest that emit it.
+const (
+	// ErrorCodeRevisionMismatch indicates the request specified an
+	// ExpectedRevision that didn't match the entity's current KV
+	// revision at the time of write. Callers (notably
+	// pkg/lifecycle.Manager.Transition) use this to drive
+	// read-validate-retry loops.
+	ErrorCodeRevisionMismatch = "revision_mismatch"
+
+	// ErrorCodeEntityNotFound indicates the request targeted an
+	// entity ID that does not exist in ENTITY_STATES. For
+	// update-style requests this means the entity was never created
+	// or was deleted concurrently.
+	ErrorCodeEntityNotFound = "entity_not_found"
+
+	// ErrorCodeEntityExists indicates a create-style request hit an
+	// entity ID that already exists. Used by
+	// CreateEntityWithTriples to surface create-or-fail conflicts.
+	ErrorCodeEntityExists = "entity_already_exists"
+
+	// ErrorCodeInvalidRequest indicates the request envelope failed
+	// pre-write validation (nil entity, malformed JSON, etc.).
+	// Callers should not retry without fixing the request.
+	ErrorCodeInvalidRequest = "invalid_request"
+
+	// ErrorCodeInternal is the catch-all for handler-internal
+	// failures (KV transport errors, unmarshal failures on stored
+	// state, etc.). Callers may retry as appropriate.
+	ErrorCodeInternal = "internal"
+)
 
 // CreateEntityResponse response for entity creation
 type CreateEntityResponse struct {

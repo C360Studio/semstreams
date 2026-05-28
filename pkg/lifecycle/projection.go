@@ -139,17 +139,26 @@ func setFieldFromObject(field reflect.Value, object any, fieldName string) error
 }
 
 // extractTripleScalar returns the Object of the LAST triple matching
-// the predicate, as a string. Empty when no matching triple exists
-// or the Object isn't string-shaped (numeric / bool predicates use
-// extractTripleAny instead).
+// the predicate AND subject, as a string. Empty when no matching triple
+// exists or the Object isn't string-shaped.
+//
+// Subject scoping (per ADR-049 reviewer B3): triples carry a Subject;
+// only those belonging to entityID are considered. Triples with an
+// empty Subject are treated as entity-scoped (entry from the legacy
+// pre-Subject pipeline). This is defensive — graph-ingest stores
+// triples under per-entity KV keys today, but future cross-entity
+// triple storage would silently mis-project without this check.
 //
 // Used by Manager.Transition's read-validate path (extract current
 // phase before validating the transition) and by Manager.History
 // (extract audit-predicate values from each revision).
-func extractTripleScalar(triples []message.Triple, predicate string) string {
+func extractTripleScalar(triples []message.Triple, entityID, predicate string) string {
 	last := ""
 	for _, t := range triples {
 		if t.Predicate != predicate {
+			continue
+		}
+		if t.Subject != "" && t.Subject != entityID {
 			continue
 		}
 		switch v := t.Object.(type) {
@@ -165,13 +174,17 @@ func extractTripleScalar(triples []message.Triple, predicate string) string {
 }
 
 // hasTriple returns true when any triple in the slice has the given
-// predicate. Used by Manager.Create to detect "lifecycle already
-// attached to this entity."
-func hasTriple(triples []message.Triple, predicate string) bool {
+// subject (or empty subject) and predicate. Used by Manager.Create
+// to detect "lifecycle already attached to this entity."
+func hasTriple(triples []message.Triple, entityID, predicate string) bool {
 	for _, t := range triples {
-		if t.Predicate == predicate {
-			return true
+		if t.Predicate != predicate {
+			continue
 		}
+		if t.Subject != "" && t.Subject != entityID {
+			continue
+		}
+		return true
 	}
 	return false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -24,16 +25,32 @@ type fakeEmitter struct {
 	requests []*graph.UpdateEntityWithTriplesRequest
 }
 
-func (f *fakeEmitter) emit(_ context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
+// update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
+// CAS-on-condition when ExpectedRevision > 0; otherwise must-exist
+// (entity not found if absent); naive-append merge (NOT
+// per-predicate-latest-wins — that's a read-time concern via
+// extractTripleScalar). Per ADR-049 reviewer B1 the test substrate
+// MUST match production or it masks bugs.
+func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
 	currentRev := f.bucket.revOf(req.Entity.ID)
+	if !f.bucket.exists(req.Entity.ID) {
+		return &graph.UpdateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{
+				Success:   false,
+				ErrorCode: graph.ErrorCodeEntityNotFound,
+				Error:     "entity not found: " + req.Entity.ID,
+			},
+		}, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
+	}
 	if req.ExpectedRevision > 0 && req.ExpectedRevision != currentRev {
 		return &graph.UpdateEntityWithTriplesResponse{
 			MutationResponse: graph.MutationResponse{
-				Success: false,
-				Error:   "revision mismatch: expected " + tostr(req.ExpectedRevision) + ", current " + tostr(currentRev),
+				Success:   false,
+				ErrorCode: graph.ErrorCodeRevisionMismatch,
+				Error:     "revision mismatch",
 			},
 		}, errEmitRevisionMismatch
 	}
@@ -44,7 +61,7 @@ func (f *fakeEmitter) emit(_ context.Context, req *graph.UpdateEntityWithTriples
 		for _, p := range req.RemoveTriples {
 			removeSet[p] = struct{}{}
 		}
-		kept := merged[:0]
+		kept := make([]message.Triple, 0, len(merged))
 		for _, t := range merged {
 			if _, drop := removeSet[t.Predicate]; drop {
 				continue
@@ -53,7 +70,9 @@ func (f *fakeEmitter) emit(_ context.Context, req *graph.UpdateEntityWithTriples
 		}
 		merged = kept
 	}
-	merged = applyPerPredicateLatestWins(merged, req.AddTriples)
+	// Naive append — matches mutations.go:559 and :656 exactly. Per-predicate
+	// latest-wins is a READ-time concern, not a write-time merge.
+	merged = append(merged, req.AddTriples...)
 	state := *req.Entity
 	state.Triples = merged
 	f.bucket.put(req.Entity.ID, &state)
@@ -63,31 +82,30 @@ func (f *fakeEmitter) emit(_ context.Context, req *graph.UpdateEntityWithTriples
 	}, nil
 }
 
-// applyPerPredicateLatestWins mirrors graph-ingest's per-predicate
-// latest-wins merge. Triples in adds replace prior triples with the
-// same predicate on the same subject.
-func applyPerPredicateLatestWins(existing, adds []message.Triple) []message.Triple {
-	bySubjPred := map[string]int{}
-	out := make([]message.Triple, 0, len(existing)+len(adds))
-	for _, t := range existing {
-		key := t.Subject + "|" + t.Predicate
-		if idx, ok := bySubjPred[key]; ok {
-			out[idx] = t
-		} else {
-			bySubjPred[key] = len(out)
-			out = append(out, t)
-		}
+// create mirrors graph-ingest's handleEntityCreateWithTriples — atomic
+// create-or-fail. Returns ErrAlreadyExists when the entity is already
+// present (the per-entity CAS race surface for fresh-create per
+// ADR-049 reviewer B2).
+func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bucket.exists(req.Entity.ID) {
+		return &graph.CreateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{
+				Success:   false,
+				ErrorCode: graph.ErrorCodeEntityExists,
+				Error:     "entity already exists: " + req.Entity.ID,
+			},
+		}, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
 	}
-	for _, t := range adds {
-		key := t.Subject + "|" + t.Predicate
-		if idx, ok := bySubjPred[key]; ok {
-			out[idx] = t
-		} else {
-			bySubjPred[key] = len(out)
-			out = append(out, t)
-		}
-	}
-	return out
+	state := *req.Entity
+	state.Triples = req.Triples
+	f.bucket.put(req.Entity.ID, &state)
+	return &graph.CreateEntityWithTriplesResponse{
+		MutationResponse: graph.MutationResponse{Success: true, KVRevision: f.bucket.revOf(req.Entity.ID)},
+		Entity:           &state,
+		TriplesAdded:     len(req.Triples),
+	}, nil
 }
 
 // fakeBucket is the minimal jetstream.KeyValue surface Manager.getEntity
@@ -107,6 +125,13 @@ type fakeBucketEntry struct {
 
 func newFakeBucket() *fakeBucket {
 	return &fakeBucket{entries: map[string]*fakeBucketEntry{}}
+}
+
+func (b *fakeBucket) exists(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.entries[id]
+	return ok
 }
 
 func (b *fakeBucket) get(id string) *graph.EntityState {
@@ -215,21 +240,6 @@ func (b *fakeBucket) Status(context.Context) (jetstream.KeyValueStatus, error) {
 }
 func (b *fakeBucket) GetRevision(_ context.Context, _ string, _ uint64) (jetstream.KeyValueEntry, error) {
 	panic("fakeBucket.GetRevision not implemented")
-}
-
-func tostr(u uint64) string {
-	const digits = "0123456789"
-	if u == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for u > 0 {
-		i--
-		buf[i] = digits[u%10]
-		u /= 10
-	}
-	return string(buf[i:])
 }
 
 // --- tests ---
@@ -437,5 +447,141 @@ func TestManager_GetRawReturnsAllTriples(t *testing.T) {
 	}
 	if len(state.Triples) != 1 || state.Triples[0].Predicate != "x.y.z" {
 		t.Errorf("unexpected raw triples: %+v", state.Triples)
+	}
+}
+
+// TestManager_DuplicatePredicateAccumulationGetReturnsLatest exercises
+// the production naive-append merge (per ADR-049 reviewer B1).
+// Repeated transitions accumulate duplicate `mission.phase` triples in
+// the stored EntityState; Manager.Get must project the LAST one
+// (per-predicate latest-wins at read time, not write time).
+func TestManager_DuplicatePredicateAccumulationGetReturnsLatest(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.accum"
+
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.Transition(ctx, "fixture", id, "flying", TransitionSourceRule, "go"); err != nil {
+		t.Fatalf("Transition 1: %v", err)
+	}
+	if err := mgr.Transition(ctx, "fixture", id, "completed", TransitionSourceRule, "ok"); err != nil {
+		t.Fatalf("Transition 2: %v", err)
+	}
+
+	stored := bucket.get(id)
+	phaseCount := 0
+	for _, tr := range stored.Triples {
+		if tr.Predicate == "mission.phase" {
+			phaseCount++
+		}
+	}
+	if phaseCount < 3 {
+		t.Errorf("expected >= 3 mission.phase triples after Create+2 Transitions (naive append per production), got %d. If this is 1, the fake substrate dedups at write time — the wrong semantic.", phaseCount)
+	}
+	got, err := mgr.Get(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Phase() != "completed" {
+		t.Errorf("after duplicate-predicate accumulation, projected Phase=%q, want completed", got.Phase())
+	}
+}
+
+// TestManager_ConcurrentCreateOnlyOneWins exercises B2 — atomic
+// create-or-fail. With ExpectedRevision=0's prior broken semantics
+// two concurrent Creates would silently both succeed and double-stamp
+// the phase triple.
+func TestManager_ConcurrentCreateOnlyOneWins(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.race"
+
+	const N = 8
+	var wg sync.WaitGroup
+	wg.Add(N)
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			errs <- mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	successes := 0
+	alreadyExists := 0
+	other := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyExists):
+			alreadyExists++
+		default:
+			other++
+		}
+	}
+	if successes != 1 {
+		t.Errorf("expected exactly 1 successful concurrent Create, got %d (already_exists=%d, other=%d)",
+			successes, alreadyExists, other)
+	}
+	if other != 0 {
+		t.Errorf("expected losers to surface ErrAlreadyExists, got %d unclassified errors", other)
+	}
+}
+
+// TestWorkflowValidateRejectsNon6SegmentPattern pins B5 — workflows
+// declaring a 5-segment EntityIDPattern fail at Register time, not at
+// first List call with no matches.
+func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
+	t.Parallel()
+	bad := Workflow{
+		Name:            "bad",
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // 5 segments
+		Transitions:     Transitions{"planning": {}},
+		PhasePredicate:  "x.phase",
+		Schema:          reflect.TypeOf(fixtureMission{}),
+	}
+	err := bad.validate()
+	if err == nil {
+		t.Fatal("expected validate to reject 5-segment EntityIDPattern, got nil")
+	}
+}
+
+// TestManager_DiffSkipsZeroValueOnMissingPredicate pins B4 — a
+// TransitionWith mutator that touches a zero-value field should not
+// emit a spurious delta against a missing-predicate baseline.
+func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.zerodiff"
+
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	preCount := len(emitter.requests)
+	// Mutator that touches no fields — should not emit non-phase deltas.
+	if err := mgr.TransitionWith(ctx, "fixture", id, "flying", TransitionSourceRule, "", func(_ Participant) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("TransitionWith: %v", err)
+	}
+	if len(emitter.requests) != preCount+1 {
+		t.Fatalf("expected exactly 1 emit, got %d", len(emitter.requests)-preCount)
+	}
+	last := emitter.requests[len(emitter.requests)-1]
+	// Count predicate emissions: phase + 4 audit fields = 5 expected.
+	// If diff is spurious on zero-value Note field, we'd see > 5.
+	gotPreds := map[string]bool{}
+	for _, tr := range last.AddTriples {
+		gotPreds[tr.Predicate] = true
+	}
+	if _, ok := gotPreds["mission.owner_org_id"]; ok {
+		t.Error("zero-value OwnerOrgID should not emit a delta against missing predicate baseline")
 	}
 }

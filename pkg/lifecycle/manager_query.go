@@ -152,7 +152,7 @@ func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participan
 					)
 					continue
 				}
-				if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+				if !hasTriple(state.Triples, entry.Key(), reg.workflow.PhasePredicate) {
 					continue
 				}
 				target := reflect.New(reg.meta.GoType).Interface().(Participant)
@@ -229,7 +229,7 @@ func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]Tra
 			)
 			continue
 		}
-		currentPhase := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+		currentPhase := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
 		if currentPhase == "" || currentPhase == previousPhase {
 			continue
 		}
@@ -243,15 +243,15 @@ func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]Tra
 		// at this revision (the ADR-049 mechanism that closes the
 		// always-framework bug).
 		if pred := reg.workflow.AuditPredicates.Source; pred != "" {
-			if src := extractTripleScalar(state.Triples, pred); src != "" {
+			if src := extractTripleScalar(state.Triples, entityID, pred); src != "" {
 				event.Triggered = TransitionSource(src)
 			}
 		}
 		if pred := reg.workflow.AuditPredicates.Note; pred != "" {
-			event.Note = extractTripleScalar(state.Triples, pred)
+			event.Note = extractTripleScalar(state.Triples, entityID, pred)
 		}
 		if pred := reg.workflow.AuditPredicates.From; pred != "" {
-			if from := extractTripleScalar(state.Triples, pred); from != "" {
+			if from := extractTripleScalar(state.Triples, entityID, pred); from != "" {
 				event.From = from
 			}
 		}
@@ -365,7 +365,7 @@ func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceS
 			if targetReg := m.findRegistrationForEntity(targetID); targetReg != nil {
 				stub.Workflow = targetReg.workflow.Name
 				if target, _, err := m.getEntity(ctx, targetID); err == nil {
-					stub.Phase = extractTripleScalar(target.Triples, targetReg.workflow.PhasePredicate)
+					stub.Phase = extractTripleScalar(target.Triples, targetID, targetReg.workflow.PhasePredicate)
 				}
 			}
 			stubs = append(stubs, stub)

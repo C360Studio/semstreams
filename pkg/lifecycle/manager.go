@@ -229,7 +229,7 @@ func (m *Manager) getWithRevision(ctx context.Context, workflow, entityID string
 	if err != nil {
 		return nil, 0, err
 	}
-	if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+	if !hasTriple(state.Triples, entityID, reg.workflow.PhasePredicate) {
 		return nil, 0, fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
 			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
 	}
@@ -303,55 +303,63 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 			ErrInvalidTransition, initial.Phase(), reg.workflow.Name)
 	}
 
-	// Read current state (entity may already exist with non-lifecycle
-	// triples; that's fine). CAS-on-condition: if non-zero revision,
-	// we must observe the same revision at write time.
-	var currentVersion uint64
-	var expectedRevision uint64
+	// Read current state. Two distinct fresh-create paths:
+	//   - entity absent → route through CreateEntityWithTriples
+	//     (atomic create-or-fail; ErrAlreadyExists on race)
+	//   - entity present without phase triple → attach lifecycle via
+	//     UpdateEntityWithTriples with CAS-on-condition (ExpectedRevision
+	//     = current rev; concurrent attach fails with revision mismatch
+	//     which we surface as ErrAlreadyExists)
+	//
+	// Per ADR-049 reviewer B2 this split closes the silent concurrent-
+	// create race that ExpectedRevision=0 had on the prior code.
+	now := time.Now()
 	state, rev, err := m.getEntity(ctx, entityID)
 	switch {
 	case errors.Is(err, ErrEntityNotFound):
-		// Entity doesn't exist at all — fresh-create flow. We can't
-		// CAS-on-zero-rev on the existing UpdateEntityWithTriples
-		// handler (graph-ingest's CAS path requires the entity to
-		// exist). Bootstrap by emitting with ExpectedRevision=0 (the
-		// "no CAS" path), accepting the existing retry semantics.
-		expectedRevision = 0
-		currentVersion = 0
+		delta := buildInitialTriples(reg, entityID, initial, now)
+		createReq := &graph.CreateEntityWithTriplesRequest{
+			Entity: &graph.EntityState{
+				ID:          entityID,
+				Version:     1,
+				UpdatedAt:   now,
+				MessageType: lifecycleMessageType,
+			},
+			Triples: delta,
+		}
+		if _, err := m.emitter.create(ctx, createReq); err != nil {
+			if errors.Is(err, ErrAlreadyExists) {
+				return fmt.Errorf("%w: workflow=%q entity_id=%q",
+					ErrAlreadyExists, reg.workflow.Name, entityID)
+			}
+			return err
+		}
+		return nil
 	case err != nil:
 		return err
-	default:
-		if hasTriple(state.Triples, reg.workflow.PhasePredicate) {
-			return fmt.Errorf("%w: workflow=%q entity_id=%q",
-				ErrAlreadyExists, reg.workflow.Name, entityID)
-		}
-		expectedRevision = rev
-		currentVersion = state.Version
 	}
-
-	// Build the delta: phase + initial audit + projection-mapped
-	// non-zero fields. Audit on Create is TransitionSourceFramework
-	// with note="created".
-	now := time.Now()
+	// Entity exists — must not already have phase triple.
+	if hasTriple(state.Triples, entityID, reg.workflow.PhasePredicate) {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q",
+			ErrAlreadyExists, reg.workflow.Name, entityID)
+	}
 	delta := buildInitialTriples(reg, entityID, initial, now)
-
-	// Emit through graph-ingest.
-	emitReq := &graph.UpdateEntityWithTriplesRequest{
+	updateReq := &graph.UpdateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
-			Version:     currentVersion + 1,
+			Version:     state.Version + 1,
 			UpdatedAt:   now,
 			MessageType: lifecycleMessageType,
 		},
 		AddTriples:       delta,
-		ExpectedRevision: expectedRevision,
+		ExpectedRevision: rev,
 	}
-	if _, err := m.emitter.emit(ctx, emitReq); err != nil {
+	if _, err := m.emitter.update(ctx, updateReq); err != nil {
 		if errors.Is(err, errEmitRevisionMismatch) {
-			// Concurrent Create from a sibling — surface as
+			// Concurrent attach from a sibling — surface as
 			// ErrAlreadyExists since the most likely cause is
 			// a parallel lifecycle attach.
-			return fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent create)",
+			return fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
 				ErrAlreadyExists, reg.workflow.Name, entityID)
 		}
 		return err
@@ -420,7 +428,7 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 		if err != nil {
 			return err
 		}
-		currentPhase := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+		currentPhase := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
 		if currentPhase == "" {
 			return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
 				ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
@@ -478,7 +486,7 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 			AddTriples:       delta,
 			ExpectedRevision: currentRev,
 		}
-		_, err = m.emitter.emit(ctx, emitReq)
+		_, err = m.emitter.update(ctx, emitReq)
 		if err == nil {
 			m.logger.Debug("lifecycle: transition",
 				slog.String("workflow", reg.workflow.Name),
@@ -504,6 +512,20 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 // the original triple slice and returns triple deltas for fields
 // whose projected value changed. Skips the phase field (Transition
 // emits it explicitly) and read-only fields (ID, audit, reference).
+//
+// Zero-value semantics (per ADR-049 reviewer B4): when a predicate is
+// MISSING from the original triples AND the mutator leaves the field
+// at its zero value, no delta is emitted — emitting `field=0` to fill
+// a missing predicate is noise, not a meaningful state change. When
+// the original triple IS present with zero-value content (the operator
+// genuinely set it to zero earlier), and the mutator leaves it at
+// zero, also no delta. The diff emits only when the in-memory value
+// differs from the projected-string form of the original triple.
+//
+// Limited to scalars + time.Time per the projection layer's documented
+// scope. Slice / map / pointer field types on the Schema are NOT
+// supported by projection today; if added later, this diff needs to
+// extend its comparison logic.
 func diffProjectedTriples(sm *structMeta, entityID string, original []message.Triple, mutated Participant) []message.Triple {
 	rv := reflect.ValueOf(mutated)
 	if rv.Kind() == reflect.Pointer {
@@ -518,18 +540,21 @@ func diffProjectedTriples(sm *structMeta, entityID string, original []message.Tr
 		if !fieldVal.IsValid() {
 			continue
 		}
-		// Project the original triple's value into a comparable
-		// representation. Mutator could either set, clear, or
-		// no-op; the latter we skip. Comparison by string-ified
-		// form keeps it simple (the projection layer types are
-		// limited to scalars + time.Time).
+		// Skip when both sides are zero-value-missing: predicate not
+		// in original AND mutator left field at zero. Prevents
+		// spurious deltas on first Transition of an entity whose
+		// mutator does not touch this field.
+		hasOriginal := hasTriple(original, entityID, predicate)
+		if !hasOriginal && fieldVal.IsZero() {
+			continue
+		}
 		newVal := fieldVal.Interface()
-		oldStr := extractTripleScalar(original, predicate)
+		oldStr := extractTripleScalar(original, entityID, predicate)
 		newStr := fmt.Sprintf("%v", newVal)
 		if t, ok := newVal.(time.Time); ok {
 			newStr = t.Format(time.RFC3339Nano)
 		}
-		if oldStr == newStr {
+		if hasOriginal && oldStr == newStr {
 			continue
 		}
 		delta = append(delta, triple(entityID, predicate, newVal))
@@ -571,7 +596,7 @@ func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID str
 		if err != nil {
 			return err
 		}
-		if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+		if !hasTriple(state.Triples, entityID, reg.workflow.PhasePredicate) {
 			return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
 				ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
 		}
@@ -587,7 +612,7 @@ func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID str
 			RemoveTriples:    removes,
 			ExpectedRevision: currentRev,
 		}
-		_, err = m.emitter.emit(ctx, emitReq)
+		_, err = m.emitter.update(ctx, emitReq)
 		if err == nil {
 			return nil
 		}
@@ -614,7 +639,7 @@ func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
 	if err != nil {
 		return err
 	}
-	from := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+	from := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
 	if from == "" {
 		return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
 			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)

@@ -1,15 +1,26 @@
 // Package lifecycle — graph-ingest emit wrapper.
 //
 // The Manager state-change operations (Create, Transition, UpdateFromOperator,
-// Complete, Fail) all funnel through graphEmitter.emit — a thin wrapper
-// over natsclient.Request on the graph-ingest mutation subject. Centralizing
-// the request shape + response classification + revision-mismatch sentinel
-// translation keeps the per-operation code in manager.go focused on
-// validation and projection rather than transport plumbing.
+// Complete, Fail) all funnel through graphEmitter — a thin wrapper over
+// natsclient.Request on the graph-ingest mutation subjects. Centralizing
+// the request shape + response classification + sentinel translation keeps
+// the per-operation code in manager.go focused on validation and projection
+// rather than transport plumbing.
 //
-// Why an interface, not a free function: the test path injects a fake
-// emitter that records the request without crossing NATS — Manager
-// unit tests against in-memory graph state work without testcontainers.
+// Two methods:
+//
+//   - update: targets graph.mutation.entity.update_with_triples — for
+//     existing entities, with optional CAS-on-condition via
+//     UpdateEntityWithTriplesRequest.ExpectedRevision.
+//   - create: targets graph.mutation.entity.create_with_triples — for
+//     entities that don't yet exist. Atomic create-or-fail; returns
+//     ErrAlreadyExists when the entity already exists. This is the
+//     primitive that closes the Manager.Create concurrent-create race
+//     (ADR-049 PR2 reviewer B2).
+//
+// Error classification reads the stable ErrorCode field on
+// MutationResponse — added in this pre-tag follow-up to replace fragile
+// substring matching (R1).
 package lifecycle
 
 import (
@@ -17,7 +28,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -31,17 +41,22 @@ import (
 // (test). The Manager talks to the interface so tests can run
 // without NATS.
 type graphEmitter interface {
-	// emit sends the request to graph-ingest and waits for the
-	// MutationResponse. Returns errEmitRevisionMismatch when the
-	// handler signals the CAS failed (used by Manager.Transition's
-	// retry loop). Returns ErrEntityNotFound when the handler
-	// reports the entity doesn't exist (translated from the
-	// handler's "entity not found" error string).
-	emit(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error)
+	// update sends an UpdateEntityWithTriplesRequest to graph-ingest
+	// and waits for the response. Returns errEmitRevisionMismatch
+	// when the handler signals CAS failed (Manager.Transition retry
+	// loop). Returns ErrEntityNotFound when the handler reports the
+	// entity doesn't exist.
+	update(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error)
+
+	// create sends a CreateEntityWithTriplesRequest to graph-ingest.
+	// Atomic create-or-fail. Returns ErrAlreadyExists when the entity
+	// is already present in ENTITY_STATES (the per-entity CAS race
+	// surface for fresh-create).
+	create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error)
 }
 
-// graphEmitterNATS is the production graphEmitter — sends the request
-// via natsclient.Request on the graph-ingest mutation subject.
+// graphEmitterNATS is the production graphEmitter — sends requests
+// via natsclient.Request on the graph-ingest mutation subjects.
 type graphEmitterNATS struct {
 	client  *natsclient.Client
 	timeout time.Duration
@@ -54,53 +69,81 @@ func newGraphEmitterNATS(client *natsclient.Client, timeout time.Duration) *grap
 	return &graphEmitterNATS{client: client, timeout: timeout}
 }
 
-// graphMutationSubject is the NATS subject the graph-ingest component
-// subscribes to for entity-update-with-triples requests. Mirror of
-// processor/graph-ingest/mutations.go SubjectEntityUpdateWithTriples.
-// Hardcoded here (not imported) to keep pkg/lifecycle from depending
-// on processor/graph-ingest — the subject is a stable wire contract.
-const graphMutationSubject = "graph.mutation.entity.update_with_triples"
+// Subject names for the graph-ingest mutation handlers. Hardcoded here
+// rather than imported from processor/graph-ingest to avoid the
+// pkg/lifecycle → processor/graph-ingest dependency — the subjects are
+// stable wire contracts.
+const (
+	graphSubjectUpdateWithTriples = "graph.mutation.entity.update_with_triples"
+	graphSubjectCreateWithTriples = "graph.mutation.entity.create_with_triples"
+)
 
 // errEmitRevisionMismatch is the package-internal sentinel Manager
-// branches on for CAS retry. Translated from the handler's "revision
-// mismatch" error string.
+// branches on for CAS retry. Translated from the handler's
+// ErrorCodeRevisionMismatch response.
 var errEmitRevisionMismatch = errors.New("lifecycle: emit revision mismatch (CAS conflict)")
 
-// emit marshals the request, fires it as a NATS request/reply, and
-// classifies the response. The handler error-payload convention is
-// covered in [[feedback_natsclient_error_payload_convention]] —
-// natsclient.Request returns a successful response containing
-// `error: <message>`; the err return is only for transport errors.
-func (g *graphEmitterNATS) emit(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
+// update marshals an UpdateEntityWithTriplesRequest, fires it as a
+// NATS request/reply, and classifies the response by ErrorCode.
+func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal request: %v", ErrEmitFailed, err)
+		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
-	respBody, err := g.client.Request(ctx, graphMutationSubject, body, g.timeout)
+	respBody, err := g.client.Request(ctx, graphSubjectUpdateWithTriples, body, g.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("%w: NATS request to %s: %v", ErrEmitFailed, graphMutationSubject, err)
+		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectUpdateWithTriples, err)
 	}
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("%w: unmarshal response: %v", ErrEmitFailed, err)
+		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
 	}
 	if !resp.Success {
-		// Classify the handler's error string into the sentinels
-		// Manager branches on. The strings mirror the handler's
-		// shape — keep in lockstep with processor/graph-ingest/mutations.go.
-		if strings.Contains(resp.Error, "revision mismatch") {
+		switch resp.ErrorCode {
+		case graph.ErrorCodeRevisionMismatch:
 			return &resp, errEmitRevisionMismatch
-		}
-		if strings.Contains(resp.Error, "entity not found") {
+		case graph.ErrorCodeEntityNotFound:
 			return &resp, fmt.Errorf("%w: %s", ErrEntityNotFound, resp.Error)
 		}
-		return &resp, fmt.Errorf("%w: graph-ingest rejected request: %s",
-			ErrEmitFailed, resp.Error)
+		return &resp, fmt.Errorf("%w: graph-ingest rejected request (code=%q): %s",
+			ErrEmitFailed, resp.ErrorCode, resp.Error)
+	}
+	return &resp, nil
+}
+
+// create marshals a CreateEntityWithTriplesRequest, fires it as a NATS
+// request/reply, and classifies the response by ErrorCode. Atomic
+// create-or-fail: ErrAlreadyExists when graph-ingest reports
+// ErrorCodeEntityExists.
+func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+
+	respBody, err := g.client.Request(ctx, graphSubjectCreateWithTriples, body, g.timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectCreateWithTriples, err)
+	}
+
+	var resp graph.CreateEntityWithTriplesResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
+	}
+	if !resp.Success {
+		if resp.ErrorCode == graph.ErrorCodeEntityExists {
+			return &resp, fmt.Errorf("%w: %s", ErrAlreadyExists, resp.Error)
+		}
+		return &resp, fmt.Errorf("%w: graph-ingest rejected create (code=%q): %s",
+			ErrEmitFailed, resp.ErrorCode, resp.Error)
 	}
 	return &resp, nil
 }
