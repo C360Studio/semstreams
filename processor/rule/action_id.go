@@ -73,7 +73,7 @@ func (a Action) fingerprint(ruleID string) string {
 // default.
 //
 // Per action type:
-//   - publish / publish_agent / trigger_workflow:
+//   - publish / publish_agent:
 //     Subject — sibling actions of the same Type in a rule almost
 //     always differ on Subject.
 //   - add_triple / remove_triple / update_triple: Predicate + Object
@@ -88,7 +88,7 @@ func (a Action) fingerprint(ruleID string) string {
 //     authors who hit this collision must set Action.ID explicitly.
 func actionDistinguisher(a Action) string {
 	switch a.Type {
-	case ActionTypePublish, ActionTypePublishAgent, ActionTypeTriggerWorkflow:
+	case ActionTypePublish, ActionTypePublishAgent:
 		return a.Subject
 	case ActionTypeAddTriple, ActionTypeRemoveTriple, ActionTypeUpdateTriple:
 		return a.Predicate + "|" + a.Object

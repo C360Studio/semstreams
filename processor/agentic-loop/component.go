@@ -20,7 +20,6 @@ import (
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/workflow"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/nats-io/nats.go/jetstream"
@@ -1822,24 +1821,4 @@ func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 		p.Properties = v
 	}
 	return p
-}
-
-// WorkflowParticipant interface implementation.
-// Agentic-loop handles multiple workflows dynamically, so it returns empty WorkflowID.
-
-// WorkflowID returns empty string since this component handles multiple workflows dynamically.
-// The workflow context is tracked per-loop via WorkflowSlug/WorkflowStep fields.
-func (c *Component) WorkflowID() string {
-	return ""
-}
-
-// Phase returns the workflow phase this component represents.
-func (c *Component) Phase() string {
-	return "agentic-execution"
-}
-
-// StateManager returns nil since agentic-loop manages its own state internally.
-// Workflows interact with agentic-loop via events and KV watches, not direct state access.
-func (c *Component) StateManager() *workflow.StateManager {
-	return nil
 }

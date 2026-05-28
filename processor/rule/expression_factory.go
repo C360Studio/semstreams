@@ -2,6 +2,7 @@
 package rule
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -25,6 +26,21 @@ type ExpressionRule struct {
 	evaluator     *expression.Evaluator
 	lastTriggered time.Time
 	shouldTrigger bool
+
+	// lifecycleManager is the optional pkg/lifecycle.Manager wired by
+	// the rule Processor. When non-nil, EvaluateEntityState
+	// pre-resolves the trigger entity's lifecycle state so condition
+	// fields like `$entity.lifecycle.phase` evaluate at initial-match
+	// time. ADR-047.
+	lifecycleManager LifecycleManager
+}
+
+// SetLifecycleManager installs the Lifecycle harness Manager used by
+// initial-state condition.Field resolution for `$entity.lifecycle.*`
+// paths. nil arg disables resolution (tokens then surface as missing-
+// field errors at evaluation — loud-fail).
+func (r *ExpressionRule) SetLifecycleManager(m LifecycleManager) {
+	r.lifecycleManager = m
 }
 
 // NewExpressionRule creates a new expression-based rule
@@ -161,14 +177,27 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 	// See SubstituteConditionValues for the contract; #149 surfaced
 	// the gap during reference-pack integration testing.
 	ec := &ExecutionContext{
-		EntityID: entityState.ID,
-		Entity:   entityState,
+		EntityID:  entityState.ID,
+		Entity:    entityState,
+		Lifecycle: r.lifecycleManager,
 	}
 	expr := r.buildLogicalExpression()
 	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
 
-	// Use the expression.Evaluator for direct triple evaluation
-	result, err := r.evaluator.Evaluate(entityState, expr)
+	// ADR-047: pre-resolve $entity.lifecycle.* condition fields into
+	// a stateFields map and dispatch via EvaluateWithStateAndMessage
+	// so the evaluator's broadened prefix check picks them up.
+	// No-op when no Manager is wired or the entity isn't
+	// lifecycle-managed.
+	stateFields := expression.StateFields{}
+	PopulateLifecycleStateFields(context.Background(), r.lifecycleManager, entityState.ID, stateFields)
+	var result bool
+	var err error
+	if len(stateFields) > 0 {
+		result, err = r.evaluator.EvaluateWithStateAndMessage(entityState, stateFields, nil, expr)
+	} else {
+		result, err = r.evaluator.Evaluate(entityState, expr)
+	}
 	if err != nil {
 		slog.Debug("ExpressionRule: evaluation error",
 			"rule", r.name,

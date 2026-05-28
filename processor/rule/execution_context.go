@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
@@ -130,6 +131,33 @@ type ExecutionContext struct {
 	// `call_id`, `tool_name`, etc.) into verdict subjects and audit
 	// reasons.
 	MessageData map[string]any
+
+	// Lifecycle is the pkg/lifecycle.Manager wired by the rule
+	// processor at Initialize time (ADR-047). The `$entity.lifecycle.*`
+	// substitution layer reads from here; lifecycle_* action executors
+	// reach the manager via ActionExecutor.lifecycle directly so this
+	// field stays nil-safe — substitution tokens just survive
+	// untouched (and trip the unresolved-template warning) when no
+	// manager is wired.
+	Lifecycle LifecycleManager
+
+	// lifecycleParticipantCache memoizes the LookupByEntityID result
+	// for the lifetime of this ExecutionContext, so multi-template
+	// rules don't pay the linear-scan cost per substitution call.
+	// Populated lazily inside applyLifecycleSubstitutions. Nil means
+	// "not yet looked up"; a non-nil cache with a nil Participant
+	// indicates a confirmed not-found (don't re-scan).
+	lifecycleParticipantCache *lifecycleLookupResult
+}
+
+// lifecycleLookupResult caches the outcome of a Manager.LookupByEntityID
+// call on an ExecutionContext. Memoizing in the negative case avoids
+// re-scanning all registered workflows for every template substitution
+// in a rule that references $entity.lifecycle.* but whose trigger
+// entity isn't lifecycle-managed.
+type lifecycleLookupResult struct {
+	participant lifecycle.Participant
+	err         error
 }
 
 // RuleID returns the originating rule's identifier, or an empty string if the
@@ -254,6 +282,13 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 			result = strings.ReplaceAll(result, key, fmt.Sprintf("%v", triple.Object))
 		}
 	}
+
+	// Lifecycle harness substitutions (ADR-047). Resolves
+	// $entity.lifecycle.{phase,terminal,workflow,workflow_def}. No-op
+	// when ec.Lifecycle is nil or the entity isn't registered with
+	// any workflow — surviving tokens trip the unresolved-template
+	// warning below.
+	result = ec.applyLifecycleSubstitutions(result)
 
 	// Schedule substitutions (cron rules only). No-op when ec.Schedule
 	// is nil; unknown $schedule.* tokens will then trip the

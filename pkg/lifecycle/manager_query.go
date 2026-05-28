@@ -191,6 +191,78 @@ func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participan
 	return out, nil
 }
 
+// AssertRuleWritable returns nil when fieldJSONName is a field on
+// the registered workflow that the rule layer's lifecycle_transition
+// `set` clause is allowed to mutate. Returns ErrFieldNotOperatorWritable
+// otherwise. The rule layer enforces the SAME default-deny as the
+// operator API (UpdateFromOperator) — fields without `lifecycle:"operator_writable"`
+// are protected, plus `lifecycle:"id"` and `lifecycle:"phase"` fields
+// can NEVER be set via rule actions (identity is immutable; phase
+// is owned by Manager.Transition's transitions-table validation).
+//
+// Rationale: rules and operators converge on one allowed-mutation
+// convention. A rule definition is operator-authored config; allowing
+// the rule path strictly MORE privileges than the operator API would
+// create an asymmetric attack surface where a typo or
+// attacker-influenced rule could rewrite entity_id or read-only
+// state-machine fields the harness protects everywhere else.
+//
+// Apps that want rules to mutate fields beyond operator scope must
+// either tag those fields `lifecycle:"operator_writable"` (widening
+// both paths) or stamp the change via add_triple/update_triple
+// instead of through the lifecycle_transition `set` clause.
+//
+// Returns ErrWorkflowNotRegistered if workflow isn't registered. The
+// field-not-found case maps to ErrFieldNotOperatorWritable too — a
+// typo on a JSON field name and a deliberate write to a protected
+// field should both surface as "you can't write that," not as two
+// distinct error classes for the same operator action.
+func (m *Manager) AssertRuleWritable(workflow, fieldJSONName string) error {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return err
+	}
+	field, ok := reg.structMeta.FieldsByJSONName[fieldJSONName]
+	if !ok {
+		return fmt.Errorf("%w: workflow=%q field=%q (no such field on the registered participant)",
+			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+	}
+	if field.IsID {
+		return fmt.Errorf("%w: workflow=%q field=%q (entity_id is immutable — set on Create only, never via rule transition)",
+			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+	}
+	if field.IsPhase {
+		return fmt.Errorf("%w: workflow=%q field=%q (phase is owned by Manager.Transition; use lifecycle_transition's phase field, not set)",
+			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+	}
+	if !field.OperatorWritable {
+		return fmt.Errorf("%w: workflow=%q field=%q (default-deny — tag the struct field `lifecycle:\"operator_writable\"` if rules + operators should be able to mutate it)",
+			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+	}
+	return nil
+}
+
+// FieldType returns the reflect.Type of the named field on the
+// registered participant, for callers (the rule executor) that need
+// to apply typed numeric ops (increment/decrement) without
+// reimplementing field-name resolution. Returns ErrFieldNotOperatorWritable
+// when the field doesn't exist or isn't rule-writable, so callers can
+// reuse the same gate before mutating.
+func (m *Manager) FieldType(workflow, fieldJSONName string) (reflect.Type, error) {
+	if err := m.AssertRuleWritable(workflow, fieldJSONName); err != nil {
+		return nil, err
+	}
+	reg, _ := m.lookupByWorkflow(workflow) // already validated by AssertRuleWritable
+	field := reg.structMeta.FieldsByJSONName[fieldJSONName]
+	// Re-resolve the field type from a sample instance. structMeta
+	// only caches FieldIndex; the Type lives on the underlying struct.
+	rv := reflect.ValueOf(reg.keySample)
+	if rv.Kind() == reflect.Pointer {
+		rv = rv.Elem()
+	}
+	return rv.FieldByIndex(field.FieldIndex).Type(), nil
+}
+
 // UpdateFromOperator applies a patch map to the entity, validating
 // that every patched field is tagged `lifecycle:"operator_writable"`
 // in the registered state struct. Default-deny: fields without the
@@ -334,14 +406,14 @@ func (m *Manager) Children(ctx context.Context, parentEntityID string) ([]Partic
 // (already at root). Returns ErrEntityNotFound if the starting
 // entityID itself can't be resolved.
 func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant, error) {
-	current, err := m.findByEntityID(ctx, entityID)
+	current, err := m.LookupByEntityID(ctx, entityID)
 	if err != nil {
 		return nil, err
 	}
 	var out []Participant
 	parentID := current.ParentEntityID()
 	for parentID != "" {
-		parent, err := m.findByEntityID(ctx, parentID)
+		parent, err := m.LookupByEntityID(ctx, parentID)
 		if err != nil {
 			if errors.Is(err, ErrEntityNotFound) {
 				// Truncate the walk loudly — the chain is
@@ -361,15 +433,17 @@ func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant
 	return out, nil
 }
 
-// findByEntityID resolves an entityID to a Participant by scanning
+// LookupByEntityID resolves an entityID to a Participant by scanning
 // every registered workflow's bucket. Returns ErrEntityNotFound if
 // the ID isn't present in any bucket.
 //
-// Internal helper for Ancestors; not exposed publicly because the
-// linear-scan cost across all workflows is bounded only by the
-// total instance count. Apps wanting "which workflow does this ID
-// belong to" should track that mapping themselves.
-func (m *Manager) findByEntityID(ctx context.Context, entityID string) (Participant, error) {
+// O(workflows × bucket-size) per call. Suitable for the rule
+// engine's `lifecycle_*` action path and `$entity.lifecycle.*`
+// substitution path (low-frequency, rule-fire-driven). NOT
+// per-message-shaped — apps with high-frequency lookup needs
+// should track their own entityID→workflow mapping and call the
+// workflow-typed Get directly.
+func (m *Manager) LookupByEntityID(ctx context.Context, entityID string) (Participant, error) {
 	m.mu.RLock()
 	regs := make([]*registration, 0, len(m.registrations))
 	for _, reg := range m.registrations {

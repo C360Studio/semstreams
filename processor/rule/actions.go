@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
@@ -30,8 +31,6 @@ const (
 	ActionTypeUpdateTriple = "update_triple"
 	// ActionTypePublishAgent triggers an agentic loop by publishing a TaskMessage
 	ActionTypePublishAgent = "publish_agent"
-	// ActionTypeTriggerWorkflow triggers a reactive workflow by publishing to workflow.trigger.<workflow_id>
-	ActionTypeTriggerWorkflow = "trigger_workflow"
 	// ActionTypeUpdateKV writes JSON to a named KV bucket with optional CAS merge
 	ActionTypeUpdateKV = "update_kv"
 	// ActionTypeDeny issues a deny verdict that short-circuits subsequent actions
@@ -45,6 +44,18 @@ const (
 	// the same rule firing; the asymmetry is the feature, not an oversight.
 	// See ADR-039 §"Why explicit approve, not optimistic absence of deny".
 	ActionTypeApprove = "approve"
+	// ActionTypeLifecycleTransition moves a lifecycle-managed entity to a new
+	// phase via the registered pkg/lifecycle.Manager. Atomic with optional
+	// set-ops on the same Update closure. See ADR-047.
+	ActionTypeLifecycleTransition = "lifecycle_transition"
+	// ActionTypeLifecycleComplete transitions a lifecycle-managed entity to
+	// the first terminal phase reachable from its current phase. See ADR-047
+	// + Manager.Complete for the selection rule.
+	ActionTypeLifecycleComplete = "lifecycle_complete"
+	// ActionTypeLifecycleFail transitions a lifecycle-managed entity to the
+	// declared "failed" terminal phase, carrying the reason for audit. See
+	// ADR-047 + Manager.Fail.
+	ActionTypeLifecycleFail = "lifecycle_fail"
 )
 
 // PredicateRuleDeny is the audit-triple predicate written by deny actions.
@@ -189,12 +200,6 @@ type Action struct {
 	// flows that don't opt in see no Metadata change).
 	RelatedLoops map[string]string `json:"related_loops,omitempty"`
 
-	// WorkflowID is the workflow identifier for trigger_workflow actions
-	WorkflowID string `json:"workflow_id,omitempty"`
-
-	// ContextData provides additional context passed to the workflow
-	ContextData map[string]any `json:"context_data,omitempty"`
-
 	// WorkflowSlug identifies the workflow for publish_agent actions (e.g., "github-issue-to-pr")
 	WorkflowSlug string `json:"workflow_slug,omitempty"`
 
@@ -268,13 +273,45 @@ type Action struct {
 	MaxIterations *int `json:"max_iterations,omitempty"`
 
 	// Reason is the human-readable verdict message for deny AND approve
-	// actions. For deny it travels with the *DenyVerdict error so callers
-	// can record it without a side-channel lookup; for approve it lands in
-	// the audit triple and in the verdict payload published to Subject.
-	// Variable substitution is applied (e.g.
-	// "$caller.id denied: insufficient role $caller.role" or
-	// "$caller.id approved for tool $message.tool_name").
+	// actions, and the failure cause for lifecycle_fail. For deny it travels
+	// with the *DenyVerdict error so callers can record it without a
+	// side-channel lookup; for approve it lands in the audit triple and in
+	// the verdict payload published to Subject; for lifecycle_fail it travels
+	// as the TransitionEvent.Note for audit (Manager.Fail rejects empty
+	// reasons — operators need the failure cause in the trail).
+	// Variable substitution is applied.
 	Reason string `json:"reason,omitempty"`
+
+	// Workflow names the lifecycle workflow this action targets, for the
+	// lifecycle_* action family (ADR-047). When empty, the action resolves
+	// the workflow by scanning Manager registrations for the trigger
+	// entity's ID (O(workflows × bucket-size) per call — fine for the
+	// rule-fire path but worth being explicit when authors know the type).
+	// Required when the trigger entity's lifecycle workflow is ambiguous
+	// across registrations.
+	Workflow string `json:"workflow,omitempty"`
+
+	// Phase is the target phase for lifecycle_transition. Must be declared
+	// in the registered Transitions table for Workflow. Variable
+	// substitution is applied so authors can write
+	// `"phase": "$message.next_phase"` when the target is data-driven.
+	Phase string `json:"phase,omitempty"`
+
+	// Set is an optional map of field-name → value-or-typed-op applied
+	// atomically with the lifecycle_transition phase change. Each entry is
+	// either a literal (string / number / bool — set as-is) or a typed
+	// operation:
+	//
+	//   {"op": "set", "value": <v>}   — equivalent to a bare literal v
+	//   {"op": "increment"}            — int/uint/float field += 1
+	//   {"op": "decrement"}            — int/uint/float field -= 1
+	//
+	// Field names match JSON tags on the Participant struct (the same
+	// surface UpdateFromOperator's patch keys use). Unknown fields surface
+	// as authoring errors. Set runs inside the same Manager.Update closure
+	// as the phase write — failures abort the whole transition, no partial
+	// state lands.
+	Set map[string]any `json:"set,omitempty"`
 
 	// ForEach is a substitution-resolvable reference to a list-typed
 	// value the action iterates over. Each iteration binds the current
@@ -353,6 +390,23 @@ type Publisher interface {
 	Publish(ctx context.Context, subject string, data []byte) error
 }
 
+// LifecycleManager is the subset of *lifecycle.Manager used by the
+// rule action executor for the lifecycle_* action family (ADR-047).
+// Defined as an interface so the executor can be tested without a
+// running NATS client.
+type LifecycleManager interface {
+	TransitionWith(ctx context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, note string, mutator func(lifecycle.Participant) error) error
+	Complete(ctx context.Context, workflow, entityID string) error
+	Fail(ctx context.Context, workflow, entityID, reason string) error
+	LookupByEntityID(ctx context.Context, entityID string) (lifecycle.Participant, error)
+	GetWorkflowDefinition(workflow string) (lifecycle.WorkflowDef, error)
+	// AssertRuleWritable enforces the rule-vs-operator convergence
+	// (ADR-047): lifecycle_transition's `set` clause must respect the
+	// same default-deny as UpdateFromOperator. Identity, phase, and
+	// non-operator-writable fields are protected.
+	AssertRuleWritable(workflow, fieldJSONName string) error
+}
+
 // ActionExecutor executes actions for rules.
 // It handles triple mutations, NATS publishing, KV writes, and other action types.
 type ActionExecutor struct {
@@ -360,6 +414,7 @@ type ActionExecutor struct {
 	tripleMutator TripleMutator                // Optional: if nil, triple mutations are logged but not persisted
 	publisher     Publisher                    // Optional: if nil, publish actions are logged but not sent
 	kvWriter      KVWriter                     // Optional: if nil, update_kv actions are logged but not executed
+	lifecycle     LifecycleManager             // Optional: if nil, lifecycle_* actions return an error explaining no Manager is wired
 	toolRegistry  component.ToolRegistryReader // Optional: if nil, publish_agent default_tools resolution returns empty
 }
 
@@ -370,6 +425,15 @@ type ActionExecutor struct {
 // processor when it has access to deps.ToolRegistry.
 func (e *ActionExecutor) SetToolRegistry(r component.ToolRegistryReader) {
 	e.toolRegistry = r
+}
+
+// SetLifecycleManager installs the Lifecycle harness Manager used by
+// the lifecycle_* action family. nil-valued arg disables the actions
+// (executor returns an error for lifecycle_* dispatches). Set
+// explicitly after construction by the rule processor when it has
+// access to the registered Manager.
+func (e *ActionExecutor) SetLifecycleManager(m LifecycleManager) {
+	e.lifecycle = m
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -437,14 +501,18 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executeUpdateTriple(ctx, action, ec)
 	case ActionTypePublishAgent:
 		return e.executePublishAgent(ctx, action, ec)
-	case ActionTypeTriggerWorkflow:
-		return e.executeTriggerWorkflow(ctx, action, ec)
 	case ActionTypeUpdateKV:
 		return e.executeUpdateKV(ctx, action, ec)
 	case ActionTypeDeny:
 		return e.executeDeny(ctx, action, ec)
 	case ActionTypeApprove:
 		return e.executeApprove(ctx, action, ec)
+	case ActionTypeLifecycleTransition:
+		return e.executeLifecycleTransition(ctx, action, ec)
+	case ActionTypeLifecycleComplete:
+		return e.executeLifecycleComplete(ctx, action, ec)
+	case ActionTypeLifecycleFail:
+		return e.executeLifecycleFail(ctx, action, ec)
 	default:
 		return fmt.Errorf("unknown action type: %s", action.Type)
 	}
@@ -1122,70 +1190,6 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 					"error", err)
 			}
 		}
-	}
-
-	return nil
-}
-
-// executeTriggerWorkflow triggers a reactive workflow by publishing to workflow.trigger.<workflow_id>.
-// This enables rules to initiate complex orchestration workflows while keeping rules simple.
-// The payload is wrapped in a BaseMessage for proper deserialization by the reactive workflow engine.
-func (e *ActionExecutor) executeTriggerWorkflow(ctx context.Context, action Action, ec *ExecutionContext) error {
-	entityID := ec.EntityID
-	if action.WorkflowID == "" {
-		return errors.New("workflow_id is required for trigger_workflow action")
-	}
-
-	// Build typed trigger payload (implements message.Payload)
-	payload := &WorkflowTriggerPayload{
-		WorkflowID:  action.WorkflowID,
-		EntityID:    entityID,
-		TriggeredAt: time.Now().UTC(),
-		RelatedID:   ec.RelatedID,
-		Context:     action.ContextData,
-	}
-
-	subject := fmt.Sprintf("workflow.trigger.%s", action.WorkflowID)
-
-	if e.logger != nil {
-		e.logger.Debug("Triggering workflow",
-			"workflow_id", action.WorkflowID,
-			"subject", subject,
-			"entity_id", entityID)
-	}
-
-	// Publish via NATS if publisher is configured
-	if e.publisher != nil {
-		// Create BaseMessage with proper type info for deserialization
-		msgType := message.Type{
-			Domain:   WorkflowTriggerDomain,
-			Category: WorkflowTriggerCategory,
-			Version:  WorkflowTriggerVersion,
-		}
-		baseMsg := message.NewBaseMessage(msgType, payload, "rule-processor")
-
-		// BaseMessage.MarshalJSON handles the wire format
-		data, err := json.Marshal(baseMsg)
-		if err != nil {
-			return fmt.Errorf("marshal workflow trigger message: %w", err)
-		}
-
-		if err := e.publisher.Publish(ctx, subject, data); err != nil {
-			return fmt.Errorf("publish workflow trigger to %s: %w", subject, err)
-		}
-
-		if e.logger != nil {
-			e.logger.Debug("Workflow trigger published",
-				"workflow_id", action.WorkflowID,
-				"subject", subject,
-				"entity_id", entityID,
-				"size", len(data))
-		}
-	} else if e.logger != nil {
-		e.logger.Debug("Workflow trigger not published (no publisher configured)",
-			"workflow_id", action.WorkflowID,
-			"subject", subject,
-			"entity_id", entityID)
 	}
 
 	return nil

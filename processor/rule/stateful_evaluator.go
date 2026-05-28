@@ -23,6 +23,23 @@ type StatefulEvaluator struct {
 	actionExecutor ActionExecutorInterface
 	exprEvaluator  *expression.Evaluator
 	logger         *slog.Logger
+
+	// lifecycleManager is the optional pkg/lifecycle.Manager wired by
+	// the rule Processor at Initialize. When non-nil, runEvaluation
+	// pre-resolves the trigger entity's lifecycle state into the
+	// evaluator's stateFields map so condition.Field references like
+	// `$entity.lifecycle.phase` evaluate. The action layer reads via
+	// ActionExecutor.lifecycle independently.
+	lifecycleManager LifecycleManager
+}
+
+// SetLifecycleManager installs the Lifecycle harness Manager used by
+// condition.Field resolution for `$entity.lifecycle.*` paths. Called
+// by the rule Processor at Initialize when a Manager is wired into
+// the deployment. nil arg disables resolution (tokens then surface as
+// missing-field errors at evaluation — loud-fail).
+func (e *StatefulEvaluator) SetLifecycleManager(m LifecycleManager) {
+	e.lifecycleManager = m
 }
 
 // ActionExecutorInterface defines the interface for action execution.
@@ -177,6 +194,7 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 		Related:     ev.Related,
 		State:       matchState,
 		MessageData: ev.MessageData,
+		Lifecycle:   e.lifecycleManager,
 	}
 
 	stateFields := expression.StateFields{
@@ -187,6 +205,10 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 	for field, prevValue := range prevState.FieldValues {
 		stateFields["$prev."+field] = prevValue
 	}
+	// $entity.lifecycle.* keys live in the same stateFields map by
+	// design (see evaluator.go's prefix-check). No-op when no Manager
+	// is wired or the trigger entity isn't lifecycle-managed.
+	PopulateLifecycleStateFields(ctx, e.lifecycleManager, ev.EntityID, stateFields)
 
 	actions := e.selectActions(ev.Rule, transition, currentlyMatching, recovering, ev.EntityID, ev.RelatedID, iteration)
 	e.runActions(ctx, ev.Rule, ec, actions, ev.Entity, stateFields, expression.MessageFields(ev.MessageData), ev.EntityID, ev.RelatedID)
@@ -223,12 +245,16 @@ func (e *StatefulEvaluator) reEvaluateTransitions(
 	for field, prevValue := range prevState.FieldValues {
 		prevFields["$prev."+field] = prevValue
 	}
+	// ADR-047: surface $entity.lifecycle.* keys to the evaluator on
+	// the transition-re-eval path so a rule conditioning on phase
+	// can fire its `On: enter/exit` transitions correctly.
+	PopulateLifecycleStateFields(context.Background(), e.lifecycleManager, entityID, prevFields)
 
 	// #149: substitute $-prefixed string Values in conditions
 	// against the entity before evaluation. Without this, a condition
 	// `value: "$entity.triple.foo.length"` reaches the operator as
 	// the literal template and coerce-errors at runtime.
-	ec := &ExecutionContext{EntityID: entityID, Entity: entity}
+	ec := &ExecutionContext{EntityID: entityID, Entity: entity, Lifecycle: e.lifecycleManager}
 	expr := expression.LogicalExpression{
 		Conditions: SubstituteConditionValues(ruleDef.Conditions, ec),
 		Logic:      ruleDef.Logic,
@@ -485,6 +511,7 @@ func (e *StatefulEvaluator) evaluateWhen(
 		EntityID:    entityID,
 		Entity:      entity,
 		MessageData: map[string]any(messageFields),
+		Lifecycle:   e.lifecycleManager,
 	}
 	expr := expression.LogicalExpression{
 		Conditions: SubstituteConditionValues(conditions, ec),

@@ -88,6 +88,15 @@ type Processor struct {
 	// the deployment (graph-only flows, etc.).
 	toolRegistry component.ToolRegistryReader
 
+	// lifecycleManager is the shared pkg/lifecycle.Manager plumbed
+	// through component.Dependencies.LifecycleManager (or a wrapped
+	// equivalent). Forwarded to the ActionExecutor at Initialize so
+	// the lifecycle_* action family (ADR-047) can move Participants
+	// through declared phases. Nil when no Lifecycle harness is wired
+	// into the deployment — lifecycle_* actions surface an error
+	// rather than silently no-op'ing.
+	lifecycleManager LifecycleManager
+
 	// decoder unmarshal incoming BaseMessage envelopes against the
 	// shared payload registry. Set via SetDecoder after construction
 	// (the existing NewProcessor signature predates Dependencies-based
@@ -280,6 +289,14 @@ func (rp *Processor) SetToolRegistry(r component.ToolRegistryReader) {
 // semantic messages — handleSemanticMessage will fail-fast.
 func (rp *Processor) SetDecoder(d *message.Decoder) {
 	rp.decoder = d
+}
+
+// SetLifecycleManager installs the pkg/lifecycle.Manager used by the
+// lifecycle_* action family (ADR-047). Mirrors SetToolRegistry/
+// SetDecoder. A nil arg disables the actions — lifecycle_* dispatch
+// surfaces a wiring-error rather than silently succeeding.
+func (rp *Processor) SetLifecycleManager(m LifecycleManager) {
+	rp.lifecycleManager = m
 }
 
 // setupPorts initializes input and output port definitions. Ports
@@ -536,6 +553,20 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		setter.SetToolRegistry(rp.toolRegistry)
 	}
 
+	// Propagate the Lifecycle harness Manager (ADR-047) so the
+	// lifecycle_* action family can dispatch transitions, AND so the
+	// stateful evaluator can resolve `$entity.lifecycle.*` condition
+	// fields against the trigger entity's Participant. Same
+	// type-assert pattern as SetToolRegistry — keeps concrete-field
+	// knowledge in the implementations.
+	if rp.lifecycleManager != nil {
+		if setter, ok := actionExecutor.(interface {
+			SetLifecycleManager(LifecycleManager)
+		}); ok {
+			setter.SetLifecycleManager(rp.lifecycleManager)
+		}
+	}
+
 	// Persist the executor on the processor so the cron scheduler
 	// (initializeCronScheduler) can dispatch through the same instance
 	// the StatefulEvaluator uses. Single shared executor keeps publishing
@@ -546,6 +577,11 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 
 	// Create StatefulEvaluator
 	rp.statefulEvaluator = NewStatefulEvaluator(rp.stateTracker, actionExecutor, rp.logger)
+	// ADR-047: same setter pattern as ActionExecutor so the evaluator
+	// can resolve $entity.lifecycle.* condition fields.
+	if rp.lifecycleManager != nil {
+		rp.statefulEvaluator.SetLifecycleManager(rp.lifecycleManager)
+	}
 
 	rp.logger.Info("State tracker initialized for stateful ECA rules")
 	return nil
