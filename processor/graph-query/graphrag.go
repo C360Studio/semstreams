@@ -2,6 +2,7 @@
 package graphquery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1249,6 +1250,22 @@ func (c *Component) searchEntitiesSemantic(ctx context.Context, query string, li
 	resp, err := c.natsClient.Request(ctx, "graph.embedding.query.search", data, 30*time.Second)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "GraphQuery", "searchEntitiesSemantic", "semantic search request")
+	}
+
+	// Handler-layer failure surfaces in the response body via natsclient's
+	// "error: <msg>" payload convention — most common cause here:
+	// graph-embedding's embedder isn't initialized yet, or the embedder
+	// (semembed HTTP / BM25 cache) couldn't produce a vector for the
+	// query text. Treat as "no semantic hits" so globalSearch's caller
+	// falls through to the tier-2 text-based community search instead of
+	// hard-failing. Per feedback_natsclient_error_payload_convention;
+	// gh#93 tracks the header-classified replacement (breaking change,
+	// deferred — quick site-local fix here to unblock pre-tag e2e).
+	if bytes.HasPrefix(resp, []byte("error: ")) {
+		c.logger.Debug("semantic search returned handler error",
+			slog.String("query", query),
+			slog.String("body", string(resp)))
+		return nil, nil
 	}
 
 	// Response format from graph-embedding/query.go:SearchResponse

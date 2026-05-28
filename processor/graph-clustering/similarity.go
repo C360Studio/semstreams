@@ -2,6 +2,7 @@
 package graphclustering
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -90,6 +91,20 @@ func (f *querySimilarityFinder) FindSimilar(
 		f.logger.Debug("similarity query failed",
 			slog.String("entity_id", entityID),
 			slog.Any("error", err))
+		return nil, nil
+	}
+
+	// Handler-layer failure surfaces in the response body via natsclient's
+	// "error: <msg>" payload convention (most common case here: source
+	// entity has no embedding yet, e.g. aggregation/group entities never
+	// projected through the embedder). Treat as "no similar found" so the
+	// caller (SemanticGapDetector) keeps walking other entities. Per
+	// feedback_natsclient_error_payload_convention; gh#93 tracks the
+	// header-classified replacement (breaking change, deferred).
+	if bytes.HasPrefix(respData, []byte("error: ")) {
+		f.logger.Debug("similarity query returned handler error",
+			slog.String("entity_id", entityID),
+			slog.String("body", string(respData)))
 		return nil, nil
 	}
 
