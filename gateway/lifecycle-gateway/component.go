@@ -24,20 +24,24 @@ import (
 // literal.
 const ComponentName = "lifecycle-gateway"
 
-// Config is the operator-facing configuration surface.
+// Config is the operator-facing configuration surface. Field tags
+// populate the generated OpenAPI schema (`schemas/lifecycle-gateway.v1.json`)
+// — every field MUST carry `schema:"type:...,description:...,category:..."`
+// so operator dashboards can render the config surface. See
+// `component/schema_tags.go` for the conventions.
 type Config struct {
 	// PathPrefix is mounted under the parent component prefix (the
 	// arg to RegisterHTTPHandlers). Default "workflows" so the
 	// fully-resolved routes look like /lifecycle-gateway/workflows
 	// or /workflows when mounted at root. Leading slash is added
 	// automatically; trailing slash is normalized.
-	PathPrefix string `json:"path_prefix,omitempty"`
+	PathPrefix string `json:"path_prefix,omitempty" schema:"type:string,description:URL path prefix mounted under the parent component prefix (e.g. \"workflows\" → /lifecycle-gateway/workflows). Default \"workflows\". Must be non-empty after stripping leading/trailing slashes.,category:basic"`
 
 	// EnableWebSocket toggles the WS upgrade path for
 	// {prefix}/{type}?stream=true. Default true. Operators that
 	// don't need live updates (purely poll-based dashboards) can
 	// disable it to remove the upgrade-handler surface.
-	EnableWebSocket bool `json:"enable_websocket"`
+	EnableWebSocket bool `json:"enable_websocket" schema:"type:bool,description:Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true. Set to false to disable live-update streaming and keep the gateway poll-only.,category:basic"`
 
 	// MaxBodyBytes caps the size of operator-supplied JSON bodies on
 	// POST {type}/{id}/state and POST {type}/{id}/transition (S2
@@ -45,7 +49,7 @@ type Config struct {
 	// Operators that genuinely need larger patch bodies (uncommon —
 	// operator_writable surface should be narrow) raise this
 	// explicitly. Zero or negative means "no override" → default.
-	MaxBodyBytes int64 `json:"max_body_bytes,omitempty"`
+	MaxBodyBytes int64 `json:"max_body_bytes,omitempty" schema:"type:int,description:Maximum bytes accepted in POST .../state and POST .../transition request bodies. Default 1048576 (1 MiB). Zero or negative means use default.,category:advanced"`
 
 	// AllowedOrigins is the WebSocket-upgrade origin allowlist
 	// (S7 reviewer fix — the gateway's POST surface mutates state,
@@ -55,7 +59,7 @@ type Config struct {
 	// "permit all" — the gateway emits a Warn log at Start time so
 	// operators see the policy choice in their logs. Wildcards are
 	// not supported; explicit origins only.
-	AllowedOrigins []string `json:"allowed_origins,omitempty"`
+	AllowedOrigins []string `json:"allowed_origins,omitempty" schema:"type:array,description:WebSocket upgrade Origin allowlist as exact-match strings. Empty list permits all origins and logs a Warn at Start; set explicitly to restrict cross-origin upgrades.,category:advanced"`
 }
 
 // Validate enforces operator-friendly constraints on the config.
