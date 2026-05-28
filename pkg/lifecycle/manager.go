@@ -410,6 +410,21 @@ func (m *Manager) Update(ctx context.Context, workflow, entityID string, mutator
 // Note is an optional free-text annotation; Manager.Fail uses it
 // to carry the failure reason. Pass "" when not relevant.
 func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase string, source TransitionSource, note string) error {
+	return m.TransitionWith(ctx, workflow, entityID, newPhase, source, note, nil)
+}
+
+// TransitionWith is Transition + a caller-supplied mutator that runs
+// inside the same Update closure (and therefore the same atomic KV
+// write) as the phase change. mutator runs AFTER transitions-table
+// validation but BEFORE the phase field is rewritten — failures from
+// the mutator abort the whole transition (no partial state write,
+// CAS retry replays the mutator on the next revision).
+//
+// Intended for the rule engine's `lifecycle_transition` action's
+// `set` clause: state-field mutations + phase change live in one
+// optimistic-concurrency-protected write. nil mutator is equivalent
+// to Transition (and is the path Transition itself takes).
+func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPhase string, source TransitionSource, note string, mutator func(Participant) error) error {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return err
@@ -427,6 +442,11 @@ func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase s
 		if !reg.transitions.IsValidTransition(from, newPhase) {
 			return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q to=%q (not a declared edge)",
 				ErrInvalidTransition, reg.workflow, entityID, from, newPhase)
+		}
+		if mutator != nil {
+			if err := mutator(p); err != nil {
+				return err
+			}
 		}
 		// Mutate the Phase field in place via reflection (the
 		// alternative — requiring Participant.SetPhase(string) on

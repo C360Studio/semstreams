@@ -172,8 +172,17 @@ func (e *Evaluator) EvaluateWithStateAndMessage(entityState *gtypes.EntityState,
 // the layered sources (stateFields, messageFields, entity triples) per
 // the precedence rule documented on EvaluateWithStateAndMessage.
 func (e *Evaluator) evaluateConditionWithStateAndMessage(entityState *gtypes.EntityState, stateFields StateFields, messageFields MessageFields, condition ConditionExpression) (bool, error) {
-	// 1. `$state.*` / `$prev.*` — pseudo-fields from rule match state.
-	if strings.HasPrefix(condition.Field, "$state.") || strings.HasPrefix(condition.Field, "$prev.") {
+	// 1. `$state.*` / `$prev.*` / `$entity.lifecycle.*` — pseudo-fields
+	// from rule match state and the Lifecycle harness (ADR-047). The
+	// stateFields map is the shared carrier for caller-resolved values;
+	// the Lifecycle prefix is recognized here so callers can stuff
+	// `$entity.lifecycle.phase` etc. into the same map as `$state.*`
+	// and reuse one resolution path. Lifecycle values are pre-resolved
+	// at the caller against pkg/lifecycle.Manager — see
+	// stateful_evaluator.go's runEvaluation for the wire.
+	if strings.HasPrefix(condition.Field, "$state.") ||
+		strings.HasPrefix(condition.Field, "$prev.") ||
+		strings.HasPrefix(condition.Field, "$entity.lifecycle.") {
 		fieldValue, exists := stateFields[condition.Field]
 		if !exists {
 			if condition.Required {

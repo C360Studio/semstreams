@@ -469,6 +469,170 @@ func TestManager_Transition_RejectsFromTerminal(t *testing.T) {
 	}
 }
 
+// --- TransitionWith ---
+
+// TransitionWith is the atomic-mutate-and-phase variant that
+// underpins the rule engine's lifecycle_transition action's `set`
+// clause (ADR-047 PR 2). The mutator runs after transitions-table
+// validation but before the phase write; failures abort the entire
+// transition (no partial state lands).
+func TestManager_TransitionWith_MutatorRunsBeforePhaseWrite(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "tw-1", "planning")
+
+	err := mgr.TransitionWith(context.Background(), "mission", "tw-1", "flying", TransitionSourceRule, "",
+		func(p Participant) error {
+			m := p.(*missionState)
+			m.OwnerOrgIDF = "acme"
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("TransitionWith planning→flying: %v", err)
+	}
+	got, _ := mgr.Get(context.Background(), "mission", "tw-1")
+	m := got.(*missionState)
+	if m.Phase() != "flying" {
+		t.Errorf("Phase didn't update, got %q", m.Phase())
+	}
+	if m.OwnerOrgIDF != "acme" {
+		t.Errorf("mutator field write didn't persist, got %q", m.OwnerOrgIDF)
+	}
+}
+
+func TestManager_TransitionWith_MutatorErrorAbortsTransition(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "tw-2", "planning")
+
+	mutatorErr := errors.New("invariant violated")
+	err := mgr.TransitionWith(context.Background(), "mission", "tw-2", "flying", TransitionSourceRule, "",
+		func(_ Participant) error { return mutatorErr })
+	if !errors.Is(err, mutatorErr) {
+		t.Fatalf("expected mutator error to surface, got %v", err)
+	}
+	// Phase must not have moved.
+	got, _ := mgr.Get(context.Background(), "mission", "tw-2")
+	if got.Phase() != "planning" {
+		t.Errorf("phase should remain planning when mutator errors, got %q", got.Phase())
+	}
+}
+
+func TestManager_TransitionWith_NilMutatorEqualsTransition(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "tw-3", "planning")
+	// Nil mutator is the path Transition itself takes; confirm parity.
+	err := mgr.TransitionWith(context.Background(), "mission", "tw-3", "flying", TransitionSourceRule, "", nil)
+	if err != nil {
+		t.Fatalf("TransitionWith nil mutator: %v", err)
+	}
+	got, _ := mgr.Get(context.Background(), "mission", "tw-3")
+	if got.Phase() != "flying" {
+		t.Errorf("phase didn't update, got %q", got.Phase())
+	}
+}
+
+func TestManager_TransitionWith_RejectsBeforeRunningMutator(t *testing.T) {
+	// Mutator must NOT run when the target phase is undeclared —
+	// transitions-table validation happens first.
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "tw-4", "planning")
+
+	mutatorRan := false
+	err := mgr.TransitionWith(context.Background(), "mission", "tw-4", "exploded", TransitionSourceRule, "",
+		func(_ Participant) error {
+			mutatorRan = true
+			return nil
+		})
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("expected ErrInvalidTransition, got %v", err)
+	}
+	if mutatorRan {
+		t.Errorf("mutator ran despite target-phase rejection (validation must precede mutator)")
+	}
+}
+
+// --- AssertRuleWritable ---
+
+// AssertRuleWritable is consumed by processor/rule's lifecycle_transition
+// action to enforce convergence with UpdateFromOperator's default-deny.
+// Tests cover: happy path (operator_writable field), and the four
+// rejection classes (identity, phase, non-operator-writable, unknown
+// workflow / unknown field).
+
+func TestManager_AssertRuleWritable_AllowsOperatorWritableField(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	if err := mgr.AssertRuleWritable("mission", "owner_org_id"); err != nil {
+		t.Errorf("owner_org_id is operator_writable, got %v", err)
+	}
+}
+
+func TestManager_AssertRuleWritable_RejectsIdentityField(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	err := mgr.AssertRuleWritable("mission", "entity_id")
+	if !errors.Is(err, ErrFieldNotOperatorWritable) {
+		t.Errorf("expected ErrFieldNotOperatorWritable for identity field, got %v", err)
+	}
+}
+
+func TestManager_AssertRuleWritable_RejectsPhaseField(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	err := mgr.AssertRuleWritable("mission", "phase")
+	if !errors.Is(err, ErrFieldNotOperatorWritable) {
+		t.Errorf("expected ErrFieldNotOperatorWritable for phase field, got %v", err)
+	}
+}
+
+func TestManager_AssertRuleWritable_RejectsNonOperatorWritableField(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	// parent_mission has no lifecycle tag at all → not operator_writable
+	// → must reject.
+	err := mgr.AssertRuleWritable("mission", "parent_mission")
+	if !errors.Is(err, ErrFieldNotOperatorWritable) {
+		t.Errorf("expected ErrFieldNotOperatorWritable for tag-less field, got %v", err)
+	}
+}
+
+func TestManager_AssertRuleWritable_RejectsUnknownField(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	err := mgr.AssertRuleWritable("mission", "no_such_field")
+	if !errors.Is(err, ErrFieldNotOperatorWritable) {
+		t.Errorf("expected ErrFieldNotOperatorWritable for unknown field, got %v", err)
+	}
+}
+
+func TestManager_AssertRuleWritable_RejectsUnknownWorkflow(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	err := mgr.AssertRuleWritable("not_a_workflow", "owner_org_id")
+	if !errors.Is(err, ErrWorkflowNotRegistered) {
+		t.Errorf("expected ErrWorkflowNotRegistered, got %v", err)
+	}
+}
+
+// --- LookupByEntityID ---
+
+func TestManager_LookupByEntityID_FindsAcrossWorkflows(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	mustCreate(t, mgr, "lookup-1", "planning")
+
+	p, err := mgr.LookupByEntityID(context.Background(), "lookup-1")
+	if err != nil {
+		t.Fatalf("LookupByEntityID: %v", err)
+	}
+	if p.Workflow() != "mission" {
+		t.Errorf("expected workflow=mission, got %q", p.Workflow())
+	}
+	if p.EntityID() != "lookup-1" {
+		t.Errorf("expected entity_id=lookup-1, got %q", p.EntityID())
+	}
+}
+
+func TestManager_LookupByEntityID_ReturnsNotFound(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	_, err := mgr.LookupByEntityID(context.Background(), "does-not-exist")
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("expected ErrEntityNotFound, got %v", err)
+	}
+}
+
 // --- Complete ---
 
 func TestManager_Complete_PicksFirstReachableTerminal(t *testing.T) {
