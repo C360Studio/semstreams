@@ -2,11 +2,56 @@
 
 ## Status
 
-**Accepted** — 2026-05-28. Shipped as the 4-PR bundle (#154 / #155 /
-#156 / #157) and tagged v1.0.0-beta.85 with lifecycle e2e tier green
-(`task e2e:lifecycle` — gateway + rule-engine + Manager round-trip
-across 8 stages including UDP-driven rule transition + operator
-transition + history replay + WebSocket live update).
+**SUPERSEDED by [ADR-049](049-lifecycle-harness-prime-schema-over-entity-states.md)**
+— 2026-05-28. The "Manager owns per-workflow KV bucket"
+architectural choice in this ADR shipped as v1.0.0-beta.85
+(four-PR bundle #154/#155/#156/#157). The e2e build for the
+lifecycle tier surfaced that the choice produces **graph-invisible
+workflow state** — the lifecycle-managed entity's phase never
+lands as a triple in ENTITY_STATES; the graph layer doesn't see
+the workflow. ADR-049 redesigns the harness as a
+schema-and-discipline layer over ENTITY_STATES (state changes
+emit through graph-ingest like every other write), preserving the
+Participant/Transitions/operator-API concepts from this ADR while
+retiring the private-bucket substrate choice. beta.85 is
+retroactively marked v0 of the harness; v1 ships in beta.86 on
+the ADR-049 substrate.
+
+The concepts in this ADR that carry forward into ADR-049:
+- Participant interface (small contract on app domain structs)
+- Transitions table with structural Validate
+- Struct-tag parser (`lifecycle:"id|phase|readonly|operator_writable|indexable"`)
+- Operator API surface (workflows + instances + state patch +
+  transition + history + WebSocket stream)
+- Phase drift detection
+- The workflow-substrate concept itself
+
+What changes in ADR-049:
+- Manager does NOT own per-workflow KV buckets
+- State changes go through graph-ingest via
+  `UpdateEntityWithTriplesRequest`
+- Schema declarations grow `ChildWorkflows`, `ReferencePredicates`,
+  `AuditPredicates`
+- History reads ENTITY_STATES revisions with source attribution
+  from the audit-predicate triples (fixes the always-`framework`
+  Triggered bug structurally)
+- lifecycle-gateway slims to thin composition over graph-gateway
+- Create semantics reframe to "add lifecycle dimension" (allows
+  coexisting with existing non-lifecycle triples on the same entity)
+
+The history below this status block is preserved as the design-process
+record for what was decided + shipped in beta.85. The architectural
+analysis remains valid as background; the per-workflow bucket
+recommendation is no longer the canonical position — ADR-049 is.
+
+---
+
+**Original status (Accepted 2026-05-28)** — Shipped as the 4-PR
+bundle (#154 / #155 / #156 / #157) and tagged v1.0.0-beta.85 with
+lifecycle e2e tier green (`task e2e:lifecycle` — gateway +
+rule-engine + Manager round-trip across 8 stages including
+UDP-driven rule transition + operator transition + history replay
++ WebSocket live update).
 Originally proposed 2026-05-24; resolves the workflow-primitives design
 exercise ([proposal](../proposals/workflow-primitives-design-exercise.md),
 [decision draft](../proposals/workflow-primitives-decision.md),
