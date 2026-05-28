@@ -7,198 +7,140 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"slices"
 	"sync"
+	"time"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Manager is the framework-provided harness over Participant
-// implementations. One Manager per process; workflow types register
-// at startup via Manager.Register.
+// lifecycleMessageType identifies writes from the harness in graph-ingest
+// telemetry. Stamped on every UpdateEntityWithTriplesRequest the Manager
+// emits so operators can grep for lifecycle-driven entity mutations.
+var lifecycleMessageType = message.Type{
+	Domain:   "lifecycle",
+	Category: "harness",
+	Version:  "v1",
+}
+
+// Manager is the schema-and-discipline layer over ENTITY_STATES
+// (ADR-049). Workflow types register at startup via Manager.Register;
+// state changes route through graph-ingest via the standard
+// UpdateEntityWithTriples wire (with CAS-on-condition via
+// ExpectedRevision); reads project triples into the registered
+// Schema struct.
 //
 // Concurrency model: registrations map is protected by RWMutex
-// (read-heavy: Register at startup, every Get/Update reads).
-// Per-entity concurrency is delegated to the kvStore's revision-CAS
-// semantics — Manager.Update's mutator closure runs under retry-
-// on-conflict, so concurrent updates to the same entity serialize
-// without an in-process per-entity lock.
+// (read-heavy: Register at startup, every Get/Transition reads).
+// Per-entity concurrency is handled by graph-ingest's CAS — the
+// Manager.Transition loop re-reads on ErrKVRevisionMismatch and
+// re-validates until either the write commits or the retry budget
+// exhausts.
 type Manager struct {
 	natsClient *natsclient.Client
 	logger     *slog.Logger
+	emitter    graphEmitter
 
-	// storeFactory builds a per-bucket kvStore. The production
-	// constructor (NewManager) wires this to a kvNATSStore-builder
-	// closure over natsClient; tests inject a mock-store factory
-	// via newManagerForTest.
-	storeFactory func(bucket string) (kvStore, error)
+	// entityStatesBucket is the direct KV handle for ENTITY_STATES.
+	// Used for reads (Get, List, History) and Watch — graph-ingest
+	// is the single writer, but anyone can read. Lazily initialized
+	// on first use; in the test path it's pre-populated.
+	bucketMu           sync.Mutex
+	entityStatesBucket jetstream.KeyValue
 
 	mu            sync.RWMutex
 	registrations map[string]*registration
 
 	// driftSeen memoizes phase-drift Warn-log emissions so List
 	// callers polling at dashboard frequencies don't generate
-	// N×interval log lines per drifted entity. Keyed by
-	// "<workflow>|<entityID>|<phase>" — re-logs only when the
-	// entity transitions into a NEW drifted phase, never on
-	// repeated observation of the same drift state. Memory is
-	// bounded by total distinct (entity, phase) drift tuples.
-	// sync.Map (not sync.Mutex+map) because the read path
-	// dominates: Get/List are read-heavy.
+	// N×interval log lines per drifted entity.
 	driftSeen sync.Map
 }
 
 // registration holds the per-workflow-type state Manager needs at
-// every Get / Create / Update call. Built once at Register time;
-// read-only after — every field is immutable post-Register so the
-// RWMutex only protects the map insert, not the registration body.
+// every Get / Create / Transition call. Built once at Register time;
+// read-only after.
 type registration struct {
-	workflow    string
-	factory     func() Participant
-	transitions Transitions
-	structMeta  *structMeta
-	bucket      string
-	store       kvStore
-
-	// keySample is a cached factory instance held solely to
-	// dispatch the KVKey(entityID) method without allocating a
-	// fresh Participant per Get/Update. Per ADR-047's KVKey
-	// contract, KVKey must be a pure function of entityID — no
-	// per-instance struct state is consulted — so sharing one
-	// sample across all calls is safe even under concurrency
-	// (KVKey is read-only on the receiver).
-	keySample Participant
+	workflow Workflow
+	meta     *structMeta
 }
 
 // NewManager constructs a Manager that talks to NATS via the given
 // client. Logger may be nil — falls back to slog.Default.
 //
 // Workflow registration happens via Manager.Register at app
-// startup; this constructor itself does not touch NATS (per-bucket
-// kvStore handles open lazily at Register time so deployments with
-// no workflows registered pay no KV cost).
+// startup; this constructor itself does not touch NATS (the
+// ENTITY_STATES bucket handle initializes lazily on first read).
 func NewManager(client *natsclient.Client, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	m := &Manager{
+	return &Manager{
 		natsClient:    client,
 		logger:        logger,
+		emitter:       newGraphEmitterNATS(client, 5*time.Second),
 		registrations: make(map[string]*registration),
 	}
-	m.storeFactory = m.defaultStoreFactory
-	return m
 }
 
-// newManagerForTest constructs a Manager wired to the given store
-// factory, bypassing NATS entirely. Test-only — production callers
-// use NewManager.
-func newManagerForTest(logger *slog.Logger, factory func(bucket string) (kvStore, error)) *Manager {
+// newManagerForTest constructs a Manager with an injected emitter
+// and an injected ENTITY_STATES bucket. Test-only — production
+// callers use NewManager.
+func newManagerForTest(logger *slog.Logger, emitter graphEmitter, bucket jetstream.KeyValue) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
-		logger:        logger,
-		storeFactory:  factory,
-		registrations: make(map[string]*registration),
+		logger:             logger,
+		emitter:            emitter,
+		entityStatesBucket: bucket,
+		registrations:      make(map[string]*registration),
 	}
 }
 
-// defaultStoreFactory is NewManager's wiring to kvNATSStore. Kept
-// as a method so newManagerForTest can override storeFactory before
-// any Register call lands.
-func (m *Manager) defaultStoreFactory(bucket string) (kvStore, error) {
-	return newKVNATSStore(m.natsClient, bucket)
-}
-
-// Register declares a workflow type to the Manager. Must be called
-// at app startup, before any Get / Create / Update calls land.
+// Register declares a workflow to the Manager. Must be called at
+// app startup, before any Get / Create / Transition calls land.
 // Idempotent at the wiring level — re-registering the same workflow
-// returns ErrWorkflowAlreadyRegistered to surface a duplicate-init
+// name returns ErrWorkflowAlreadyRegistered to surface a duplicate-init
 // wiring bug.
 //
-// The factory returns a fresh zero-value Participant; Manager.Get
-// uses it as the json.Unmarshal target so the codec can populate
-// the app's typed state struct. Factory must return a POINTER
-// receiver (json.Unmarshal can't populate value-typed Participant
-// implementations).
+// The Workflow.Schema reflect.Type is reflected over at Register
+// time to build the projection metadata (predicate→FieldIndex map);
+// the resulting structMeta is cached for the lifetime of the Manager.
 //
-// transitions is validated against Transitions.Validate before
-// registration commits; an invalid table is rejected with the
-// validation error wrapped as ErrInvalidTransitionsTable.
-func (m *Manager) Register(workflow string, factory func() Participant, transitions Transitions) error {
-	if workflow == "" {
-		return fmt.Errorf("%w: workflow name required", ErrWorkflowNotRegistered)
-	}
-	if factory == nil {
-		return fmt.Errorf("%w: factory required for workflow %q", ErrWorkflowNotRegistered, workflow)
-	}
-
-	if err := transitions.Validate(); err != nil {
+// Returns ErrInvalidTransitionsTable if the table is internally
+// inconsistent. Returns the wrapped tag-parsing error for unknown
+// or contradictory lifecycle tags on Schema fields.
+func (m *Manager) Register(workflow Workflow) error {
+	if err := workflow.validate(); err != nil {
 		return err
 	}
-
-	sample := factory()
-	if sample == nil {
-		return fmt.Errorf("%w: factory for workflow %q returned nil", ErrWorkflowNotRegistered, workflow)
-	}
-
-	// Validate factory return shape — must be a non-nil pointer to a
-	// settable struct (json.Unmarshal target + reflect.Value field
-	// writes both require addressability).
-	rv := reflect.ValueOf(sample)
-	if rv.Kind() != reflect.Pointer || rv.IsNil() {
-		return fmt.Errorf("%w: factory for workflow %q must return non-nil pointer (got %v)",
-			ErrWorkflowNotRegistered, workflow, rv.Kind())
-	}
-
-	structMeta, err := parseStructTags(rv)
+	meta, err := parseSchemaType(workflow.Schema)
 	if err != nil {
 		return err
-	}
-
-	bucket := sample.KVBucket()
-	if bucket == "" {
-		// Defensive: an empty KVBucket would route every workflow's
-		// instances into bucket "" — almost certainly a wiring bug.
-		return fmt.Errorf("%w: factory for workflow %q returned empty KVBucket",
-			ErrWorkflowNotRegistered, workflow)
-	}
-
-	if sample.Workflow() == "" {
-		return fmt.Errorf("%w: factory for workflow %q returned empty Workflow() — must match the registered name",
-			ErrWorkflowNotRegistered, workflow)
-	}
-	if sample.Workflow() != workflow {
-		return fmt.Errorf("%w: factory for workflow %q returns Workflow()=%q (mismatch — factory's Workflow() must match the registered name)",
-			ErrWorkflowNotRegistered, workflow, sample.Workflow())
-	}
-
-	store, err := m.storeFactory(bucket)
-	if err != nil {
-		return fmt.Errorf("lifecycle: open KV bucket %q for workflow %q: %w", bucket, workflow, err)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.registrations[workflow]; exists {
-		return fmt.Errorf("%w: workflow %q", ErrWorkflowAlreadyRegistered, workflow)
+	if _, exists := m.registrations[workflow.Name]; exists {
+		return fmt.Errorf("%w: workflow %q", ErrWorkflowAlreadyRegistered, workflow.Name)
 	}
 
-	m.registrations[workflow] = &registration{
-		workflow:    workflow,
-		factory:     factory,
-		transitions: transitions,
-		structMeta:  structMeta,
-		bucket:      bucket,
-		store:       store,
-		keySample:   sample,
+	m.registrations[workflow.Name] = &registration{
+		workflow: workflow,
+		meta:     meta,
 	}
 	m.logger.Info("lifecycle: registered workflow",
-		slog.String("workflow", workflow),
-		slog.String("bucket", bucket),
-		slog.Int("phase_count", len(transitions)))
+		slog.String("workflow", workflow.Name),
+		slog.String("pattern", workflow.EntityIDPattern),
+		slog.Int("phase_count", len(workflow.Transitions)),
+		slog.Int("operator_writable_predicates", len(workflow.OperatorWritablePredicates)),
+		slog.Int("child_workflows", len(workflow.ChildWorkflows)),
+		slog.Int("reference_predicates", len(workflow.ReferencePredicates)),
+	)
 	return nil
 }
 
@@ -214,89 +156,133 @@ func (m *Manager) lookupByWorkflow(workflow string) (*registration, error) {
 	return reg, nil
 }
 
-// Get loads the instance at entityID for the given workflow type.
-// Returns ErrEntityNotFound when no instance exists at the key,
-// ErrWorkflowNotRegistered when the workflow type isn't registered.
-//
-// The returned Participant is a fresh instance — mutating it does
-// NOT persist. Use Manager.Update with a mutator closure to commit
-// changes.
-//
-// Drift validation: TODO(manager) — see Participant.Phase doc-comment.
-// Currently this just returns whatever Phase() the deserialized struct
-// reports, even if it's not in the registered Transitions table.
-// PR 1b's query-ops slice adds the drift check.
-func (m *Manager) Get(ctx context.Context, workflow, entityID string) (Participant, error) {
-	reg, err := m.lookupByWorkflow(workflow)
-	if err != nil {
-		return nil, err
+// ensureBucket lazy-initializes the ENTITY_STATES bucket handle.
+// graph-ingest owns the bucket's lifecycle; the Manager just opens
+// an existing handle.
+func (m *Manager) ensureBucket(ctx context.Context) (jetstream.KeyValue, error) {
+	m.bucketMu.Lock()
+	defer m.bucketMu.Unlock()
+	if m.entityStatesBucket != nil {
+		return m.entityStatesBucket, nil
 	}
-	return m.getFromRegistration(ctx, reg, entityID)
-}
-
-// getFromRegistration is the shared Get-by-resolved-registration
-// path. Reused by Update so it doesn't re-take the registrations
-// RLock per retry.
-func (m *Manager) getFromRegistration(ctx context.Context, reg *registration, entityID string) (Participant, error) {
-	p, _, err := m.getWithRevision(ctx, reg, entityID)
-	return p, err
-}
-
-// getWithRevision returns the Participant plus the KV revision at
-// which it was loaded — required for Update's CAS write. The Get
-// public method discards the revision; Update uses it.
-func (m *Manager) getWithRevision(ctx context.Context, reg *registration, entityID string) (Participant, uint64, error) {
-	key := keyForEntity(entityID, reg)
-	value, revision, err := reg.store.Get(ctx, key)
+	if m.natsClient == nil {
+		return nil, fmt.Errorf("lifecycle: NATS client unavailable (test-mode Manager constructed without an ENTITY_STATES bucket)")
+	}
+	bucket, err := m.natsClient.GetKeyValueBucket(ctx, graph.BucketEntityStates)
 	if err != nil {
-		if errors.Is(err, errKVKeyNotFound) {
-			return nil, 0, fmt.Errorf("%w: workflow=%q entity_id=%q",
-				ErrEntityNotFound, reg.workflow, entityID)
+		return nil, fmt.Errorf("lifecycle: open %s bucket: %w", graph.BucketEntityStates, err)
+	}
+	m.entityStatesBucket = bucket
+	return bucket, nil
+}
+
+// getEntity reads the entity state from ENTITY_STATES + its current
+// KV revision. Returns ErrEntityNotFound when the entity has no
+// triples at all (never created).
+func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.EntityState, uint64, error) {
+	bucket, err := m.ensureBucket(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	entry, err := bucket.Get(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, 0, fmt.Errorf("%w: entity_id=%q", ErrEntityNotFound, entityID)
 		}
 		return nil, 0, fmt.Errorf("lifecycle: KV get for %q: %w", entityID, err)
 	}
-	target := reg.factory()
-	if err := json.Unmarshal(value, target); err != nil {
-		return nil, 0, fmt.Errorf("lifecycle: unmarshal entity %q (workflow %q): %w",
-			entityID, reg.workflow, err)
+	var state graph.EntityState
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+		return nil, 0, fmt.Errorf("lifecycle: unmarshal entity %q: %w", entityID, err)
 	}
-	// Drift detection — resolves the TODO(manager) marker on
-	// Participant.Phase. An entity whose Phase isn't in the
-	// registered Transitions table is silently treated as
-	// terminal by Transitions.IsTerminal (defensive default), so
-	// it never appears in Active=true lists where an operator
-	// would notice it. Surface the drift loudly via Warn so the
-	// log signal makes the silent degradation visible. Apps
-	// wanting structured detection rather than log-scraping can
-	// add a Degraded-bool wrapper in a future API extension —
-	// log-only is the v1 surface (see reviewer m2 on PR 1b core
-	// + the Degraded-bool precedent from PR #137 / GH #120).
-	if _, declared := reg.transitions[target.Phase()]; !declared {
-		// De-dup the Warn per (workflow, entityID, phase) tuple so
-		// List callers polling at dashboard frequencies don't
-		// flood the log substrate with N×interval drift events
-		// per stuck entity. The same drift triggers exactly one
-		// Warn per process; transitioning into a NEW drifted
-		// phase re-logs.
-		driftKey := reg.workflow + "|" + entityID + "|" + target.Phase()
+	return &state, entry.Revision(), nil
+}
+
+// Get reads the entity at entityID for the given workflow and
+// projects its triples into a fresh Participant of the registered
+// Schema type. Returns ErrEntityNotFound when the entity doesn't
+// exist; ErrEntityNotLifecycleManaged when it exists but has no
+// phase triple.
+//
+// The returned Participant is a fresh instance — mutating it does
+// NOT persist. Use Manager.Transition or Manager.UpdateFromOperator
+// to commit changes.
+func (m *Manager) Get(ctx context.Context, workflow, entityID string) (Participant, error) {
+	p, _, err := m.getWithRevision(ctx, workflow, entityID)
+	return p, err
+}
+
+// GetWithRevision is like Get but also returns the entity's current
+// KV revision. Callers building their own CAS loops branch on the
+// revision; the framework's own Transition / UpdateFromOperator
+// uses it internally.
+func (m *Manager) GetWithRevision(ctx context.Context, workflow, entityID string) (Participant, uint64, error) {
+	return m.getWithRevision(ctx, workflow, entityID)
+}
+
+func (m *Manager) getWithRevision(ctx context.Context, workflow, entityID string) (Participant, uint64, error) {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return nil, 0, err
+	}
+	state, revision, err := m.getEntity(ctx, entityID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+		return nil, 0, fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
+			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
+	}
+
+	target := reflect.New(reg.meta.GoType).Interface().(Participant)
+	if err := projectTriples(reg.meta, entityID, state.Triples, target); err != nil {
+		return nil, 0, fmt.Errorf("lifecycle: project entity %q (workflow %q): %w",
+			entityID, reg.workflow.Name, err)
+	}
+
+	// Drift detection — entity's projected phase isn't declared in
+	// the transitions table. Logged once per (workflow, entity, phase)
+	// tuple so polling callers don't flood logs.
+	if _, declared := reg.workflow.Transitions[target.Phase()]; !declared {
+		driftKey := reg.workflow.Name + "|" + entityID + "|" + target.Phase()
 		if _, alreadyLogged := m.driftSeen.LoadOrStore(driftKey, struct{}{}); !alreadyLogged {
 			m.logger.Warn("lifecycle: entity phase not declared in transitions table — silent drift detected (logged once per process per drift state)",
-				slog.String("workflow", reg.workflow),
+				slog.String("workflow", reg.workflow.Name),
 				slog.String("entity_id", entityID),
 				slog.String("phase", target.Phase()),
-				slog.Any("declared_phases", reg.transitions.Phases()))
+				slog.Any("declared_phases", reg.workflow.Transitions.Phases()),
+			)
 		}
 	}
 	return target, revision, nil
 }
 
-// Create commits a fresh Participant to KV. Returns an error if
-// an instance already exists at the same EntityID (create-only
-// semantics — apps that want to overwrite must Delete first OR
-// use Update with a fresh Get).
+// GetRaw is the debug escape hatch (ADR-049 P1): returns the full
+// graph.EntityState for the given entityID without projection or
+// workflow-scoping. Operator dashboards use this to render
+// arbitrary triples on a lifecycle entity for debug purposes.
 //
-// The initial.EntityID() value is used as both the JSON identity
-// and the KV key derivation source (via Participant.KVKey()).
+// Bypasses the projection layer so it has no schema requirements
+// — works on any entity in ENTITY_STATES regardless of workflow
+// registration. Returns ErrEntityNotFound for unknown entities.
+func (m *Manager) GetRaw(ctx context.Context, entityID string) (*graph.EntityState, error) {
+	state, _, err := m.getEntity(ctx, entityID)
+	return state, err
+}
+
+// Create attaches lifecycle to the entity at initial.EntityID() —
+// the "add lifecycle dimension" semantics per ADR-049 Q5. The
+// entity MAY already exist with non-lifecycle triples (e.g. a
+// processor stamping `mission.command` before any lifecycle action
+// fires); Create coexists with those triples without clobbering.
+//
+// Returns ErrAlreadyExists if the entity already has a triple for
+// the workflow's PhasePredicate (i.e. already lifecycle-managed in
+// this workflow). The entity itself may exist with non-lifecycle
+// triples and Create still succeeds.
+//
+// Stamps the initial phase + all non-zero projection-mapped fields
+// as triples in one atomic AddTriplesBatch via graph-ingest.
 func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	if initial == nil {
 		return errors.New("lifecycle: Create requires non-nil Participant")
@@ -305,239 +291,356 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	if err != nil {
 		return err
 	}
+	entityID := initial.EntityID()
+	if entityID == "" {
+		return errors.New("lifecycle: Create requires non-empty EntityID")
+	}
 	// Validate the initial Phase is declared in the transitions
 	// table — typo at Create time is friendlier than typo discovered
 	// at first Transition attempt.
-	if _, declared := reg.transitions[initial.Phase()]; !declared {
+	if _, declared := reg.workflow.Transitions[initial.Phase()]; !declared {
 		return fmt.Errorf("%w: initial phase %q not declared in transitions table for workflow %q",
-			ErrInvalidTransition, initial.Phase(), reg.workflow)
+			ErrInvalidTransition, initial.Phase(), reg.workflow.Name)
 	}
-	value, err := json.Marshal(initial)
-	if err != nil {
-		return fmt.Errorf("lifecycle: marshal Create payload: %w", err)
-	}
-	key := keyForEntity(initial.EntityID(), reg)
-	if _, err := reg.store.Create(ctx, key, value); err != nil {
-		if errors.Is(err, errKVKeyExists) {
-			return fmt.Errorf("lifecycle: Create — entity %q already exists in workflow %q",
-				initial.EntityID(), reg.workflow)
+
+	// Read current state (entity may already exist with non-lifecycle
+	// triples; that's fine). CAS-on-condition: if non-zero revision,
+	// we must observe the same revision at write time.
+	var currentVersion uint64
+	var expectedRevision uint64
+	state, rev, err := m.getEntity(ctx, entityID)
+	switch {
+	case errors.Is(err, ErrEntityNotFound):
+		// Entity doesn't exist at all — fresh-create flow. We can't
+		// CAS-on-zero-rev on the existing UpdateEntityWithTriples
+		// handler (graph-ingest's CAS path requires the entity to
+		// exist). Bootstrap by emitting with ExpectedRevision=0 (the
+		// "no CAS" path), accepting the existing retry semantics.
+		expectedRevision = 0
+		currentVersion = 0
+	case err != nil:
+		return err
+	default:
+		if hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+			return fmt.Errorf("%w: workflow=%q entity_id=%q",
+				ErrAlreadyExists, reg.workflow.Name, entityID)
 		}
-		return fmt.Errorf("lifecycle: KV create for %q: %w", initial.EntityID(), err)
+		expectedRevision = rev
+		currentVersion = state.Version
+	}
+
+	// Build the delta: phase + initial audit + projection-mapped
+	// non-zero fields. Audit on Create is TransitionSourceFramework
+	// with note="created".
+	now := time.Now()
+	delta := buildInitialTriples(reg, entityID, initial, now)
+
+	// Emit through graph-ingest.
+	emitReq := &graph.UpdateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          entityID,
+			Version:     currentVersion + 1,
+			UpdatedAt:   now,
+			MessageType: lifecycleMessageType,
+		},
+		AddTriples:       delta,
+		ExpectedRevision: expectedRevision,
+	}
+	if _, err := m.emitter.emit(ctx, emitReq); err != nil {
+		if errors.Is(err, errEmitRevisionMismatch) {
+			// Concurrent Create from a sibling — surface as
+			// ErrAlreadyExists since the most likely cause is
+			// a parallel lifecycle attach.
+			return fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent create)",
+				ErrAlreadyExists, reg.workflow.Name, entityID)
+		}
+		return err
 	}
 	return nil
 }
 
-// updateRetries bounds the CAS-conflict retry budget per Update call.
-// A higher number defends against tight loops of concurrent updates;
-// too high invites unbounded latency under contention. 5 is enough
-// to absorb typical bursts (a few rules racing on the same entity)
-// without becoming a hidden bottleneck if a rule is stuck rewriting
-// the same entity in a tight loop.
-const updateRetries = 5
-
-// Update mutates the entity at entityID via the given mutator
-// closure, under CAS retry semantics:
-//
-//  1. Get current state + revision
-//  2. Call mutator(participant) — mutator mutates the pointer in place
-//  3. Marshal + KV.Update with the revision
-//  4. On CAS conflict, retry from step 1 (up to updateRetries)
-//
-// mutator errors abort the update immediately with the wrapped error
-// — no retry, no KV write. The mutator must NOT call Manager methods
-// (re-entry would deadlock the registrations RWMutex and risk
-// CAS-loop tail-chases).
-//
-// Returns ErrEntityNotFound if the entity doesn't exist at any
-// point during the retry budget. Returns the wrapped mutator error
-// if the closure rejected the proposed change. Returns
-// ErrUpdateRetriesExhausted if the retry budget exhausted under
-// persistent contention — callers wanting application-layer retry
-// branch on errors.Is(err, ErrUpdateRetriesExhausted).
-func (m *Manager) Update(ctx context.Context, workflow, entityID string, mutator func(Participant) error) error {
-	if mutator == nil {
-		return errors.New("lifecycle: Update requires non-nil mutator")
+// buildInitialTriples constructs the triple slice for Manager.Create:
+// phase + audit (source=framework, at=now, note="created") + non-zero
+// projection fields.
+func buildInitialTriples(reg *registration, entityID string, initial Participant, now time.Time) []message.Triple {
+	delta := []message.Triple{
+		triple(entityID, reg.workflow.PhasePredicate, initial.Phase()),
 	}
-	reg, err := m.lookupByWorkflow(workflow)
-	if err != nil {
-		return err
+	if reg.workflow.AuditPredicates.Source != "" {
+		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Source, string(TransitionSourceFramework)))
 	}
-	for range updateRetries {
-		current, revision, err := m.getWithRevision(ctx, reg, entityID)
-		if err != nil {
-			return err
-		}
-		if err := mutator(current); err != nil {
-			return fmt.Errorf("lifecycle: Update mutator rejected change for %q: %w", entityID, err)
-		}
-		value, err := json.Marshal(current)
-		if err != nil {
-			return fmt.Errorf("lifecycle: marshal Update payload for %q: %w", entityID, err)
-		}
-		key := keyForEntity(entityID, reg)
-		if _, err := reg.store.Update(ctx, key, value, revision); err != nil {
-			if errors.Is(err, errKVRevisionMismatch) {
-				// CAS conflict — concurrent writer beat us. Retry.
-				continue
-			}
-			if errors.Is(err, errKVKeyNotFound) {
-				return fmt.Errorf("%w: workflow=%q entity_id=%q (deleted during Update)",
-					ErrEntityNotFound, reg.workflow, entityID)
-			}
-			return fmt.Errorf("lifecycle: KV update for %q: %w", entityID, err)
-		}
-		return nil
+	if reg.workflow.AuditPredicates.At != "" {
+		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.At, now.Format(time.RFC3339Nano)))
 	}
-	return fmt.Errorf("%w: workflow=%q entity_id=%q after %d retries",
-		ErrUpdateRetriesExhausted, reg.workflow, entityID, updateRetries)
+	if reg.workflow.AuditPredicates.Note != "" {
+		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Note, "created"))
+	}
+	delta = append(delta, projectStructToTriples(reg.meta, entityID, initial)...)
+	return delta
 }
 
+// updateRetries bounds the CAS-conflict retry budget per
+// Transition / UpdateFromOperator call. A higher number defends
+// against tight loops of concurrent updates; too high invites
+// unbounded latency under contention.
+const updateRetries = 5
+
 // Transition moves the entity at entityID from its current phase to
-// newPhase, atomically with any CAS retries. Validates the transition
-// against the registered Transitions table:
-//
-//   - newPhase must be declared in the table (typo catcher)
-//   - (current → newPhase) must be a declared edge
-//   - current phase must NOT be terminal (terminal entities cannot
-//     transition further — surfaces ErrTerminalPhase distinctly so
-//     dashboards can show "cannot abort an already-completed mission")
-//
-// source identifies what triggered the transition (rule action,
-// operator API, component direct call, framework auto). Persisted
-// in the History stream for audit (the History query op lands in
-// the next commit).
-//
-// Note is an optional free-text annotation; Manager.Fail uses it
-// to carry the failure reason. Pass "" when not relevant.
+// newPhase. Validates against the registered Transitions table and
+// emits the phase change + audit triples atomically through
+// graph-ingest with CAS-on-condition via ExpectedRevision. On CAS
+// conflict, re-reads + re-validates + re-emits up to updateRetries.
 func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase string, source TransitionSource, note string) error {
 	return m.TransitionWith(ctx, workflow, entityID, newPhase, source, note, nil)
 }
 
 // TransitionWith is Transition + a caller-supplied mutator that runs
-// inside the same Update closure (and therefore the same atomic KV
-// write) as the phase change. mutator runs AFTER transitions-table
-// validation but BEFORE the phase field is rewritten — failures from
-// the mutator abort the whole transition (no partial state write,
-// CAS retry replays the mutator on the next revision).
+// in the same projected-Participant context as the transition,
+// allowing additional fields to be patched atomically with the
+// phase change. The mutator runs AFTER transitions-table validation
+// but BEFORE the phase delta is built; failures from the mutator
+// abort the whole transition.
 //
-// Intended for the rule engine's `lifecycle_transition` action's
-// `set` clause: state-field mutations + phase change live in one
-// optimistic-concurrency-protected write. nil mutator is equivalent
-// to Transition (and is the path Transition itself takes).
+// The mutator's mutations are diffed against the projection-extracted
+// values and emitted as triple deltas alongside the phase change.
+// Same atomic AddTriplesBatch write.
 func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPhase string, source TransitionSource, note string, mutator func(Participant) error) error {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return err
 	}
-	if _, declared := reg.transitions[newPhase]; !declared {
+	if _, declared := reg.workflow.Transitions[newPhase]; !declared {
 		return fmt.Errorf("%w: target phase %q not declared in transitions table for workflow %q",
-			ErrInvalidTransition, newPhase, reg.workflow)
+			ErrInvalidTransition, newPhase, reg.workflow.Name)
 	}
-	return m.Update(ctx, workflow, entityID, func(p Participant) error {
-		from := p.Phase()
-		if reg.transitions.IsTerminal(from) {
-			return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q",
-				ErrTerminalPhase, reg.workflow, entityID, from)
-		}
-		if !reg.transitions.IsValidTransition(from, newPhase) {
-			return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q to=%q (not a declared edge)",
-				ErrInvalidTransition, reg.workflow, entityID, from, newPhase)
-		}
-		if mutator != nil {
-			if err := mutator(p); err != nil {
-				return err
-			}
-		}
-		// Mutate the Phase field in place via reflection (the
-		// alternative — requiring Participant.SetPhase(string) on
-		// the interface — puts boilerplate on every app's state
-		// struct; the cached structMeta.PhaseField makes this a
-		// single field-by-index reflect write).
-		if err := setPhaseField(p, reg.structMeta, newPhase); err != nil {
+
+	var lastErr error
+	for retry := 0; retry < updateRetries; retry++ {
+		state, currentRev, err := m.getEntity(ctx, entityID)
+		if err != nil {
 			return err
 		}
-		// Source + note are observable today via slog; the History
-		// query op in the next commit reconstructs full TransitionEvent
-		// records from KV revision metadata + a per-update audit
-		// triple. For now the log line is the audit trail.
-		// TODO(history): emit a TransitionEvent{From, To, At,
-		// Triggered: source, Note: note} stamped onto the entity (or
-		// a side KV history bucket) so History can return it.
-		m.logger.Debug("lifecycle: transition",
-			slog.String("workflow", reg.workflow),
-			slog.String("entity_id", entityID),
-			slog.String("from", from),
-			slog.String("to", newPhase),
-			slog.String("source", string(source)),
-			slog.String("note", note))
+		currentPhase := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+		if currentPhase == "" {
+			return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
+				ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
+		}
+		if reg.workflow.Transitions.IsTerminal(currentPhase) {
+			return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q",
+				ErrTerminalPhase, reg.workflow.Name, entityID, currentPhase)
+		}
+		if !reg.workflow.Transitions.IsValidTransition(currentPhase, newPhase) {
+			return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q to=%q (not a declared edge)",
+				ErrInvalidTransition, reg.workflow.Name, entityID, currentPhase, newPhase)
+		}
+
+		// Build the delta: phase + audit + (optional) mutator-changed
+		// projection fields.
+		now := time.Now()
+		delta := []message.Triple{
+			triple(entityID, reg.workflow.PhasePredicate, newPhase),
+		}
+		if reg.workflow.AuditPredicates.Source != "" {
+			delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Source, string(source)))
+		}
+		if reg.workflow.AuditPredicates.At != "" {
+			delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.At, now.Format(time.RFC3339Nano)))
+		}
+		if reg.workflow.AuditPredicates.From != "" {
+			delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.From, currentPhase))
+		}
+		if note != "" && reg.workflow.AuditPredicates.Note != "" {
+			delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Note, note))
+		}
+
+		// Run mutator under projection if present.
+		if mutator != nil {
+			projected := reflect.New(reg.meta.GoType).Interface().(Participant)
+			if err := projectTriples(reg.meta, entityID, state.Triples, projected); err != nil {
+				return fmt.Errorf("lifecycle: project entity %q for mutator: %w", entityID, err)
+			}
+			if err := mutator(projected); err != nil {
+				return fmt.Errorf("lifecycle: TransitionWith mutator rejected change for %q: %w", entityID, err)
+			}
+			// Diff the mutated projection against the original
+			// triples — any field whose projected value changed
+			// emits a fresh triple at its declared predicate.
+			delta = append(delta, diffProjectedTriples(reg.meta, entityID, state.Triples, projected)...)
+		}
+
+		emitReq := &graph.UpdateEntityWithTriplesRequest{
+			Entity: &graph.EntityState{
+				ID:          entityID,
+				Version:     state.Version + 1,
+				UpdatedAt:   now,
+				MessageType: lifecycleMessageType,
+			},
+			AddTriples:       delta,
+			ExpectedRevision: currentRev,
+		}
+		_, err = m.emitter.emit(ctx, emitReq)
+		if err == nil {
+			m.logger.Debug("lifecycle: transition",
+				slog.String("workflow", reg.workflow.Name),
+				slog.String("entity_id", entityID),
+				slog.String("from", currentPhase),
+				slog.String("to", newPhase),
+				slog.String("source", string(source)),
+				slog.String("note", note),
+			)
+			return nil
+		}
+		if errors.Is(err, errEmitRevisionMismatch) {
+			lastErr = err
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("%w: workflow=%q entity_id=%q after %d retries (last: %v)",
+		ErrUpdateRetriesExhausted, reg.workflow.Name, entityID, updateRetries, lastErr)
+}
+
+// diffProjectedTriples compares the mutated projected struct against
+// the original triple slice and returns triple deltas for fields
+// whose projected value changed. Skips the phase field (Transition
+// emits it explicitly) and read-only fields (ID, audit, reference).
+func diffProjectedTriples(sm *structMeta, entityID string, original []message.Triple, mutated Participant) []message.Triple {
+	rv := reflect.ValueOf(mutated)
+	if rv.Kind() == reflect.Pointer {
+		rv = rv.Elem()
+	}
+	var delta []message.Triple
+	for predicate, meta := range sm.FieldsByPredicate {
+		if meta.IsPhase || meta.ReadOnly {
+			continue
+		}
+		fieldVal := rv.FieldByIndex(meta.FieldIndex)
+		if !fieldVal.IsValid() {
+			continue
+		}
+		// Project the original triple's value into a comparable
+		// representation. Mutator could either set, clear, or
+		// no-op; the latter we skip. Comparison by string-ified
+		// form keeps it simple (the projection layer types are
+		// limited to scalars + time.Time).
+		newVal := fieldVal.Interface()
+		oldStr := extractTripleScalar(original, predicate)
+		newStr := fmt.Sprintf("%v", newVal)
+		if t, ok := newVal.(time.Time); ok {
+			newStr = t.Format(time.RFC3339Nano)
+		}
+		if oldStr == newStr {
+			continue
+		}
+		delta = append(delta, triple(entityID, predicate, newVal))
+	}
+	return delta
+}
+
+// UpdateFromOperator applies a JSON-keyed patch to the entity,
+// validating that every patched field is operator_writable. The
+// patch is applied atomically — phase is NOT touched here (use
+// Transition for phase changes). CAS retries on revision mismatch.
+//
+// Patch values are wired to triples via the field's declared
+// predicate. nil values map to RemoveTriples for that predicate.
+//
+// Returns ErrEntityNotFound when the entity doesn't exist;
+// ErrEntityNotLifecycleManaged when it exists but has no phase
+// triple; ErrFieldNotOperatorWritable for the first protected key
+// in the patch.
+func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error {
+	if len(patch) == 0 {
 		return nil
-	})
+	}
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return err
+	}
+
+	// Pre-validate the patch against operator_writable BEFORE the
+	// CAS loop — invalid patches shouldn't burn round-trips.
+	adds, removes, err := projectPatchToTriples(reg.meta, entityID, patch)
+	if err != nil {
+		return fmt.Errorf("lifecycle: UpdateFromOperator workflow=%q: %w", reg.workflow.Name, err)
+	}
+
+	var lastErr error
+	for retry := 0; retry < updateRetries; retry++ {
+		state, currentRev, err := m.getEntity(ctx, entityID)
+		if err != nil {
+			return err
+		}
+		if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+			return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
+				ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
+		}
+
+		emitReq := &graph.UpdateEntityWithTriplesRequest{
+			Entity: &graph.EntityState{
+				ID:          entityID,
+				Version:     state.Version + 1,
+				UpdatedAt:   time.Now(),
+				MessageType: lifecycleMessageType,
+			},
+			AddTriples:       adds,
+			RemoveTriples:    removes,
+			ExpectedRevision: currentRev,
+		}
+		_, err = m.emitter.emit(ctx, emitReq)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errEmitRevisionMismatch) {
+			lastErr = err
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("%w: workflow=%q entity_id=%q after %d retries (last: %v)",
+		ErrUpdateRetriesExhausted, reg.workflow.Name, entityID, updateRetries, lastErr)
 }
 
 // Complete transitions the entity to the first terminal phase
-// REACHABLE from its current phase (sorted iteration of declared
-// terminals + first one with an in-edge from the current phase).
-// Deterministic across processes — picks the same target every time
-// given the same transitions table.
-//
-// Errors with ErrTerminalPhase if the entity is already terminal,
-// or ErrInvalidTransition if no terminal phase is reachable from
-// the current phase (e.g. transitions table declares terminals but
-// the current phase has no edge to any of them — wiring bug worth
-// surfacing).
-//
-// Apps with semantic terminal-name distinctions (failed vs aborted
-// vs cancelled vs completed) should call Transition directly with
-// the specific terminal phase rather than relying on Complete's
-// selection. Complete is the convenience for "mark this done" in
-// workflows where the natural success-terminal is unambiguous from
-// the current phase's edge set.
-//
-// There is a small race window between the internal Get-for-current-
-// phase and the subsequent Transition: if a concurrent writer
-// transitions the entity to terminal between our two operations,
-// the Transition call surfaces ErrTerminalPhase. The benign-race
-// outcome (entity is terminal as desired) reads as an error to
-// the caller — acceptable trade-off for the simpler API.
+// REACHABLE from its current phase, deterministically. Errors with
+// ErrTerminalPhase if the entity is already terminal, or
+// ErrInvalidTransition if no terminal phase is reachable.
 func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return err
 	}
-	current, err := m.Get(ctx, workflow, entityID)
+	state, _, err := m.getEntity(ctx, entityID)
 	if err != nil {
 		return err
 	}
-	from := current.Phase()
-	if reg.transitions.IsTerminal(from) {
-		return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q",
-			ErrTerminalPhase, reg.workflow, entityID, from)
+	from := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+	if from == "" {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
+			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
 	}
-	outEdges := reg.transitions[from]
-	// Sorted terminals filtered to those reachable from current
-	// phase. Deterministic + sorted means apps see the same
-	// target across processes given the same table.
-	terminals := reg.transitions.TerminalPhases()
+	if reg.workflow.Transitions.IsTerminal(from) {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q",
+			ErrTerminalPhase, reg.workflow.Name, entityID, from)
+	}
+	outEdges := reg.workflow.Transitions[from]
+	terminals := reg.workflow.Transitions.TerminalPhases()
 	var reachable []string
 	for _, terminal := range terminals {
-		if slices.Contains(outEdges, terminal) {
-			reachable = append(reachable, terminal)
+		for _, e := range outEdges {
+			if e == terminal {
+				reachable = append(reachable, terminal)
+				break
+			}
 		}
 	}
 	if len(reachable) == 0 {
 		return fmt.Errorf("%w: workflow=%q entity_id=%q phase=%q has no edge to any terminal phase (declared terminals: %v)",
-			ErrInvalidTransition, reg.workflow, entityID, from, terminals)
+			ErrInvalidTransition, reg.workflow.Name, entityID, from, terminals)
 	}
-	// When MORE than one terminal is reachable from the current
-	// phase, Complete's sorted-pick is ambiguous-looking — apps
-	// probably wanted semantic distinction (success vs failure vs
-	// abort) and grabbed the convenience helper. Loud-warn so the
-	// footgun is visible in operator logs without breaking the
-	// caller. Single-reachable terminals are unambiguous and don't
-	// warn.
 	if len(reachable) > 1 {
 		m.logger.Warn("lifecycle: Complete selection is ambiguous — multiple terminals reachable from current phase; consider Transition for explicit selection",
-			slog.String("workflow", reg.workflow),
+			slog.String("workflow", reg.workflow.Name),
 			slog.String("entity_id", entityID),
 			slog.String("from", from),
 			slog.String("picked", reachable[0]),
@@ -546,15 +649,14 @@ func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
 	return m.Transition(ctx, workflow, entityID, reachable[0], TransitionSourceFramework, "")
 }
 
-// Fail transitions the entity to a terminal phase, carrying the
-// reason in the TransitionEvent.Note for audit. Selects the
-// terminal phase by exact-name match against the reserved name
-// "failed" if present; otherwise errors (apps that don't declare
-// a "failed" phase must call Transition directly with their
-// preferred error-state phase).
+// Fail transitions the entity to the "failed" terminal phase,
+// carrying the reason in the audit Note predicate. Errors if no
+// "failed" phase is declared on the workflow (apps must call
+// Transition explicitly with their preferred error-state phase
+// otherwise).
 //
-// The reason argument is required (empty string rejected) — a Fail
-// with no reason defeats the audit purpose.
+// reason must be non-empty — a Fail with no reason defeats the
+// audit purpose.
 func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) error {
 	if reason == "" {
 		return errors.New("lifecycle: Fail requires non-empty reason (operators need the failure cause in the audit trail)")
@@ -564,50 +666,9 @@ func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) e
 		return err
 	}
 	const failedPhase = "failed"
-	if _, declared := reg.transitions[failedPhase]; !declared {
+	if _, declared := reg.workflow.Transitions[failedPhase]; !declared {
 		return fmt.Errorf("%w: workflow %q does not declare a %q phase; call Transition with your preferred error-state phase instead",
-			ErrInvalidTransition, reg.workflow, failedPhase)
+			ErrInvalidTransition, reg.workflow.Name, failedPhase)
 	}
-	// reason flows to Transition.note below; the slog audit inside
-	// Transition picks it up. Full TransitionEvent persistence
-	// (History) lands in the next commit on this branch.
 	return m.Transition(ctx, workflow, entityID, failedPhase, TransitionSourceFramework, reason)
-}
-
-// setPhaseField writes newPhase into the Phase field on p via the
-// cached structMeta's PhaseField metadata. Returns an error if the
-// field index can't be resolved (shouldn't happen at runtime since
-// parseStructTags validated PhaseField presence at Register time).
-//
-// Uses reflect.Value.FieldByIndex with the cached FieldIndex slice
-// from parseStructTags — constant-time indexed access, not the
-// linear FieldByName walk. The reflect cost per Transition is one
-// indirect SetString, no map lookup.
-func setPhaseField(p Participant, sm *structMeta, newPhase string) error {
-	rv := reflect.ValueOf(p)
-	if rv.Kind() == reflect.Pointer {
-		rv = rv.Elem()
-	}
-	field := rv.FieldByIndex(sm.PhaseField.FieldIndex)
-	if !field.CanSet() {
-		return fmt.Errorf("lifecycle: phase field %q is not settable (Participant must be a pointer to a struct with exported phase field)",
-			sm.PhaseField.FieldName)
-	}
-	if field.Kind() != reflect.String {
-		return fmt.Errorf("lifecycle: phase field %q has type %v, expected string",
-			sm.PhaseField.FieldName, field.Kind())
-	}
-	field.SetString(newPhase)
-	return nil
-}
-
-// keyForEntity returns the KV key for the given entity ID in the
-// workflow's bucket. Pure dispatch — no allocation, no reflect.
-//
-// ADR-047's KVKey(entityID string) signature makes the key a pure
-// function of entityID, so the cached keySample (one instance per
-// registration, populated at Register time) can serve every call.
-// The receiver state isn't consulted; only the entityID arg.
-func keyForEntity(entityID string, reg *registration) string {
-	return reg.keySample.KVKey(entityID)
 }

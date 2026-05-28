@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,6 @@ import (
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
@@ -183,25 +183,13 @@ func buildPayloadRegistry() (*payloadregistry.Registry, error) {
 // here), registers the e2e-only mission workflow, and optionally
 // seeds an initial instance from --lifecycle-seed.
 //
-// Plumbing must match cmd/semstreams/main.go so the e2e binary
-// doesn't drift from the framework binary —
-// [[feedback_e2e_required_for_breaking_changes]].
-func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, natsClient *natsclient.Client, logger *slog.Logger, seedID string) error {
-	// Provision the MISSIONS KV bucket before Register opens it.
-	// Per ADR-047 the harness does NOT create buckets — apps own
-	// bucket topology (replication, history depth, max-bytes are
-	// per-bucket operator decisions). Apps using the harness in
-	// production wire CreateKeyValueBucket into their own bootstrap;
-	// here the e2e binary does it inline.
-	if _, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      mission.KVBucket,
-		Description: "Mission lifecycle Participants (ADR-047 e2e fixture)",
-		History:     10,
-	}); err != nil {
-		return fmt.Errorf("provision MISSIONS KV bucket: %w", err)
-	}
-	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
-	if err := svcDeps.LifecycleManager.Register(mission.Workflow, mission.New, mission.Transitions); err != nil {
+// Per ADR-049 the harness lives over ENTITY_STATES — no per-workflow
+// bucket provisioning. State changes emit through graph-ingest like
+// every other write; reads project triples into the registered
+// Schema struct.
+func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger, seedID string) error {
+	svcDeps.LifecycleManager = lifecycle.NewManager(svcDeps.NATSClient, svcDeps.Logger)
+	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
 		return fmt.Errorf("register mission workflow: %w", err)
 	}
 	if seedID != "" {
@@ -227,10 +215,10 @@ func seedMission(ctx context.Context, mgr *lifecycle.Manager, entityID string) e
 		slog.Info("seeded mission", "entity_id", entityID, "phase", mission.PhasePlanning)
 		return nil
 	}
-	// Manager.Create wraps the underlying "already exists" KV error
-	// into a free-form fmt.Errorf string; we match by substring to
-	// stay idempotent.
-	if strings.Contains(err.Error(), "already exists") {
+	// Manager.Create returns ErrAlreadyExists when the entity is
+	// already lifecycle-managed (has the phase triple). Treat as a
+	// no-op so the e2e binary is idempotent across restarts.
+	if errors.Is(err, lifecycle.ErrAlreadyExists) {
 		slog.Info("mission already seeded", "entity_id", entityID)
 		return nil
 	}

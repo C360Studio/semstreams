@@ -1,4 +1,11 @@
-// Package lifecycle — query-ops surface (List, Watch, History).
+// Package lifecycle — query-ops surface (List, Watch, History,
+// Children, References, LookupByEntityID, AssertRuleWritable,
+// FieldType, GetWorkflowDefinition, ListWorkflows).
+//
+// All query ops read from ENTITY_STATES via the direct KV handle —
+// graph-ingest remains the single writer; the harness only emits
+// through it via the Manager state-change operations defined in
+// manager.go.
 package lifecycle
 
 import (
@@ -10,90 +17,58 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// List returns instances of the given workflow type matching opts.
-// v1 implementation is linear-scan over the workflow's bucket: every
-// key is fetched, deserialized, and run through the filter chain.
-// Complexity is O(N) per call where N is the bucket size.
+// List returns Participants of the given workflow type matching opts.
 //
-// Scaling cliff: ~10K active instances is fine for v1 linear scan;
-// beyond that the secondary-index v2 work (ADR-047 § KV indexing)
-// is the upgrade path. Operators hitting the cliff demonstrate the
-// bottleneck and trigger v2 work; the ListOptions surface stays
-// stable across the migration so callers don't need to change.
+// Implementation: enumerates ENTITY_STATES keys, filters by the
+// workflow's EntityIDPattern, loads + projects each match, applies
+// the filter chain (Phase / Active / Match), and paginates with
+// Limit + Offset.
 //
-// Filter ordering (cheap → expensive) so Match's reflect-based
-// comparisons only run on candidates that already passed the
-// cheap Phase / Active method-call filters. This is the
-// reviewer-recommended optimization to keep reflect cost bounded.
-//
-// Returned slice ownership: each Participant is a fresh instance
-// (factory-produced + json-deserialized). Mutating returned
-// pointers does NOT persist — use Update with a mutator closure
-// to commit changes. Order is the bucket's ListKeys order (sorted
-// for the mock; jetstream returns key insertion order plus
-// pagination — operator dashboards should sort caller-side if
-// needed).
+// Complexity is O(N) per call where N is the bucket size; consumers
+// hitting the cliff (~10K active instances) trigger the v2
+// secondary-index work documented in ADR-049's deferred section.
+// The API stays stable across that migration.
 func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) ([]Participant, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve Match field indices ONCE per call (cached lookup by
-	// JSON field name → reflect FieldIndex slice). The inner-loop
-	// per-candidate reflect cost is then FieldByIndex (constant-
-	// time) not FieldByName (linear walk). For a Match with K keys
-	// scanned over N entities, this is K+N reflect ops, not K*N.
-	matchPlan, err := buildMatchPlan(reg.structMeta, opts.Match)
+	matchPlan, err := buildMatchPlan(reg.meta, opts.Match)
 	if err != nil {
-		return nil, fmt.Errorf("lifecycle: List Match resolution for workflow %q: %w", reg.workflow, err)
+		return nil, fmt.Errorf("lifecycle: List Match resolution for workflow %q: %w", reg.workflow.Name, err)
 	}
 
-	keys, err := reg.store.ListKeys(ctx)
+	bucket, err := m.ensureBucket(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("lifecycle: List ListKeys for workflow %q: %w", reg.workflow, err)
+		return nil, err
 	}
+	lister, err := bucket.ListKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: List ListKeys for workflow %q: %w", reg.workflow.Name, err)
+	}
+	defer lister.Stop()
 
-	out := make([]Participant, 0, len(keys))
-	skipped := 0
-	// Iterate via the existing per-entityID resolution path so
-	// drift-detection-when-added (TODO(manager) on Participant.Phase)
-	// flows through one code path, not two. Apps that need raw KV
-	// scan without Participant decoding can drop to natsclient
-	// directly — out of scope for the harness.
-	for _, key := range keys {
-		// Derive the entityID from the key. v1 uses the convention
-		// that KVKey(entityID) produces a key from which entityID
-		// can be recovered. We extract by inverse: compute the
-		// keySample-generated key for a sentinel ID, find the
-		// position of the sentinel, then for each scanned key,
-		// slice at that position.
-		//
-		// TODO(list-perf): cache the key→entityID transform at
-		// Register time too (mirror of keyForEntity). Today this
-		// is invoked per candidate. Land alongside the v2
-		// secondary index — scan-path optimization belongs there.
-		entityID, ok := entityIDFromKey(key, reg)
-		if !ok {
-			// Key doesn't match our workflow's KVKey shape — skip
-			// rather than error. A bucket may hold keys from
-			// multiple sources if operators share buckets across
-			// workflows (uncommon but supported).
-			skipped++
+	out := make([]Participant, 0)
+	for key := range lister.Keys() {
+		if !matchPattern(reg.workflow.EntityIDPattern, key) {
 			continue
 		}
-		participant, _, getErr := m.getWithRevision(ctx, reg, entityID)
+		participant, _, getErr := m.getWithRevision(ctx, workflow, key)
 		if getErr != nil {
-			// Entity gone between ListKeys and Get — race;
-			// quietly skip rather than fail the whole List call.
-			if errors.Is(getErr, ErrEntityNotFound) {
+			// Entity gone between list and get, or not yet
+			// lifecycle-managed — skip quietly.
+			if errors.Is(getErr, ErrEntityNotFound) || errors.Is(getErr, ErrEntityNotLifecycleManaged) {
 				continue
 			}
-			return nil, fmt.Errorf("lifecycle: List Get %q: %w", entityID, getErr)
+			return nil, fmt.Errorf("lifecycle: List Get %q: %w", key, getErr)
 		}
-
 		if !matchesPhaseFilter(participant, opts.Phase) {
 			continue
 		}
@@ -106,13 +81,6 @@ func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) (
 		out = append(out, participant)
 	}
 
-	if skipped > 0 {
-		m.logger.Debug("lifecycle: List skipped keys not matching workflow shape",
-			slog.String("workflow", reg.workflow),
-			slog.Int("skipped", skipped))
-	}
-
-	// Apply Offset / Limit on the filtered set.
 	if opts.Offset > 0 {
 		if opts.Offset >= len(out) {
 			return []Participant{}, nil
@@ -125,369 +93,405 @@ func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) (
 	return out, nil
 }
 
-// Watch streams Participant snapshots for every write to the
-// workflow's bucket. Bootstrap-then-live: the first batch is the
-// snapshot of current state, then live updates as KV writes
-// land. The returned channel closes when ctx is canceled OR the
-// underlying watcher errors (caller treats both as "stop
-// iterating").
+// Watch streams Participant snapshots for every write to
+// ENTITY_STATES whose key matches the workflow's EntityIDPattern.
+// Bootstrap-then-live: the first batch is the snapshot of current
+// state, then live updates as KV writes land.
 //
-// Each delivered Participant is a fresh instance. Mutating it
-// does NOT persist (same contract as Get).
+// Each delivered Participant is a fresh instance. Mutating it does
+// NOT persist.
 //
-// Delete-marker events are NOT delivered as Participants —
-// they're skipped (no instance to render). Apps that need to
-// react to deletions should use the kvStore primitive directly
-// via a follow-up tool — Watch's contract is "current Participants
-// you can read."
-//
-// CALLER MUST CANCEL ctx when done iterating. The watcher
-// goroutine and its underlying jetstream subscription pin until
-// ctx.Done(); a caller that simply stops reading the channel
-// without canceling leaks the goroutine and the NATS subscription
-// until the next write-then-block triggers buffer back-pressure.
-// Pattern:
-//
-//	ctx, cancel := context.WithCancel(parentCtx)
-//	defer cancel()
-//	ch, err := mgr.Watch(ctx, workflow)
-//	// ...drain ch...
+// CALLER MUST CANCEL ctx when done iterating — the watcher goroutine
+// and the underlying jetstream subscription pin until ctx.Done().
 func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participant, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return nil, err
 	}
-	src, err := reg.store.Watch(ctx)
+	bucket, err := m.ensureBucket(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("lifecycle: Watch for workflow %q: %w", reg.workflow, err)
+		return nil, err
 	}
+	watcher, err := bucket.WatchAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: Watch for workflow %q: %w", reg.workflow.Name, err)
+	}
+
 	out := make(chan Participant, 16)
 	go func() {
 		defer close(out)
-		for entry := range src {
-			if entry.IsDelete {
-				// Skip tombstones — Watch contract is current
-				// Participants. Apps needing deletion signals
-				// hook the kvStore.Watch directly via a future
-				// API; out of scope for the harness today.
-				continue
-			}
-			target := reg.factory()
-			if err := json.Unmarshal(entry.Value, target); err != nil {
-				m.logger.Warn("lifecycle: Watch unmarshal failed; skipping entry",
-					slog.String("workflow", reg.workflow),
-					slog.String("key", entry.Key),
-					slog.Uint64("revision", entry.Revision),
-					slog.String("error", err.Error()))
-				continue
-			}
+		defer watcher.Stop()
+		for {
 			select {
-			case out <- target:
 			case <-ctx.Done():
 				return
+			case entry, ok := <-watcher.Updates():
+				if !ok {
+					return
+				}
+				if entry == nil {
+					// nil entry marks end-of-initial-values per
+					// the NATS KV bootstrap contract; live events
+					// follow.
+					continue
+				}
+				if entry.Operation() == jetstream.KeyValueDelete ||
+					entry.Operation() == jetstream.KeyValuePurge {
+					continue
+				}
+				if !matchPattern(reg.workflow.EntityIDPattern, entry.Key()) {
+					continue
+				}
+				var state graph.EntityState
+				if err := json.Unmarshal(entry.Value(), &state); err != nil {
+					m.logger.Warn("lifecycle: Watch unmarshal failed; skipping entry",
+						slog.String("workflow", reg.workflow.Name),
+						slog.String("key", entry.Key()),
+						slog.Uint64("revision", entry.Revision()),
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+				if !hasTriple(state.Triples, reg.workflow.PhasePredicate) {
+					continue
+				}
+				target := reflect.New(reg.meta.GoType).Interface().(Participant)
+				if err := projectTriples(reg.meta, entry.Key(), state.Triples, target); err != nil {
+					m.logger.Warn("lifecycle: Watch projection failed; skipping entry",
+						slog.String("workflow", reg.workflow.Name),
+						slog.String("key", entry.Key()),
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+				select {
+				case out <- target:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
 	return out, nil
 }
 
+// History returns the phase-transition history for the entity at
+// entityID, derived from ENTITY_STATES revision replay. Each
+// TransitionEvent represents one phase change.
+//
+// Reconstruction reads each historical revision, decodes its
+// EntityState, and extracts the phase + audit-predicate values.
+// Triggered + Note come from the audit triples Manager.Transition
+// stamped at write time — no parallel audit store needed.
+//
+// The always-`framework` bug (the gap that ADR-049 closes) is
+// structurally fixed: the real source is in the audit triple, so
+// History reads it back rather than synthesizing a constant.
+func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error) {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return nil, err
+	}
+	bucket, err := m.ensureBucket(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := bucket.History(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, fmt.Errorf("%w: workflow=%q entity_id=%q",
+				ErrEntityNotFound, reg.workflow.Name, entityID)
+		}
+		return nil, fmt.Errorf("lifecycle: History for %q: %w", entityID, err)
+	}
+
+	events := make([]TransitionEvent, 0, len(entries))
+	previousPhase := ""
+	for _, entry := range entries {
+		if entry.Operation() == jetstream.KeyValueDelete ||
+			entry.Operation() == jetstream.KeyValuePurge {
+			events = append(events, TransitionEvent{
+				From:      previousPhase,
+				To:        "<deleted>",
+				At:        entry.Created(),
+				Triggered: TransitionSourceFramework,
+			})
+			previousPhase = "<deleted>"
+			continue
+		}
+		var state graph.EntityState
+		if err := json.Unmarshal(entry.Value(), &state); err != nil {
+			m.logger.Warn("lifecycle: History unmarshal failed; skipping revision",
+				slog.String("workflow", reg.workflow.Name),
+				slog.String("entity_id", entityID),
+				slog.Uint64("revision", entry.Revision()),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		currentPhase := extractTripleScalar(state.Triples, reg.workflow.PhasePredicate)
+		if currentPhase == "" || currentPhase == previousPhase {
+			continue
+		}
+		event := TransitionEvent{
+			From:      previousPhase,
+			To:        currentPhase,
+			At:        entry.Created(),
+			Triggered: TransitionSourceFramework,
+		}
+		// Recover source attribution from audit triples stamped
+		// at this revision (the ADR-049 mechanism that closes the
+		// always-framework bug).
+		if pred := reg.workflow.AuditPredicates.Source; pred != "" {
+			if src := extractTripleScalar(state.Triples, pred); src != "" {
+				event.Triggered = TransitionSource(src)
+			}
+		}
+		if pred := reg.workflow.AuditPredicates.Note; pred != "" {
+			event.Note = extractTripleScalar(state.Triples, pred)
+		}
+		if pred := reg.workflow.AuditPredicates.From; pred != "" {
+			if from := extractTripleScalar(state.Triples, pred); from != "" {
+				event.From = from
+			}
+		}
+		events = append(events, event)
+		previousPhase = currentPhase
+	}
+	return events, nil
+}
+
+// Children returns ChildResult entries for every child link
+// declared in the parent workflow's ChildWorkflows, optionally
+// narrowed by opts.Workflow + paginated by Limit/Offset.
+//
+// Cross-workflow: the parent and its children may be in different
+// workflows. Manager.Children reads the parent's triples, walks
+// each ChildSpec's LinkPredicate, and loads each linked entity via
+// the child workflow's Get. Children whose child workflow isn't
+// registered, or whose entity is gone, are skipped with a Warn log
+// — one bad child shouldn't kill the whole response.
+func (m *Manager) Children(ctx context.Context, parentEntityID string, opts ChildOptions) ([]ChildResult, error) {
+	parentState, _, err := m.getEntity(ctx, parentEntityID)
+	if err != nil {
+		return nil, err
+	}
+	parentReg := m.findRegistrationForEntity(parentEntityID)
+	if parentReg == nil {
+		return nil, fmt.Errorf("lifecycle: Children — entity %q does not match any registered EntityIDPattern",
+			parentEntityID)
+	}
+
+	type childRef struct{ workflow, entityID string }
+	var refs []childRef
+	for _, childSpec := range parentReg.workflow.ChildWorkflows {
+		if opts.Workflow != "" && opts.Workflow != childSpec.Workflow {
+			continue
+		}
+		for _, t := range parentState.Triples {
+			if t.Predicate != childSpec.LinkPredicate {
+				continue
+			}
+			childID, ok := t.Object.(string)
+			if !ok {
+				continue
+			}
+			refs = append(refs, childRef{childSpec.Workflow, childID})
+		}
+	}
+	// Stable order for deterministic pagination across calls.
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].workflow != refs[j].workflow {
+			return refs[i].workflow < refs[j].workflow
+		}
+		return refs[i].entityID < refs[j].entityID
+	})
+
+	if opts.Offset >= len(refs) {
+		return nil, nil
+	}
+	end := len(refs)
+	if opts.Limit > 0 && opts.Offset+opts.Limit < end {
+		end = opts.Offset + opts.Limit
+	}
+	page := refs[opts.Offset:end]
+
+	results := make([]ChildResult, 0, len(page))
+	for _, r := range page {
+		child, err := m.Get(ctx, r.workflow, r.entityID)
+		if err != nil {
+			m.logger.Warn("lifecycle: Children — child load failed; skipping",
+				slog.String("parent", parentEntityID),
+				slog.String("child", r.entityID),
+				slog.String("child_workflow", r.workflow),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		results = append(results, ChildResult{Workflow: r.workflow, State: child})
+	}
+	return results, nil
+}
+
+// References returns ReferenceStub entries for every ReferencePredicate
+// triple on the entity. Stubs are light — Workflow + Phase are
+// populated only when the target itself is lifecycle-managed
+// (matches some registered EntityIDPattern).
+func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceStub, error) {
+	state, _, err := m.getEntity(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+	reg := m.findRegistrationForEntity(entityID)
+	if reg == nil {
+		return nil, fmt.Errorf("lifecycle: References — entity %q does not match any registered EntityIDPattern",
+			entityID)
+	}
+
+	var stubs []ReferenceStub
+	for _, refSpec := range reg.workflow.ReferencePredicates {
+		for _, t := range state.Triples {
+			if t.Predicate != refSpec.Predicate {
+				continue
+			}
+			targetID, ok := t.Object.(string)
+			if !ok {
+				continue
+			}
+			stub := ReferenceStub{
+				EntityID:  targetID,
+				Predicate: refSpec.Predicate,
+			}
+			if targetReg := m.findRegistrationForEntity(targetID); targetReg != nil {
+				stub.Workflow = targetReg.workflow.Name
+				if target, _, err := m.getEntity(ctx, targetID); err == nil {
+					stub.Phase = extractTripleScalar(target.Triples, targetReg.workflow.PhasePredicate)
+				}
+			}
+			stubs = append(stubs, stub)
+		}
+	}
+	return stubs, nil
+}
+
+// LookupByEntityID resolves an entityID to a Participant by matching
+// the entity against every registered EntityIDPattern. Returns the
+// first matching workflow's projected Participant.
+//
+// O(workflows) per call — typically a handful of registrations.
+// Suitable for the rule engine's `lifecycle_*` action path and
+// `$entity.lifecycle.*` substitution path.
+func (m *Manager) LookupByEntityID(ctx context.Context, entityID string) (Participant, error) {
+	reg := m.findRegistrationForEntity(entityID)
+	if reg == nil {
+		return nil, fmt.Errorf("%w: entity_id=%q (no registered EntityIDPattern matches)",
+			ErrEntityNotFound, entityID)
+	}
+	return m.Get(ctx, reg.workflow.Name, entityID)
+}
+
+// findRegistrationForEntity returns the registration whose
+// EntityIDPattern matches the given entityID. Returns nil when no
+// registration matches.
+//
+// Pattern matching: '*' wildcards per dot-separated segment. The
+// 6-part EntityIDPattern matches the 6-part entity_id one segment
+// at a time.
+func (m *Manager) findRegistrationForEntity(entityID string) *registration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, reg := range m.registrations {
+		if matchPattern(reg.workflow.EntityIDPattern, entityID) {
+			return reg
+		}
+	}
+	return nil
+}
+
+// matchPattern compares a 6-part dotted glob pattern against a
+// concrete entity_id. '*' in a segment matches any value for that
+// segment; non-'*' segments require exact match.
+func matchPattern(pattern, id string) bool {
+	if pattern == "" {
+		return false
+	}
+	if pattern == id || pattern == "*" {
+		return true
+	}
+	pParts := strings.Split(pattern, ".")
+	iParts := strings.Split(id, ".")
+	if len(pParts) != len(iParts) {
+		return false
+	}
+	for i := range pParts {
+		if pParts[i] == "*" {
+			continue
+		}
+		if pParts[i] != iParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // AssertRuleWritable returns nil when fieldJSONName is a field on
 // the registered workflow that the rule layer's lifecycle_transition
 // `set` clause is allowed to mutate. Returns ErrFieldNotOperatorWritable
-// otherwise. The rule layer enforces the SAME default-deny as the
-// operator API (UpdateFromOperator) — fields without `lifecycle:"operator_writable"`
-// are protected, plus `lifecycle:"id"` and `lifecycle:"phase"` fields
-// can NEVER be set via rule actions (identity is immutable; phase
-// is owned by Manager.Transition's transitions-table validation).
-//
-// Rationale: rules and operators converge on one allowed-mutation
-// convention. A rule definition is operator-authored config; allowing
-// the rule path strictly MORE privileges than the operator API would
-// create an asymmetric attack surface where a typo or
-// attacker-influenced rule could rewrite entity_id or read-only
-// state-machine fields the harness protects everywhere else.
-//
-// Apps that want rules to mutate fields beyond operator scope must
-// either tag those fields `lifecycle:"operator_writable"` (widening
-// both paths) or stamp the change via add_triple/update_triple
-// instead of through the lifecycle_transition `set` clause.
-//
-// Returns ErrWorkflowNotRegistered if workflow isn't registered. The
-// field-not-found case maps to ErrFieldNotOperatorWritable too — a
-// typo on a JSON field name and a deliberate write to a protected
-// field should both surface as "you can't write that," not as two
-// distinct error classes for the same operator action.
+// otherwise — same default-deny convention as UpdateFromOperator so
+// rule definitions can't accidentally exceed operator authority.
 func (m *Manager) AssertRuleWritable(workflow, fieldJSONName string) error {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return err
 	}
-	field, ok := reg.structMeta.FieldsByJSONName[fieldJSONName]
+	field, ok := reg.meta.FieldsByJSONName[fieldJSONName]
 	if !ok {
-		return fmt.Errorf("%w: workflow=%q field=%q (no such field on the registered participant)",
-			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+		return fmt.Errorf("%w: workflow=%q field=%q (no such field on the registered schema)",
+			ErrFieldNotOperatorWritable, reg.workflow.Name, fieldJSONName)
 	}
 	if field.IsID {
 		return fmt.Errorf("%w: workflow=%q field=%q (entity_id is immutable — set on Create only, never via rule transition)",
-			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+			ErrFieldNotOperatorWritable, reg.workflow.Name, fieldJSONName)
 	}
 	if field.IsPhase {
 		return fmt.Errorf("%w: workflow=%q field=%q (phase is owned by Manager.Transition; use lifecycle_transition's phase field, not set)",
-			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+			ErrFieldNotOperatorWritable, reg.workflow.Name, fieldJSONName)
 	}
 	if !field.OperatorWritable {
-		return fmt.Errorf("%w: workflow=%q field=%q (default-deny — tag the struct field `lifecycle:\"operator_writable\"` if rules + operators should be able to mutate it)",
-			ErrFieldNotOperatorWritable, reg.workflow, fieldJSONName)
+		return fmt.Errorf("%w: workflow=%q field=%q (default-deny — tag the struct field `lifecycle:\"operator_writable,predicate=...\"` if rules + operators should be able to mutate it)",
+			ErrFieldNotOperatorWritable, reg.workflow.Name, fieldJSONName)
 	}
 	return nil
 }
 
 // FieldType returns the reflect.Type of the named field on the
-// registered participant, for callers (the rule executor) that need
-// to apply typed numeric ops (increment/decrement) without
-// reimplementing field-name resolution. Returns ErrFieldNotOperatorWritable
-// when the field doesn't exist or isn't rule-writable, so callers can
-// reuse the same gate before mutating.
+// registered Schema, for callers (the rule executor) that need to
+// apply typed numeric ops (increment/decrement) without
+// reimplementing field-name resolution.
 func (m *Manager) FieldType(workflow, fieldJSONName string) (reflect.Type, error) {
 	if err := m.AssertRuleWritable(workflow, fieldJSONName); err != nil {
 		return nil, err
 	}
-	reg, _ := m.lookupByWorkflow(workflow) // already validated by AssertRuleWritable
-	field := reg.structMeta.FieldsByJSONName[fieldJSONName]
-	// Re-resolve the field type from a sample instance. structMeta
-	// only caches FieldIndex; the Type lives on the underlying struct.
-	rv := reflect.ValueOf(reg.keySample)
-	if rv.Kind() == reflect.Pointer {
-		rv = rv.Elem()
-	}
-	return rv.FieldByIndex(field.FieldIndex).Type(), nil
-}
-
-// UpdateFromOperator applies a patch map to the entity, validating
-// that every patched field is tagged `lifecycle:"operator_writable"`
-// in the registered state struct. Default-deny: fields without the
-// tag are rejected with ErrFieldNotOperatorWritable. The patch is
-// applied atomically under Manager.Update's CAS-retry contract.
-//
-// Patch values are STRICT-typed against the target field's concrete
-// type (reflect.Type.AssignableTo); a Go-typed mismatch (e.g. int
-// against a uint32 field) is rejected. HTTP gateway components
-// (PR 3 of the ADR-047 bundle) handle query-string-to-Go-type
-// coercion at the wire boundary — that is the right place for
-// permissive parsing of operator-supplied values, NOT inside
-// UpdateFromOperator.
-//
-// Returns ErrEntityNotFound if the entity doesn't exist (same as
-// Update). Returns ErrFieldNotOperatorWritable for the first
-// disallowed key encountered. Returns a wrapped type-mismatch
-// error for the first incompatible patch value.
-func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error {
-	if len(patch) == 0 {
-		return nil // no-op patch is success — operators sometimes
-		// hit endpoints with empty bodies and shouldn't see errors
-	}
-	reg, err := m.lookupByWorkflow(workflow)
-	if err != nil {
-		return err
-	}
-
-	// Pre-validate the entire patch against operator_writable +
-	// type compatibility BEFORE the Update mutator runs. Rejecting
-	// late inside the mutator would cost a KV round-trip for a
-	// patch that was never going to apply.
-	plan := make([]operatorPatchSpec, 0, len(patch))
-	for key, value := range patch {
-		field, ok := reg.structMeta.FieldsByJSONName[key]
-		if !ok {
-			return fmt.Errorf("lifecycle: UpdateFromOperator key %q does not match any field on workflow %q",
-				key, reg.workflow)
-		}
-		if !field.OperatorWritable {
-			return fmt.Errorf("%w: workflow=%q field=%q",
-				ErrFieldNotOperatorWritable, reg.workflow, key)
-		}
-		plan = append(plan, operatorPatchSpec{
-			field:    field,
-			wantVal:  value,
-			jsonName: key,
-		})
-	}
-
-	return m.Update(ctx, workflow, entityID, func(p Participant) error {
-		rv := reflect.ValueOf(p)
-		if rv.Kind() == reflect.Pointer {
-			rv = rv.Elem()
-		}
-		for _, spec := range plan {
-			target := rv.FieldByIndex(spec.field.FieldIndex)
-			patchVal := reflect.ValueOf(spec.wantVal)
-			// nil-valued patches set the field to its zero
-			// value — matches operator intent "clear this field."
-			if !patchVal.IsValid() {
-				target.SetZero()
-				continue
-			}
-			if !patchVal.Type().AssignableTo(target.Type()) {
-				return fmt.Errorf("lifecycle: UpdateFromOperator field %q: cannot assign %v to %v",
-					spec.jsonName, patchVal.Type(), target.Type())
-			}
-			target.Set(patchVal)
-		}
-		return nil
-	})
-}
-
-// operatorPatchSpec is the pre-validated, per-patch-key wiring
-// resolved at the top of UpdateFromOperator. Cached locally rather
-// than computed inside the mutator so CAS-retry doesn't re-validate
-// on every iteration.
-type operatorPatchSpec struct {
-	field    *fieldMeta
-	wantVal  any
-	jsonName string
-}
-
-// Children returns Participants whose ParentEntityID() equals the
-// given parentEntityID, across ALL registered workflows. v1
-// implementation is a linear scan over every registered workflow's
-// bucket; complexity is O(sum-of-bucket-sizes) per call.
-//
-// Cross-workflow semantics: a parent in workflow A can have
-// children in workflow B (e.g. semspec's Plan-owns-Requirements
-// pattern — Plan and Requirement are distinct workflows). Children
-// returns all of them merged into one slice; sort caller-side if
-// needed.
-//
-// Scaling consideration: high parent-child fan-out apps should
-// prefer List(workflow, Match{"parent_field": parentID}) where
-// parent_field is the JSON name of the ParentEntityID-backing
-// struct field. That stays within one workflow's bucket and works
-// with the v2 secondary-index path when it lands. Children is the
-// generic helper for the cross-workflow case; List + Match is the
-// scaling-friendly path for the common intra-workflow case.
-func (m *Manager) Children(ctx context.Context, parentEntityID string) ([]Participant, error) {
-	m.mu.RLock()
-	regs := make([]*registration, 0, len(m.registrations))
-	for _, reg := range m.registrations {
-		regs = append(regs, reg)
-	}
-	m.mu.RUnlock()
-
-	var out []Participant
-	for _, reg := range regs {
-		participants, err := m.List(ctx, reg.workflow, ListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("lifecycle: Children scan workflow %q: %w", reg.workflow, err)
-		}
-		for _, p := range participants {
-			if p.ParentEntityID() == parentEntityID {
-				out = append(out, p)
-			}
-		}
-	}
-	return out, nil
-}
-
-// Ancestors returns Participants walking from the given entityID
-// up the parent chain, ROOT-FIRST (the entity itself is NOT
-// included; ancestors[0] is the immediate parent, ancestors[last]
-// is the root). Stops when ParentEntityID() returns empty string
-// or when a parent can't be resolved (logged + walk truncated).
-//
-// Cross-workflow: each ancestor may be in a different workflow
-// than the starting entity. v1 implementation resolves each
-// ancestor by scanning every registered workflow's bucket for the
-// entityID — O(workflows × bucket-size) per ancestor lookup. Apps
-// with deep parent chains in high-cardinality workflows feel this;
-// the v2 secondary-index work (ADR-047 § KV indexing) makes the
-// per-ancestor lookup constant-time.
-//
-// Returns empty slice (not error) for entities with no parent
-// (already at root). Returns ErrEntityNotFound if the starting
-// entityID itself can't be resolved.
-func (m *Manager) Ancestors(ctx context.Context, entityID string) ([]Participant, error) {
-	current, err := m.LookupByEntityID(ctx, entityID)
-	if err != nil {
-		return nil, err
-	}
-	var out []Participant
-	parentID := current.ParentEntityID()
-	for parentID != "" {
-		parent, err := m.LookupByEntityID(ctx, parentID)
-		if err != nil {
-			if errors.Is(err, ErrEntityNotFound) {
-				// Truncate the walk loudly — the chain is
-				// broken (parent referenced but deleted or
-				// never created). Log so operators see the
-				// dangling ref; return what we have.
-				m.logger.Warn("lifecycle: Ancestors walk truncated — parent not found",
-					slog.String("starting_entity", entityID),
-					slog.String("missing_parent", parentID))
-				return out, nil
-			}
-			return nil, err
-		}
-		out = append(out, parent)
-		parentID = parent.ParentEntityID()
-	}
-	return out, nil
-}
-
-// LookupByEntityID resolves an entityID to a Participant by scanning
-// every registered workflow's bucket. Returns ErrEntityNotFound if
-// the ID isn't present in any bucket.
-//
-// O(workflows × bucket-size) per call. Suitable for the rule
-// engine's `lifecycle_*` action path and `$entity.lifecycle.*`
-// substitution path (low-frequency, rule-fire-driven). NOT
-// per-message-shaped — apps with high-frequency lookup needs
-// should track their own entityID→workflow mapping and call the
-// workflow-typed Get directly.
-func (m *Manager) LookupByEntityID(ctx context.Context, entityID string) (Participant, error) {
-	m.mu.RLock()
-	regs := make([]*registration, 0, len(m.registrations))
-	for _, reg := range m.registrations {
-		regs = append(regs, reg)
-	}
-	m.mu.RUnlock()
-
-	for _, reg := range regs {
-		// Use getFromRegistration directly — m.Get would re-take
-		// the registrations RLock once per workflow to re-resolve
-		// reg by name. The snapshot above is sufficient.
-		p, err := m.getFromRegistration(ctx, reg, entityID)
-		if err == nil {
-			return p, nil
-		}
-		if !errors.Is(err, ErrEntityNotFound) {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("%w: entity_id=%q (scanned %d workflows)",
-		ErrEntityNotFound, entityID, len(regs))
+	reg, _ := m.lookupByWorkflow(workflow)
+	field := reg.meta.FieldsByJSONName[fieldJSONName]
+	t := reg.meta.GoType
+	return t.FieldByIndex(field.FieldIndex).Type, nil
 }
 
 // GetWorkflowDefinition returns the WorkflowDef for the given
-// workflow type, suitable for operator-dashboard introspection
-// (state-machine diagram rendering, patchable-field listing, etc.).
-//
-// Returns ErrWorkflowNotRegistered if the workflow isn't registered.
+// workflow type. Returns ErrWorkflowNotRegistered when the workflow
+// isn't registered.
 func (m *Manager) GetWorkflowDefinition(workflow string) (WorkflowDef, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return WorkflowDef{}, err
 	}
-	return WorkflowDef{
-		Workflow:               reg.workflow,
-		Transitions:            reg.transitions,
-		KVBucket:               reg.bucket,
-		OperatorWritableFields: reg.structMeta.OperatorWritableJSONNames(),
-	}, nil
+	return workflowDef(reg), nil
 }
 
 // ListWorkflows returns the WorkflowDef for every registered
 // workflow type, sorted by workflow name for deterministic
-// operator-dashboard output across restarts.
+// operator-dashboard output.
 func (m *Manager) ListWorkflows() []WorkflowDef {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -498,102 +502,23 @@ func (m *Manager) ListWorkflows() []WorkflowDef {
 	sort.Strings(names)
 	out := make([]WorkflowDef, 0, len(names))
 	for _, name := range names {
-		reg := m.registrations[name]
-		out = append(out, WorkflowDef{
-			Workflow:               reg.workflow,
-			Transitions:            reg.transitions,
-			KVBucket:               reg.bucket,
-			OperatorWritableFields: reg.structMeta.OperatorWritableJSONNames(),
-		})
+		out = append(out, workflowDef(m.registrations[name]))
 	}
 	return out
 }
 
-// History returns the phase-transition history for the entity at
-// entityID, derived from KV revision replay. Each TransitionEvent
-// represents one write to the entity's KV key.
-//
-// Reconstruction semantics (v1 — best-effort from KV alone):
-//   - Each revision is decoded as a Participant snapshot
-//   - From = previous revision's Phase (empty for the first revision)
-//   - To = this revision's Phase
-//   - At = revision's CreatedAt timestamp
-//   - Triggered = TransitionSourceFramework (cannot recover the
-//     original source from KV alone — source/note persistence is a
-//     future enhancement that would write an audit triple alongside
-//     the state update)
-//   - Note = "" (same limitation as Triggered)
-//
-// Returns ErrEntityNotFound if the entity has no KV history (never
-// existed). An entity that existed and was deleted returns its
-// history including the final delete-marker as a synthetic
-// transition with To="<deleted>" so audit trails can show the
-// terminal event.
-//
-// Revisions where the Phase did NOT change (Update calls that
-// mutated other fields but not Phase) are skipped — History
-// surfaces phase-transition events specifically, not every
-// state mutation. Apps wanting the full revision stream should
-// drop to the kvStore primitive directly.
-func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error) {
-	reg, err := m.lookupByWorkflow(workflow)
-	if err != nil {
-		return nil, err
+func workflowDef(reg *registration) WorkflowDef {
+	return WorkflowDef{
+		Workflow:                   reg.workflow.Name,
+		Transitions:                reg.workflow.Transitions,
+		EntityIDPattern:            reg.workflow.EntityIDPattern,
+		PhasePredicate:             reg.workflow.PhasePredicate,
+		OperatorWritableFields:     reg.meta.OperatorWritableJSONNames(),
+		OperatorWritablePredicates: reg.meta.OperatorWritablePredicates(),
 	}
-	key := keyForEntity(entityID, reg)
-	entries, err := reg.store.History(ctx, key)
-	if err != nil {
-		if errors.Is(err, errKVKeyNotFound) {
-			return nil, fmt.Errorf("%w: workflow=%q entity_id=%q",
-				ErrEntityNotFound, reg.workflow, entityID)
-		}
-		return nil, fmt.Errorf("lifecycle: History for %q: %w", entityID, err)
-	}
-
-	events := make([]TransitionEvent, 0, len(entries))
-	previousPhase := ""
-	for _, entry := range entries {
-		if entry.IsDelete {
-			// Surface the deletion as a synthetic terminal event
-			// so audit trails are complete.
-			events = append(events, TransitionEvent{
-				From:      previousPhase,
-				To:        "<deleted>",
-				At:        entry.CreatedAt,
-				Triggered: TransitionSourceFramework,
-			})
-			previousPhase = "<deleted>"
-			continue
-		}
-		snapshot := reg.factory()
-		if err := json.Unmarshal(entry.Value, snapshot); err != nil {
-			// Don't fail the whole History call on a single bad
-			// revision — log and skip. A corrupt revision in the
-			// stream shouldn't black out the entity's audit trail.
-			m.logger.Warn("lifecycle: History unmarshal failed; skipping revision",
-				slog.String("workflow", reg.workflow),
-				slog.String("entity_id", entityID),
-				slog.Uint64("revision", entry.Revision),
-				slog.String("error", err.Error()))
-			continue
-		}
-		thisPhase := snapshot.Phase()
-		if thisPhase == previousPhase {
-			// Update that didn't change phase — not a transition.
-			continue
-		}
-		events = append(events, TransitionEvent{
-			From:      previousPhase,
-			To:        thisPhase,
-			At:        entry.CreatedAt,
-			Triggered: TransitionSourceFramework,
-		})
-		previousPhase = thisPhase
-	}
-	return events, nil
 }
 
-// ---- internal helpers ----
+// ---- internal: match plan + filter chain ----
 
 // matchPlan caches the structMeta resolution for ListOptions.Match
 // keys — one FieldIndex slice per match key, so the per-candidate
@@ -620,7 +545,7 @@ func buildMatchPlan(sm *structMeta, match map[string]any) (*matchPlan, error) {
 	for key, want := range match {
 		field, ok := sm.FieldsByJSONName[key]
 		if !ok {
-			return nil, fmt.Errorf("lifecycle: Match key %q does not match any field on the registered state struct (check json: tags)",
+			return nil, fmt.Errorf("lifecycle: Match key %q does not match any field on the registered Schema (check json: tags)",
 				key)
 		}
 		plan.specs = append(plan.specs, matchSpec{
@@ -670,33 +595,7 @@ func matchesActiveFilter(p Participant, active bool) bool {
 	return !p.IsTerminal()
 }
 
-// entityIDFromKey extracts the entityID from a KV key by inverse
-// of the registration's keySample.KVKey(entityID) transform. v1
-// uses a sentinel-substitution approach: compute the prefix/suffix
-// once per call from a known sentinel ID, then slice the input key.
-//
-// Returns (entityID, true) when the key matches the workflow's
-// KVKey shape; ("", false) when it doesn't (key from a different
-// workflow sharing the bucket, or operator-injected debug keys).
-//
-// TODO(list-perf): the sentinel-detection is currently per-call.
-// Cache the prefix/suffix on registration at Register time so List
-// only pays the detection cost once per Register, not once per
-// List call. Lands alongside the v2 secondary index work.
-func entityIDFromKey(key string, reg *registration) (string, bool) {
-	const sentinel = "___LIFECYCLE_ENTITY_ID_SENTINEL___"
-	sample := reg.keySample.KVKey(sentinel)
-	idx := strings.Index(sample, sentinel)
-	if idx < 0 {
-		// KVKey didn't incorporate the entityID — apps using
-		// constant-key shapes don't roundtrip through this helper.
-		// Treat as "doesn't match" so List quietly skips.
-		return "", false
-	}
-	prefix := sample[:idx]
-	suffix := sample[idx+len(sentinel):]
-	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, suffix) {
-		return "", false
-	}
-	return key[len(prefix) : len(key)-len(suffix)], true
-}
+// triplesEntity is the placeholder shape that signals projection
+// callers don't need the full EntityState. Kept here to make the
+// unused-import elimination cleaner — not referenced.
+var _ message.Triple

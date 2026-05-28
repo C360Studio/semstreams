@@ -2,771 +2,440 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// missionState is the test fixture for Manager unit tests. Shape
-// mirrors the ADR-047 worked example so the tests double as a
-// readable spec for "how does a Participant implementation actually
-// look in practice." Implements the Participant interface and uses
-// the canonical struct-tag layout.
-type missionState struct {
-	EntityIDF      string `json:"entity_id" lifecycle:"id"`
-	PhaseF         string `json:"phase" lifecycle:"phase,readonly"`
-	OwnerOrgIDF    string `json:"owner_org_id" lifecycle:"operator_writable"`
-	ParentMissionF string `json:"parent_mission,omitempty"`
+// fakeEmitter is an in-memory graphEmitter the Manager unit tests
+// drive against. It writes the merged entity state into the supplied
+// fakeBucket so subsequent Manager reads see what was emitted —
+// exercising the projection round-trip without NATS.
+type fakeEmitter struct {
+	mu       sync.Mutex
+	bucket   *fakeBucket
+	requests []*graph.UpdateEntityWithTriplesRequest
 }
 
-func (m *missionState) EntityID() string             { return m.EntityIDF }
-func (m *missionState) Workflow() string             { return "mission" }
-func (m *missionState) Phase() string                { return m.PhaseF }
-func (m *missionState) IsTerminal() bool             { return missionTransitions.IsTerminal(m.PhaseF) }
-func (m *missionState) KVBucket() string             { return "MISSIONS" }
-func (m *missionState) KVKey(entityID string) string { return "mission." + entityID }
-func (m *missionState) ParentEntityID() string       { return m.ParentMissionF }
-
-// valueMission is the deliberately-broken Participant shape for the
-// "factory must return pointer" Register-time rejection test. Value-
-// receiver methods + factory-returns-by-value. NOT a usable
-// Participant in production — exists solely so the test fixture
-// reaches the rv.Kind() != reflect.Pointer rejection path in
-// Manager.Register.
-type valueMission struct {
-	EntityIDF string `json:"entity_id" lifecycle:"id"`
-	PhaseF    string `json:"phase" lifecycle:"phase"`
-}
-
-func (v valueMission) EntityID() string             { return v.EntityIDF }
-func (v valueMission) Workflow() string             { return "value-mission" }
-func (v valueMission) Phase() string                { return v.PhaseF }
-func (v valueMission) IsTerminal() bool             { return false }
-func (v valueMission) KVBucket() string             { return "MISSIONS" }
-func (v valueMission) KVKey(entityID string) string { return "v." + entityID }
-func (v valueMission) ParentEntityID() string       { return "" }
-
-var missionTransitions = Transitions{
-	"planning":  {"flying", "aborted"},
-	"flying":    {"capturing", "landing", "aborted"},
-	"capturing": {"flying"},
-	"landing":   {"completed", "failed"},
-	"completed": {},
-	"failed":    {},
-	"aborted":   {},
-}
-
-func missionFactory() Participant { return &missionState{} }
-
-// newTestManager builds a Manager wired to a fresh in-memory mock
-// store, registers the mission workflow, and returns both for the
-// test body. Centralizes the boilerplate so each test focuses on
-// the behavior under test.
-func newTestManager(t *testing.T) (*Manager, *kvMockStore) {
-	t.Helper()
-	store := newKVMockStore(nil)
-	mgr := newManagerForTest(nil, func(bucket string) (kvStore, error) {
-		if bucket != "MISSIONS" {
-			t.Fatalf("test fixture only supports MISSIONS bucket, got %q", bucket)
+func (f *fakeEmitter) emit(_ context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, req)
+	currentRev := f.bucket.revOf(req.Entity.ID)
+	if req.ExpectedRevision > 0 && req.ExpectedRevision != currentRev {
+		return &graph.UpdateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{
+				Success: false,
+				Error:   "revision mismatch: expected " + tostr(req.ExpectedRevision) + ", current " + tostr(currentRev),
+			},
+		}, errEmitRevisionMismatch
+	}
+	current := f.bucket.get(req.Entity.ID)
+	merged := current.Triples
+	if len(req.RemoveTriples) > 0 {
+		removeSet := map[string]struct{}{}
+		for _, p := range req.RemoveTriples {
+			removeSet[p] = struct{}{}
 		}
-		return store, nil
-	})
-	if err := mgr.Register("mission", missionFactory, missionTransitions); err != nil {
-		t.Fatalf("Register mission: %v", err)
+		kept := merged[:0]
+		for _, t := range merged {
+			if _, drop := removeSet[t.Predicate]; drop {
+				continue
+			}
+			kept = append(kept, t)
+		}
+		merged = kept
 	}
-	return mgr, store
+	merged = applyPerPredicateLatestWins(merged, req.AddTriples)
+	state := *req.Entity
+	state.Triples = merged
+	f.bucket.put(req.Entity.ID, &state)
+	return &graph.UpdateEntityWithTriplesResponse{
+		MutationResponse: graph.MutationResponse{Success: true, KVRevision: f.bucket.revOf(req.Entity.ID)},
+		Entity:           &state,
+	}, nil
 }
 
-// --- Register ---
+// applyPerPredicateLatestWins mirrors graph-ingest's per-predicate
+// latest-wins merge. Triples in adds replace prior triples with the
+// same predicate on the same subject.
+func applyPerPredicateLatestWins(existing, adds []message.Triple) []message.Triple {
+	bySubjPred := map[string]int{}
+	out := make([]message.Triple, 0, len(existing)+len(adds))
+	for _, t := range existing {
+		key := t.Subject + "|" + t.Predicate
+		if idx, ok := bySubjPred[key]; ok {
+			out[idx] = t
+		} else {
+			bySubjPred[key] = len(out)
+			out = append(out, t)
+		}
+	}
+	for _, t := range adds {
+		key := t.Subject + "|" + t.Predicate
+		if idx, ok := bySubjPred[key]; ok {
+			out[idx] = t
+		} else {
+			bySubjPred[key] = len(out)
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
-func TestManager_Register_HappyPath(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	// Re-registering must reject as ErrWorkflowAlreadyRegistered;
-	// idempotent-re-init is a wiring bug, not a benign no-op.
-	err := mgr.Register("mission", missionFactory, missionTransitions)
-	if !errors.Is(err, ErrWorkflowAlreadyRegistered) {
-		t.Errorf("re-register should error with ErrWorkflowAlreadyRegistered, got %v", err)
+// fakeBucket is the minimal jetstream.KeyValue surface Manager.getEntity
+// + manager_query.go exercise. We implement only the methods the
+// Manager calls; the rest panic if invoked.
+type fakeBucket struct {
+	mu      sync.Mutex
+	entries map[string]*fakeBucketEntry
+	nextRev uint64
+}
+
+type fakeBucketEntry struct {
+	state     *graph.EntityState
+	revision  uint64
+	createdAt time.Time
+}
+
+func newFakeBucket() *fakeBucket {
+	return &fakeBucket{entries: map[string]*fakeBucketEntry{}}
+}
+
+func (b *fakeBucket) get(id string) *graph.EntityState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if e, ok := b.entries[id]; ok {
+		clone := *e.state
+		return &clone
+	}
+	return &graph.EntityState{ID: id}
+}
+
+func (b *fakeBucket) revOf(id string) uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if e, ok := b.entries[id]; ok {
+		return e.revision
+	}
+	return 0
+}
+
+func (b *fakeBucket) put(id string, state *graph.EntityState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nextRev++
+	b.entries[id] = &fakeBucketEntry{state: state, revision: b.nextRev, createdAt: time.Now()}
+}
+
+// jetstream.KeyValue minimum surface — embedding via composition is
+// painful, so we implement only what Manager uses.
+
+func (b *fakeBucket) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e, ok := b.entries[key]
+	if !ok {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	data, _ := json.Marshal(e.state)
+	return &fakeKVEntry{key: key, value: data, revision: e.revision, created: e.createdAt}, nil
+}
+
+// fakeKVEntry is the bare-minimum jetstream.KeyValueEntry implementation.
+type fakeKVEntry struct {
+	key      string
+	value    []byte
+	revision uint64
+	created  time.Time
+}
+
+func (e *fakeKVEntry) Bucket() string                  { return "ENTITY_STATES" }
+func (e *fakeKVEntry) Key() string                     { return e.key }
+func (e *fakeKVEntry) Value() []byte                   { return e.value }
+func (e *fakeKVEntry) Revision() uint64                { return e.revision }
+func (e *fakeKVEntry) Created() time.Time              { return e.created }
+func (e *fakeKVEntry) Delta() uint64                   { return 0 }
+func (e *fakeKVEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
+
+// jetstream.KeyValue methods Manager doesn't call in this test —
+// panic so a future change that adds a call surfaces here.
+func (b *fakeBucket) PutString(context.Context, string, string) (uint64, error) {
+	panic("fakeBucket.PutString not implemented")
+}
+func (b *fakeBucket) Put(context.Context, string, []byte) (uint64, error) {
+	panic("fakeBucket.Put not implemented")
+}
+func (b *fakeBucket) Create(context.Context, string, []byte, ...jetstream.KVCreateOpt) (uint64, error) {
+	panic("fakeBucket.Create not implemented")
+}
+func (b *fakeBucket) Update(context.Context, string, []byte, uint64) (uint64, error) {
+	panic("fakeBucket.Update not implemented")
+}
+func (b *fakeBucket) Delete(context.Context, string, ...jetstream.KVDeleteOpt) error {
+	panic("fakeBucket.Delete not implemented")
+}
+func (b *fakeBucket) Purge(context.Context, string, ...jetstream.KVDeleteOpt) error {
+	panic("fakeBucket.Purge not implemented")
+}
+func (b *fakeBucket) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	panic("fakeBucket.Watch not implemented")
+}
+func (b *fakeBucket) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	panic("fakeBucket.WatchAll not implemented")
+}
+func (b *fakeBucket) WatchFiltered(context.Context, []string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	panic("fakeBucket.WatchFiltered not implemented")
+}
+func (b *fakeBucket) Keys(context.Context, ...jetstream.WatchOpt) ([]string, error) {
+	panic("fakeBucket.Keys not implemented")
+}
+func (b *fakeBucket) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
+	panic("fakeBucket.ListKeys not implemented")
+}
+func (b *fakeBucket) ListKeysFiltered(context.Context, ...string) (jetstream.KeyLister, error) {
+	panic("fakeBucket.ListKeysFiltered not implemented")
+}
+func (b *fakeBucket) History(context.Context, string, ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
+	panic("fakeBucket.History not implemented")
+}
+func (b *fakeBucket) Bucket() string { return "ENTITY_STATES" }
+func (b *fakeBucket) PurgeDeletes(context.Context, ...jetstream.KVPurgeOpt) error {
+	panic("fakeBucket.PurgeDeletes not implemented")
+}
+func (b *fakeBucket) Status(context.Context) (jetstream.KeyValueStatus, error) {
+	panic("fakeBucket.Status not implemented")
+}
+func (b *fakeBucket) GetRevision(_ context.Context, _ string, _ uint64) (jetstream.KeyValueEntry, error) {
+	panic("fakeBucket.GetRevision not implemented")
+}
+
+func tostr(u uint64) string {
+	const digits = "0123456789"
+	if u == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for u > 0 {
+		i--
+		buf[i] = digits[u%10]
+		u /= 10
+	}
+	return string(buf[i:])
+}
+
+// --- tests ---
+
+func newTestManager(t *testing.T) (*Manager, *fakeEmitter, *fakeBucket) {
+	t.Helper()
+	bucket := newFakeBucket()
+	emitter := &fakeEmitter{bucket: bucket}
+	mgr := newManagerForTest(nil, emitter, bucket)
+	wf := lifecycle{}.fixtureWorkflow()
+	if err := mgr.Register(wf); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	return mgr, emitter, bucket
+}
+
+type lifecycle struct{}
+
+func (lifecycle) fixtureWorkflow() Workflow {
+	return Workflow{
+		Name:            "fixture",
+		EntityIDPattern: "*.*.lifecycle.gcs.mission.*",
+		Phases:          []string{"planning", "flying", "completed", "aborted", "failed"},
+		Transitions: Transitions{
+			"planning":  {"flying", "aborted"},
+			"flying":    {"completed", "aborted"},
+			"completed": {},
+			"aborted":   {},
+			"failed":    {},
+		},
+		PhasePredicate: "mission.phase",
+		Schema:         reflect.TypeOf(fixtureMission{}),
+		OperatorWritablePredicates: []string{
+			"mission.owner_org_id",
+			"mission.note",
+		},
+		AuditPredicates: AuditSpec{
+			Source: "mission.last_transition_source",
+			At:     "mission.last_transition_at",
+			From:   "mission.last_transition_from",
+			Note:   "mission.last_transition_note",
+		},
 	}
 }
 
-func TestManager_Register_RejectsInvalidTransitions(t *testing.T) {
-	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
-		return newKVMockStore(nil), nil
-	})
-	bad := Transitions{
-		"a": {"b"}, // "b" never declared as a key
-	}
-	err := mgr.Register("mission", missionFactory, bad)
-	if !errors.Is(err, ErrInvalidTransitionsTable) {
-		t.Fatalf("expected ErrInvalidTransitionsTable, got %v", err)
-	}
-}
+func TestManager_RoundTripCreateGetTransition(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
 
-func TestManager_Register_RejectsNilFactory(t *testing.T) {
-	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
-		return newKVMockStore(nil), nil
-	})
-	if err := mgr.Register("mission", nil, missionTransitions); err == nil {
-		t.Fatal("nil factory must be rejected")
-	}
-}
-
-func TestManager_Register_RejectsFactoryReturningNil(t *testing.T) {
-	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
-		return newKVMockStore(nil), nil
-	})
-	err := mgr.Register("mission", func() Participant { return nil }, missionTransitions)
-	if err == nil || !strings.Contains(err.Error(), "nil") {
-		t.Fatalf("nil-returning factory must be rejected with nil-mentioning error, got %v", err)
-	}
-}
-
-func TestManager_Register_RejectsFactoryReturningValue(t *testing.T) {
-	// Value-typed Participant returns from the factory are rejected
-	// at Register time. json.Unmarshal can't populate value
-	// receivers (no addressability), and reflect.Value.SetString on
-	// the phase field would panic on a non-pointer. Catching this
-	// at Register surfaces the wiring bug at startup, not at the
-	// first Get/Transition attempt in prod.
-	//
-	// Uses the package-scoped valueMission fixture (value-receiver
-	// methods, factory returns by value) so the test exercises the
-	// REAL "non-pointer factory return" code path at manager.go's
-	// rv.Kind() != reflect.Pointer check.
-	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
-		return newKVMockStore(nil), nil
-	})
-	err := mgr.Register("value-mission", func() Participant {
-		return valueMission{EntityIDF: "x", PhaseF: "planning"}
-	}, missionTransitions)
-	if err == nil {
-		t.Fatal("value-typed factory return must be rejected")
-	}
-	if !strings.Contains(err.Error(), "pointer") {
-		t.Errorf("rejection should mention 'pointer' for operator debugging, got %q", err)
-	}
-}
-
-func TestManager_Register_RejectsMismatchedWorkflowName(t *testing.T) {
-	mgr := newManagerForTest(nil, func(string) (kvStore, error) {
-		return newKVMockStore(nil), nil
-	})
-	// Factory returns missionState which declares Workflow()=="mission",
-	// but we register it under a different name. Mismatch should reject.
-	err := mgr.Register("survey", missionFactory, missionTransitions)
-	if err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("workflow-name mismatch should reject with mismatch-mentioning error, got %v", err)
-	}
-}
-
-// --- Get ---
-
-func TestManager_Get_ReturnsNotFound(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	_, err := mgr.Get(context.Background(), "mission", "does-not-exist")
-	if !errors.Is(err, ErrEntityNotFound) {
-		t.Fatalf("Get on missing entity should error ErrEntityNotFound, got %v", err)
-	}
-}
-
-func TestManager_Get_UnknownWorkflow(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	_, err := mgr.Get(context.Background(), "never-registered", "irrelevant")
-	if !errors.Is(err, ErrWorkflowNotRegistered) {
-		t.Fatalf("Get on unregistered workflow should error ErrWorkflowNotRegistered, got %v", err)
-	}
-}
-
-// --- Create + Get round-trip ---
-
-func TestManager_Create_AndGet_RoundTrip(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	initial := &missionState{
-		EntityIDF:   "mission-001",
-		PhaseF:      "planning",
-		OwnerOrgIDF: "acme",
-	}
-	if err := mgr.Create(context.Background(), initial); err != nil {
+	id := "c360.platform1.lifecycle.gcs.mission.001"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning", OwnerOrgID: "acme"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	got, err := mgr.Get(context.Background(), "mission", "mission-001")
+	got, err := mgr.Get(ctx, "fixture", id)
 	if err != nil {
-		t.Fatalf("Get after Create: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
-	gotMission, ok := got.(*missionState)
-	if !ok {
-		t.Fatalf("Get returned %T, want *missionState", got)
+	gotMission := got.(*fixtureMission)
+	if gotMission.PhaseF != "planning" {
+		t.Errorf("Phase=%q, want planning", gotMission.PhaseF)
 	}
-	if gotMission.PhaseF != "planning" || gotMission.OwnerOrgIDF != "acme" {
-		t.Errorf("round-trip lost fields: %+v", gotMission)
+	if gotMission.OwnerOrgID != "acme" {
+		t.Errorf("OwnerOrgID=%q, want acme", gotMission.OwnerOrgID)
 	}
-}
 
-func TestManager_Create_RejectsDuplicate(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	initial := &missionState{EntityIDF: "dup", PhaseF: "planning"}
-	if err := mgr.Create(context.Background(), initial); err != nil {
-		t.Fatalf("first Create: %v", err)
+	if err := mgr.Transition(ctx, "fixture", id, "flying", TransitionSourceRule, "launched"); err != nil {
+		t.Fatalf("Transition: %v", err)
 	}
-	err := mgr.Create(context.Background(), initial)
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("duplicate Create should error with already-exists, got %v", err)
-	}
-}
-
-func TestManager_Create_RejectsUndeclaredInitialPhase(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	bad := &missionState{EntityIDF: "x", PhaseF: "exploded"}
-	err := mgr.Create(context.Background(), bad)
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("Create with undeclared initial phase should error ErrInvalidTransition, got %v", err)
-	}
-}
-
-// --- Update ---
-
-func TestManager_Update_HappyPath(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "u-1", "planning")
-
-	err := mgr.Update(context.Background(), "mission", "u-1", func(p Participant) error {
-		ms := p.(*missionState)
-		ms.OwnerOrgIDF = "newcorp"
-		return nil
-	})
+	got2, err := mgr.Get(ctx, "fixture", id)
 	if err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("Get after transition: %v", err)
 	}
-	got, _ := mgr.Get(context.Background(), "mission", "u-1")
-	if got.(*missionState).OwnerOrgIDF != "newcorp" {
-		t.Errorf("mutation didn't persist: %+v", got)
-	}
-}
-
-func TestManager_Update_MutatorErrorAborts(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "u-2", "planning")
-
-	sentinel := errors.New("mutator says no")
-	err := mgr.Update(context.Background(), "mission", "u-2", func(_ Participant) error {
-		return sentinel
-	})
-	if !errors.Is(err, sentinel) {
-		t.Errorf("mutator error must wrap and surface, got %v", err)
-	}
-	// State must be unchanged after mutator-reject (no KV write happened).
-	got, _ := mgr.Get(context.Background(), "mission", "u-2")
-	if got.(*missionState).PhaseF != "planning" {
-		t.Errorf("mutator-reject should not have written; got phase %q", got.(*missionState).PhaseF)
+	if got2.Phase() != "flying" {
+		t.Errorf("after Transition: phase=%q, want flying", got2.Phase())
 	}
 }
 
-func TestManager_Update_RetriesOnCASConflict(t *testing.T) {
-	// Use a mock store that injects a CAS conflict on the first Update,
-	// then succeeds on retry. Verifies the retry loop actually runs.
-	store := newKVMockStore(nil)
-	conflictStore := &flakyOnceUpdateStore{kvMockStore: store}
-	mgr := newManagerForTest(nil, func(_ string) (kvStore, error) {
-		return conflictStore, nil
-	})
-	if err := mgr.Register("mission", missionFactory, missionTransitions); err != nil {
-		t.Fatalf("Register: %v", err)
+func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.t1"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	mustCreate(t, mgr, "u-3", "planning")
-
-	err := mgr.Update(context.Background(), "mission", "u-3", func(p Participant) error {
-		p.(*missionState).OwnerOrgIDF = "after-retry"
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Update should have succeeded on retry, got %v", err)
-	}
-	if !conflictStore.firstConflictInjected {
-		t.Error("retry path didn't trigger — flakyOnceUpdateStore never injected its conflict")
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "u-3")
-	if got.(*missionState).OwnerOrgIDF != "after-retry" {
-		t.Errorf("retry didn't apply final mutation: %+v", got)
-	}
-}
-
-func TestManager_Update_ConcurrentMutationsSerialize(t *testing.T) {
-	// N goroutines mutate the same entity concurrently. Each
-	// appends a unique tag to the OwnerOrgIDF field. After all
-	// goroutines return, the final field value must contain
-	// every tag (none lost to silent CAS-conflict drops) and no
-	// duplicates (the CAS retry loop must read-then-write
-	// atomically — read-stale-then-write-stale would either
-	// double-append or drop entries).
-	//
-	// N is bounded by updateRetries because of the convergence
-	// arithmetic: with N writers, the worst-case loser needs
-	// up to N-1 retries (each "round" of retries advances exactly
-	// one writer). Using N == updateRetries-1 keeps the test
-	// reliably non-flaky while still exercising the full CAS-
-	// retry serialization path. The "what happens under
-	// budget-exhaustion contention" case is covered separately
-	// by TestManager_Update_ExhaustsRetriesUnderPersistentConflict.
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "concurrent", "planning")
-
-	const goroutines = updateRetries - 1
-	tags := make([]string, goroutines)
-	for i := range goroutines {
-		tags[i] = fmt.Sprintf("tag-%02d", i)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
-		go func(tag string) {
-			defer wg.Done()
-			err := mgr.Update(context.Background(), "mission", "concurrent", func(p Participant) error {
-				ms := p.(*missionState)
-				if ms.OwnerOrgIDF == "" {
-					ms.OwnerOrgIDF = tag
-				} else {
-					ms.OwnerOrgIDF = ms.OwnerOrgIDF + "," + tag
-				}
-				return nil
-			})
-			if err != nil {
-				t.Errorf("concurrent Update %q: %v", tag, err)
-			}
-		}(tags[i])
-	}
-	wg.Wait()
-
-	got, err := mgr.Get(context.Background(), "mission", "concurrent")
-	if err != nil {
-		t.Fatalf("Get after concurrent updates: %v", err)
-	}
-	final := got.(*missionState).OwnerOrgIDF
-	parts := strings.Split(final, ",")
-	if len(parts) != goroutines {
-		t.Fatalf("expected %d tags in final value, got %d: %q", goroutines, len(parts), final)
-	}
-	seen := make(map[string]int, goroutines)
-	for _, part := range parts {
-		seen[part]++
-	}
-	if len(seen) != goroutines {
-		t.Errorf("expected %d distinct tags, got %d (dup detection): %v", goroutines, len(seen), seen)
-	}
-	for _, tag := range tags {
-		if seen[tag] != 1 {
-			t.Errorf("tag %q appeared %d times, expected 1", tag, seen[tag])
-		}
-	}
-}
-
-func TestManager_Update_MutatorCanSetPhaseDirectly(t *testing.T) {
-	// Current behavior: Manager.Update's mutator can mutate the
-	// Phase field directly without going through Transition. This
-	// bypasses the transitions-table validation that Transition
-	// applies. This test LOCKS the current behavior — either it
-	// continues to be allowed (apps that need it have an escape
-	// hatch) OR a future change deliberately closes it (and
-	// updates the test).
-	//
-	// Discipline call: apps SHOULD use Transition for phase
-	// changes; the convenience of mutator-can-do-anything is
-	// occasionally useful for state-recovery shims (e.g. clearing
-	// drift on a known-corrupt instance). Documented here so the
-	// behavior isn't ambiguous in either direction.
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "direct", "planning")
-
-	err := mgr.Update(context.Background(), "mission", "direct", func(p Participant) error {
-		// Skip from planning to completed — not a declared edge
-		// in the transitions table, but Update doesn't validate
-		// edges (Transition does). The Update succeeds.
-		ms := p.(*missionState)
-		ms.PhaseF = "completed"
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("mutator setting Phase directly should succeed (Update doesn't validate edges): %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "direct")
-	if got.Phase() != "completed" {
-		t.Errorf("direct Phase mutation didn't persist: %q", got.Phase())
-	}
-}
-
-func TestManager_Update_ExhaustsRetriesUnderPersistentConflict(t *testing.T) {
-	// Mock store that conflicts on EVERY Update — Manager must give
-	// up after updateRetries attempts and surface the CAS error.
-	store := newKVMockStore(nil)
-	alwaysConflict := &alwaysConflictUpdateStore{kvMockStore: store}
-	mgr := newManagerForTest(nil, func(_ string) (kvStore, error) {
-		return alwaysConflict, nil
-	})
-	if err := mgr.Register("mission", missionFactory, missionTransitions); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	mustCreate(t, mgr, "u-4", "planning")
-
-	err := mgr.Update(context.Background(), "mission", "u-4", func(_ Participant) error {
-		return nil
-	})
-	if err == nil || !errors.Is(err, ErrUpdateRetriesExhausted) {
-		t.Fatalf("persistent conflict should exhaust retries with ErrUpdateRetriesExhausted, got %v", err)
-	}
-	if alwaysConflict.updateCalls != updateRetries {
-		t.Errorf("expected exactly %d Update attempts, got %d", updateRetries, alwaysConflict.updateCalls)
-	}
-}
-
-// --- Transition ---
-
-func TestManager_Transition_HappyPath(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "t-1", "planning")
-
-	err := mgr.Transition(context.Background(), "mission", "t-1", "flying", TransitionSourceRule, "")
-	if err != nil {
-		t.Fatalf("Transition planning→flying: %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "t-1")
-	if got.Phase() != "flying" {
-		t.Errorf("Phase didn't update, got %q", got.Phase())
-	}
-}
-
-func TestManager_Transition_RejectsUndeclaredTarget(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "t-2", "planning")
-	err := mgr.Transition(context.Background(), "mission", "t-2", "exploded", TransitionSourceRule, "")
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("target not in table should error ErrInvalidTransition, got %v", err)
-	}
-}
-
-func TestManager_Transition_RejectsInvalidEdge(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "t-3", "planning")
-	// planning → completed isn't a declared edge.
-	err := mgr.Transition(context.Background(), "mission", "t-3", "completed", TransitionSourceRule, "")
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("non-edge transition should error ErrInvalidTransition, got %v", err)
-	}
-}
-
-func TestManager_Transition_RejectsFromTerminal(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "t-4", "planning")
-	// Walk to a terminal first.
-	must(t, mgr.Transition(context.Background(), "mission", "t-4", "aborted", TransitionSourceOperator, ""))
-	// Now try to transition out of terminal — should error specifically
-	// ErrTerminalPhase (distinguished from ErrInvalidTransition so
-	// dashboards can show the right hint).
-	err := mgr.Transition(context.Background(), "mission", "t-4", "planning", TransitionSourceRule, "")
-	if !errors.Is(err, ErrTerminalPhase) {
-		t.Fatalf("transition from terminal should error ErrTerminalPhase, got %v", err)
-	}
-}
-
-// --- TransitionWith ---
-
-// TransitionWith is the atomic-mutate-and-phase variant that
-// underpins the rule engine's lifecycle_transition action's `set`
-// clause (ADR-047 PR 2). The mutator runs after transitions-table
-// validation but before the phase write; failures abort the entire
-// transition (no partial state lands).
-func TestManager_TransitionWith_MutatorRunsBeforePhaseWrite(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "tw-1", "planning")
-
-	err := mgr.TransitionWith(context.Background(), "mission", "tw-1", "flying", TransitionSourceRule, "",
-		func(p Participant) error {
-			m := p.(*missionState)
-			m.OwnerOrgIDF = "acme"
-			return nil
-		})
-	if err != nil {
-		t.Fatalf("TransitionWith planning→flying: %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "tw-1")
-	m := got.(*missionState)
-	if m.Phase() != "flying" {
-		t.Errorf("Phase didn't update, got %q", m.Phase())
-	}
-	if m.OwnerOrgIDF != "acme" {
-		t.Errorf("mutator field write didn't persist, got %q", m.OwnerOrgIDF)
-	}
-}
-
-func TestManager_TransitionWith_MutatorErrorAbortsTransition(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "tw-2", "planning")
-
-	mutatorErr := errors.New("invariant violated")
-	err := mgr.TransitionWith(context.Background(), "mission", "tw-2", "flying", TransitionSourceRule, "",
-		func(_ Participant) error { return mutatorErr })
-	if !errors.Is(err, mutatorErr) {
-		t.Fatalf("expected mutator error to surface, got %v", err)
-	}
-	// Phase must not have moved.
-	got, _ := mgr.Get(context.Background(), "mission", "tw-2")
-	if got.Phase() != "planning" {
-		t.Errorf("phase should remain planning when mutator errors, got %q", got.Phase())
-	}
-}
-
-func TestManager_TransitionWith_NilMutatorEqualsTransition(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "tw-3", "planning")
-	// Nil mutator is the path Transition itself takes; confirm parity.
-	err := mgr.TransitionWith(context.Background(), "mission", "tw-3", "flying", TransitionSourceRule, "", nil)
-	if err != nil {
-		t.Fatalf("TransitionWith nil mutator: %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "tw-3")
-	if got.Phase() != "flying" {
-		t.Errorf("phase didn't update, got %q", got.Phase())
-	}
-}
-
-func TestManager_TransitionWith_RejectsBeforeRunningMutator(t *testing.T) {
-	// Mutator must NOT run when the target phase is undeclared —
-	// transitions-table validation happens first.
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "tw-4", "planning")
-
-	mutatorRan := false
-	err := mgr.TransitionWith(context.Background(), "mission", "tw-4", "exploded", TransitionSourceRule, "",
-		func(_ Participant) error {
-			mutatorRan = true
-			return nil
-		})
+	err := mgr.Transition(ctx, "fixture", id, "completed", TransitionSourceRule, "")
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("expected ErrInvalidTransition, got %v", err)
 	}
-	if mutatorRan {
-		t.Errorf("mutator ran despite target-phase rejection (validation must precede mutator)")
+}
+
+func TestManager_CreateOnExistingPhaseTripleErrAlreadyExists(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dup"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"})
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists, got %v", err)
 	}
 }
 
-// --- AssertRuleWritable ---
-
-// AssertRuleWritable is consumed by processor/rule's lifecycle_transition
-// action to enforce convergence with UpdateFromOperator's default-deny.
-// Tests cover: happy path (operator_writable field), and the four
-// rejection classes (identity, phase, non-operator-writable, unknown
-// workflow / unknown field).
-
-func TestManager_AssertRuleWritable_AllowsOperatorWritableField(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	if err := mgr.AssertRuleWritable("mission", "owner_org_id"); err != nil {
-		t.Errorf("owner_org_id is operator_writable, got %v", err)
+func TestManager_UpdateFromOperatorPatchesPredicate(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.op"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.UpdateFromOperator(ctx, "fixture", id, map[string]any{
+		"note": "operator-set",
+	}); err != nil {
+		t.Fatalf("UpdateFromOperator: %v", err)
+	}
+	got, err := mgr.Get(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.(*fixtureMission).Note != "operator-set" {
+		t.Errorf("Note=%q, want operator-set", got.(*fixtureMission).Note)
 	}
 }
 
-func TestManager_AssertRuleWritable_RejectsIdentityField(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	err := mgr.AssertRuleWritable("mission", "entity_id")
+func TestManager_UpdateFromOperatorRejectsProtectedField(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.prot"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	err := mgr.UpdateFromOperator(ctx, "fixture", id, map[string]any{"phase": "flying"})
 	if !errors.Is(err, ErrFieldNotOperatorWritable) {
-		t.Errorf("expected ErrFieldNotOperatorWritable for identity field, got %v", err)
+		t.Fatalf("expected ErrFieldNotOperatorWritable, got %v", err)
 	}
 }
 
-func TestManager_AssertRuleWritable_RejectsPhaseField(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	err := mgr.AssertRuleWritable("mission", "phase")
-	if !errors.Is(err, ErrFieldNotOperatorWritable) {
-		t.Errorf("expected ErrFieldNotOperatorWritable for phase field, got %v", err)
+func TestManager_GetReturnsNotLifecycleManagedForRawEntity(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.raw"
+	// Seed entity directly into the bucket WITHOUT a phase triple —
+	// simulates a processor stamping `mission.command` before any
+	// lifecycle action fires.
+	bucket.put(id, &graph.EntityState{
+		ID: id,
+		Triples: []message.Triple{
+			{Subject: id, Predicate: "mission.command", Object: "launch"},
+		},
+	})
+	_, err := mgr.Get(ctx, "fixture", id)
+	if !errors.Is(err, ErrEntityNotLifecycleManaged) {
+		t.Fatalf("expected ErrEntityNotLifecycleManaged, got %v", err)
+	}
+	// After Create the entity coexists with its prior triple.
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create after raw seed: %v", err)
+	}
+	got, err := mgr.Get(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("Get after Create: %v", err)
+	}
+	if got.Phase() != "planning" {
+		t.Errorf("phase wrong: %v", got.Phase())
 	}
 }
 
-func TestManager_AssertRuleWritable_RejectsNonOperatorWritableField(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	// parent_mission has no lifecycle tag at all → not operator_writable
-	// → must reject.
-	err := mgr.AssertRuleWritable("mission", "parent_mission")
-	if !errors.Is(err, ErrFieldNotOperatorWritable) {
-		t.Errorf("expected ErrFieldNotOperatorWritable for tag-less field, got %v", err)
+func TestManager_LookupByEntityIDMatchesPattern(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.lkup"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-}
-
-func TestManager_AssertRuleWritable_RejectsUnknownField(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	err := mgr.AssertRuleWritable("mission", "no_such_field")
-	if !errors.Is(err, ErrFieldNotOperatorWritable) {
-		t.Errorf("expected ErrFieldNotOperatorWritable for unknown field, got %v", err)
-	}
-}
-
-func TestManager_AssertRuleWritable_RejectsUnknownWorkflow(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	err := mgr.AssertRuleWritable("not_a_workflow", "owner_org_id")
-	if !errors.Is(err, ErrWorkflowNotRegistered) {
-		t.Errorf("expected ErrWorkflowNotRegistered, got %v", err)
-	}
-}
-
-// --- LookupByEntityID ---
-
-func TestManager_LookupByEntityID_FindsAcrossWorkflows(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "lookup-1", "planning")
-
-	p, err := mgr.LookupByEntityID(context.Background(), "lookup-1")
+	got, err := mgr.LookupByEntityID(ctx, id)
 	if err != nil {
 		t.Fatalf("LookupByEntityID: %v", err)
 	}
-	if p.Workflow() != "mission" {
-		t.Errorf("expected workflow=mission, got %q", p.Workflow())
-	}
-	if p.EntityID() != "lookup-1" {
-		t.Errorf("expected entity_id=lookup-1, got %q", p.EntityID())
+	if got.Workflow() != "fixture" {
+		t.Errorf("workflow=%q, want fixture", got.Workflow())
 	}
 }
 
-func TestManager_LookupByEntityID_ReturnsNotFound(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	_, err := mgr.LookupByEntityID(context.Background(), "does-not-exist")
-	if !errors.Is(err, ErrEntityNotFound) {
-		t.Fatalf("expected ErrEntityNotFound, got %v", err)
-	}
-}
-
-// --- Complete ---
-
-func TestManager_Complete_PicksFirstReachableTerminal(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "c-1", "planning")
-	// Walk to landing so a terminal transition is possible.
-	must(t, mgr.Transition(context.Background(), "mission", "c-1", "flying", TransitionSourceRule, ""))
-	must(t, mgr.Transition(context.Background(), "mission", "c-1", "landing", TransitionSourceRule, ""))
-
-	if err := mgr.Complete(context.Background(), "mission", "c-1"); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "c-1")
-	// landing → {completed, failed}; sorted declared terminals are
-	// {aborted, completed, failed}; first sorted terminal that is
-	// ALSO reachable from landing is "completed". Deterministic.
-	if got.Phase() != "completed" {
-		t.Errorf("Complete from landing should pick first sorted reachable terminal 'completed', got %q",
-			got.Phase())
-	}
-	if !got.IsTerminal() {
-		t.Errorf("entity should be terminal after Complete, got %q", got.Phase())
-	}
-}
-
-func TestManager_Complete_RejectsFromTerminal(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "c-2", "planning")
-	must(t, mgr.Transition(context.Background(), "mission", "c-2", "aborted", TransitionSourceOperator, ""))
-
-	err := mgr.Complete(context.Background(), "mission", "c-2")
-	if !errors.Is(err, ErrTerminalPhase) {
-		t.Fatalf("Complete on already-terminal entity should error ErrTerminalPhase, got %v", err)
-	}
-}
-
-func TestManager_Complete_NoReachableTerminalErrors(t *testing.T) {
-	// Custom transitions table where the non-terminal phase has no
-	// edge to any terminal — Complete should surface the wiring bug.
-	noReachableTerminal := Transitions{
-		"start":     {"middle"},
-		"middle":    {"start"}, // cycle, no terminal reachable
-		"completed": {},
-	}
-	store := newKVMockStore(nil)
-	mgr := newManagerForTest(nil, func(_ string) (kvStore, error) {
-		return store, nil
+func TestManager_GetRawReturnsAllTriples(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.raw2"
+	bucket.put(id, &graph.EntityState{
+		ID: id,
+		Triples: []message.Triple{
+			{Subject: id, Predicate: "x.y.z", Object: "literal"},
+		},
 	})
-	if err := mgr.Register("mission", missionFactory, noReachableTerminal); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	must(t, mgr.Create(context.Background(), &missionState{EntityIDF: "stuck", PhaseF: "start"}))
-
-	err := mgr.Complete(context.Background(), "mission", "stuck")
-	if !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("Complete with no reachable terminal should error ErrInvalidTransition, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "no edge to any terminal") {
-		t.Errorf("error should mention 'no edge to any terminal' for operator debugging, got %q", err)
-	}
-}
-
-// --- Fail ---
-
-func TestManager_Fail_RequiresReason(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	err := mgr.Fail(context.Background(), "mission", "anything", "")
-	if err == nil {
-		t.Fatal("Fail with empty reason must error (audit-trail discipline)")
-	}
-}
-
-func TestManager_Fail_TransitionsToFailedPhase(t *testing.T) {
-	mgr, _ := newTestManager(t)
-	mustCreate(t, mgr, "f-1", "planning")
-	must(t, mgr.Transition(context.Background(), "mission", "f-1", "flying", TransitionSourceRule, ""))
-	must(t, mgr.Transition(context.Background(), "mission", "f-1", "landing", TransitionSourceRule, ""))
-
-	if err := mgr.Fail(context.Background(), "mission", "f-1", "engine failure"); err != nil {
-		t.Fatalf("Fail: %v", err)
-	}
-	got, _ := mgr.Get(context.Background(), "mission", "f-1")
-	if got.Phase() != "failed" {
-		t.Errorf("Fail should transition to 'failed', got %q", got.Phase())
-	}
-}
-
-// --- helpers ---
-
-func mustCreate(t *testing.T, mgr *Manager, id, phase string) {
-	t.Helper()
-	err := mgr.Create(context.Background(), &missionState{EntityIDF: id, PhaseF: phase})
+	state, err := mgr.GetRaw(ctx, id)
 	if err != nil {
-		t.Fatalf("mustCreate %q@%q: %v", id, phase, err)
+		t.Fatalf("GetRaw: %v", err)
 	}
-}
-
-func must(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if len(state.Triples) != 1 || state.Triples[0].Predicate != "x.y.z" {
+		t.Errorf("unexpected raw triples: %+v", state.Triples)
 	}
-}
-
-// flakyOnceUpdateStore wraps kvMockStore to inject one CAS conflict
-// on the FIRST Update call. Used by the retry-on-conflict test.
-type flakyOnceUpdateStore struct {
-	*kvMockStore
-	mu                    sync.Mutex
-	firstConflictInjected bool
-}
-
-func (f *flakyOnceUpdateStore) Update(ctx context.Context, key string, value []byte, expectedRevision uint64) (uint64, error) {
-	f.mu.Lock()
-	if !f.firstConflictInjected {
-		f.firstConflictInjected = true
-		f.mu.Unlock()
-		return 0, errKVRevisionMismatch
-	}
-	f.mu.Unlock()
-	return f.kvMockStore.Update(ctx, key, value, expectedRevision)
-}
-
-// alwaysConflictUpdateStore makes EVERY Update conflict, used to
-// verify Manager exhausts updateRetries and surfaces the CAS error.
-type alwaysConflictUpdateStore struct {
-	*kvMockStore
-	mu          sync.Mutex
-	updateCalls int
-}
-
-func (a *alwaysConflictUpdateStore) Update(_ context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
-	a.mu.Lock()
-	a.updateCalls++
-	a.mu.Unlock()
-	return 0, errKVRevisionMismatch
 }

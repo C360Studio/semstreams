@@ -5,20 +5,39 @@
 //
 // The package intentionally lives under cmd/e2e-semstreams so the
 // production semstreams binary does not register this workflow —
-// per ADR-047 the framework provides the substrate (Manager,
+// per ADR-049 the framework provides the substrate (Manager,
 // lifecycle-gateway component, lifecycle_* rule actions); apps own
 // their workflow types.
 package mission
 
 import (
+	"reflect"
+
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
 
 // Workflow is the registered workflow type name.
 const Workflow = "mission"
 
-// KVBucket is the NATS KV bucket that stores Mission instances.
-const KVBucket = "MISSIONS"
+// EntityIDPattern matches mission entities in the federated graph.
+// Six-segment org.platform.domain.system.type.instance shape per
+// pkg/types.EntityID; the org + platform + instance segments wildcard
+// while domain (`lifecycle`), system (`gcs`), and type (`mission`)
+// pin the canonical mission shape.
+const EntityIDPattern = "*.*.lifecycle.gcs.mission.*"
+
+// Predicate names for projection (ADR-049). Manager.Transition writes
+// `mission.phase`; UpdateFromOperator writes `mission.owner_org_id`
+// and `mission.note`; the audit predicates carry source attribution.
+const (
+	PredicatePhase       = "mission.phase"
+	PredicateOwnerOrgID  = "mission.owner_org_id"
+	PredicateNote        = "mission.note"
+	PredicateAuditSource = "mission.last_transition_source"
+	PredicateAuditAt     = "mission.last_transition_at"
+	PredicateAuditFrom   = "mission.last_transition_from"
+	PredicateAuditNote   = "mission.last_transition_note"
+)
 
 // Phases of a mission.
 const (
@@ -44,27 +63,51 @@ var Transitions = lifecycle.Transitions{
 
 // State is a lifecycle.Participant for the Mission workflow.
 //
-// Field tags:
-//   - lifecycle:"id"                 — identity, read-only via operator path
-//   - lifecycle:"phase"              — phase, owned by Manager.Transition
-//   - lifecycle:"operator_writable"  — patchable through POST .../state
+// Field tags (ADR-049):
+//   - lifecycle:"id"                                       — identity
+//   - lifecycle:"phase,predicate=mission.phase"            — phase triple
+//   - lifecycle:"operator_writable,predicate=mission.*"    — patchable via operator API
 //
-// All fields carry json tags because Manager round-trips Participants
-// through JSON on every Get/Update. The OwnerOrgID field is the only
-// operator-writable surface — phase changes go through Transition.
+// The projection layer round-trips between the entity's triples in
+// ENTITY_STATES and this struct on every Get / Transition; the
+// Participant is a typed VIEW over triples, not a private blob.
 type State struct {
 	EntityIDField string `json:"entity_id" lifecycle:"id"`
-	PhaseField    string `json:"phase" lifecycle:"phase"`
-	OwnerOrgID    string `json:"owner_org_id,omitempty" lifecycle:"operator_writable"`
-	Note          string `json:"note,omitempty" lifecycle:"operator_writable"`
+	PhaseField    string `json:"phase" lifecycle:"phase,predicate=mission.phase"`
+	OwnerOrgID    string `json:"owner_org_id,omitempty" lifecycle:"operator_writable,predicate=mission.owner_org_id"`
+	Note          string `json:"note,omitempty" lifecycle:"operator_writable,predicate=mission.note"`
 }
 
-// New returns a freshly-initialized State. The Manager's factory
-// callback uses this to produce target instances for Get/Update.
-// EntityID + Phase are zeroed; they are populated by JSON unmarshal
-// from KV (Get) or by the caller before Manager.Create.
-func New() lifecycle.Participant {
+// New returns a freshly-initialized State. Apps don't call this on
+// read — Manager.Get projects fresh instances from the registered
+// Schema via reflection. New is here for Create-side callers
+// (e.g. seedMission in cmd/e2e-semstreams/main.go).
+func New() *State {
 	return &State{}
+}
+
+// WorkflowDeclaration returns the lifecycle.Workflow ready to pass
+// to Manager.Register. Centralized here so cmd/e2e-semstreams/main.go
+// + the lifecycle-gateway both see the same schema.
+func WorkflowDeclaration() lifecycle.Workflow {
+	return lifecycle.Workflow{
+		Name:            Workflow,
+		EntityIDPattern: EntityIDPattern,
+		Phases:          []string{PhasePlanning, PhaseFlying, PhaseCompleted, PhaseAborted},
+		Transitions:     Transitions,
+		PhasePredicate:  PredicatePhase,
+		Schema:          reflect.TypeOf(State{}),
+		OperatorWritablePredicates: []string{
+			PredicateOwnerOrgID,
+			PredicateNote,
+		},
+		AuditPredicates: lifecycle.AuditSpec{
+			Source: PredicateAuditSource,
+			At:     PredicateAuditAt,
+			From:   PredicateAuditFrom,
+			Note:   PredicateAuditNote,
+		},
+	}
 }
 
 // EntityID returns the federated 6-part identifier.
@@ -80,16 +123,6 @@ func (s *State) Phase() string { return s.PhaseField }
 // out-edges in Transitions.
 func (s *State) IsTerminal() bool { return Transitions.IsTerminal(s.PhaseField) }
 
-// KVBucket returns the NATS KV bucket name.
-func (s *State) KVBucket() string { return KVBucket }
-
-// KVKey returns the KV key for a given entity ID. Pure function of
-// entityID per ADR-047's Participant contract — no per-instance
-// state is consulted (the Manager caches one sample and calls KVKey
-// with resolved entityIDs).
-func (s *State) KVKey(entityID string) string { return entityID }
-
 // ParentEntityID returns "" — missions have no parent workflow in
-// this demo. Apps wanting parent/child workflows (e.g. plan owns
-// requirements) return the parent's EntityID here.
+// this demo.
 func (s *State) ParentEntityID() string { return "" }

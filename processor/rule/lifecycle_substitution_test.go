@@ -85,8 +85,9 @@ func TestSubstitute_LifecycleWorkflowAndWorkflowDef_PrefixOrdering(t *testing.T)
 	mgr := newFakeManager()
 	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-4", PhaseF: "planning"})
 	mgr.workflowDefs["mission"] = lifecycle.WorkflowDef{
-		Workflow: "mission",
-		KVBucket: "MISSIONS",
+		Workflow:        "mission",
+		EntityIDPattern: "*.lifecycle.gcs.mission.*",
+		PhasePredicate:  "mission.phase",
 	}
 
 	ec := &ExecutionContext{EntityID: "s-4", Lifecycle: mgr}

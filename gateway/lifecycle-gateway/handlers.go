@@ -130,7 +130,10 @@ func (c *Component) handleListWorkflows(w http.ResponseWriter, r *http.Request) 
 	}
 	defs := c.manager.ListWorkflows()
 	type entry struct {
-		Workflow               string         `json:"workflow"`
+		Workflow string `json:"workflow"`
+		// KVBucket reflects the workflow's EntityIDPattern under
+		// ADR-049 (no per-workflow bucket). Field name kept for
+		// operator-API back-compat.
 		KVBucket               string         `json:"kv_bucket"`
 		Phases                 []string       `json:"phases"`
 		TerminalPhases         []string       `json:"terminal_phases"`
@@ -142,7 +145,7 @@ func (c *Component) handleListWorkflows(w http.ResponseWriter, r *http.Request) 
 	for _, def := range defs {
 		e := entry{
 			Workflow:               def.Workflow,
-			KVBucket:               def.KVBucket,
+			KVBucket:               def.EntityIDPattern,
 			Phases:                 def.Transitions.Phases(),
 			TerminalPhases:         def.Transitions.TerminalPhases(),
 			OperatorWritableFields: def.OperatorWritableFields,
@@ -287,17 +290,18 @@ func (c *Component) handleChildren(w http.ResponseWriter, r *http.Request, _ /* 
 		c.recordRequest(false, "method not allowed")
 		return
 	}
-	// Workflow is ignored: Children scans by ParentEntityID across
-	// all workflows. The route includes {workflow} for symmetry
-	// with the other endpoints; the value just isn't load-bearing
-	// for the underlying call. Documented in the OpenAPI/README.
-	kids, err := c.manager.Children(r.Context(), entityID)
+	// ADR-049 Children: enumerates the parent's ChildSpec
+	// LinkPredicate triples; each child is projected via the child
+	// workflow's Schema. The route's {workflow} segment refers to
+	// the parent's workflow type; the value isn't load-bearing for
+	// Children itself.
+	kids, err := c.manager.Children(r.Context(), entityID, lifecycle.ChildOptions{})
 	if err != nil {
 		c.writeErrorFromLifecycle(w, "children", err)
 		return
 	}
 	if kids == nil {
-		kids = []lifecycle.Participant{}
+		kids = []lifecycle.ChildResult{}
 	}
 	c.writeJSON(w, http.StatusOK, kids)
 	c.recordRequest(true, "")

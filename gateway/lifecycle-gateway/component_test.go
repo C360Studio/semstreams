@@ -78,10 +78,12 @@ func newFakeManager() *fakeManager {
 
 func (m *fakeManager) registerWorkflow(workflow string, transitions lifecycle.Transitions) {
 	m.defs = append(m.defs, lifecycle.WorkflowDef{
-		Workflow:               workflow,
-		KVBucket:               "MISSIONS",
-		Transitions:            transitions,
-		OperatorWritableFields: []string{"owner_org_id"},
+		Workflow:                   workflow,
+		EntityIDPattern:            "*.lifecycle.gcs." + workflow + ".*",
+		PhasePredicate:             workflow + ".phase",
+		Transitions:                transitions,
+		OperatorWritableFields:     []string{"owner_org_id"},
+		OperatorWritablePredicates: []string{workflow + ".owner_org_id"},
 	})
 	m.writableFields[workflow] = map[string]bool{"owner_org_id": true}
 }
@@ -175,18 +177,22 @@ func (m *fakeManager) History(_ context.Context, workflow, entityID string) ([]l
 	return m.historyByID[entityID], nil
 }
 
-func (m *fakeManager) Children(_ context.Context, parentEntityID string) ([]lifecycle.Participant, error) {
+func (m *fakeManager) Children(_ context.Context, parentEntityID string, _ lifecycle.ChildOptions) ([]lifecycle.ChildResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []lifecycle.Participant
-	for _, byID := range m.entities {
+	var out []lifecycle.ChildResult
+	for workflow, byID := range m.entities {
 		for _, p := range byID {
 			if p.ParentMissionF == parentEntityID {
-				out = append(out, p)
+				out = append(out, lifecycle.ChildResult{Workflow: workflow, State: p})
 			}
 		}
 	}
 	return out, nil
+}
+
+func (m *fakeManager) References(_ context.Context, _ string) ([]lifecycle.ReferenceStub, error) {
+	return nil, nil
 }
 
 func (m *fakeManager) UpdateFromOperator(_ context.Context, workflow, entityID string, patch map[string]any) error {
