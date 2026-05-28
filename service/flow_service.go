@@ -884,10 +884,29 @@ func generateFlowID() string {
 // startFlowStatusPublisher watches the flows KV bucket for state changes
 // and publishes them to flows.{flowId}.status for WebSocket consumption.
 // This enables event-driven flow status updates instead of per-client polling.
+//
+// Seeds the FLOWS JetStream stream with the current state of every flow at
+// startup BEFORE the watcher loop begins. Without this, the watcher's
+// bootstrap delivery is racy on fresh containers and the flow_status envelope
+// type may not appear before the e2e dataflow test's 30s deadline — see
+// project_websocket_flake_diagnosis.
 func (fs *FlowService) startFlowStatusPublisher(ctx context.Context) {
 	if fs.natsClient == nil || fs.flowStore == nil {
 		fs.logger.Warn("Flow status publisher disabled: missing NATS client or flow store")
 		return
+	}
+
+	// Seed FLOWS stream with current state of every flow so last_per_subject
+	// consumers see something immediately on connect. Best-effort: errors are
+	// logged but do not block publisher startup.
+	if flows, err := fs.flowStore.List(ctx); err == nil {
+		for _, flow := range flows {
+			if flow != nil {
+				fs.publishFlowStatus(ctx, flow.ID, flow.RuntimeState)
+			}
+		}
+	} else {
+		fs.logger.Debug("Flow status publisher: seed-list failed; relying on watcher bootstrap", "error", err)
 	}
 
 	// Watch all flows in the KV bucket

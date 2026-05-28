@@ -2040,7 +2040,13 @@ type ComponentGap struct {
 // publishHealthLoop publishes component health to JetStream every 5s.
 // Each component's health is published to health.component.{name} for granular filtering.
 // Gracefully handles NATS being unavailable - skips publish, doesn't block.
+//
+// Fires an immediate first publish before entering the tick loop so the HEALTH
+// JetStream stream is seeded as soon as ComponentManager.Start completes —
+// same warm-up rationale as Manager.publishHealthLoop. Eliminates the
+// cold-start race that caused the verify-websocket-stream e2e flake.
 func (cm *ComponentManager) publishHealthLoop(ctx context.Context) {
+	cm.publishComponentHealth(ctx) // seed stream immediately
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 

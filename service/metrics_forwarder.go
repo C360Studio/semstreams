@@ -239,9 +239,18 @@ func (mf *MetricsForwarder) Stop(timeout time.Duration) error {
 	return mf.BaseService.Stop(timeout)
 }
 
-// publishLoop periodically publishes metrics to NATS
+// publishLoop periodically publishes metrics to NATS.
+//
+// Fires an immediate first publish before entering the tick loop so the
+// METRICS JetStream stream is seeded as soon as MetricsForwarder.Start
+// completes. Otherwise fresh clients connecting between T+0 and T+pushInterval
+// see an empty stream under last_per_subject delivery and time out waiting
+// for `component_metrics` envelopes (e2e dataflow flake — see
+// project_websocket_flake_diagnosis).
 func (mf *MetricsForwarder) publishLoop(ctx context.Context) {
 	defer mf.wg.Done()
+
+	mf.publishMetrics(ctx) // seed stream immediately
 
 	for {
 		select {

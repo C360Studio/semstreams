@@ -289,7 +289,15 @@ func (m *Manager) StartAll(ctx context.Context) error {
 // publishHealthLoop publishes service health to JetStream every 5s.
 // Each service's health is published to health.service.{name} for granular filtering.
 // Gracefully handles NATS being unavailable - skips publish, doesn't block.
+//
+// Fires an immediate first publish before entering the tick loop so the HEALTH
+// JetStream stream is seeded as soon as Manager.StartAll completes. Otherwise
+// fresh clients connecting between T+0 and T+5s see an empty stream under
+// last_per_subject delivery and time out waiting for `service_health` /
+// `component_health` envelopes (e2e dataflow flake — see
+// project_websocket_flake_diagnosis).
 func (m *Manager) publishHealthLoop(ctx context.Context) {
+	m.publishServiceHealth(ctx) // seed stream immediately
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
