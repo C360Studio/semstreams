@@ -499,6 +499,17 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, "entity cannot be nil")
 	}
 
+	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
+	// the caller requires the entity's current KV revision to match
+	// exactly; mismatch fails the request without silently merging.
+	// pkg/lifecycle.Manager.Transition uses this to preserve
+	// state-machine correctness under concurrent writes. Existing
+	// callers pass zero and get the UpdateWithRetry merge behavior
+	// unchanged.
+	if req.ExpectedRevision > 0 {
+		return c.handleEntityUpdateWithTriplesCAS(ctx, &req)
+	}
+
 	// PR-B: the delta apply runs *inside* UpdateWithRetry's update
 	// function, so each retry re-applies AddTriples/RemoveTriples
 	// against the fresh current state. PR-A read once then CAS'd,
@@ -568,6 +579,107 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
 		// #120: write committed, read-back failed → degraded success.
+		return marshalUpdateEntityWithTriplesDegraded(req.TraceID, req.RequestID, err.Error())
+	}
+
+	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
+		MutationResponse: graph.MutationResponse{
+			Success:    true,
+			Timestamp:  time.Now().UnixNano(),
+			KVRevision: rev,
+			TraceID:    req.TraceID,
+			RequestID:  req.RequestID,
+		},
+		Entity:         stored,
+		TriplesAdded:   len(req.AddTriples),
+		TriplesRemoved: triplesRemoved,
+		Version:        int64(stored.Version),
+	})
+}
+
+// handleEntityUpdateWithTriplesCAS is the CAS-on-condition branch of
+// handleEntityUpdateWithTriples (ADR-049). Reads the entity's current
+// state + revision, rejects if the revision doesn't match the caller's
+// ExpectedRevision, applies the delta, and writes single-pass via
+// updateEntityAtRevision so a concurrent writer between read and
+// write fails the request rather than silently merging.
+//
+// Distinct from the default UpdateWithRetry path because the caller
+// requires "current state is what I expected" semantics — this is
+// the primitive pkg/lifecycle.Manager.Transition uses to preserve
+// state-machine correctness. The default path is correct for the
+// graph's facts-accumulate model; this path is correct for the
+// state-machine-transition model.
+//
+// On revision mismatch (either at read-time or write-time CAS), the
+// error message includes the expected vs actual revision so callers
+// can decide whether to retry the whole read-validate-emit loop
+// (Manager.Transition does this) or surface to the user.
+func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) ([]byte, error) {
+	// Read current state with revision.
+	current, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+				fmt.Sprintf("entity not found: %s", req.Entity.ID))
+		}
+		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			fmt.Sprintf("fetch current entity failed: %v", err))
+	}
+
+	// CAS-on-condition: caller's expected rev must match what we just read.
+	if currentRev != req.ExpectedRevision {
+		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+			fmt.Sprintf("revision mismatch: expected %d, current %d", req.ExpectedRevision, currentRev))
+	}
+
+	// Apply delta against current state. Same merge logic as the
+	// UpdateWithRetry path; lifted here so this path doesn't depend
+	// on the retry closure.
+	triplesRemoved := 0
+	merged := current.Triples
+	if len(req.RemoveTriples) > 0 {
+		removeSet := make(map[string]struct{}, len(req.RemoveTriples))
+		for _, p := range req.RemoveTriples {
+			removeSet[p] = struct{}{}
+		}
+		kept := make([]message.Triple, 0, len(current.Triples))
+		for _, t := range current.Triples {
+			if _, drop := removeSet[t.Predicate]; drop {
+				triplesRemoved++
+				continue
+			}
+			kept = append(kept, t)
+		}
+		merged = kept
+	}
+	if len(req.AddTriples) > 0 {
+		merged = append(merged, req.AddTriples...)
+	}
+
+	// Build the new entity: caller's metadata + merged triples.
+	// Shallow-copy so we don't mutate the caller-owned pointer.
+	newEntity := *req.Entity
+	newEntity.Triples = merged
+
+	// Single-pass CAS via the existing updateEntityAtRevision
+	// primitive. A concurrent writer between our read and write
+	// trips ErrKVRevisionMismatch here even though the read-time
+	// check passed.
+	if err := c.updateEntityAtRevision(ctx, &newEntity, req.ExpectedRevision); err != nil {
+		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+			return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
+				fmt.Sprintf("revision mismatch: concurrent modification of %s (expected revision %d)",
+					req.Entity.ID, req.ExpectedRevision))
+		}
+		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
+	}
+
+	// Read back for response. Degraded path handles read-back failure
+	// (write committed, read-back failed → operator sees Success +
+	// Degraded flag per #120).
+	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
+	if err != nil {
 		return marshalUpdateEntityWithTriplesDegraded(req.TraceID, req.RequestID, err.Error())
 	}
 

@@ -43,13 +43,34 @@ type CreateEntityWithTriplesRequest struct {
 	RequestID string           `json:"request_id,omitempty"`
 }
 
-// UpdateEntityWithTriplesRequest updates entity and modifies triples atomically
+// UpdateEntityWithTriplesRequest updates entity and modifies triples atomically.
+//
+// CAS-on-condition (ADR-049): when ExpectedRevision is non-zero, the
+// handler reads the entity's current KV revision and rejects the
+// request with a "revision mismatch" error if it doesn't match. This
+// gives callers (notably pkg/lifecycle.Manager.Transition) the
+// primitive needed to handle state-machine races — two writers
+// transitioning the same entity from the same start state both pass
+// validation but only one is allowed to commit.
+//
+// When ExpectedRevision is zero (the default + the shape every
+// existing caller uses), the handler uses internal UpdateWithRetry
+// semantics: re-read + re-apply the delta on each retry until the
+// CAS succeeds or the retry budget is exhausted. This is correct for
+// the "facts accumulate" model the graph layer was built around.
 type UpdateEntityWithTriplesRequest struct {
 	Entity        *EntityState     `json:"entity"`
 	AddTriples    []message.Triple `json:"add_triples,omitempty"`
 	RemoveTriples []string         `json:"remove_triples,omitempty"` // Triple predicates to remove
-	TraceID       string           `json:"trace_id,omitempty"`
-	RequestID     string           `json:"request_id,omitempty"`
+	// ExpectedRevision opts into single-pass CAS-on-condition writes.
+	// Non-zero = require entity's current KV revision to match exactly;
+	// zero = existing UpdateWithRetry behavior (no CAS check on caller
+	// side; internal retry on conflict). Lifecycle Manager.Transition
+	// uses the non-zero path per ADR-049 to preserve state-machine
+	// correctness under concurrent writes.
+	ExpectedRevision uint64 `json:"expected_revision,omitempty"`
+	TraceID          string `json:"trace_id,omitempty"`
+	RequestID        string `json:"request_id,omitempty"`
 }
 
 // AddTripleRequest adds a triple to an existing entity

@@ -715,3 +715,211 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 	assert.True(t, testMutationType.Equal(stored.MessageType),
 		"req.Entity.MessageType must survive across UpdateWithRetry attempts")
 }
+
+// --- ADR-049 PR 1: UpdateEntityWithTriplesRequest.ExpectedRevision ---
+//
+// The CAS-on-condition path: when ExpectedRevision is non-zero, the
+// handler reads the entity's current revision, rejects on mismatch
+// (single-pass — no internal retry), applies the delta, and writes
+// at the expected rev. A concurrent writer between read and write
+// trips the CAS at write time. This is the primitive
+// pkg/lifecycle.Manager.Transition uses to preserve state-machine
+// correctness under concurrent writes.
+
+func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionSuccess(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.casupd.success.entity.001"
+	seed := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, seed), "seed entity")
+
+	// Capture the seed's revision so we can pass it as ExpectedRevision.
+	_, seedRev, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	require.NotZero(t, seedRev)
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:           seed,
+		AddTriples:       []message.Triple{{Subject: entityID, Predicate: "test.cas.added", Object: "v1", Timestamp: time.Now(), Confidence: 1.0}},
+		ExpectedRevision: seedRev,
+		RequestID:        "req-update-wt-cas-success",
+	}
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	require.True(t, resp.Success, "CAS-on-condition with matching rev should succeed; err=%q", resp.Error)
+	assert.Equal(t, 1, resp.TriplesAdded)
+	assert.Greater(t, resp.KVRevision, seedRev, "revision should increment after write")
+}
+
+func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionMismatchAtRead(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.casupd.mismatch.entity.001"
+	seed := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, seed), "seed entity")
+
+	_, seedRev, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+
+	// Advance the revision via an unrelated write so the caller's
+	// (stale) ExpectedRevision no longer matches.
+	intermediate := graph.UpdateEntityWithTriplesRequest{
+		Entity:     seed,
+		AddTriples: []message.Triple{{Subject: entityID, Predicate: "test.intermediate", Object: "advance", Timestamp: time.Now(), Confidence: 1.0}},
+		RequestID:  "req-intermediate-advance",
+	}
+	intermediateResp, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, intermediate))
+	require.NoError(t, err)
+	var iResp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(intermediateResp, &iResp))
+	require.True(t, iResp.Success)
+
+	// Now caller submits with the STALE rev. CAS should reject at the
+	// read-time check.
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:           seed,
+		AddTriples:       []message.Triple{{Subject: entityID, Predicate: "test.cas.late", Object: "should-not-land", Timestamp: time.Now(), Confidence: 1.0}},
+		ExpectedRevision: seedRev, // stale!
+		RequestID:        "req-update-wt-cas-stale",
+	}
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success, "stale ExpectedRevision must fail")
+	assert.Contains(t, resp.Error, "revision mismatch",
+		"error should signal revision mismatch so callers can re-read + re-validate")
+
+	// Verify the stale delta did NOT land.
+	_, currentRev, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	assert.Equal(t, iResp.KVRevision, currentRev,
+		"revision must not have advanced after a CAS-rejected request")
+	entry, err := c.entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	var stored graph.EntityState
+	require.NoError(t, json.Unmarshal(entry.Value, &stored))
+	for _, tr := range stored.Triples {
+		assert.NotEqual(t, "test.cas.late", tr.Predicate,
+			"the late triple from the stale request must not have landed")
+	}
+}
+
+func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionZeroKeepsExistingBehavior(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.casupd.zerorev.entity.001"
+	seed := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, seed), "seed entity")
+
+	// ExpectedRevision == 0 means "use the existing UpdateWithRetry
+	// path." Every existing caller passes zero; the field is opt-in.
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:     seed,
+		AddTriples: []message.Triple{{Subject: entityID, Predicate: "test.zero_rev.added", Object: "via-retry-path", Timestamp: time.Now(), Confidence: 1.0}},
+		// ExpectedRevision deliberately omitted (zero value)
+		RequestID: "req-update-wt-zero-rev",
+	}
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	require.True(t, resp.Success, "zero-ExpectedRevision must use the existing UpdateWithRetry path")
+	assert.Equal(t, 1, resp.TriplesAdded)
+}
+
+func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionAbsentEntity(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.casupd.absent.entity.001"
+	// Note: no Create — entity does not exist.
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:           &graph.EntityState{ID: entityID, MessageType: testMutationType},
+		AddTriples:       []message.Triple{{Subject: entityID, Predicate: "test.absent.added", Object: "should-fail", Timestamp: time.Now(), Confidence: 1.0}},
+		ExpectedRevision: 42, // arbitrary non-zero
+		RequestID:        "req-update-wt-cas-absent",
+	}
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+	require.NoError(t, err)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success, "CAS-on-condition against absent entity must fail")
+	assert.Contains(t, resp.Error, "entity not found",
+		"absent-entity error message must allow callers to disambiguate from CAS mismatch")
+}
+
+func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.casupd.race.entity.001"
+	seed := newMutationTestEntity(entityID)
+	require.NoError(t, c.CreateEntity(ctx, seed), "seed entity")
+
+	// Two callers concurrently read at the SAME revision then both
+	// try to write with ExpectedRevision=thatRev. Exactly one wins;
+	// the other gets a revision-mismatch at write-time CAS even
+	// though the read-time check passed (because the winner moved
+	// the revision in between).
+	_, sharedRev, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	require.NotZero(t, sharedRev)
+
+	const N = 8
+	var (
+		successCount int
+		mismatchErrs int
+		mu           sync.Mutex
+		wg           sync.WaitGroup
+	)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			req := graph.UpdateEntityWithTriplesRequest{
+				Entity:           seed,
+				AddTriples:       []message.Triple{{Subject: entityID, Predicate: fmt.Sprintf("test.race.%d", idx), Object: "via-cas", Timestamp: time.Now(), Confidence: 1.0}},
+				ExpectedRevision: sharedRev,
+				RequestID:        fmt.Sprintf("req-race-%d", idx),
+			}
+			respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
+			if err != nil {
+				return
+			}
+			var resp graph.UpdateEntityWithTriplesResponse
+			if err := json.Unmarshal(respBytes, &resp); err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if resp.Success {
+				successCount++
+			} else if errors.Is(errors.New(resp.Error), errors.New("revision mismatch")) || (resp.Error != "" && (containsAny(resp.Error, "revision mismatch", "concurrent modification"))) {
+				mismatchErrs++
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, successCount, "exactly one CAS race winner expected from %d racers", N)
+	assert.Equal(t, N-1, mismatchErrs, "all other racers must observe revision-mismatch errors")
+}
+
+// containsAny is a small test helper — true if s contains any of the
+// substrings. Avoids importing strings just for this assertion.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+	}
+	return false
+}
