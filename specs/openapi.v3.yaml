@@ -1014,6 +1014,7 @@ components:
                         - $ref: ../schemas/json_filter.v1.json
                         - $ref: ../schemas/json_generic.v1.json
                         - $ref: ../schemas/json_map.v1.json
+                        - $ref: ../schemas/lifecycle-gateway.v1.json
                         - $ref: ../schemas/oasf-generator.v1.json
                         - $ref: ../schemas/objectstore.v1.json
                         - $ref: ../schemas/otel-exporter.v1.json

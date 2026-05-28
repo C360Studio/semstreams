@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -32,6 +33,7 @@ type Dependencies struct {
 	ComponentRegistry *component.Registry          // Component registry for ComponentManager
 	ToolRegistry      component.ToolRegistryReader // Shared tool executor registry plumbed to component deps
 	PayloadRegistry   *payloadregistry.Registry    // Shared payload registry plumbed to component deps
+	LifecycleManager  *lifecycle.Manager           // Shared Lifecycle harness Manager (ADR-047), plumbed to component deps (rule processor + lifecycle-gateway). Nil when no app workflows are registered.
 	ServiceManager    *Manager                     // Service manager for accessing other services
 }
 

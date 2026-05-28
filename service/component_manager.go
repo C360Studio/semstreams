@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
@@ -40,6 +41,7 @@ type ComponentManager struct {
 	registry         *component.Registry
 	toolRegistry     component.ToolRegistryReader           // Shared tool registry plumbed via deps.ToolRegistry to managed components
 	payloadRegistry  *payloadregistry.Registry              // Shared payload registry plumbed via deps.PayloadRegistry to managed components
+	lifecycleManager *lifecycle.Manager                     // Shared Lifecycle harness Manager plumbed via deps.LifecycleManager (ADR-047). Nil when no app workflows are registered.
 	componentConfigs config.ComponentConfigs                // Component configurations
 	platform         types.PlatformMeta                     // Platform identity for components
 	components       map[string]*component.ManagedComponent // Track managed components
@@ -143,11 +145,13 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 	var registry *component.Registry
 	var toolRegistry component.ToolRegistryReader
 	var payloadRegistry *payloadregistry.Registry
+	var lifecycleManager *lifecycle.Manager
 	if deps != nil {
 		platform = deps.Platform
 		registry = deps.ComponentRegistry
 		toolRegistry = deps.ToolRegistry
 		payloadRegistry = deps.PayloadRegistry
+		lifecycleManager = deps.LifecycleManager
 	}
 
 	// Fallback to creating a new registry if not provided
@@ -161,6 +165,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		registry:             registry,
 		toolRegistry:         toolRegistry,
 		payloadRegistry:      payloadRegistry,
+		lifecycleManager:     lifecycleManager,
 		componentConfigs:     componentsConfig,
 		platform:             platform,
 		components:           make(map[string]*component.ManagedComponent),
@@ -1536,6 +1541,7 @@ func (cm *ComponentManager) buildComponentDependencies() component.Dependencies 
 		ToolRegistry:      cm.toolRegistry,
 		PayloadRegistry:   cm.payloadRegistry,
 		ComponentRegistry: cm.registry,
+		LifecycleManager:  cm.lifecycleManager,
 	}
 
 	return deps

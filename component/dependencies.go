@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
 )
@@ -57,6 +58,28 @@ type Dependencies struct {
 	ToolRegistry      ToolRegistryReader        // Shared tool executor registry (can be nil; agentic-tools requires it)
 	PayloadRegistry   *payloadregistry.Registry // Shared payload registry (can be nil; components unmarshaling BaseMessage require it)
 	ComponentRegistry Lookup                    // Sibling component lookup (can be nil)
+
+	// LifecycleManager is the shared pkg/lifecycle.Manager that
+	// owns workflow-shaped entity instances (ADR-047). Apps that
+	// declare Participant-implementing entities (drone missions,
+	// sensor lifecycles, manufacturing batches, scenario executions)
+	// build the Manager in main.go, call Manager.Register for each
+	// app workflow, and pass it through Dependencies. Both the rule
+	// processor (lifecycle_* actions + $entity.lifecycle.* condition
+	// fields) and the lifecycle-gateway (operator HTTP API) read
+	// from this field.
+	//
+	// Concrete type (not an interface) per the PayloadRegistry
+	// precedent — pkg/lifecycle is a framework-owned leaf package,
+	// not an external/pluggable surface, and consumers narrow to
+	// their own minimum-surface interfaces locally (see
+	// processor/rule.LifecycleManager) when they want to abstract
+	// for testing.
+	//
+	// Can be nil — apps without any lifecycle-managed entity types
+	// pay zero cost, and the consumers that DO read this field
+	// loud-fail with a wiring error rather than silently no-op'ing.
+	LifecycleManager *lifecycle.Manager
 }
 
 // GetLogger returns the configured logger or a default logger if none is provided

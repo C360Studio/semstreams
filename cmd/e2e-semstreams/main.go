@@ -29,6 +29,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
@@ -151,6 +152,12 @@ func run() error {
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
+	// Lifecycle harness Manager (ADR-047). Plumbed identically to
+	// cmd/semstreams/main.go so the e2e binary doesn't drift from
+	// the framework binary — registry-singleton-style migrations
+	// past have left one binary wired and the other half-migrated
+	// (see [[feedback_e2e_required_for_breaking_changes]]).
+	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err

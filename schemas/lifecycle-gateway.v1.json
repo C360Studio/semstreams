@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lifecycle-gateway.v1.json",
+  "type": "object",
+  "title": "lifecycle-gateway Configuration",
+  "description": "Operator HTTP + WebSocket gateway over pkg/lifecycle.Manager (ADR-047)",
+  "properties": {},
+  "required": [],
+  "x-component-metadata": {
+    "name": "lifecycle-gateway",
+    "type": "gateway",
+    "protocol": "http",
+    "domain": "lifecycle",
+    "version": "0.1.0"
+  }
+}
