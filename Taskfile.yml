@@ -46,6 +46,8 @@ includes:
     taskfile: ./taskfiles/e2e/crud-tools.yml
   e2e:ops:
     taskfile: ./taskfiles/e2e/ops.yml
+  e2e:lifecycle:
+    taskfile: ./taskfiles/e2e/lifecycle.yml
   e2e:throughput:
     taskfile: ./taskfiles/e2e/throughput.yml
 

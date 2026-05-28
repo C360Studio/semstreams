@@ -1,0 +1,160 @@
+{
+  "version": "1.1.0",
+  "platform": {
+    "org": "c360",
+    "id": "semstreams-lifecycle",
+    "type": "lifecycle-e2e",
+    "region": "local",
+    "instance_id": "lifecycle-001",
+    "environment": "test"
+  },
+  "tier": "lifecycle",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Lifecycle Tier — Mission Workflow E2E",
+          "description": "ADR-047 Lifecycle harness + lifecycle-gateway + rule-driven transitions",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": false
+      }
+    },
+    "message-logger": {
+      "name": "message-logger",
+      "enabled": true,
+      "config": {
+        "buffer_size": 1000,
+        "monitor_subjects": ["mission.*", "raw.mission.*"],
+        "enable_kv_query": true,
+        "log_level": "INFO"
+      }
+    },
+    "log-forwarder": {
+      "name": "log-forwarder",
+      "enabled": true,
+      "config": {
+        "min_level": "INFO"
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "raw.mission.command",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "mission-command": {
+      "type": "processor",
+      "name": "mission-command",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "command_in",
+              "subject": "raw.mission.command",
+              "type": "jetstream"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "command_out",
+              "subject": "mission.processed.entity",
+              "type": "jetstream",
+              "interface": "mission.command.v1"
+            }
+          ]
+        },
+        "org_id": "c360",
+        "platform": "test"
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "mission_in",
+              "subject": "mission.processed.entity",
+              "type": "jetstream",
+              "interface": "mission.command.v1",
+              "description": "Mission command Graphables to land in ENTITY_STATES"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "entity_states",
+              "subject": "ENTITY_STATES",
+              "type": "kv-write"
+            }
+          ]
+        },
+        "enable_hierarchy": false
+      }
+    },
+    "rule": {
+      "type": "processor",
+      "name": "rule-processor",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": []
+        },
+        "entity_watch_patterns": ["c360.test.lifecycle.gcs.mission.*"],
+        "rules_files": ["/app/configs/rules/lifecycle/01-mission-launch.json"],
+        "buffer_window_size": "10m",
+        "alert_cooldown_period": "2m"
+      }
+    },
+    "lifecycle-gateway": {
+      "type": "gateway",
+      "name": "lifecycle-gateway",
+      "enabled": true,
+      "config": {
+        "path_prefix": "workflows",
+        "enable_websocket": true,
+        "allowed_origins": ["http://localhost", "http://localhost:38080"]
+      }
+    }
+  }
+}

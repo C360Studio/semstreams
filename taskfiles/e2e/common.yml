@@ -29,6 +29,7 @@ tasks:
       - docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15 2>/dev/null || true
       - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15 2>/dev/null || true
       - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15 2>/dev/null || true
+      - docker compose -f docker/compose/lifecycle.yml down -v --timeout 15 2>/dev/null || true
       - docker volume ls -q --filter name=semstreams | xargs -r docker volume rm 2>/dev/null || true
       - docker volume ls -q --filter name=semembed | xargs -r docker volume rm 2>/dev/null || true
       - docker volume ls -q --filter name=nats-semstreams | xargs -r docker volume rm 2>/dev/null || true

@@ -2,7 +2,12 @@
 
 ## Status
 
-**Proposed** — 2026-05-24. Resolves the workflow-primitives design
+**Accepted** — 2026-05-28. Shipped as the 4-PR bundle (#154 / #155 /
+#156 / #157) and tagged v1.0.0-beta.85 with lifecycle e2e tier green
+(`task e2e:lifecycle` — gateway + rule-engine + Manager round-trip
+across 8 stages including UDP-driven rule transition + operator
+transition + history replay + WebSocket live update).
+Originally proposed 2026-05-24; resolves the workflow-primitives design
 exercise ([proposal](../proposals/workflow-primitives-design-exercise.md),
 [decision draft](../proposals/workflow-primitives-decision.md),
 [robotic sketch](../proposals/workflow-primitives-robotic-sketch.md),

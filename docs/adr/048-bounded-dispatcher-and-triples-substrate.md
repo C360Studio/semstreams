@@ -2,11 +2,17 @@
 
 ## Status
 
-**Proposed** — 2026-05-24. Companion to [ADR-047](047-lifecycle-harness-substrate.md).
-Co-locates two small substrate completions: promoting the existing
-`pkg/worker.Pool` to a first-class framework concurrency primitive
-with KV-twofer integration, and adding the `.triples` enumeration
-substitution that closes the rule-engine multi-valued primitive set.
+**Accepted** — 2026-05-28. Shipped alongside [ADR-047](047-lifecycle-harness-substrate.md)
+in the 4-PR bundle tagged v1.0.0-beta.85. The companion lifecycle e2e
+tier exercises the BoundedDispatcher contract indirectly via the
+Manager — `.triples` substitution is exercised by the `phase3FireJoin`
+integration test in `processor/rule`.
+
+Originally proposed 2026-05-24. Co-locates two small substrate completions:
+promoting the existing `pkg/worker.Pool` to a first-class framework
+concurrency primitive with KV-twofer integration, and adding the
+`.triples` enumeration substitution that closes the rule-engine
+multi-valued primitive set.
 
 These two primitives are bundled because both are unambiguous-win
 substrate completions that the Lifecycle harness (ADR-047) and

@@ -1,0 +1,41 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Run lifecycle E2E tests (ADR-047 Lifecycle harness gateway + rule round-trip)
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[E2E LIFECYCLE] Starting SemStreams lifecycle environment..."
+      - docker compose -f docker/compose/lifecycle.yml up -d --wait
+      - echo "[OK] All services are healthy"
+      - echo "[E2E LIFECYCLE] Running lifecycle scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario lifecycle
+        ignore_error: true
+      - docker compose -f docker/compose/lifecycle.yml down -v --timeout 15
+
+  debug:
+    desc: Start lifecycle E2E environment for debugging (leaves containers running)
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports"]
+    cmds:
+      - echo "[E2E LIFECYCLE DEBUG] Starting SemStreams lifecycle environment..."
+      - docker compose -f docker/compose/lifecycle.yml up -d
+      - echo "[E2E LIFECYCLE DEBUG] Waiting for NATS..."
+      - |
+        for i in {1..30}; do
+          if curl -sf http://localhost:38222/healthz > /dev/null 2>&1; then
+            echo "[OK] NATS is ready"
+            break
+          fi
+          echo "Waiting for NATS... ($i/30)"
+          sleep 2
+        done
+      - echo "[E2E LIFECYCLE DEBUG] Waiting 5 seconds for SemStreams to start..."
+      - sleep 5
+      - docker logs semstreams-lifecycle-app
+      - echo ""
+      - echo "[E2E LIFECYCLE DEBUG] Environment is running. Use:"
+      - echo "  curl http://localhost:38080/lifecycle-gateway/workflows"
+      - echo "  docker logs -f semstreams-lifecycle-app"
+      - echo "  task e2e:clean   # cleanup"

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
 	"github.com/c360studio/semstreams/config"
@@ -35,6 +36,7 @@ import (
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
@@ -116,20 +118,9 @@ func run() error {
 		return err
 	}
 
-	// Build the shared payload registry and register builtins BEFORE
-	// service deps. Mirrors cmd/semstreams/main.go. Examples loaded by
-	// this binary (iot_sensor, document) register their own payload
-	// types separately — payloadbuiltins.Register intentionally covers
-	// only first-party builtins, mirroring the componentregistry split.
-	payloadReg := payloadregistry.New()
-	if err := payloadbuiltins.Register(payloadReg); err != nil {
-		return fmt.Errorf("register builtin payloads: %w", err)
-	}
-	if err := iotsensor.RegisterPayloads(payloadReg); err != nil {
-		return fmt.Errorf("register iot_sensor payloads: %w", err)
-	}
-	if err := document.RegisterPayloads(payloadReg); err != nil {
-		return fmt.Errorf("register document payloads: %w", err)
+	payloadReg, err := buildPayloadRegistry()
+	if err != nil {
+		return err
 	}
 
 	// Build the shared tool registry and register builtins BEFORE
@@ -152,18 +143,98 @@ func run() error {
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
-	// Lifecycle harness Manager (ADR-047). Plumbed identically to
-	// cmd/semstreams/main.go so the e2e binary doesn't drift from
-	// the framework binary — registry-singleton-style migrations
-	// past have left one binary wired and the other half-migrated
-	// (see [[feedback_e2e_required_for_breaking_changes]]).
-	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
+	if err := wireLifecycleManager(ctx, svcDeps, natsClient, logger, cliCfg.LifecycleSeed); err != nil {
+		return err
+	}
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
 	}
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
+}
+
+// buildPayloadRegistry constructs the shared payload registry and
+// registers builtins + the example processor payloads loaded by
+// this binary (iot_sensor, document, mission). Mirrors
+// cmd/semstreams/main.go's split: payloadbuiltins.Register covers
+// only first-party builtins; example processors register their own
+// payload types so downstream consumers (semdragons, semspec)
+// don't inherit example dependencies.
+func buildPayloadRegistry() (*payloadregistry.Registry, error) {
+	reg := payloadregistry.New()
+	if err := payloadbuiltins.Register(reg); err != nil {
+		return nil, fmt.Errorf("register builtin payloads: %w", err)
+	}
+	if err := iotsensor.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register iot_sensor payloads: %w", err)
+	}
+	if err := document.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register document payloads: %w", err)
+	}
+	if err := mission.RegisterPayloads(reg); err != nil {
+		return nil, fmt.Errorf("register mission payloads: %w", err)
+	}
+	return reg, nil
+}
+
+// wireLifecycleManager builds the pkg/lifecycle.Manager, plumbs it
+// into svcDeps (rule processor + lifecycle-gateway both pull from
+// here), registers the e2e-only mission workflow, and optionally
+// seeds an initial instance from --lifecycle-seed.
+//
+// Plumbing must match cmd/semstreams/main.go so the e2e binary
+// doesn't drift from the framework binary —
+// [[feedback_e2e_required_for_breaking_changes]].
+func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, natsClient *natsclient.Client, logger *slog.Logger, seedID string) error {
+	// Provision the MISSIONS KV bucket before Register opens it.
+	// Per ADR-047 the harness does NOT create buckets — apps own
+	// bucket topology (replication, history depth, max-bytes are
+	// per-bucket operator decisions). Apps using the harness in
+	// production wire CreateKeyValueBucket into their own bootstrap;
+	// here the e2e binary does it inline.
+	if _, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      mission.KVBucket,
+		Description: "Mission lifecycle Participants (ADR-047 e2e fixture)",
+		History:     10,
+	}); err != nil {
+		return fmt.Errorf("provision MISSIONS KV bucket: %w", err)
+	}
+	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
+	if err := svcDeps.LifecycleManager.Register(mission.Workflow, mission.New, mission.Transitions); err != nil {
+		return fmt.Errorf("register mission workflow: %w", err)
+	}
+	if seedID != "" {
+		if err := seedMission(ctx, svcDeps.LifecycleManager, seedID); err != nil {
+			return fmt.Errorf("seed mission: %w", err)
+		}
+	}
+	return nil
+}
+
+// seedMission Creates a mission Participant at the given entity ID
+// in the planning phase. Used by the lifecycle e2e tier's startup
+// flag so the gateway has a known instance to serve before the
+// scenario runs. Already-exists is treated as a no-op so the binary
+// is idempotent across restarts in the e2e fixture.
+func seedMission(ctx context.Context, mgr *lifecycle.Manager, entityID string) error {
+	state := &mission.State{
+		EntityIDField: entityID,
+		PhaseField:    mission.PhasePlanning,
+	}
+	err := mgr.Create(ctx, state)
+	if err == nil {
+		slog.Info("seeded mission", "entity_id", entityID, "phase", mission.PhasePlanning)
+		return nil
+	}
+	// Manager.Create wraps the underlying "already exists" KV error
+	// into a free-form fmt.Errorf string; we match by substring to
+	// stay idempotent.
+	if strings.Contains(err.Error(), "already exists") {
+		slog.Info("mission already seeded", "entity_id", entityID)
+		return nil
+	}
+	return err
 }
 
 // buildRuleManager constructs a rule.ConfigManager for CRUD against the
@@ -228,6 +299,12 @@ type CLIConfig struct {
 	ShowVersion     bool
 	ShowHelp        bool
 	ShutdownTimeout time.Duration
+	// LifecycleSeed is the entity ID to seed into the mission
+	// workflow at startup. ADR-047 has no public Create HTTP
+	// endpoint by design; the lifecycle e2e tier uses this
+	// flag to put a known instance in place before the scenario
+	// hits the gateway. Empty = no seeding (default).
+	LifecycleSeed string
 }
 
 func parseCLI() (*CLIConfig, bool, error) {
@@ -238,6 +315,7 @@ func parseCLI() (*CLIConfig, bool, error) {
 		Debug:           os.Getenv("SEMSTREAMS_DEBUG") == "true",
 		DebugPort:       6060,
 		ShutdownTimeout: 30 * time.Second,
+		LifecycleSeed:   os.Getenv("SEMSTREAMS_LIFECYCLE_SEED"),
 	}
 
 	for i := 1; i < len(os.Args); i++ {
@@ -254,6 +332,11 @@ func parseCLI() (*CLIConfig, bool, error) {
 			cliCfg.ShowHelp = true
 		case arg == "--validate":
 			cliCfg.Validate = true
+		case arg == "--lifecycle-seed":
+			if i+1 < len(os.Args) {
+				i++
+				cliCfg.LifecycleSeed = os.Args[i]
+			}
 		}
 	}
 
@@ -600,6 +683,9 @@ func registerExampleComponents(registry *component.Registry) error {
 	}
 	if err := document.Register(registry); err != nil {
 		return fmt.Errorf("register document: %w", err)
+	}
+	if err := mission.Register(registry); err != nil {
+		return fmt.Errorf("register mission-command: %w", err)
 	}
 	return nil
 }

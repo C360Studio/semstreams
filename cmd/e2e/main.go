@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
+	lifecyclescenario "github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/throughput"
 )
@@ -238,6 +239,10 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("    deep-research   - Rules-driven multi-agent research flow")
 	fmt.Println("                      Requires rule-processor with deep-research rules")
 	fmt.Println("")
+	fmt.Println("  Lifecycle (ADR-047):")
+	fmt.Println("    lifecycle       - Lifecycle-gateway + rule-engine + Manager round-trip")
+	fmt.Println("                      Uses cmd/e2e-semstreams with the mission workflow")
+	fmt.Println("")
 	fmt.Println("  Throughput (for profiling):")
 	fmt.Println("    throughput       - High-volume stress test (10,000+ messages)")
 	fmt.Println("                       Captures pprof profiles when SEMSTREAMS_DEBUG=true")
@@ -402,24 +407,42 @@ func createScenario(
 		cfg.BaseURL = flags.baseURL
 		return opsscenario.NewScenario(edgeClient, cfg)
 
+	// Lifecycle scenario (ADR-047 — gateway + rule-engine round-trip)
+	case "lifecycle":
+		cfg := lifecyclescenario.DefaultConfig()
+		if flags.baseURL != "" {
+			cfg.BaseURL = flags.baseURL
+		}
+		if flags.udpEndpoint != "" {
+			cfg.UDPEndpoint = flags.udpEndpoint
+		}
+		return lifecyclescenario.NewScenario(edgeClient, cfg)
+
 	// Throughput scenario (high-volume stress test with profiling + query load)
 	case "throughput":
-		cfg := throughput.DefaultConfig()
-		cfg.MessageCount = flags.messageCount
-		cfg.GraphQLURL = flags.graphqlURL
-		cfg.ProfileAll = flags.profileAll
-		cfg.UniqueEntities = flags.uniqueEntities
-		cfg.QueryDuringIngestion = flags.queryDuringIngestion
-		cfg.MaxQueryP99Ms = flags.maxQueryP99Ms
-		cfg.MaxQueryErrorRate = flags.maxQueryErrorRate
-		if flags.outputDir != "" {
-			cfg.ProfileDir = flags.outputDir + "/profiles"
-		}
-		return throughput.NewScenario(flags.metricsURL, flags.udpEndpoint, cfg)
+		return newThroughputScenario(flags)
 
 	default:
 		return nil
 	}
+}
+
+// newThroughputScenario builds the throughput scenario from CLI
+// flags. Extracted from createScenario to keep that switch
+// dispatch under revive's function-length limit (50 statements).
+func newThroughputScenario(flags *cliFlags) scenarios.Scenario {
+	cfg := throughput.DefaultConfig()
+	cfg.MessageCount = flags.messageCount
+	cfg.GraphQLURL = flags.graphqlURL
+	cfg.ProfileAll = flags.profileAll
+	cfg.UniqueEntities = flags.uniqueEntities
+	cfg.QueryDuringIngestion = flags.queryDuringIngestion
+	cfg.MaxQueryP99Ms = flags.maxQueryP99Ms
+	cfg.MaxQueryErrorRate = flags.maxQueryErrorRate
+	if flags.outputDir != "" {
+		cfg.ProfileDir = flags.outputDir + "/profiles"
+	}
+	return throughput.NewScenario(flags.metricsURL, flags.udpEndpoint, cfg)
 }
 
 // runScenario executes a single scenario

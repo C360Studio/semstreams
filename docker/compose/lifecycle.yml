@@ -1,0 +1,97 @@
+# E2E Test Environment for SemStreams Lifecycle Harness (ADR-047)
+#
+# Uses the e2e binary (target: e2e) because the framework binary
+# (cmd/semstreams) does NOT register the mission workflow — per
+# ADR-047, lifecycle workflows are app-owned. Running this tier
+# against the framework target would silently break (no workflow,
+# no mission entity for the gateway to serve, no rule wire).
+# See [[feedback_e2e_required_for_breaking_changes]] for the beta.18
+# forensic case study this fixture gates against.
+#
+# Tests:
+#   - Lifecycle gateway HTTP + WebSocket surface (ADR-047 PR 3)
+#   - Rule-driven lifecycle_transition (ADR-047 PR 2)
+#   - Manager seed + KV-backed persistence (ADR-047 PR 1)
+#
+# Usage:
+#   task e2e:lifecycle           # Run lifecycle E2E tests
+#   task e2e:clean               # Clean up after
+
+services:
+  # NATS Server with JetStream
+  nats:
+    image: nats:2.12-alpine
+    container_name: semstreams-lifecycle-nats
+    ports:
+      - "34222:4222" # Client connections (3xxxx range to avoid collisions)
+      - "38222:8222" # HTTP monitoring
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-lifecycle-nats"]
+    volumes:
+      - nats-semstreams-lifecycle-data:/data
+    networks:
+      - semstreams-lifecycle-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8222/healthz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # E2E SemStreams Application (mission workflow registered)
+  semstreams:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: e2e
+    container_name: semstreams-lifecycle-app
+    command:
+      [
+        "--config",
+        "/app/configs/lifecycle-flow.json",
+        "--lifecycle-seed",
+        "c360.test.lifecycle.gcs.mission.m001",
+      ]
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_CONFIG=/app/configs/lifecycle-flow.json
+      - SEMSTREAMS_LOG_LEVEL=info
+    volumes:
+      - ../../configs:/app/configs:ro
+    ports:
+      - "38080:8080" # HTTP API (lifecycle-gateway, health)
+      - "39090:9090" # Prometheus metrics
+      - "34550:14550/udp" # UDP input (mission commands)
+    networks:
+      - semstreams-lifecycle-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/readyz",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-lifecycle-net:
+    driver: bridge
+
+volumes:
+  nats-semstreams-lifecycle-data:
+    driver: local
