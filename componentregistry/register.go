@@ -8,6 +8,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	graphgateway "github.com/c360studio/semstreams/gateway/graph-gateway"
 	gatewayhttp "github.com/c360studio/semstreams/gateway/http"
+	lifecyclegateway "github.com/c360studio/semstreams/gateway/lifecycle-gateway"
 	a2ainput "github.com/c360studio/semstreams/input/a2a"
 	fileinput "github.com/c360studio/semstreams/input/file"
 	githubwebhook "github.com/c360studio/semstreams/input/github-webhook"
@@ -165,6 +166,14 @@ func registerProtocolLayer(registry *component.Registry) error {
 	// Gateways
 	if err := gatewayhttp.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "HTTP gateway component registration")
+	}
+
+	// Lifecycle harness operator gateway (ADR-047 PR 3) — operator
+	// HTTP+WebSocket surface over pkg/lifecycle.Manager. Requires
+	// deps.LifecycleManager wired at service init; the factory
+	// loud-fails at component construction if missing.
+	if err := lifecyclegateway.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "lifecycle-gateway component registration")
 	}
 
 	return nil

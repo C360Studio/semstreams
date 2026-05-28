@@ -135,27 +135,27 @@ const (
 type TransitionEvent struct {
 	// From is the phase the entity was in before the transition.
 	// Empty string for the Create event (entity didn't exist before).
-	From string
+	From string `json:"from"`
 
 	// To is the phase the entity entered. Equal to the entity's
 	// Phase() at the time of the transition.
-	To string
+	To string `json:"to"`
 
 	// At is the wallclock time the transition was committed to KV.
 	// Sourced from the KV revision's metadata, not from app code
 	// — so it's authoritative across restarts and clock skew.
-	At time.Time
+	At time.Time `json:"at"`
 
 	// Triggered identifies what caused the transition. Closed set
 	// of values defined by TransitionSource. Operator dashboards
 	// can filter / color-code by this field; audit trails
 	// distinguish operator-initiated from automated transitions.
-	Triggered TransitionSource
+	Triggered TransitionSource `json:"triggered"`
 
 	// Note is an optional free-text annotation. Manager.Fail uses
 	// this to carry the failure reason; Manager.Transition can pass
 	// arbitrary context. Empty by default.
-	Note string
+	Note string `json:"note,omitempty"`
 }
 
 // WorkflowDef describes a registered workflow type. Returned by
@@ -168,21 +168,21 @@ type TransitionEvent struct {
 type WorkflowDef struct {
 	// Workflow is the workflow type identifier (matches what was
 	// passed to Manager.Register and what Participant.Workflow returns).
-	Workflow string
+	Workflow string `json:"workflow"`
 
 	// Transitions is the declared phase-transition table registered
 	// for this workflow. The state-machine diagram is derivable
 	// directly from this map.
-	Transitions Transitions
+	Transitions Transitions `json:"transitions"`
 
 	// KVBucket is the NATS KV bucket this workflow's instances live
 	// in. Operator API uses this to route List/Watch operations.
-	KVBucket string
+	KVBucket string `json:"kv_bucket"`
 
 	// OperatorWritableFields lists the JSON field paths that are
 	// tagged `lifecycle:"operator_writable"` on the registered state
 	// struct. Used by UpdateFromOperator to enforce default-deny;
 	// also exposed in the operator API for clients to know which
 	// fields are patchable.
-	OperatorWritableFields []string
+	OperatorWritableFields []string `json:"operator_writable_fields"`
 }

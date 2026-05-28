@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lifecycle-gateway.v1.json",
+  "type": "object",
+  "title": "lifecycle-gateway Configuration",
+  "description": "Operator HTTP + WebSocket gateway over pkg/lifecycle.Manager (ADR-047)",
+  "properties": {
+    "allowed_origins": {
+      "type": "array",
+      "description": "WebSocket upgrade Origin allowlist as exact-match strings. Empty list permits all origins and logs a Warn at Start; set explicitly to restrict cross-origin upgrades.",
+      "items": {
+        "type": "string"
+      },
+      "category": "advanced"
+    },
+    "enable_websocket": {
+      "type": "boolean",
+      "description": "Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true when omitted. Set to false to disable live-update streaming and keep the gateway poll-only.",
+      "category": "basic"
+    },
+    "max_body_bytes": {
+      "type": "integer",
+      "description": "Maximum bytes accepted in POST .../state and POST .../transition request bodies. Default 1048576 (1 MiB). Zero or negative means use default.",
+      "category": "advanced"
+    },
+    "path_prefix": {
+      "type": "string",
+      "description": "URL path prefix mounted under the parent component prefix (e.g. \"workflows\" → /lifecycle-gateway/workflows). Default \"workflows\". Must be non-empty after stripping leading/trailing slashes.",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "lifecycle-gateway",
+    "type": "gateway",
+    "protocol": "http",
+    "domain": "lifecycle",
+    "version": "0.1.0"
+  }
+}

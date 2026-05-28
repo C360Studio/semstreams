@@ -86,6 +86,16 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 	// unmarshal incoming envelopes against the shared payload registry.
 	processor.SetDecoder(message.NewDecoder(deps.PayloadRegistry))
 
+	// Propagate the Lifecycle harness Manager (ADR-047) so the
+	// lifecycle_* action family + $entity.lifecycle.* condition-field
+	// resolution can dispatch through it. Nil-safe: apps without
+	// lifecycle-managed entity types pass no Manager and the rule
+	// engine surfaces a wiring error if a rule references the
+	// harness anyway.
+	if deps.LifecycleManager != nil {
+		processor.SetLifecycleManager(deps.LifecycleManager)
+	}
+
 	// Set logger from dependencies
 	logger := deps.Logger
 	if logger == nil {

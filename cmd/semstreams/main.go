@@ -29,6 +29,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
@@ -170,6 +171,17 @@ func run() error {
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
+
+	// 10b. Build the shared Lifecycle harness Manager (ADR-047) and
+	// plumb it into service dependencies. The framework binary
+	// itself registers no Participant workflows — that's app-side
+	// responsibility — but the Manager is always available so the
+	// rule processor's lifecycle_* actions + lifecycle-gateway
+	// can operate the moment an app does call Manager.Register.
+	// This matches the wiring discipline from
+	// [[feedback_verify_main_go_wire_for_sister_asks]] —
+	// half-migrated framework binaries silently break workflows.
+	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
 
 	// 11. Configure and create services
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
