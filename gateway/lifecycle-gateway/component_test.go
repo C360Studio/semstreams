@@ -53,18 +53,19 @@ func (p *fakeParticipant) ParentEntityID() string       { return p.ParentMission
 // gateway path that doesn't require KV-revision-based History or
 // Watch behaviour.
 type fakeManager struct {
-	mu              sync.Mutex
-	entities        map[string]map[string]*fakeParticipant // workflow → id → state
-	defs            []lifecycle.WorkflowDef
-	historyByID     map[string][]lifecycle.TransitionEvent
-	writableFields  map[string]map[string]bool // workflow → field → allowed
-	updateCalls     int
-	transitionCalls int
-	transitionErr   error
-	updateErr       error
-	listErr         error
-	watchCh         chan lifecycle.Participant
-	watchErr        error
+	mu                sync.Mutex
+	entities          map[string]map[string]*fakeParticipant // workflow → id → state
+	defs              []lifecycle.WorkflowDef
+	historyByID       map[string][]lifecycle.TransitionEvent
+	writableFields    map[string]map[string]bool // workflow → field → allowed
+	updateCalls       int
+	transitionCalls   int
+	transitionErr     error
+	updateErr         error
+	listErr           error            // global List error (any workflow)
+	listErrByWorkflow map[string]error // per-workflow List error (overrides listErr when set)
+	watchCh           chan lifecycle.Participant
+	watchErr          error
 }
 
 func newFakeManager() *fakeManager {
@@ -104,6 +105,9 @@ func (m *fakeManager) ListWorkflows() []lifecycle.WorkflowDef {
 }
 
 func (m *fakeManager) List(_ context.Context, workflow string, opts lifecycle.ListOptions) ([]lifecycle.Participant, error) {
+	if perWorkflowErr, ok := m.listErrByWorkflow[workflow]; ok {
+		return nil, perWorkflowErr
+	}
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
@@ -296,6 +300,62 @@ func TestListWorkflows_Success(t *testing.T) {
 	counts, _ := got[0]["counts_by_phase"].(map[string]any)
 	if counts["planning"] != float64(1) || counts["flying"] != float64(1) {
 		t.Errorf("phase counts: got %v", counts)
+	}
+}
+
+// TestListWorkflows_PartialListFailure exercises the B2 fix: when one
+// workflow's List call fails (e.g. KV unreachable), the gateway must
+// still render every workflow type but mark the failing one with a
+// `counts_error` field — silent fall-through to empty counts was the
+// original silent-fail bug. Regression-locks the loud-fail discipline
+// per [[feedback_no_clean_except_handwave]].
+func TestListWorkflows_PartialListFailure(t *testing.T) {
+	t.Parallel()
+	srv, mgr := newTestGateway(t, "/gw")
+	defer srv.Close()
+	// Register a second workflow so we can confirm one failure doesn't
+	// blow up the whole response.
+	mgr.registerWorkflow("calibration", lifecycle.Transitions{"idle": {"running"}, "running": {}})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-1", PhaseF: "planning"})
+	mgr.seed("calibration", &fakeParticipant{EntityIDF: "c-1", PhaseF: "idle"})
+
+	mgr.listErrByWorkflow = map[string]error{
+		"mission": fmt.Errorf("simulated KV unreachable for MISSIONS bucket"),
+	}
+
+	resp, err := http.Get(srv.URL + "/gw/workflows")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d (partial List failure must NOT fail the whole response)", resp.StatusCode)
+	}
+	var got []map[string]any
+	mustDecodeJSON(t, resp, &got)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 workflow entries, got %d", len(got))
+	}
+	byName := map[string]map[string]any{}
+	for _, e := range got {
+		byName[e["workflow"].(string)] = e
+	}
+	mission := byName["mission"]
+	calib := byName["calibration"]
+	// The failing workflow must carry counts_error AND empty counts.
+	if mission["counts_error"] == nil || mission["counts_error"] == "" {
+		t.Errorf("mission entry missing counts_error: %v", mission)
+	}
+	if counts, ok := mission["counts_by_phase"].(map[string]any); !ok || len(counts) != 0 {
+		t.Errorf("mission counts_by_phase should be empty on failure, got %v", mission["counts_by_phase"])
+	}
+	// The healthy workflow must render normally (no counts_error,
+	// counts populated).
+	if _, hasErr := calib["counts_error"]; hasErr {
+		t.Errorf("calibration entry should have no counts_error, got %v", calib["counts_error"])
+	}
+	if counts, _ := calib["counts_by_phase"].(map[string]any); counts["idle"] != float64(1) {
+		t.Errorf("calibration counts_by_phase: got %v", calib["counts_by_phase"])
 	}
 }
 
@@ -670,6 +730,16 @@ func TestFactory_AcceptsRealManagerType(t *testing.T) {
 	// path passes deps.LifecycleManager which is *lifecycle.Manager;
 	// the factory must accept the concrete type (which implicitly
 	// satisfies our local LifecycleManager interface).
+	//
+	// SCOPE: this test verifies type-acceptance ONLY — the zero-value
+	// Manager passed here has no registered workflows + no store
+	// factory wired, so any operation against it would either return
+	// empty (ListWorkflows) or panic (List/Get/Update/etc). DO NOT
+	// extend this test to exercise behavior; use a fakeManager via
+	// newTestGateway or TestFactory_FullProductionWire for behavior
+	// coverage. The factory-accepts-concrete invariant is what's
+	// load-bearing here; the wired-and-functional invariant lives
+	// elsewhere.
 	deps := component.Dependencies{LifecycleManager: &lifecycle.Manager{}}
 	comp, err := CreateLifecycleGateway(nil, deps)
 	if err != nil {
@@ -746,6 +816,46 @@ func TestFactory_FullProductionWire(t *testing.T) {
 	// to upgrade since the field is set non-nil).
 	if comp.upgrade.CheckOrigin == nil {
 		t.Errorf("factory did not wire Upgrader.CheckOrigin")
+	}
+}
+
+// TestOpenAPISpec_DocumentsAllEndpoints locks the operator-facing
+// OpenAPI surface: the 7 HTTP endpoints (plus the WebSocket-upgrade
+// variant on /workflows/{type}) must appear in the spec so operator
+// dashboards auto-discover them. A regression that dropped an entry
+// would silently de-document an endpoint that still serves traffic.
+func TestOpenAPISpec_DocumentsAllEndpoints(t *testing.T) {
+	t.Parallel()
+	spec := lifecycleGatewayOpenAPISpec()
+	wantPaths := []string{
+		"/workflows",
+		"/workflows/{type}",
+		"/workflows/{type}/{id}",
+		"/workflows/{type}/{id}/history",
+		"/workflows/{type}/{id}/children",
+		"/workflows/{type}/{id}/state",
+		"/workflows/{type}/{id}/transition",
+	}
+	for _, p := range wantPaths {
+		if _, ok := spec.Paths[p]; !ok {
+			t.Errorf("spec missing path %q", p)
+		}
+	}
+	// Method coverage: state + transition must be POST-only; the rest GET-only.
+	for path, ps := range spec.Paths {
+		switch path {
+		case "/workflows/{type}/{id}/state", "/workflows/{type}/{id}/transition":
+			if ps.POST == nil {
+				t.Errorf("path %q missing POST operation", path)
+			}
+			if ps.GET != nil {
+				t.Errorf("path %q should not expose GET", path)
+			}
+		default:
+			if ps.GET == nil {
+				t.Errorf("path %q missing GET operation", path)
+			}
+		}
 	}
 }
 

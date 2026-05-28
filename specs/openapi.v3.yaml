@@ -917,6 +917,251 @@ paths:
                         application/json:
                             schema:
                                 type: object
+    /workflows:
+        get:
+            summary: List registered workflow types
+            description: Returns the workflow types registered with the Manager + per-phase instance counts. Per-workflow List errors surface as a `counts_error` field on the failing entry so partial degradation is visible without breaking the whole response.
+            tags:
+                - Lifecycle
+            responses:
+                "200":
+                    description: Workflow types with instance counts
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "405":
+                    description: Method not allowed (GET only)
+    /workflows/{type}:
+        get:
+            summary: List instances of a workflow type
+            description: Lists Participant instances for the given workflow type with filter + pagination query parameters. When ?stream=true is set, the connection is upgraded to a WebSocket that streams bootstrap + live updates from Manager.Watch.
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier (matches Participant.Workflow())
+                  schema:
+                    type: string
+                - name: phase
+                  in: query
+                  description: Filter to instances in this phase
+                  schema:
+                    type: string
+                - name: active
+                  in: query
+                  description: Filter to non-terminal instances when true
+                  schema:
+                    type: boolean
+                - name: limit
+                  in: query
+                  description: Maximum results returned (default unlimited)
+                  schema:
+                    type: integer
+                - name: offset
+                  in: query
+                  description: Skip the first N matching results for pagination
+                  schema:
+                    type: integer
+                - name: match.<field>
+                  in: query
+                  description: Field-equality filter (any number; one query param per field)
+                  schema:
+                    type: string
+                - name: stream
+                  in: query
+                  description: Set to 'true' to upgrade to a WebSocket carrying Manager.Watch updates
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Instance array (or WebSocket frames when ?stream=true)
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Invalid query parameter
+                "403":
+                    description: WebSocket streaming disabled (enable_websocket=false)
+                "404":
+                    description: Workflow type not registered
+                "405":
+                    description: Method not allowed (GET only)
+    /workflows/{type}/{id}:
+        get:
+            summary: Get instance state
+            description: Returns the full Participant state for the given workflow type + entity ID.
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier
+                  schema:
+                    type: string
+                - name: id
+                  in: path
+                  required: true
+                  description: Entity ID (Participant.EntityID())
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Participant state
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "404":
+                    description: Workflow or entity not found
+                "405":
+                    description: Method not allowed (GET only)
+    /workflows/{type}/{id}/children:
+        get:
+            summary: List child instances
+            description: Returns Participants whose ParentEntityID matches the given entity, across all registered workflows. The {type} segment is required for routing symmetry with the other endpoints; the underlying Manager.Children call scans cross-workflow.
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier (routing-only; cross-workflow scan ignores it)
+                  schema:
+                    type: string
+                - name: id
+                  in: path
+                  required: true
+                  description: Parent entity ID
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Child Participant array
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "405":
+                    description: Method not allowed (GET only)
+    /workflows/{type}/{id}/history:
+        get:
+            summary: List phase-transition history
+            description: Returns the phase-transition history derived from KV revision replay. Each entry includes from/to phases, wallclock timestamp, the TransitionSource (rule/operator/component/framework), and any operator-supplied note.
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier
+                  schema:
+                    type: string
+                - name: id
+                  in: path
+                  required: true
+                  description: Entity ID
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: TransitionEvent array
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "404":
+                    description: Workflow or entity not found
+                "405":
+                    description: Method not allowed (GET only)
+    /workflows/{type}/{id}/state:
+        post:
+            summary: Operator patch (state mutation)
+            description: 'Applies a JSON-body patch to the Participant. The body is a `{<field>: <value>}` map; every field MUST be tagged `lifecycle:"operator_writable"` on the registered state struct. Identity (`lifecycle:"id"`) and phase fields are protected by the same default-deny gate the rule layer enforces (ADR-047 § AssertRuleWritable).'
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier
+                  schema:
+                    type: string
+                - name: id
+                  in: path
+                  required: true
+                  description: Entity ID
+                  schema:
+                    type: string
+            requestBody:
+                description: Field-name → value patch map
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/StatePatchRequest'
+            responses:
+                "200":
+                    description: Patch applied
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Invalid body OR field is not operator_writable OR type mismatch
+                "404":
+                    description: Workflow or entity not found
+                "405":
+                    description: Method not allowed (POST only)
+                "409":
+                    description: Optimistic-concurrency retries exhausted
+                "413":
+                    description: Request body exceeds max_body_bytes
+    /workflows/{type}/{id}/transition:
+        post:
+            summary: Operator-initiated phase transition
+            description: Transitions the Participant to the requested phase via Manager.Transition with TransitionSourceOperator. Phase must be declared in the workflow's Transitions table; current → target must be a declared edge; current must not be terminal.
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier
+                  schema:
+                    type: string
+                - name: id
+                  in: path
+                  required: true
+                  description: Entity ID
+                  schema:
+                    type: string
+            requestBody:
+                description: Target phase + optional operator note for the audit trail
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/TransitionRequest'
+            responses:
+                "200":
+                    description: Transition applied
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Invalid body OR target phase undeclared OR edge undeclared OR current phase terminal
+                "404":
+                    description: Workflow or entity not found
+                "405":
+                    description: Method not allowed (POST only)
+                "413":
+                    description: Request body exceeds max_body_bytes
 components:
     schemas:
         ActivityEvent:
@@ -2098,6 +2343,15 @@ components:
                 - step_type
                 - duration
             type: object
+        TransitionRequest:
+            properties:
+                note:
+                    type: string
+                phase:
+                    type: string
+            required:
+                - phase
+            type: object
 tags:
     - name: AgenticDispatch
       description: User message processing and command dispatch
@@ -2113,6 +2367,8 @@ tags:
       description: GraphQL query endpoint for knowledge graph operations
     - name: Inference
       description: Structural anomaly inference review API
+    - name: Lifecycle
+      description: pkg/lifecycle.Manager operator read + mutation surface (ADR-047)
     - name: MCP
       description: Model Context Protocol endpoint for AI tool integration
     - name: MessageLogger

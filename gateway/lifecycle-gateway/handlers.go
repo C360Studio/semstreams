@@ -83,15 +83,14 @@ func (c *Component) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// routePrefix recomputes the mounted root for path stripping.
-// Mirrors the math in RegisterHTTPHandlers; kept duplicated rather
-// than stored to avoid a mu.RLock per request — the values are
-// configured once at startup and don't move.
+// routePrefix returns the mounted root for path stripping. The root
+// is computed once in RegisterHTTPHandlers from the parent prefix +
+// config.PathPrefix and stored on c.cachedRoot; this getter reads
+// it under mu.RLock so a hot-reload of the component (re-running
+// RegisterHTTPHandlers with a different prefix) doesn't race
+// in-flight serveHTTP readers. The RLock is uncontended in steady
+// state.
 func (c *Component) routePrefix() string {
-	// The HTTP server passes us the URL.Path verbatim; we don't have
-	// access to the parent prefix here unless we cache it. Cache it
-	// at RegisterHTTPHandlers time via c.mu so serveHTTP can subtract
-	// it back out.
 	c.mu.RLock()
 	root := c.cachedRoot
 	c.mu.RUnlock()
@@ -379,10 +378,10 @@ func (c *Component) handleOperatorTransition(w http.ResponseWriter, r *http.Requ
 // The client controls the lifetime: closing the WS or canceling
 // the request context cancels Watch's ctx, which closes Manager's
 // watcher goroutine + the underlying NATS subscription. Slow
-// consumers blow through the per-connection buffer
-// (c.config.WatchBufferSize); the gateway closes the connection
-// rather than blocking the watcher (slow consumer → loud close,
-// per ADR-047's loud-fail discipline).
+// consumers exceed gorilla/websocket's internal write buffer; when
+// WriteJSON fails the gateway closes the connection rather than
+// blocking the watcher (slow consumer → loud close per ADR-047's
+// loud-fail discipline).
 func (c *Component) handleWebSocket(w http.ResponseWriter, r *http.Request, workflow string) {
 	if !c.config.EnableWebSocket {
 		c.writeError(w, http.StatusForbidden,
