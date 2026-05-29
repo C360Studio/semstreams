@@ -206,11 +206,14 @@ func (c *Client) SubscribeForRequests(
 		// Call the handler
 		response, err := handler(msgCtx, msg.Data)
 		if err != nil {
-			// Send error response if there's a reply subject
-			if msg.Reply != "" {
-				// Use a simple error format - could be enhanced with structured errors
-				_ = msg.Respond([]byte("error: " + err.Error()))
-			}
+			// Send a header-classified error reply (gh#93). The
+			// reply body keeps the legacy "error: <msg>" shape for
+			// backward compatibility; X-Status / X-Error-Class
+			// headers carry the new caller signal. RespondError
+			// returns errMissingReplySubject when the inbound
+			// message had no reply subject — that's expected for
+			// fire-and-forget patterns, so swallow.
+			_ = RespondError(msg, err)
 			return
 		}
 

@@ -1,0 +1,222 @@
+// Package natsclient — header-classified handler errors (gh#93).
+//
+// Handler errors from SubscribeForRequests handlers, and from direct
+// msg.Respond callers that opt in, travel as wire headers:
+//
+//	X-Status: error
+//	X-Error-Class: transient | invalid | fatal
+//
+// The reply body keeps the legacy "error: <msg>" shape unchanged so
+// existing prefix-sniffing callers (pathrag.go, graphrag.go, etc.) keep
+// working unmodified — dual encoding is the load-bearing
+// backward-compat contract. Phase 4 (deferred post-1.0) drops the
+// legacy body shape; until then headers are the new-callers signal,
+// body is the old-callers signal, and both carry the same information.
+//
+// Caller migration:
+//
+//	OLD: data, err := c.Request(ctx, subj, body, timeout)
+//	     if err != nil { /* transport */ }
+//	     if bytes.HasPrefix(data, []byte("error: ")) { /* handler */ }
+//
+//	NEW: data, err := c.RequestClassified(ctx, subj, body, timeout)
+//	     if err != nil {
+//	         // err may be transport OR classified handler error
+//	         if errs.IsInvalid(err) { /* 400 */ }
+//	         if errs.IsTransient(err) { /* retry */ }
+//	     }
+//
+// Handler migration:
+//
+//	OLD: msg.Respond([]byte("error: " + err.Error()))
+//	NEW: natsclient.RespondError(msg, err)
+//
+// HTTP semantics (400 vs 404) belong at the gateway layer, not the
+// wire layer — "not found" maps to ErrorClass=invalid at this layer;
+// gateways disambiguate with a small body-substring check or a
+// per-subject convention. See feedback_natsclient_error_payload_convention.md.
+package natsclient
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"time"
+
+	"github.com/nats-io/nats.go"
+
+	"github.com/c360studio/semstreams/pkg/errs"
+)
+
+// Header keys for the header-classified error convention. New callers
+// branch on these; legacy callers fall through to the "error: " body
+// prefix as before.
+const (
+	// HeaderStatus is set to HeaderStatusError on reply messages that
+	// represent a handler-side failure. Absent on success replies.
+	HeaderStatus = "X-Status"
+
+	// HeaderErrorClass carries the pkg/errs.ErrorClass value as a
+	// lowercase string: "transient", "invalid", or "fatal". Set
+	// only when HeaderStatus == HeaderStatusError.
+	HeaderErrorClass = "X-Error-Class"
+)
+
+// Values used in HeaderStatus / HeaderErrorClass.
+const (
+	HeaderStatusError = "error"
+
+	ErrorClassTransient = "transient"
+	ErrorClassInvalid   = "invalid"
+	ErrorClassFatal     = "fatal"
+)
+
+// legacyErrorBodyPrefix is the body-prefix convention the framework
+// has used since pre-#93. Callers can still sniff this shape for the
+// duration of the dual-encoding window (Phase 4 retires it).
+var legacyErrorBodyPrefix = []byte("error: ")
+
+// errMissingReplySubject is returned by RespondError when the inbound
+// message had no reply subject — there's no one to respond to.
+var errMissingReplySubject = errors.New("natsclient: message has no reply subject")
+
+// RespondError writes a header-classified error reply to msg. The
+// reply body keeps the legacy "error: <msg>" shape; headers carry
+// the new X-Status / X-Error-Class signal.
+//
+// Used by SubscribeForRequests internally + by direct-msg.Respond
+// handlers that opt in to the convention.
+//
+// Returns nil + no-op when err is nil (treat as success — caller
+// should have used msg.Respond with success data). Returns
+// errMissingReplySubject when the inbound message has no reply
+// subject; caller can ignore (the request was fire-and-forget).
+func RespondError(msg *nats.Msg, err error) error {
+	if err == nil {
+		return nil
+	}
+	if msg.Reply == "" {
+		return errMissingReplySubject
+	}
+
+	reply := nats.NewMsg(msg.Reply)
+	reply.Header = make(nats.Header)
+	reply.Header.Set(HeaderStatus, HeaderStatusError)
+	reply.Header.Set(HeaderErrorClass, classForHeader(err))
+	reply.Data = []byte(legacyErrorBodyPrefix)
+	reply.Data = append(reply.Data, err.Error()...)
+
+	return msg.RespondMsg(reply)
+}
+
+// ReplyError sends a header-classified error reply via the
+// client's Publish path. Companion to Reply / ReplyWithHeaders for
+// handlers that don't have the inbound *nats.Msg in scope.
+//
+// Returns nil + no-op when err is nil OR replyTo is empty.
+func (c *Client) ReplyError(ctx context.Context, replyTo string, err error) error {
+	if err == nil || replyTo == "" {
+		return nil
+	}
+
+	body := append([]byte(legacyErrorBodyPrefix), err.Error()...)
+	headers := map[string]string{
+		HeaderStatus:     HeaderStatusError,
+		HeaderErrorClass: classForHeader(err),
+	}
+	return c.ReplyWithHeaders(ctx, replyTo, body, headers)
+}
+
+// ClassifyReply inspects a reply message and returns either the
+// success body (when no error signal is present) or a classified
+// error suitable for branching with errs.IsInvalid / IsTransient /
+// IsFatal.
+//
+// Detection order:
+//  1. X-Status: error header → reconstruct from X-Error-Class.
+//  2. Legacy "error: " body prefix → classify as invalid (the
+//     default for old handlers; gateways doing finer-grained mapping
+//     can substring-check the unwrapped message).
+//  3. Otherwise → success: return body, nil.
+//
+// The reconstructed classified error reads
+// "natsclient.ClassifyReply: handler error failed: <original>" so its
+// provenance is obvious in logs while errs.Is* still returns the
+// correct class.
+func ClassifyReply(msg *nats.Msg) ([]byte, error) {
+	if msg == nil {
+		return nil, nil
+	}
+
+	if msg.Header.Get(HeaderStatus) == HeaderStatusError {
+		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
+		return nil, classifiedFromHeader(msg.Header.Get(HeaderErrorClass), string(body))
+	}
+
+	if bytes.HasPrefix(msg.Data, legacyErrorBodyPrefix) {
+		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
+		return nil, classifiedFromHeader(ErrorClassInvalid, string(body))
+	}
+
+	return msg.Data, nil
+}
+
+// RequestClassified is the recommended caller-side replacement for
+// Request + body-prefix sniffing. It performs the request, then
+// runs the reply through ClassifyReply so the returned error covers
+// both transport and handler failure modes uniformly.
+//
+// Transport failures (no responders, timeout) are returned as the
+// underlying error and classify as ErrorTransient via pkg/errs.IsTransient
+// — caller's existing retry logic on IsTransient continues to fire.
+//
+// Handler failures arrive as a *errs.ClassifiedError reconstructed
+// from the X-Error-Class header (or the legacy body prefix as
+// fallback). Caller branches on errs.IsInvalid / IsTransient / IsFatal.
+func (c *Client) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	msg, err := c.RequestWithHeaders(ctx, subject, data, nil, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return ClassifyReply(msg)
+}
+
+// classForHeader returns the lowercase ErrorClass string that should
+// be stamped in the X-Error-Class header for the given error.
+func classForHeader(err error) string {
+	switch errs.Classify(err) {
+	case errs.ErrorInvalid:
+		return ErrorClassInvalid
+	case errs.ErrorFatal:
+		return ErrorClassFatal
+	case errs.ErrorTransient:
+		return ErrorClassTransient
+	default:
+		return ErrorClassTransient
+	}
+}
+
+// classifiedFromHeader reconstructs a *errs.ClassifiedError from the
+// X-Error-Class header value + the unwrapped body message. The
+// resulting error round-trips through errs.IsInvalid / IsTransient /
+// IsFatal correctly.
+//
+// Unknown class strings fall back to invalid (the conservative choice
+// — a caller seeing IsInvalid won't retry on a class they don't
+// recognize, vs IsTransient which would loop).
+func classifiedFromHeader(class, message string) error {
+	if message == "" {
+		message = "handler error"
+	}
+	inner := errors.New(message)
+	switch class {
+	case ErrorClassInvalid:
+		return errs.WrapInvalid(inner, "natsclient", "ClassifyReply", "handler error")
+	case ErrorClassFatal:
+		return errs.WrapFatal(inner, "natsclient", "ClassifyReply", "handler error")
+	case ErrorClassTransient:
+		return errs.WrapTransient(inner, "natsclient", "ClassifyReply", "handler error")
+	default:
+		return errs.WrapInvalid(inner, "natsclient", "ClassifyReply", "handler error (unknown class)")
+	}
+}
