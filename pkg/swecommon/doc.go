@@ -51,9 +51,10 @@
 //
 // Implemented: scalar components + DataRecord + JSON/text/binary
 // encoders + decoders + schema marshal/unmarshal + media-type
-// constants. Deferred: DataArray (homogeneous element record),
-// DataChoice (discriminated union), Vector (axis-frame-bound
-// values), per-component constraints (allowedValues, ranges),
-// multi-reason NilValues block, nested DataRecord values, SWE
-// XML encoding (CS API does not require it).
+// constants. Deferred (tracked in
+// https://github.com/C360Studio/semstreams/issues/167): DataArray
+// (homogeneous element record), DataChoice (discriminated union),
+// Vector (axis-frame-bound values), per-component constraints
+// (allowedValues, ranges), multi-reason NilValues block, nested
+// DataRecord values, SWE XML encoding (CS API does not require it).
 package swecommon

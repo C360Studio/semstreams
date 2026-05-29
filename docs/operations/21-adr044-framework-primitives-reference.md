@@ -223,8 +223,9 @@ Added by [ADR-050](../adr/050-swe-common-schema-bound-encodings.md). Closes [#11
 | [`pkg/swecommon.MediaSWEJSON / MediaSWECSV / MediaSWEBinary`](../../pkg/swecommon/media_types.go) | CS API media-type strings | Content negotiation in CS API gateways |
 
 ADR-050 covers the scope cuts (DataArray / DataChoice / Vector /
-constraints / nested records / XML encoding all deferred) and the
-semconnect migration path.
+constraints / nested records / XML encoding all deferred,
+tracked as [#167](https://github.com/C360Studio/semstreams/issues/167))
+and the semconnect migration path.
 
 ## Scope cut — what's deferred to follow-up tags
 

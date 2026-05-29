@@ -103,7 +103,7 @@ Phase 1 covers everything CS API consumers need to drop
 - UoMs, nil values, time, typed quantities, categories
 - Round-trip tests covering each shape
 
-Deferred (filed for follow-up, not blocking the conformance claim):
+Deferred (tracked in [#167](https://github.com/C360Studio/semstreams/issues/167), not blocking the conformance claim):
 
 - DataArray (homogeneous element record) — useful for waveform /
   spectrum results, not in CS API Phase 1 observation use cases.
