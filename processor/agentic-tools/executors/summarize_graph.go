@@ -27,6 +27,9 @@ import (
 // sniffed the body-prefix shape — gh#93 Phase 2 unified the
 // transport + handler error paths behind RequestClassified, so the
 // caller now branches on the reconstructed-classified shape.
+//
+// Same-package helper used by both summarize_graph and search_graph
+// executors; lift to a shared package if a third caller appears.
 func classifyRequestError(err error) agentic.ToolErrorKind {
 	var ce *errs.ClassifiedError
 	if errors.As(err, &ce) {
@@ -171,7 +174,7 @@ func (e *SummarizeGraphExecutor) Execute(ctx context.Context, call agentic.ToolC
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("summarize_graph failed: %v", err),
+			Error:     fmt.Sprintf("summarize_graph: %s", err.Error()),
 			ErrorKind: classifyRequestError(err),
 		}, nil
 	}

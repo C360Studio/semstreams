@@ -224,31 +224,46 @@ func TestLegacyBodyPrefixStable(t *testing.T) {
 	}
 }
 
-// TestClassifyReply_ClassifiedErrorRecoversComponentFields confirms
-// the reconstructed *errs.ClassifiedError exposes its Component /
-// Operation fields via errors.As. Callers may use these for slog
-// attribution ("which natsclient call this came from").
-func TestClassifyReply_ClassifiedErrorRecoversComponentFields(t *testing.T) {
+// TestClassifyReply_ReconstructedErrorPreservesInnerMessage pins the
+// load-bearing Phase 2-polish contract: the reconstructed
+// *errs.ClassifiedError's Error() string is the handler's clean inner
+// message — NOT a leaky framework-attribution wrap. Phase 2's
+// reviewer R2/R3 surfaced that gateway/graph-gateway and
+// agentic-tools/executors were leaking
+// "natsclient.ClassifyReply: handler error failed: <real msg>" to
+// external surfaces; classifiedFromHeader now uses errs.Classified
+// (bare constructor) so the inner message round-trips verbatim.
+func TestClassifyReply_ReconstructedErrorPreservesInnerMessage(t *testing.T) {
 	t.Parallel()
 	msg := &nats.Msg{
 		Header: nats.Header{
 			HeaderStatus:     []string{HeaderStatusError},
 			HeaderErrorClass: []string{ErrorClassInvalid},
 		},
-		Data: []byte("error: bad request"),
+		Data: []byte("error: not found: test.entity.001"),
 	}
 	_, err := ClassifyReply(msg)
 	if err == nil {
 		t.Fatal("expected non-nil error")
 	}
+	// errors.As recovery still works (class round-trip is intact).
 	var ce *errs.ClassifiedError
 	if !errors.As(err, &ce) {
 		t.Fatalf("expected reconstructed error to be a *errs.ClassifiedError; got %T (%v)", err, err)
 	}
-	if ce.Component != "natsclient" {
-		t.Errorf("ce.Component = %q, want \"natsclient\"", ce.Component)
+	// Class survives.
+	if !errs.IsInvalid(err) {
+		t.Errorf("expected IsInvalid(err) == true; got false")
 	}
-	if ce.Operation != "ClassifyReply" {
-		t.Errorf("ce.Operation = %q, want \"ClassifyReply\"", ce.Operation)
+	// Inner message survives verbatim — no framework attribution.
+	if err.Error() != "not found: test.entity.001" {
+		t.Errorf("err.Error() = %q, want %q (no framework attribution)",
+			err.Error(), "not found: test.entity.001")
+	}
+	if strings.Contains(err.Error(), "natsclient") {
+		t.Errorf("err.Error() must NOT leak natsclient attribution; got %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "ClassifyReply") {
+		t.Errorf("err.Error() must NOT leak ClassifyReply attribution; got %q", err.Error())
 	}
 }

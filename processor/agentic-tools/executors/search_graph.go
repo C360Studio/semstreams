@@ -142,7 +142,7 @@ func (e *SearchGraphExecutor) Execute(ctx context.Context, call agentic.ToolCall
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("search_graph failed: %v", err),
+			Error:     fmt.Sprintf("search_graph: %s", err.Error()),
 			ErrorKind: classifyRequestError(err),
 		}, nil
 	}

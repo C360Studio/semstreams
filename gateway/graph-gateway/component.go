@@ -1624,18 +1624,12 @@ func (c *Component) handleNATSResponse(w http.ResponseWriter, subject string, re
 // that optionally includes an extensions map (e.g. classification metadata). When extensions
 // is nil, behaviour is identical to handleNATSResponse.
 func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subject string, resp []byte, extensions map[string]interface{}) {
-	// gh#93 Phase 2: handler errors are now intercepted upstream by
-	// RequestClassified (the caller path), so by the time we get here
-	// resp is guaranteed not to start with "error: ". Defensive sniff
-	// retained as a belt-and-braces fallback during the dual-encoding
-	// window in case some caller bypasses RequestClassified.
-	respStr := string(resp)
-	if strings.HasPrefix(respStr, "error:") {
-		atomic.AddInt64(&c.errors, 1)
-		errorMsg := strings.TrimSpace(strings.TrimPrefix(respStr, "error: "))
-		c.writeGraphQLError(w, http.StatusOK, errorMsg) // GraphQL convention: 200 with errors
-		return
-	}
+	// gh#93 Phase 2: handler errors are intercepted upstream by
+	// RequestClassified at the caller path; resp here is guaranteed
+	// not to start with "error: ". The legacy defensive body-prefix
+	// sniff was removed per CLAUDE.md ("don't add error handling for
+	// scenarios that can't happen"). If a future caller bypasses
+	// RequestClassified, that's a separate caller-side bug.
 
 	// Detect JetStream PubAck responses (indicates stream/subject overlap)
 	if isPubAckResponse(resp) {
@@ -1776,8 +1770,10 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Classified handler error (server alive, reporting failure)
-		// → GraphQL 200 with errors envelope. Message text is the
-		// handler's original error.
+		// → GraphQL 200 with errors envelope. err.Error() returns
+		// the handler's clean inner message verbatim
+		// (classifiedFromHeader uses errs.Classified to preserve
+		// the wire text without framework attribution).
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) {
 			c.writeGraphQLError(w, http.StatusOK, err.Error())

@@ -134,8 +134,15 @@ func (r *searchGraphRetriever) FetchCandidates(ctx context.Context, topic string
 	}
 	// gh#93 Phase 2: RequestClassified unifies transport + handler
 	// errors. Both arrive via err return; caller wraps as a single
-	// "search_graph failed" error so the upstream retriever decides
-	// whether to fall back or surface the failure.
+	// "search_graph" error. The upstream retriever drives fall-back
+	// off the CandidateSet.Degraded field, not err class — so
+	// flattening here is OK today.
+	//
+	// TODO(phase-4): consider surfacing the err class via
+	// CandidateSet.DegradedReason so callers can distinguish
+	// "search subsystem unreachable" from "search returned no
+	// candidates legitimately" once header-classified errors are
+	// the canonical path.
 	respData, err := r.client.RequestClassified(ctx, searchGraphSubject, reqData, r.timeout)
 	if err != nil {
 		return CandidateSet{}, fmt.Errorf("search_graph: %w", err)

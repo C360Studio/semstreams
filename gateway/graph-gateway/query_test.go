@@ -600,6 +600,68 @@ func TestGateway_QueryErrorHandling_ComponentUnavailable(t *testing.T) {
 	assert.NotNil(t, errors)
 }
 
+// TestGateway_QueryErrorHandling_ClassifiedHandlerError pins the
+// gh#93 Phase 2 contract: when the upstream NATS handler returns
+// a classified error (legacy body "error: <msg>" OR header-stamped
+// X-Status), the gateway maps it to HTTP 200 with a GraphQL errors
+// envelope, and the envelope message is the handler's CLEAN inner
+// text — NOT the natsclient.ClassifyReply attribution wrap.
+//
+// The mock RequestClassified shim routes through Request +
+// natsclient.ClassifyReply against a header-less nats.Msg, so this
+// exercises ClassifyReply's legacy-body-prefix fallback path —
+// matches how a pre-#93 handler appears on the wire AND validates
+// the migration handles both shape paths uniformly.
+func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
+	mock := newMockNATSRequester()
+
+	// Handler returns the legacy body-prefix error shape that
+	// graph-ingest's handleQueryEntityNATS emits on missing entity.
+	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+		return []byte("error: not found: test.entity.001"), nil
+	}
+
+	comp := createTestGatewayWithMock(t, mock)
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	defer comp.Stop(5 * time.Second)
+
+	gqlRequest := map[string]interface{}{
+		"query": `query { entity(id: "test.entity.001") { id } }`,
+	}
+	body, err := json.Marshal(gqlRequest)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	comp.handleGraphQL(w, req)
+
+	// GraphQL convention: handler errors → 200 with errors envelope.
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	errs, ok := response["errors"].([]interface{})
+	require.True(t, ok, "response must have errors array; got %v", response)
+	require.NotEmpty(t, errs, "errors array must be non-empty")
+
+	// The error message must surface the handler's CLEAN inner
+	// message — not the natsclient.ClassifyReply attribution wrap.
+	firstErr := errs[0].(map[string]interface{})
+	message, ok := firstErr["message"].(string)
+	require.True(t, ok, "first error must have message field; got %v", firstErr)
+	assert.Contains(t, message, "not found: test.entity.001",
+		"GraphQL error message must surface the handler text")
+	assert.NotContains(t, message, "natsclient",
+		"GraphQL error message must NOT leak natsclient attribution; got %q", message)
+	assert.NotContains(t, message, "ClassifyReply",
+		"GraphQL error message must NOT leak ClassifyReply attribution; got %q", message)
+}
+
 func TestGateway_QueryErrorHandling_GraphQLError(t *testing.T) {
 	mock := newMockNATSRequester()
 

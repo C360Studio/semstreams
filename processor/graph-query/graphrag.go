@@ -1258,18 +1258,26 @@ func (c *Component) searchEntitiesSemantic(ctx context.Context, query string, li
 	}
 
 	// gh#93 Phase 2: RequestClassified unifies transport + handler
-	// errors. Most common handler error here: graph-embedding's
-	// embedder isn't initialized yet, or the embedder (semembed HTTP
-	// / BM25 cache) couldn't produce a vector for the query text.
-	// Treat any classified handler error as "no semantic hits" so
-	// globalSearch's caller falls through to the tier-2 text-based
-	// community search instead of hard-failing.
+	// errors behind one classified return. Distinguish with errors.As:
+	//   - Handler-side classified error (embedder not ready, no vector
+	//     for query text) → fail-open with nil so globalSearch falls
+	//     to tier-2 text-based community search. Server reported
+	//     "I couldn't help with this query," which is a legitimate
+	//     fall-through signal.
+	//   - Transport-layer failure (no responders, timeout) → propagate
+	//     as Transient. The embedding service is unreachable; the
+	//     caller should know vs silently degrading to text search on
+	//     every query.
 	resp, err := c.natsClient.RequestClassified(ctx, "graph.embedding.query.search", data, 30*time.Second)
 	if err != nil {
-		c.logger.Debug("semantic search failed (transport or handler)",
-			slog.String("query", query),
-			slog.Any("error", err))
-		return nil, nil
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) {
+			c.logger.Debug("semantic search handler error",
+				slog.String("query", query),
+				slog.Any("error", err))
+			return nil, nil
+		}
+		return nil, errs.WrapTransient(err, "GraphQuery", "searchEntitiesSemantic", "semantic search request")
 	}
 
 	// Response format from graph-embedding/query.go:SearchResponse

@@ -257,13 +257,20 @@ func classForHeader(err error) string {
 }
 
 // classifiedFromHeader reconstructs a *errs.ClassifiedError from the
-// X-Error-Class header value + the unwrapped body message. The
-// resulting error round-trips through errs.IsInvalid / IsTransient /
-// IsFatal correctly.
+// X-Error-Class header value + the unwrapped body message. Uses
+// errs.Classified (the bare constructor) rather than the Wrap*
+// family so the inner message survives verbatim — external surfaces
+// (GraphQL responses, agent tool results) get the handler's clean
+// text via err.Error() instead of a leaky framework-attribution
+// prefix.
 //
-// Unknown class strings fall back to invalid (the conservative choice
-// — a caller seeing IsInvalid won't retry on a class they don't
-// recognize, vs IsTransient which would loop).
+// The resulting error round-trips through errs.IsInvalid /
+// IsTransient / IsFatal correctly because errs.Classified preserves
+// the class tag on the ClassifiedError struct.
+//
+// Unknown class strings fall back to invalid (the conservative
+// choice — a caller seeing IsInvalid won't retry on a class they
+// don't recognize, vs IsTransient which would loop).
 func classifiedFromHeader(class, message string) error {
 	if message == "" {
 		message = "handler error"
@@ -271,12 +278,12 @@ func classifiedFromHeader(class, message string) error {
 	inner := errors.New(message)
 	switch class {
 	case ErrorClassInvalid:
-		return errs.WrapInvalid(inner, "natsclient", "ClassifyReply", "handler error")
+		return errs.Classified(errs.ErrorInvalid, inner)
 	case ErrorClassFatal:
-		return errs.WrapFatal(inner, "natsclient", "ClassifyReply", "handler error")
+		return errs.Classified(errs.ErrorFatal, inner)
 	case ErrorClassTransient:
-		return errs.WrapTransient(inner, "natsclient", "ClassifyReply", "handler error")
+		return errs.Classified(errs.ErrorTransient, inner)
 	default:
-		return errs.WrapInvalid(inner, "natsclient", "ClassifyReply", "handler error (unknown class)")
+		return errs.Classified(errs.ErrorInvalid, inner)
 	}
 }
