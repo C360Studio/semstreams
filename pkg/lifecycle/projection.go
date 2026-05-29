@@ -206,7 +206,7 @@ func projectStructToTriples(sm *structMeta, entityID string, source Participant)
 	}
 	var out []message.Triple
 	for _, meta := range sm.FieldsByPredicate {
-		if meta.IsID || meta.ReadOnly && !meta.IsPhase {
+		if meta.IsID || (meta.ReadOnly && !meta.IsPhase) {
 			// Skip ID (no predicate target).
 			// Skip readonly non-phase fields (audit + reference
 			// targets are stamped by the framework / upstream

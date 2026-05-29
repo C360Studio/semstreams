@@ -16,6 +16,16 @@ var (
 	// indicates a wire-up bug, not a benign re-init.
 	ErrWorkflowAlreadyRegistered = errors.New("lifecycle: workflow already registered")
 
+	// ErrInvalidWorkflow is returned by Workflow.validate() at Register
+	// time when the declaration itself is malformed (missing required
+	// field, wrong-arity EntityIDPattern, duplicate ChildSpec
+	// LinkPredicate, etc.). Distinct from ErrWorkflowNotRegistered —
+	// that one fires at lookup time when a caller references a
+	// workflow type that was never registered. Callers branching on
+	// errors.Is(err, ErrInvalidWorkflow) can distinguish "you wrote
+	// a bad Workflow{}" from "you asked for an unknown workflow."
+	ErrInvalidWorkflow = errors.New("lifecycle: invalid workflow declaration")
+
 	// ErrEntityNotFound is returned by Manager.Get when no entity exists
 	// at the given EntityID in ENTITY_STATES. Distinct from
 	// ErrEntityNotLifecycleManaged — that one fires when the entity

@@ -370,6 +370,11 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 // buildInitialTriples constructs the triple slice for Manager.Create:
 // phase + audit (source=framework, at=now, note="created") + non-zero
 // projection fields.
+//
+// AuditPredicates.From is deliberately NOT stamped here — initial
+// creation has no prior phase. History reconstruction handles the
+// absent-From case by falling back to previousPhase="" for the first
+// revision (see Manager.History at manager_query.go:209).
 func buildInitialTriples(reg *registration, entityID string, initial Participant, now time.Time) []message.Triple {
 	delta := []message.Triple{
 		triple(entityID, reg.workflow.PhasePredicate, initial.Phase()),
