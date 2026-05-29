@@ -211,6 +211,20 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 	}))
 }
 
+// queryMsg + the handleQuery* methods + respondError + respondJSON
+// below form a parallel msg-style handler family that is NEVER
+// registered for production traffic. Only the *NATS-suffixed
+// handlers above are wired via SubscribeForRequests; the msg-style
+// handlers exist solely for the in-process unit tests in this
+// package and emit a `{"error": "..."}` JSON envelope (a third
+// divergent error shape, distinct from both the legacy `error: `
+// body prefix and the gh#93 X-Status header convention).
+//
+// This duplication is a refactoring debt — the *NATS handlers
+// should be exercised directly by tests. Out of scope for gh#93's
+// wire-format fix (no production wire impact). Tracked as a separate
+// followup; see the gh#93 PR description's "Deferred" section.
+//
 // queryMsg is an interface for query request messages.
 // This accommodates both real NATS messages and test mocks.
 type queryMsg interface {

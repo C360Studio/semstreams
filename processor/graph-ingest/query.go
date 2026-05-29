@@ -4,6 +4,7 @@ package graphingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // defaultMaxConcurrent is the default bounded concurrency for entity fetches
@@ -63,21 +65,24 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, errs.WrapInvalid(err, "Component", "handleQueryEntityNATS", "unmarshal request")
 	}
 
 	// Validate request
 	if req.ID == "" {
-		return nil, fmt.Errorf("invalid request: empty id")
+		return nil, errs.WrapInvalid(errors.New("empty id"), "Component", "handleQueryEntityNATS", "validate request")
 	}
 
 	// Get entity from KV bucket
 	entry, err := c.entityBucket.Get(ctx, req.ID)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
-			return nil, fmt.Errorf("not found: %s", req.ID)
+			// HTTP semantics (400 vs 404) live at the gateway —
+			// "not found" classifies as Invalid at the wire boundary;
+			// callers can substring-match the body for 404 routing.
+			return nil, errs.WrapInvalid(errors.New(req.ID), "Component", "handleQueryEntityNATS", "entity not found")
 		}
-		return nil, fmt.Errorf("internal error: %w", err)
+		return nil, errs.WrapTransient(err, "Component", "handleQueryEntityNATS", "kv get")
 	}
 
 	return entry.Value, nil
@@ -94,7 +99,7 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 		IDs []string `json:"ids"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, errs.WrapInvalid(err, "Component", "handleQueryBatchNATS", "unmarshal request")
 	}
 
 	// Handle empty IDs (return empty entities)
@@ -123,7 +128,7 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, errs.WrapInvalid(err, "Component", "handleQueryPrefixNATS", "unmarshal request")
 	}
 
 	// Build prefix for server-side filtering
@@ -135,7 +140,7 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 	// Use server-side prefix filtering instead of loading all keys
 	keys, err := c.entityBucket.KeysByPrefix(ctx, prefixDot)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get keys: %w", err)
+		return nil, errs.WrapTransient(err, "Component", "handleQueryPrefixNATS", "kv keys by prefix")
 	}
 
 	// Also check exact match for full entity ID queries (6-part IDs
@@ -179,13 +184,13 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
 		c.logger.Error("suffix query unmarshal failed", "error", err)
-		return nil, fmt.Errorf("invalid request: %w", err)
+		return nil, errs.WrapInvalid(err, "Component", "handleQuerySuffixNATS", "unmarshal request")
 	}
 
 	c.logger.Debug("suffix query received", "suffix", req.Suffix)
 
 	if req.Suffix == "" {
-		return nil, fmt.Errorf("invalid request: empty suffix")
+		return nil, errs.WrapInvalid(errors.New("empty suffix"), "Component", "handleQuerySuffixNATS", "validate request")
 	}
 
 	// Tier 1: Check TTL cache (O(1) memory lookup)
@@ -260,6 +265,20 @@ func (c *Component) suffixFallbackScan(ctx context.Context, suffix string) strin
 	return ""
 }
 
+// queryMsg + the handleQueryEntity / handleQueryBatch methods +
+// respondError + respondJSON below form a parallel msg-style handler
+// family that is NEVER registered for production traffic. Only the
+// *NATS-suffixed handlers above are wired via SubscribeForRequests;
+// the msg-style handlers exist solely for the in-process unit tests
+// in this package and emit a `{"error": "..."}` JSON envelope
+// (a third divergent error shape, distinct from both the legacy
+// `error: ` body prefix and the gh#93 X-Status header convention).
+//
+// This duplication is a refactoring debt — the *NATS handlers
+// should be exercised directly by tests. Out of scope for gh#93's
+// wire-format fix (no production wire impact). Tracked as a separate
+// followup; see the gh#93 PR description's "Deferred" section.
+//
 // queryMsg is an interface for query request messages.
 // This accommodates both real NATS messages and test mocks.
 type queryMsg interface {

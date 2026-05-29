@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -1470,7 +1471,7 @@ func (c *Component) handleTrajectoryQuery(_ context.Context, data []byte) ([]byt
 		Limit  int    `json:"limit,omitempty"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil || req.LoopID == "" {
-		return nil, fmt.Errorf("loopId required")
+		return nil, errs.WrapInvalid(errors.New("loopId required"), "Component", "handleTrajectoryQuery", "validate request")
 	}
 
 	// Try cache first (finalized trajectories).
@@ -1483,7 +1484,9 @@ func (c *Component) handleTrajectoryQuery(_ context.Context, data []byte) ([]byt
 	if traj == nil {
 		t, err := c.handler.trajectoryManager.GetTrajectory(req.LoopID)
 		if err != nil {
-			return nil, fmt.Errorf("trajectory not found: %w", err)
+			// "Not found" classifies as Invalid at the wire boundary
+			// per gh#93 — HTTP semantics (404) belong at the gateway.
+			return nil, errs.WrapInvalid(err, "Component", "handleTrajectoryQuery", "trajectory not found")
 		}
 		traj = &t
 	}
