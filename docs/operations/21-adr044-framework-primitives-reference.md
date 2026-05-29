@@ -207,6 +207,26 @@ The CS API server's job is endpoint routing, content negotiation,
 auth, and conformance-class declaration. The data shape work is
 done by the framework primitives.
 
+## Phase 7 follow-up — SWE Common schema-bound encodings
+
+Added by [ADR-050](../adr/050-swe-common-schema-bound-encodings.md). Closes [#116](https://github.com/C360Studio/semstreams/issues/116) — the semconnect Stage 27 upstream-ask carrying the `X-CS-SWE-Subset: observation-values` workaround.
+
+| Primitive | What it provides | Use it for |
+|-----------|------------------|------------|
+| [`pkg/swecommon.DataComponent`](../../pkg/swecommon/component.go) | Sealed supertype for SWE Common data components | Type-switching across kinds in encoder dispatch |
+| [`pkg/swecommon.DataRecord`](../../pkg/swecommon/schema.go) | Composite record of named typed fields | Result-schema + command-payload model |
+| [`pkg/swecommon.Quantity / Count / Time / Boolean / Text / Category`](../../pkg/swecommon/component.go) | Scalar components with UoM / codeSpace / referenceFrame | Field-level typed values |
+| [`pkg/swecommon.MarshalSchema / UnmarshalSchema`](../../pkg/swecommon/schema.go) | Round-trip OGC SWE Common JSON Encoding (22-022) schema document | Advertising a datastream's result schema |
+| [`pkg/swecommon.EncodeJSON / DecodeJSON`](../../pkg/swecommon/json.go) | Schema-bound `application/swe+json` | Observation-collection responses + command JSON payloads |
+| [`pkg/swecommon.EncodeText / DecodeText`](../../pkg/swecommon/text.go) | Schema-bound `application/swe+csv` (configurable separators) | CSV-shaped observation streams |
+| [`pkg/swecommon.EncodeBinary / DecodeBinary`](../../pkg/swecommon/binary.go) | Schema-bound `application/swe+binary` (packed primitives + nil bitmap) | Binary observation streams + command payloads |
+| [`pkg/swecommon.MediaSWEJSON / MediaSWECSV / MediaSWEBinary`](../../pkg/swecommon/media_types.go) | CS API media-type strings | Content negotiation in CS API gateways |
+
+ADR-050 covers the scope cuts (DataArray / DataChoice / Vector /
+constraints / nested records / XML encoding all deferred,
+tracked as [#167](https://github.com/C360Studio/semstreams/issues/167))
+and the semconnect migration path.
+
 ## Scope cut — what's deferred to follow-up tags
 
 ADR-044 explicitly defers these to future phases / ADRs (post-Phase 6):
