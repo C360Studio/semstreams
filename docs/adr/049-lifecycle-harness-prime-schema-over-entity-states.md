@@ -2,12 +2,11 @@
 
 ## Status
 
-**Proposed** — 2026-05-28. Supersedes the per-workflow KV bucket
-architectural choice in [ADR-047](047-lifecycle-harness-substrate.md).
-Will be **Accepted** once shipped as the v1.0.0-beta.86 bundle
-with lifecycle e2e tier green AND post-redesign smoke confirming
-the existing tiers (core, structural, statistical, semantic,
-agentic) all still pass.
+**Accepted** — 2026-05-29 with the v1.0.0-beta.86 tag. All six e2e
+tiers green pre-tag (lifecycle, core cold-start 2/2, structural,
+statistical, agentic, semantic 7m05s). Supersedes the per-workflow
+KV bucket architectural choice in
+[ADR-047](047-lifecycle-harness-substrate.md).
 
 Working name throughout the design exercise: "ADR-047-prime." This
 is the canonical numbered ADR; the working name remains useful in
