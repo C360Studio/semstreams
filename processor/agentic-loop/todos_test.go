@@ -163,44 +163,34 @@ func TestBuildTodoStateMessage_EmptyReturnsZeroValue(t *testing.T) {
 	}
 }
 
-// TestParseQueryEntityTodos_NotFoundIsEmptyList pins the fresh-loop
-// fail-open contract. graph-ingest's handler returns a Go error on
-// missing entity, but natsclient.SubscribeForRequests wraps it as a
-// successful NATS response whose body is "error: not found: <id>".
-// We must detect that prefix and return an empty list rather than
-// emit a JSON-unmarshal Debug log per iteration of every fresh loop.
-// Regression: the prior implementation checked err.Error() on the
-// Request return, which never fires on this protocol path.
-func TestParseQueryEntityTodos_NotFoundIsEmptyList(t *testing.T) {
+// TestParseQueryEntityTodos_UnmarshalFailureSurfaces pins the
+// remaining contract for parseQueryEntityTodos after the gh#93
+// Phase 2 migration: ReadTodos now routes through
+// natsclient.RequestClassified, so handler errors arrive via the err
+// return and the fresh-loop fail-open contract is enforced one level
+// up. parseQueryEntityTodos only sees success-path bytes; if they
+// aren't valid EntityState JSON, return the unmarshal error.
+//
+// The not-found / fresh-loop fail-open contract is now wire-driven
+// by the integration test in todos_wire_integration_test.go.
+func TestParseQueryEntityTodos_UnmarshalFailureSurfaces(t *testing.T) {
 	tests := []struct {
 		name      string
 		payload   string
-		wantNil   bool
 		wantError bool
 	}{
-		{"exact prefix", "error: not found", true, false},
-		{"with id suffix", "error: not found: acme.test.foo.bar.loop.001", true, false},
-		// Other "error: ..." payloads fall through and surface as
-		// unmarshal failures — the caller logs Debug, the model just
-		// doesn't see the block this iteration. Tested here so a
-		// future protocol change that broadens the not-found prefix
-		// (e.g. to "error:" alone) trips this case.
-		{"other handler error", "error: internal error: db down", false, true},
+		{"empty body", "", true},
+		{"non-JSON", "garbage data", true},
+		{"empty triples", `{"id":"x","triples":[]}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			todos, err := parseQueryEntityTodos([]byte(tt.payload))
-			if tt.wantNil {
-				if err != nil {
-					t.Errorf("payload %q: got err %v, want nil", tt.payload, err)
-				}
-				if todos != nil {
-					t.Errorf("payload %q: got todos %v, want nil", tt.payload, todos)
-				}
-				return
-			}
+			_, err := parseQueryEntityTodos([]byte(tt.payload))
 			if tt.wantError && err == nil {
-				t.Errorf("payload %q: expected unmarshal error, got nil", tt.payload)
+				t.Errorf("payload %q: expected error, got nil", tt.payload)
+			}
+			if !tt.wantError && err != nil {
+				t.Errorf("payload %q: got err %v, want nil", tt.payload, err)
 			}
 		})
 	}

@@ -1,7 +1,6 @@
 package agenticloop
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,22 +12,9 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
-
-// notFoundPrefix is the prefix natsclient.SubscribeForRequests stamps
-// onto handler-side errors when the responder returns a Go error
-// instead of structured response data. graph-ingest's
-// handleQueryEntityNATS returns "not found: <id>" as a Go error on
-// missing entities; the client sees that as a *successful* NATS
-// response whose body starts with "error: not found:".
-//
-// We detect that prefix and treat it as an empty-list signal so a
-// fresh loop's first iteration doesn't emit a JSON-unmarshal Debug
-// log line per check. Any other "error: ..." payload (e.g.
-// "error: internal error: ...") falls through and surfaces as an
-// unmarshal error that the caller logs.
-var notFoundPrefix = []byte("error: not found")
 
 // queryEntitySubject is the NATS subject for single-entity reads from
 // graph-ingest. Mirrors processor/graph-ingest/query.go.
@@ -89,12 +75,18 @@ func (r *natsTodoReader) ReadTodos(ctx context.Context, loopEntityID string) ([]
 		return nil, fmt.Errorf("marshal query request: %w", err)
 	}
 
-	respData, err := r.client.Request(ctx, queryEntitySubject, reqData, readTodosTimeout)
+	respData, err := r.client.RequestClassified(ctx, queryEntitySubject, reqData, readTodosTimeout)
 	if err != nil {
-		// Transport-layer errors (timeout, no responders) — propagate.
-		// Handler-layer errors land in the response body via
-		// natsclient's "error: ..." payload convention, NOT in this
-		// err return; see notFoundPrefix above.
+		// gh#93: RequestClassified unifies transport AND handler
+		// errors behind one classified return. Handler-side
+		// "not found" classifies as Invalid (graph-ingest's
+		// handleQueryEntityNATS returns errs.Classified(ErrorInvalid,
+		// "not found: <id>") for missing entities) — fail-open with
+		// an empty list so a fresh loop's first iteration doesn't
+		// emit Debug noise. Transient/transport errors propagate.
+		if errs.IsInvalid(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("request %s: %w", queryEntitySubject, err)
 	}
 
@@ -102,17 +94,11 @@ func (r *natsTodoReader) ReadTodos(ctx context.Context, loopEntityID string) ([]
 }
 
 // parseQueryEntityTodos decodes a graph.ingest.query.entity response
-// payload into TodoState values. Treats the "error: not found"
-// payload prefix as an empty list (fresh-loop case) so callers don't
-// log a JSON-unmarshal Debug line on every first iteration. Other
-// "error: ..." payloads fall through and surface as unmarshal
-// errors. Factored out so the not-found contract is testable
-// without a NATS test cluster.
+// payload into TodoState values. As of gh#93 Phase 2 the caller
+// (ReadTodos) routes through natsclient.RequestClassified, which
+// surfaces handler-side errors via err return — this function only
+// sees success-path bytes.
 func parseQueryEntityTodos(respData []byte) ([]TodoState, error) {
-	if bytes.HasPrefix(respData, notFoundPrefix) {
-		return nil, nil
-	}
-
 	var entity graph.EntityState
 	if err := json.Unmarshal(respData, &entity); err != nil {
 		return nil, fmt.Errorf("unmarshal entity: %w", err)

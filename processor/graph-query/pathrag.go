@@ -2,7 +2,6 @@
 package graphquery
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -202,25 +201,29 @@ func (p *PathSearcher) applyLimits(reqDepth, reqNodes int) (maxDepth, maxNodes i
 //
 // Protocol note: graph-ingest's handleQueryEntityNATS returns a Go
 // error on missing-entity, but natsclient.SubscribeForRequests wraps
-// handler errors as a successful NATS response whose body starts with
-// "error: ". The previous implementation only branched on the Go err
-// return — which never fires on this protocol path — so a missing
-// entity silently passed verification. We detect the "error: " prefix
-// on the response payload to surface the not-found case correctly.
-// Same fix as ADR-036 Stage 4 H1 in processor/agentic-loop/todos.go.
+// gh#93 Phase 2: RequestClassified unifies transport and handler
+// errors. Handler-side "not found" classifies as Invalid and surfaces
+// as *errs.ClassifiedError; transport failures (no responders,
+// context.DeadlineExceeded) arrive as raw errors. We distinguish so
+// callers know whether the entity is genuinely absent vs we couldn't
+// ask. Previous implementation only branched on the Go err return —
+// which never fired on the legacy protocol path — so a missing entity
+// silently passed verification. Same fix as ADR-036 Stage 4 H1 in
+// processor/agentic-loop/todos.go.
 func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) error {
 	entityReq := map[string]string{"id": entityID}
 	entityReqData, _ := json.Marshal(entityReq)
-	respData, err := p.nats.Request(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
+	_, err := p.nats.RequestClassified(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
 	if err != nil {
-		// Transport-layer failure (timeout, no responders).
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) {
+			// Handler-side classified error — most commonly
+			// Invalid+"not found: <id>". Entity is genuinely absent.
+			return fmt.Errorf("entity not found: %w", err)
+		}
+		// Transport-layer failure (no responders, timeout). We
+		// couldn't ask; the entity may or may not exist.
 		return fmt.Errorf("query entity: %w", err)
-	}
-	// Handler-layer failure surfaces in the response body via
-	// natsclient's "error: <msg>" payload convention. The most
-	// common case is "error: not found: <id>" for missing entities.
-	if bytes.HasPrefix(respData, []byte("error: ")) {
-		return fmt.Errorf("entity not found: %s", string(respData))
 	}
 	return nil
 }

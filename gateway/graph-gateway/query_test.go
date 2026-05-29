@@ -16,9 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // ====================================================================================
@@ -44,6 +46,18 @@ func (m *mockNATSRequester) Request(ctx context.Context, subject string, data []
 		return m.requestFunc(ctx, subject, data, timeout)
 	}
 	return nil, errors.New("no mock response configured")
+}
+
+// RequestClassified routes through Request and ClassifyReply against
+// the response bytes (no headers — exercises the legacy-body-prefix
+// fallback). Matches how a pre-#93 handler appears on the wire.
+func (m *mockNATSRequester) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	body, err := m.Request(ctx, subject, data, timeout)
+	if err != nil {
+		return nil, err
+	}
+	msg := &nats.Msg{Data: body, Header: nats.Header{}}
+	return natsclient.ClassifyReply(msg)
 }
 
 func (m *mockNATSRequester) Status() natsclient.ConnectionStatus {
