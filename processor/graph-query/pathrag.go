@@ -217,9 +217,13 @@ func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) 
 	if err != nil {
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) {
-			// Handler-side classified error — most commonly
-			// Invalid+"not found: <id>". Entity is genuinely absent.
-			return fmt.Errorf("entity not found: %w", err)
+			// Handler-side classified error — propagate verbatim.
+			// Producer side has already emitted a self-describing
+			// message (e.g. "not found: <id>", "internal error: ...")
+			// via errs.Classified, so wrapping here would
+			// double-prefix the wire body. Caller-facing GraphQL
+			// surface shows the handler's clean message directly.
+			return err
 		}
 		// Transport-layer failure (no responders, timeout). We
 		// couldn't ask; the entity may or may not exist.
