@@ -161,7 +161,7 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
 
 	for _, tr := range triples {
 		if tr.Subject != loopEntityID {
@@ -175,16 +175,28 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 	predicates := predicateSet(triples)
 	required := []string{
 		agvocab.LoopOutcome,
-		agvocab.LoopRole,
 		agvocab.LoopIterations,
 		agvocab.LoopTokensIn,
 		agvocab.LoopTokensOut,
-		agvocab.LoopTask,
 		agvocab.LoopEndedAt,
 	}
 	for _, pred := range required {
 		if !predicates[pred] {
 			t.Errorf("missing required predicate: %s", pred)
+		}
+	}
+
+	// gh#159: spawn-known predicates (role, task) live on the entity
+	// from WriteSpawnIdentity, NOT from the completion stamp — otherwise
+	// graph-ingest's append semantics would duplicate them on every
+	// completion.
+	spawnStamped := []string{
+		agvocab.LoopRole,
+		agvocab.LoopTask,
+	}
+	for _, pred := range spawnStamped {
+		if predicates[pred] {
+			t.Errorf("predicate %s should be spawn-stamped only, not in completion triples", pred)
 		}
 	}
 
@@ -221,7 +233,7 @@ func TestBuildLoopCompletionTriples_CostCalculation(t *testing.T) {
 
 	// (1000 * 3.0 + 500 * 15.0) / 1_000_000 = 0.0105
 	cost := float64(event.TokensIn)*3.0/1_000_000 + float64(event.TokensOut)*15.0/1_000_000
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
 
 	predicates := predicateSet(triples)
 	if !predicates[agvocab.LoopCostUSD] {
@@ -253,7 +265,7 @@ func TestBuildLoopCompletionTriples_ZeroCostOmitted(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
 	predicates := predicateSet(triples)
 
 	if predicates[agvocab.LoopCostUSD] {
@@ -276,7 +288,7 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 		// ParentLoopID, WorkflowSlug, WorkflowStep, UserID all empty
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
 	predicates := predicateSet(triples)
 
 	optional := []string{
@@ -293,33 +305,34 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 	}
 }
 
-func TestBuildLoopCompletionTriples_PromptEmittedAsDescription(t *testing.T) {
+// gh#159: agent.loop.description is now spawn-stamped via
+// WriteSpawnIdentity; completion/failure stamps do NOT carry it. Covered
+// by TestBuildSpawnIdentityTriples_StampsDescription.
+func TestBuildLoopCompletionTriples_DescriptionNotInCompletion(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopD"
 	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
-	prompt := "Investigate MQTT retained-message behavior in the telemetry ingress"
 
 	event := &agentic.LoopCompletedEvent{
 		LoopID:      "loopD",
 		TaskID:      "task-mqtt",
 		Outcome:     "success",
 		Role:        "researcher",
-		Prompt:      prompt,
+		Prompt:      "Investigate MQTT retained-message behavior in the telemetry ingress",
 		Model:       "claude",
 		Iterations:  3,
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
 
-	if got := objectFor(triples, agvocab.LoopDescription); got != prompt {
-		t.Errorf("%s: got %v, want %q", agvocab.LoopDescription, got, prompt)
+	if predicateSet(triples)[agvocab.LoopDescription] {
+		t.Errorf("%s leaked into completion stamp; should be spawn-only", agvocab.LoopDescription)
 	}
 }
 
-func TestBuildLoopFailureTriples_PromptEmittedAsDescription(t *testing.T) {
+func TestBuildLoopFailureTriples_DescriptionNotInFailure(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopE"
 	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
-	prompt := "Find deployment errors from the last 24 hours"
 
 	event := &agentic.LoopFailedEvent{
 		LoopID:     "loopE",
@@ -328,16 +341,16 @@ func TestBuildLoopFailureTriples_PromptEmittedAsDescription(t *testing.T) {
 		Reason:     "timeout",
 		Error:      "context deadline exceeded",
 		Role:       "researcher",
-		Prompt:     prompt,
+		Prompt:     "Find deployment errors from the last 24 hours",
 		Model:      "claude",
 		Iterations: 1,
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
 
-	if got := objectFor(triples, agvocab.LoopDescription); got != prompt {
-		t.Errorf("%s: got %v, want %q", agvocab.LoopDescription, got, prompt)
+	if predicateSet(triples)[agvocab.LoopDescription] {
+		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopDescription)
 	}
 }
 
@@ -386,7 +399,10 @@ func TestTruncateForTriple(t *testing.T) {
 	})
 }
 
-func TestBuildLoopCompletionTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
+// gh#159: spawn-stamped predicates (parent, workflow, workflow_step,
+// user) live on the entity from WriteSpawnIdentity, NOT the completion
+// stamp. Covered by TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet.
+func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopB"
 	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
 
@@ -404,35 +420,21 @@ func TestBuildLoopCompletionTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 		CompletedAt:  time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
 	predicates := predicateSet(triples)
 
-	optional := []string{
+	spawnOnly := []string{
 		agvocab.LoopParent,
 		agvocab.LoopWorkflow,
 		agvocab.LoopWorkflowStep,
 		agvocab.LoopUser,
+		agvocab.LoopRole,
+		agvocab.LoopTask,
 	}
-	for _, pred := range optional {
-		if !predicates[pred] {
-			t.Errorf("expected predicate %s to be present, but it was omitted", pred)
+	for _, pred := range spawnOnly {
+		if predicates[pred] {
+			t.Errorf("predicate %s leaked into completion stamp; should be spawn-only", pred)
 		}
-	}
-
-	// Parent must be a valid 6-part entity ID.
-	parent, ok := objectFor(triples, agvocab.LoopParent).(string)
-	if !ok {
-		t.Fatal("LoopParent object is not a string")
-	}
-	if !message.IsValidEntityID(parent) {
-		t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
-	}
-
-	if got := objectFor(triples, agvocab.LoopWorkflow); got != "code-review" {
-		t.Errorf("%s: got %v, want code-review", agvocab.LoopWorkflow, got)
-	}
-	if got := objectFor(triples, agvocab.LoopUser); got != "user-xyz" {
-		t.Errorf("%s: got %v, want user-xyz", agvocab.LoopUser, got)
 	}
 }
 
@@ -454,22 +456,28 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
 	predicates := predicateSet(triples)
 
 	required := []string{
 		agvocab.LoopOutcome,
-		agvocab.LoopRole,
 		agvocab.LoopIterations,
 		agvocab.LoopTokensIn,
 		agvocab.LoopTokensOut,
-		agvocab.LoopTask,
 		agvocab.LoopEndedAt,
 	}
 	for _, pred := range required {
 		if !predicates[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
+	}
+
+	// gh#159: role and task are spawn-stamped, not failure-stamped.
+	if predicates[agvocab.LoopRole] {
+		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopRole)
+	}
+	if predicates[agvocab.LoopTask] {
+		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopTask)
 	}
 
 	// LoopModelUsed is conditional on non-empty modelEntityID.
@@ -496,7 +504,7 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
 	predicates := predicateSet(triples)
 
 	// ParentLoopID belongs to the optional set — when empty (failure on a
@@ -510,15 +518,15 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestBuildLoopFailureTriples_StampsParentLoopID closes the ancestry-walk
-// gap from semteams ADR-038 PR B: chain-aware failure handlers
-// (chainpause writing chain.paused.* to the canonical chain entity) need
-// agent.loop.parent stamped on failed loops to walk ancestry from the
-// failure to the chain root. Mirrors
-// TestBuildLoopCompletionTriples_OptionalFieldsPresentWhenSet's parent
-// assertion. Without this, the walk terminates at the failure and stamps
-// chain triples to the wrong entity.
-func TestBuildLoopFailureTriples_StampsParentLoopID(t *testing.T) {
+// gh#159: agent.loop.parent is now spawn-stamped via WriteSpawnIdentity,
+// so the chain-aware ancestry walk from semteams ADR-038 PR B reads
+// parent from the same entity but stamped at spawn rather than at
+// failure. Covered structurally by
+// TestBuildSpawnIdentityTriples_StampsParent — failure-side test pins
+// the absence so a regression that re-adds the failure-time stamp
+// (producing duplicate parent triples after append-semantics) fails
+// loud.
+func TestBuildLoopFailureTriples_ParentNotInFailure(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFailChild"
 	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
 
@@ -533,27 +541,16 @@ func TestBuildLoopFailureTriples_StampsParentLoopID(t *testing.T) {
 		FailedAt:     time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0, "acme", "ops")
-	predicates := predicateSet(triples)
-
-	if !predicates[agvocab.LoopParent] {
-		t.Fatalf("expected agent.loop.parent triple on failure path; got predicates: %v", predicates)
-	}
-
-	parent, ok := objectFor(triples, agvocab.LoopParent).(string)
-	if !ok {
-		t.Fatal("LoopParent object is not a string")
-	}
-	want := "acme.ops.agent.agentic-loop.execution.loopParentXYZ"
-	if parent != want {
-		t.Errorf("LoopParent = %q, want %q", parent, want)
-	}
-	if !message.IsValidEntityID(parent) {
-		t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
+	if predicateSet(triples)[agvocab.LoopParent] {
+		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopParent)
 	}
 }
 
-func TestBuildLoopFailureTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
+// gh#159: workflow / workflow_step / user are spawn-only; failure stamp
+// keeps only the completion-shape signals (outcome, iterations, tokens,
+// cost, model_used, ended_at).
+func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopFail3"
 	modelEntityID := "acme.ops.agent.model-registry.endpoint.claude"
 
@@ -573,30 +570,28 @@ func TestBuildLoopFailureTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 	}
 
 	cost := 0.005
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, "acme", "ops")
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
 	predicates := predicateSet(triples)
 
-	optional := []string{
+	spawnOnly := []string{
+		agvocab.LoopRole,
+		agvocab.LoopTask,
 		agvocab.LoopWorkflow,
 		agvocab.LoopWorkflowStep,
 		agvocab.LoopUser,
-		agvocab.LoopCostUSD,
-		agvocab.LoopModelUsed,
 	}
-	for _, pred := range optional {
-		if !predicates[pred] {
-			t.Errorf("expected predicate %s to be present, but it was omitted", pred)
+	for _, pred := range spawnOnly {
+		if predicates[pred] {
+			t.Errorf("predicate %s leaked into failure stamp; should be spawn-only", pred)
 		}
 	}
 
-	if got := objectFor(triples, agvocab.LoopWorkflow); got != "code-review" {
-		t.Errorf("%s: got %v, want code-review", agvocab.LoopWorkflow, got)
+	// Completion-shape signals must remain.
+	if !predicates[agvocab.LoopCostUSD] {
+		t.Errorf("expected %s to be present in failure stamp", agvocab.LoopCostUSD)
 	}
-	if got := objectFor(triples, agvocab.LoopWorkflowStep); got != "revise" {
-		t.Errorf("%s: got %v, want revise", agvocab.LoopWorkflowStep, got)
-	}
-	if got := objectFor(triples, agvocab.LoopUser); got != "user-abc" {
-		t.Errorf("%s: got %v, want user-abc", agvocab.LoopUser, got)
+	if !predicates[agvocab.LoopModelUsed] {
+		t.Errorf("expected %s to be present in failure stamp", agvocab.LoopModelUsed)
 	}
 	if got := objectFor(triples, agvocab.LoopModelUsed); got != modelEntityID {
 		t.Errorf("%s: got %v, want %q", agvocab.LoopModelUsed, got, modelEntityID)
@@ -615,7 +610,7 @@ func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 		FailedAt:   time.Now(),
 	}
 
-	triples := buildLoopFailureTriples(loopEntityID, event, "", 0, "acme", "ops")
+	triples := buildLoopFailureTriples(loopEntityID, event, "", 0)
 	predicates := predicateSet(triples)
 
 	if predicates[agvocab.LoopModelUsed] {
@@ -635,7 +630,7 @@ func TestBuildLoopCompletionTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 		CompletedAt: time.Now(),
 	}
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, "", 0, "acme", "ops")
+	triples := buildLoopCompletionTriples(loopEntityID, event, "", 0)
 	predicates := predicateSet(triples)
 
 	if predicates[agvocab.LoopModelUsed] {
@@ -659,11 +654,16 @@ func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
 	triples := buildLoopCancellationTriples(loopEntityID, event)
 	predicates := predicateSet(triples)
 
-	required := []string{agvocab.LoopOutcome, agvocab.LoopTask, agvocab.LoopEndedAt}
+	required := []string{agvocab.LoopOutcome, agvocab.LoopEndedAt}
 	for _, pred := range required {
 		if !predicates[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
+	}
+
+	// gh#159: task is spawn-only; cancellation stamp must not re-emit it.
+	if predicates[agvocab.LoopTask] {
+		t.Errorf("%s leaked into cancellation stamp; should be spawn-only", agvocab.LoopTask)
 	}
 
 	if got := objectFor(triples, agvocab.LoopOutcome); got != "cancelled" {
@@ -671,7 +671,9 @@ func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
 	}
 }
 
-func TestBuildLoopCancellationTriples_OptionalWorkflowFields(t *testing.T) {
+// gh#159: workflow / workflow_step are spawn-only; cancellation stamp
+// keeps only the transition signals (outcome, ended_at).
+func TestBuildLoopCancellationTriples_SpawnFieldsNotInCancellation(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopCancel2"
 
 	event := &agentic.LoopCancelledEvent{
@@ -686,11 +688,15 @@ func TestBuildLoopCancellationTriples_OptionalWorkflowFields(t *testing.T) {
 	triples := buildLoopCancellationTriples(loopEntityID, event)
 	predicates := predicateSet(triples)
 
-	if !predicates[agvocab.LoopWorkflow] {
-		t.Error("expected LoopWorkflow to be present")
+	spawnOnly := []string{
+		agvocab.LoopTask,
+		agvocab.LoopWorkflow,
+		agvocab.LoopWorkflowStep,
 	}
-	if !predicates[agvocab.LoopWorkflowStep] {
-		t.Error("expected LoopWorkflowStep to be present")
+	for _, pred := range spawnOnly {
+		if predicates[pred] {
+			t.Errorf("predicate %s leaked into cancellation stamp; should be spawn-only", pred)
+		}
 	}
 }
 

@@ -258,6 +258,14 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 }
 
 // WriteLoopCompletion emits triples for a successfully completed loop execution.
+//
+// All completion-path triples share the loop-execution entity Subject and
+// are stamped atomically via writeBatch so the rule engine sees them in a
+// single EntityState UPDATED event. Pre-fix behaviour (per-triple writes)
+// produced one event per triple; a rule firing on agent.loop.outcome that
+// substituted any other completion-path triple in its action would evaluate
+// against a partial snapshot and bail. gh#159 + ADR-046 Phase 1 reference
+// fan-out pattern depends on this atomicity.
 func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.LoopCompletedEvent) {
 	if w.natsClient == nil {
 		return
@@ -277,16 +285,17 @@ func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.Lo
 
 	cost := computeCost(w.modelRegistry, event.Model, event.TokensIn, event.TokensOut)
 
-	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost, w.platform.Org, w.platform.Platform)
-	for _, t := range triples {
-		if err := w.writeTriple(ctx, t); err != nil {
-			w.logger.Warn("graph_writer: failed to write loop completion triple",
-				"loop_id", event.LoopID, "predicate", t.Predicate, "error", err)
-		}
+	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write loop completion batch",
+			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
 	}
 }
 
 // WriteLoopFailure emits triples for a loop that terminated with an error.
+//
+// Atomic-batch stamp shape mirrors WriteLoopCompletion — see its godoc for
+// the race-fix rationale (gh#159).
 func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopFailedEvent) {
 	if w.natsClient == nil {
 		return
@@ -306,12 +315,10 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 
 	cost := computeCost(w.modelRegistry, event.Model, event.TokensIn, event.TokensOut)
 
-	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, w.platform.Org, w.platform.Platform)
-	for _, t := range triples {
-		if err := w.writeTriple(ctx, t); err != nil {
-			w.logger.Warn("graph_writer: failed to write loop failure triple",
-				"loop_id", event.LoopID, "predicate", t.Predicate, "error", err)
-		}
+	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write loop failure batch",
+			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
 	}
 }
 
@@ -399,11 +406,13 @@ func (w *graphWriter) WriteLineageTriples(ctx context.Context, loopID string, re
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
 	triples := buildLineageTriples(loopEntityID, related)
-	for _, t := range triples {
-		if err := w.writeTriple(ctx, t); err != nil {
-			w.logger.Warn("graph_writer: failed to write lineage triple",
-				"loop_id", loopID, "predicate", t.Predicate, "error", err)
-		}
+	// Atomic batch on the loop entity so downstream rules firing on any
+	// lineage.X triple see all sibling lineage.Y triples in the same
+	// EntityState snapshot — same race-fix shape as WriteLoopCompletion
+	// (gh#159).
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write lineage batch",
+			"loop_id", loopID, "predicate_count", len(triples), "error", err)
 	}
 }
 
@@ -439,7 +448,105 @@ func buildLineageTriples(loopEntityID string, related map[string]any) []message.
 	return triples
 }
 
+// WriteSpawnIdentity stamps the loop's canonical identity triples on
+// its execution entity at spawn time. These predicates are known the
+// moment the TaskMessage arrives at the loop component, so deferring
+// them to completion (the pre-gh#159 shape) creates two problems:
+//
+//   - Mid-loop reads can't observe them. Trajectory inspection,
+//     ancestry walks from a still-running child, and rules firing
+//     on intermediate signals all see the loop entity without
+//     these attributes until completion.
+//   - Completion-path stamping arrives staggered across N events
+//     (per-triple writes), letting rules fire on agent.loop.outcome
+//     before agent.loop.parent lands — the gh#159 race that breaks
+//     ADR-046 Phase 1's example-fan-out reference pattern.
+//
+// Atomic-batch stamp on the loop entity. Conditional triples (parent,
+// workflow, workflow_step, user, description) are omitted when their
+// TaskMessage source field is empty so the entity isn't polluted with
+// zero-value triples.
+//
+// Failure handling matches WriteLineageTriples: log and continue. A
+// failed stamp surfaces downstream as $entity.triple.agent.loop.parent
+// (etc.) tripping the unresolvedTemplateVarRe warning — same shape
+// rule authors already debug.
+func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) {
+	if w.natsClient == nil {
+		return
+	}
+	if task == nil {
+		return
+	}
+	if w.platform.Org == "" || w.platform.Platform == "" {
+		w.logger.Warn("graph_writer: cannot write spawn identity, platform identity missing",
+			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
+		return
+	}
+
+	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
+	triples := buildSpawnIdentityTriples(loopEntityID, task, w.platform.Org, w.platform.Platform)
+	if len(triples) == 0 {
+		return
+	}
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write spawn identity batch",
+			"loop_id", loopID, "predicate_count", len(triples), "error", err)
+	}
+}
+
+// buildSpawnIdentityTriples constructs the spawn-time identity triples
+// on the loop-execution entity. Pure (clock-injection via time.Now is
+// the same shape as buildLoopCompletionTriples), so it's unit-testable
+// without NATS.
+//
+// Always emits: agent.loop.role, agent.loop.task. Conditionally emits
+// parent, workflow, workflow_step, user, description when the
+// corresponding TaskMessage field is non-empty.
+func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, org, platform string) []message.Triple {
+	now := time.Now()
+	triple := func(predicate string, object any) message.Triple {
+		return message.Triple{
+			Subject:    loopEntityID,
+			Predicate:  predicate,
+			Object:     object,
+			Source:     graphWriterSource,
+			Timestamp:  now,
+			Confidence: 1.0,
+		}
+	}
+
+	triples := make([]message.Triple, 0, 7)
+	if task.Role != "" {
+		triples = append(triples, triple(agvocab.LoopRole, task.Role))
+	}
+	if task.TaskID != "" {
+		triples = append(triples, triple(agvocab.LoopTask, task.TaskID))
+	}
+	if task.ParentLoopID != "" {
+		parentEntityID := agentic.LoopExecutionEntityID(org, platform, task.ParentLoopID)
+		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+	}
+	if task.WorkflowSlug != "" {
+		triples = append(triples, triple(agvocab.LoopWorkflow, task.WorkflowSlug))
+	}
+	if task.WorkflowStep != "" {
+		triples = append(triples, triple(agvocab.LoopWorkflowStep, task.WorkflowStep))
+	}
+	if task.UserID != "" {
+		triples = append(triples, triple(agvocab.LoopUser, task.UserID))
+	}
+	if task.Prompt != "" {
+		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(task.Prompt, maxPromptTripleBytes)))
+	}
+	return triples
+}
+
 // WriteLoopCancellation emits triples for a loop that was cancelled.
+//
+// Atomic-batch stamp shape mirrors WriteLoopCompletion — see its godoc for
+// the race-fix rationale (gh#159). Cancellation isn't a common rule join
+// point today but the same race shape would apply if one is added.
 func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.LoopCancelledEvent) {
 	if w.natsClient == nil {
 		return
@@ -452,11 +559,9 @@ func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
 	triples := buildLoopCancellationTriples(loopEntityID, event)
-	for _, t := range triples {
-		if err := w.writeTriple(ctx, t); err != nil {
-			w.logger.Warn("graph_writer: failed to write loop cancellation triple",
-				"loop_id", event.LoopID, "predicate", t.Predicate, "error", err)
-		}
+	if err := w.writeBatch(ctx, triples); err != nil {
+		w.logger.Warn("graph_writer: failed to write loop cancellation batch",
+			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
 	}
 }
 
@@ -504,13 +609,17 @@ func buildModelEndpointTriples(entityID string, ep model.EndpointConfig) []messa
 
 // buildLoopCompletionTriples constructs triples for a successfully completed loop.
 // cost should be pre-computed via computeCost; pass 0.0 to omit the cost triple.
-// org and platform are passed through for constructing parent loop entity IDs.
+//
+// Spawn-known triples (role, task, parent, workflow, workflow_step, user,
+// description) are stamped at spawn time by WriteSpawnIdentity (gh#159)
+// and intentionally NOT re-emitted here — graph-ingest's AddTriples
+// appends rather than upserts, so a second write would create duplicate
+// triples on every completion. Completion-only triples below.
 func buildLoopCompletionTriples(
 	loopEntityID string,
 	event *agentic.LoopCompletedEvent,
 	modelEntityID string,
 	cost float64,
-	org, platform string,
 ) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -526,11 +635,9 @@ func buildLoopCompletionTriples(
 
 	triples := []message.Triple{
 		triple(agvocab.LoopOutcome, event.Outcome),
-		triple(agvocab.LoopRole, event.Role),
 		triple(agvocab.LoopIterations, event.Iterations),
 		triple(agvocab.LoopTokensIn, event.TokensIn),
 		triple(agvocab.LoopTokensOut, event.TokensOut),
-		triple(agvocab.LoopTask, event.TaskID),
 		triple(agvocab.LoopEndedAt, event.CompletedAt.Format(time.RFC3339)),
 	}
 
@@ -540,37 +647,23 @@ func buildLoopCompletionTriples(
 	if cost > 0 {
 		triples = append(triples, triple(agvocab.LoopCostUSD, cost))
 	}
-	if event.ParentLoopID != "" {
-		parentEntityID := agentic.LoopExecutionEntityID(org, platform, event.ParentLoopID)
-		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
-	}
-	if event.WorkflowSlug != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflow, event.WorkflowSlug))
-	}
-	if event.WorkflowStep != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflowStep, event.WorkflowStep))
-	}
-	if event.UserID != "" {
-		triples = append(triples, triple(agvocab.LoopUser, event.UserID))
-	}
-	if event.Prompt != "" {
-		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(event.Prompt, maxPromptTripleBytes)))
-	}
 
 	return triples
 }
 
 // buildLoopFailureTriples constructs triples for a loop that terminated with an error.
 // cost should be pre-computed via computeCost; pass 0.0 to omit the cost triple.
-// org and platform are required to construct the parent loop's 6-part entity ID
-// when event.ParentLoopID is set — required for ancestry walks from failed loops
-// (semteams ADR-038 chainpause).
+//
+// Spawn-known triples (role, task, parent, workflow, workflow_step, user,
+// description) are stamped at spawn time by WriteSpawnIdentity (gh#159)
+// and intentionally NOT re-emitted here — see buildLoopCompletionTriples
+// for the upsert-vs-append rationale. Failure-path ancestry walks
+// (semteams ADR-038 chainpause) read agent.loop.parent stamped at spawn.
 func buildLoopFailureTriples(
 	loopEntityID string,
 	event *agentic.LoopFailedEvent,
 	modelEntityID string,
 	cost float64,
-	org, platform string,
 ) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -586,11 +679,9 @@ func buildLoopFailureTriples(
 
 	triples := []message.Triple{
 		triple(agvocab.LoopOutcome, event.Outcome),
-		triple(agvocab.LoopRole, event.Role),
 		triple(agvocab.LoopIterations, event.Iterations),
 		triple(agvocab.LoopTokensIn, event.TokensIn),
 		triple(agvocab.LoopTokensOut, event.TokensOut),
-		triple(agvocab.LoopTask, event.TaskID),
 		triple(agvocab.LoopEndedAt, event.FailedAt.Format(time.RFC3339)),
 	}
 
@@ -600,33 +691,16 @@ func buildLoopFailureTriples(
 	if cost > 0 {
 		triples = append(triples, triple(agvocab.LoopCostUSD, cost))
 	}
-	if event.ParentLoopID != "" {
-		// Mirrors buildLoopCompletionTriples — ancestry walks need the
-		// agent.loop.parent triple on failed loops too. Without this,
-		// chain-aware failure handlers (chainpause writing chain.paused.*
-		// to the canonical chain entity) terminate the walk at the
-		// failure and stamp triples on the wrong entity. ADR-038.
-		parentEntityID := agentic.LoopExecutionEntityID(org, platform, event.ParentLoopID)
-		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
-	}
-	if event.WorkflowSlug != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflow, event.WorkflowSlug))
-	}
-	if event.WorkflowStep != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflowStep, event.WorkflowStep))
-	}
-	if event.UserID != "" {
-		triples = append(triples, triple(agvocab.LoopUser, event.UserID))
-	}
-	if event.Prompt != "" {
-		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(event.Prompt, maxPromptTripleBytes)))
-	}
 
 	return triples
 }
 
 // buildLoopCancellationTriples constructs the minimal set of triples for a cancelled loop.
 // Cancellation events carry less data than completion/failure — no model, no token counts.
+//
+// Spawn-known triples (task, workflow, workflow_step) live on the loop
+// entity from WriteSpawnIdentity (gh#159); cancellation only writes the
+// transition signals.
 func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancelledEvent) []message.Triple {
 	now := time.Now()
 	triple := func(predicate string, object any) message.Triple {
@@ -640,20 +714,10 @@ func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancel
 		}
 	}
 
-	triples := []message.Triple{
+	return []message.Triple{
 		triple(agvocab.LoopOutcome, event.Outcome),
-		triple(agvocab.LoopTask, event.TaskID),
 		triple(agvocab.LoopEndedAt, event.CancelledAt.Format(time.RFC3339)),
 	}
-
-	if event.WorkflowSlug != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflow, event.WorkflowSlug))
-	}
-	if event.WorkflowStep != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflowStep, event.WorkflowStep))
-	}
-
-	return triples
 }
 
 // buildTrajectoryStepTriples constructs triples for all trajectory steps.

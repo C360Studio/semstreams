@@ -20,10 +20,17 @@ import (
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
-// tripleCollector subscribes to graph.mutation.triple.add and collects all triples received.
+// tripleCollector subscribes to BOTH graph.mutation.triple.add and
+// graph.mutation.triple.add_batch so it stays sound through gh#159's
+// per-triple→batched refactor. Per-request counters expose
+// "how many NATS round-trips did the writer make" so atomicity-class
+// tests can assert exact batch counts.
 type tripleCollector struct {
-	mu      sync.Mutex
-	triples []message.Triple
+	mu             sync.Mutex
+	triples        []message.Triple
+	singleRequests int
+	batchRequests  int
+	batchSizes     []int
 }
 
 func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, error) {
@@ -34,6 +41,7 @@ func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, erro
 
 	tc.mu.Lock()
 	tc.triples = append(tc.triples, req.Triple)
+	tc.singleRequests++
 	tc.mu.Unlock()
 
 	resp := gtypes.AddTripleResponse{
@@ -45,12 +53,55 @@ func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, erro
 	return json.Marshal(resp)
 }
 
+func (tc *tripleCollector) batchHandler(_ context.Context, data []byte) ([]byte, error) {
+	var req gtypes.AddTriplesBatchRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, err
+	}
+
+	tc.mu.Lock()
+	tc.triples = append(tc.triples, req.Triples...)
+	tc.batchRequests++
+	tc.batchSizes = append(tc.batchSizes, len(req.Triples))
+	tc.mu.Unlock()
+
+	resp := gtypes.AddTriplesBatchResponse{
+		MutationResponse: gtypes.MutationResponse{
+			Success:   true,
+			Timestamp: time.Now().UnixNano(),
+		},
+		WrittenCount: len(req.Triples),
+	}
+	return json.Marshal(resp)
+}
+
+// subscribeMutations wires both single + batch subjects on tc so the
+// caller's writer code path is observed regardless of which mutation
+// subject it uses. Returns t.Fatal on failure.
+func (tc *tripleCollector) subscribeMutations(t *testing.T, ctx context.Context, client *natsclient.Client) {
+	t.Helper()
+	if _, err := client.SubscribeForRequests(ctx, "graph.mutation.triple.add", tc.handler); err != nil {
+		t.Fatalf("subscribe add: %v", err)
+	}
+	if _, err := client.SubscribeForRequests(ctx, "graph.mutation.triple.add_batch", tc.batchHandler); err != nil {
+		t.Fatalf("subscribe add_batch: %v", err)
+	}
+}
+
 func (tc *tripleCollector) getTriples() []message.Triple {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	out := make([]message.Triple, len(tc.triples))
 	copy(out, tc.triples)
 	return out
+}
+
+func (tc *tripleCollector) requestCounts() (single, batch int, batchSizes []int) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	sizes := make([]int, len(tc.batchSizes))
+	copy(sizes, tc.batchSizes)
+	return tc.singleRequests, tc.batchRequests, sizes
 }
 
 func (tc *tripleCollector) predicateSet() map[string]bool {
@@ -78,10 +129,7 @@ func TestWriteModelEndpoints_Integration(t *testing.T) {
 
 	// Set up triple collector as responder.
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	// Build a model registry with two endpoints.
 	reg := &model.Registry{
@@ -133,10 +181,7 @@ func TestWriteLoopCompletion_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	reg := &model.Registry{
 		Endpoints: map[string]*model.EndpointConfig{
@@ -172,9 +217,23 @@ func TestWriteLoopCompletion_Integration(t *testing.T) {
 	triples := collector.getTriples()
 	preds := collector.predicateSet()
 
-	// 7 required + model_used + cost + parent + workflow + workflow_step + user = 13
-	if len(triples) < 13 {
-		t.Errorf("expected at least 13 triples, got %d", len(triples))
+	// gh#159: completion stamp is the atomic-batch of 5 always-on +
+	// model_used + cost = 7 predicates. Spawn-stamped predicates
+	// (role, task, parent, workflow, workflow_step, user, description)
+	// belong to WriteSpawnIdentity, not the completion stamp.
+	completionRequired := []string{
+		agvocab.LoopOutcome,
+		agvocab.LoopIterations,
+		agvocab.LoopTokensIn,
+		agvocab.LoopTokensOut,
+		agvocab.LoopEndedAt,
+		agvocab.LoopModelUsed,
+		agvocab.LoopCostUSD,
+	}
+	for _, pred := range completionRequired {
+		if !preds[pred] {
+			t.Errorf("expected %s in completion stamp", pred)
+		}
 	}
 
 	// Verify the loop entity ID is valid.
@@ -182,14 +241,35 @@ func TestWriteLoopCompletion_Integration(t *testing.T) {
 		t.Errorf("invalid loop entity ID: %q", triples[0].Subject)
 	}
 
-	// Cost should be present (non-zero pricing + non-zero tokens).
-	if !preds[agvocab.LoopCostUSD] {
-		t.Error("expected agent.loop.cost_usd triple")
+	// Spawn-stamped predicates MUST NOT appear in completion (would
+	// duplicate after graph-ingest append).
+	spawnOnly := []string{
+		agvocab.LoopRole,
+		agvocab.LoopTask,
+		agvocab.LoopParent,
+		agvocab.LoopWorkflow,
+		agvocab.LoopWorkflowStep,
+		agvocab.LoopUser,
+		agvocab.LoopDescription,
+	}
+	for _, pred := range spawnOnly {
+		if preds[pred] {
+			t.Errorf("predicate %s leaked into completion stamp; should be spawn-only", pred)
+		}
 	}
 
-	// Parent should be a valid entity ID.
-	if !preds[agvocab.LoopParent] {
-		t.Error("expected agent.loop.parent triple")
+	// gh#159 atomicity: all completion triples land in ONE batch
+	// request, not per-triple writes. Single-request counter must be
+	// zero; batch-request counter must be exactly one.
+	single, batch, sizes := collector.requestCounts()
+	if single != 0 {
+		t.Errorf("expected zero single-triple add requests, got %d", single)
+	}
+	if batch != 1 {
+		t.Errorf("expected exactly one batch request, got %d (sizes=%v)", batch, sizes)
+	}
+	if batch == 1 && sizes[0] != len(completionRequired) {
+		t.Errorf("expected batch size %d, got %d", len(completionRequired), sizes[0])
 	}
 }
 
@@ -198,10 +278,7 @@ func TestWriteLoopFailure_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
@@ -219,20 +296,124 @@ func TestWriteLoopFailure_Integration(t *testing.T) {
 
 	w.WriteLoopFailure(ctx, event)
 
-	triples := collector.getTriples()
-
-	// 7 required + model_used (non-empty model) = 8
-	// cost omitted (nil registry)
-	if len(triples) < 8 {
-		t.Errorf("expected at least 8 triples, got %d", len(triples))
+	// gh#159: failure stamp is atomic-batch of 5 always-on + model_used
+	// (nil registry → cost omitted) = 6 predicates.
+	failureRequired := []string{
+		agvocab.LoopOutcome,
+		agvocab.LoopIterations,
+		agvocab.LoopTokensIn,
+		agvocab.LoopTokensOut,
+		agvocab.LoopEndedAt,
+		agvocab.LoopModelUsed,
 	}
+	preds := collector.predicateSet()
+	for _, pred := range failureRequired {
+		if !preds[pred] {
+			t.Errorf("expected %s in failure stamp", pred)
+		}
+	}
+
+	// Atomicity (gh#159).
+	single, batch, sizes := collector.requestCounts()
+	if single != 0 {
+		t.Errorf("expected zero single-triple add requests, got %d", single)
+	}
+	if batch != 1 {
+		t.Errorf("expected exactly one batch request, got %d (sizes=%v)", batch, sizes)
+	}
+}
+
+// gh#159: WriteSpawnIdentity stamps all canonical identity triples on
+// the loop-execution entity in one atomic batch at spawn time.
+// Reproduces the production wire path so a refactor that splits the
+// stamp back into per-triple writes (re-introducing the
+// agent.loop.outcome <-> agent.loop.parent race that broke ADR-046
+// Phase 1's example-fan-out reference pattern) fails this test.
+func TestWriteSpawnIdentity_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	collector := &tripleCollector{}
+	collector.subscribeMutations(t, ctx, tc.Client)
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	task := &agentic.TaskMessage{
+		TaskID:       "task-spawn-int",
+		Role:         "researcher",
+		ParentLoopID: "loop-parent-uuid",
+		WorkflowSlug: "research",
+		WorkflowStep: "gather",
+		UserID:       "user-spawn",
+		Prompt:       "Investigate MQTT retained messages",
+	}
+
+	w.WriteSpawnIdentity(ctx, "loop-spawn-int", task)
 
 	preds := collector.predicateSet()
-	if !preds[agvocab.LoopOutcome] {
-		t.Error("expected agent.loop.outcome triple")
+	required := []string{
+		agvocab.LoopRole,
+		agvocab.LoopTask,
+		agvocab.LoopParent,
+		agvocab.LoopWorkflow,
+		agvocab.LoopWorkflowStep,
+		agvocab.LoopUser,
+		agvocab.LoopDescription,
 	}
-	if !preds[agvocab.LoopEndedAt] {
-		t.Error("expected agent.loop.ended_at triple")
+	for _, pred := range required {
+		if !preds[pred] {
+			t.Errorf("expected %s in spawn identity stamp", pred)
+		}
+	}
+
+	// Parent must be a valid 6-part entity ID.
+	for _, tr := range collector.getTriples() {
+		if tr.Predicate != agvocab.LoopParent {
+			continue
+		}
+		parent, ok := tr.Object.(string)
+		if !ok {
+			t.Fatal("LoopParent object is not a string")
+		}
+		if !message.IsValidEntityID(parent) {
+			t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
+		}
+		want := "acme.ops.agent.agentic-loop.execution.loop-parent-uuid"
+		if parent != want {
+			t.Errorf("LoopParent = %q, want %q", parent, want)
+		}
+	}
+
+	// gh#159 atomicity: all 7 identity triples land in exactly ONE
+	// batch request.
+	single, batch, sizes := collector.requestCounts()
+	if single != 0 {
+		t.Errorf("expected zero single-triple add requests, got %d", single)
+	}
+	if batch != 1 {
+		t.Errorf("expected exactly one batch request, got %d (sizes=%v)", batch, sizes)
+	}
+	if batch == 1 && sizes[0] != len(required) {
+		t.Errorf("expected batch size %d, got %d", len(required), sizes[0])
+	}
+}
+
+// gh#159: WriteSpawnIdentity must no-op for a nil task without
+// panicking. Callers (component.go's handleTaskMessage path) guard with
+// nil checks but the helper should be robust to the contract anyway.
+func TestWriteSpawnIdentity_NilTask_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	collector := &tripleCollector{}
+	collector.subscribeMutations(t, ctx, tc.Client)
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+	w.WriteSpawnIdentity(ctx, "loop-nil", nil)
+
+	single, batch, _ := collector.requestCounts()
+	if single+batch != 0 {
+		t.Errorf("expected zero requests for nil task, got single=%d batch=%d", single, batch)
 	}
 }
 
@@ -241,10 +422,7 @@ func TestWriteLoopCancellation_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
@@ -257,16 +435,26 @@ func TestWriteLoopCancellation_Integration(t *testing.T) {
 
 	w.WriteLoopCancellation(ctx, event)
 
-	triples := collector.getTriples()
-
-	// 3 required: outcome, task, ended_at
-	if len(triples) < 3 {
-		t.Errorf("expected at least 3 triples, got %d", len(triples))
-	}
-
 	preds := collector.predicateSet()
+	// gh#159: cancellation stamp is the minimal transition signal
+	// (outcome + ended_at). Task is spawn-only.
 	if !preds[agvocab.LoopOutcome] {
 		t.Error("expected agent.loop.outcome triple")
+	}
+	if !preds[agvocab.LoopEndedAt] {
+		t.Error("expected agent.loop.ended_at triple")
+	}
+	if preds[agvocab.LoopTask] {
+		t.Error("agent.loop.task leaked into cancellation stamp; should be spawn-only")
+	}
+
+	// Atomicity (gh#159).
+	single, batch, sizes := collector.requestCounts()
+	if single != 0 {
+		t.Errorf("expected zero single-triple add requests, got %d", single)
+	}
+	if batch != 1 {
+		t.Errorf("expected exactly one batch request, got %d (sizes=%v)", batch, sizes)
 	}
 }
 
@@ -276,10 +464,7 @@ func TestWriteTrajectorySteps_Integration(t *testing.T) {
 
 	// Set up triple collector as responder.
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	// Create ObjectStore for content storage.
 	store, err := objectstore.NewStoreWithConfig(ctx, tc.Client, objectstore.Config{
@@ -411,10 +596,7 @@ func TestWriteTrajectorySteps_NoContentStore_StillWritesTriples(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	// No content store set — triples should still be written.
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
@@ -468,10 +650,7 @@ func TestWriteModelEndpoints_MissingPlatform_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	// Empty org/platform should skip writes.
 	w := agenticloop.NewGraphWriterForTest(tc.Client, &model.Registry{
@@ -499,10 +678,7 @@ func TestWriteLineageTriples_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
@@ -555,10 +731,7 @@ func TestWriteLineageTriples_MissingPlatform_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	collector := &tripleCollector{}
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add", collector.handler)
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	collector.subscribeMutations(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{}) // no Org/Platform
 	w.WriteLineageTriples(ctx, "any-loop", map[string]any{"researcher": "x"})

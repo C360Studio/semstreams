@@ -846,13 +846,20 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
 
-	// Stamp cross-arc lineage triples on the spawned loop's entity.
-	// Each entry in task.Metadata[MetadataKeyRelatedLoops] (set by
-	// rule.executePublishAgent from rule.Action.RelatedLoops) becomes
-	// a lineage.<key> triple. Downstream rules read via the existing
-	// $entity.triple.<predicate> substitution. No-op when the producer
-	// didn't set RelatedLoops (back-compat).
+	// Stamp the loop's canonical identity triples (parent, role, task,
+	// workflow, workflow_step, user, description) at spawn time so
+	// rules + tools observe them throughout the loop's lifetime, not
+	// just after completion. gh#159 — closes the agent.loop.outcome
+	// vs agent.loop.parent race that made ADR-046 Phase 1's example-
+	// fan-out reference pattern unwritable for real-LLM consumers.
+	//
+	// Stamp cross-arc lineage triples (Metadata[MetadataKeyRelatedLoops]
+	// set by rule.executePublishAgent from rule.Action.RelatedLoops)
+	// on the same entity in a separate atomic batch. Downstream rules
+	// read both families via the existing $entity.triple.<predicate>
+	// substitution. No-op when the producer didn't set RelatedLoops.
 	if c.graphWriter != nil {
+		c.graphWriter.WriteSpawnIdentity(ctx, result.LoopID, task)
 		if rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops].(map[string]any); ok {
 			c.graphWriter.WriteLineageTriples(ctx, result.LoopID, rawLineage)
 		}

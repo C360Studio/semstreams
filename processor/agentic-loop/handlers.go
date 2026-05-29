@@ -938,7 +938,12 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// Forward progress — clear the truncation retry counter.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleCompleteResponse(&result, loopID, entity, response.Message.Content); err != nil {
+		// gh#158: fall back to ReasoningContent when Content is empty so
+		// the LLM's terminal text always lands on Result + downstream
+		// read_loop_result, even when the provider adapter routed it to
+		// the non-canonical field.
+		completionText := resolveCompletionText(response.Message)
+		if err := h.handleCompleteResponse(&result, loopID, entity, completionText); err != nil {
 			return result, err
 		}
 
@@ -1508,14 +1513,14 @@ func (h *MessageHandler) failLoop(result *HandlerResult, loopID, outcome, reason
 // coordinator-decide recovery path (the wedge shape is "coordinator
 // completed without emitting a coordinator.next_action triple"). Used
 // by the terminal-tool-less synthesis path (#133): when this returns
-// false on a completed loop and Config.SynthesizeTerminalOnCompletion
-// is on, the framework synthesizes a needs_clarification decide.
-// Broadening to a wider terminal-tool set is a separate decision (the
-// rule pack opting into synthesis should not implicitly assume any tool
-// that calls StopLoop is a decide-equivalent — a submit_work or future
-// emit_diagnosis terminal would be a content-bearing terminal, not a
-// routing decision, and would not want a synth decide overwriting its
-// successful completion).
+// false on a completed loop and the synthesis trigger fires (see
+// shouldSynthesizeDecide), the framework synthesizes a
+// needs_clarification decide. Broadening to a wider terminal-tool set
+// is a separate decision (the rule pack opting into synthesis should
+// not implicitly assume any tool that calls StopLoop is a
+// decide-equivalent — a submit_work or future emit_diagnosis terminal
+// would be a content-bearing terminal, not a routing decision, and
+// would not want a synth decide overwriting its successful completion).
 func hasDecideToolCall(steps []agentic.TrajectoryStep) bool {
 	for _, s := range steps {
 		if s.StepType == "tool_call" && s.ToolName == "decide" {
@@ -1523,6 +1528,35 @@ func hasDecideToolCall(steps []agentic.TrajectoryStep) bool {
 		}
 	}
 	return false
+}
+
+// decideToolAvailable reports whether `decide` is in the loop's
+// allowed tool set. When true, the rule pack explicitly granted the
+// loop the routing-decision primitive — a text-only completion under
+// that condition is a wedge shape regardless of the operator's
+// Config.SynthesizeTerminalOnCompletion opt-in (gh#158).
+func decideToolAvailable(tools []agentic.ToolDefinition) bool {
+	for _, td := range tools {
+		if td.Name == "decide" {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveCompletionText picks the LLM's terminal output for surfacing
+// into Result + the synthesized decide reason. Provider adapters route
+// model output into either Content (canonical) or ReasoningContent
+// (thinking models / some Gemini paths). gh#158 surfaced two-of-three
+// parallel gather loops stranding 219 tokens of model output because
+// the framework only read Content. Fall back to ReasoningContent so
+// the text always lands on the read path even when the adapter chose
+// the non-canonical field.
+func resolveCompletionText(msg agentic.ChatMessage) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	return msg.ReasoningContent
 }
 
 // handleCompleteResponse processes completion responses.
@@ -1577,19 +1611,34 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 			slog.String("error", trajErr.Error()))
 	}
 
-	// Terminal-tool-less completion synthesis (#133). When the loop
-	// reaches state=complete WITHOUT a `decide` tool_call in the
-	// trajectory AND opt-in via Config.SynthesizeTerminalOnCompletion,
-	// surface a SyntheticDecideRequest on the result so Component routes
-	// it through graphWriter. Cheap-model substrate recovery: small
-	// models occasionally return text-only at completion despite
-	// persona prose enforcing a decide call; the synth keeps downstream
-	// rules matching on coordinator.next_action rather than wedging the
-	// chain. Off by default; new flows targeting flash/sub-30B opt in.
-	if h.config.SynthesizeTerminalOnCompletion && !hasDecideToolCall(trajectorySteps) {
-		result.SyntheticDecide = &SyntheticDecideRequest{
-			LoopID: loopID,
-			Reason: responseContent,
+	// Terminal-tool-less completion synthesis (#133, widened by gh#158).
+	// When the loop reaches state=complete WITHOUT a `decide` tool_call
+	// in the trajectory, surface a SyntheticDecideRequest on the
+	// result so Component routes it through graphWriter. Two trigger
+	// conditions, either is sufficient:
+	//
+	//  1. Config.SynthesizeTerminalOnCompletion — explicit operator
+	//     opt-in. Original #133 surface.
+	//  2. `decide` is in the loop's allowed tool set — the rule pack
+	//     granted the routing-decision primitive but the model didn't
+	//     call it. gh#158: this is a wedge shape regardless of the
+	//     operator's opt-in; downstream rules expecting
+	//     coordinator.next_action will block forever waiting for a
+	//     decide that was never going to come.
+	//
+	// Cheap-model substrate recovery: small models occasionally return
+	// text-only at completion despite persona prose enforcing a decide
+	// call; the synth keeps downstream rules matching on
+	// coordinator.next_action rather than wedging the chain.
+	if !hasDecideToolCall(trajectorySteps) {
+		loopTools := h.loopManager.GetCachedTools(loopID)
+		triggerFlag := h.config.SynthesizeTerminalOnCompletion
+		triggerToolset := decideToolAvailable(loopTools)
+		if triggerFlag || triggerToolset {
+			result.SyntheticDecide = &SyntheticDecideRequest{
+				LoopID: loopID,
+				Reason: responseContent,
+			}
 		}
 	}
 

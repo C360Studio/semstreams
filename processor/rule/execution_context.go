@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -275,9 +277,22 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	// list-Object stringification.
 	result = ec.applyTripleTriplesSubstitutions(result)
 
-	// Entity triple substitutions (e.g., $entity.triple.agent.role → triple value)
+	// Entity triple substitutions (e.g., $entity.triple.agent.role → triple value).
+	//
+	// gh#160: iterate triples in descending predicate-length order so a
+	// shorter predicate cannot swallow a longer one. Without the sort,
+	// `$entity.triple.lineage.researcher-plan` would substitute inside
+	// the longer reference `$entity.triple.lineage.researcher-plan-entity`
+	// — leaving the `-entity` suffix dangling and producing a phantom
+	// subject. Stable sort preserves the original order within equal-
+	// length groups for deterministic test output.
 	if ec.Entity != nil {
-		for _, triple := range ec.Entity.Triples {
+		sorted := make([]message.Triple, len(ec.Entity.Triples))
+		copy(sorted, ec.Entity.Triples)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return len(sorted[i].Predicate) > len(sorted[j].Predicate)
+		})
+		for _, triple := range sorted {
 			key := "$entity.triple." + triple.Predicate
 			result = strings.ReplaceAll(result, key, fmt.Sprintf("%v", triple.Object))
 		}
