@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // Direction constants for path traversal
@@ -87,7 +89,10 @@ func NewPathSearcher(nats natsRequester, timeout time.Duration, maxDepth int, lo
 // Search performs BFS traversal with path tracking
 func (p *PathSearcher) Search(ctx context.Context, req PathSearchRequest) (*PathSearchResponse, error) {
 	if req.StartEntity == "" {
-		return nil, fmt.Errorf("invalid request: empty start_entity")
+		// Classified at source so the handleGlobalSearch wire emits
+		// X-Error-Class: invalid instead of defaulting to transient.
+		// errs.Classified preserves the historic body shape.
+		return nil, errs.Classified(errs.ErrorInvalid, errors.New("invalid request: empty start_entity"))
 	}
 
 	// Apply request-level timeout if specified

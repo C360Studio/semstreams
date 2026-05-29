@@ -1470,8 +1470,15 @@ func (c *Component) handleTrajectoryQuery(_ context.Context, data []byte) ([]byt
 		LoopID string `json:"loopId"`
 		Limit  int    `json:"limit,omitempty"`
 	}
-	if err := json.Unmarshal(data, &req); err != nil || req.LoopID == "" {
-		return nil, errs.WrapInvalid(errors.New("loopId required"), "Component", "handleTrajectoryQuery", "validate request")
+	// Split unmarshal vs missing-loopId per Phase 3 reviewer R3 — both
+	// classify Invalid but log lines should distinguish them. errs.Classified
+	// preserves the historic "loopId required" / "trajectory not found: ..."
+	// wire body shape for downstream sniffers per gh#93 dual-encoding.
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("loopId required: %w", err))
+	}
+	if req.LoopID == "" {
+		return nil, errs.Classified(errs.ErrorInvalid, errors.New("loopId required"))
 	}
 
 	// Try cache first (finalized trajectories).
@@ -1486,7 +1493,7 @@ func (c *Component) handleTrajectoryQuery(_ context.Context, data []byte) ([]byt
 		if err != nil {
 			// "Not found" classifies as Invalid at the wire boundary
 			// per gh#93 — HTTP semantics (404) belong at the gateway.
-			return nil, errs.WrapInvalid(err, "Component", "handleTrajectoryQuery", "trajectory not found")
+			return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("trajectory not found: %w", err))
 		}
 		traj = &t
 	}

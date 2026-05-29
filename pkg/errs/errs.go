@@ -244,6 +244,31 @@ func newClassified(class ErrorClass, err error, component, operation, message st
 	}
 }
 
+// Classified wraps err with the given class WITHOUT adding the
+// "<component>.<method>: <action> failed: " attribution prefix that
+// WrapTransient/WrapFatal/WrapInvalid layer on. Use when callers
+// downstream rely on the inner error's text being the verbatim
+// Error() string (e.g. wire-format consumers parsing the body for
+// a known prefix).
+//
+// Prefer WrapTransient/WrapFatal/WrapInvalid for new code — the
+// attribution prefix is operator-visible in logs and worth the cost
+// when no caller is parsing the message. This bare constructor exists
+// for the gh#93 dual-encoding window: handlers that need to preserve
+// the historic "<kind>: <detail>" body shape (e.g. "not found: <id>",
+// "invalid request: <reason>") so the body-prefix sniffers downstream
+// keep working while the X-Error-Class header layer rolls out. Once
+// Phase 4 retires the legacy body shape, the Wrap* family becomes
+// preferred uniformly.
+//
+// Returns nil when err is nil.
+func Classified(class ErrorClass, err error) *ClassifiedError {
+	if err == nil {
+		return nil
+	}
+	return newClassified(class, err, "", "", err.Error())
+}
+
 // Wrap creates a standardized error with context following the pattern:
 // "component.method: action failed: %w"
 func Wrap(err error, component, method, action string) error {
