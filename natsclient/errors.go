@@ -35,6 +35,46 @@
 // wire layer — "not found" maps to ErrorClass=invalid at this layer;
 // gateways disambiguate with a small body-substring check or a
 // per-subject convention. See feedback_natsclient_error_payload_convention.md.
+//
+// # Footgun warning — plain Request() is still a silent-corruption surface
+//
+// Phase 1 is ADDITIVE. The plain Request() and RequestWithHeaders()
+// methods are UNCHANGED — they do NOT inspect X-Status / X-Error-Class
+// headers, and they return the legacy "error: <msg>" body verbatim
+// with err == nil when the handler errors. New code that does
+//
+//	data, err := c.Request(...)
+//	if err != nil { return err }
+//	json.Unmarshal(data, &resp)        // SILENT CORRUPTION on handler error
+//
+// will silently mis-decode handler errors as success data. This is
+// the exact bug class that shipped three times in the beta.86 cycle
+// (commit c626854 fixed FindSimilar + searchEntitiesSemantic; commit
+// 895ec44 fixed searchGraph's fallback adapter — different shape,
+// same class). New callers MUST use RequestClassified, OR explicitly
+// check bytes.HasPrefix(data, []byte("error: ")) before unmarshal.
+// See feedback_silent_handler_error_payload_audit.md for the audit
+// pattern.
+//
+// # Sentinel chains do not survive the wire boundary
+//
+// classifiedFromHeader reconstructs a fresh *errs.ClassifiedError
+// from the header value + body message. The original handler's
+// sentinel chain (e.g. an inner jetstream.ErrKeyNotFound, or any
+// custom errors.Is-friendly sentinel) is LOST in transit. Callers
+// that previously branched on errors.Is(err, sentinel) need to
+// substring-match the body message instead, OR move the
+// sentinel-distinction logic to the handler side and surface the
+// distinction through a different mechanism (separate subject,
+// distinct ErrorClass, response-payload field). The ErrorClass
+// taxonomy (invalid / transient / fatal) is the ONLY structured
+// signal that round-trips today.
+//
+// If a future consumer needs sentinel-Is parity across the wire,
+// the path is adding an X-Error-Sentinel header with a small
+// allowlist of framework-recognized sentinel IDs; classifiedFromHeader
+// would graft the real sentinel back into the wrap chain. Filed as
+// follow-up to gh#93 (out of Phase 1 scope).
 package natsclient
 
 import (
@@ -87,9 +127,17 @@ var errMissingReplySubject = errors.New("natsclient: message has no reply subjec
 // Used by SubscribeForRequests internally + by direct-msg.Respond
 // handlers that opt in to the convention.
 //
+// When to reach for RespondError vs (*Client).ReplyError:
+//   - Handler has *nats.Msg in scope (most common — direct Subscribe
+//     callback): use RespondError(msg, err). Free function; reads
+//     the reply subject off msg.
+//   - Handler has only a reply subject + *Client (e.g. deferred-reply
+//     forwarder): use c.ReplyError(ctx, replyTo, err). Method;
+//     publishes via the client connection.
+//
 // Returns nil + no-op when err is nil (treat as success — caller
 // should have used msg.Respond with success data). Returns
-// errMissingReplySubject when the inbound message has no reply
+// errMissingReplySubject when the inbound message had no reply
 // subject; caller can ignore (the request was fire-and-forget).
 func RespondError(msg *nats.Msg, err error) error {
 	if err == nil {
@@ -149,11 +197,23 @@ func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 	}
 
 	if msg.Header.Get(HeaderStatus) == HeaderStatusError {
-		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
+		// Header-driven path. Strip the legacy prefix only if
+		// present so the inner message is clean; future Phase 4
+		// handlers may stop emitting the prefix entirely, in which
+		// case this becomes a pure pass-through. Either way the
+		// reconstructed error carries the original handler text.
+		body := msg.Data
+		if bytes.HasPrefix(body, legacyErrorBodyPrefix) {
+			body = bytes.TrimPrefix(body, legacyErrorBodyPrefix)
+		}
 		return nil, classifiedFromHeader(msg.Header.Get(HeaderErrorClass), string(body))
 	}
 
 	if bytes.HasPrefix(msg.Data, legacyErrorBodyPrefix) {
+		// Pre-#93 handler — no header signal. Conservative default:
+		// classify as invalid so callers don't loop-retry on an
+		// unknown shape. Gateways doing finer-grained mapping can
+		// substring-check the unwrapped message.
 		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
 		return nil, classifiedFromHeader(ErrorClassInvalid, string(body))
 	}

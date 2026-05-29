@@ -3,6 +3,7 @@
 package natsclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -135,6 +136,39 @@ func TestIntegration_LegacyBodyPrefix_StillReadable(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "legacy compat case") {
 		t.Errorf("body missing original message; got %q", data)
+	}
+}
+
+// TestIntegration_LegacyRequest_SuccessBodyUnchanged is the
+// success-path counterpart to TestIntegration_LegacyBodyPrefix_StillReadable.
+// Pre-#93 callers using plain Request() against a Phase-1 handler
+// must see exactly the bytes the handler returned — Phase 1's
+// SubscribeForRequests change must NOT introduce headers or trace
+// the byte payload on the success path. Locks the byte invariant
+// that Phase 4 (legacy body drop) would otherwise break first here.
+func TestIntegration_LegacyRequest_SuccessBodyUnchanged(t *testing.T) {
+	ctx := context.Background()
+
+	natsContainer, natsURL := startNATSContainer(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	client, err := NewClient(natsURL)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(ctx))
+	defer client.Close(ctx)
+
+	subject := "test.legacy.success.body"
+	want := []byte(`{"hello":"world","number":42}`)
+	_, err = client.SubscribeForRequests(ctx, subject, func(_ context.Context, _ []byte) ([]byte, error) {
+		return want, nil
+	})
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	data, err := client.Request(ctx, subject, []byte("ping"), 2*time.Second)
+	require.NoError(t, err)
+	if !bytes.Equal(data, want) {
+		t.Fatalf("Request success body diverged from handler bytes:\n  got  %q\n  want %q", data, want)
 	}
 }
 

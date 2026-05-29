@@ -223,3 +223,32 @@ func TestLegacyBodyPrefixStable(t *testing.T) {
 		t.Fatalf("legacyErrorBodyPrefix = %q, want %q — wire break!", legacyErrorBodyPrefix, want)
 	}
 }
+
+// TestClassifyReply_ClassifiedErrorRecoversComponentFields confirms
+// the reconstructed *errs.ClassifiedError exposes its Component /
+// Operation fields via errors.As. Callers may use these for slog
+// attribution ("which natsclient call this came from").
+func TestClassifyReply_ClassifiedErrorRecoversComponentFields(t *testing.T) {
+	t.Parallel()
+	msg := &nats.Msg{
+		Header: nats.Header{
+			HeaderStatus:     []string{HeaderStatusError},
+			HeaderErrorClass: []string{ErrorClassInvalid},
+		},
+		Data: []byte("error: bad request"),
+	}
+	_, err := ClassifyReply(msg)
+	if err == nil {
+		t.Fatal("expected non-nil error")
+	}
+	var ce *errs.ClassifiedError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected reconstructed error to be a *errs.ClassifiedError; got %T (%v)", err, err)
+	}
+	if ce.Component != "natsclient" {
+		t.Errorf("ce.Component = %q, want \"natsclient\"", ce.Component)
+	}
+	if ce.Operation != "ClassifyReply" {
+		t.Errorf("ce.Operation = %q, want \"ClassifyReply\"", ce.Operation)
+	}
+}

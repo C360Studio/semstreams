@@ -3,6 +3,7 @@ package natsclient
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -212,14 +213,26 @@ func (c *Client) SubscribeForRequests(
 			// headers carry the new caller signal. RespondError
 			// returns errMissingReplySubject when the inbound
 			// message had no reply subject — that's expected for
-			// fire-and-forget patterns, so swallow.
-			_ = RespondError(msg, err)
+			// fire-and-forget patterns, so swallow. Any other
+			// publish failure is operator-visible (queue full,
+			// connection torn down mid-reply, etc.) and needs to
+			// surface, not silently swallow.
+			if respErr := RespondError(msg, err); respErr != nil && !errors.Is(respErr, errMissingReplySubject) {
+				c.logger.Error("natsclient: failed to publish handler-error reply",
+					"subject", subject,
+					"handler_err", err.Error(),
+					"publish_err", respErr.Error())
+			}
 			return
 		}
 
 		// Send successful response
 		if msg.Reply != "" {
-			_ = msg.Respond(response)
+			if respErr := msg.Respond(response); respErr != nil {
+				c.logger.Error("natsclient: failed to publish handler success reply",
+					"subject", subject,
+					"err", respErr.Error())
+			}
 		}
 	})
 	if err != nil {
