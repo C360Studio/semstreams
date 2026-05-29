@@ -31,6 +31,11 @@ import (
 // *natsclient.Client satisfies this interface, and tests can provide mocks.
 type natsRequester interface {
 	Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+	// RequestClassified is the gh#93 caller-side path: handler errors
+	// surface via the err return as classified errors, transport
+	// errors remain on err too. Prefer over Request+body-sniff for
+	// new callers.
+	RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
 	SubscribeForRequests(ctx context.Context, subject string, handler func(ctx context.Context, data []byte) ([]byte, error)) (*natsclient.Subscription, error)
 	Status() natsclient.ConnectionStatus
 	Connect(ctx context.Context) error

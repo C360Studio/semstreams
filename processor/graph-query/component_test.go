@@ -49,6 +49,22 @@ func (m *mockNATSClient) Request(ctx context.Context, subject string, data []byt
 	return nil, errors.New("no mock response configured")
 }
 
+// RequestClassified routes through Request and then ClassifyReply
+// against the response bytes. The mock has no headers, so this
+// exercises the legacy-body-prefix fallback path — matches how a
+// pre-#93 handler would behave today.
+func (m *mockNATSClient) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	body, err := m.Request(ctx, subject, data, timeout)
+	if err != nil {
+		return nil, err
+	}
+	// Synthesize a *nats.Msg with no headers and the body bytes so
+	// ClassifyReply runs against the same shape it would see from
+	// the wire. Avoids depending on a real connection.
+	msg := &nats.Msg{Data: body, Header: nats.Header{}}
+	return natsclient.ClassifyReply(msg)
+}
+
 func (m *mockNATSClient) SubscribeForRequests(_ context.Context, subject string, _ func(ctx context.Context, data []byte) ([]byte, error)) (*natsclient.Subscription, error) {
 	m.subscribed[subject] = true
 	// Return a nil subscription since the mock doesn't actually subscribe

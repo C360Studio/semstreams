@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -206,6 +205,15 @@ func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]Tra
 	}
 
 	events := make([]TransitionEvent, 0, len(entries))
+	// previousPhase tracks the last observed phase across revisions,
+	// including non-phase-changing intermediate revisions (e.g. an
+	// operator UpdateFromOperator that touches only Note). Such
+	// revisions are skipped at :233-235 because currentPhase ==
+	// previousPhase, so the next genuine transition's From still
+	// reflects the prior phase rather than the intervening no-op.
+	// During mid-rollout, revisions written before AuditPredicates.From
+	// existed fall back to this reconstruction; once .From is stamped
+	// the :253-256 read takes precedence.
 	previousPhase := ""
 	for _, entry := range entries {
 		if entry.Operation() == jetstream.KeyValueDelete ||
@@ -337,6 +345,12 @@ func (m *Manager) Children(ctx context.Context, parentEntityID string, opts Chil
 // triple on the entity. Stubs are light — Workflow + Phase are
 // populated only when the target itself is lifecycle-managed
 // (matches some registered EntityIDPattern).
+//
+// Cost model: 1 read for the source entity plus 1 additional read per
+// lifecycle-managed reference target (so a `Phase` peek can be filled
+// in). References pointing at non-lifecycle entities skip the second
+// read. References does NOT call References transitively — the returned
+// stubs are depth-1 only; following them is the caller's job.
 func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceStub, error) {
 	state, _, err := m.getEntity(ctx, entityID)
 	if err != nil {
@@ -594,8 +608,3 @@ func matchesActiveFilter(p Participant, active bool) bool {
 	}
 	return !p.IsTerminal()
 }
-
-// triplesEntity is the placeholder shape that signals projection
-// callers don't need the full EntityState. Kept here to make the
-// unused-import elimination cleaner — not referenced.
-var _ message.Triple

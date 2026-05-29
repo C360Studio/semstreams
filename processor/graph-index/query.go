@@ -211,8 +211,12 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 	}))
 }
 
-// queryMsg is an interface for query request messages.
-// This accommodates both real NATS messages and test mocks.
+// queryMsg + the handleQuery* methods + respondError/respondJSON below
+// are a parallel handler family used ONLY by in-package unit tests
+// (the *NATS-suffixed handlers above are the production wire). Emit
+// a third error shape — `{"error": "..."}` JSON envelopes — distinct
+// from the legacy body prefix and gh#93 X-Status headers. Refactoring
+// debt; out of scope for gh#93. See PR description.
 type queryMsg interface {
 	Data() []byte
 	Respond(data []byte) error

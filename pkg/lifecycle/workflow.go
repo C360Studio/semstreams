@@ -160,14 +160,16 @@ type ReferenceSpec struct {
 
 // validate checks the Workflow declaration for structural correctness
 // at Register time. Catches typos and missing required fields before
-// the workflow goes live.
+// the workflow goes live. All failures wrap ErrInvalidWorkflow —
+// ErrWorkflowNotRegistered is reserved for lookup-time misses on the
+// Manager surface.
 func (w *Workflow) validate() error {
 	if w.Name == "" {
-		return fmt.Errorf("%w: workflow Name is required", ErrWorkflowNotRegistered)
+		return fmt.Errorf("%w: workflow Name is required", ErrInvalidWorkflow)
 	}
 	if w.EntityIDPattern == "" {
 		return fmt.Errorf("%w: workflow %q EntityIDPattern is required",
-			ErrWorkflowNotRegistered, w.Name)
+			ErrInvalidWorkflow, w.Name)
 	}
 	// EntityIDPattern must be 6-segment to match the federated EntityID
 	// contract (org.platform.domain.system.type.instance — pkg/types.EntityID
@@ -176,15 +178,15 @@ func (w *Workflow) validate() error {
 	// e2e mission pattern. Fail loudly at Register time.
 	if segs := strings.Split(w.EntityIDPattern, "."); len(segs) != 6 {
 		return fmt.Errorf("%w: workflow %q EntityIDPattern %q has %d segments (expected 6 per federated EntityID contract org.platform.domain.system.type.instance)",
-			ErrWorkflowNotRegistered, w.Name, w.EntityIDPattern, len(segs))
+			ErrInvalidWorkflow, w.Name, w.EntityIDPattern, len(segs))
 	}
 	if w.PhasePredicate == "" {
 		return fmt.Errorf("%w: workflow %q PhasePredicate is required",
-			ErrWorkflowNotRegistered, w.Name)
+			ErrInvalidWorkflow, w.Name)
 	}
 	if w.Schema == nil {
 		return fmt.Errorf("%w: workflow %q Schema is required",
-			ErrWorkflowNotRegistered, w.Name)
+			ErrInvalidWorkflow, w.Name)
 	}
 	if err := w.Transitions.Validate(); err != nil {
 		return err
@@ -195,22 +197,22 @@ func (w *Workflow) validate() error {
 	for _, ch := range w.ChildWorkflows {
 		if ch.Workflow == "" {
 			return fmt.Errorf("%w: workflow %q has ChildWorkflows entry with empty Workflow",
-				ErrWorkflowNotRegistered, w.Name)
+				ErrInvalidWorkflow, w.Name)
 		}
 		if ch.LinkPredicate == "" {
 			return fmt.Errorf("%w: workflow %q ChildSpec for %q has empty LinkPredicate",
-				ErrWorkflowNotRegistered, w.Name, ch.Workflow)
+				ErrInvalidWorkflow, w.Name, ch.Workflow)
 		}
 		if seen[ch.LinkPredicate] {
 			return fmt.Errorf("%w: workflow %q has duplicate ChildSpec LinkPredicate %q",
-				ErrWorkflowNotRegistered, w.Name, ch.LinkPredicate)
+				ErrInvalidWorkflow, w.Name, ch.LinkPredicate)
 		}
 		seen[ch.LinkPredicate] = true
 	}
 	for _, ref := range w.ReferencePredicates {
 		if ref.Predicate == "" {
 			return fmt.Errorf("%w: workflow %q has ReferenceSpec with empty Predicate",
-				ErrWorkflowNotRegistered, w.Name)
+				ErrInvalidWorkflow, w.Name)
 		}
 	}
 	return nil

@@ -8,8 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // recordingNATSQuerier captures the last request and returns a
@@ -29,6 +32,21 @@ func (r *recordingNATSQuerier) Request(_ context.Context, subject string, data [
 	r.gotPayload = data
 	r.gotTimeout = timeout
 	return r.resp, r.err
+}
+
+// RequestClassified routes through Request and then runs ClassifyReply
+// against the response bytes. The mock has no headers, so this
+// exercises ClassifyReply's legacy-body-prefix fallback path —
+// matches how a pre-#93 handler would behave today AND how a
+// header-stamping Phase-1 handler appears once the response bytes
+// land on the wire.
+func (r *recordingNATSQuerier) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	body, err := r.Request(ctx, subject, data, timeout)
+	if err != nil {
+		return nil, err
+	}
+	msg := &nats.Msg{Data: body, Header: nats.Header{}}
+	return natsclient.ClassifyReply(msg)
 }
 
 func successSummaryResponse(t *testing.T, data graph.SummaryData) []byte {

@@ -21,6 +21,7 @@ package graphgateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -47,6 +48,11 @@ import (
 // *natsclient.Client satisfies this interface, and tests can provide mocks.
 type natsRequester interface {
 	Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+	// RequestClassified is the gh#93 caller-side path that surfaces
+	// handler errors via the err return as classified errors.
+	// Used by the GraphQL → NATS request path so handler "not found",
+	// "invalid request", etc. map cleanly to GraphQL errors.
+	RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
 	Status() natsclient.ConnectionStatus
 }
 
@@ -1618,14 +1624,12 @@ func (c *Component) handleNATSResponse(w http.ResponseWriter, subject string, re
 // that optionally includes an extensions map (e.g. classification metadata). When extensions
 // is nil, behaviour is identical to handleNATSResponse.
 func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subject string, resp []byte, extensions map[string]interface{}) {
-	// Check if response is a plain-text error from NATS handler (format: "error: <message>")
-	respStr := string(resp)
-	if strings.HasPrefix(respStr, "error:") {
-		atomic.AddInt64(&c.errors, 1)
-		errorMsg := strings.TrimSpace(strings.TrimPrefix(respStr, "error: "))
-		c.writeGraphQLError(w, http.StatusOK, errorMsg) // GraphQL convention: 200 with errors
-		return
-	}
+	// gh#93 Phase 2: handler errors are intercepted upstream by
+	// RequestClassified at the caller path; resp here is guaranteed
+	// not to start with "error: ". The legacy defensive body-prefix
+	// sniff was removed per CLAUDE.md ("don't add error handling for
+	// scenarios that can't happen"). If a future caller bypasses
+	// RequestClassified, that's a separate caller-side bug.
 
 	// Detect JetStream PubAck responses (indicates stream/subject overlap)
 	if isPubAckResponse(resp) {
@@ -1752,13 +1756,31 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 
 	payloadBytes, _ := json.Marshal(payload)
 
-	resp, err := c.natsRequester.Request(ctx, subject, payloadBytes, c.config.QueryTimeout)
+	// gh#93 Phase 2: RequestClassified surfaces handler-side errors
+	// via the err return. Transport failures (no responders, context
+	// deadline) arrive as raw errors; handler-side classified errors
+	// arrive as *errs.ClassifiedError. We preserve the historic HTTP
+	// status mapping: transport → 500, handler error → 200 with
+	// GraphQL errors envelope.
+	resp, err := c.natsRequester.RequestClassified(ctx, subject, payloadBytes, c.config.QueryTimeout)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		if err == context.DeadlineExceeded || ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled {
 			c.writeGraphQLError(w, http.StatusGatewayTimeout, "request timeout")
 			return
 		}
+		// Classified handler error (server alive, reporting failure)
+		// → GraphQL 200 with errors envelope. err.Error() returns
+		// the handler's clean inner message verbatim
+		// (classifiedFromHeader uses errs.Classified to preserve
+		// the wire text without framework attribution).
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) {
+			c.writeGraphQLError(w, http.StatusOK, err.Error())
+			return
+		}
+		// Transport-layer failure (no responders, connection error)
+		// → 500 Internal Server Error. Component is unreachable.
 		c.writeGraphQLError(w, http.StatusInternalServerError, "query failed")
 		return
 	}

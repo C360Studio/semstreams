@@ -32,26 +32,6 @@ func (a *classifierChainAdapter) ClassifyQuery(ctx context.Context, topic string
 	return a.chain.ClassifyQuery(ctx, topic)
 }
 
-// natsErrorPrefix is the body-prefix convention natsclient handlers
-// use to surface Go errors as response payloads (see
-// feedback_natsclient_error_payload_convention). One named constant
-// instead of `len("error: ")` magic numbers across call sites.
-const natsErrorPrefix = "error: "
-
-// extractNATSBodyError returns the trimmed error message if respData
-// carries the natsErrorPrefix shape; the bool flags whether a match
-// happened. Mirrors processor/agentic-tools/executors helper of the
-// same intent, kept local until natsclient grows a shared helper.
-func extractNATSBodyError(respData []byte) (string, bool) {
-	if len(respData) < len(natsErrorPrefix) {
-		return "", false
-	}
-	if string(respData[:len(natsErrorPrefix)]) != natsErrorPrefix {
-		return "", false
-	}
-	return string(respData[len(natsErrorPrefix):]), true
-}
-
 // searchGraphSubject is the existing graph-query NATS surface for
 // natural-language search. PR 2 reuses it (rather than introducing a
 // new endpoint) so the candidate-retrieval path shares wiring with
@@ -152,20 +132,20 @@ func (r *searchGraphRetriever) FetchCandidates(ctx context.Context, topic string
 	if err != nil {
 		return CandidateSet{}, fmt.Errorf("marshal search request: %w", err)
 	}
-	respData, err := r.client.Request(ctx, searchGraphSubject, reqData, r.timeout)
+	// gh#93 Phase 2: RequestClassified unifies transport + handler
+	// errors. Both arrive via err return; caller wraps as a single
+	// "search_graph" error. The upstream retriever drives fall-back
+	// off the CandidateSet.Degraded field, not err class — so
+	// flattening here is OK today.
+	//
+	// TODO(phase-4): consider surfacing the err class via
+	// CandidateSet.DegradedReason so callers can distinguish
+	// "search subsystem unreachable" from "search returned no
+	// candidates legitimately" once header-classified errors are
+	// the canonical path.
+	respData, err := r.client.RequestClassified(ctx, searchGraphSubject, reqData, r.timeout)
 	if err != nil {
-		return CandidateSet{}, fmt.Errorf("request %s: %w", searchGraphSubject, err)
-	}
-	// natsclient handler-error convention (body-prefix "error: ...")
-	// per feedback_natsclient_error_payload_convention. The check is
-	// inlined here because pulling in the agentic-tools helper would
-	// invert the dependency graph. Follow-up: lifting
-	// natsclient.ExtractHandlerError into natsclient itself, so
-	// summarize_graph + search_graph + this adapter share one helper
-	// — file alongside the planned #93 header-classified-errors
-	// migration.
-	if errMsg, ok := extractNATSBodyError(respData); ok {
-		return CandidateSet{}, fmt.Errorf("search_graph server error: %s", errMsg)
+		return CandidateSet{}, fmt.Errorf("search_graph: %w", err)
 	}
 
 	var resp searchGraphResponse

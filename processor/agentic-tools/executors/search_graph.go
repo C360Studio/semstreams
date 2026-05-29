@@ -134,23 +134,16 @@ func (e *SearchGraphExecutor) Execute(ctx context.Context, call agentic.ToolCall
 		}, nil
 	}
 
-	respData, err := e.natsClient.Request(ctx, searchGraphSubject, reqPayload, e.timeout)
+	// gh#93 Phase 2: RequestClassified unifies transport + handler
+	// errors behind one classified return. classifyRequestError maps
+	// transport failures to ToolErrorNetwork and handler-side
+	// classified errors to ToolErrorExternal.
+	respData, err := e.natsClient.RequestClassified(ctx, searchGraphSubject, reqPayload, e.timeout)
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("search_graph NATS request failed: %v", err),
-			ErrorKind: agentic.ToolErrorNetwork,
-		}, nil
-	}
-
-	// natsclient convention: handler-side Go errors come back in the
-	// body as "error: <msg>" rather than the err return. Check FIRST.
-	// See feedback_natsclient_error_payload_convention.md.
-	if msg, ok := extractNATSHandlerError(respData); ok {
-		return agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     fmt.Sprintf("search_graph server error: %s", msg),
-			ErrorKind: agentic.ToolErrorExternal,
+			Error:     fmt.Sprintf("search_graph: %s", err.Error()),
+			ErrorKind: classifyRequestError(err),
 		}, nil
 	}
 

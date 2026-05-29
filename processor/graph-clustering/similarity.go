@@ -2,7 +2,6 @@
 package graphclustering
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -84,27 +83,18 @@ func (f *querySimilarityFinder) FindSimilar(
 		return nil, errs.WrapInvalid(err, "querySimilarityFinder", "FindSimilar", "marshal request")
 	}
 
-	// Send request with timeout
-	respData, err := f.natsClient.Request(ctx, similarQuerySubject, reqData, similarQueryTimeout)
+	// gh#93 Phase 2: RequestClassified unifies transport + handler
+	// errors behind one classified return. The similarity finder is
+	// optional — fail-open on any error so the caller
+	// (SemanticGapDetector) keeps walking other entities. Most common
+	// handler error here is "source entity has no embedding yet"
+	// (aggregation/group entities never projected through the
+	// embedder).
+	respData, err := f.natsClient.RequestClassified(ctx, similarQuerySubject, reqData, similarQueryTimeout)
 	if err != nil {
-		// Log but don't fail - similarity finder is optional
-		f.logger.Debug("similarity query failed",
+		f.logger.Debug("similarity query failed (transport or handler)",
 			slog.String("entity_id", entityID),
 			slog.Any("error", err))
-		return nil, nil
-	}
-
-	// Handler-layer failure surfaces in the response body via natsclient's
-	// "error: <msg>" payload convention (most common case here: source
-	// entity has no embedding yet, e.g. aggregation/group entities never
-	// projected through the embedder). Treat as "no similar found" so the
-	// caller (SemanticGapDetector) keeps walking other entities. Per
-	// feedback_natsclient_error_payload_convention; gh#93 tracks the
-	// header-classified replacement (breaking change, deferred).
-	if bytes.HasPrefix(respData, []byte("error: ")) {
-		f.logger.Debug("similarity query returned handler error",
-			slog.String("entity_id", entityID),
-			slog.String("body", string(respData)))
 		return nil, nil
 	}
 

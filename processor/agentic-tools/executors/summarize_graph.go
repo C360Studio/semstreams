@@ -1,9 +1,9 @@
 package executors
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,34 +11,31 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// natsErrorPrefix is the convention natsclient.SubscribeForRequests
-// uses to surface handler-side Go errors back to callers — the
-// response body is `error: <msg>`, NOT a transport-level error.
-// Every NATS Request caller must check for this prefix before
-// attempting to decode the body as the expected response shape,
-// otherwise a downstream component failure surfaces to the LLM as
-// an opaque "parse response" error pointing at the wrong fix.
+// classifyRequestError maps a natsclient.RequestClassified failure
+// into the agentic ToolError taxonomy:
 //
-// See memory feedback_natsclient_error_payload_convention.md —
-// this convention bit PR #48 twice (todos.go H1 + pathrag.go
-// sister-bug). Every new NATS query caller in this PR follows the
-// same pattern.
-var natsErrorPrefix = []byte("error: ")
-
-// extractNATSHandlerError inspects raw NATS response bytes for the
-// natsclient "error: <msg>" handler-error envelope. Returns
-// (extracted-message, true) when the body matches the convention,
-// otherwise ("", false). Callers should propagate the extracted
-// message as ToolErrorExternal (downstream component is alive but
-// reporting failure) rather than ToolErrorInternal (we can't parse
-// the response).
-func extractNATSHandlerError(data []byte) (string, bool) {
-	if bytes.HasPrefix(data, natsErrorPrefix) {
-		return string(data[len(natsErrorPrefix):]), true
+//   - Transport failures (no responders, timeout, ctx cancelled)
+//     arrive as raw errors → ToolErrorNetwork.
+//   - Handler-side failures arrive as *errs.ClassifiedError
+//     reconstructed from the X-Status / X-Error-Class wire headers
+//     (or legacy body-prefix fallback) → ToolErrorExternal.
+//
+// Replaces the per-callsite extractNATSHandlerError helper that
+// sniffed the body-prefix shape — gh#93 Phase 2 unified the
+// transport + handler error paths behind RequestClassified, so the
+// caller now branches on the reconstructed-classified shape.
+//
+// Same-package helper used by both summarize_graph and search_graph
+// executors; lift to a shared package if a third caller appears.
+func classifyRequestError(err error) agentic.ToolErrorKind {
+	var ce *errs.ClassifiedError
+	if errors.As(err, &ce) {
+		return agentic.ToolErrorExternal
 	}
-	return "", false
+	return agentic.ToolErrorNetwork
 }
 
 const (
@@ -74,6 +71,12 @@ const (
 // memory recorder.
 type NATSQuerier interface {
 	Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+	// RequestClassified is the gh#93 path that surfaces handler
+	// errors via err return as *errs.ClassifiedError. Test mocks
+	// can synthesize via Request + natsclient.ClassifyReply against
+	// a nats.Msg{Data: ...} (matches the legacy-body-prefix
+	// fallback path).
+	RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
 }
 
 // SummarizeGraphExecutor implements the summarize_graph tool. Thin
@@ -162,25 +165,17 @@ func (e *SummarizeGraphExecutor) Execute(ctx context.Context, call agentic.ToolC
 		}, nil
 	}
 
-	respData, err := e.natsClient.Request(ctx, summarizeGraphSubject, reqPayload, e.timeout)
+	// gh#93 Phase 2: RequestClassified unifies transport + handler
+	// errors behind one classified return. classifyRequestError maps
+	// transport failures to ToolErrorNetwork (retryable from agent's
+	// view) and handler-side classified errors to ToolErrorExternal
+	// (server alive, reporting failure — different agent recovery).
+	respData, err := e.natsClient.RequestClassified(ctx, summarizeGraphSubject, reqPayload, e.timeout)
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("summarize_graph NATS request failed: %v", err),
-			ErrorKind: agentic.ToolErrorNetwork,
-		}, nil
-	}
-
-	// natsclient convention: handler-side Go errors come back in the
-	// body as "error: <msg>" rather than the err return. Check FIRST,
-	// before json.Unmarshal — otherwise downstream failures surface
-	// as opaque "parse response" errors and the LLM tries to fix the
-	// wrong thing. See feedback_natsclient_error_payload_convention.md.
-	if msg, ok := extractNATSHandlerError(respData); ok {
-		return agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     fmt.Sprintf("summarize_graph server error: %s", msg),
-			ErrorKind: agentic.ToolErrorExternal,
+			Error:     fmt.Sprintf("summarize_graph: %s", err.Error()),
+			ErrorKind: classifyRequestError(err),
 		}, nil
 	}
 
