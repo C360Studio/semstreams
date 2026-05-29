@@ -619,7 +619,12 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 
 	switch strategy {
 	case "entity_lookup":
-		return c.handleStrategyEntityLookup(ctx, classResult, searchQuery, startTime)
+		if result, handled := c.handleStrategyEntityLookup(ctx, classResult, searchQuery, startTime); handled {
+			return result, nil
+		}
+		// entity_lookup couldn't resolve the query as a partial entity ID
+		// (single-word queries, no path_start_node, fewer than 2 dots) —
+		// fall through to graphrag so the semantic tier gets a chance.
 	case "pathrag":
 		if result, handled := c.tryPathIntentSearch(ctx, classResult, req.Query, startTime, len(data)); handled {
 			return result, nil
@@ -788,9 +793,20 @@ func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearch
 
 // handleStrategyEntityLookup resolves a named entity and returns it directly.
 // This is used for exact-match queries like "show me sensor-001".
-// If the entity cannot be resolved, an empty response is returned so the
-// caller can fall through to graphrag.
-func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, startTime time.Time) ([]byte, error) {
+//
+// Returns (result, true) when the entity_lookup strategy actually produced
+// a meaningful resolution; (nil, false) when the classifier mis-routed a
+// query that doesn't look like a partial entity ID (single common words,
+// no path_start_node, fewer than 2 dots) so the caller can fall through
+// to graphrag. Mirrors tryPathIntentSearch's signature pattern.
+//
+// Prior behavior returned an empty `(result, nil)` in the no-fall-through
+// case; the caller switch then unconditionally returned that empty
+// payload — single-word queries like "forklift" / "hydraulic" /
+// "temperature" hit this dead-end every time. The known-answer e2e
+// surface caught it; the user-acknowledged "single-word search doesn't
+// work" was the same root cause.
+func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, startTime time.Time) ([]byte, bool) {
 	// Prefer path_start_node extracted by the classifier; fall back to the
 	// (possibly refined) query text when it looks like a partial entity ID.
 	ref := ""
@@ -801,36 +817,24 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		ref = searchQuery
 	}
 	if ref == "" {
-		// Nothing to look up — return empty so graphrag handles it.
-		return json.Marshal(GlobalSearchResponse{
-			Entities:   []*gtypes.EntityState{},
-			Count:      0,
-			DurationMs: time.Since(startTime).Milliseconds(),
-		})
+		// Nothing to look up — signal fall-through to graphrag.
+		return nil, false
 	}
 
 	fullID, err := c.resolvePartialEntityID(ctx, ref)
 	if err != nil || fullID == "" {
-		c.logger.Debug("entity_lookup: could not resolve entity",
+		c.logger.Debug("entity_lookup: could not resolve entity, falling through",
 			"ref", ref,
 			"error", err)
-		return json.Marshal(GlobalSearchResponse{
-			Entities:   []*gtypes.EntityState{},
-			Count:      0,
-			DurationMs: time.Since(startTime).Milliseconds(),
-		})
+		return nil, false
 	}
 
 	entities, loadErr := c.loadEntities(ctx, []string{fullID})
 	if loadErr != nil {
-		c.logger.Debug("entity_lookup: load failed",
+		c.logger.Debug("entity_lookup: load failed, falling through",
 			"id", fullID,
 			"error", loadErr)
-		return json.Marshal(GlobalSearchResponse{
-			Entities:   []*gtypes.EntityState{},
-			Count:      0,
-			DurationMs: time.Since(startTime).Milliseconds(),
-		})
+		return nil, false
 	}
 
 	response := GlobalSearchResponse{
@@ -841,7 +845,14 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 	c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID})
 
 	c.recordSuccess(0, 0)
-	return json.Marshal(response)
+	out, err := json.Marshal(response)
+	if err != nil {
+		c.logger.Debug("entity_lookup: marshal failed, falling through",
+			"id", fullID,
+			"error", err)
+		return nil, false
+	}
+	return out, true
 }
 
 // handleStrategySemantic executes a pure vector similarity search.

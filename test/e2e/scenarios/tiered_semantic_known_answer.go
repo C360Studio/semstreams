@@ -113,7 +113,7 @@ func (s *TieredScenario) runKnownAnswerProbe(ctx context.Context, gatewayURL str
 		}
 	}
 
-	gs := resp.Data.GlobalSearch
+	gs := resp.Data.SearchGraph
 	matched := matchKnownAnswerTerm(ka, gs)
 
 	detail := map[string]any{
@@ -244,20 +244,34 @@ type globalSearchPayload struct {
 	Summarized bool `json:"summarized"`
 }
 
-// knownAnswerResponse is the GraphQL envelope for the globalSearch query.
+// knownAnswerResponse is the GraphQL envelope for the searchGraph query.
+//
+// Probes go through searchGraph (the canonical "find me stuff" entry point
+// per the graphSummary+searchGraph commit 83d1c72) rather than globalSearch
+// directly. searchGraph composes globalSearch's GraphRAG path with a
+// semantic similarity fallback when GraphRAG strategies return empty —
+// notably the entity_lookup strategy that single-word queries route to.
+// Calling globalSearch directly would by design return empty for
+// `forklift` / `hydraulic` / `temperature` (the classifier routes them to
+// entity_lookup which fails to resolve a partial entity ID and returns
+// empty without falling through). searchGraph is what server-side agents
+// and external apps use for known-answer-shaped queries.
 type knownAnswerResponse struct {
 	Data struct {
-		GlobalSearch globalSearchPayload `json:"globalSearch"`
+		// SearchGraph is the canonical search response. The JSON key
+		// matches the GraphQL resolver name; the payload shape mirrors
+		// globalSearch (searchGraph wraps it).
+		SearchGraph globalSearchPayload `json:"searchGraph"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
 	} `json:"errors"`
 }
 
-// sendGlobalSearchAtLevel issues a globalSearch GraphQL query for the given
-// query + level and returns the parsed response. Mirrors the pattern of
-// sendGraphRAGGlobalRequest but with explicit level (the existing helper
-// hard-codes level=1).
+// sendGlobalSearchAtLevel issues a searchGraph GraphQL query for the given
+// query + level and returns the parsed response. (Named for backward
+// continuity with the existing test stage; the resolver targeted now is
+// searchGraph, not globalSearch — see knownAnswerResponse docstring.)
 func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL, query string, level int) (*knownAnswerResponse, time.Duration, error) {
 	// Note: the gateway forwards the graph-query JSON wire format (snake_case)
 	// directly, so response field names are snake_case regardless of the
@@ -266,7 +280,7 @@ func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL
 	// surfaces so the matcher can scan whichever the server populated.
 	graphqlQuery := map[string]any{
 		"query": `query($query: String!, $level: Int, $maxCommunities: Int) {
-			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities) {
+			searchGraph(query: $query, level: $level, maxCommunities: $maxCommunities) {
 				entities { id type label }
 				entity_ids
 				entity_digests { id type label }

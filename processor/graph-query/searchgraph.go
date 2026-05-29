@@ -144,13 +144,29 @@ type semanticHit struct {
 	Similarity float64 `json:"similarity"`
 }
 
-// semanticEnvelope is the response shape graph-embedding returns from
-// the semantic search path. Same wire shape semspec's client-side
-// fallback parsed (tools/workflow/graph.go:semanticSearchFallback).
+// semanticEnvelope is the response shape the GraphQL gateway returns
+// for the `similaritySearch` resolver — results nested under the
+// resolver field name. This is what external GraphQL clients (e.g.
+// semspec's tools/workflow/graph.go:semanticSearchFallback) parse.
 type semanticEnvelope struct {
 	SimilaritySearch struct {
 		Results []semanticHit `json:"results"`
 	} `json:"similaritySearch"`
+}
+
+// semanticRawEnvelope is the response shape graph-embedding's
+// handleQuerySearchNATS returns DIRECTLY when called via NATS request/
+// reply (no GraphQL wrapper). This is what handleSearchGraph's fallback
+// call to handleQuerySemantic actually receives — the gateway-shape
+// wrapper is added only when the response flows through the GraphQL
+// resolver path, which the in-process fallback bypasses.
+//
+// Without this shape variant the adapter silently returned nil for
+// every fallback (the empirical "single-word search doesn't work" bug
+// the user flagged). See processor/graph-embedding/query.go SearchResponse.
+type semanticRawEnvelope struct {
+	Query   string        `json:"query"`
+	Results []semanticHit `json:"results"`
 }
 
 // adaptSemanticToGlobalSearchResponse turns a raw semantic-search
@@ -159,16 +175,35 @@ type semanticEnvelope struct {
 // is unparseable or empty (callers fall back to the original empty
 // globalSearch payload).
 //
+// Tolerates BOTH wire shapes:
+//
+//   - GraphQL-wrapped: {"similaritySearch":{"results":[...]}} — what
+//     gateway-facing callers see.
+//   - Raw NATS:        {"query":"...","results":[...]}         — what
+//     in-process handleQuerySemantic returns.
+//
 // The Answer field is intentionally omitted: the fallback is a
 // last-resort discovery surface, not a synthesis path. Downstream
 // callers that want narrative output answer-synthesize on their own.
 func adaptSemanticToGlobalSearchResponse(data []byte) *GlobalSearchResponse {
+	// Try the GraphQL-wrapped shape first (what external callers send
+	// in via gateway-mounted searchGraph composition).
+	var hits []semanticHit
 	var env semanticEnvelope
-	if err := json.Unmarshal(data, &env); err != nil || len(env.SimilaritySearch.Results) == 0 {
-		return nil
+	if err := json.Unmarshal(data, &env); err == nil && len(env.SimilaritySearch.Results) > 0 {
+		hits = env.SimilaritySearch.Results
 	}
-	digests := make([]EntityDigest, 0, len(env.SimilaritySearch.Results))
-	for _, hit := range env.SimilaritySearch.Results {
+	// Fallback to the raw NATS shape (what in-process handleQuerySemantic
+	// returns, which is the actual path searchGraph takes today).
+	if len(hits) == 0 {
+		var raw semanticRawEnvelope
+		if err := json.Unmarshal(data, &raw); err != nil || len(raw.Results) == 0 {
+			return nil
+		}
+		hits = raw.Results
+	}
+	digests := make([]EntityDigest, 0, len(hits))
+	for _, hit := range hits {
 		if hit.EntityID == "" {
 			continue
 		}
