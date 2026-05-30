@@ -116,6 +116,33 @@ func (s *FlowServiceHTTPSuite) TearDownTest() {
 		s.configMgr.Stop(5 * time.Second)
 	}
 	s.cancel()
+
+	// Reap all KV buckets created during this test so the next test
+	// starts with a clean JetStream. The shared SetupSuite container
+	// otherwise accumulates buckets (semstreams_config, semstreams_flows,
+	// the message-logger bucket, plus 5 KV watchers each) across all
+	// tests in the suite. With WithMaxReconnects(0) on the test client
+	// (natsclient/test_client.go:348), a single JetStream hiccup on any
+	// test late in the suite kills the connection permanently and
+	// every later test fails with "not connected to NATS" / "create/get
+	// KV bucket" / "insufficient storage". Observed on PR #169 CI gate:
+	// 12 tests passed then 3 trailing tests failed with that exact
+	// shape. Reaping per-test makes each test independent.
+	//
+	// Listing + deleting (rather than naming each bucket) is future-
+	// proof — any new bucket introduced by ConfigManager / FlowService /
+	// flowstore / message logger is reaped automatically without test
+	// maintenance.
+	if s.natsClient != nil {
+		reapCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		buckets, err := s.natsClient.ListKeyValueBuckets(reapCtx)
+		if err == nil {
+			for _, name := range buckets {
+				_ = s.natsClient.DeleteKeyValueBucket(reapCtx, name)
+			}
+		}
+	}
 }
 
 // Helper functions
