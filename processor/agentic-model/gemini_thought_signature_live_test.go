@@ -14,14 +14,18 @@ import (
 )
 
 // ADR-037 chunk 8 live_llm smoke against Gemini 3.x preview.
+// Post-ADR-051: carrier is ChatMessage.ReasoningRecords; field
+// matched by ToolCallID on echo.
 //
 // Asserts the end-to-end thought_signature round trip:
 //  1. First request elicits a tool_call from the model.
 //  2. The wire response carries extra_content.google.thought_signature
-//     and convertWireResponse lifts it into agentic.ToolCall.Metadata.
-//  3. The second request (with tool result + replayed assistant tool_call)
-//     is accepted — Gemini 3.x rejects multi-turn tool flows where the
-//     signature isn't echoed.
+//     and convertWireResponse lifts it into
+//     ChatMessage.ReasoningRecords as a ReasoningRecord{Provider:"google",
+//     CarrierKind:ToolCall, ToolCallID:...}.
+//  3. The second request (with tool result + replayed assistant
+//     message including its ReasoningRecords) is accepted — Gemini 3.x
+//     rejects multi-turn tool flows where the signature isn't echoed.
 //
 // Requires:
 //   - GEMINI_API_KEY environment variable (sourced from secrets manager).
@@ -118,21 +122,24 @@ func TestGemini3x_ThoughtSignature_RoundTrip(t *testing.T) {
 			resp1.Status, resp1.Message.Content)
 	}
 	tc := resp1.Message.ToolCalls[0]
-	sig, _ := tc.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string)
+	sig := signatureForToolCall(resp1.Message.ReasoningRecords, tc.ID)
 	t.Logf("turn 1 toolcall[0]: id=%q name=%q args=%v sig_len=%d sig_preview=%q",
 		tc.ID, tc.Name, tc.Arguments, len(sig), previewSig(sig))
 	if sig == "" {
 		t.Logf("turn 1: thought_signature is empty — model is not a 3.x preview build OR the API stripped it. Continuing to turn 2 to see whether the round-trip still succeeds without it.")
 	}
 
-	// Turn 2: replay the assistant tool_call + supply the tool result.
+	// Turn 2: replay the assistant message + supply the tool result.
+	// ReasoningRecords ride alongside the ToolCalls on the assistant
+	// message; attachReasoningRecordsToWire rebinds them by ToolCallID.
 	turn2 := agentic.AgentRequest{
 		RequestID: "req-gemini-rt-2",
 		Messages: []agentic.ChatMessage{
 			{Role: "user", Content: "What is 17 * 23? Use the multiply tool."},
 			{
-				Role:      "assistant",
-				ToolCalls: resp1.Message.ToolCalls, // carries signature in Metadata
+				Role:             "assistant",
+				ToolCalls:        resp1.Message.ToolCalls,
+				ReasoningRecords: resp1.Message.ReasoningRecords,
 			},
 			{
 				Role:       "tool",
@@ -165,4 +172,16 @@ func previewSig(s string) string {
 		return s
 	}
 	return s[:16] + "..."
+}
+
+// signatureForToolCall extracts the Gemini thought signature from a
+// message's ReasoningRecords for a specific tool_call. Returns "" if
+// no matching record is found.
+func signatureForToolCall(records []agentic.ReasoningRecord, toolCallID string) string {
+	for _, rec := range records {
+		if rec.Provider == "google" && rec.CarrierKind == agentic.ReasoningCarrierToolCall && rec.ToolCallID == toolCallID {
+			return string(rec.Opaque)
+		}
+	}
+	return ""
 }

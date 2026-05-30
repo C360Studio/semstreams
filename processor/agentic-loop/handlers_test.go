@@ -2196,12 +2196,20 @@ func extractDispatchedToolCall(t *testing.T, data []byte) agentic.ToolCall {
 	return envelope.Payload
 }
 
-// TestPropagateMetadata_MergesWithWirePopulation pins the merge fix
-// for the Gemini-wire metadata-dropping bug: when the wire adapter
-// pre-populates ToolCall.Metadata (e.g. with a thought signature),
-// the cached TaskMessage.Metadata MUST still propagate onto the
-// dispatched call by filling in keys the wire side didn't set —
-// instead of being skipped entirely by a "no-op if non-empty" guard.
+// wirePrePopulatedTestKey stands in for any per-call key the
+// translation layer may write onto ToolCall.Metadata before the
+// loop's metadata-merge step runs. Pre-ADR-051 the canonical example
+// was the Gemini thought signature; post-rename that carrier lives on
+// ChatMessage.ReasoningRecords (a sibling field), but the merge
+// invariant guards every future case of pre-populated ToolCall.Metadata
+// — so the test holds the invariant with a generic test-local key.
+const wirePrePopulatedTestKey = "wire_prepopulated_marker"
+
+// TestPropagateMetadata_MergesWithWirePopulation pins the merge
+// invariant: when a ToolCall arrives with pre-populated Metadata, the
+// cached TaskMessage.Metadata MUST still propagate onto the dispatched
+// call by filling in keys the pre-population didn't set — instead of
+// being skipped entirely by a "no-op if non-empty" guard.
 //
 // Pre-fix shape (broken):
 //
@@ -2209,13 +2217,12 @@ func extractDispatchedToolCall(t *testing.T, data []byte) agentic.ToolCall {
 //	    approved[i].Metadata = metadata
 //	}
 //
-// Any wire-side pre-population blocked the entire cached map. That
+// Any non-empty pre-population blocked the entire cached map. That
 // silently dropped action_allowlist / related_loops / caller context
-// for every Gemini-wire tool call (client_wire.go:303-313 in the
-// readC360ThoughtSignature branch).
+// for every tool call that arrived with prior Metadata.
 //
-// Post-fix: merge, with call-specific keys winning (so the wire
-// adapter's per-call metadata is never overwritten).
+// Post-fix: merge, with call-specific keys winning (so the
+// translation layer's per-call metadata is never overwritten).
 func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
@@ -2235,9 +2242,10 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 	}
 	loopID := taskResult.LoopID
 
-	// Model response with a tool call carrying wire-adapter
-	// pre-population, mirroring what client_wire.go's Gemini path
-	// produces when readC360ThoughtSignature returns a non-empty sig.
+	// Model response with a tool call carrying a pre-populated key on
+	// ToolCall.Metadata. The carrier (the Gemini signature) no longer
+	// lives here post-ADR-051, but any future per-call write would
+	// exercise the same merge code path.
 	response := agentic.AgentResponse{
 		RequestID: "req-merge-1",
 		Status:    "tool_call",
@@ -2248,7 +2256,7 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 					ID:   "call-merge-1",
 					Name: "fan_out",
 					Metadata: map[string]any{
-						agentic.MetadataKeyGoogleThoughtSignature: "wire-sig-abc",
+						wirePrePopulatedTestKey: "marker-abc",
 					},
 				},
 			},
@@ -2275,17 +2283,16 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 		t.Fatalf("no tool.execute message published; PublishedMessages=%+v", result.PublishedMessages)
 	}
 
-	// Wire-side pre-population survives (call-specific keys win).
-	if sig, ok := got.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); !ok || sig != "wire-sig-abc" {
-		t.Errorf("Gemini thought signature lost — got Metadata[%q]=%v, want %q",
-			agentic.MetadataKeyGoogleThoughtSignature, got.Metadata[agentic.MetadataKeyGoogleThoughtSignature], "wire-sig-abc")
+	// Pre-populated value survives (call-specific keys win).
+	if marker, ok := got.Metadata[wirePrePopulatedTestKey].(string); !ok || marker != "marker-abc" {
+		t.Errorf("pre-populated marker lost — got Metadata[%q]=%v, want %q",
+			wirePrePopulatedTestKey, got.Metadata[wirePrePopulatedTestKey], "marker-abc")
 	}
 
 	// Cached TaskMessage metadata IS propagated — the bug was that
-	// these keys were silently dropped when wire pre-population
-	// existed.
+	// these keys were silently dropped when pre-population existed.
 	if _, ok := got.Metadata[agentic.MetadataKeyDecideActionAllowlist]; !ok {
-		t.Errorf("action_allowlist dropped — wire pre-population blocked propagation of cached task metadata. "+
+		t.Errorf("action_allowlist dropped — pre-population blocked propagation of cached task metadata. "+
 			"got Metadata=%v", got.Metadata)
 	}
 	if audit, ok := got.Metadata["custom_audit_tag"].(string); !ok || audit != "audit-merge-1" {
@@ -2295,10 +2302,10 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 }
 
 // TestPropagateMetadata_NoOverwriteOnConflict pins the merge-direction
-// invariant: when a key exists in BOTH the wire-populated call
-// metadata AND the cached task metadata, the wire side wins. This
-// prevents the cached task metadata from overwriting per-call wire
-// state (e.g. a thought signature that's specific to this call).
+// invariant: when a key exists in BOTH the pre-populated call metadata
+// AND the cached task metadata, the call side wins. This prevents
+// cached task metadata from overwriting per-call context written by
+// the translation layer.
 func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
@@ -2310,8 +2317,8 @@ func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 		Prompt: "exercise the merge conflict path",
 		Metadata: map[string]any{
 			// Cached task metadata also carries this key — call-side
-			// must win so per-call wire context is preserved.
-			agentic.MetadataKeyGoogleThoughtSignature: "task-sig-bad",
+			// must win so per-call context is preserved.
+			wirePrePopulatedTestKey: "task-marker-bad",
 		},
 	})
 	if err != nil {
@@ -2329,7 +2336,7 @@ func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 					ID:   "call-conflict-1",
 					Name: "fan_out",
 					Metadata: map[string]any{
-						agentic.MetadataKeyGoogleThoughtSignature: "wire-sig-good",
+						wirePrePopulatedTestKey: "wire-marker-good",
 					},
 				},
 			},
@@ -2349,10 +2356,10 @@ func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 		}
 	}
 
-	if sig, ok := got.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); !ok || sig != "wire-sig-good" {
+	if marker, ok := got.Metadata[wirePrePopulatedTestKey].(string); !ok || marker != "wire-marker-good" {
 		t.Errorf("Merge direction wrong — call-specific value should win on conflict. "+
 			"got Metadata[%q]=%v, want %q",
-			agentic.MetadataKeyGoogleThoughtSignature, got.Metadata[agentic.MetadataKeyGoogleThoughtSignature], "wire-sig-good")
+			wirePrePopulatedTestKey, got.Metadata[wirePrePopulatedTestKey], "wire-marker-good")
 	}
 }
 

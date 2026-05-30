@@ -157,24 +157,6 @@ const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 // a Go string) — readers coerce on access.
 const MetadataKeyRelatedLoops = "agent.related_loops"
 
-// MetadataKeyGoogleThoughtSignature is the ToolCall.Metadata key under
-// which the per-tool_call thought signature emitted by Gemini 3.x
-// preview models flows across loop turns.
-//
-// Gemini 3.x emits the signature at
-// `response.choices[].message.tool_calls[].extra_content.google.thought_signature`
-// and requires the same signature echoed back on the assistant
-// tool_calls of the next request (only the first tool_call per step
-// needs the signature; subsequent calls in the same step inherit).
-// agentic-model's wire backend extracts the signature during
-// convertWireResponse and writes it under this key; on the next
-// request, GeminiAdapter.NormalizeMessages reconstructs the
-// `extra_content.google.thought_signature` shape on the outgoing
-// wire ToolCall.
-//
-// Value type: string. Non-Gemini providers ignore the carrier.
-const MetadataKeyGoogleThoughtSignature = "google_thought_signature"
-
 // LineageTriplePrefix is the predicate prefix for cross-arc loop-ID
 // lineage triples stamped on a spawned loop's entity at loop-creation
 // time. Each entry in TaskMessage.Metadata[MetadataKeyRelatedLoops]

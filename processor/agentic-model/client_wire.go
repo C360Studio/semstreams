@@ -40,7 +40,7 @@ func (c *Client) buildWireRequest(req agentic.AgentRequest) wire.ChatCompletionR
 	adapter := c.getAdapter()
 	chatReq := wire.ChatCompletionRequest{
 		Model:    c.endpoint.Model,
-		Messages: adapter.NormalizeMessages(agenticMessagesToWire(req.Messages)),
+		Messages: adapter.NormalizeMessages(attachReasoningRecordsToWire(agenticMessagesToWire(req.Messages), req.Messages)),
 	}
 
 	c.applyWireRequestParams(&chatReq, req)
@@ -110,21 +110,56 @@ func agenticToolCallsToWire(in []agentic.ToolCall) []wire.ToolCall {
 				Arguments: string(argsJSON),
 			},
 		}
-		// Carry the Gemini thought_signature through the wire layer
-		// under a framework-internal key (c360_thought_signature).
-		// GeminiAdapter.NormalizeMessages reconstructs the actual
-		// extra_content shape Gemini expects; the buildWireRequest
-		// hygiene step strips any remaining c360_* keys on send.
-		if sig, ok := tc.Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string); ok && sig != "" {
-			if out[j].Extras == nil {
-				out[j].Extras = make(map[string]json.RawMessage, 1)
+	}
+	return out
+}
+
+// attachReasoningRecordsToWire writes each agentic.ChatMessage's
+// ReasoningRecords into the matching wire shape. Walks records once
+// per message and dispatches by CarrierKind:
+//
+//   - ReasoningCarrierToolCall (Gemini): matches by ToolCallID and
+//     writes the framework-internal carrier wireKeyC360ThoughtSignature
+//     onto the wire ToolCall.Extras. GeminiAdapter.NormalizeMessages
+//     reconstructs the extra_content.google.thought_signature shape
+//     downstream; buildWireRequest's hygiene step strips any remaining
+//     framework-internal keys before send.
+//   - Other CarrierKinds: no-op at this layer (OpenAI Responses uses
+//     a different wire shape entirely — handled by the Responses
+//     client per ADR-051 D4, not by ChatCompletion translation).
+//
+// in is the wire-shape slice produced by agenticMessagesToWire (same
+// length, same order); src is the original agentic slice carrying
+// ReasoningRecords. Returns in for fluent chaining.
+func attachReasoningRecordsToWire(in []wire.Message, src []agentic.ChatMessage) []wire.Message {
+	for i := range src {
+		if i >= len(in) {
+			break
+		}
+		for _, rec := range src[i].ReasoningRecords {
+			if rec.CarrierKind != agentic.ReasoningCarrierToolCall {
+				continue
 			}
-			if b, err := json.Marshal(sig); err == nil {
-				out[j].Extras[wireKeyC360ThoughtSignature] = b
+			if rec.ToolCallID == "" || len(rec.Opaque) == 0 {
+				continue
+			}
+			for j := range in[i].ToolCalls {
+				if in[i].ToolCalls[j].ID != rec.ToolCallID {
+					continue
+				}
+				b, err := json.Marshal(string(rec.Opaque))
+				if err != nil {
+					continue
+				}
+				if in[i].ToolCalls[j].Extras == nil {
+					in[i].ToolCalls[j].Extras = make(map[string]json.RawMessage, 1)
+				}
+				in[i].ToolCalls[j].Extras[wireKeyC360ThoughtSignature] = b
+				break
 			}
 		}
 	}
-	return out
+	return in
 }
 
 // wireKeyC360ThoughtSignature is the framework-internal carrier key on
@@ -306,10 +341,12 @@ func (c *Client) convertWireResponse(resp *wire.ChatCompletionResponse, requestI
 				Arguments: args,
 			}
 			if sig := readC360ThoughtSignature(tc); sig != "" {
-				if toolCalls[i].Metadata == nil {
-					toolCalls[i].Metadata = make(map[string]any, 1)
-				}
-				toolCalls[i].Metadata[agentic.MetadataKeyGoogleThoughtSignature] = sig
+				response.Message.ReasoningRecords = append(response.Message.ReasoningRecords, agentic.ReasoningRecord{
+					Provider:    "google",
+					CarrierKind: agentic.ReasoningCarrierToolCall,
+					ToolCallID:  tc.ID,
+					Opaque:      []byte(sig),
+				})
 			}
 		}
 		response.Message.ToolCalls = toolCalls

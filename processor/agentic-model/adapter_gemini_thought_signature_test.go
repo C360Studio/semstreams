@@ -164,8 +164,10 @@ func TestGeminiAdapter_NormalizeMessages_OnlyFirstToolCallKeepsSignature(t *test
 }
 
 // TestSignature_RoundTripThroughAgentic asserts the full agentic ↔ wire
-// round-trip: response signature → agentic.Metadata → next request's
-// wire extra_content. Mirrors what the loop does across turns.
+// round-trip: response signature → agentic.ReasoningRecords →
+// next request's wire extra_content. Mirrors what the loop does across
+// turns. Post-ADR-051 the carrier is the message-level ReasoningRecords
+// sibling field, not ToolCall.Metadata.
 func TestSignature_RoundTripThroughAgentic(t *testing.T) {
 	// Step 1: simulate Gemini response with thought_signature.
 	extra, _ := json.Marshal(map[string]any{
@@ -192,24 +194,45 @@ func TestSignature_RoundTripThroughAgentic(t *testing.T) {
 	// Step 2: adapter extracts to carrier.
 	(&GeminiAdapter{}).NormalizeResponse(resp)
 
-	// Step 3: convertWireResponse lifts to agentic.Metadata.
+	// Step 3: convertWireResponse lifts the signature into the
+	// message-level ReasoningRecords field, attributed to call-1.
 	c := &Client{endpoint: nil, adapter: &GeminiAdapter{}}
 	agentResp := c.convertWireResponse(resp, "req-rt")
 	if len(agentResp.Message.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool_call, got %d", len(agentResp.Message.ToolCalls))
 	}
-	sig, _ := agentResp.Message.ToolCalls[0].Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string)
-	if sig != "sig-rt" {
-		t.Fatalf("agentic Metadata sig = %q, want sig-rt", sig)
+	if len(agentResp.Message.ReasoningRecords) != 1 {
+		t.Fatalf("expected 1 ReasoningRecord, got %d", len(agentResp.Message.ReasoningRecords))
+	}
+	rec := agentResp.Message.ReasoningRecords[0]
+	if rec.Provider != "google" {
+		t.Errorf("Provider = %q, want google", rec.Provider)
+	}
+	if rec.CarrierKind != agentic.ReasoningCarrierToolCall {
+		t.Errorf("CarrierKind = %q, want %q", rec.CarrierKind, agentic.ReasoningCarrierToolCall)
+	}
+	if rec.ToolCallID != "call-1" {
+		t.Errorf("ToolCallID = %q, want call-1", rec.ToolCallID)
+	}
+	if string(rec.Opaque) != "sig-rt" {
+		t.Fatalf("Opaque = %q, want sig-rt", string(rec.Opaque))
 	}
 
 	// Step 4: next-turn translation puts signature back on the wire.
-	wireMsgs := agenticMessagesToWire([]agentic.ChatMessage{
-		{Role: "assistant", ToolCalls: agentResp.Message.ToolCalls},
-	})
+	// attachReasoningRecordsToWire reads ReasoningRecords off the
+	// assistant message and writes the framework-internal carrier onto
+	// matching wire ToolCalls by ToolCallID.
+	srcMsgs := []agentic.ChatMessage{
+		{
+			Role:             "assistant",
+			ToolCalls:        agentResp.Message.ToolCalls,
+			ReasoningRecords: agentResp.Message.ReasoningRecords,
+		},
+	}
+	wireMsgs := attachReasoningRecordsToWire(agenticMessagesToWire(srcMsgs), srcMsgs)
 	carrier, ok := wireMsgs[0].ToolCalls[0].Extras[wireKeyC360ThoughtSignature]
 	if !ok {
-		t.Fatal("agenticToolCallsToWire should write framework-internal carrier")
+		t.Fatal("attachReasoningRecordsToWire should write framework-internal carrier")
 	}
 	var carrierStr string
 	_ = json.Unmarshal(carrier, &carrierStr)
@@ -236,9 +259,10 @@ func TestSignature_RoundTripThroughAgentic(t *testing.T) {
 
 // TestStreamingPath_LiftsThoughtSignature asserts that the streaming
 // wire path runs NormalizeResponse and lifts the thought_signature
-// carrier into agentic.Metadata. Without this, multi-turn tool flows
-// on Gemini 3.x via wire+streaming silently fail to echo the signature
-// on subsequent requests. This is the test that would have caught H1.
+// carrier into ChatMessage.ReasoningRecords. Without this, multi-turn
+// tool flows on Gemini 3.x via wire+streaming silently fail to echo
+// the signature on subsequent requests. This is the test that would
+// have caught H1.
 func TestStreamingPath_LiftsThoughtSignature(t *testing.T) {
 	extra, _ := json.Marshal(map[string]any{
 		"google": map[string]any{"thought_signature": "sig-streamed"},
@@ -261,9 +285,16 @@ func TestStreamingPath_LiftsThoughtSignature(t *testing.T) {
 	if len(resp.Message.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool_call, got %d", len(resp.Message.ToolCalls))
 	}
-	sig, _ := resp.Message.ToolCalls[0].Metadata[agentic.MetadataKeyGoogleThoughtSignature].(string)
-	if sig != "sig-streamed" {
-		t.Errorf("streaming path Metadata sig = %q, want sig-streamed (NormalizeResponse not called?)", sig)
+	if len(resp.Message.ReasoningRecords) != 1 {
+		t.Fatalf("expected 1 ReasoningRecord on streamed response, got %d (NormalizeResponse not called?)",
+			len(resp.Message.ReasoningRecords))
+	}
+	rec := resp.Message.ReasoningRecords[0]
+	if rec.ToolCallID != "call-1" {
+		t.Errorf("ToolCallID = %q, want call-1", rec.ToolCallID)
+	}
+	if string(rec.Opaque) != "sig-streamed" {
+		t.Errorf("streaming path Opaque = %q, want sig-streamed", string(rec.Opaque))
 	}
 }
 
