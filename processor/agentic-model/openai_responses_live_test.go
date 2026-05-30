@@ -5,7 +5,9 @@ package agenticmodel_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/model/wire/responses"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 )
 
@@ -337,17 +340,143 @@ func TestOpenAIResponses_ReasoningEcho(t *testing.T) {
 	}
 }
 
+// TestOpenAIResponses_Streaming exercises the typed-event SSE
+// parser + Accumulator end-to-end against real /v1/responses with
+// Stream=true. Closes the skeleton-from-docs gap on the ~21 SSE
+// event types: until this runs, the parser and accumulator are
+// doc-derived modeling. A wire-shape mismatch on any event type
+// breaks the streaming path silently in production. The test
+// asserts:
+//
+//  1. Stream connects and yields a sequence of events (no decode
+//     errors mid-stream).
+//  2. At least one response.created and one response.completed
+//     event arrive (lifecycle markers present).
+//  3. At least one output_text.delta event carries non-empty
+//     Delta text (the accumulator's primary input).
+//  4. The Accumulator's Final() produces a Response whose Output
+//     contains the final text — proving incremental + terminal
+//     paths agree.
+func TestOpenAIResponses_Streaming(t *testing.T) {
+	apiKey := requireOpenAIAPIKey(t)
+	wireClient, err := buildLiveResponsesClient(apiKey)
+	if err != nil {
+		t.Fatalf("build responses client: %v", err)
+	}
+
+	chosenModel := openAIResponsesTestModel()
+	t.Logf("Streaming test against model=%q", chosenModel)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	req := &responses.Request{
+		Model: chosenModel,
+		Input: []responses.InputItem{
+			responses.NewInputUserMessage("Count from 1 to 5, one number per line."),
+		},
+		MaxOutputTokens: 256,
+	}
+	stream, err := wireClient.ResponsesStream(ctx, req)
+	if err != nil {
+		t.Fatalf("ResponsesStream: %v", err)
+	}
+	defer stream.Close()
+
+	acc := responses.NewAccumulator()
+	var sawCreated, sawCompleted bool
+	var deltaCount int
+	var totalDeltaLen int
+	eventCount := 0
+
+	for {
+		ev, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			t.Fatalf("stream.Recv: %v", recvErr)
+		}
+		if ev == nil {
+			break
+		}
+		eventCount++
+
+		switch ev.Type {
+		case responses.EventTypeResponseCreated:
+			sawCreated = true
+		case responses.EventTypeResponseCompleted:
+			sawCompleted = true
+		case responses.EventTypeOutputTextDelta:
+			if ev.Delta != "" {
+				deltaCount++
+				totalDeltaLen += len(ev.Delta)
+			}
+		}
+
+		if accErr := acc.Add(ev); accErr != nil {
+			t.Logf("accumulator skip on %s: %v", ev.Type, accErr)
+		}
+	}
+
+	t.Logf("streamed %d events: created=%v completed=%v deltas=%d total_delta_bytes=%d",
+		eventCount, sawCreated, sawCompleted, deltaCount, totalDeltaLen)
+
+	if !sawCreated {
+		t.Error("did not see response.created — lifecycle missing")
+	}
+	if !sawCompleted {
+		t.Error("did not see response.completed — terminal event missing")
+	}
+	if deltaCount == 0 {
+		t.Error("no output_text.delta events with text — accumulator can't build incrementally")
+	}
+
+	final := acc.Final()
+	if final == nil {
+		t.Fatal("Accumulator.Final() returned nil")
+	}
+	if final.Status != "completed" {
+		t.Errorf("Final.Status = %q, want completed (terminal event promoted)", final.Status)
+	}
+	var assembledText string
+	for i := range final.Output {
+		if final.Output[i].IsMessage() {
+			assembledText += final.Output[i].OutputText()
+		}
+	}
+	if assembledText == "" {
+		t.Error("Final response has no assembled text — accumulator/terminal-promote disagree")
+	}
+	t.Logf("Final assembled text: %q (%d chars)", assembledText, len(assembledText))
+
+	// Sanity: the model was asked to count to 5; check for digits.
+	for _, want := range []string{"1", "2", "3", "4", "5"} {
+		if !strings.Contains(assembledText, want) {
+			t.Errorf("expected %q in counted output, got %q", want, assembledText)
+		}
+	}
+}
+
 // TestOpenAIResponses_CaptureFixtures harvests live request/response
 // bodies into model/wire/responses/testdata/ for the unit-level
-// round-trip parity tests. Skips by default; enable with
-// CAPTURE_FIXTURES=1. Overwrites existing files unconditionally
-// when enabled — caller decides when to re-capture.
+// round-trip parity tests in model/wire/responses/. Skips by default;
+// enable with CAPTURE_FIXTURES=1.
+//
+// Captured pairs (filenames stable so
+// TestResponses_GoldenFixture_Parity can iterate them):
+//   - request_simple_text.json + response_simple_text.json
+//   - request_function_call_round.json +
+//     response_function_call_with_reasoning.json
+//
+// We drive responses.Client directly here rather than going through
+// the agentic-model client — keeps the captured shape the wire-level
+// truth without translator artifacts.
 func TestOpenAIResponses_CaptureFixtures(t *testing.T) {
 	if os.Getenv("CAPTURE_FIXTURES") != "1" {
 		t.Skip("CAPTURE_FIXTURES != 1; skipping fixture capture")
 	}
-	requireOpenAIAPIKey(t)
-
+	apiKey := requireOpenAIAPIKey(t)
 	testdataDir, err := filepath.Abs(filepath.Join("..", "..", "model", "wire", "responses", "testdata"))
 	if err != nil {
 		t.Fatalf("resolve testdata dir: %v", err)
@@ -356,37 +485,134 @@ func TestOpenAIResponses_CaptureFixtures(t *testing.T) {
 		t.Fatalf("testdata dir not found: %v", err)
 	}
 
-	// We can't easily intercept the wire body from inside the
-	// agentic-model client; instead, we drive the responses.Client
-	// directly here and serialize the request/response pair.
-	// This is the same shape the agentic-model client constructs;
-	// the captured fixtures back the round-trip tests in
-	// model/wire/responses/.
-
-	// NOTE: the implementation of this capture is intentionally a
-	// future seam. Set CAPTURE_FIXTURES=1 to run, but the test will
-	// emit a TODO log line until the seam is filled. The TODO does
-	// not fail the test — it's a known gap tracked in the PR.
-	t.Logf("TODO: fixture capture implementation pending — see ADR-051 pre-tag gate")
-	_ = testdataDir
-}
-
-// outputJSONToFile is a helper for fixture capture (kept for the
-// scaffold even if TestOpenAIResponses_CaptureFixtures defers the
-// real capture).
-func outputJSONToFile(t *testing.T, path string, v any) {
-	t.Helper()
-	b, err := json.MarshalIndent(v, "", "  ")
+	wireClient, err := buildLiveResponsesClient(apiKey)
 	if err != nil {
-		t.Fatalf("marshal %s: %v", path, err)
+		t.Fatalf("build responses client: %v", err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
+
+	chosenModel := openAIResponsesReasoningModel()
+	t.Logf("Capturing fixtures against model=%q", chosenModel)
+
+	// Fixture 1: minimal text request + response.
+	simpleReq := &responses.Request{
+		Model: chosenModel,
+		Input: []responses.InputItem{
+			responses.NewInputUserMessage("Reply with only the word 'pong'."),
+		},
+		MaxOutputTokens: 64,
 	}
-	t.Logf("wrote %s (%d bytes)", filepath.Base(path), len(b))
+	writeFixture(t, testdataDir, "request_simple_text.json", simpleReq)
+	simpleResp, err := wireClient.Responses(context.Background(), simpleReq)
+	if err != nil {
+		t.Fatalf("simple-text Responses: %v", err)
+	}
+	writeFixture(t, testdataDir, "response_simple_text.json", simpleResp)
+
+	// Fixture 2: function-call round with reasoning echo.
+	// Step A: drive a tool-use turn with reasoning_effort to produce
+	// a reasoning item + function_call output.
+	tools := []responses.Tool{
+		{
+			Type:        "function",
+			Name:        "multiply",
+			Description: "Multiplies two integers.",
+			Parameters: json.RawMessage(`{
+				"type":"object",
+				"properties":{
+					"a":{"type":"integer"},
+					"b":{"type":"integer"}
+				},
+				"required":["a","b"],
+				"additionalProperties":false
+			}`),
+			Strict: true,
+		},
+	}
+	storeFalse := false
+	turnAReq := &responses.Request{
+		Model: chosenModel,
+		Input: []responses.InputItem{
+			responses.NewInputUserMessage("What is 47 * 89? Think, then use the multiply tool."),
+		},
+		Tools:           tools,
+		Reasoning:       &responses.ReasoningParams{Effort: "medium"},
+		Include:         []string{"reasoning.encrypted_content"},
+		Store:           &storeFalse,
+		MaxOutputTokens: 1024,
+	}
+	turnAResp, err := wireClient.Responses(context.Background(), turnAReq)
+	if err != nil {
+		t.Fatalf("turn A (reasoning + tool): %v", err)
+	}
+	// Capture turn A's response — this is the
+	// "response with reasoning + function_call" fixture.
+	writeFixture(t, testdataDir, "response_function_call_with_reasoning.json", turnAResp)
+
+	// Step B: build the echo request that replays the reasoning items
+	// + function_call + supplies the tool result. THIS is the input-side
+	// request fixture worth capturing — the round-trip shape that
+	// exercises echo correctness.
+	turnBInput := []responses.InputItem{
+		responses.NewInputUserMessage("What is 47 * 89? Think, then use the multiply tool."),
+	}
+	var toolCallID string
+	for i := range turnAResp.Output {
+		item := &turnAResp.Output[i]
+		switch {
+		case item.IsReasoning():
+			turnBInput = append(turnBInput, responses.NewInputReasoning(
+				item.ID, item.EncryptedContent, item.Summary,
+			))
+		case item.IsFunctionCall():
+			turnBInput = append(turnBInput, responses.NewInputFunctionCall(
+				item.CallID, item.Name, item.Arguments,
+			))
+			toolCallID = item.CallID
+		}
+	}
+	if toolCallID != "" {
+		turnBInput = append(turnBInput, responses.NewInputFunctionCallOutput(
+			toolCallID, `{"product":4183}`,
+		))
+	}
+	turnBReq := &responses.Request{
+		Model:           chosenModel,
+		Input:           turnBInput,
+		Tools:           tools,
+		Reasoning:       &responses.ReasoningParams{Effort: "medium"},
+		Include:         []string{"reasoning.encrypted_content"},
+		Store:           &storeFalse,
+		MaxOutputTokens: 1024,
+	}
+	writeFixture(t, testdataDir, "request_function_call_round.json", turnBReq)
+
+	t.Logf("captured 4 fixtures into %s", testdataDir)
 }
 
-// _ = silences the unused-function lint when the fixture capture
-// seam hasn't been filled.
-var _ = fmt.Stringer(nil)
-var _ = outputJSONToFile
+// buildLiveResponsesClient constructs a raw responses.Client against
+// the real /v1/responses endpoint. Returns ready-to-use client.
+func buildLiveResponsesClient(apiKey string) (*responses.Client, error) {
+	return responses.NewClient(responses.ClientConfig{
+		BaseURL:    "https://api.openai.com/v1",
+		HTTPClient: http.DefaultClient,
+		AuthHeader: "Bearer " + apiKey,
+	})
+}
+
+// writeFixture marshals v as compact JSON and writes to testdataDir/name.
+// Overwrites unconditionally; caller decides when to re-capture.
+// Compact (not indented) so RawMessage fields (Parameters, Annotations)
+// round-trip byte-for-byte through TestResponses_GoldenFixture_Parity
+// — the wire representation is compact anyway. Use `jq .` for review.
+func writeFixture(t *testing.T, testdataDir, name string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal %s: %v", name, err)
+	}
+	path := filepath.Join(testdataDir, name)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	t.Logf("wrote %s (%d bytes)", name, len(b))
+}

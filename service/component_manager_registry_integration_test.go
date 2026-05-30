@@ -168,7 +168,14 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 // registryTestComponent is a minimal component that satisfies the
 // Discoverable + LifecycleComponent interfaces so ComponentManager can
 // Start and Stop it during the test.
+//
+// startMu serializes access to startTime — Start runs on the
+// component-manager's startComponentAsync goroutine, while Health is
+// invoked from the publishHealthLoop goroutine. Without the mutex,
+// the race detector flags the unsynchronized read/write pair under
+// -race + -tags=integration.
 type registryTestComponent struct {
+	startMu   sync.RWMutex
 	startTime time.Time
 }
 
@@ -186,14 +193,19 @@ func (c *registryTestComponent) ConfigSchema() component.ConfigSchema {
 	return component.ConfigSchema{}
 }
 func (c *registryTestComponent) Health() component.HealthStatus {
-	return component.HealthStatus{Healthy: true, LastCheck: time.Now(), Uptime: time.Since(c.startTime)}
+	c.startMu.RLock()
+	uptime := time.Since(c.startTime)
+	c.startMu.RUnlock()
+	return component.HealthStatus{Healthy: true, LastCheck: time.Now(), Uptime: uptime}
 }
 func (c *registryTestComponent) DataFlow() component.FlowMetrics {
 	return component.FlowMetrics{LastActivity: time.Now()}
 }
 func (c *registryTestComponent) Initialize() error { return nil }
 func (c *registryTestComponent) Start(_ context.Context) error {
+	c.startMu.Lock()
 	c.startTime = time.Now()
+	c.startMu.Unlock()
 	return nil
 }
 func (c *registryTestComponent) Stop(_ time.Duration) error { return nil }
