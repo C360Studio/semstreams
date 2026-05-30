@@ -33,6 +33,17 @@ import (
 
 const openAIResponsesDefaultModel = "gpt-5.5"
 
+// openAIResponsesReasoningModel picks the model used for the
+// reasoning-explicit test. Defaults to gpt-5.5 (which supports
+// reasoning_effort when wired through /v1/responses); override with
+// OPENAI_RESPONSES_REASONING_MODEL for o-series / Codex / GPT-5.5-mini.
+func openAIResponsesReasoningModel() string {
+	if m := os.Getenv("OPENAI_RESPONSES_REASONING_MODEL"); m != "" {
+		return m
+	}
+	return "gpt-5.5"
+}
+
 func requireOpenAIAPIKey(t *testing.T) string {
 	t.Helper()
 	key := os.Getenv("OPENAI_API_KEY")
@@ -181,6 +192,148 @@ func TestOpenAIResponses_ToolFlow_WithReasoningEcho(t *testing.T) {
 	t.Logf("turn 2: status=%q content=%q", resp2.Status, resp2.Message.Content)
 	if !strings.Contains(resp2.Message.Content, "391") {
 		t.Errorf("expected 391 in turn 2 response, got %q", resp2.Message.Content)
+	}
+}
+
+// TestOpenAIResponses_ReasoningEcho is the ADR-051 forcing-function
+// gate: exercises tool_choice + reasoning_effort combined (the combo
+// ChatCompletion forbids on GPT-5.5 / o-series, which is the entire
+// reason this work exists). Asserts:
+//
+//  1. Turn 1 elicits BOTH a tool_call AND at least one
+//     ReasoningRecord{Provider:"openai", CarrierKind:StandaloneItem}
+//     with non-empty Opaque bytes (the encrypted_content blob).
+//  2. Turn 2 replays the assistant message WITH ReasoningRecords +
+//     supplies the tool result, and the API accepts it. If the echo
+//     is broken (records not flowing through ChatMessage.ReasoningRecords,
+//     adapter not rebuilding the reasoning InputItem shape, or the
+//     translator not interleaving them with messages correctly),
+//     turn 2 either fails outright or the model re-thinks instead
+//     of continuing — both are failure modes this test catches.
+//
+// Override model with OPENAI_RESPONSES_REASONING_MODEL when the
+// default doesn't emit reasoning items in your account.
+func TestOpenAIResponses_ReasoningEcho(t *testing.T) {
+	requireOpenAIAPIKey(t)
+
+	chosenModel := openAIResponsesReasoningModel()
+	client, err := agenticmodel.NewClient(&model.EndpointConfig{
+		Provider:        "openai",
+		URL:             "https://api.openai.com/v1",
+		Model:           chosenModel,
+		APIKeyEnv:       "OPENAI_API_KEY",
+		WireBackend:     "responses",
+		ReasoningEffort: "medium", // forcing-function combo with tool_choice
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.SetResponsesAdapter(agenticmodel.ResponsesAdapterFor("openai"))
+
+	ctx := context.Background()
+	tools := []agentic.ToolDefinition{
+		{
+			Name:        "multiply",
+			Description: "Multiplies two integers and returns the product.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"a": map[string]any{"type": "integer"},
+					"b": map[string]any{"type": "integer"},
+				},
+				"required": []string{"a", "b"},
+			},
+		},
+	}
+
+	t.Logf("Reasoning-explicit test against model=%q with reasoning.effort=medium", chosenModel)
+
+	turn1 := agentic.AgentRequest{
+		RequestID: "req-resp-reasoning-1",
+		Messages: []agentic.ChatMessage{
+			{Role: "user", Content: "What is 47 * 89? Think carefully, then use the multiply tool."},
+		},
+		Tools: tools,
+	}
+	ctx1, cancel1 := context.WithTimeout(ctx, 90*time.Second)
+	resp1, err := client.ChatCompletion(ctx1, turn1)
+	cancel1()
+	if err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	if resp1.Status == "error" {
+		t.Fatalf("turn 1 error: %s", resp1.Error)
+	}
+	t.Logf("turn 1: status=%q toolcalls=%d reasoning_records=%d",
+		resp1.Status, len(resp1.Message.ToolCalls), len(resp1.Message.ReasoningRecords))
+
+	if len(resp1.Message.ToolCalls) == 0 {
+		t.Fatalf("turn 1: expected at least one tool_call, got status=%q content=%q",
+			resp1.Status, resp1.Message.Content)
+	}
+	if len(resp1.Message.ReasoningRecords) == 0 {
+		t.Fatalf("turn 1: expected at least one ReasoningRecord (model=%s, reasoning_effort=medium); "+
+			"the API didn't emit reasoning items. Try a Codex-class or o-series model via "+
+			"OPENAI_RESPONSES_REASONING_MODEL.", chosenModel)
+	}
+
+	// Inspect the first ReasoningRecord: provider, carrier kind,
+	// non-empty Opaque, non-empty ItemID.
+	rec := resp1.Message.ReasoningRecords[0]
+	t.Logf("turn 1 reasoning_record[0]: provider=%q carrier=%q item_id=%q opaque_len=%d summary=%q",
+		rec.Provider, rec.CarrierKind, rec.ItemID, len(rec.Opaque), rec.SummaryText)
+	if rec.Provider != "openai" {
+		t.Errorf("ReasoningRecord[0].Provider = %q, want openai", rec.Provider)
+	}
+	if string(rec.CarrierKind) != "standalone_item" {
+		t.Errorf("ReasoningRecord[0].CarrierKind = %q, want standalone_item", rec.CarrierKind)
+	}
+	if rec.ItemID == "" {
+		t.Error("ReasoningRecord[0].ItemID empty (capture path broken?)")
+	}
+	if len(rec.Opaque) == 0 {
+		t.Error("ReasoningRecord[0].Opaque empty (encrypted_content not captured?)")
+	}
+
+	tc := resp1.Message.ToolCalls[0]
+	t.Logf("turn 1 tool_call: id=%q name=%q args=%v", tc.ID, tc.Name, tc.Arguments)
+
+	// Turn 2: replay the assistant message INCLUDING ReasoningRecords,
+	// supply the tool result. If the echo path is correctly threading
+	// the encrypted_content blob back as an input reasoning item,
+	// OpenAI accepts the request and continues; if not, it errors or
+	// the model re-thinks visibly.
+	turn2 := agentic.AgentRequest{
+		RequestID: "req-resp-reasoning-2",
+		Messages: []agentic.ChatMessage{
+			{Role: "user", Content: "What is 47 * 89? Think carefully, then use the multiply tool."},
+			{
+				Role:             "assistant",
+				ToolCalls:        resp1.Message.ToolCalls,
+				ReasoningRecords: resp1.Message.ReasoningRecords,
+			},
+			{
+				Role:       "tool",
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				Content:    `{"product":4183}`,
+			},
+		},
+		Tools: tools,
+	}
+	ctx2, cancel2 := context.WithTimeout(ctx, 90*time.Second)
+	resp2, err := client.ChatCompletion(ctx2, turn2)
+	cancel2()
+	if err != nil {
+		t.Fatalf("turn 2 (reasoning echo): %v", err)
+	}
+	if resp2.Status == "error" {
+		t.Fatalf("turn 2 reasoning echo error: %s — likely ReasoningRecord echo path broken "+
+			"(records didn't reconstruct on the wire correctly)", resp2.Error)
+	}
+	t.Logf("turn 2 (reasoning echo): status=%q content=%q", resp2.Status, resp2.Message.Content)
+	if !strings.Contains(resp2.Message.Content, "4183") {
+		t.Errorf("expected 4183 in turn 2 response, got %q", resp2.Message.Content)
 	}
 }
 

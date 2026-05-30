@@ -243,7 +243,10 @@ func TestBuildResponsesRequest_ToolChoiceForced(t *testing.T) {
 
 // TestBuildResponsesRequest_ReasoningEffortFromEndpoint pins that
 // the endpoint's reasoning_effort flows into the Responses
-// reasoning.effort field.
+// reasoning.effort field AND that include is set to opt into
+// encrypted_content emission (without it the API silently omits
+// the blob, breaking cross-turn echo). Both invariants caught by
+// the ADR-051 PR 4 live reasoning-echo test.
 func TestBuildResponsesRequest_ReasoningEffortFromEndpoint(t *testing.T) {
 	c := newResponsesTestClient(t)
 	c.endpoint.ReasoningEffort = "medium"
@@ -252,6 +255,18 @@ func TestBuildResponsesRequest_ReasoningEffortFromEndpoint(t *testing.T) {
 	})
 	if got.Reasoning == nil || got.Reasoning.Effort != "medium" {
 		t.Errorf("Reasoning = %+v, want Effort=medium", got.Reasoning)
+	}
+	wantInclude := "reasoning.encrypted_content"
+	found := false
+	for _, s := range got.Include {
+		if s == wantInclude {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Include = %v, want to contain %q (silent encrypted_content omission risk)",
+			got.Include, wantInclude)
 	}
 }
 

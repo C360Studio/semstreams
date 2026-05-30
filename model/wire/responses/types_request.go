@@ -80,6 +80,18 @@ type Request struct {
 	// API echoes back on the response. Capped at 16 keys, 64-char
 	// keys, 512-char values per OpenAI's docs.
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// Include opts into response fields the API otherwise omits.
+	// Most consequential for our path: "reasoning.encrypted_content"
+	// — without this opt-in, the API does NOT emit encrypted_content
+	// on reasoning output items in stateless mode, breaking
+	// cross-turn echo silently. The translator sets this
+	// automatically when reasoning is configured (ADR-051 D2).
+	//
+	// Other documented values (out of scope for Phase 1):
+	// "message.input_image.image_url", "file_search_call.results",
+	// "code_interpreter_call.outputs".
+	Include []string `json:"include,omitempty"`
 }
 
 // ReasoningParams configures reasoning behavior on o-series and

@@ -1,6 +1,9 @@
 package responses
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // InputItem is the discriminated-union element of Request.Input.
 // The Type field selects the populated subset of fields. The closed
@@ -60,6 +63,45 @@ type InputItem struct {
 	// response. Possible values include "completed", "in_progress",
 	// "incomplete". Producers leave empty on items they construct.
 	Status string `json:"status,omitempty"`
+}
+
+// MarshalJSON ensures the `summary` field is always present on
+// reasoning input items even when the local slice is nil or empty.
+// The OpenAI Responses API rejects echoed reasoning items without
+// a summary field with HTTP 400 missing_required_parameter, even
+// though `[]` is acceptable. Caught by the ADR-051 PR 4 live
+// reasoning-echo test before tag.
+//
+// Non-reasoning items marshal through the default path (omitempty
+// honored on Summary).
+func (i InputItem) MarshalJSON() ([]byte, error) {
+	type alias InputItem
+	if i.Type != ItemTypeReasoning {
+		return json.Marshal(alias(i))
+	}
+	b, err := json.Marshal(alias(i))
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Contains(b, []byte(`"summary"`)) {
+		return b, nil
+	}
+	// Inject `"summary":[]` before the closing brace.
+	idx := bytes.LastIndexByte(b, '}')
+	if idx < 0 {
+		return b, nil
+	}
+	var sep []byte
+	if idx > 1 {
+		sep = []byte(`,"summary":[]`)
+	} else {
+		sep = []byte(`"summary":[]`)
+	}
+	out := make([]byte, 0, len(b)+len(sep))
+	out = append(out, b[:idx]...)
+	out = append(out, sep...)
+	out = append(out, b[idx:]...)
+	return out, nil
 }
 
 // OutputItem is the discriminated-union element of Response.Output.

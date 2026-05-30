@@ -138,7 +138,22 @@ func (c *Client) applyResponsesRequestParams(out *responses.Request, req agentic
 	}
 	if c.endpoint.ReasoningEffort != "" {
 		out.Reasoning = &responses.ReasoningParams{Effort: c.endpoint.ReasoningEffort}
+		// Opt into encrypted_content emission on reasoning output
+		// items. Without this, the API omits encrypted_content and
+		// cross-turn echo loses the opaque blob — a silent break
+		// caught by the ADR-051 PR 4 live reasoning-echo test.
+		out.Include = appendUnique(out.Include, "reasoning.encrypted_content")
 	}
+}
+
+// appendUnique appends v to dst if not already present.
+func appendUnique(dst []string, v string) []string {
+	for _, s := range dst {
+		if s == v {
+			return dst
+		}
+	}
+	return append(dst, v)
 }
 
 // agenticResponseFormatToResponsesText translates agentic.ResponseFormat

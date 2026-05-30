@@ -187,6 +187,75 @@ func TestResponse_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestInputItem_ReasoningSummaryAlwaysPresent pins the workaround
+// for OpenAI's reasoning-input-item summary requirement: the API
+// rejects echoed reasoning items without a `summary` field even
+// when the local slice is nil/empty. InputItem.MarshalJSON injects
+// `"summary":[]` for reasoning items that lack one. Caught by the
+// ADR-051 PR 4 live reasoning-echo test (HTTP 400 missing_required_parameter).
+func TestInputItem_ReasoningSummaryAlwaysPresent(t *testing.T) {
+	cases := []struct {
+		name        string
+		item        responses.InputItem
+		wantSummary string
+	}{
+		{
+			name: "reasoning with nil summary emits []",
+			item: responses.InputItem{
+				Type:             responses.ItemTypeReasoning,
+				ID:               "rs_1",
+				EncryptedContent: "blob",
+			},
+			wantSummary: `"summary":[]`,
+		},
+		{
+			name: "reasoning with empty summary emits []",
+			item: responses.InputItem{
+				Type:             responses.ItemTypeReasoning,
+				ID:               "rs_2",
+				EncryptedContent: "blob",
+				Summary:          []responses.SummaryPart{},
+			},
+			wantSummary: `"summary":[]`,
+		},
+		{
+			name: "reasoning with populated summary preserves it",
+			item: responses.InputItem{
+				Type:             responses.ItemTypeReasoning,
+				ID:               "rs_3",
+				EncryptedContent: "blob",
+				Summary: []responses.SummaryPart{
+					{Type: responses.SummaryTypeText, Text: "thinking"},
+				},
+			},
+			wantSummary: `"summary":[{"type":"summary_text","text":"thinking"}]`,
+		},
+		{
+			name: "non-reasoning item omits summary (default behavior preserved)",
+			item: responses.NewInputUserMessage("hi"),
+			// Empty wantSummary signals the substring must NOT appear.
+			wantSummary: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if tc.wantSummary == "" {
+				if strings.Contains(string(b), `"summary"`) {
+					t.Errorf("expected NO summary field on non-reasoning item; got %s", string(b))
+				}
+				return
+			}
+			if !strings.Contains(string(b), tc.wantSummary) {
+				t.Errorf("expected substring %q; got %s", tc.wantSummary, string(b))
+			}
+		})
+	}
+}
+
 // TestOutputItem_Accessors pins the convenience helpers on
 // OutputItem (OutputText, RefusalText, IsMessage, etc.).
 func TestOutputItem_Accessors(t *testing.T) {
