@@ -2,14 +2,35 @@
 
 ## Status
 
-**Proposed** — 2026-05-30. Companion research doc at
+**Accepted** — 2026-05-30. Implementation shipped in v1.0.0-beta.89
+as a four-PR bundle (carrier rename + wire package + streaming +
+agentic-model dispatch) plus a live-test fix-up commit. Companion
+research doc at
 [`docs/proposals/openai-responses-wire-support.md`](../proposals/openai-responses-wire-support.md)
-captures the option exploration; this ADR is the canonical decision
-record. Extends [ADR-037](037-self-hosted-llm-wire-package.md) by
-adding a second top-level wire shape to the `model/wire` package
-layer. Sister-agent picks up implementation when this ADR is
-Accepted; the proposal doc is the working/research artifact and stays
-in `docs/proposals/` per the working-record convention.
+captures the option exploration. Extends
+[ADR-037](037-self-hosted-llm-wire-package.md) by adding a second
+top-level wire shape to the `model/wire` package layer.
+
+**Shipped:**
+- `agentic.ReasoningRecord` + `ChatMessage.ReasoningRecords` field;
+  `MetadataKeyGoogleThoughtSignature` deleted (Phase 1 BREAKING).
+- `model/wire/responses/` package: types + non-streaming client +
+  typed-event SSE stream + accumulator.
+- `agentic-model` Responses dispatch: `WireBackend="responses"`
+  opt-in, `OpenAIResponsesAdapter` capture/echo of
+  `ReasoningRecord{CarrierKind:StandaloneItem}`, three-way client
+  dispatch (SDK / wire-ChatCompletion / Responses), per-endpoint
+  `agentic_model_request_bytes` histogram.
+
+**Live-tested before tag** (per ADR's never-retag discipline):
+single-turn complete, tool flow round-trip, the forcing-function
+`tool_choice + reasoning_effort` combo on GPT-5.5 with real
+encrypted_content echo across turns, plus Gemini regression
+through the new carrier. Two API-shape bugs surfaced and fixed
+pre-tag: opt-in `include: ["reasoning.encrypted_content"]` (the
+API omits encrypted_content otherwise) and `"summary":[]` injection
+on echoed reasoning items (the API rejects 400
+missing_required_parameter without it).
 
 ## Context
 
