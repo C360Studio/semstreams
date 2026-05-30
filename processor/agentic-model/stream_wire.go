@@ -329,12 +329,15 @@ func (a *wireStreamAccumulator) toAgentResponse(requestID string) agentic.AgentR
 			}
 			// Read the carrier off the post-NormalizeResponse wire shape
 			// (synth.Choices[0].Message.ToolCalls[i] mirrors the SDK-side
-			// extraction in convertWireResponse).
+			// extraction in convertWireResponse). Lift into the message-
+			// level ReasoningRecords sibling field per ADR-051.
 			if sig := readC360ThoughtSignature(synth.Choices[0].Message.ToolCalls[i]); sig != "" {
-				if out.Metadata == nil {
-					out.Metadata = make(map[string]any, 1)
-				}
-				out.Metadata[agentic.MetadataKeyGoogleThoughtSignature] = sig
+				resp.Message.ReasoningRecords = append(resp.Message.ReasoningRecords, agentic.ReasoningRecord{
+					Provider:    "google",
+					CarrierKind: agentic.ReasoningCarrierToolCall,
+					ToolCallID:  tc.ID,
+					Opaque:      []byte(sig),
+				})
 			}
 			toolCalls = append(toolCalls, out)
 		}

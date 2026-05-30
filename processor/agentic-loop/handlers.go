@@ -1034,14 +1034,15 @@ func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID st
 	// context the dispatcher attached to the task.
 	//
 	// Merge semantics: cached TaskMessage metadata fills in keys that
-	// the ToolCall doesn't already carry. Wire-adapter pre-population
-	// (e.g. the Gemini wire backend stamping
-	// MetadataKeyGoogleThoughtSignature on each tool call in
-	// client_wire.go) must NOT block propagation of cached domain
+	// the ToolCall doesn't already carry. Any per-call pre-population
+	// on ToolCall.Metadata must NOT block propagation of cached domain
 	// metadata like action_allowlist / related_loops / trace_id —
 	// pre-fix the guard was `len(approved[i].Metadata) == 0` and any
-	// wire-side pre-population silently dropped the entire cached map
-	// for every Gemini-wire tool call.
+	// non-empty pre-population silently dropped the entire cached map.
+	// (The original failure case was the Gemini-wire backend writing a
+	// thought signature here; ADR-051 moved that carrier off Metadata
+	// onto ChatMessage.ReasoningRecords, but the merge invariant guards
+	// every future case of pre-populated ToolCall.Metadata.)
 	//
 	// Metadata["loop_id"] is intentionally NOT stamped here — the
 	// canonical stamp lives in dispatchToolCall so every dispatch path

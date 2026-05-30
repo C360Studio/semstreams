@@ -703,6 +703,12 @@ func (c *Component) getClientForRequest(req agentic.AgentRequest) (*Client, *mod
 
 	// Wire provider adapter for request/response normalization.
 	client.SetAdapter(AdapterFor(ep.Provider))
+	// ADR-051: when the endpoint opts into the Responses path,
+	// also wire the Responses-side adapter so capture/echo of
+	// ReasoningRecord{CarrierKind:StandaloneItem} runs at the seam.
+	if ep.WireBackend == "responses" {
+		client.SetResponsesAdapter(ResponsesAdapterFor(ep.Provider))
+	}
 
 	// Wire logger, streaming chunk handler, and metrics
 	client.SetLogger(c.logger)

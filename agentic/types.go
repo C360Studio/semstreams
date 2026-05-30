@@ -212,6 +212,13 @@ type ChatMessage struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"` // Required for tool role messages
 	IsError          bool       `json:"is_error,omitempty"`     // Tool result contains an error — preserved during context GC
+
+	// ReasoningRecords are provider-opaque reasoning blobs captured
+	// from the model's response, to be echoed back on subsequent
+	// turns. Loop owns cross-turn propagation; adapters reshape into
+	// wire format at the seam. See ReasoningRecord (agentic/reasoning.go)
+	// and ADR-051.
+	ReasoningRecords []ReasoningRecord `json:"reasoning_records,omitempty"`
 }
 
 // UnmarshalJSON accepts both "reasoning" (Ollama) and "reasoning_content" (DeepSeek/canonical).

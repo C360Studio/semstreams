@@ -2021,6 +2021,27 @@ components:
                                             type: string
                                         reasoning_content:
                                             type: string
+                                        reasoning_records:
+                                            items:
+                                                properties:
+                                                    carrier_kind:
+                                                        type: string
+                                                    item_id:
+                                                        type: string
+                                                    opaque:
+                                                        format: byte
+                                                        type: string
+                                                    provider:
+                                                        type: string
+                                                    summary_text:
+                                                        type: string
+                                                    tool_call_id:
+                                                        type: string
+                                                required:
+                                                    - provider
+                                                    - carrier_kind
+                                                type: object
+                                            type: array
                                         role:
                                             type: string
                                         tool_call_id:
@@ -2250,6 +2271,27 @@ components:
                                 type: string
                             reasoning_content:
                                 type: string
+                            reasoning_records:
+                                items:
+                                    properties:
+                                        carrier_kind:
+                                            type: string
+                                        item_id:
+                                            type: string
+                                        opaque:
+                                            format: byte
+                                            type: string
+                                        provider:
+                                            type: string
+                                        summary_text:
+                                            type: string
+                                        tool_call_id:
+                                            type: string
+                                    required:
+                                        - provider
+                                        - carrier_kind
+                                    type: object
+                                type: array
                             role:
                                 type: string
                             tool_call_id:

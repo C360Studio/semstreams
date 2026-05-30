@@ -131,9 +131,10 @@ func (a *GeminiAdapter) NormalizeStreamDelta(delta wire.ToolCall, lastIndex int)
 // Gemini's extra_content.google.thought_signature shape into the
 // framework-internal carrier key wireKeyC360ThoughtSignature. The
 // generic convertWireResponse then lifts the carrier into
-// agentic.ToolCall.Metadata under MetadataKeyGoogleThoughtSignature so
-// the signature flows across loop turns without Gemini-specific code
-// in the agentic layer.
+// agentic.ChatMessage.ReasoningRecords as a
+// ReasoningRecord{Provider:"google", CarrierKind:ToolCall, ToolCallID:...}
+// so the signature flows across loop turns without Gemini-specific
+// code in the agentic layer (ADR-051).
 //
 // Safe to call universally — adapters that don't see extra_content
 // (every non-Gemini provider) read no carrier and write nothing.

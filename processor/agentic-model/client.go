@@ -16,21 +16,24 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/model/wire"
+	"github.com/c360studio/semstreams/model/wire/responses"
 	"github.com/c360studio/semstreams/pkg/errs"
 	openai "github.com/sashabaranov/go-openai"
 )
 
 // Client wraps OpenAI SDK for agentic model requests
 type Client struct {
-	client       *openai.Client
-	wireClient   *wire.Client // populated lazily when endpoint.WireBackend = "wire" (ADR-037)
-	endpoint     *model.EndpointConfig
-	chunkHandler ChunkHandler
-	metrics      *modelMetrics
-	logger       *slog.Logger
-	throttle     *EndpointThrottle
-	retryCfg     RetryConfig
-	adapter      ProviderAdapter
+	client           *openai.Client
+	wireClient       *wire.Client      // populated eagerly when endpoint.WireBackend = "wire" (ADR-037)
+	responsesClient  *responses.Client // populated eagerly when endpoint.WireBackend = "responses" (ADR-051)
+	endpoint         *model.EndpointConfig
+	chunkHandler     ChunkHandler
+	metrics          *modelMetrics
+	logger           *slog.Logger
+	throttle         *EndpointThrottle
+	retryCfg         RetryConfig
+	adapter          ProviderAdapter
+	responsesAdapter ResponsesAdapter
 	// ollamaProbeOnce guards a lazy /api/show probe that warns when the
 	// model is running with a num_ctx smaller than endpoint.MaxTokens —
 	// Ollama's /v1/ compat layer can't override it at request time, so the
@@ -99,7 +102,41 @@ func NewClient(endpoint *model.EndpointConfig) (*Client, error) {
 		out.wireClient = wc
 	}
 
+	// ADR-051: eager Responses client construction when the endpoint
+	// opts into the /v1/responses path. Same eager-build rationale
+	// as the wire client above.
+	if endpoint.WireBackend == "responses" {
+		rc, err := buildResponsesClientForEndpoint(endpoint, httpClient)
+		if err != nil {
+			return nil, err
+		}
+		out.responsesClient = rc
+	}
+
 	return out, nil
+}
+
+// buildResponsesClientForEndpoint constructs a *responses.Client for
+// the given endpoint, sharing the same HTTP transport as the SDK
+// client (the model.NewHTTPClient invariant from beta.43/47).
+func buildResponsesClientForEndpoint(endpoint *model.EndpointConfig, httpClient *http.Client) (*responses.Client, error) {
+	apiKey := ""
+	if endpoint.APIKeyEnv != "" {
+		apiKey = os.Getenv(endpoint.APIKeyEnv)
+	}
+	authHeader := ""
+	if apiKey != "" {
+		authHeader = "Bearer " + apiKey
+	}
+	rc, err := responses.NewClient(responses.ClientConfig{
+		BaseURL:    endpoint.URL,
+		HTTPClient: httpClient,
+		AuthHeader: authHeader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agentic-model: build responses client: %w", err)
+	}
+	return rc, nil
 }
 
 // buildWireClientForEndpoint constructs a *wire.Client for the given
@@ -166,6 +203,22 @@ func (c *Client) getAdapter() ProviderAdapter {
 		return c.adapter
 	}
 	return defaultAdapter
+}
+
+// SetResponsesAdapter sets the Responses-path adapter. Used when
+// endpoint.WireBackend = "responses" (ADR-051). When not set, the
+// dispatch falls back to the default OpenAIResponsesAdapter.
+func (c *Client) SetResponsesAdapter(a ResponsesAdapter) {
+	c.responsesAdapter = a
+}
+
+// getResponsesAdapter returns the configured Responses adapter,
+// defaulting to the package-level OpenAIResponsesAdapter singleton.
+func (c *Client) getResponsesAdapter() ResponsesAdapter {
+	if c.responsesAdapter != nil {
+		return c.responsesAdapter
+	}
+	return defaultResponsesAdapter
 }
 
 // applyResponseFormat plumbs req.ResponseFormat onto chatReq (provider-agnostic;
@@ -379,8 +432,13 @@ func (c *Client) buildChatRequest(req agentic.AgentRequest) openai.ChatCompletio
 // Both curves cap at MaxDelay and respect ctx cancellation at every wait point.
 //
 // When endpoint.WireBackend = "wire" (ADR-037), the call routes through
-// the wire-native path (chatCompletionWire); otherwise the SDK path runs.
+// the wire-native ChatCompletion path. When endpoint.WireBackend =
+// "responses" (ADR-051), the call routes through the Responses path.
+// Otherwise the SDK path runs.
 func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (agentic.AgentResponse, error) {
+	if c.useResponsesBackend() {
+		return c.chatCompletionResponses(ctx, req)
+	}
 	if c.useWireBackend() {
 		return c.chatCompletionWire(ctx, req)
 	}
