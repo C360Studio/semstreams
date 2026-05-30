@@ -71,14 +71,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 // recorded on any other status. Network and decode errors return as
 // regular errors.
 //
-// Phase 1: streaming (req.Stream=true) is unsupported and returns
-// an error. Phase 2 adds ResponsesStream alongside this method.
+// Streaming callers should use ResponsesStream instead; passing
+// req.Stream=true here returns an error to make the misuse loud
+// (Responses always forces Stream=false on the wire).
 func (c *Client) Responses(ctx context.Context, req *Request) (*Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("responses: nil request")
 	}
 	if req.Stream {
-		return nil, fmt.Errorf("responses: streaming not supported in Phase 1 (use ResponsesStream when available)")
+		return nil, fmt.Errorf("responses: req.Stream=true; use ResponsesStream for streaming")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -109,6 +110,43 @@ func (c *Client) Responses(ctx context.Context, req *Request) (*Response, error)
 		return nil, fmt.Errorf("responses: decode response: %w", err)
 	}
 	return &out, nil
+}
+
+// ResponsesStream executes a streaming Responses call. Returns a
+// *Stream the caller drives via Recv until io.EOF; callers MUST
+// call Close when done. On non-2xx the response body is read fully
+// and returned as *APIError; the *Stream is nil in that case.
+//
+// The request's Stream flag is forced to true before send — the
+// caller does not need to set it.
+func (c *Client) ResponsesStream(ctx context.Context, req *Request) (*Stream, error) {
+	if req == nil {
+		return nil, fmt.Errorf("responses: nil request")
+	}
+	req.Stream = true
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("responses: marshal request: %w", err)
+	}
+	httpReq, err := c.buildHTTPRequest(ctx, http.MethodPost, c.responsesURL(), body, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Cache-Control", "no-cache")
+
+	resp, err := c.cfg.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("responses: ResponsesStream: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, DecodeError(resp.StatusCode, bodyBytes)
+	}
+
+	return newStream(resp.Body, c.cfg.MaxFrameSize), nil
 }
 
 // buildHTTPRequest constructs an *http.Request with auth + extras

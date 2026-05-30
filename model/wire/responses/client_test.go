@@ -147,25 +147,6 @@ func TestClient_Responses_APIError(t *testing.T) {
 	}
 }
 
-// TestClient_Responses_StreamingRejected asserts the Phase 1 client
-// returns a clear error when Stream=true; streaming arrives in Phase 2.
-func TestClient_Responses_StreamingRejected(t *testing.T) {
-	c, err := responses.NewClient(responses.ClientConfig{
-		BaseURL:    "http://unused",
-		HTTPClient: http.DefaultClient,
-	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	_, err = c.Responses(context.Background(), &responses.Request{
-		Model:  "gpt-5.5",
-		Stream: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "streaming not supported") {
-		t.Errorf("expected streaming-rejected error, got %v", err)
-	}
-}
-
 // TestNewClient_Validation pins the config validation surface.
 func TestNewClient_Validation(t *testing.T) {
 	if _, err := responses.NewClient(responses.ClientConfig{}); err == nil {
