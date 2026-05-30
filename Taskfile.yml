@@ -50,6 +50,8 @@ includes:
     taskfile: ./taskfiles/e2e/lifecycle.yml
   e2e:throughput:
     taskfile: ./taskfiles/e2e/throughput.yml
+  e2e:openai-responses:
+    taskfile: ./taskfiles/e2e/openai-responses.yml
 
   # ADR-043 prompt-injection classifier measurement
   adr043:

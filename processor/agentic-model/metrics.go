@@ -37,6 +37,11 @@ type modelMetrics struct {
 
 	// Endpoint health (circuit-breaker observability)
 	endpointHealthState *prometheus.GaugeVec
+
+	// Per-request bytes-on-wire by backend. Used to observe the
+	// stateless-echo cost on the Responses backend (ADR-051 D2),
+	// where echoed reasoning items add bytes to every request.
+	requestBytes *prometheus.HistogramVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -135,6 +140,14 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 				Name:      "endpoint_health_state",
 				Help:      "Circuit-breaker state for each endpoint (1 if endpoint is in this state, 0 otherwise). state label: closed, open, half_open.",
 			}, []string{"endpoint", "state"}),
+
+			requestBytes: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_model",
+				Name:      "request_bytes",
+				Help:      "Distribution of outgoing request body sizes by backend and model. Used to observe the stateless reasoning-echo cost on the Responses backend (ADR-051).",
+				Buckets:   prometheus.ExponentialBuckets(1024, 2, 14), // 1 KiB to ~16 MiB
+			}, []string{"backend", "model"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -151,6 +164,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = registry.RegisterCounterVec("agentic-model", "rate_limit_retries_total", metrics.rateLimitRetries)
 			_ = registry.RegisterCounterVec("agentic-model", "length_truncations_total", metrics.lengthTruncationsTotal)
 			_ = registry.RegisterGaugeVec("agentic-model", "endpoint_health_state", metrics.endpointHealthState)
+			_ = registry.RegisterHistogramVec("agentic-model", "request_bytes", metrics.requestBytes)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestsTotal)
@@ -165,9 +179,18 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.rateLimitRetries)
 			_ = prometheus.DefaultRegisterer.Register(metrics.lengthTruncationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.endpointHealthState)
+			_ = prometheus.DefaultRegisterer.Register(metrics.requestBytes)
 		}
 	})
 	return metrics
+}
+
+// recordResponsesRequestBytes observes the outgoing wire-bytes size
+// for a Responses request. Labels backend="responses" so the metric
+// can be split per-backend (operators can compare against wire/SDK
+// baselines).
+func (m *modelMetrics) recordResponsesRequestBytes(model string, bytes float64) {
+	m.requestBytes.WithLabelValues("responses", model).Observe(bytes)
 }
 
 // recordEndpointHealthState sets the gauge for one endpoint to indicate

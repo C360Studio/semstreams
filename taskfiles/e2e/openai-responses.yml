@@ -1,0 +1,41 @@
+version: "3"
+
+# OpenAI Responses live e2e (ADR-051).
+#
+# Drives the agentic-model client against the real OpenAI
+# /v1/responses endpoint to verify dispatch + translation + adapter
+# capture/echo end-to-end. Requires OPENAI_API_KEY to be set; tests
+# skip cleanly when absent so this target is safe to run in any
+# environment.
+#
+# Unlike the Docker-stack e2e tiers (core, structural, statistical,
+# semantic, agentic), this target does NOT spin up infrastructure —
+# it's a wire-level live test against the real upstream. The
+# Docker-stack tiers exercise the agentic loop end-to-end and stay
+# the canonical full-system check.
+#
+# Pre-tag use: HARD gate per ADR-051 phasing — must pass before
+# tagging the BREAKING bundle so the doc-derived skeleton has
+# verified parity with the real wire shape.
+#
+# Cost: each run hits the real OpenAI API. Two paid round-trips per
+# TestOpenAIResponses_ToolFlow_WithReasoningEcho execution + one per
+# TestOpenAIResponses_SingleTurn. Use sparingly.
+
+tasks:
+  default:
+    desc: "OpenAI Responses live e2e — wire-level live test (~30s, uses paid API)"
+    silent: false
+    cmds:
+      - echo "[OPENAI-RESPONSES] Running live wire-level test against /v1/responses..."
+      - echo "[OPENAI-RESPONSES] NOTE - this hits the real OpenAI API and costs $$."
+      - go test -tags=live_llm -timeout 5m -count=1 -v -run "TestOpenAIResponses" ./processor/agentic-model/...
+      - echo "[OK] OpenAI Responses live test complete"
+
+  capture:
+    desc: "Capture live OpenAI Responses fixtures into model/wire/responses/testdata/"
+    silent: false
+    cmds:
+      - echo "[OPENAI-RESPONSES] Capturing wire-shape fixtures..."
+      - CAPTURE_FIXTURES=1 go test -tags=live_llm -timeout 5m -count=1 -v -run "TestOpenAIResponses_CaptureFixtures" ./processor/agentic-model/...
+      - echo "[OK] Fixtures captured to model/wire/responses/testdata/"

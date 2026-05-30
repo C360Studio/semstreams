@@ -500,8 +500,8 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 	if err := validateDurationField(name, "request_timeout", ep.RequestTimeout); err != nil {
 		return err
 	}
-	if ep.WireBackend != "" && ep.WireBackend != "sdk" && ep.WireBackend != "wire" {
-		return fmt.Errorf("endpoint %q: wire_backend must be \"\", \"sdk\", or \"wire\"", name)
+	if ep.WireBackend != "" && ep.WireBackend != "sdk" && ep.WireBackend != "wire" && ep.WireBackend != "responses" {
+		return fmt.Errorf("endpoint %q: wire_backend must be \"\", \"sdk\", \"wire\", or \"responses\"", name)
 	}
 	return nil
 }
