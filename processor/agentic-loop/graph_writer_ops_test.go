@@ -77,6 +77,11 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 	var allTriples []message.Triple
 	for _, r := range runs {
 		entityID := testLoopEntityID(r.loopID)
+		// gh#159: role is now spawn-stamped. Production reads filter
+		// the loop entity from KV which carries BOTH spawn-time and
+		// completion-time triples; simulate the same union here.
+		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
+		allTriples = append(allTriples, buildSpawnIdentityTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		if r.outcome == "success" {
 			event := &agentic.LoopCompletedEvent{
 				LoopID:      r.loopID,
@@ -86,7 +91,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 				Iterations:  r.iterations,
 				CompletedAt: time.Now(),
 			}
-			allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0, testOrg, testPlatform)...)
+			allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0)...)
 		} else {
 			event := &agentic.LoopFailedEvent{
 				LoopID:     r.loopID,
@@ -96,7 +101,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 				Iterations: r.iterations,
 				FailedAt:   time.Now(),
 			}
-			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0, "acme", "ops")...)
+			allTriples = append(allTriples, buildLoopFailureTriples(entityID, event, "", 0)...)
 		}
 	}
 
@@ -240,6 +245,9 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 	var allTriples []message.Triple
 	for _, r := range results {
 		entityID := testLoopEntityID(r.loopID)
+		// gh#159: role is now spawn-stamped; mirror production flow.
+		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
+		allTriples = append(allTriples, buildSpawnIdentityTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		event := &agentic.LoopCompletedEvent{
 			LoopID:      r.loopID,
 			TaskID:      "task-" + r.loopID,
@@ -248,7 +256,7 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 			Iterations:  r.iterations,
 			CompletedAt: time.Now(),
 		}
-		allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0, testOrg, testPlatform)...)
+		allTriples = append(allTriples, buildLoopCompletionTriples(entityID, event, "", 0)...)
 	}
 
 	// Ops agent query: iteration counts for researcher role
@@ -347,7 +355,7 @@ func TestOpsQuery_CostByModel(t *testing.T) {
 			CompletedAt: time.Now(),
 		}
 
-		triples := buildLoopCompletionTriples(entityID, event, modelEntityID, cost, testOrg, testPlatform)
+		triples := buildLoopCompletionTriples(entityID, event, modelEntityID, cost)
 
 		modelUsed, _ := objectFor(triples, agvocab.LoopModelUsed).(string)
 		loopCost, _ := objectFor(triples, agvocab.LoopCostUSD).(float64)

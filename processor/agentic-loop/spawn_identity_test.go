@@ -1,0 +1,259 @@
+package agenticloop
+
+import (
+	"testing"
+	"time"
+
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+)
+
+// gh#159: WriteSpawnIdentity stamps the loop's canonical identity
+// predicates at spawn time so rules + tools observe them throughout
+// the loop's lifetime, not just after completion. These tests cover
+// the pure builder; the wire-level atomic-batch behaviour is exercised
+// by the spawn site's integration test.
+
+func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-001"
+	task := &agentic.TaskMessage{
+		TaskID: "task-spawn-001",
+		Role:   "researcher",
+		Prompt: "Investigate the deployment failure",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+
+	for _, tr := range triples {
+		if tr.Subject != loopEntityID {
+			t.Errorf("unexpected subject: got %q, want %q", tr.Subject, loopEntityID)
+		}
+		if tr.Confidence != 1.0 {
+			t.Errorf("unexpected confidence: got %v, want 1.0", tr.Confidence)
+		}
+		if tr.Source != graphWriterSource {
+			t.Errorf("unexpected source: got %q, want %q", tr.Source, graphWriterSource)
+		}
+	}
+
+	predicates := predicateSet(triples)
+	required := []string{
+		agvocab.LoopRole,
+		agvocab.LoopTask,
+		agvocab.LoopDescription,
+	}
+	for _, pred := range required {
+		if !predicates[pred] {
+			t.Errorf("missing required predicate: %s", pred)
+		}
+	}
+
+	if got := objectFor(triples, agvocab.LoopRole); got != "researcher" {
+		t.Errorf("%s: got %v, want researcher", agvocab.LoopRole, got)
+	}
+	if got := objectFor(triples, agvocab.LoopTask); got != "task-spawn-001" {
+		t.Errorf("%s: got %v, want task-spawn-001", agvocab.LoopTask, got)
+	}
+}
+
+// Parent must be stamped as a valid 6-part entity ID (the same shape
+// the completion-path previously produced), so semteams ADR-038
+// ancestry-walk and rule-engine $entity.triple.agent.loop.parent
+// substitutions continue to resolve to a navigable entity reference.
+func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-001"
+	task := &agentic.TaskMessage{
+		TaskID:       "task-child-001",
+		Role:         "gather",
+		ParentLoopID: "parent-loop-uuid",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	if !predicates[agvocab.LoopParent] {
+		t.Fatalf("expected agent.loop.parent triple; got predicates: %v", predicates)
+	}
+
+	parent, ok := objectFor(triples, agvocab.LoopParent).(string)
+	if !ok {
+		t.Fatal("LoopParent object is not a string")
+	}
+	want := "acme.ops.agent.agentic-loop.execution.parent-loop-uuid"
+	if parent != want {
+		t.Errorf("LoopParent = %q, want %q", parent, want)
+	}
+	if !message.IsValidEntityID(parent) {
+		t.Errorf("LoopParent %q is not a valid 6-part entity ID", parent)
+	}
+}
+
+func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-full"
+	task := &agentic.TaskMessage{
+		TaskID:       "task-spawn-full",
+		Role:         "architect",
+		ParentLoopID: "parent-uuid",
+		WorkflowSlug: "code-review",
+		WorkflowStep: "draft",
+		UserID:       "user-xyz",
+		Prompt:       "Design the new auth flow",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	optional := []string{
+		agvocab.LoopParent,
+		agvocab.LoopWorkflow,
+		agvocab.LoopWorkflowStep,
+		agvocab.LoopUser,
+	}
+	for _, pred := range optional {
+		if !predicates[pred] {
+			t.Errorf("expected predicate %s to be present, but it was omitted", pred)
+		}
+	}
+
+	if got := objectFor(triples, agvocab.LoopWorkflow); got != "code-review" {
+		t.Errorf("%s: got %v, want code-review", agvocab.LoopWorkflow, got)
+	}
+	if got := objectFor(triples, agvocab.LoopWorkflowStep); got != "draft" {
+		t.Errorf("%s: got %v, want draft", agvocab.LoopWorkflowStep, got)
+	}
+	if got := objectFor(triples, agvocab.LoopUser); got != "user-xyz" {
+		t.Errorf("%s: got %v, want user-xyz", agvocab.LoopUser, got)
+	}
+}
+
+func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-minimal"
+	task := &agentic.TaskMessage{
+		TaskID: "task-spawn-minimal",
+		Role:   "researcher",
+		// ParentLoopID, WorkflowSlug, WorkflowStep, UserID, Prompt all empty
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	optional := []string{
+		agvocab.LoopParent,
+		agvocab.LoopWorkflow,
+		agvocab.LoopWorkflowStep,
+		agvocab.LoopUser,
+		agvocab.LoopDescription,
+	}
+	for _, pred := range optional {
+		if predicates[pred] {
+			t.Errorf("expected predicate %s to be omitted when empty, but it was present", pred)
+		}
+	}
+
+	// Role + task survive.
+	if !predicates[agvocab.LoopRole] {
+		t.Errorf("expected %s to be present", agvocab.LoopRole)
+	}
+	if !predicates[agvocab.LoopTask] {
+		t.Errorf("expected %s to be present", agvocab.LoopTask)
+	}
+}
+
+func TestBuildSpawnIdentityTriples_LongPromptTruncated(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.spawn-long-prompt"
+
+	// 10KB prompt — above maxPromptTripleBytes (8KB).
+	longPrompt := ""
+	for i := 0; i < 10240; i++ {
+		longPrompt += "a"
+	}
+
+	task := &agentic.TaskMessage{
+		TaskID: "task-long",
+		Role:   "researcher",
+		Prompt: longPrompt,
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+
+	desc, ok := objectFor(triples, agvocab.LoopDescription).(string)
+	if !ok {
+		t.Fatal("LoopDescription object is not a string")
+	}
+	if len(desc) > maxPromptTripleBytes {
+		t.Errorf("LoopDescription length %d exceeds cap %d", len(desc), maxPromptTripleBytes)
+	}
+}
+
+// Equal timestamps on all triples in one spawn batch are a soft
+// expectation downstream — none of the rule-engine semantics depend
+// on it, but it makes diff/inspection cleaner. Pin the property so a
+// refactor that reaches for time.Now() in the per-triple constructor
+// (instead of once at the top of buildSpawnIdentityTriples) fails this
+// test.
+func TestBuildSpawnIdentityTriples_SharedTimestamp(t *testing.T) {
+	task := &agentic.TaskMessage{
+		TaskID:       "task-shared-ts",
+		Role:         "researcher",
+		ParentLoopID: "parent-id",
+		WorkflowSlug: "wf",
+		WorkflowStep: "step",
+		UserID:       "user",
+		Prompt:       "prompt",
+	}
+
+	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-shared", task, "acme", "ops")
+	if len(triples) < 2 {
+		t.Fatalf("expected multiple triples, got %d", len(triples))
+	}
+
+	first := triples[0].Timestamp
+	for i, tr := range triples[1:] {
+		if !tr.Timestamp.Equal(first) {
+			t.Errorf("triple[%d] timestamp %v != triple[0] timestamp %v", i+1, tr.Timestamp, first)
+		}
+	}
+}
+
+// Pin a regression guard: future Edits that add new spawn-known fields
+// to TaskMessage should also add them to buildSpawnIdentityTriples. The
+// counter test surfaces missed coverage when a TaskMessage field with
+// a vocab-defined predicate gets added but the builder doesn't emit it.
+func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
+	task := &agentic.TaskMessage{
+		TaskID:       "task-count",
+		Role:         "researcher",
+		ParentLoopID: "parent-id",
+		WorkflowSlug: "wf",
+		WorkflowStep: "step",
+		UserID:       "user",
+		Prompt:       "prompt",
+	}
+
+	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-count", task, "acme", "ops")
+	want := 7 // role, task, parent, workflow, workflow_step, user, description
+	if len(triples) != want {
+		preds := make([]string, 0, len(triples))
+		for _, tr := range triples {
+			preds = append(preds, tr.Predicate)
+		}
+		t.Errorf("expected %d triples, got %d: %v", want, len(triples), preds)
+	}
+}
+
+// Sanity check: now-vs-past timestamps are sensible (not zero).
+func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
+	task := &agentic.TaskMessage{TaskID: "task-ts", Role: "researcher"}
+	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-ts", task, "acme", "ops")
+
+	if len(triples) == 0 {
+		t.Fatal("expected at least one triple")
+	}
+	if triples[0].Timestamp.IsZero() {
+		t.Error("expected non-zero timestamp")
+	}
+	if time.Since(triples[0].Timestamp) > time.Minute {
+		t.Errorf("timestamp suspiciously old: %v", triples[0].Timestamp)
+	}
+}

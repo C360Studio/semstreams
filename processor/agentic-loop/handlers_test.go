@@ -1720,6 +1720,147 @@ func TestHandleCompleteResponse_SyntheticDecide_DefaultOff(t *testing.T) {
 	}
 }
 
+// gh#158: widen the #133 trigger to fire automatically when `decide` is
+// in the loop's allowed tool set, even if Config.SynthesizeTerminalOnCompletion
+// is the default-off. Rationale: the rule pack granted the routing-
+// decision primitive, so a text-only completion is a wedge shape
+// downstream rules will block on. Closes the "text-only completion
+// strands work" class without requiring every consumer to discover and
+// flip the opt-in flag.
+func TestHandleCompleteResponse_SyntheticDecide_DecideInToolsetTriggers(t *testing.T) {
+	// Default config (SynthesizeTerminalOnCompletion=false).
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-decide-in-toolset",
+		Role:   "researcher-research-gather",
+		Model:  "gemini-2.5-flash",
+		Prompt: "Investigate hydraulic actuators",
+		Tools: []agentic.ToolDefinition{
+			{Name: "web_search", Description: "Search the web", Parameters: map[string]any{"type": "object"}},
+			{Name: "decide", Description: "Emit a routing decision", Parameters: map[string]any{"type": "object"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	// Model completes with text-only — no tool_calls, no decide.
+	response := agentic.AgentResponse{
+		RequestID: "req-decide-toolset",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "Here is my summary of hydraulic actuators...",
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	if result.SyntheticDecide == nil {
+		t.Fatal("SyntheticDecide should be non-nil when decide is in allowed tools and model returned text-only")
+	}
+	if result.SyntheticDecide.Reason != response.Message.Content {
+		t.Errorf("SyntheticDecide.Reason = %q, want raw model text %q", result.SyntheticDecide.Reason, response.Message.Content)
+	}
+}
+
+// gh#158: when `decide` is NOT in the loop's allowed tools and the
+// opt-in flag is off, do NOT synthesize. Loops that legitimately
+// terminate without a decide (e.g. submit_work, emit_diagnosis terminal
+// tools, or pure data-returning loops) keep their pre-#158 behaviour.
+func TestHandleCompleteResponse_SyntheticDecide_DecideNotInToolset_NoSynthesis(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-no-decide",
+		Role:   "submitter",
+		Model:  "test-model",
+		Prompt: "Submit the report",
+		Tools: []agentic.ToolDefinition{
+			{Name: "web_search", Description: "Search the web", Parameters: map[string]any{"type": "object"}},
+			// No decide.
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	response := agentic.AgentResponse{
+		RequestID: "req-no-decide",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:    "assistant",
+			Content: "Report submitted.",
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	if result.SyntheticDecide != nil {
+		t.Errorf("SyntheticDecide should be nil when decide is not in allowed tools and flag is off; got %+v", result.SyntheticDecide)
+	}
+}
+
+// gh#158: providers route model text to either Content or
+// ReasoningContent. Beta.86 reproduced two-of-three parallel gathers
+// stranding 219 tokens of output because the framework only read
+// Content. Verify the fallback path: empty Content + non-empty
+// ReasoningContent → SyntheticDecide.Reason carries the ReasoningContent
+// (not empty string).
+func TestHandleCompleteResponse_SyntheticDecide_ReasoningContentFallback(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-reasoning-fallback",
+		Role:   "researcher-research-gather",
+		Model:  "gemini-2.5-flash",
+		Prompt: "Investigate caching strategies",
+		Tools: []agentic.ToolDefinition{
+			{Name: "decide", Description: "Emit a routing decision", Parameters: map[string]any{"type": "object"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	const reasoningText = "Caching strategies fall into three buckets: write-through, write-back, write-around..."
+
+	response := agentic.AgentResponse{
+		RequestID: "req-reasoning-only",
+		Status:    "complete",
+		Message: agentic.ChatMessage{
+			Role:             "assistant",
+			Content:          "",
+			ReasoningContent: reasoningText,
+		},
+	}
+
+	result, err := handler.HandleModelResponse(ctx, loopID, response)
+	if err != nil {
+		t.Fatalf("HandleModelResponse() error = %v", err)
+	}
+
+	if result.SyntheticDecide == nil {
+		t.Fatal("SyntheticDecide should be non-nil for text-only completion with decide-in-toolset")
+	}
+	if result.SyntheticDecide.Reason != reasoningText {
+		t.Errorf("SyntheticDecide.Reason = %q, want ReasoningContent %q (Content was empty)", result.SyntheticDecide.Reason, reasoningText)
+	}
+}
+
 // --- Per-task tools tests ---
 
 func TestHandleTask_PerTaskTools(t *testing.T) {

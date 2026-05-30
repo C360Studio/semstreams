@@ -128,6 +128,69 @@ func TestSubstituteVariables_EntityParts_NoCollisionWithIDOrTriple(t *testing.T)
 	}
 }
 
+// gh#160: when two triples share a predicate prefix
+// (e.g. "lineage.researcher-plan" vs "lineage.researcher-plan-entity"),
+// the substitution must resolve the longer reference to its own value
+// rather than letting the shorter predicate swallow the longer one and
+// leave the suffix dangling.
+//
+// Pre-fix behaviour depended on triple-iteration order: if the shorter
+// predicate landed first in the loop, `strings.ReplaceAll` would
+// substitute its value inside `$entity.triple.lineage.researcher-plan-entity`
+// and leave the literal `-entity` suffix orphaned — producing a phantom
+// subject downstream. Sorting triples by predicate length descending
+// makes the longest match-first, so prefix predicates can never swallow
+// longer-prefix references.
+//
+// Reproduces the path-A workaround SemTeams shipped for #159 that
+// surfaced this race in production smoke runs.
+func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.T) {
+	t.Parallel()
+
+	planUUID := "78a0e9ed-3da3-4bc4-ae33-1c3c8f4a0001"
+	planEntity := "c360.bootstrap-001.agent.agentic-loop.execution." + planUUID
+
+	tests := []struct {
+		name        string
+		tripleOrder []message.Triple
+	}{
+		{
+			name: "shorter predicate first (regression case)",
+			tripleOrder: []message.Triple{
+				{Predicate: "lineage.researcher-plan", Object: planUUID},
+				{Predicate: "lineage.researcher-plan-entity", Object: planEntity},
+			},
+		},
+		{
+			name: "longer predicate first (previously-passing case)",
+			tripleOrder: []message.Triple{
+				{Predicate: "lineage.researcher-plan-entity", Object: planEntity},
+				{Predicate: "lineage.researcher-plan", Object: planUUID},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ec := &ExecutionContext{
+				EntityID: "c360.bootstrap-001.agent.agentic-loop.execution.child",
+				Entity: &gtypes.EntityState{
+					Triples: tt.tripleOrder,
+				},
+			}
+
+			in := "subject=$entity.triple.lineage.researcher-plan-entity short=$entity.triple.lineage.researcher-plan"
+			want := "subject=" + planEntity + " short=" + planUUID
+
+			if got := ec.SubstituteVariables(in); got != want {
+				t.Errorf("got  %q\nwant %q", got, want)
+			}
+		})
+	}
+}
+
 // Confirms the unresolvedTemplateVarRe in execution_context.go matches
 // $entity.<part> tokens when the entity ID isn't 6-part, so authors see
 // the warning rather than a silent empty render. Mirrors the surfacing
