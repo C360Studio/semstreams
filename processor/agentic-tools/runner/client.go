@@ -1,9 +1,16 @@
-// Package sandbox provides an HTTP client for the sandbox server.
-// The sandbox server runs file, git, and command operations inside an isolated
+// Package runner is an HTTP client for a remote tool-execution sandbox server.
+// The remote server runs file, git, and command operations inside an isolated
 // container so that agent-generated code never touches the host process.
 //
+// Naming note: this package is the local Go client; the upstream service it
+// talks to is colloquially "the sandbox server" (operated by semspec via
+// SANDBOX_URL). The package was renamed from `sandbox` to `runner` to free
+// the `sandbox` term for the substrate-level primitive (see ADR-052 /
+// `pkg/sandbox` capability-aware execution environment substrate). External
+// surfaces unchanged: SANDBOX_URL env var, server-side wire protocol.
+//
 // Ported from semspec/tools/sandbox with task_id mapped to agent loop_id.
-package sandbox
+package runner
 
 import (
 	"bytes"

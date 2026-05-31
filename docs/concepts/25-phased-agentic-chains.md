@@ -113,8 +113,8 @@ framework primitives:
 | Trajectory manager | ✅ shipped | KV-backed |
 | Loop lineage (`loop_id`, parent chain) | ✅ shipped | message metadata |
 | `read_loop_result` tool | ✅ shipped | inter-phase data passing |
-| `BashExecutor` (local + sandbox) | ✅ shipped | `processor/agentic-tools/executors/bash.go` |
-| Sandbox client | ✅ shipped | `processor/agentic-tools/sandbox/` |
+| `BashExecutor` (local + remote runner) | ✅ shipped | `processor/agentic-tools/executors/bash.go` |
+| Runner client (HTTP client for remote sandbox container) | ✅ shipped | `processor/agentic-tools/runner/` (renamed from `sandbox/` 2026-05-31 to free the `sandbox` term for the substrate primitive — see ADR-052) |
 | Chain-scoped worktree on `BashExecutor` | 🟡 gap | tracked, see issues |
 | Always-warm sandbox documented as default | 🟡 gap | tracked, see issues |
 | Preview-first output for large `bash` fetches | 🟡 gap | tracked, see issues |

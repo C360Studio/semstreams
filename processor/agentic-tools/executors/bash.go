@@ -1,8 +1,9 @@
 // Package executors provides tool executor implementations for the agentic system.
 //
-// BashExecutor runs shell commands. When a sandbox is configured (SANDBOX_URL),
-// commands execute inside the sandbox container. Otherwise, they run locally
-// via os/exec with sensitive environment variables stripped.
+// BashExecutor runs shell commands. When a remote runner is configured (SANDBOX_URL),
+// commands execute inside the remote sandbox container via the runner client.
+// Otherwise, they run locally via os/exec with sensitive environment variables
+// stripped.
 //
 // Ported from semspec/tools/bash.
 package executors
@@ -18,7 +19,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/processor/agentic-tools/sandbox"
+	"github.com/c360studio/semstreams/processor/agentic-tools/runner"
 )
 
 const (
@@ -26,10 +27,11 @@ const (
 	bashDefaultTimeout = 120 * time.Second
 )
 
-// BashExecutor runs shell commands locally or via sandbox.
+// BashExecutor runs shell commands locally or via the remote runner client
+// (which routes to a remote sandbox container — see SANDBOX_URL).
 type BashExecutor struct {
 	workDir string
-	sandbox *sandbox.Client
+	runner  *runner.Client
 	timeout time.Duration
 }
 
@@ -51,7 +53,7 @@ func NewBashExecutor(workDir, sandboxURL string, opts ...BashOption) *BashExecut
 		opt(e)
 	}
 	if sandboxURL != "" {
-		e.sandbox = sandbox.NewClient(sandboxURL)
+		e.runner = runner.NewClient(sandboxURL)
 	}
 	return e
 }
@@ -112,7 +114,7 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 	readOnlyPaths := stringSliceArg(call.Arguments["read_only_paths"])
 	verifyClean, _ := call.Arguments["verify_clean"].(bool)
 
-	if e.sandbox != nil {
+	if e.runner != nil {
 		taskID := "default"
 		if m := call.Metadata; m != nil {
 			if tid, ok := m["task_id"].(string); ok && tid != "" {
@@ -122,13 +124,13 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 			}
 		}
 		if verifyClean {
-			if violation, err := e.verifyCleanSandbox(ctx, taskID, readOnlyPaths); err != nil {
+			if violation, err := e.verifyCleanRemote(ctx, taskID, readOnlyPaths); err != nil {
 				return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("verify_clean precondition failed: %v", err)}, nil
 			} else if violation != "" {
 				return agentic.ToolResult{CallID: call.ID, Error: violation}, nil
 			}
 		}
-		return e.execSandbox(ctx, call.ID, command, taskID)
+		return e.execRemote(ctx, call.ID, command, taskID)
 	}
 
 	if verifyClean {
@@ -162,14 +164,14 @@ func stringSliceArg(raw any) []string {
 	return out
 }
 
-// verifyCleanSandbox runs `git status -z --porcelain --untracked-files=all` inside the sandbox and
-// returns a non-empty violation message if any dirty path matches
-// readOnlyPaths (or, when readOnlyPaths is empty, if any path is dirty).
-// Returns ("", nil) when the precondition passes; (msg, nil) when it
-// fails; ("", err) when the precondition itself errored (network,
-// non-zero exit from git status, malformed output).
-func (e *BashExecutor) verifyCleanSandbox(ctx context.Context, taskID string, readOnlyPaths []string) (string, error) {
-	res, err := e.sandbox.Exec(ctx, taskID, "git status -z --porcelain --untracked-files=all", int(e.effectiveTimeout().Milliseconds()))
+// verifyCleanRemote runs `git status -z --porcelain --untracked-files=all` inside
+// the remote runner's sandbox container and returns a non-empty violation
+// message if any dirty path matches readOnlyPaths (or, when readOnlyPaths is
+// empty, if any path is dirty). Returns ("", nil) when the precondition
+// passes; (msg, nil) when it fails; ("", err) when the precondition itself
+// errored (network, non-zero exit from git status, malformed output).
+func (e *BashExecutor) verifyCleanRemote(ctx context.Context, taskID string, readOnlyPaths []string) (string, error) {
+	res, err := e.runner.Exec(ctx, taskID, "git status -z --porcelain --untracked-files=all", int(e.effectiveTimeout().Milliseconds()))
 	if err != nil {
 		return "", err
 	}
@@ -183,7 +185,7 @@ func (e *BashExecutor) verifyCleanSandbox(ctx context.Context, taskID string, re
 }
 
 // verifyCleanLocal runs the same precondition against the local workdir.
-// Mirrors verifyCleanSandbox; kept separate so each path remains
+// Mirrors verifyCleanRemote; kept separate so each path remains
 // straightforward to read.
 func (e *BashExecutor) verifyCleanLocal(ctx context.Context, readOnlyPaths []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
@@ -285,13 +287,13 @@ func pathMatchesAny(path string, patterns []string) bool {
 	return false
 }
 
-// execSandbox routes the command to the sandbox container.
-func (e *BashExecutor) execSandbox(ctx context.Context, callID, command, taskID string) (agentic.ToolResult, error) {
-	result, err := e.sandbox.Exec(ctx, taskID, command, int(e.effectiveTimeout().Milliseconds()))
+// execRemote routes the command to the remote runner's sandbox container.
+func (e *BashExecutor) execRemote(ctx context.Context, callID, command, taskID string) (agentic.ToolResult, error) {
+	result, err := e.runner.Exec(ctx, taskID, command, int(e.effectiveTimeout().Milliseconds()))
 	if err != nil {
 		return agentic.ToolResult{
 			CallID: callID,
-			Error:  fmt.Sprintf("sandbox exec failed: %v", err),
+			Error:  fmt.Sprintf("remote exec failed: %v", err),
 		}, nil
 	}
 
