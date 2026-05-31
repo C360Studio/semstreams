@@ -143,7 +143,13 @@ func run() error {
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
 	svcDeps.ToolRegistry = toolRegistry
 	svcDeps.PayloadRegistry = payloadReg
-	if err := wireLifecycleManager(ctx, svcDeps, natsClient, logger, cliCfg.LifecycleSeed); err != nil {
+	// Wire the lifecycle manager but DO NOT seed yet — graph-ingest
+	// is not started until manager.StartAll runs inside
+	// runWithSignalHandling. Seeding pre-start would deadlock: the
+	// emit retry holds the goroutine that would otherwise call
+	// StartAll, so the responder we are waiting for can never come
+	// up. The seed is run as a post-start hook below. See gh#170.
+	if err := wireLifecycleManager(ctx, svcDeps, natsClient, logger); err != nil {
 		return err
 	}
 
@@ -151,7 +157,12 @@ func run() error {
 		return err
 	}
 
-	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout)
+	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout, func(seedCtx context.Context) error {
+		if cliCfg.LifecycleSeed == "" {
+			return nil
+		}
+		return seedMission(seedCtx, svcDeps.LifecycleManager, cliCfg.LifecycleSeed)
+	})
 }
 
 // buildPayloadRegistry constructs the shared payload registry and
@@ -180,22 +191,19 @@ func buildPayloadRegistry() (*payloadregistry.Registry, error) {
 
 // wireLifecycleManager builds the pkg/lifecycle.Manager, plumbs it
 // into svcDeps (rule processor + lifecycle-gateway both pull from
-// here), registers the e2e-only mission workflow, and optionally
-// seeds an initial instance from --lifecycle-seed.
+// here), and registers the e2e-only mission workflow. Seeding the
+// initial mission instance is the caller's responsibility AFTER
+// manager.StartAll — see runWithSignalHandling's postStart hook and
+// gh#170 for the cold-start race that drove this split.
 //
 // Per ADR-049 the harness lives over ENTITY_STATES — no per-workflow
 // bucket provisioning. State changes emit through graph-ingest like
 // every other write; reads project triples into the registered
 // Schema struct.
-func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger, seedID string) error {
+func wireLifecycleManager(_ context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger) error {
 	svcDeps.LifecycleManager = lifecycle.NewManager(svcDeps.NATSClient, svcDeps.Logger)
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
 		return fmt.Errorf("register mission workflow: %w", err)
-	}
-	if seedID != "" {
-		if err := seedMission(ctx, svcDeps.LifecycleManager, seedID); err != nil {
-			return fmt.Errorf("seed mission: %w", err)
-		}
 	}
 	return nil
 }
@@ -622,7 +630,13 @@ func createServiceIfEnabled(
 	return nil
 }
 
-func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdownTimeout time.Duration) error {
+// runWithSignalHandling starts all services and then, while the
+// process is alive, runs the optional postStart hook. postStart sees
+// a fully-started service graph (graph-ingest subscriptions live,
+// rules wired) so callers that need to emit immediately on boot —
+// e.g. lifecycle seed via Manager.Create — can do so without racing
+// the cold-start path captured in gh#170.
+func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdownTimeout time.Duration, postStart func(context.Context) error) error {
 	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer signalCancel()
 
@@ -631,6 +645,12 @@ func runWithSignalHandling(ctx context.Context, manager *service.Manager, shutdo
 		return fmt.Errorf("start services: %w", err)
 	}
 	slog.Info("All services started successfully")
+
+	if postStart != nil {
+		if err := postStart(signalCtx); err != nil {
+			return fmt.Errorf("post-start hook: %w", err)
+		}
+	}
 
 	<-signalCtx.Done()
 	slog.Info("Received shutdown signal")

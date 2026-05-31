@@ -83,18 +83,45 @@ const (
 // ErrorCodeRevisionMismatch response.
 var errEmitRevisionMismatch = errors.New("lifecycle: emit revision mismatch (CAS conflict)")
 
+// lifecycleEmitRetryConfig is the retry budget for Manager emit
+// requests. natsclient.DefaultRetryConfig (~700ms total) is tuned for
+// subscription propagation latency, but the lifecycle Manager faces a
+// wider race surface (gh#170): graph-ingest may not have started yet
+// when Manager.Create / Manager.Transition fires from a fast-boot
+// path. ~13s total budget (10 retries × 200ms→2s backoff) covers
+// Docker cold-start times where graph-ingest's SubscribeForRequests
+// can be several seconds behind the lifecycle wire.
+//
+// Cumulative wait: 200+400+800+1600+2000+2000+2000+2000+2000+2000 ≈
+// 13s, capped per-attempt by g.timeout (default 5s).
+var lifecycleEmitRetryConfig = natsclient.RetryConfig{
+	MaxRetries:        10,
+	InitialBackoff:    200 * time.Millisecond,
+	MaxBackoff:        2 * time.Second,
+	BackoffMultiplier: 2.0,
+}
+
 // update marshals an UpdateEntityWithTriplesRequest, fires it as a
 // NATS request/reply, and classifies the response by ErrorCode.
+//
+// Uses RequestWithRetry with lifecycleEmitRetryConfig to survive the
+// graph-ingest cold-start race (gh#170). Retry is safe here:
+// graph-ingest's update_with_triples handler enforces CAS via
+// ExpectedRevision, so a duplicate-delivery after a lost response
+// surfaces as ErrorCodeRevisionMismatch, which Manager.Transition's
+// outer CAS loop re-reads and re-validates.
+//
+// No outer context.WithTimeout: the retry budget (~13s) controls
+// total duration; each retry attempt is bounded internally by
+// g.timeout. Capping with an outer 5s deadline would truncate the
+// retry budget on cold-start paths — the very class gh#170 captures.
 func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, g.timeout)
-	defer cancel()
-
-	respBody, err := g.client.Request(ctx, graphSubjectUpdateWithTriples, body, g.timeout)
+	respBody, err := g.client.RequestWithRetry(ctx, graphSubjectUpdateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
 	if err != nil {
 		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectUpdateWithTriples, err)
 	}
@@ -120,16 +147,25 @@ func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWi
 // request/reply, and classifies the response by ErrorCode. Atomic
 // create-or-fail: ErrAlreadyExists when graph-ingest reports
 // ErrorCodeEntityExists.
+//
+// Uses RequestWithRetry with lifecycleEmitRetryConfig to survive the
+// graph-ingest cold-start race (gh#170). The retry path can in
+// principle expose a false-positive ErrAlreadyExists if a first
+// attempt succeeded but its response was lost in transit; on cold-
+// start (the actual race the issue captures) the error is
+// "no responders" before graph-ingest receives anything, so the retry
+// is the correct atomic create. Callers that hit ErrAlreadyExists on
+// what they expected to be a fresh create should re-read the entity
+// rather than treating the error as fatal.
+//
+// No outer context.WithTimeout: see update() rationale.
 func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, g.timeout)
-	defer cancel()
-
-	respBody, err := g.client.Request(ctx, graphSubjectCreateWithTriples, body, g.timeout)
+	respBody, err := g.client.RequestWithRetry(ctx, graphSubjectCreateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
 	if err != nil {
 		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectCreateWithTriples, err)
 	}
