@@ -14,16 +14,16 @@ func TestIRIsCoverConstants(t *testing.T) {
 		Prefix + ":SensorMLDocument":  SensorMLDocument,
 		Prefix + ":SWESchemaDocument": SWESchemaDocument,
 
-		Prefix + ":producedBy":          ProducedBy,
-		Prefix + ":resultTimeRange":     ResultTimeRange,
-		Prefix + ":phenomenonTimeRange": PhenomenonTimeRange,
-		Prefix + ":resultType":          ResultType,
-		Prefix + ":controlsSystem":      ControlsSystem,
-		Prefix + ":partOfControlStream": PartOfControlStream,
-		Prefix + ":eventForSystem":      EventForSystem,
-		Prefix + ":hasSource":           HasSource,
-		Prefix + ":hasResultSchema":     HasResultSchema,
-		Prefix + ":hasCommandSchema":    HasCommandSchema,
+		Prefix + ":producedBy":          ProducedByIRI,
+		Prefix + ":resultTimeRange":     ResultTimeRangeIRI,
+		Prefix + ":phenomenonTimeRange": PhenomenonTimeRangeIRI,
+		Prefix + ":resultType":          ResultTypeIRI,
+		Prefix + ":controlsSystem":      ControlsSystemIRI,
+		Prefix + ":partOfControlStream": PartOfControlStreamIRI,
+		Prefix + ":eventForSystem":      EventForSystemIRI,
+		Prefix + ":hasSource":           HasSourceIRI,
+		Prefix + ":hasResultSchema":     HasResultSchemaIRI,
+		Prefix + ":hasCommandSchema":    HasCommandSchemaIRI,
 	}
 	got := IRIs()
 	if len(got) != len(wantPairs) {
@@ -38,17 +38,45 @@ func TestIRIsCoverConstants(t *testing.T) {
 	}
 }
 
-func TestConstantsLiveInDeclaredNamespace(t *testing.T) {
+// TestIRIConstantsLiveInDeclaredNamespace ensures every `*IRI`
+// constant lands under the spec-rooted Namespace. The dotted
+// predicate constants (ProducedBy, HasSource, etc.) DO NOT live in
+// the IRI namespace — they're internal dotted-notation strings —
+// so they're excluded from this check (gh#182).
+func TestIRIConstantsLiveInDeclaredNamespace(t *testing.T) {
 	all := []string{
 		Datastream, ControlStream, Command, SystemEvent,
 		SensorMLDocument, SWESchemaDocument,
-		ProducedBy, ResultTimeRange, PhenomenonTimeRange, ResultType,
-		ControlsSystem, PartOfControlStream, EventForSystem,
-		HasSource, HasResultSchema, HasCommandSchema,
+		ProducedByIRI, ResultTimeRangeIRI, PhenomenonTimeRangeIRI, ResultTypeIRI,
+		ControlsSystemIRI, PartOfControlStreamIRI, EventForSystemIRI,
+		HasSourceIRI, HasResultSchemaIRI, HasCommandSchemaIRI,
 	}
 	for _, c := range all {
 		if !strings.HasPrefix(c, Namespace) {
 			t.Errorf("%q does not start with CS API namespace %q", c, Namespace)
+		}
+	}
+}
+
+// TestPredicateConstantsUseDottedNotation ensures the dotted predicate
+// constants follow the framework convention `domain.category.property`
+// (vocabulary/predicates.go) — i.e. NOT IRI-shaped (gh#182). Three
+// dotted segments, lowercase domain, no IRI-namespace prefix.
+func TestPredicateConstantsUseDottedNotation(t *testing.T) {
+	predicates := []string{
+		ProducedBy, ResultTimeRange, PhenomenonTimeRange, ResultType,
+		ControlsSystem, PartOfControlStream, EventForSystem,
+		HasSource, HasResultSchema, HasCommandSchema,
+	}
+	for _, p := range predicates {
+		if strings.HasPrefix(p, Namespace) {
+			t.Errorf("%q must be dotted-notation, not IRI-shaped", p)
+		}
+		if strings.Count(p, ".") != 2 {
+			t.Errorf("%q must be three-level dotted (domain.category.property), got %d dots", p, strings.Count(p, "."))
+		}
+		if !strings.HasPrefix(p, "csapi.") {
+			t.Errorf("%q must start with `csapi.` domain", p)
 		}
 	}
 }
@@ -59,8 +87,8 @@ func TestIsKnown(t *testing.T) {
 		want bool
 	}{
 		{Datastream, true},
-		{ProducedBy, true},
-		{ResultTimeRange, true},
+		{ProducedByIRI, true},
+		{ResultTimeRangeIRI, true},
 		{Namespace + "unmappedButValidCSAPI", false},
 		{"http://example.org/not-csapi", false},
 		{"", false},
@@ -78,8 +106,8 @@ func TestLocalName(t *testing.T) {
 		want string
 	}{
 		{Datastream, "Datastream"},
-		{ProducedBy, "producedBy"},
-		{ResultTimeRange, "resultTimeRange"},
+		{ProducedByIRI, "producedBy"},
+		{ResultTimeRangeIRI, "resultTimeRange"},
 		{Namespace + "unmappedButValidCSAPI", "unmappedButValidCSAPI"},
 		{"http://example.org/not-csapi", ""},
 		{"", ""},
