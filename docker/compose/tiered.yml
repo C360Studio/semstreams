@@ -187,6 +187,8 @@ services:
   # Statistical variant - runs without ML services (uses BM25 fallback for search)
   # PROFILE: statistical - Only started when --profile statistical is specified
   semstreams:
+    # Per-target image tag — see docker/compose/e2e.yml for rationale.
+    image: c360studio/semstreams:e2e-production
     build:
       context: ../..
       dockerfile: docker/Dockerfile
@@ -235,6 +237,8 @@ services:
   # Structural variant - uses e2e-semstreams binary with reactive workflow engine
   # PROFILE: structural - Only started when --profile structural is specified
   semstreams-structural:
+    # Per-target image tag — see docker/compose/e2e.yml for rationale.
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
@@ -280,6 +284,8 @@ services:
   # SemStreams Application with ML services enabled
   # PROFILE: semantic - Only started when --profile semantic is specified
   semstreams-ml:
+    # Per-target image tag — see docker/compose/e2e.yml for rationale.
+    image: c360studio/semstreams:e2e-production
     build:
       context: ../..
       dockerfile: docker/Dockerfile

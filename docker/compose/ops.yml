@@ -65,6 +65,8 @@ services:
       start_period: 5s
 
   semstreams:
+    # Per-target image tag — see docker/compose/e2e.yml for rationale.
+    image: c360studio/semstreams:e2e-production
     build:
       context: ../..
       dockerfile: docker/Dockerfile
