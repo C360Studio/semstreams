@@ -376,7 +376,16 @@ func createScenario(
 		// Set GraphQL URL based on variant — via ServiceManager shared mux
 		if cfg.Variant == "semantic" {
 			cfg.GraphQLURL = "http://localhost:38180/graph-gateway/graphql"
-			cfg.ValidationTimeout = 60 * time.Second // Neural embeddings need more time
+			// Semantic tier has the slowest entity-load pipeline:
+			// neural embeddings, multiple ML services (semembed +
+			// 3 seminstruct instances), and the longest file-loader
+			// path. Under Docker pressure (parallel projects on the
+			// host), the verify-entity-count critical-entity check
+			// can need >60s before all PathRAG-test entities land.
+			// 120s gives 2× the historical budget; steady-state
+			// entity load on idle hosts is still well under 5s, so
+			// this only matters on contended hosts.
+			cfg.ValidationTimeout = 120 * time.Second
 		} else {
 			cfg.GraphQLURL = "http://localhost:38080/graph-gateway/graphql"
 		}

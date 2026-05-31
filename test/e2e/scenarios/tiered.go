@@ -105,10 +105,18 @@ func DefaultTieredConfig() *TieredConfig {
 		Variant:         "", // Auto-detect from environment
 		MessageCount:    20,
 		MessageInterval: 50 * time.Millisecond,
-		// Event-driven validation timeouts
-		// 10s default - structural tier should complete quickly
-		// Semantic tier may need to override this for ML processing
-		ValidationTimeout:    10 * time.Second,
+		// Event-driven validation timeouts.
+		// 30s default — entity stabilization needs headroom for Docker
+		// pressure on the host (parallel projects spinning containers
+		// can slow graph-ingest's pipeline meaningfully). Steady-state
+		// stabilization completes in ~100ms; the generous budget only
+		// matters under contention. Prior 10s budget consistently flaked
+		// in the beta.91 sweep when host was loaded — the SSE path
+		// would return `TimedOut: false, FinalCount: 0` before entities
+		// landed, and the silent-pass downstream surfaced as
+		// "entity not found" in stage 14 (test-pathrag-document).
+		// Semantic tier may still override this for ML processing.
+		ValidationTimeout:    30 * time.Second,
 		PollInterval:         100 * time.Millisecond, // Fast polling for responsiveness
 		MinProcessed:         10,                     // At least 50% should make it through
 		MinExpectedEntities:  50,                     // Test data has 74 entities, expect at least 50 indexed
