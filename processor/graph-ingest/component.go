@@ -834,9 +834,15 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 		return
 	}
 
-	// Store entity in KV bucket
-	if err := c.CreateEntity(ctx, entity); err != nil {
-		c.logger.Error("Failed to create entity",
+	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
+	// used CreateEntity (Put = full-replace) here, which clobbered any
+	// pre-existing triples on the entity. The atomic mutation handlers
+	// (create_with_triples, update_with_triples, triple.add) all merge;
+	// the jetstream consumer path was the lone outlier and silently
+	// erased lifecycle-managed entity state on every subsequent
+	// Graphable arrival.
+	if err := c.MergeEntity(ctx, entity); err != nil {
+		c.logger.Error("Failed to merge entity",
 			slog.String("entity_id", entity.ID),
 			slog.Any("error", err))
 		return
@@ -916,6 +922,125 @@ func validateEntityID(id string) error {
 // when the ID is already present.
 func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState) error {
 	return c.createEntity(ctx, entity, false)
+}
+
+// MergeEntity ingests a streaming-consumer EntityState (typically built
+// by extractEntityFromMessage from a Graphable arriving on the
+// JetStream input) WITHOUT clobbering pre-existing triples on the
+// entity. First write behaves like CreateEntity (the entity didn't
+// exist; its fields land verbatim); subsequent writes append the
+// incoming triples to the existing slice and refresh latest-wins
+// metadata (MessageType, StorageRef, UpdatedAt) while monotonically
+// bumping Version.
+//
+// Closes gh#177: the prior code called CreateEntity (Put = full-
+// replace) from handleMessage, which erased any triples written via
+// the atomic mutation handlers (create_with_triples, update_with_
+// triples, triple.add) — all of which merge. The jetstream consumer
+// path was the lone outlier. Lifecycle-managed entities surfaced this
+// most loudly: Manager.Create stamped the phase triple, then the
+// first Graphable arrival via a downstream processor wiped it.
+//
+// Uses entityBucket.UpdateWithRetry for atomic CAS read-modify-write,
+// so concurrent arrivals on the same Subject converge without racing.
+func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) error {
+	if entity == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "MergeEntity", "entity cannot be nil")
+	}
+	if err := validateEntityID(entity.ID); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return errs.Wrap(err, "Component", "MergeEntity", "context cancelled")
+	}
+
+	// Hierarchy inference is deterministic per entityID — calling it
+	// on every merge would APPEND the same hierarchy triples on each
+	// arrival (50 mission-command Graphables → 50 copies of
+	// type.container / system.container / etc. on the same entity).
+	// Gate to first-write only, applied inside the CAS callback so the
+	// fetch happens once per genuine create. See go-reviewer concern 5
+	// on the gh#177 fix.
+	var hierarchyTriples []message.Triple
+	if c.config.EnableHierarchy && c.hierarchyInference != nil {
+		// Probe-then-fetch: cheap pre-check avoids the inference cost
+		// on guaranteed-second-write paths. Even if the entity is
+		// concurrently created between probe and CAS, the callback's
+		// len(current) == 0 branch is the gate that actually applies
+		// the hierarchy triples — the probe is an optimization, not
+		// correctness.
+		if _, err := c.entityBucket.Get(ctx, entity.ID); err != nil && natsclient.IsKVNotFoundError(err) {
+			triples, herr := c.hierarchyInference.GetHierarchyTriples(ctx, entity.ID)
+			if herr != nil {
+				c.logger.Warn("Failed to get hierarchy triples",
+					slog.String("entity_id", entity.ID),
+					slog.Any("error", herr))
+			} else {
+				hierarchyTriples = triples
+			}
+		}
+	}
+
+	var bytesWritten int
+	err := c.entityBucket.UpdateWithRetry(ctx, entity.ID, func(current []byte) ([]byte, error) {
+		// First write: entity didn't exist. Apply hierarchy triples
+		// (deterministic-per-ID so safe to apply once on create),
+		// then store verbatim.
+		if len(current) == 0 {
+			if len(hierarchyTriples) > 0 {
+				entity.Triples = append(entity.Triples, hierarchyTriples...)
+			}
+			data, err := json.Marshal(entity)
+			if err == nil {
+				bytesWritten = len(data)
+			}
+			return data, err
+		}
+		// Existing entity: merge triples + refresh latest-wins metadata.
+		// Hierarchy triples are NOT re-applied — they landed on the
+		// original create and would only produce duplicates here.
+		var existing graph.EntityState
+		if err := json.Unmarshal(current, &existing); err != nil {
+			return nil, err // non-retryable
+		}
+		existing.Triples = append(existing.Triples, entity.Triples...)
+		existing.MessageType = entity.MessageType
+		if entity.StorageRef != nil {
+			existing.StorageRef = entity.StorageRef
+		}
+		existing.Version++
+		existing.UpdatedAt = time.Now()
+		data, err := json.Marshal(&existing)
+		if err == nil {
+			bytesWritten = len(data)
+		}
+		return data, err
+	})
+	if err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return errs.Wrap(err, "Component", "MergeEntity", "CAS update")
+	}
+
+	// Cache invalidation matches createEntity — readers must see the
+	// merged state on next Get.
+	if c.entityCache != nil {
+		c.entityCache.Delete(entity.ID) //nolint:errcheck
+	}
+
+	c.updateSuffixIndex(ctx, entity.ID)
+
+	atomic.AddInt64(&c.messagesProcessed, 1)
+	atomic.AddInt64(&c.bytesProcessed, int64(bytesWritten))
+	c.lastActivity.Store(time.Now())
+	c.entitiesUpdated.Inc()
+
+	c.logger.Debug("entity merged",
+		slog.String("entity_id", entity.ID),
+		slog.Int("triples_in", len(entity.Triples)))
+
+	c.ensureRelationshipTargetsExist(ctx, entity)
+
+	return nil
 }
 
 // CreateEntityStrict creates a new entity atomically — if the ID is
