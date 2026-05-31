@@ -42,6 +42,14 @@ services:
 
   # SemStreams Application (core components only)
   semstreams:
+    # Explicit image tag is load-bearing — docker compose's default name
+    # ({project}_{service}) collides across compose files in this dir,
+    # so whoever built last wins regardless of `target:`. Per-target
+    # tags eliminate cross-compose contamination. Caught during the
+    # v1.0.0-beta.90 pre-tag gate: a target:e2e build from lifecycle.yml
+    # leaked into target:production for e2e.yml and the websocket-stream
+    # scenario silently ran against the wrong binary for 36s.
+    image: c360studio/semstreams:e2e-production
     build:
       context: ../..
       dockerfile: docker/Dockerfile
