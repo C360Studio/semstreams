@@ -92,6 +92,7 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "query_entity", Type: "nats-request", Subject: "graph.query.entity"},
+				{Name: "query_batch", Type: "nats-request", Subject: "graph.query.batch"},
 				{Name: "query_relationships", Type: "nats-request", Subject: "graph.query.relationships"},
 				{Name: "query_path_search", Type: "nats-request", Subject: "graph.query.pathSearch"},
 			},

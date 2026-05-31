@@ -118,7 +118,7 @@ Empty prefix forces a full KV scan (`KeysByPrefix("")` walks every key in `ENTIT
 
 ### Choose `limit` deliberately
 
-Default is 1000 when `limit` is 0 or omitted. Keep it at the smallest value your UI actually needs to render. A 5K-entity response wastes bandwidth and JSON decode time for no gain if the user sees 200 rows.
+Default is **100** when `limit` is 0 or omitted. The gateway caps the default to keep replies under NATS's default 1MB `max_payload` ceiling for entities with substantial triple sets (gh#172). For larger result sets, set `limit` explicitly up to the internal cap. Keep it at the smallest value your UI actually needs to render — a 5K-entity response wastes bandwidth and JSON decode time for no gain if the user sees 200 rows.
 
 ### Exhaustive enumeration has no API
 

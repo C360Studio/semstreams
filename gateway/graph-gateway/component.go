@@ -960,8 +960,20 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 		return extractVars(variables, "id")
 	case "graph.query.relationships":
 		return c.transformRelationshipVars(variables)
-	case "graph.query.hierarchyStats", "graph.query.prefix":
+	case "graph.query.hierarchyStats":
 		return extractVars(variables, "prefix", "limit")
+	case "graph.query.prefix":
+		// gh#172: cap the default at 100 to keep replies under NATS's
+		// default 1MB max_payload for entities with substantial triple
+		// sets. graph-ingest's internal default stays at 1000 for non-
+		// gateway callers (handleQueryHierarchyStats passes 10000 and
+		// other in-tree callers set Limit explicitly). The gateway is
+		// the user-facing surface where the safety floor matters.
+		payload := extractVars(variables, "prefix", "limit")
+		if _, ok := payload["limit"]; !ok {
+			payload["limit"] = 100
+		}
+		return payload
 	case "graph.query.spatial":
 		return extractVars(variables, "north", "south", "east", "west", "limit")
 	case "graph.query.temporal":

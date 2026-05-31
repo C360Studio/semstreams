@@ -28,6 +28,7 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 	registrations := []subRegistration{
 		{"graph.query.entity", c.handleQueryEntity},
 		{"graph.query.entityByAlias", c.handleQueryEntityByAlias},
+		{"graph.query.batch", c.handleQueryBatch},
 		{"graph.query.relationships", c.handleQueryRelationships},
 		{"graph.query.pathSearch", c.handlePathSearch},
 		{"graph.query.hierarchyStats", c.handleQueryHierarchyStats},
@@ -145,6 +146,55 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntityByAlias", "request timeout")
 		}
 		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntityByAlias", "query entity")
+	}
+
+	c.recordSuccess(len(data), len(response))
+	return response, nil
+}
+
+// handleQueryBatch handles batch entity query requests (passthrough to
+// graph-ingest). Removes the N+1 collection-read pattern semconnect
+// (and other CS API gateway consumers) hit when hydrating predicate-
+// query results: instead of `predicate query → N entity queries`, the
+// flow becomes `predicate query → 1 batch query` — two NATS round-
+// trips total, regardless of result set size. gh#172 Phase 1.
+//
+// The internal graph.ingest.query.batch handler this forwards to
+// already does bounded concurrency (default 10 parallel KV gets),
+// cache-aware reads, and partial-success (skips missing IDs without
+// failing the whole batch). This passthrough simply lifts that
+// internal subject to the public graph.query.* surface.
+//
+// Chunking guidance: batches above ~100 IDs with substantial triple
+// sets risk exceeding NATS's default 1MB max_payload on the reply.
+// Callers expecting unbounded result-set sizes should chunk client-
+// side. Streaming/pagination for unbounded collections is a separate
+// design question (filed as a follow-up if the threshold actually
+// bites in practice).
+func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, error) {
+	c.reportQuerying(ctx)
+
+	// Validate request shape early — empty IDs is a no-op at the
+	// graph-ingest side, but malformed JSON should surface as
+	// ErrorInvalid at the caller (matches handleQueryEntity).
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryBatch", "parse request")
+	}
+
+	subject := c.router.Route("entityBatch")
+	if subject == "" {
+		return nil, errs.WrapTransient(errors.New("entityBatch query routing not available"), "GraphQuery", "handleQueryBatch", "route query")
+	}
+	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	if err != nil {
+		c.recordError(err)
+		if errors.Is(err, nats.ErrTimeout) {
+			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryBatch", "request timeout")
+		}
+		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryBatch", "query batch")
 	}
 
 	c.recordSuccess(len(data), len(response))
