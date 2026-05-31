@@ -54,6 +54,30 @@
 // are exported strings; no OWL inferencing, no SPARQL, no operator-
 // authored RDF. Prefix registration is automatic on import.
 //
+// # Dual-surface predicates (gh#182)
+//
+// Predicates expose two constants each — a dotted-notation form for
+// internal use in [message.Triple.Predicate] values and an IRI form
+// for JSON-LD / RDF export. Both share a Go identifier base; the IRI
+// form carries the `IRI` suffix:
+//
+//   - csapi.HasSource       = "csapi.artifact.source"    // dotted, for triples
+//   - csapi.HasSourceIRI    = "http://...hasSource"      // IRI, for export
+//   - csapi.ProducedBy      = "csapi.datastream.producedBy"
+//   - csapi.ProducedByIRI   = "http://...producedBy"
+//
+// Use the dotted form when constructing triples (the framework's NATS
+// wildcard semantics, predicate-index, and rule-engine all rely on the
+// dotted convention). Use the IRI form when serializing for boundary
+// export (JSON-LD `@context`, RDF/Turtle, OGC API responses). The
+// dotted-→-IRI mapping is registered automatically on package import
+// via [vocabulary.Register]; consumers can also resolve via
+// [vocabulary.GetPredicateMetadata].
+//
+// Class IRIs (Datastream, ControlStream, SensorMLDocument, etc.) have
+// no dotted counterpart — rdf:type values stay IRI-shaped on export
+// and aren't graph predicates themselves.
+//
 // # External references
 //
 //   - Spec (working draft): https://docs.ogc.org/DRAFTS/23-001r0.html

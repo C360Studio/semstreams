@@ -70,6 +70,11 @@ const (
 // by their compact form. Adding a constant in iris.go or
 // predicates.go requires adding it here too; the contract test in
 // iris_test.go fails loud if these drift apart.
+//
+// Predicate IRI entries use the `*IRI` constants from predicates.go
+// (the dotted forms are framework-internal and don't appear in IRI
+// tables). Class IRIs have no parallel dotted form — RDF type
+// references stay IRI-shaped on export.
 var iris = map[string]string{
 	// Classes
 	Prefix + ":Datastream":        Datastream,
@@ -79,17 +84,17 @@ var iris = map[string]string{
 	Prefix + ":SensorMLDocument":  SensorMLDocument,
 	Prefix + ":SWESchemaDocument": SWESchemaDocument,
 
-	// Predicates
-	Prefix + ":producedBy":          ProducedBy,
-	Prefix + ":resultTimeRange":     ResultTimeRange,
-	Prefix + ":phenomenonTimeRange": PhenomenonTimeRange,
-	Prefix + ":resultType":          ResultType,
-	Prefix + ":controlsSystem":      ControlsSystem,
-	Prefix + ":partOfControlStream": PartOfControlStream,
-	Prefix + ":eventForSystem":      EventForSystem,
-	Prefix + ":hasSource":           HasSource,
-	Prefix + ":hasResultSchema":     HasResultSchema,
-	Prefix + ":hasCommandSchema":    HasCommandSchema,
+	// Predicates — `*IRI` form (export/import boundary).
+	Prefix + ":producedBy":          ProducedByIRI,
+	Prefix + ":resultTimeRange":     ResultTimeRangeIRI,
+	Prefix + ":phenomenonTimeRange": PhenomenonTimeRangeIRI,
+	Prefix + ":resultType":          ResultTypeIRI,
+	Prefix + ":controlsSystem":      ControlsSystemIRI,
+	Prefix + ":partOfControlStream": PartOfControlStreamIRI,
+	Prefix + ":eventForSystem":      EventForSystemIRI,
+	Prefix + ":hasSource":           HasSourceIRI,
+	Prefix + ":hasResultSchema":     HasResultSchemaIRI,
+	Prefix + ":hasCommandSchema":    HasCommandSchemaIRI,
 }
 
 var reverseIRIs = func() map[string]string {

@@ -33,23 +33,32 @@ entities.
 
 ```text
 Parent entity (Datastream, System, ControlStream, ...)
-  rdf:type                csapi:Datastream
-  csapi:producedBy        system:<systemEntityID>
-  csapi:hasResultSchema   artifact:<schemaEntityID>     ← typed-artifact link
-  csapi:hasSource         artifact:<sensormlEntityID>   ← typed-artifact link
+  rdf:type                          csapi:Datastream             ← IRI (export-only, rdf:type stays IRI-shaped)
+  csapi.datastream.producedBy       system:<systemEntityID>      ← dotted predicate
+  csapi.datastream.resultSchema     artifact:<schemaEntityID>    ← typed-artifact link
+  csapi.artifact.source             artifact:<sensormlEntityID>  ← typed-artifact link
 
 artifact:<schemaEntityID>
-  rdf:type                csapi:SWESchemaDocument
+  rdf:type                csapi:SWESchemaDocument                ← IRI (export-only)
   StorageRef              { Instance: "csapi-artifacts",
                             Key: "swe/schemas/temp-celsius-v1.json",
                             ContentType: "application/swe+json" }
 
 artifact:<sensormlEntityID>
-  rdf:type                csapi:SensorMLDocument
+  rdf:type                csapi:SensorMLDocument                 ← IRI (export-only)
   StorageRef              { Instance: "csapi-artifacts",
                             Key: "sml/systems/weather-station-42.xml",
                             ContentType: "application/sml+xml" }
 ```
+
+**Predicate form (gh#182)**: triples carry the dotted-notation
+predicate constants (`csapi.HasSource`, `csapi.HasResultSchema`,
+`csapi.ProducedBy`, etc. — all expand to `csapi.<category>.<property>`)
+per the framework convention. The IRI forms (`csapi.HasSourceIRI`,
+etc.) live alongside them for JSON-LD / RDF export. The framework
+registry auto-binds dotted → IRI on package import so exporters can
+resolve in either direction. See `vocabulary/csapi/doc.go`
+§Dual-surface predicates.
 
 EntityID convention for artifacts: the `instance` segment of the
 6-part ID encodes identity in a content-addressable way — schema name
@@ -92,9 +101,12 @@ every other storage-ref-bearing entity.
 
 ## Cross-references
 
-- `vocabulary/csapi/` — `HasSource`, `HasResultSchema`,
-  `HasCommandSchema` predicates; `SensorMLDocument`,
-  `SWESchemaDocument` class IRIs.
+- `vocabulary/csapi/` — `HasSource`/`HasSourceIRI`,
+  `HasResultSchema`/`HasResultSchemaIRI`,
+  `HasCommandSchema`/`HasCommandSchemaIRI` dotted + IRI dual forms
+  (gh#182). All csapi predicates expose the same `{dotted, IRI}`
+  shape; `SensorMLDocument` and `SWESchemaDocument` are class IRIs
+  (rdf:type values; no dotted form).
 - [Rule-Driven Artifacts](18-rule-driven-artifacts.md) — the sister
   pattern for *external-facing* rendered artifacts (markdown, CSV,
   HTTP payloads). Different shape; complementary.
