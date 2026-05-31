@@ -34,6 +34,20 @@
 // reference §Scope-cut for the rationale (Schema flows as a
 // StorageRef pointer rather than an inline triple).
 //
+// # Typed artifact entities (gh#171)
+//
+// SensorML source documents, SWE Common result schemas, and SWE
+// Common command schemas are stored as first-class artifact
+// entities — they get their own 6-part EntityID, their own
+// singular StorageRef pointing to the document in NATS ObjectStore,
+// and are related to parent resources (System, Datastream,
+// ControlStream) via vocabulary predicates: HasSource,
+// HasResultSchema, HasCommandSchema. This is "Pattern 2" from the
+// gh#171 triage: the substrate already supports it, no framework
+// primitive change needed, and it cleanly handles the cross-stream
+// reuse case (one schema referenced by N Datastreams without
+// content duplication). See [docs/concepts/26-typed-artifact-entities.md].
+//
 // # Standards-at-work, not semweb hell
 //
 // This package follows the [vocabulary] family pattern. Constants

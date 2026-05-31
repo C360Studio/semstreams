@@ -35,4 +35,26 @@ const (
 	// EventForSystem binds a SystemEvent to the entity ID of the
 	// System the event is about. CS API v1.0 Part 2 §16.
 	EventForSystem = Namespace + "eventForSystem"
+
+	// HasSource binds a System or Datastream to the entity ID of
+	// the SensorMLDocument artifact that carries its lossless
+	// source representation. The artifact is a first-class entity
+	// with its own StorageRef pointing to the SensorML XML/JSON in
+	// ObjectStore. Lets parent resources stay graph-shaped
+	// (queryable facts) while the heavy document payload is fetched
+	// on demand via the ObjectStore reference. gh#171.
+	HasSource = Namespace + "hasSource"
+
+	// HasResultSchema binds a Datastream to the entity ID of the
+	// SWESchemaDocument artifact describing its observation result
+	// structure. Reusable across N Datastreams that share a schema —
+	// the artifact entity holds the canonical schema, the
+	// Datastreams reference it. gh#171.
+	HasResultSchema = Namespace + "hasResultSchema"
+
+	// HasCommandSchema binds a ControlStream to the entity ID of
+	// the SWESchemaDocument artifact describing the structure of
+	// commands it accepts. Same reuse model as HasResultSchema.
+	// gh#171.
+	HasCommandSchema = Namespace + "hasCommandSchema"
 )

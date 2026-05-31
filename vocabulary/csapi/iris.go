@@ -43,6 +43,27 @@ const (
 	// by /systems/{id}/events. CS API v1.0 Part 2 §16. Draft
 	// surface; IRI may swap when the spec publishes.
 	SystemEvent = Namespace + "SystemEvent"
+
+	// SensorMLDocument — the typed artifact class for a SensorML
+	// XML/JSON document carrying lossless source describing a
+	// System or Procedure. Stored as a first-class artifact entity
+	// (per gh#171 Pattern 2): the artifact carries its own 6-part
+	// EntityID + a singular StorageRef pointing to the document in
+	// ObjectStore. Datastreams and Systems reference it via the
+	// HasSource predicate. Lets parent resources stay graph-shaped
+	// while keeping the heavy document payload addressable via
+	// NATS ObjectStore.
+	SensorMLDocument = Namespace + "SensorMLDocument"
+
+	// SWESchemaDocument — the typed artifact class for a SWE Common
+	// DataRecord (or higher-arity schema) used by a Datastream or
+	// ControlStream. Stored as a first-class artifact entity with
+	// its own StorageRef. Datastreams reference it via
+	// HasResultSchema; ControlStreams reference it via
+	// HasCommandSchema. The reuse case (one schema across N
+	// streams) is what makes the typed-artifact pattern preferable
+	// to inline embedding on each parent.
+	SWESchemaDocument = Namespace + "SWESchemaDocument"
 )
 
 // iris is the canonical set of IRIs this package surfaces, indexed
@@ -51,10 +72,12 @@ const (
 // iris_test.go fails loud if these drift apart.
 var iris = map[string]string{
 	// Classes
-	Prefix + ":Datastream":    Datastream,
-	Prefix + ":ControlStream": ControlStream,
-	Prefix + ":Command":       Command,
-	Prefix + ":SystemEvent":   SystemEvent,
+	Prefix + ":Datastream":        Datastream,
+	Prefix + ":ControlStream":     ControlStream,
+	Prefix + ":Command":           Command,
+	Prefix + ":SystemEvent":       SystemEvent,
+	Prefix + ":SensorMLDocument":  SensorMLDocument,
+	Prefix + ":SWESchemaDocument": SWESchemaDocument,
 
 	// Predicates
 	Prefix + ":producedBy":          ProducedBy,
@@ -64,6 +87,9 @@ var iris = map[string]string{
 	Prefix + ":controlsSystem":      ControlsSystem,
 	Prefix + ":partOfControlStream": PartOfControlStream,
 	Prefix + ":eventForSystem":      EventForSystem,
+	Prefix + ":hasSource":           HasSource,
+	Prefix + ":hasResultSchema":     HasResultSchema,
+	Prefix + ":hasCommandSchema":    HasCommandSchema,
 }
 
 var reverseIRIs = func() map[string]string {
