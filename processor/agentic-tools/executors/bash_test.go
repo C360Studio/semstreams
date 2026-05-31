@@ -76,14 +76,15 @@ func TestBashExecutor_StderrCaptured(t *testing.T) {
 	assert.Contains(t, result.Content, "stderr-text")
 }
 
-func TestBashExecutor_SandboxMode(t *testing.T) {
-	// When sandbox URL is set, sandbox client is created
+func TestBashExecutor_RemoteMode(t *testing.T) {
+	// When SANDBOX_URL is set, the runner client (HTTP client to the
+	// remote sandbox container) is created.
 	e := NewBashExecutor("/tmp", "http://sandbox:8080")
-	assert.NotNil(t, e.sandbox)
+	assert.NotNil(t, e.runner)
 
-	// Without sandbox URL, runs locally
+	// Without SANDBOX_URL, runs locally.
 	e2 := NewBashExecutor("/tmp", "")
-	assert.Nil(t, e2.sandbox)
+	assert.Nil(t, e2.runner)
 }
 
 func TestFilterEnv_StripsSecrets(t *testing.T) {
