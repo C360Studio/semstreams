@@ -1348,6 +1348,79 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// TestGateway_PrefixQuery_DefaultsLimitTo100 pins gh#172's gateway-
+// layer cap. When the GraphQL client omits `limit`, the gateway
+// injects 100 into the NATS payload before forwarding. graph-ingest's
+// internal default stays 1000 (non-gateway callers can still hit that
+// ceiling explicitly); the gateway layer is the user-facing surface
+// where the 1MB max_payload safety floor matters.
+func TestGateway_PrefixQuery_DefaultsLimitTo100(t *testing.T) {
+	mock := newMockNATSRequester()
+
+	mock.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
+		assert.Equal(t, "graph.query.prefix", subject)
+
+		var payload map[string]interface{}
+		require.NoError(t, json.Unmarshal(data, &payload))
+
+		assert.Equal(t, float64(100), payload["limit"],
+			"omitted limit should be capped at the gateway-layer default of 100 (gh#172)")
+
+		return []byte(`{"entities":[]}`), nil
+	}
+
+	comp := createTestGatewayWithMock(t, mock)
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	defer comp.Stop(5 * time.Second)
+
+	gqlRequest := map[string]interface{}{
+		"query": `{ entitiesByPrefix(prefix: "test.") { id } }`,
+	}
+	body, err := json.Marshal(gqlRequest)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	comp.handleGraphQL(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestGateway_PrefixQuery_ExplicitLimitOverridesDefault pins the
+// inverse — when the caller sets `limit` explicitly, the gateway must
+// NOT clobber it with the default. Up to graph-ingest's internal cap.
+func TestGateway_PrefixQuery_ExplicitLimitOverridesDefault(t *testing.T) {
+	mock := newMockNATSRequester()
+
+	mock.requestFunc = func(_ context.Context, _ string, data []byte, _ time.Duration) ([]byte, error) {
+		var payload map[string]interface{}
+		require.NoError(t, json.Unmarshal(data, &payload))
+		assert.Equal(t, float64(500), payload["limit"],
+			"explicit caller limit must override the gateway default")
+		return []byte(`{"entities":[]}`), nil
+	}
+
+	comp := createTestGatewayWithMock(t, mock)
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	defer comp.Stop(5 * time.Second)
+
+	gqlRequest := map[string]interface{}{
+		"query": `{ entitiesByPrefix(prefix: "test.", limit: 500) { id } }`,
+	}
+	body, err := json.Marshal(gqlRequest)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	comp.handleGraphQL(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestGateway_InlineArgs_ExplicitVariablesOverrideInline(t *testing.T) {
 	mock := newMockNATSRequester()
 
