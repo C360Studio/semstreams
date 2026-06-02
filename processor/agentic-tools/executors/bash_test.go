@@ -3,6 +3,7 @@ package executors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/processor/agentic-tools/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -439,6 +442,118 @@ func TestBashExecutor_VerifyClean_SandboxBlocksOnDirty(t *testing.T) {
 	// command must NOT have been issued.
 	require.Len(t, *calls, 1, "real command should not have been issued; calls: %+v", *calls)
 	assert.Contains(t, (*calls)[0].command, "git status")
+}
+
+// recordingRunner is a Runner that captures every Exec call and returns
+// a canned ExecResult. Lets tests prove (1) WithRunner replaces the
+// URL-based default and (2) BashExecutor routes through the supplied
+// Runner without touching the network. Mirrors the role of
+// newFakeSandboxServer for the URL-based path, but without HTTP — the
+// whole point of the Runner interface is per-call routing without an
+// HTTP middlebox.
+type recordingRunner struct {
+	mu     sync.Mutex
+	calls  []recordedExec
+	result *runner.ExecResult
+	err    error
+}
+
+type recordedExec struct {
+	taskID    string
+	command   string
+	timeoutMs int
+}
+
+func (r *recordingRunner) Exec(_ context.Context, taskID, command string, timeoutMs int) (*runner.ExecResult, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, recordedExec{taskID: taskID, command: command, timeoutMs: timeoutMs})
+	r.mu.Unlock()
+	return r.result, r.err
+}
+
+// TestBashExecutor_WithRunner_RoutesThroughCustomRunner is the primary
+// boundary test for the Runner interface extension point. Product shells
+// (e.g., semteams's per-tenant devcontainer router) supply a custom
+// Runner via WithRunner and expect every remote dispatch to go through
+// it — no fallback to local exec, no HTTP, no URL-based runner.
+func TestBashExecutor_WithRunner_RoutesThroughCustomRunner(t *testing.T) {
+	rec := &recordingRunner{
+		result: &runner.ExecResult{Stdout: "from-custom-runner", ExitCode: 0},
+	}
+	e := NewBashExecutor("", "", WithRunner(rec))
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "cr-1",
+		Name:      "bash",
+		Arguments: map[string]any{"command": "echo hi"},
+		Metadata:  map[string]any{"task_id": "task-abc"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error)
+	assert.Equal(t, "from-custom-runner", res.Content)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	require.Len(t, rec.calls, 1)
+	assert.Equal(t, "task-abc", rec.calls[0].taskID)
+	assert.Equal(t, "echo hi", rec.calls[0].command)
+	assert.Greater(t, rec.calls[0].timeoutMs, 0, "timeout must be propagated as ms")
+}
+
+// TestBashExecutor_WithRunner_OverridesURL pins the mutual-exclusion
+// contract: when both a sandboxURL and WithRunner are supplied, WithRunner
+// wins. Documented behavior — callers are expected to use one or the
+// other, but the constructor must not silently revert to the URL-based
+// runner if both arrive. The HTTP handler fails the test the instant
+// the contract breaks (matches the newFakeSandboxServer pattern above)
+// so the diagnosis is "URL runner was invoked", not "custom runner
+// returned the wrong content."
+func TestBashExecutor_WithRunner_OverridesURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("WithRunner did not override; URL runner was invoked at %s", r.URL.Path)
+	}))
+	t.Cleanup(server.Close)
+
+	rec := &recordingRunner{result: &runner.ExecResult{Stdout: "custom-wins", ExitCode: 0}}
+	e := NewBashExecutor("/unused", server.URL, WithRunner(rec))
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "cr-2",
+		Name:      "bash",
+		Arguments: map[string]any{"command": "echo override"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "custom-wins", res.Content)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	require.Len(t, rec.calls, 1)
+}
+
+// TestBashExecutor_WithRunner_NilIsNoop confirms that passing a nil
+// Runner via WithRunner does NOT clobber the URL-based default. Keeps
+// callers safe from accidentally disabling the URL-based runner with
+// an uninitialized custom impl.
+func TestBashExecutor_WithRunner_NilIsNoop(t *testing.T) {
+	e := NewBashExecutor("/tmp", "http://sandbox:8080", WithRunner(nil))
+	assert.NotNil(t, e.runner, "nil Runner must not clear the URL-constructed default")
+}
+
+// TestBashExecutor_WithRunner_PropagatesError surfaces transport-layer
+// errors through the same path as the URL-based runner — exec failure
+// becomes a ToolResult.Error, not a returned err.
+func TestBashExecutor_WithRunner_PropagatesError(t *testing.T) {
+	rec := &recordingRunner{err: errors.New("router unavailable")}
+	e := NewBashExecutor("", "", WithRunner(rec))
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "cr-3",
+		Name:      "bash",
+		Arguments: map[string]any{"command": "echo hi"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "remote exec failed")
+	assert.Contains(t, res.Error, "router unavailable")
 }
 
 // TestBashExecutor_VerifyClean_SandboxAllowsClean covers the success
