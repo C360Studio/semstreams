@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic/research"
@@ -80,7 +81,12 @@ func extractLoopIDFromSubject(subject string) string {
 // adapters.go, so a malformed model response surfaces as a specific
 // "router emitted invalid X" error rather than a generic decode
 // failure downstream.
-func routeDecision(ctx context.Context, router Router, intent *research.Intent, classifierOut *research.ClassifierOutput, maxResponseTokens, maxCandidatesInPrompt int) (*research.RouteDecision, error) {
+//
+// logger is used only for defense-in-depth Warn lines (e.g. a
+// model that emitted non-empty args for synthesize_directly). nil
+// is tolerated — falls back to slog.Default — so test callers can
+// skip logger plumbing.
+func routeDecision(ctx context.Context, router Router, intent *research.Intent, classifierOut *research.ClassifierOutput, maxResponseTokens, maxCandidatesInPrompt int, logger *slog.Logger) (*research.RouteDecision, error) {
 	if intent == nil {
 		return nil, fmt.Errorf("intent is nil")
 	}
@@ -89,6 +95,9 @@ func routeDecision(ctx context.Context, router Router, intent *research.Intent, 
 	}
 	if router == nil {
 		return nil, fmt.Errorf("router is nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	systemPrompt := buildSystemPrompt()
@@ -104,12 +113,12 @@ func routeDecision(ctx context.Context, router Router, intent *research.Intent, 
 
 	jsonBytes, err := extractJSON(rawContent)
 	if err != nil {
-		return nil, fmt.Errorf("extract JSON from router content: %w (raw=%q finish_reason=%q)", err, truncate(rawContent, 200), reason)
+		return nil, fmt.Errorf("extract JSON from router content: %w (raw=%q finish_reason=%q)", err, truncate(rawContent, errPayloadTruncateBytes), reason)
 	}
 
 	var decision research.RouteDecision
 	if err := json.Unmarshal(jsonBytes, &decision); err != nil {
-		return nil, fmt.Errorf("decode route decision: %w (raw=%q)", err, truncate(string(jsonBytes), 200))
+		return nil, fmt.Errorf("decode route decision: %w (raw=%q)", err, truncate(string(jsonBytes), errPayloadTruncateBytes))
 	}
 	if err := decision.Validate(); err != nil {
 		return nil, fmt.Errorf("router emitted invalid action: %w", err)
@@ -131,14 +140,33 @@ func routeDecision(ctx context.Context, router Router, intent *research.Intent, 
 			return nil, fmt.Errorf("router emitted invalid retighten args: %w", err)
 		}
 	case research.ActionSynthesizeDirectly:
-		// No args expected; if the model emitted some, log-and-keep
-		// (validators downstream don't read them). Don't reject —
-		// frontier models sometimes emit empty maps even when told
-		// not to, and that's not a routing failure.
+		// No args expected. Frontier models sometimes emit empty maps
+		// even when told not to — that's not a routing failure. But
+		// NON-empty args here means the model picked synthesize_directly
+		// while emitting args that would have been valid for a
+		// different action (likely confusion between branches), and the
+		// downstream synthesizer will silently lose that intent. Surface
+		// a Warn so operator trajectory review catches it. Keep routing
+		// to synthesize_directly — rejecting would gate the chain on a
+		// known-noisy frontier-model behaviour.
+		if len(decision.Args) > 0 {
+			logger.Warn("synthesize_directly emitted with non-empty args; possible action confusion",
+				slog.String("action", decision.Action),
+				slog.Int("args_count", len(decision.Args)),
+				slog.String("rationale", truncate(decision.Rationale, errPayloadTruncateBytes)))
+		}
 	}
 
 	return &decision, nil
 }
+
+// errPayloadTruncateBytes caps the raw-payload snippet rendered in
+// error messages and the synthesize_directly Warn line. 512 keeps
+// the JSON action enum and per-action arg keys visible even when
+// the model wrapped its emit in long prose. Used at three sites
+// (extract JSON failure, decode failure, synthesize_directly Warn)
+// so a future tweak stays consistent.
+const errPayloadTruncateBytes = 512
 
 // extractJSON pulls a JSON object out of an LLM response. Many
 // models wrap their structured emit in ```json fences or prose
@@ -155,15 +183,35 @@ func extractJSON(content string) ([]byte, error) {
 	trimmed = strings.TrimSuffix(trimmed, "```")
 	trimmed = strings.TrimSpace(trimmed)
 
-	// Locate the outermost {...} object — handles brace counts in
-	// nested values correctly because we walk character-by-character.
+	// Locate the outermost {...} object. The walker tracks JSON
+	// string-literal context so a `}` inside a string value (a
+	// model's rationale field is the common case — "axes spanning
+	// {time, entity_type}") doesn't truncate the extraction
+	// mid-object. Backslash-escaped quotes inside strings do not
+	// toggle the string-context flag.
 	start := strings.Index(trimmed, "{")
 	if start < 0 {
 		return nil, fmt.Errorf("no JSON object found in content")
 	}
 	depth := 0
+	inString := false
+	escaped := false
 	for i := start; i < len(trimmed); i++ {
-		switch trimmed[i] {
+		ch := trimmed[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case ch == '\\':
+				escaped = true
+			case ch == '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
 		case '{':
 			depth++
 		case '}':

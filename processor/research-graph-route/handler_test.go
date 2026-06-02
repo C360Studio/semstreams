@@ -1,9 +1,12 @@
 package researchroute
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +97,30 @@ func TestExtractJSON(t *testing.T) {
 			input:   `{"action":"x"`,
 			wantErr: true,
 		},
+		{
+			// Regression: brace inside a string value must NOT truncate
+			// the extraction. Surfaces as soon as the model writes a
+			// rationale like "axes spanning {time, entity_type}".
+			name:  "brace inside string value",
+			input: `{"action":"synthesize_directly","args":{},"rationale":"axes spanning {time, entity_type}"}`,
+			want:  `{"action":"synthesize_directly","args":{},"rationale":"axes spanning {time, entity_type}"}`,
+		},
+		{
+			// Both braces inside a string value — symmetric form of the
+			// above. Catches a walker that toggled string-context only
+			// on `{` (instead of `"`).
+			name:  "both braces inside string value",
+			input: `{"action":"x","args":{},"rationale":"oh no a } in prose and another { for good measure"}`,
+			want:  `{"action":"x","args":{},"rationale":"oh no a } in prose and another { for good measure"}`,
+		},
+		{
+			// Escaped quote inside a string value must NOT exit
+			// string-context. Catches a walker that treats every `"`
+			// as a toggle without tracking the escape.
+			name:  "escaped quote does not exit string",
+			input: `{"action":"retighten","args":{"topic":"the \"quoted\" } term"}}`,
+			want:  `{"action":"retighten","args":{"topic":"the \"quoted\" } term"}}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -127,7 +154,7 @@ func TestRouteDecision_SynthesizeDirectly(t *testing.T) {
 		Candidates: []research.Candidate{{EntityID: "drone-001", Label: "Drone 001", Tier: "0", Source: "x"}},
 	}
 
-	got, err := routeDecision(context.Background(), router, intent, out, 512, 10)
+	got, err := routeDecision(context.Background(), router, intent, out, 512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
 	}
@@ -152,7 +179,7 @@ func TestRouteDecision_DecomposeHappyPath(t *testing.T) {
 	got, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x", Tier: "0"},
-		512, 10)
+		512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
 	}
@@ -175,7 +202,7 @@ func TestRouteDecision_WalkSeedsHappyPath(t *testing.T) {
 	got, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x", Tier: "0", Candidates: []research.Candidate{{EntityID: "drone-001", Tier: "0", Source: "x"}}},
-		512, 10)
+		512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
 	}
@@ -195,7 +222,7 @@ func TestRouteDecision_RetightenHappyPath(t *testing.T) {
 	got, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x", Tier: "0"},
-		512, 10)
+		512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
 	}
@@ -215,7 +242,7 @@ func TestRouteDecision_RejectsRouterError(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "router call") {
 		t.Fatalf("want router-call error, got %v", err)
 	}
@@ -226,7 +253,7 @@ func TestRouteDecision_RejectsEmptyContent(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "empty content") {
 		t.Fatalf("want empty-content error, got %v", err)
 	}
@@ -240,7 +267,7 @@ func TestRouteDecision_RejectsInvalidAction(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil {
 		t.Fatal("want invalid-action error, got nil")
 	}
@@ -259,7 +286,7 @@ func TestRouteDecision_RejectsBadDecomposeArgs(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid decompose args") {
 		t.Fatalf("want invalid-decompose-args error, got %v", err)
 	}
@@ -270,7 +297,7 @@ func TestRouteDecision_RejectsBadWalkSeedsArgs(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid walk_seeds args") {
 		t.Fatalf("want invalid-walk_seeds-args error, got %v", err)
 	}
@@ -281,7 +308,7 @@ func TestRouteDecision_RejectsBadRetightenArgs(t *testing.T) {
 	_, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid retighten args") {
 		t.Fatalf("want invalid-retighten-args error, got %v", err)
 	}
@@ -290,17 +317,77 @@ func TestRouteDecision_RejectsBadRetightenArgs(t *testing.T) {
 func TestRouteDecision_SynthesizeDirectlyToleratesExtraArgs(t *testing.T) {
 	// Frontier models occasionally emit empty args even when told
 	// not to. SynthesizeDirectly tolerates this — downstream
-	// synthesizer ignores Args for this action.
+	// synthesizer ignores Args for this action. The defense-in-depth
+	// Warn for this case is covered in
+	// TestRouteDecision_SynthesizeDirectlyWarnsOnNonEmptyArgs.
 	router := &fakeRouter{content: `{"action":"synthesize_directly","args":{"extra":"ignored"},"rationale":"x"}`}
 	got, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
 		&research.ClassifierOutput{Topic: "x"},
-		512, 10)
+		512, 10, discardLogger())
 	if err != nil {
 		t.Fatalf("routeDecision should tolerate extra args on synthesize_directly: %v", err)
 	}
 	if got.Action != research.ActionSynthesizeDirectly {
 		t.Errorf("action drift: %q", got.Action)
+	}
+}
+
+// discardLogger returns a logger that swallows output; used by
+// routeDecision tests that intentionally exercise the
+// non-empty-args path but don't want the Warn line in test stderr.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestRouteDecision_SynthesizeDirectlyWarnsOnNonEmptyArgs pins the
+// defense-in-depth Warn (post-PR-#187 review follow-up): when the
+// model picks synthesize_directly but emits args that would have
+// been valid for a different action (likely action-confusion), we
+// keep routing but log a Warn so operator trajectory review catches
+// it. Otherwise the downstream synthesizer silently loses the
+// intent.
+func TestRouteDecision_SynthesizeDirectlyWarnsOnNonEmptyArgs(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	router := &fakeRouter{content: `{"action":"synthesize_directly","args":{"seeds":[{"ref":"x","ref_type":"name"}]},"rationale":"confused"}`}
+	got, err := routeDecision(context.Background(), router,
+		&research.Intent{Topic: "x"},
+		&research.ClassifierOutput{Topic: "x"},
+		512, 10, logger)
+	if err != nil {
+		t.Fatalf("routeDecision: %v", err)
+	}
+	if got.Action != research.ActionSynthesizeDirectly {
+		t.Errorf("action drift: %q", got.Action)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "synthesize_directly emitted with non-empty args") {
+		t.Errorf("expected Warn about non-empty args, log was:\n%s", logged)
+	}
+	if !strings.Contains(logged, "args_count=1") {
+		t.Errorf("Warn should include args count, log was:\n%s", logged)
+	}
+}
+
+// TestRouteDecision_SynthesizeDirectlyEmptyArgsDoesNotWarn pins
+// the negative case: an empty args map (the well-behaved synthesis
+// path) must not Warn — otherwise log churn would mask the
+// confusion case the Warn exists to catch.
+func TestRouteDecision_SynthesizeDirectlyEmptyArgsDoesNotWarn(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	router := &fakeRouter{content: `{"action":"synthesize_directly","args":{},"rationale":"all good"}`}
+	if _, err := routeDecision(context.Background(), router,
+		&research.Intent{Topic: "x"},
+		&research.ClassifierOutput{Topic: "x"},
+		512, 10, logger); err != nil {
+		t.Fatalf("routeDecision: %v", err)
+	}
+	if strings.Contains(logBuf.String(), "non-empty args") {
+		t.Errorf("empty args should NOT produce a Warn, log was:\n%s", logBuf.String())
 	}
 }
 
@@ -418,7 +505,7 @@ func TestRouteDecision_PassesSystemAndUserPrompts(t *testing.T) {
 		Topic: "my topic", Tier: "0",
 		Candidates: []research.Candidate{{EntityID: "ent-1", Tier: "0", Source: "x"}},
 	}
-	_, err := routeDecision(context.Background(), router, intent, out, 512, 10)
+	_, err := routeDecision(context.Background(), router, intent, out, 512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
 	}
