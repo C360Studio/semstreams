@@ -1189,7 +1189,18 @@ func runWithBudget(ctx context.Context, budget time.Duration, fn func(context.Co
 
 	select {
 	case <-done:
-		return false
+		// fn returned. But "returned" is ambiguous when bctx was
+		// cancelled before/while fn ran — the goroutine may have
+		// observed bctx.Done() and returned promptly, which is the
+		// timed-out (or parent-cancelled) case, NOT a within-budget
+		// completion. When parent ctx is pre-cancelled, bctx is born
+		// cancelled and both channels become ready simultaneously;
+		// Go's select picks one at random, so without this check the
+		// function returns the wrong answer ~50% of the time on the
+		// pre-cancel path (caught by
+		// TestRunWithBudget_ParentContextCancellationPropagates
+		// flaking on CI). Inspect bctx to disambiguate.
+		return bctx.Err() != nil
 	case <-bctx.Done():
 		return true
 	}

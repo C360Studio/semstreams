@@ -841,6 +841,155 @@ func TestExecutionOutput_ValidateRejectsInvalid(t *testing.T) {
 	}
 }
 
+// --- AssessmentOutput ---
+
+func TestAssessmentOutput_RoundTripThroughDecoder_Sufficient(t *testing.T) {
+	original := &research.AssessmentOutput{
+		Topic:         "drone-001 maintenance events in the last 24 hours",
+		Sufficient:    true,
+		Rationale:     "candidate set carries the maintenance event triple with a SnippetText line for the 14:32Z fault",
+		Confidence:    0.86,
+		EvidenceCount: 3,
+	}
+
+	envelope := message.NewBaseMessage(original.Schema(), original, "research-assessment-roundtrip-test")
+	wireBytes, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
+	}
+	if got := decoded.Type(); got != original.Schema() {
+		t.Errorf("type: got %+v, want %+v", got, original.Schema())
+	}
+	got, ok := decoded.Payload().(*research.AssessmentOutput)
+	if !ok {
+		t.Fatalf("payload: got %T, want *research.AssessmentOutput", decoded.Payload())
+	}
+	if got.Topic != original.Topic {
+		t.Errorf("topic drift: got %q, want %q", got.Topic, original.Topic)
+	}
+	if !got.Sufficient {
+		t.Error("Sufficient lost on round-trip")
+	}
+	if got.Confidence != original.Confidence {
+		t.Errorf("confidence drift: got %v, want %v", got.Confidence, original.Confidence)
+	}
+	if got.EvidenceCount != original.EvidenceCount {
+		t.Errorf("evidence_count drift: got %d, want %d", got.EvidenceCount, original.EvidenceCount)
+	}
+	if got.Rationale != original.Rationale {
+		t.Errorf("rationale drift")
+	}
+	if len(got.RefinedQueries) != 0 {
+		t.Errorf("refined_queries should be empty for Sufficient=true; got %v", got.RefinedQueries)
+	}
+}
+
+func TestAssessmentOutput_RoundTripThroughDecoder_RefinePath(t *testing.T) {
+	original := &research.AssessmentOutput{
+		Topic:      "drone-001 status across the fleet",
+		Sufficient: false,
+		RefinedQueries: []string{
+			"battery alert frequency for drone-001 in the last 7 days",
+			"maintenance events on drone-001 that paged operations",
+		},
+		Rationale:     "evidence covers maintenance window but topic asks about fleet-wide status — need cross-drone slice",
+		Confidence:    0.42,
+		EvidenceCount: 2,
+	}
+	envelope := message.NewBaseMessage(original.Schema(), original, "test")
+	wireBytes, _ := json.Marshal(envelope)
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, ok := decoded.Payload().(*research.AssessmentOutput)
+	if !ok {
+		t.Fatalf("payload: got %T", decoded.Payload())
+	}
+	if got.Sufficient {
+		t.Error("Sufficient drift: got true, want false")
+	}
+	if len(got.RefinedQueries) != 2 {
+		t.Fatalf("refined_queries len: got %d, want 2", len(got.RefinedQueries))
+	}
+	if got.RefinedQueries[0] != original.RefinedQueries[0] {
+		t.Errorf("refined_queries[0] drift")
+	}
+}
+
+func TestAssessmentOutput_DegradedRoundTrip(t *testing.T) {
+	original := &research.AssessmentOutput{
+		Topic:          "x",
+		Sufficient:     false,
+		Degraded:       true,
+		DegradedReason: "upstream execute.complete missing",
+	}
+	envelope := message.NewBaseMessage(original.Schema(), original, "test")
+	wireBytes, _ := json.Marshal(envelope)
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := decoded.Payload().(*research.AssessmentOutput)
+	if !got.Degraded {
+		t.Error("Degraded flag lost")
+	}
+	if got.DegradedReason != "upstream execute.complete missing" {
+		t.Errorf("degraded reason drift: %q", got.DegradedReason)
+	}
+}
+
+func TestAssessmentOutput_ValidateRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  research.AssessmentOutput
+		wantSub string
+	}{
+		{
+			name:    "missing topic",
+			output:  research.AssessmentOutput{Sufficient: true},
+			wantSub: "topic",
+		},
+		{
+			name: "empty refined query",
+			output: research.AssessmentOutput{
+				Topic:          "x",
+				RefinedQueries: []string{"valid", "   "},
+			},
+			wantSub: "refined_queries[1]",
+		},
+		{
+			name:    "confidence out of range",
+			output:  research.AssessmentOutput{Topic: "x", Confidence: 1.5},
+			wantSub: "confidence",
+		},
+		{
+			name:    "negative evidence count",
+			output:  research.AssessmentOutput{Topic: "x", EvidenceCount: -1},
+			wantSub: "evidence_count",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.output.Validate()
+			if err == nil {
+				t.Fatalf("Validate = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("Validate error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
 // --- enum guards ---
 
 func TestIsValidSeedRefType(t *testing.T) {

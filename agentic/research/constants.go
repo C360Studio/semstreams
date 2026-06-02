@@ -40,6 +40,12 @@ const (
 	// trigger key; assess_sufficiency (PR 5) consumes the payload
 	// to pick sufficient / refine.
 	CategoryExecutionOutput = "execution_output"
+
+	// CategoryAssessmentOutput is the assess_sufficiency component's
+	// emit (ADR-045 Phase 1 PR 5): the sufficient/refine decision
+	// over the upstream ExecutionOutput. R3 dispatches synthesize on
+	// Sufficient, refine on !Sufficient.
+	CategoryAssessmentOutput = "assessment_output"
 )
 
 // RouteAction values for RouteDecision.Action. Closed enum per ADR-045

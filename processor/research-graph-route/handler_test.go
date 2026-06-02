@@ -58,88 +58,9 @@ func TestExtractLoopIDFromSubject(t *testing.T) {
 	}
 }
 
-// --- extractJSON ---
-
-func TestExtractJSON(t *testing.T) {
-	cases := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:  "bare object",
-			input: `{"action":"synthesize_directly","args":{}}`,
-			want:  `{"action":"synthesize_directly","args":{}}`,
-		},
-		{
-			name:  "markdown fenced",
-			input: "```json\n{\"action\":\"retighten\",\"args\":{\"topic\":\"x\"}}\n```",
-			want:  `{"action":"retighten","args":{"topic":"x"}}`,
-		},
-		{
-			name:  "prose preface",
-			input: `Sure — here is the decision:` + "\n" + `{"action":"walk_seeds","args":{"seeds":[{"ref":"x","ref_type":"name"}]}}` + "\nLet me know if you need more.",
-			want:  `{"action":"walk_seeds","args":{"seeds":[{"ref":"x","ref_type":"name"}]}}`,
-		},
-		{
-			name:  "nested braces preserved",
-			input: `{"action":"decompose","args":{"axes":["a","b"],"focus":"x","scope":"narrow"},"rationale":"y"}`,
-			want:  `{"action":"decompose","args":{"axes":["a","b"],"focus":"x","scope":"narrow"},"rationale":"y"}`,
-		},
-		{
-			name:    "no object",
-			input:   "I cannot answer this.",
-			wantErr: true,
-		},
-		{
-			name:    "unbalanced",
-			input:   `{"action":"x"`,
-			wantErr: true,
-		},
-		{
-			// Regression: brace inside a string value must NOT truncate
-			// the extraction. Surfaces as soon as the model writes a
-			// rationale like "axes spanning {time, entity_type}".
-			name:  "brace inside string value",
-			input: `{"action":"synthesize_directly","args":{},"rationale":"axes spanning {time, entity_type}"}`,
-			want:  `{"action":"synthesize_directly","args":{},"rationale":"axes spanning {time, entity_type}"}`,
-		},
-		{
-			// Both braces inside a string value — symmetric form of the
-			// above. Catches a walker that toggled string-context only
-			// on `{` (instead of `"`).
-			name:  "both braces inside string value",
-			input: `{"action":"x","args":{},"rationale":"oh no a } in prose and another { for good measure"}`,
-			want:  `{"action":"x","args":{},"rationale":"oh no a } in prose and another { for good measure"}`,
-		},
-		{
-			// Escaped quote inside a string value must NOT exit
-			// string-context. Catches a walker that treats every `"`
-			// as a toggle without tracking the escape.
-			name:  "escaped quote does not exit string",
-			input: `{"action":"retighten","args":{"topic":"the \"quoted\" } term"}}`,
-			want:  `{"action":"retighten","args":{"topic":"the \"quoted\" } term"}}`,
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := extractJSON(c.input)
-			if c.wantErr {
-				if err == nil {
-					t.Errorf("extractJSON: want error, got %q", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("extractJSON: unexpected error %v", err)
-			}
-			if string(got) != c.want {
-				t.Errorf("extractJSON = %q, want %q", got, c.want)
-			}
-		})
-	}
-}
+// extractJSON tests moved to processor/research-graph-llmwrap when
+// the helper was promoted to a shared package in PR 5. See
+// processor/research-graph-llmwrap/jsonextract_test.go.
 
 // --- routeDecision happy paths ---
 

@@ -1031,6 +1031,8 @@ func TestCapabilityConstants_Values(t *testing.T) {
 		{"layer_normalization", CapabilityLayerNormalization, "layer_normalization"},
 		{"anomaly_review", CapabilityAnomalyReview, "anomaly_review"},
 		{"research_routing", CapabilityResearchRouting, "research_routing"},
+		{"research_assessment", CapabilityResearchAssessment, "research_assessment"},
+		{"research_synthesis", CapabilityResearchSynthesis, "research_synthesis"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

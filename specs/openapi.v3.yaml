@@ -1263,9 +1263,11 @@ components:
                         - $ref: ../schemas/oasf-generator.v1.json
                         - $ref: ../schemas/objectstore.v1.json
                         - $ref: ../schemas/otel-exporter.v1.json
+                        - $ref: ../schemas/research-graph-assess.v1.json
                         - $ref: ../schemas/research-graph-classify.v1.json
                         - $ref: ../schemas/research-graph-execute.v1.json
                         - $ref: ../schemas/research-graph-route.v1.json
+                        - $ref: ../schemas/research-graph-synthesize.v1.json
                         - $ref: ../schemas/rule-processor.v1.json
                         - $ref: ../schemas/slim-bridge.v1.json
                         - $ref: ../schemas/udp.v1.json

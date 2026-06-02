@@ -37,9 +37,11 @@ import (
 	jsongeneric "github.com/c360studio/semstreams/processor/json_generic"
 	jsonmap "github.com/c360studio/semstreams/processor/json_map"
 	oasfgenerator "github.com/c360studio/semstreams/processor/oasf-generator"
+	researchassess "github.com/c360studio/semstreams/processor/research-graph-assess"
 	researchclassify "github.com/c360studio/semstreams/processor/research-graph-classify"
 	researchexecute "github.com/c360studio/semstreams/processor/research-graph-execute"
 	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
+	researchsynthesize "github.com/c360studio/semstreams/processor/research-graph-synthesize"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/storage/objectstore"
 )
@@ -201,9 +203,10 @@ func registerSemanticLayer(registry *component.Registry) error {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "graph-query component registration")
 	}
 
-	// Research graph chain (ADR-045): nl_classify + route_search +
-	// execute_subqueries stages. Subsequent PRs add assess_sufficiency
-	// and synthesize_answer.
+	// Research graph chain (ADR-045 Phase 1): five components wired
+	// in chain order — classify → route → execute → assess →
+	// synthesize. PR 6 wires the seven rules + reference flow that
+	// connect them.
 	if err := researchclassify.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-classify component registration")
 	}
@@ -212,6 +215,12 @@ func registerSemanticLayer(registry *component.Registry) error {
 	}
 	if err := researchexecute.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-execute component registration")
+	}
+	if err := researchassess.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-assess component registration")
+	}
+	if err := researchsynthesize.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-synthesize component registration")
 	}
 
 	// Statistical/Semantic tier components (enabled via config)
