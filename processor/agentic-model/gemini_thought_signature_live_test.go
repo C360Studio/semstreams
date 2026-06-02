@@ -246,7 +246,7 @@ func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
 			// response. Opaque tool data prevents the model from
 			// answering inline.
 			{
-				Role: "system",
+				Role:    "system",
 				Content: "You are a warehouse management assistant. ALWAYS use the supplied tools to fetch real data; never answer from memory. When the user asks about multiple INDEPENDENT pieces of data, dispatch ALL tool calls in your FIRST response in parallel — do not wait for any result before issuing the other calls.",
 			},
 			{
