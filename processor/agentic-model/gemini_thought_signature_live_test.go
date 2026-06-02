@@ -125,8 +125,22 @@ func TestGemini3x_ThoughtSignature_RoundTrip(t *testing.T) {
 	sig := signatureForToolCall(resp1.Message.ReasoningRecords, tc.ID)
 	t.Logf("turn 1 toolcall[0]: id=%q name=%q args=%v sig_len=%d sig_preview=%q",
 		tc.ID, tc.Name, tc.Arguments, len(sig), previewSig(sig))
+	// HARD-FAIL on empty signature for Gemini 3.x preview models —
+	// the whole point of this test is to gate the capture contract.
+	// Soft-warn here was the gap that let #194 ship undetected
+	// after #188 fixed the echo path. See
+	// [[feedback_live_gate_catches_doc_derived]] (sharpened 2026-06-02).
+	//
+	// Escape hatch: GEMINI_ALLOW_EMPTY_SIG=1 turns the assertion
+	// back into a warn for operators investigating regressions
+	// against non-3.x test models or known-stripped endpoints.
+	if sig == "" && os.Getenv("GEMINI_ALLOW_EMPTY_SIG") == "" {
+		t.Fatalf("turn 1: thought_signature is empty — capture path is broken on this model/endpoint. "+
+			"Set GEMINI_ALLOW_EMPTY_SIG=1 to downgrade to warn for non-3.x test runs. "+
+			"model=%q wire endpoint=%q gh#194 regression gate", geminiTestModel(), "openai-compat")
+	}
 	if sig == "" {
-		t.Logf("turn 1: thought_signature is empty — model is not a 3.x preview build OR the API stripped it. Continuing to turn 2 to see whether the round-trip still succeeds without it.")
+		t.Logf("turn 1: thought_signature empty; GEMINI_ALLOW_EMPTY_SIG override active — turn 2 will likely fail with HTTP 400")
 	}
 
 	// Turn 2: replay the assistant message + supply the tool result.
@@ -162,6 +176,174 @@ func TestGemini3x_ThoughtSignature_RoundTrip(t *testing.T) {
 	if resp2.Status == "error" {
 		t.Fatalf("turn 2 returned error: %s — likely thought_signature not echoed correctly", resp2.Error)
 	}
+}
+
+// TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip
+// exercises the multi-tool-call response shape that triggered
+// #194 in production. The test was a deliberate gap in the
+// single-tool TestGemini3x_ThoughtSignature_RoundTrip — Gemini's
+// validator only rejects the multi-tool path when position 2+
+// lacks a signature, so the single-tool test couldn't catch the
+// capture-side strip.
+//
+// Asks the model to call two tools in parallel (calculator-shaped
+// because Gemini's persona naturally emits parallel calls for
+// independent arithmetic problems). Asserts:
+//
+//  1. Turn 1 returns 2+ ToolCalls.
+//  2. EVERY captured ToolCall has a non-empty thought_signature
+//     in ReasoningRecords. This is the contract #188's echo fix
+//     can only honor if capture surfaced the signatures in the
+//     first place.
+//  3. Turn 2 (echo + tool results) is accepted. Gemini 3.x rejects
+//     with HTTP 400 if position 2+ is missing its signature; this
+//     turn implicitly tests the round-trip the validator gates.
+//
+// Per [[feedback_live_gate_catches_doc_derived]] (sharpened
+// 2026-06-02), each leg of a round-trip wire fix needs a HARD-FAIL
+// contract assertion under production-realistic conditions.
+func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
+	client := newGeminiLiveClient(t)
+	ctx := context.Background()
+	t.Logf("Gemini live multi-tool test against model=%q", geminiTestModel())
+
+	// Tools designed so the model CANNOT satisfy them from prior
+	// knowledge (gemini-3-pro-preview is strong enough to do
+	// arithmetic in its head, so calculator-shaped tools get
+	// skipped). These are opaque lookups that REQUIRE tool calls
+	// to obtain the data.
+	tools := []agentic.ToolDefinition{
+		{
+			Name:        "lookup_inventory_count",
+			Description: "Looks up the current count of a SKU in the warehouse inventory system. Returns the integer count.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"sku": map[string]any{"type": "string", "description": "The SKU code (e.g. 'WIDGET-42')"},
+				},
+				"required": []string{"sku"},
+			},
+		},
+		{
+			Name:        "lookup_warehouse_capacity",
+			Description: "Looks up the maximum capacity of a warehouse by its ID. Returns the integer capacity in units.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"warehouse_id": map[string]any{"type": "string", "description": "The warehouse identifier (e.g. 'WH-EAST-1')"},
+				},
+				"required": []string{"warehouse_id"},
+			},
+		},
+	}
+
+	turn1 := agentic.AgentRequest{
+		RequestID: "req-gemini-parallel-1",
+		Messages: []agentic.ChatMessage{
+			// Prompt explicitly forces parallel emission. The two
+			// lookups have NO causal dependency — best-practice
+			// agent behavior is to dispatch both in a single
+			// response. Opaque tool data prevents the model from
+			// answering inline.
+			{
+				Role:    "system",
+				Content: "You are a warehouse management assistant. ALWAYS use the supplied tools to fetch real data; never answer from memory. When the user asks about multiple INDEPENDENT pieces of data, dispatch ALL tool calls in your FIRST response in parallel — do not wait for any result before issuing the other calls.",
+			},
+			{
+				Role:    "user",
+				Content: "Look up the current inventory count for SKU 'WIDGET-42' and ALSO the capacity of warehouse 'WH-EAST-1'. These are independent lookups — dispatch both in parallel.",
+			},
+		},
+		Tools: tools,
+	}
+
+	ctx1, cancel1 := context.WithTimeout(ctx, 90*time.Second)
+	resp1, err := client.ChatCompletion(ctx1, turn1)
+	cancel1()
+	if err != nil {
+		t.Fatalf("turn 1 failed: %v", err)
+	}
+	if resp1.Status == "error" {
+		t.Fatalf("turn 1 returned error: %s", resp1.Error)
+	}
+	t.Logf("turn 1: tool_calls=%d records=%d", len(resp1.Message.ToolCalls), len(resp1.Message.ReasoningRecords))
+
+	// If the model only emitted one tool call (model behavior we
+	// can't fully control), SKIP — we want this test to fire
+	// specifically on the multi-tool path, not pass by accident
+	// on a single-tool response.
+	if len(resp1.Message.ToolCalls) < 2 {
+		t.Skipf("model emitted %d tool_calls; need 2+ to exercise the #194 multi-tool capture contract — try GEMINI_TEST_MODEL=gemini-3-pro-preview or re-run", len(resp1.Message.ToolCalls))
+	}
+
+	// Capture contract per Google's docs (verified empirically
+	// 2026-06-02 on gemini-3-flash-preview): the first
+	// function-call part in each step carries thought_signature;
+	// subsequent parallel calls in the same step don't need to.
+	// So the hard-fail line is:
+	//
+	//   - position 0 MUST have a non-empty signature (otherwise
+	//     capture is broken — this is the gh#194 production state
+	//     where semteams hit zero captured sigs)
+	//   - positions 1+ MAY have signatures (allowed but not required)
+	//   - turn 2 MUST succeed (the actual round-trip contract)
+	//
+	// GEMINI_ALLOW_EMPTY_SIG=1 escape hatch downgrades the
+	// position-0 assertion for operators investigating non-3.x
+	// models or known-stripped endpoints.
+	allowEmpty := os.Getenv("GEMINI_ALLOW_EMPTY_SIG") != ""
+	for i, tc := range resp1.Message.ToolCalls {
+		sig := signatureForToolCall(resp1.Message.ReasoningRecords, tc.ID)
+		t.Logf("turn 1 toolcall[%d]: id=%q name=%q sig_len=%d sig_preview=%q",
+			i, tc.ID, tc.Name, len(sig), previewSig(sig))
+	}
+	firstSig := signatureForToolCall(resp1.Message.ReasoningRecords, resp1.Message.ToolCalls[0].ID)
+	if firstSig == "" && !allowEmpty {
+		t.Fatalf("turn 1: position-0 tool_call %q missing thought_signature — capture path is broken on this model/endpoint. "+
+			"Per Google's 'first call per step' docs (and empirical verification), Gemini 3.x preview MUST emit a sig on the first call; "+
+			"missing here = gh#194 reproduction state. Set GEMINI_ALLOW_EMPTY_SIG=1 to downgrade.",
+			resp1.Message.ToolCalls[0].ID)
+	}
+
+	// Turn 2: replay the assistant message + supply BOTH tool
+	// results. Gemini 3.x's validator will HTTP 400 if any
+	// echoed tool_call lacks its signature — that's the
+	// downstream contract this test gates.
+	toolResults := make([]agentic.ChatMessage, 0, len(resp1.Message.ToolCalls))
+	for _, tc := range resp1.Message.ToolCalls {
+		toolResults = append(toolResults, agentic.ChatMessage{
+			Role:       "tool",
+			ToolCallID: tc.ID,
+			Name:       tc.Name,
+			Content:    `{"result": 0}`, // value doesn't matter for the wire contract
+		})
+	}
+	msgs := []agentic.ChatMessage{
+		turn1.Messages[0], // system
+		turn1.Messages[1], // user
+		{
+			Role:             "assistant",
+			ToolCalls:        resp1.Message.ToolCalls,
+			ReasoningRecords: resp1.Message.ReasoningRecords,
+		},
+	}
+	msgs = append(msgs, toolResults...)
+	turn2 := agentic.AgentRequest{
+		RequestID: "req-gemini-parallel-2",
+		Messages:  msgs,
+		Tools:     tools,
+	}
+
+	ctx2, cancel2 := context.WithTimeout(ctx, 90*time.Second)
+	resp2, err := client.ChatCompletion(ctx2, turn2)
+	cancel2()
+	if err != nil {
+		t.Fatalf("turn 2 failed: %v — likely a thought_signature echo regression. gh#194 + gh#188", err)
+	}
+	if resp2.Status == "error" {
+		t.Fatalf("turn 2 returned error: %s — likely a thought_signature echo regression. gh#194 + gh#188", resp2.Error)
+	}
+	t.Logf("turn 2: status=%q finish_reason=%q — multi-tool round-trip OK", resp2.Status, resp2.FinishReason)
 }
 
 // previewSig returns the first 16 chars of a signature for logging — full

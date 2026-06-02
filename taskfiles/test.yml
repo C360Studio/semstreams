@@ -50,10 +50,10 @@ tasks:
       - echo "[OK] Live LLM tests complete"
 
   live:gemini:
-    desc: Live round-trip against Gemini 3.x preview (needs GEMINI_API_KEY in .env)
+    desc: Live round-trip against Gemini 3.x preview (needs GEMINI_API_KEY in .env). Runs single-tool + parallel-tool gates (gh#194 regression coverage).
     cmds:
-      - echo "[LIVE] Gemini 3.x thought_signature round-trip..."
-      - go test -tags=live_llm -v -timeout 240s -run TestGemini3x_ThoughtSignature_RoundTrip ./processor/agentic-model/...
+      - echo "[LIVE] Gemini 3.x thought_signature round-trip (single + parallel tool)..."
+      - go test -tags=live_llm -v -timeout 360s -run TestGemini3x_ThoughtSignature ./processor/agentic-model/...
 
   live:ollama:
     desc: Live response_format integration against local Ollama (needs Ollama at :11434)
