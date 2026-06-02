@@ -38,6 +38,7 @@ import (
 	jsonmap "github.com/c360studio/semstreams/processor/json_map"
 	oasfgenerator "github.com/c360studio/semstreams/processor/oasf-generator"
 	researchclassify "github.com/c360studio/semstreams/processor/research-graph-classify"
+	researchexecute "github.com/c360studio/semstreams/processor/research-graph-execute"
 	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/storage/objectstore"
@@ -200,14 +201,17 @@ func registerSemanticLayer(registry *component.Registry) error {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "graph-query component registration")
 	}
 
-	// Research graph chain (ADR-045): nl_classify + route_search
-	// stages. Subsequent PRs add execute_subqueries,
-	// assess_sufficiency, and synthesize_answer.
+	// Research graph chain (ADR-045): nl_classify + route_search +
+	// execute_subqueries stages. Subsequent PRs add assess_sufficiency
+	// and synthesize_answer.
 	if err := researchclassify.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-classify component registration")
 	}
 	if err := researchroute.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-route component registration")
+	}
+	if err := researchexecute.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-execute component registration")
 	}
 
 	// Statistical/Semantic tier components (enabled via config)

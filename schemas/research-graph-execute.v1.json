@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "research-graph-execute.v1.json",
+  "type": "object",
+  "title": "research-graph-execute Configuration",
+  "description": "ADR-045 execute_subqueries: materialise sub-queries from RouteDecision intent + fan-out across Tier 0+1 retrieval + dedup + rank + budget. Emits ExecutionOutput for R3.",
+  "properties": {
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket holding research-pipeline loops and trigger/completion keys",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
+    "max_parallelism": {
+      "type": "integer",
+      "description": "Concurrent sub-query execution cap. Keeps fan-out from saturating gateways. 0 means default (8)",
+      "default": 8,
+      "maximum": 64,
+      "category": "advanced"
+    },
+    "max_results_per_subquery": {
+      "type": "integer",
+      "description": "Per-sub-query result count cap before ranking + budget enforcement. Prevents a runaway sub-query from dominating evidence. 0 means default (50)",
+      "default": 50,
+      "maximum": 500,
+      "category": "advanced"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port configuration. execute_subqueries requires one nats input subscribing to component.execute_subqueries.\u003e",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "research-graph-execute",
+    "type": "processor",
+    "protocol": "execute_subqueries",
+    "domain": "research",
+    "version": "0.1.0"
+  }
+}

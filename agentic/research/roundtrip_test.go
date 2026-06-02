@@ -720,6 +720,127 @@ func TestParseRetightenArgs_Rejects(t *testing.T) {
 	}
 }
 
+// --- ExecutionOutput ---
+
+func TestExecutionOutput_RoundTripThroughDecoder(t *testing.T) {
+	original := &research.ExecutionOutput{
+		Topic:  "drone-001 maintenance events in the last 24 hours",
+		Action: research.ActionWalkSeeds,
+		Evidence: []research.Evidence{
+			{EntityID: "acme.ops.robotics.gcs.drone.001", Tier: "0", Source: "walk_seeds.entity_state", Score: 0.95},
+			{EntityID: "acme.ops.robotics.gcs.event.maint-001", Tier: "0", Source: "walk_seeds.predicate_walk", Score: 0.82, SnippetText: "scheduled maintenance window"},
+			{EntityID: "acme.ops.robotics.gcs.alert.battery", Tier: "1", Source: "walk_seeds.bm25_coverage", Score: 0.55},
+		},
+		SubQueryCount:    3,
+		BudgetTokensUsed: 87,
+	}
+
+	envelope := message.NewBaseMessage(original.Schema(), original, "research-execution-roundtrip-test")
+	wireBytes, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
+	}
+	got, ok := decoded.Payload().(*research.ExecutionOutput)
+	if !ok {
+		t.Fatalf("payload: got %T, want *research.ExecutionOutput", decoded.Payload())
+	}
+	if got.Topic != original.Topic {
+		t.Errorf("topic drift: got %q, want %q", got.Topic, original.Topic)
+	}
+	if got.Action != original.Action {
+		t.Errorf("action drift: got %q, want %q", got.Action, original.Action)
+	}
+	if len(got.Evidence) != 3 {
+		t.Fatalf("evidence len: got %d, want 3", len(got.Evidence))
+	}
+	if got.Evidence[0].EntityID != original.Evidence[0].EntityID {
+		t.Errorf("evidence[0].EntityID drift")
+	}
+	if got.SubQueryCount != 3 {
+		t.Errorf("subquery_count drift: got %d, want 3", got.SubQueryCount)
+	}
+	if got.BudgetTokensUsed != 87 {
+		t.Errorf("budget_tokens_used drift: got %d, want 87", got.BudgetTokensUsed)
+	}
+}
+
+func TestExecutionOutput_DegradedRoundTrip(t *testing.T) {
+	// Degraded + empty-Evidence is a valid execution outcome
+	// (assess_sufficiency reads it as low-confidence input).
+	// Confirm the degrade flags survive round-trip.
+	original := &research.ExecutionOutput{
+		Topic:          "x",
+		Action:         research.ActionDecompose,
+		Degraded:       true,
+		DegradedReason: "spatial axis deferred to Phase 2",
+		SubQueryCount:  2,
+	}
+	envelope := message.NewBaseMessage(original.Schema(), original, "test")
+	wireBytes, _ := json.Marshal(envelope)
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoded, err := decoder.Decode(wireBytes)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := decoded.Payload().(*research.ExecutionOutput)
+	if !got.Degraded {
+		t.Error("Degraded flag lost on round-trip")
+	}
+	if got.DegradedReason != "spatial axis deferred to Phase 2" {
+		t.Errorf("degraded reason drift: %q", got.DegradedReason)
+	}
+}
+
+func TestExecutionOutput_ValidateRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  research.ExecutionOutput
+		wantSub string
+	}{
+		{
+			name:    "missing topic",
+			output:  research.ExecutionOutput{Action: research.ActionWalkSeeds},
+			wantSub: "topic",
+		},
+		{
+			name:    "missing action",
+			output:  research.ExecutionOutput{Topic: "x"},
+			wantSub: "action",
+		},
+		{
+			name:    "bogus action",
+			output:  research.ExecutionOutput{Topic: "x", Action: "bogus"},
+			wantSub: "canonical router action",
+		},
+		{
+			name: "evidence with bad tier",
+			output: research.ExecutionOutput{
+				Topic:    "x",
+				Action:   research.ActionWalkSeeds,
+				Evidence: []research.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
+			},
+			wantSub: "tier",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.output.Validate()
+			if err == nil {
+				t.Fatalf("Validate = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("Validate error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
 // --- enum guards ---
 
 func TestIsValidSeedRefType(t *testing.T) {
