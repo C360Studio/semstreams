@@ -42,11 +42,24 @@ const (
 	// (ADR-045 Phase 1 PR 3) to make a single structured-emit routing
 	// decision per research operation: one of synthesize_directly /
 	// retighten / walk_seeds / decompose. First of the three research
-	// LLM-wrapping capabilities; assess_sufficiency (PR 5) and
-	// synthesize_answer (PR 5) will introduce CapabilityResearchAssessment
-	// and CapabilityResearchSynthesis as separate capabilities so
-	// operators can route each stage independently.
+	// LLM-wrapping capabilities; PR 5 introduces
+	// CapabilityResearchAssessment and CapabilityResearchSynthesis as
+	// separate capabilities so operators can route each stage
+	// independently.
 	CapabilityResearchRouting = "research_routing"
+	// CapabilityResearchAssessment is used by the assess_sufficiency
+	// component (ADR-045 Phase 1 PR 5) to decide whether the
+	// execute_subqueries evidence is sufficient to synthesize from, or
+	// whether the refine loop should retry with sharper sub-queries.
+	// Second of the three research LLM-wrapping capabilities.
+	CapabilityResearchAssessment = "research_assessment"
+	// CapabilityResearchSynthesis is used by the synthesize_answer
+	// component (ADR-045 Phase 1 PR 5) to compose the chain's terminal
+	// natural-language answer from the evidence array. Third of the
+	// three research LLM-wrapping capabilities; operators can route
+	// synthesis to a stronger model than routing/assessment when the
+	// answer quality matters more than the structural-decision speed.
+	CapabilityResearchSynthesis = "research_synthesis"
 )
 
 // ResolvedEndpoint holds the resolved connection details for a capability endpoint.

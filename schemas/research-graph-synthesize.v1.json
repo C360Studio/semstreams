@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "research-graph-synthesize.v1.json",
+  "type": "object",
+  "title": "research-graph-synthesize Configuration",
+  "description": "ADR-045 synthesize_answer: terminal LLM stage. Quote-back-validated synthesis grounded in upstream evidence. Drives the continuation rule.",
+  "properties": {
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket holding research-pipeline loops and trigger/completion keys",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
+    "max_evidence_in_prompt": {
+      "type": "integer",
+      "description": "Cap on number of ExecutionOutput evidence items embedded in the synthesizer prompt. Top-N by Score; tighter caps keep prompts within small-model context windows. 0 means default (30)",
+      "default": 30,
+      "maximum": 200,
+      "category": "advanced"
+    },
+    "max_response_tokens": {
+      "type": "integer",
+      "description": "Cap on LLM response tokens for the synthesis output",
+      "default": 2048,
+      "maximum": 8192,
+      "category": "advanced"
+    },
+    "max_snippet_chars_in_prompt": {
+      "type": "integer",
+      "description": "Cap on per-evidence SnippetText characters rendered in the synthesizer prompt. 0 means default (480)",
+      "default": 480,
+      "maximum": 4000,
+      "category": "advanced"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port configuration. synthesize_answer requires one nats input subscribing to component.synthesize_answer.\u003e",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "research-graph-synthesize",
+    "type": "processor",
+    "protocol": "synthesize_answer",
+    "domain": "research",
+    "version": "0.1.0"
+  }
+}

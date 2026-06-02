@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "research-graph-assess.v1.json",
+  "type": "object",
+  "title": "research-graph-assess Configuration",
+  "description": "ADR-045 assess_sufficiency: structured-emit sufficient/refine decision over upstream ExecutionOutput evidence. Drives R3's synthesize-or-refine branch.",
+  "properties": {
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket holding research-pipeline loops and trigger/completion keys",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
+    "max_evidence_in_prompt": {
+      "type": "integer",
+      "description": "Cap on number of ExecutionOutput evidence items embedded in the assessor prompt. Top-N by Score; tighter caps keep prompts within small-model context windows. 0 means default (20)",
+      "default": 20,
+      "maximum": 100,
+      "category": "advanced"
+    },
+    "max_response_tokens": {
+      "type": "integer",
+      "description": "Cap on LLM response tokens. The JSON-shaped output is small; 1024 covers the worst case across decision paths",
+      "default": 1024,
+      "maximum": 4096,
+      "category": "advanced"
+    },
+    "max_snippet_chars_in_prompt": {
+      "type": "integer",
+      "description": "Cap on per-evidence SnippetText characters rendered in the assessor prompt. 0 means default (280)",
+      "default": 280,
+      "maximum": 2000,
+      "category": "advanced"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port configuration. assess_sufficiency requires one nats input subscribing to component.assess_sufficiency.\u003e",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "research-graph-assess",
+    "type": "processor",
+    "protocol": "assess_sufficiency",
+    "domain": "research",
+    "version": "0.1.0"
+  }
+}

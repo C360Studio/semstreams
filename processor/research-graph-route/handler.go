@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Router is the narrow LLM surface this component consumes.
@@ -111,14 +112,14 @@ func routeDecision(ctx context.Context, router Router, intent *research.Intent, 
 		return nil, fmt.Errorf("router returned empty content (finish_reason=%q)", reason)
 	}
 
-	jsonBytes, err := extractJSON(rawContent)
+	jsonBytes, err := llmwrap.ExtractJSON(rawContent)
 	if err != nil {
-		return nil, fmt.Errorf("extract JSON from router content: %w (raw=%q finish_reason=%q)", err, truncate(rawContent, errPayloadTruncateBytes), reason)
+		return nil, fmt.Errorf("extract JSON from router content: %w (raw=%q finish_reason=%q)", err, llmwrap.Truncate(rawContent, llmwrap.ErrPayloadTruncateBytes), reason)
 	}
 
 	var decision research.RouteDecision
 	if err := json.Unmarshal(jsonBytes, &decision); err != nil {
-		return nil, fmt.Errorf("decode route decision: %w (raw=%q)", err, truncate(string(jsonBytes), errPayloadTruncateBytes))
+		return nil, fmt.Errorf("decode route decision: %w (raw=%q)", err, llmwrap.Truncate(string(jsonBytes), llmwrap.ErrPayloadTruncateBytes))
 	}
 	if err := decision.Validate(); err != nil {
 		return nil, fmt.Errorf("router emitted invalid action: %w", err)
@@ -153,83 +154,15 @@ func routeDecision(ctx context.Context, router Router, intent *research.Intent, 
 			logger.Warn("synthesize_directly emitted with non-empty args; possible action confusion",
 				slog.String("action", decision.Action),
 				slog.Int("args_count", len(decision.Args)),
-				slog.String("rationale", truncate(decision.Rationale, errPayloadTruncateBytes)))
+				slog.String("rationale", llmwrap.Truncate(decision.Rationale, llmwrap.ErrPayloadTruncateBytes)))
 		}
 	}
 
 	return &decision, nil
 }
 
-// errPayloadTruncateBytes caps the raw-payload snippet rendered in
-// error messages and the synthesize_directly Warn line. 512 keeps
-// the JSON action enum and per-action arg keys visible even when
-// the model wrapped its emit in long prose. Used at three sites
-// (extract JSON failure, decode failure, synthesize_directly Warn)
-// so a future tweak stays consistent.
-const errPayloadTruncateBytes = 512
-
-// extractJSON pulls a JSON object out of an LLM response. Many
-// models wrap their structured emit in ```json fences or prose
-// preface; this helper extracts the first balanced {...} substring.
-// Falls back to the raw content (trimmed) when no braces are
-// detected. Returns an error if the result still doesn't look like
-// a JSON object.
-func extractJSON(content string) ([]byte, error) {
-	trimmed := strings.TrimSpace(content)
-	// Strip common markdown fences.
-	trimmed = strings.TrimPrefix(trimmed, "```json")
-	trimmed = strings.TrimPrefix(trimmed, "```JSON")
-	trimmed = strings.TrimPrefix(trimmed, "```")
-	trimmed = strings.TrimSuffix(trimmed, "```")
-	trimmed = strings.TrimSpace(trimmed)
-
-	// Locate the outermost {...} object. The walker tracks JSON
-	// string-literal context so a `}` inside a string value (a
-	// model's rationale field is the common case — "axes spanning
-	// {time, entity_type}") doesn't truncate the extraction
-	// mid-object. Backslash-escaped quotes inside strings do not
-	// toggle the string-context flag.
-	start := strings.Index(trimmed, "{")
-	if start < 0 {
-		return nil, fmt.Errorf("no JSON object found in content")
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(trimmed); i++ {
-		ch := trimmed[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case ch == '\\':
-				escaped = true
-			case ch == '"':
-				inString = false
-			}
-			continue
-		}
-		switch ch {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return []byte(trimmed[start : i+1]), nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("unbalanced braces in content (depth=%d)", depth)
-}
-
-// truncate returns s capped at n bytes; longer strings get an
-// ellipsis suffix. Used in error messages so an over-long LLM
-// response doesn't blow up log lines.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}
+// extractJSON + truncate were promoted to processor/research-graph-
+// llmwrap in PR 5 so assess_sufficiency + synthesize_answer can share
+// the same balanced-brace + ellipsis-cap helpers. Route_search reaches
+// for them via llmwrap.ExtractJSON / llmwrap.Truncate; same
+// ErrPayloadTruncateBytes constant.

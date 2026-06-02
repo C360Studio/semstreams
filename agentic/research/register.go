@@ -51,6 +51,13 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Description: "ADR-045 execute_subqueries component output: dedup'd + ranked + budget-enforced evidence array + provenance",
 			Factory:     func() any { return &ExecutionOutput{} },
 		},
+		{
+			Domain:      Domain,
+			Category:    CategoryAssessmentOutput,
+			Version:     SchemaVersion,
+			Description: "ADR-045 assess_sufficiency component output: sufficient/refine decision + refined queries",
+			Factory:     func() any { return &AssessmentOutput{} },
+		},
 	}
 
 	var errs []error
