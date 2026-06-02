@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "research-graph-route.v1.json",
+  "type": "object",
+  "title": "research-graph-route Configuration",
+  "description": "ADR-045 route_search: structured-emit routing decision over upstream ClassifierOutput. Emits one of synthesize_directly / retighten / walk_seeds / decompose for R2 dispatch.",
+  "properties": {
+    "loops_bucket": {
+      "type": "string",
+      "description": "NATS KV bucket holding research-pipeline loops and trigger/completion keys",
+      "default": "AGENT_LOOPS",
+      "category": "advanced"
+    },
+    "max_candidates_in_prompt": {
+      "type": "integer",
+      "description": "Cap on number of ClassifierOutput candidates embedded in the router prompt. Top-N by relevance; tighter caps keep prompts within small-model context windows. 0 means default (10)",
+      "default": 10,
+      "maximum": 50,
+      "category": "advanced"
+    },
+    "max_response_tokens": {
+      "type": "integer",
+      "description": "Cap on LLM response tokens. The JSON-shaped output is small; 512 covers the worst case across the four action shapes",
+      "default": 512,
+      "maximum": 2048,
+      "category": "advanced"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Port configuration. route_search requires one nats input subscribing to component.route_search.\u003e",
+      "category": "basic"
+    }
+  },
+  "required": [],
+  "x-component-metadata": {
+    "name": "research-graph-route",
+    "type": "processor",
+    "protocol": "route_search",
+    "domain": "research",
+    "version": "0.1.0"
+  }
+}

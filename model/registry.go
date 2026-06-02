@@ -38,6 +38,15 @@ const (
 	// deployments fall back to the community_summary endpoint (the legacy
 	// piggyback behavior preserved for backward compatibility).
 	CapabilityAnomalyReview = "anomaly_review"
+	// CapabilityResearchRouting is used by the route_search component
+	// (ADR-045 Phase 1 PR 3) to make a single structured-emit routing
+	// decision per research operation: one of synthesize_directly /
+	// retighten / walk_seeds / decompose. First of the three research
+	// LLM-wrapping capabilities; assess_sufficiency (PR 5) and
+	// synthesize_answer (PR 5) will introduce CapabilityResearchAssessment
+	// and CapabilityResearchSynthesis as separate capabilities so
+	// operators can route each stage independently.
+	CapabilityResearchRouting = "research_routing"
 )
 
 // ResolvedEndpoint holds the resolved connection details for a capability endpoint.

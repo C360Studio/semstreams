@@ -1264,6 +1264,7 @@ components:
                         - $ref: ../schemas/objectstore.v1.json
                         - $ref: ../schemas/otel-exporter.v1.json
                         - $ref: ../schemas/research-graph-classify.v1.json
+                        - $ref: ../schemas/research-graph-route.v1.json
                         - $ref: ../schemas/rule-processor.v1.json
                         - $ref: ../schemas/slim-bridge.v1.json
                         - $ref: ../schemas/udp.v1.json
