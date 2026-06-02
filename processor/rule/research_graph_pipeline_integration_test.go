@@ -210,9 +210,9 @@ func TestResearchGraphPipeline_R2_RouteAction_AllFourBranches(t *testing.T) {
 	_, _, r2, _, _, _ := loadResearchGraphRules(t)
 
 	for _, tc := range []struct {
-		name           string
-		action         string
-		wantSubject    string
+		name                  string
+		action                string
+		wantSubject           string
 		wantRemovedPredicates []string
 	}{
 		{
