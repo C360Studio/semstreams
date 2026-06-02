@@ -35,6 +35,9 @@ type fakeLoopStore struct {
 	resultEnvelope []byte
 	resultErr      error
 
+	completionEnvelope []byte
+	completionErr      error
+
 	writeOrder []string
 }
 
@@ -84,6 +87,14 @@ func (s *fakeLoopStore) PutSearchResult(_ context.Context, _ string, envelope []
 	return s.resultErr
 }
 
+func (s *fakeLoopStore) PutLoopCompletion(_ context.Context, _ string, envelope []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completionEnvelope = append([]byte(nil), envelope...)
+	s.writeOrder = append(s.writeOrder, "loop_completion")
+	return s.completionErr
+}
+
 func newTestComponent(loops LoopStore, synth Synthesizer) *Component {
 	return &Component{
 		config:      DefaultConfig(),
@@ -123,8 +134,11 @@ func TestComponent_HandleMessage_HappyPath(t *testing.T) {
 	if loops.getIntentCalls != 1 || loops.getExecCalls != 1 || loops.getRouteCalls != 1 {
 		t.Errorf("read calls: intent=%d exec=%d route=%d", loops.getIntentCalls, loops.getExecCalls, loops.getRouteCalls)
 	}
-	if len(loops.writeOrder) != 2 || loops.writeOrder[0] != "snapshot" || loops.writeOrder[1] != "search_result_complete" {
-		t.Errorf("write order = %v, want [snapshot search_result_complete]", loops.writeOrder)
+	if len(loops.writeOrder) != 3 || loops.writeOrder[0] != "snapshot" || loops.writeOrder[1] != "search_result_complete" || loops.writeOrder[2] != "loop_completion" {
+		t.Errorf("write order = %v, want [snapshot search_result_complete loop_completion]", loops.writeOrder)
+	}
+	if string(loops.completionEnvelope) != string(loops.resultEnvelope) {
+		t.Errorf("loop_completion envelope must match search_result envelope (one source of truth for the SearchResult payload)")
 	}
 	if !strings.Contains(string(loops.resultEnvelope), `Drone 001`) {
 		t.Error("envelope should carry synthesis prose")

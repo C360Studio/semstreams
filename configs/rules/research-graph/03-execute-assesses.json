@@ -1,0 +1,26 @@
+{
+  "id": "research_execute_assesses",
+  "type": "expression",
+  "name": "R3 — Execute complete → Assess",
+  "description": "ADR-045 R3. Fires when execute_subqueries stamps research.execute.complete. Dispatches assess_sufficiency to judge whether the evidence is enough or refine is needed. In the refine loop, R4's refine branch clears research.execute.complete + research.assess.complete before re-dispatching execute, so R3 fires again on the next stamp. Per-rule MaxIterations not set — R4's refine branch has the iteration cap.",
+  "enabled": true,
+  "conditions": [
+    {
+      "field": "loop.role",
+      "operator": "eq",
+      "value": "research_pipeline"
+    },
+    {
+      "field": "research.execute.complete",
+      "operator": "ne",
+      "value": ""
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "publish",
+      "subject": "component.assess_sufficiency.$entity.triple.research.loop_id"
+    }
+  ]
+}

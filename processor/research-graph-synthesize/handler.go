@@ -38,6 +38,19 @@ type LoopStore interface {
 
 	PutSearchResult(ctx context.Context, loopID string, envelope []byte) error
 	PutSnapshot(ctx context.Context, loopID string, envelope []byte) error
+
+	// PutLoopCompletion writes the SearchResult envelope at the
+	// COMPLETE_<loopID> key — the convention the existing
+	// read_loop_result tool uses (see
+	// processor/agentic-tools/loop_result.go completeKeyPrefix). Lets
+	// the R6 continuation rule's spawned parent agent fetch the
+	// SearchResult via read_loop_result(loop_id=<rg_xxx>) without a
+	// new tool. The duplicate-write cost is one extra KV put per
+	// chain; the alternative (custom read_research_result tool) is
+	// Phase 2 scope. Failure is fatal because the parent loop would
+	// see "research finished but no result" — the chain advance
+	// invariant.
+	PutLoopCompletion(ctx context.Context, loopID string, envelope []byte) error
 }
 
 // Sentinel errors. Returned for diagnostic clarity in handler logs.

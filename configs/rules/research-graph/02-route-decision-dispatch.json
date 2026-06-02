@@ -1,0 +1,85 @@
+{
+  "id": "research_route_decision_dispatch",
+  "type": "expression",
+  "name": "R2 — Route decision dispatch",
+  "description": "ADR-045 R2. Fires on research.route.complete (the route_search component's terminal stamp). Four action-level branches keyed on research.route.action (per ADR-041 action-level when clauses): synthesize_directly short-circuits to synthesize_answer; retighten re-dispatches nl_classify after clearing the classify+route markers (so R1 can re-fire); walk_seeds and decompose both dispatch execute_subqueries. The retighten branch carries MaxIterations=2 (per ADR-045 § Rule chain — caps the classify→retighten ping-pong at 2 rounds). walk_seeds/decompose dispatch is a single action with an `in` operator covering both routes, avoiding action duplication. R0 doesn't re-fire on retighten because research.requested is never cleared — the retighten path is rule-driven, not kickoff-driven.",
+  "enabled": true,
+  "conditions": [
+    {
+      "field": "loop.role",
+      "operator": "eq",
+      "value": "research_pipeline"
+    },
+    {
+      "field": "research.route.complete",
+      "operator": "ne",
+      "value": ""
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "id": "route_synthesize_directly",
+      "type": "publish",
+      "subject": "component.synthesize_answer.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.route.action",
+          "operator": "eq",
+          "value": "synthesize_directly"
+        }
+      ]
+    },
+    {
+      "id": "route_retighten_clear_classify",
+      "type": "remove_triple",
+      "predicate": "research.classify.complete",
+      "when": [
+        {
+          "field": "research.route.action",
+          "operator": "eq",
+          "value": "retighten"
+        }
+      ],
+      "max_iterations": 2
+    },
+    {
+      "id": "route_retighten_clear_route",
+      "type": "remove_triple",
+      "predicate": "research.route.complete",
+      "when": [
+        {
+          "field": "research.route.action",
+          "operator": "eq",
+          "value": "retighten"
+        }
+      ],
+      "max_iterations": 2
+    },
+    {
+      "id": "route_retighten_redispatch",
+      "type": "publish",
+      "subject": "component.nl_classify.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.route.action",
+          "operator": "eq",
+          "value": "retighten"
+        }
+      ],
+      "max_iterations": 2
+    },
+    {
+      "id": "route_walk_or_decompose",
+      "type": "publish",
+      "subject": "component.execute_subqueries.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.route.action",
+          "operator": "in",
+          "value": ["walk_seeds", "decompose"]
+        }
+      ]
+    }
+  ]
+}

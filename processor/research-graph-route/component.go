@@ -13,12 +13,15 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the route_search processor. Struct field set
@@ -35,6 +38,11 @@ type Component struct {
 	// natsclient + model registry on deps.
 	router Router
 	loops  LoopStore
+
+	// triplePub stamps research.route.complete (+ action) on the
+	// research-pipeline loop entity so R2 of the rule chain can fire
+	// with action-level when clauses. Nil-safe per llmwrap contract.
+	triplePub llmwrap.TriplePublisher
 
 	// llmClient is the underlying graph/llm.Client owned by the
 	// adapter. Held here so Stop can close it cleanly. Nil when
@@ -93,9 +101,10 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	logger := deps.GetLoggerWithComponent(ComponentName)
 
 	return &Component{
-		config: config,
-		deps:   deps,
-		logger: logger,
+		config:    config,
+		deps:      deps,
+		logger:    logger,
+		triplePub: llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 		// router + loops wired in Start (router needs model registry;
 		// loops needs the open KV bucket).
 	}, nil
@@ -400,6 +409,19 @@ func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte)
 			slog.Any("error", err))
 		atomic.AddInt64(&c.errors, 1)
 		return
+	}
+
+	// Stamp research.route.complete + research.route.action on the
+	// research-pipeline loop entity so R2 (ADR-045 rule chain) can
+	// fire with action-level when clauses. Atomic batch landing keeps
+	// action paired with complete so R2 never sees a stale action.
+	if loopEntityID, entityErr := agentic.TryLoopExecutionEntityID(c.deps.Platform.Org, c.deps.Platform.Platform, loopID); entityErr != nil {
+		c.logger.Warn("could not construct loop entity ID for triple stamp; R2 will not fire",
+			slog.String("loop_id", loopID),
+			slog.Any("error", entityErr))
+	} else {
+		triples := research.BuildRouteCompleteTriples(loopEntityID, decision.Action, time.Now())
+		_ = llmwrap.StampOrchestrationTriples(ctx, c.triplePub, c.logger, ComponentName, loopID, triples)
 	}
 
 	atomic.AddInt64(&c.messagesEmitted, 1)

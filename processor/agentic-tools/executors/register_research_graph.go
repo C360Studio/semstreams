@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/retry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // registerResearchGraph opens (or creates) the AGENT_LOOPS bucket
@@ -41,7 +42,11 @@ func registerResearchGraph(ctx context.Context, tools *agentictools.ExecutorRegi
 
 	store := natsClient.NewKVStore(bucket)
 	writer := newNATSResearchKVWriter(store)
-	executor := NewResearchGraphExecutor(writer, platform)
+	executor := NewResearchGraphExecutor(
+		writer,
+		platform,
+		WithResearchGraphTriplePublisher(llmwrap.NewNATSTriplePublisher(natsClient)),
+	)
 	executor.SetLogger(logger)
 	if err := tools.RegisterTool(ResearchGraphToolName, executor); err != nil {
 		return fmt.Errorf("register research_graph: %w", err)
