@@ -5,6 +5,15 @@
 // Otherwise, they run locally via os/exec with sensitive environment variables
 // stripped.
 //
+// The remote dispatch path is fronted by the Runner interface so downstream
+// products can supply custom routing logic (per-tenant devcontainers,
+// load-balancing across sandbox replicas, attestation-aware routing, A/B
+// testing) without wrapping BashExecutor. *runner.Client is the default
+// implementation; product shells inject alternates via WithRunner. This
+// is the per-call extension point the forthcoming capability-aware
+// execution-environment substrate (ADR-052, see
+// docs/proposals/sandbox-substrate.md) plugs into.
+//
 // Ported from semspec/tools/bash.
 package executors
 
@@ -27,11 +36,32 @@ const (
 	bashDefaultTimeout = 120 * time.Second
 )
 
-// BashExecutor runs shell commands locally or via the remote runner client
-// (which routes to a remote sandbox container — see SANDBOX_URL).
+// Runner is the per-call interface BashExecutor uses to dispatch commands
+// to a remote sandbox server. *runner.Client satisfies it (default,
+// constructed from sandboxURL). Product shells supply custom
+// implementations via WithRunner for per-call routing — e.g.,
+// attestation-aware routing to per-tenant devcontainers, load-balancing
+// across replicas, or A/B testing alternate sandbox backends. This is
+// the framework extension point the forthcoming capability-aware
+// execution-environment substrate (ADR-052) builds on; the interface
+// itself is product-agnostic and carries no devcontainer, attestation,
+// or tenancy concepts.
+type Runner interface {
+	Exec(ctx context.Context, taskID, command string, timeoutMs int) (*runner.ExecResult, error)
+}
+
+// Compile-time assertion that *runner.Client satisfies Runner. Any future
+// signature drift on *runner.Client.Exec surfaces here as a compile error
+// in the package that owns the contract, not as a runtime panic during
+// remote dispatch.
+var _ Runner = (*runner.Client)(nil)
+
+// BashExecutor runs shell commands locally or via a Runner (which routes
+// to a remote sandbox container — see SANDBOX_URL for the URL-based
+// default, WithRunner for custom routing).
 type BashExecutor struct {
 	workDir string
-	runner  *runner.Client
+	runner  Runner
 	timeout time.Duration
 }
 
@@ -43,17 +73,37 @@ func WithBashTimeout(d time.Duration) BashOption {
 	return func(e *BashExecutor) { e.timeout = d }
 }
 
+// WithRunner overrides the runner constructed from sandboxURL. When
+// provided, sandboxURL is ignored; the supplied Runner handles all
+// remote dispatch. Mutually exclusive with the URL-based constructor;
+// either call NewBashExecutor("", "", WithRunner(custom)) or pass a
+// URL and omit the option. Passing the untyped nil is treated as
+// "no override" (URL-based default applies if a URL was given). A
+// typed-nil wrapped in a Runner interface value — e.g., `var r Runner
+// = (*runner.Client)(nil); WithRunner(r)` — is NOT detected and will
+// panic on first Exec; construct your Runner before passing it in.
+func WithRunner(r Runner) BashOption {
+	return func(e *BashExecutor) {
+		if r != nil {
+			e.runner = r
+		}
+	}
+}
+
 // NewBashExecutor creates a bash executor. If sandboxURL is non-empty, commands
-// are routed to the sandbox container.
+// are routed to the sandbox container via the default *runner.Client. Pass
+// WithRunner to inject a custom Runner instead; when supplied, it overrides
+// the URL-based default.
 func NewBashExecutor(workDir, sandboxURL string, opts ...BashOption) *BashExecutor {
 	e := &BashExecutor{
 		workDir: workDir,
 	}
-	for _, opt := range opts {
-		opt(e)
-	}
 	if sandboxURL != "" {
 		e.runner = runner.NewClient(sandboxURL)
+	}
+	// Options apply after URL-based init so WithRunner can override.
+	for _, opt := range opts {
+		opt(e)
 	}
 	return e
 }
