@@ -264,23 +264,33 @@ func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
 		t.Skipf("model emitted %d tool_calls; need 2+ to exercise the #194 multi-tool capture contract — try GEMINI_TEST_MODEL=gemini-3-pro-preview or re-run", len(resp1.Message.ToolCalls))
 	}
 
-	// HARD-FAIL: every captured ToolCall must have a thought_signature.
-	// This is the #194 regression gate. Soft-warn here would defeat
-	// the test's purpose.
+	// Capture contract per Google's docs (verified empirically
+	// 2026-06-02 on gemini-3-flash-preview): the first
+	// function-call part in each step carries thought_signature;
+	// subsequent parallel calls in the same step don't need to.
+	// So the hard-fail line is:
+	//
+	//   - position 0 MUST have a non-empty signature (otherwise
+	//     capture is broken — this is the gh#194 production state
+	//     where semteams hit zero captured sigs)
+	//   - positions 1+ MAY have signatures (allowed but not required)
+	//   - turn 2 MUST succeed (the actual round-trip contract)
+	//
+	// GEMINI_ALLOW_EMPTY_SIG=1 escape hatch downgrades the
+	// position-0 assertion for operators investigating non-3.x
+	// models or known-stripped endpoints.
 	allowEmpty := os.Getenv("GEMINI_ALLOW_EMPTY_SIG") != ""
-	var missing []string
 	for i, tc := range resp1.Message.ToolCalls {
 		sig := signatureForToolCall(resp1.Message.ReasoningRecords, tc.ID)
 		t.Logf("turn 1 toolcall[%d]: id=%q name=%q sig_len=%d sig_preview=%q",
 			i, tc.ID, tc.Name, len(sig), previewSig(sig))
-		if sig == "" {
-			missing = append(missing, tc.ID)
-		}
 	}
-	if len(missing) > 0 && !allowEmpty {
-		t.Fatalf("turn 1: %d/%d tool_calls missing thought_signature (%v); capture path is broken on this model/endpoint — #194 regression gate. "+
-			"Set GEMINI_ALLOW_EMPTY_SIG=1 to downgrade to warn.",
-			len(missing), len(resp1.Message.ToolCalls), missing)
+	firstSig := signatureForToolCall(resp1.Message.ReasoningRecords, resp1.Message.ToolCalls[0].ID)
+	if firstSig == "" && !allowEmpty {
+		t.Fatalf("turn 1: position-0 tool_call %q missing thought_signature — capture path is broken on this model/endpoint. "+
+			"Per Google's 'first call per step' docs (and empirical verification), Gemini 3.x preview MUST emit a sig on the first call; "+
+			"missing here = gh#194 reproduction state. Set GEMINI_ALLOW_EMPTY_SIG=1 to downgrade.",
+			resp1.Message.ToolCalls[0].ID)
 	}
 
 	// Turn 2: replay the assistant message + supply BOTH tool
