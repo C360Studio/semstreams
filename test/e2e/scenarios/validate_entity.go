@@ -89,9 +89,20 @@ func (s *TieredScenario) executeWaitForEntityStabilization(ctx context.Context, 
 		"used_sse":      stabilization.UsedSSE,
 	}
 
-	if stabilization.TimedOut && stabilization.FinalCount < expectedEntities {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Entity stabilization: got %d, expected %d", stabilization.FinalCount, expectedEntities))
+	// Fail the stage if entities didn't stabilize. Prior code only
+	// warned-and-returned-nil when `TimedOut && FinalCount < expected`,
+	// which left a silent-pass hole on the SSE path (which returns
+	// `TimedOut: false` unconditionally even when sourceCount=0). That
+	// hole let downstream stages (test-pathrag-document, etc.) fire
+	// against an empty graph under Docker pressure and surface as
+	// "entity not found" with no useful diagnosis. Caught in the
+	// v1.0.0-beta.91 pre-tag e2e:semantic flake. Per
+	// [[feedback_warning_not_fail_masks_integration_drift]], the
+	// stabilization gate is exactly the case where warning is wrong.
+	if !stabilization.Stabilized {
+		return fmt.Errorf("entity stabilization failed: got %d, expected %d (timed_out=%v used_sse=%v wait_duration=%s)",
+			stabilization.FinalCount, expectedEntities, stabilization.TimedOut, stabilization.UsedSSE,
+			stabilization.WaitDuration)
 	}
 
 	return nil
@@ -136,14 +147,38 @@ func (s *TieredScenario) getMinRequiredEntities() int {
 	}
 }
 
+// getCriticalEntities returns entity IDs that downstream stages will
+// query by exact ID. The pollForEntities gate (executeVerifyEntityCount)
+// waits until ALL of these exist in ENTITY_STATES before proceeding,
+// closing the cold-start race the v1.0.0-beta.91 sweep surfaced:
+// testdata loads 99 entities; the bare `count >= 74` stabilization
+// gate could trigger before file-loader processed every file (e.g.
+// maintenance.jsonl might load last, after the count threshold is
+// hit by sensors + observations + documents alone). Subsequent
+// PathRAG test stages then queried `maint-001` and got "not found"
+// despite the count gate passing. Each PathRAG test entity below is
+// queried by exact ID at stage 12+; missing any of them = stage 14
+// flake. Sensor and document entities included for both PathRAG
+// shapes (sensor + document).
 func (s *TieredScenario) getCriticalEntities() []string {
 	switch s.config.Variant {
 	case "structural":
-		return []string{"c360.logistics.environmental.sensor.temperature.temp-sensor-001"}
+		return []string{
+			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			"c360.logistics.maintenance.work.completed.maint-001",
+		}
 	case "statistical", "semantic":
-		return []string{"c360.logistics.content.document.operations.doc-ops-001"}
+		return []string{
+			"c360.logistics.content.document.operations.doc-ops-001",
+			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			"c360.logistics.maintenance.work.completed.maint-001",
+		}
 	default:
-		return []string{"c360.logistics.content.document.operations.doc-ops-001"}
+		return []string{
+			"c360.logistics.content.document.operations.doc-ops-001",
+			"c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			"c360.logistics.maintenance.work.completed.maint-001",
+		}
 	}
 }
 

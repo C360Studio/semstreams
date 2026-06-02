@@ -123,16 +123,16 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 	cfg := &testConfig{
 		natsVersion: "2.12-alpine",
 		timeout:     5 * time.Second,
-		// 60s startup timeout: comfortable headroom for full
-		// `go test -race -tags=integration ./...` sweeps where Docker
-		// can be under contention from dozens of parallel container
-		// spinups. Steady-state startup is well under 5s; the
-		// generous default only matters when the host is loaded.
-		// Beta.78 sweep showed 30s occasionally insufficient for
-		// hierarchy_sync_integration_test.go and
-		// entity_mutation_integration_test.go (port-not-found within
-		// the deadline). See issue #107.
-		startTimeout: 60 * time.Second,
+		// 180s startup timeout: the wait strategy's MappedPort polls
+		// take hundreds of ms each under heavy Docker pressure (parallel
+		// projects spinning up containers — beta.91 case study). The
+		// prior 60s budget consistently exhausted at ~237 retries
+		// before the port mapping resolved (gh#107 flake class). The
+		// strategy's per-poll overhead means actual port-resolution
+		// wall time can balloon way past the steady-state ~5s. 180s
+		// keeps tests fast on idle hosts and gives 3x headroom under
+		// contention. Steady-state startup is unchanged.
+		startTimeout: 180 * time.Second,
 	}
 
 	// Apply options
@@ -160,17 +160,21 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 		Image:        "nats:" + cfg.natsVersion,
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          args,
-		// Startup timeout applied at the ForAll level so it bounds BOTH
-		// strategies. Prior pattern only set it on ForHTTP, leaving
-		// ForListeningPort with its own (shorter) default — under Docker
-		// API pressure the port-listening check would burn through retries
-		// before the HTTP timeout could engage. Symptom:
-		//   "retries: 532, port: '', last err: port '4222/tcp' not found,
-		//   ctx err: context deadline exceeded"
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp"),
-		).WithStartupTimeoutDefault(cfg.startTimeout),
+		// NATS HTTP healthcheck at /healthz on the monitoring port is
+		// the load-bearing readiness signal — it returns 200 only when
+		// the server is accepting client connections on :4222. Prior
+		// pattern used both `ForListeningPort("4222/tcp")` and
+		// `ForHTTP("/")` strategies; under Docker pressure the
+		// strategies run sequentially (per ForAll's contract), and
+		// each calls MappedPort internally to figure out where to
+		// connect. Two strategies = double the MappedPort polling
+		// stress on Docker's API. Single ForHTTP strategy halves the
+		// pressure while keeping a stronger readiness signal (HTTP 200
+		// strictly implies port is listening). Caught during beta.91
+		// flake investigation (gh#107).
+		WaitingFor: wait.ForHTTP("/healthz").
+			WithPort("8222/tcp").
+			WithStartupTimeout(cfg.startTimeout),
 	}
 
 	// Start container
@@ -267,16 +271,16 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 	cfg := &testConfig{
 		natsVersion: "2.12-alpine",
 		timeout:     5 * time.Second,
-		// 60s startup timeout: comfortable headroom for full
-		// `go test -race -tags=integration ./...` sweeps where Docker
-		// can be under contention from dozens of parallel container
-		// spinups. Steady-state startup is well under 5s; the
-		// generous default only matters when the host is loaded.
-		// Beta.78 sweep showed 30s occasionally insufficient for
-		// hierarchy_sync_integration_test.go and
-		// entity_mutation_integration_test.go (port-not-found within
-		// the deadline). See issue #107.
-		startTimeout: 60 * time.Second,
+		// 180s startup timeout: the wait strategy's MappedPort polls
+		// take hundreds of ms each under heavy Docker pressure (parallel
+		// projects spinning up containers — beta.91 case study). The
+		// prior 60s budget consistently exhausted at ~237 retries
+		// before the port mapping resolved (gh#107 flake class). The
+		// strategy's per-poll overhead means actual port-resolution
+		// wall time can balloon way past the steady-state ~5s. 180s
+		// keeps tests fast on idle hosts and gives 3x headroom under
+		// contention. Steady-state startup is unchanged.
+		startTimeout: 180 * time.Second,
 	}
 
 	// Apply options
@@ -304,17 +308,21 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 		Image:        "nats:" + cfg.natsVersion,
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          args,
-		// Startup timeout applied at the ForAll level so it bounds BOTH
-		// strategies. Prior pattern only set it on ForHTTP, leaving
-		// ForListeningPort with its own (shorter) default — under Docker
-		// API pressure the port-listening check would burn through retries
-		// before the HTTP timeout could engage. Symptom:
-		//   "retries: 532, port: '', last err: port '4222/tcp' not found,
-		//   ctx err: context deadline exceeded"
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp"),
-		).WithStartupTimeoutDefault(cfg.startTimeout),
+		// NATS HTTP healthcheck at /healthz on the monitoring port is
+		// the load-bearing readiness signal — it returns 200 only when
+		// the server is accepting client connections on :4222. Prior
+		// pattern used both `ForListeningPort("4222/tcp")` and
+		// `ForHTTP("/")` strategies; under Docker pressure the
+		// strategies run sequentially (per ForAll's contract), and
+		// each calls MappedPort internally to figure out where to
+		// connect. Two strategies = double the MappedPort polling
+		// stress on Docker's API. Single ForHTTP strategy halves the
+		// pressure while keeping a stronger readiness signal (HTTP 200
+		// strictly implies port is listening). Caught during beta.91
+		// flake investigation (gh#107).
+		WaitingFor: wait.ForHTTP("/healthz").
+			WithPort("8222/tcp").
+			WithStartupTimeout(cfg.startTimeout),
 	}
 
 	// Start container
