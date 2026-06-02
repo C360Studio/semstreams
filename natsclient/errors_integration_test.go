@@ -200,3 +200,157 @@ func TestIntegration_RequestClassified_SuccessPath(t *testing.T) {
 		t.Fatalf("data = %q, want %q", data, want)
 	}
 }
+
+// TestIntegration_RequestWithRetryClassified_RoundTripPreservesClass
+// is the gh#192 matrix-gap-closure regression net. Mirrors the
+// RequestClassified case table but drives through the retry-aware
+// entry point — proves the retry loop preserves the classified
+// contract instead of returning the legacy text-body shape (which
+// is the Footgun semteams shipped a `json.Valid` workaround for in
+// cmd/semteams/tools/addsource/executor.go).
+func TestIntegration_RequestWithRetryClassified_RoundTripPreservesClass(t *testing.T) {
+	ctx := context.Background()
+
+	natsContainer, natsURL := startNATSContainer(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	client, err := NewClient(natsURL)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(ctx))
+	defer client.Close(ctx)
+
+	cases := []struct {
+		name        string
+		handlerErr  error
+		isInvalid   bool
+		isTransient bool
+		isFatal     bool
+		wantInMsg   string
+	}{
+		{
+			name:       "invalid_class_round_trips",
+			handlerErr: errs.WrapInvalid(errors.New("bad mutation shape"), "Test", "Handle", "validate"),
+			isInvalid:  true,
+			wantInMsg:  "bad mutation shape",
+		},
+		{
+			name:        "transient_class_round_trips",
+			handlerErr:  errs.WrapTransient(errors.New("kv temporarily unavailable"), "Test", "Handle", "write"),
+			isTransient: true,
+			wantInMsg:   "kv temporarily unavailable",
+		},
+		{
+			name:       "fatal_class_round_trips",
+			handlerErr: errs.WrapFatal(errors.New("kv permanently unreachable"), "Test", "Handle", "write"),
+			isFatal:    true,
+			wantInMsg:  "kv permanently unreachable",
+		},
+	}
+
+	retry := DefaultRetryConfig()
+	retry.InitialBackoff = 20 * time.Millisecond
+	retry.MaxRetries = 2
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			subject := "test.retry_classified." + tc.name
+			_, err = client.SubscribeForRequests(ctx, subject, func(_ context.Context, _ []byte) ([]byte, error) {
+				return nil, tc.handlerErr
+			})
+			require.NoError(t, err)
+			time.Sleep(50 * time.Millisecond)
+
+			data, err := client.RequestWithRetryClassified(ctx, subject, []byte("write"), 2*time.Second, retry)
+			if data != nil {
+				t.Errorf("data should be nil on classified error; got %q", data)
+			}
+			if err == nil {
+				t.Fatal("expected classified error")
+			}
+			if errs.IsInvalid(err) != tc.isInvalid {
+				t.Errorf("IsInvalid=%v, want %v (err=%v)", errs.IsInvalid(err), tc.isInvalid, err)
+			}
+			if errs.IsTransient(err) != tc.isTransient {
+				t.Errorf("IsTransient=%v, want %v (err=%v)", errs.IsTransient(err), tc.isTransient, err)
+			}
+			if errs.IsFatal(err) != tc.isFatal {
+				t.Errorf("IsFatal=%v, want %v (err=%v)", errs.IsFatal(err), tc.isFatal, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantInMsg) {
+				t.Errorf("err=%q, want substring %q", err.Error(), tc.wantInMsg)
+			}
+		})
+	}
+}
+
+// TestIntegration_RequestWithRetryClassified_SuccessPath confirms
+// the non-error path through the retry-aware entry point: handler
+// returns (data, nil), caller gets the same data, nil error.
+func TestIntegration_RequestWithRetryClassified_SuccessPath(t *testing.T) {
+	ctx := context.Background()
+
+	natsContainer, natsURL := startNATSContainer(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	client, err := NewClient(natsURL)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(ctx))
+	defer client.Close(ctx)
+
+	subject := "test.retry_classified.success"
+	want := []byte(`{"ok":true,"id":"abc123"}`)
+	_, err = client.SubscribeForRequests(ctx, subject, func(_ context.Context, _ []byte) ([]byte, error) {
+		return want, nil
+	})
+	require.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	data, err := client.RequestWithRetryClassified(ctx, subject, []byte("write"), 2*time.Second, DefaultRetryConfig())
+	require.NoError(t, err)
+	if !bytes.Equal(data, want) {
+		t.Fatalf("data = %q, want %q", data, want)
+	}
+}
+
+// TestIntegration_RequestWithRetryClassified_RetriesThenSucceeds
+// pins that the retry loop actually retries — responder starts late,
+// the request retries through the responder-not-ready window, then
+// succeeds with the classified contract intact. Catches a refactor
+// that accidentally bypasses retry (e.g. delegating to
+// RequestClassified directly).
+func TestIntegration_RequestWithRetryClassified_RetriesThenSucceeds(t *testing.T) {
+	ctx := context.Background()
+
+	natsContainer, natsURL := startNATSContainer(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	client, err := NewClient(natsURL)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(ctx))
+	defer client.Close(ctx)
+
+	subject := "test.retry_classified.late_responder"
+	want := []byte(`{"ack":"after-delay"}`)
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_, err := client.SubscribeForRequests(ctx, subject, func(_ context.Context, _ []byte) ([]byte, error) {
+			return want, nil
+		})
+		if err != nil {
+			t.Logf("late subscribe failed: %v", err)
+		}
+	}()
+
+	retry := DefaultRetryConfig()
+	retry.InitialBackoff = 50 * time.Millisecond
+	retry.MaxRetries = 5
+	retry.BackoffMultiplier = 1.5
+
+	data, err := client.RequestWithRetryClassified(ctx, subject, []byte("write"), 2*time.Second, retry)
+	require.NoError(t, err, "retry+classified should succeed once late responder comes up")
+	if !bytes.Equal(data, want) {
+		t.Fatalf("data = %q, want %q", data, want)
+	}
+}

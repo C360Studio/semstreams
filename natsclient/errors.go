@@ -233,8 +233,53 @@ func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 // Handler failures arrive as a *errs.ClassifiedError reconstructed
 // from the X-Error-Class header (or the legacy body prefix as
 // fallback). Caller branches on errs.IsInvalid / IsTransient / IsFatal.
+//
+// Use this for QUERIES. For MUTATIONS where the responder is
+// idempotent AND emits classified errors, use
+// RequestWithRetryClassified — retrying on a hung query masks
+// responder problems as latency. See
+// docs/operations/07-nats-request-retry.md for the full rule.
 func (c *Client) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	msg, err := c.RequestWithHeaders(ctx, subject, data, nil, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return ClassifyReply(msg)
+}
+
+// RequestWithRetryClassified is the retry-aware sibling of
+// RequestClassified. It runs RequestWithRetry's retry-on-transport-
+// failure loop and then runs the final reply through ClassifyReply
+// so the returned error covers both transport (retried away) AND
+// handler failure modes uniformly. Closes gh#192: pre-beta.93 the
+// consumer-side method matrix exposed Request / RequestClassified /
+// RequestWithRetry but had no retry+classify combination, forcing
+// mutation-path callers to either skip the classified contract or
+// wrap RequestWithRetry in a `json.Valid` pre-decode guard (the
+// shape semteams shipped in cmd/semteams/tools/addsource/executor.go
+// before this method existed).
+//
+// Use this for MUTATIONS where the responder is idempotent AND
+// emits classified errors. The classified contract round-trips per
+// the same rules as RequestClassified: transport failures arrive as
+// the underlying error after the retry budget exhausts (classifies
+// as ErrorTransient via pkg/errs.IsTransient); handler failures
+// arrive as *errs.ClassifiedError reconstructed from the
+// X-Error-Class header (or the legacy body prefix as fallback).
+// Caller branches on errs.IsInvalid / IsTransient / IsFatal.
+//
+// For QUERIES use RequestClassified; retrying on a hung query
+// masks responder problems as latency. See
+// docs/operations/07-nats-request-retry.md for the full
+// mutation-vs-query rule.
+func (c *Client) RequestWithRetryClassified(
+	ctx context.Context,
+	subject string,
+	data []byte,
+	timeout time.Duration,
+	retry RetryConfig,
+) ([]byte, error) {
+	msg, err := c.requestMsgWithRetry(ctx, subject, data, timeout, retry)
 	if err != nil {
 		return nil, err
 	}

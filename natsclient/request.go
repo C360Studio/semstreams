@@ -272,6 +272,14 @@ func DefaultRetryConfig() RetryConfig {
 // to the same state on duplicate receives. For QUERIES use Request
 // instead; retrying on timeout masks hung responders as latency. See
 // docs/operations/07-nats-request-retry.md for the full rule.
+//
+// Footgun: when the responder returns a Go error, SubscribeForRequests
+// wire-encodes the failure as a legacy "error: <msg>" text body with
+// nil err. This method returns reply.Data on transport success without
+// running it through ClassifyReply, so callers that json.Unmarshal the
+// body silently corrupt on handler errors. For mutation paths that
+// want both retry AND classified error handling, use
+// RequestWithRetryClassified (closes the matrix gap filed as gh#192).
 func (c *Client) RequestWithRetry(
 	ctx context.Context,
 	subject string,
@@ -279,6 +287,25 @@ func (c *Client) RequestWithRetry(
 	timeout time.Duration,
 	retry RetryConfig,
 ) ([]byte, error) {
+	msg, err := c.requestMsgWithRetry(ctx, subject, data, timeout, retry)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
+
+// requestMsgWithRetry is the shared retry-loop helper. Returns the
+// raw *nats.Msg so callers can either extract .Data (RequestWithRetry)
+// or run the message through ClassifyReply (RequestWithRetryClassified
+// in errors.go). Keeps the two retry-aware request methods in lockstep
+// so a future retry-logic tweak doesn't silently drift between them.
+func (c *Client) requestMsgWithRetry(
+	ctx context.Context,
+	subject string,
+	data []byte,
+	timeout time.Duration,
+	retry RetryConfig,
+) (*nats.Msg, error) {
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -314,7 +341,7 @@ func (c *Client) RequestWithRetry(
 
 		if err == nil {
 			c.resetCircuit()
-			return reply.Data, nil
+			return reply, nil
 		}
 
 		lastErr = err
