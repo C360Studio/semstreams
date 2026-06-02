@@ -207,29 +207,32 @@ func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	t.Logf("Gemini live multi-tool test against model=%q", geminiTestModel())
 
+	// Tools designed so the model CANNOT satisfy them from prior
+	// knowledge (gemini-3-pro-preview is strong enough to do
+	// arithmetic in its head, so calculator-shaped tools get
+	// skipped). These are opaque lookups that REQUIRE tool calls
+	// to obtain the data.
 	tools := []agentic.ToolDefinition{
 		{
-			Name:        "multiply",
-			Description: "Multiplies two integers and returns the product.",
+			Name:        "lookup_inventory_count",
+			Description: "Looks up the current count of a SKU in the warehouse inventory system. Returns the integer count.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"a": map[string]any{"type": "integer"},
-					"b": map[string]any{"type": "integer"},
+					"sku": map[string]any{"type": "string", "description": "The SKU code (e.g. 'WIDGET-42')"},
 				},
-				"required": []string{"a", "b"},
+				"required": []string{"sku"},
 			},
 		},
 		{
-			Name:        "add",
-			Description: "Adds two integers and returns the sum.",
+			Name:        "lookup_warehouse_capacity",
+			Description: "Looks up the maximum capacity of a warehouse by its ID. Returns the integer capacity in units.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"a": map[string]any{"type": "integer"},
-					"b": map[string]any{"type": "integer"},
+					"warehouse_id": map[string]any{"type": "string", "description": "The warehouse identifier (e.g. 'WH-EAST-1')"},
 				},
-				"required": []string{"a", "b"},
+				"required": []string{"warehouse_id"},
 			},
 		},
 	}
@@ -237,10 +240,19 @@ func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
 	turn1 := agentic.AgentRequest{
 		RequestID: "req-gemini-parallel-1",
 		Messages: []agentic.ChatMessage{
-			// Prompt designed to elicit two INDEPENDENT tool calls
-			// in a single response (no causal dependency between
-			// the two operations).
-			{Role: "user", Content: "Compute 17 * 23 and ALSO 41 + 19. Make BOTH tool calls in your first response — don't wait for either result before issuing the other."},
+			// Prompt explicitly forces parallel emission. The two
+			// lookups have NO causal dependency — best-practice
+			// agent behavior is to dispatch both in a single
+			// response. Opaque tool data prevents the model from
+			// answering inline.
+			{
+				Role: "system",
+				Content: "You are a warehouse management assistant. ALWAYS use the supplied tools to fetch real data; never answer from memory. When the user asks about multiple INDEPENDENT pieces of data, dispatch ALL tool calls in your FIRST response in parallel — do not wait for any result before issuing the other calls.",
+			},
+			{
+				Role:    "user",
+				Content: "Look up the current inventory count for SKU 'WIDGET-42' and ALSO the capacity of warehouse 'WH-EAST-1'. These are independent lookups — dispatch both in parallel.",
+			},
 		},
 		Tools: tools,
 	}
@@ -307,7 +319,8 @@ func TestGemini3x_ThoughtSignature_ParallelToolCalls_RoundTrip(t *testing.T) {
 		})
 	}
 	msgs := []agentic.ChatMessage{
-		turn1.Messages[0],
+		turn1.Messages[0], // system
+		turn1.Messages[1], // user
 		{
 			Role:             "assistant",
 			ToolCalls:        resp1.Message.ToolCalls,
