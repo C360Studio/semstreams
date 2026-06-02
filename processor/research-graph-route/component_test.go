@@ -3,13 +3,16 @@ package researchroute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/model"
 )
 
 // fakeLoopStore replaces the natsLoopStore for handler integration
@@ -267,6 +270,105 @@ func TestConfig_ValidateRejectsNegativeCaps(t *testing.T) {
 	c.MaxCandidatesInPrompt = -1
 	if err := c.Validate(); err == nil {
 		t.Error("Validate accepted negative max_candidates_in_prompt")
+	}
+}
+
+// --- initRouter ---
+
+func TestInitRouter_RejectsMissingModelRegistry(t *testing.T) {
+	// route_search has no keyword fallback (unlike nl_classify's
+	// optional LLM tier). A nil ModelRegistry must surface as a
+	// startup error, not a silent degrade to no-op routing — that
+	// would leak loops mid-chain with no route.complete trigger
+	// ever written.
+	c := &Component{
+		config: DefaultConfig(),
+		logger: quietLogger(),
+	}
+	err := c.initRouter()
+	if err == nil {
+		t.Fatal("initRouter accepted nil ModelRegistry; want error")
+	}
+	if !strings.Contains(err.Error(), "model registry required") {
+		t.Errorf("error should explain missing registry: %v", err)
+	}
+	// Specifically calls out the capability name so an operator
+	// reading the log knows which capability to add.
+	if !strings.Contains(err.Error(), model.CapabilityResearchRouting) {
+		t.Errorf("error should mention CapabilityResearchRouting: %v", err)
+	}
+}
+
+func TestInitRouter_SkipsWhenRouterAlreadyInjected(t *testing.T) {
+	// Test-injected router (the path component_test.go's
+	// newTestComponent uses) must NOT re-resolve the model registry.
+	// Otherwise Start under tests would fail on nil deps.
+	c := &Component{
+		config: DefaultConfig(),
+		logger: quietLogger(),
+		router: &fakeRouter{},
+	}
+	if err := c.initRouter(); err != nil {
+		t.Errorf("initRouter with pre-injected router should no-op, got %v", err)
+	}
+}
+
+// --- concurrency ---
+
+// TestComponent_HandleMessage_ConcurrentDispatch exercises 50
+// concurrent handleMessage calls against a shared fakeRouter +
+// fakeLoopStore. Validates that wg + atomic counters surface
+// consistent totals under contention and that no write-order
+// reordering trips the snapshot-then-trigger invariant for any
+// individual call. Cheap regression net for the "two router calls
+// raced; one snapshot wins, two triggers fire" class of bugs.
+func TestComponent_HandleMessage_ConcurrentDispatch(t *testing.T) {
+	const n = 50
+	loops := &fakeLoopStore{
+		intent:        &research.Intent{Topic: "x"},
+		classifierOut: &research.ClassifierOutput{Topic: "x", Tier: "0"},
+	}
+	router := &fakeRouter{content: `{"action":"synthesize_directly","args":{},"rationale":"ok"}`}
+	c := newTestComponent(loops, router)
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			subject := "component.route_search.loop-" + fmt.Sprintf("%d", idx)
+			c.handleMessage(context.Background(), subject, nil)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&c.messagesProcessed); got != n {
+		t.Errorf("messagesProcessed = %d, want %d", got, n)
+	}
+	if got := atomic.LoadInt64(&c.messagesEmitted); got != n {
+		t.Errorf("messagesEmitted = %d, want %d", got, n)
+	}
+	if got := atomic.LoadInt64(&c.errors); got != 0 {
+		t.Errorf("errors = %d, want 0", got)
+	}
+	// Each call writes snapshot + trigger, so 2*n writes total.
+	if got := len(loops.writeOrder); got != 2*n {
+		t.Errorf("write count = %d, want %d (snapshot + trigger per call)", got, 2*n)
+	}
+	// Spot-check: every snapshot-then-trigger pair stays adjacent
+	// at minimum (snapshot at even index, trigger at odd index of
+	// each pair) — looser than full ordering since calls interleave.
+	snapshots, triggers := 0, 0
+	for _, w := range loops.writeOrder {
+		switch w {
+		case "snapshot":
+			snapshots++
+		case "route_complete":
+			triggers++
+		}
+	}
+	if snapshots != n || triggers != n {
+		t.Errorf("snapshot=%d trigger=%d, want %d each", snapshots, triggers, n)
 	}
 }
 

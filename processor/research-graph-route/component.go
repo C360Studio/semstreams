@@ -313,6 +313,13 @@ func (c *Component) Stop(timeout time.Duration) error {
 // routeDecision, writes the RouteDecision envelope + the
 // route.complete trigger key. Errors are logged and counted; not
 // propagated to NATS because the publisher is fire-and-forget.
+//
+// The ctx passed in comes from the NATS subscription callback and
+// is intentionally tied to the subscription lifecycle — Stop's
+// Unsubscribe cancels it so an in-flight LLM call drains fast.
+// wg.Add(1) + Stop's wg.Wait give the bounded "drain by timeout"
+// shape; ctx-cancel is the inner mechanism that surfaces as the
+// LLM client's error return.
 func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte) {
 	c.wg.Add(1)
 	defer c.wg.Done()
@@ -358,7 +365,7 @@ func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte)
 		return
 	}
 
-	decision, err := routeDecision(ctx, c.router, intent, classifierOut, c.config.MaxResponseTokens, c.config.MaxCandidatesInPrompt)
+	decision, err := routeDecision(ctx, c.router, intent, classifierOut, c.config.MaxResponseTokens, c.config.MaxCandidatesInPrompt, c.logger)
 	if err != nil {
 		c.logger.Error("route_decision failed; ignoring message",
 			slog.String("loop_id", loopID),
