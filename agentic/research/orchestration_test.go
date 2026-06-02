@@ -113,6 +113,92 @@ func TestBuildAssessCompleteTriples_SufficientPaths(t *testing.T) {
 	}
 }
 
+// TestBuildKickoffTriples_HappyPath locks the wire contract R0 reads:
+// loop.role + research.requested + topic + loop_id + parent_loop +
+// parent_role + budget + max_iterations all share the loop entity
+// Subject so graph-ingest's per-Subject CAS path lands the batch
+// atomically. R0 must never see a half-populated chain identity (e.g.,
+// requested=true without loop_id would publish to a nameless subject).
+func TestBuildKickoffTriples_HappyPath(t *testing.T) {
+	triples := BuildKickoffTriples(
+		testLoopEntityID,
+		"drone hover anomalies",
+		"rg_abc12345",
+		"loop_parent001",
+		"general",
+		4000,
+		5,
+		fixedTime,
+	)
+	require.Len(t, triples, 8)
+	assertSharedSubject(t, triples)
+	for _, tr := range triples {
+		assert.Equal(t, testLoopEntityID, tr.Subject)
+		assert.Equal(t, SourceResearchGraphTool, tr.Source)
+		assert.Equal(t, 1.0, tr.Confidence)
+	}
+	got := byPredicate(triples)
+	assert.Equal(t, PipelineRole, got[PredicateLoopRole])
+	assert.Equal(t, "true", got[PredicateResearchRequested])
+	assert.Equal(t, "drone hover anomalies", got[PredicateResearchTopic])
+	assert.Equal(t, "rg_abc12345", got[PredicateResearchLoopID])
+	assert.Equal(t, "loop_parent001", got[PredicateResearchParentLoop])
+	assert.Equal(t, "general", got[PredicateResearchParentRole])
+	assert.Equal(t, "4000", got[PredicateResearchBudgetTokens])
+	assert.Equal(t, "5", got[PredicateResearchMaxIterations])
+}
+
+// TestBuildKickoffTriples_OmitsParentTriplesWhenEmpty pins the
+// optional-triple behavior. parent_loop / parent_role are conditional
+// (research_graph tool invoked outside an agent loop has no parent),
+// so they must NOT land as empty-string triples — that would trigger
+// R6's role substitution and dispatch publish_agent with role="",
+// failing actions.go:984's role-required validator further downstream
+// in a confusing way.
+func TestBuildKickoffTriples_OmitsParentTriplesWhenEmpty(t *testing.T) {
+	triples := BuildKickoffTriples(
+		testLoopEntityID,
+		"drone hover anomalies",
+		"rg_abc12345",
+		"", // parentLoopID empty
+		"", // parentRole empty
+		4000,
+		5,
+		fixedTime,
+	)
+	require.Len(t, triples, 6, "empty parent_loop + parent_role omits both triples")
+	assertSharedSubject(t, triples)
+	for _, tr := range triples {
+		assert.NotEqual(t, PredicateResearchParentLoop, tr.Predicate,
+			"empty parentLoopID must NOT produce a parent_loop triple")
+		assert.NotEqual(t, PredicateResearchParentRole, tr.Predicate,
+			"empty parentRole must NOT produce a parent_role triple")
+	}
+}
+
+// TestBuildKickoffTriples_PartialParentOmissions pins each branch
+// independently — parent_loop populated, parent_role empty (and vice
+// versa) is a real shape when the parent loop's role isn't propagated
+// onto the tool call's Metadata.
+func TestBuildKickoffTriples_PartialParentOmissions(t *testing.T) {
+	t.Run("parent_loop_only", func(t *testing.T) {
+		triples := BuildKickoffTriples(testLoopEntityID, "topic", "rg_x", "loop_p", "", 4000, 5, fixedTime)
+		require.Len(t, triples, 7)
+		got := byPredicate(triples)
+		assert.Equal(t, "loop_p", got[PredicateResearchParentLoop])
+		_, hasRole := got[PredicateResearchParentRole]
+		assert.False(t, hasRole)
+	})
+	t.Run("parent_role_only", func(t *testing.T) {
+		triples := BuildKickoffTriples(testLoopEntityID, "topic", "rg_x", "", "general", 4000, 5, fixedTime)
+		require.Len(t, triples, 7)
+		got := byPredicate(triples)
+		assert.Equal(t, "general", got[PredicateResearchParentRole])
+		_, hasParentLoop := got[PredicateResearchParentLoop]
+		assert.False(t, hasParentLoop)
+	})
+}
+
 func TestBuildSearchResultCompleteTriples(t *testing.T) {
 	triples := BuildSearchResultCompleteTriples(
 		testLoopEntityID,

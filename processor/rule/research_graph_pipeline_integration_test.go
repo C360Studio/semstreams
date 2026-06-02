@@ -314,6 +314,72 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 		assert.True(t, removed[research.PredicateResearchExecuteComplete])
 		assert.True(t, removed[research.PredicateResearchAssessComplete])
 	})
+
+	// Reviewer C1 follow-up — pin the refine cap-exhaust fallback.
+	// The default smoke runs synthesize-when-sufficient through
+	// runOnEnter without state, where $state.iteration evaluates to 0.
+	// To exercise the cap-exhaust path we need to drive
+	// EvaluateWithStateAndMessage directly with a stateFields map
+	// carrying $state.iteration >= 6 (the 6th R4 fire after 5 refine
+	// rounds, where the refine actions are about to hit MaxIterations=5
+	// and skip — leaving the cap-exhaust synthesize as the only action
+	// that should fire). Without this fallback, the chain stalls
+	// silently after 5 insufficient refines.
+	t.Run("sufficient_false_at_cap_exhaust_falls_to_synthesize", func(t *testing.T) {
+		entity := withTriple(kickoffEntity(), research.PredicateResearchExecuteComplete, "2026-06-02T18:35:00Z")
+		entity = withTriple(entity, research.PredicateResearchAssessComplete, "2026-06-02T18:35:30Z")
+		entity = withTriple(entity, research.PredicateResearchAssessSufficient, "false")
+
+		rule, err := NewExpressionRule(r4)
+		require.NoError(t, err)
+		require.True(t, rule.EvaluateEntityState(entity))
+
+		pub := &mockPublisher{}
+		mut := &mockTripleMutator{}
+		exec := NewActionExecutorFull(nil, mut, pub)
+		ec := &ExecutionContext{EntityID: entity.ID, Entity: entity}
+		evaluator := expression.NewExpressionEvaluator()
+		// Replicate the stateful_evaluator's iteration counter + per-
+		// action firing cap at the cap-exhaust boundary (6th R4 fire).
+		// In production the refine actions hit MaxIterations=5 on the
+		// 6th R4 evaluation and stateful_evaluator skips them — so
+		// only the cap-exhaust fallback synthesize remains. Simulate
+		// the same gate inline: actionIterations[id] >= action.MaxIterations
+		// = skip.
+		stateFields := expression.StateFields{"$state.iteration": 6}
+		actionIterations := map[string]int{
+			"assess_refine_clear_execute": 5,
+			"assess_refine_clear_assess":  5,
+			"assess_refine_redispatch":    5,
+		}
+
+		dispatched := []string{}
+		for _, action := range r4.OnEnter {
+			if action.MaxIterations != nil && *action.MaxIterations > 0 && actionIterations[action.ID] >= *action.MaxIterations {
+				continue
+			}
+			if len(action.When) > 0 {
+				expr := expression.LogicalExpression{
+					Conditions: SubstituteConditionValues(action.When, ec),
+					Logic:      expression.LogicAnd,
+				}
+				match, whenErr := evaluator.EvaluateWithStateAndMessage(entity, stateFields, nil, expr)
+				require.NoError(t, whenErr)
+				if !match {
+					continue
+				}
+			}
+			require.NoError(t, exec.Execute(context.Background(), action, ec))
+			dispatched = append(dispatched, action.ID)
+		}
+
+		require.Equal(t, []string{"assess_synthesize_when_refine_capped"}, dispatched,
+			"at iteration=6 with sufficient=false + refine actions cap-exhausted, ONLY the cap-exhaust fallback must fire — chain advances to terminal synthesis")
+		require.Len(t, pub.published, 1)
+		assert.Equal(t, "component.synthesize_answer."+testLoopID, pub.published[0].subject)
+		assert.Empty(t, mut.removedTriples,
+			"cap-exhaust fallback must NOT clear stage markers — chain advances forward, not loops")
+	})
 }
 
 // TestResearchGraphPipeline_R6_ContinuationDispatchesParentTask locks

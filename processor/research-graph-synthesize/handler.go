@@ -47,9 +47,17 @@ type LoopStore interface {
 	// SearchResult via read_loop_result(loop_id=<rg_xxx>) without a
 	// new tool. The duplicate-write cost is one extra KV put per
 	// chain; the alternative (custom read_research_result tool) is
-	// Phase 2 scope. Failure is fatal because the parent loop would
-	// see "research finished but no result" — the chain advance
-	// invariant.
+	// Phase 2 scope.
+	//
+	// Failure is BEST-EFFORT: the handler logs Warn and continues so
+	// the orchestration triple still lands, R6 still fires, and the
+	// parent's read_loop_result call surfaces a clean key-not-found
+	// (which the parent's persona can degrade against — e.g.,
+	// "synthesis arrived but the body wasn't fetchable, here's what
+	// we know from the trajectory"). The chain-advance invariant
+	// belongs at the triple stamp, not the read-side envelope. A
+	// fatal-here treatment would short-circuit R6 and leave the
+	// parent waiting forever — strictly worse than degraded read.
 	PutLoopCompletion(ctx context.Context, loopID string, envelope []byte) error
 }
 

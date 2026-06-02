@@ -1135,7 +1135,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 		e.logger.Debug("Triggering agent task",
 			"subject", subject,
 			"task_id", taskID,
-			"role", action.Role,
+			"role", role,
 			"model", action.Model,
 			"entity_id", entityID)
 	}

@@ -430,7 +430,7 @@ func (c *Component) writeAssessment(ctx context.Context, loopID string, out *res
 	}
 
 	if err := c.loops.PutAssessmentOutput(ctx, loopID, envelopeBytes); err != nil {
-		c.logger.Error("assess.complete trigger write failed; R3 will not fire",
+		c.logger.Error("assess.complete trigger write failed; R4 will not fire",
 			slog.String("loop_id", loopID),
 			slog.Any("error", err))
 		atomic.AddInt64(&c.errors, 1)
