@@ -67,25 +67,31 @@ func (a *GeminiAdapter) NormalizeMessages(messages []wire.Message) []wire.Messag
 }
 
 // rebuildGeminiThoughtSignature walks an assistant message's tool_calls
-// and converts the framework-internal carrier on the FIRST tool_call
-// (only) into Gemini's extra_content.google.thought_signature shape.
-// Subsequent tool_calls in the same message have their carrier
-// stripped — per Gemini's "first call per step" rule, sending the
-// signature on every tool_call duplicates information and risks
-// rejection on a strict-mode preview build.
+// and converts the framework-internal carrier on EVERY tool_call that
+// has one into Gemini's extra_content.google.thought_signature shape.
+//
+// History (gh#188, 2026-06-02): the prior implementation gated emit
+// on the FIRST tool_call only, citing Google's "the model only sets
+// the signature on the first call in a parallel response" docs
+// (ADR-037 chunk 8). That was a misreading — the docs describe what
+// Gemini PUTS INTO responses, not what the client must ECHO BACK.
+// semteams smoke #13 hit HTTP 400 from Gemini 3.x preview ("Function
+// call is missing a thought_signature in functionCall parts. ...
+// position 2.") because position-2's captured signature was being
+// stripped on echo. The capture path correctly stores N signatures
+// into N ReasoningRecords; the echo path now correctly re-attaches
+// all N. Multi-tool-call cases (parallel-in-one-step on Gemini's
+// side, AND sequential-step-2-bundled-into-tool_calls on our wire
+// model) both want every signature preserved per
+// [[feedback_live_gate_catches_doc_derived]].
 func rebuildGeminiThoughtSignature(msg *wire.Message) {
 	if msg == nil {
 		return
 	}
-	firstHandled := false
 	for j := range msg.ToolCalls {
 		tc := &msg.ToolCalls[j]
 		rawSig, ok := tc.Extras[wireKeyC360ThoughtSignature]
 		if !ok {
-			continue
-		}
-		if firstHandled {
-			delete(tc.Extras, wireKeyC360ThoughtSignature)
 			continue
 		}
 		var sig string
@@ -108,7 +114,6 @@ func rebuildGeminiThoughtSignature(msg *wire.Message) {
 			tc.Extras[wireKeyExtraContent] = b
 		}
 		delete(tc.Extras, wireKeyC360ThoughtSignature)
-		firstHandled = true
 	}
 }
 

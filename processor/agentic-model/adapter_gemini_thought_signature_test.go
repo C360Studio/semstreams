@@ -118,15 +118,24 @@ func TestGeminiAdapter_NormalizeMessages_ReconstructsExtraContent(t *testing.T) 
 	}
 }
 
-// TestGeminiAdapter_NormalizeMessages_OnlyFirstToolCallKeepsSignature
+// TestGeminiAdapter_NormalizeMessages_AllToolCallsKeepSignature
 // asserts that when an assistant message carries multiple tool_calls
-// each with the framework-internal carrier, only the FIRST emits
-// extra_content. Gemini's "first call per step" contract: sending the
-// signature on every tool_call duplicates information.
-func TestGeminiAdapter_NormalizeMessages_OnlyFirstToolCallKeepsSignature(t *testing.T) {
+// each with the framework-internal carrier, EVERY position emits
+// extra_content with its corresponding thought_signature.
+//
+// Inverts the prior pinning (gh#188, 2026-06-02): the previous test
+// pinned a docs-derived "first-call-per-step" interpretation that
+// surfaces as HTTP 400 on Gemini 3.x preview when position 2+
+// signatures get stripped on echo. The docs describe what Gemini
+// PUTS INTO responses; the client must ECHO BACK every captured
+// signature. Per [[feedback_live_gate_catches_doc_derived]] the
+// docs-derived behavior should have been live-gated before pinning —
+// this test now enforces the correct contract.
+func TestGeminiAdapter_NormalizeMessages_AllToolCallsKeepSignature(t *testing.T) {
 	adapter := &GeminiAdapter{}
 	sigA, _ := json.Marshal("sig-A")
 	sigB, _ := json.Marshal("sig-B")
+	sigC, _ := json.Marshal("sig-C")
 	msg := wire.Message{
 		Role: "assistant",
 		ToolCalls: []wire.ToolCall{
@@ -140,26 +149,77 @@ func TestGeminiAdapter_NormalizeMessages_OnlyFirstToolCallKeepsSignature(t *test
 				Function: wire.Function{Name: "f2"},
 				Extras:   map[string]json.RawMessage{wireKeyC360ThoughtSignature: sigB},
 			},
+			{
+				ID:       "call-3",
+				Function: wire.Function{Name: "f3"},
+				Extras:   map[string]json.RawMessage{wireKeyC360ThoughtSignature: sigC},
+			},
 		},
 	}
 	_ = msg.SetContentString("hi")
 
 	out := adapter.NormalizeMessages([]wire.Message{msg})
 
-	first := out[0].ToolCalls[0]
-	if _, ok := first.Extras[wireKeyExtraContent]; !ok {
-		t.Error("first tool_call should carry extra_content")
+	wantSigs := []string{"sig-A", "sig-B", "sig-C"}
+	for i, want := range wantSigs {
+		tc := out[0].ToolCalls[i]
+		rawExtra, ok := tc.Extras[wireKeyExtraContent]
+		if !ok {
+			t.Errorf("tool_call[%d] (call-%d): missing extra_content; gh#188 regression — every captured signature must echo", i, i+1)
+			continue
+		}
+		if _, stillCarrier := tc.Extras[wireKeyC360ThoughtSignature]; stillCarrier {
+			t.Errorf("tool_call[%d] (call-%d): framework carrier should be deleted after rebuild", i, i+1)
+		}
+		var shape struct {
+			Google struct {
+				ThoughtSignature string `json:"thought_signature"`
+			} `json:"google"`
+		}
+		if err := json.Unmarshal(rawExtra, &shape); err != nil {
+			t.Errorf("tool_call[%d] decode extra_content: %v", i, err)
+			continue
+		}
+		if shape.Google.ThoughtSignature != want {
+			t.Errorf("tool_call[%d] thought_signature = %q, want %q", i, shape.Google.ThoughtSignature, want)
+		}
 	}
-	if _, ok := first.Extras[wireKeyC360ThoughtSignature]; ok {
-		t.Error("first tool_call: carrier should be deleted after rebuild")
-	}
+}
 
-	second := out[0].ToolCalls[1]
-	if _, ok := second.Extras[wireKeyExtraContent]; ok {
-		t.Error("second tool_call: extra_content should NOT be set (Gemini first-call-per-step)")
+// TestGeminiAdapter_NormalizeMessages_MissingCarrierIsToleratedAtAnyPosition
+// pins that a tool_call without a carrier at ANY position (not just
+// non-first) cleanly skips without affecting siblings. Catches the
+// "I deleted the gate but introduced an early-return" regression
+// shape.
+func TestGeminiAdapter_NormalizeMessages_MissingCarrierIsToleratedAtAnyPosition(t *testing.T) {
+	adapter := &GeminiAdapter{}
+	sigA, _ := json.Marshal("sig-A")
+	sigC, _ := json.Marshal("sig-C")
+	msg := wire.Message{
+		Role: "assistant",
+		ToolCalls: []wire.ToolCall{
+			{ID: "call-1", Function: wire.Function{Name: "f1"}, Extras: map[string]json.RawMessage{wireKeyC360ThoughtSignature: sigA}},
+			{ID: "call-2", Function: wire.Function{Name: "f2"}}, // no carrier
+			{ID: "call-3", Function: wire.Function{Name: "f3"}, Extras: map[string]json.RawMessage{wireKeyC360ThoughtSignature: sigC}},
+		},
 	}
-	if _, ok := second.Extras[wireKeyC360ThoughtSignature]; ok {
-		t.Error("second tool_call: carrier should be stripped")
+	_ = msg.SetContentString("hi")
+
+	out := adapter.NormalizeMessages([]wire.Message{msg})
+
+	if _, ok := out[0].ToolCalls[0].Extras[wireKeyExtraContent]; !ok {
+		t.Error("tool_call[0]: extra_content missing (sig-A should have been emitted)")
+	}
+	// tool_call[1] supplied no carrier → no extra_content expected.
+	// Verify only if Extras was somehow populated (nil is the clean
+	// case for "no signature was present").
+	if extras := out[0].ToolCalls[1].Extras; extras != nil {
+		if _, ok := extras[wireKeyExtraContent]; ok {
+			t.Error("tool_call[1]: should NOT have extra_content (no carrier was supplied)")
+		}
+	}
+	if _, ok := out[0].ToolCalls[2].Extras[wireKeyExtraContent]; !ok {
+		t.Error("tool_call[2]: extra_content missing (sig-C should have been emitted, gap at position 1 must not block position 2)")
 	}
 }
 
