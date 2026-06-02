@@ -44,6 +44,13 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Description: "ADR-045 nl_classify component output: classifier hints + initial candidate set",
 			Factory:     func() any { return &ClassifierOutput{} },
 		},
+		{
+			Domain:      Domain,
+			Category:    CategoryExecutionOutput,
+			Version:     SchemaVersion,
+			Description: "ADR-045 execute_subqueries component output: dedup'd + ranked + budget-enforced evidence array + provenance",
+			Factory:     func() any { return &ExecutionOutput{} },
+		},
 	}
 
 	var errs []error

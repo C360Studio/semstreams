@@ -33,6 +33,13 @@ const (
 	// matching trigger key; route_search (PR 3) consumes the payload
 	// to pick a routing action.
 	CategoryClassifierOutput = "classifier_output"
+
+	// CategoryExecutionOutput is the execute_subqueries component's
+	// emit (ADR-045 Phase 1 PR 4): dedup'd + ranked + budget-
+	// enforced evidence array + provenance. R3 fires on the matching
+	// trigger key; assess_sufficiency (PR 5) consumes the payload
+	// to pick sufficient / refine.
+	CategoryExecutionOutput = "execution_output"
 )
 
 // RouteAction values for RouteDecision.Action. Closed enum per ADR-045
