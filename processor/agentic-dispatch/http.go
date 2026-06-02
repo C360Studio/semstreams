@@ -313,6 +313,14 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	// See stampTraceIDFromCtx in component.go.
 	stampTraceIDFromCtx(ctx, &task)
 
+	// Scope the initial agent's tools to DefaultTools when configured.
+	// Mirrors the bus-dispatch path in handleTaskSubmission so HTTP-
+	// spawned loops honor the same scoping contract — pre-fix the HTTP
+	// path left task.Tools nil and the spawned loop fell back to global
+	// discovery, sending the full agentic-tools registry to the LLM
+	// regardless of operator default_tools configuration.
+	c.scopeTaskTools(&task)
+
 	// Track the loop
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           loopID,

@@ -2,10 +2,12 @@ package agenticdispatch
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -75,5 +77,89 @@ func TestResolveDefaultTools_EmptyInputReturnsNil(t *testing.T) {
 func TestResolveDefaultTools_NilRegistryReturnsNil(t *testing.T) {
 	if got := resolveDefaultTools(nil, []string{"some_tool"}, slog.Default()); got != nil {
 		t.Fatalf("nil registry should return nil, got %v", got)
+	}
+}
+
+// newScopeTestComponent builds a minimally-wired Component for
+// exercising scopeTaskTools end-to-end (DefaultTools config + tool
+// registry deps). Mirrors newTestComponent in http_loops_test.go but
+// also wires deps.ToolRegistry, which scopeTaskTools needs to resolve
+// names to ToolDefinitions.
+func newScopeTestComponent(t *testing.T, defaultTools []string, registered ...string) *Component {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.DefaultTools = defaultTools
+	reg := newDispatchTestRegistry(t, registered...)
+	return &Component{
+		config: cfg,
+		deps:   component.Dependencies{ToolRegistry: reg},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func TestScopeTaskTools_NilDefaultTools_LeavesTaskUnchanged(t *testing.T) {
+	// nil DefaultTools is the operator-opt-out — the spawned loop
+	// falls back to global discovery (handlers.go discoverTools).
+	// scopeTaskTools must leave task.Tools as-is (nil here).
+	c := newScopeTestComponent(t, nil, "any_tool")
+	task := agentic.TaskMessage{}
+	c.scopeTaskTools(&task)
+	if task.Tools != nil {
+		t.Fatalf("nil DefaultTools should leave task.Tools nil, got %v", task.Tools)
+	}
+}
+
+func TestScopeTaskTools_ConfiguredDefaultTools_ScopesTask(t *testing.T) {
+	// DefaultTools with registered names produces a non-nil resolved
+	// slice on task.Tools. The spawned loop respects task.Tools when
+	// non-nil and skips global discovery.
+	c := newScopeTestComponent(t, []string{"alpha", "beta"}, "alpha", "beta", "gamma")
+	task := agentic.TaskMessage{}
+	c.scopeTaskTools(&task)
+	if len(task.Tools) != 2 {
+		t.Fatalf("want 2 scoped tools, got %d: %v", len(task.Tools), task.Tools)
+	}
+	names := map[string]bool{}
+	for _, td := range task.Tools {
+		names[td.Name] = true
+	}
+	if !names["alpha"] || !names["beta"] {
+		t.Fatalf("scoped set missing expected tools: %v", names)
+	}
+	if names["gamma"] {
+		t.Fatalf("scoped set leaked unregistered name 'gamma': %v", names)
+	}
+}
+
+func TestScopeTaskTools_EmptyDefaultTools_ProducesNonNilEmpty(t *testing.T) {
+	// Explicit empty slice (`"default_tools": []` in flow config) is
+	// the "no tools for this role" opt-in. scopeTaskTools must
+	// produce a non-nil empty task.Tools so the loop respects it
+	// rather than falling back to global discovery (which would
+	// silently undo the operator's intent).
+	c := newScopeTestComponent(t, []string{}, "alpha")
+	task := agentic.TaskMessage{}
+	c.scopeTaskTools(&task)
+	if task.Tools == nil {
+		t.Fatalf("empty DefaultTools should produce non-nil empty task.Tools, got nil")
+	}
+	if len(task.Tools) != 0 {
+		t.Fatalf("empty DefaultTools should produce zero-length task.Tools, got %d: %v", len(task.Tools), task.Tools)
+	}
+}
+
+func TestScopeTaskTools_UnknownName_DroppedFromScope(t *testing.T) {
+	// Names not in the agentictools registry log + drop; the
+	// surviving scope contains only registered names. Same contract
+	// as resolveDefaultTools but verified through scopeTaskTools so
+	// both layers stay in sync.
+	c := newScopeTestComponent(t, []string{"alpha", "no_such_xyz"}, "alpha")
+	task := agentic.TaskMessage{}
+	c.scopeTaskTools(&task)
+	if len(task.Tools) != 1 {
+		t.Fatalf("want 1 scoped tool (unknown dropped), got %d: %v", len(task.Tools), task.Tools)
+	}
+	if task.Tools[0].Name != "alpha" {
+		t.Fatalf("scoped tool name = %q, want %q", task.Tools[0].Name, "alpha")
 	}
 }

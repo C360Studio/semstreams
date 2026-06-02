@@ -21,6 +21,29 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// scopeTaskTools applies c.config.DefaultTools to task.Tools when
+// configured. Mirrors the bus-dispatch and HTTP-dispatch paths so
+// both honor the same scoping contract: nil DefaultTools leaves
+// task.Tools unset (loop falls back to global discovery); an
+// explicit empty slice (`"default_tools": []`) produces a non-nil
+// empty task.Tools (loop respects "no tools for this role"). Names
+// not in the agentictools registry are logged and dropped.
+//
+// Called from both handleTaskSubmission (bus path) and
+// processTaskSubmissionSync (HTTP path) to close the gap where
+// HTTP-spawned coordinator loops would silently receive the full
+// global tool registry regardless of DefaultTools configuration.
+func (c *Component) scopeTaskTools(task *agentic.TaskMessage) {
+	if c.config.DefaultTools == nil {
+		return
+	}
+	resolved := resolveDefaultTools(c.deps.ToolRegistry, c.config.DefaultTools, c.logger)
+	if resolved == nil {
+		resolved = []agentic.ToolDefinition{}
+	}
+	task.Tools = resolved
+}
+
 // resolveDefaultTools looks up the named tools in the supplied tool
 // registry, logging and dropping any name not found. Mirror of the
 // resolver in processor/rule/actions.go — kept separate to avoid
@@ -707,18 +730,9 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	stampTraceIDFromCtx(ctx, &task)
 
 	// Scope the initial agent's tools to DefaultTools when configured.
-	// Nil DefaultTools leaves task.Tools unset so the spawned loop falls
-	// back to global discovery (pre-existing behaviour). An explicit empty
-	// slice (`"default_tools": []` in flow config) produces a non-nil empty
-	// task.Tools, which the loop respects as "no tools for this role".
-	// Names not in the agentictools registry are logged and dropped.
-	if c.config.DefaultTools != nil {
-		resolved := resolveDefaultTools(c.deps.ToolRegistry, c.config.DefaultTools, c.logger)
-		if resolved == nil {
-			resolved = []agentic.ToolDefinition{}
-		}
-		task.Tools = resolved
-	}
+	// Bus and HTTP paths share scopeTaskTools so the scoping contract
+	// is identical regardless of dispatch surface.
+	c.scopeTaskTools(&task)
 
 	// Track the loop
 	c.loopTracker.Track(&LoopInfo{
