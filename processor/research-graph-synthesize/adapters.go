@@ -153,6 +153,24 @@ func (s *natsLoopStore) PutSearchResult(ctx context.Context, loopID string, enve
 	return err
 }
 
+// loopCompletionKeyPrefix mirrors the convention the
+// processor/agentic-tools.read_loop_result tool consumes (see its
+// completeKeyPrefix). Keeping the constant local rather than
+// importing keeps the dependency direction clean (research-graph
+// chain → read_loop_result is operator-facing only, not a code
+// dependency the chain takes on).
+const loopCompletionKeyPrefix = "COMPLETE_"
+
+// PutLoopCompletion writes the SearchResult envelope at the
+// COMPLETE_<loopID> key so the parent agent's read_loop_result tool
+// can fetch it without a new tool. Co-located with PutSearchResult so
+// both AGENT_LOOPS writes that synthesize_answer makes live one place
+// and the wire contract stays inspectable.
+func (s *natsLoopStore) PutLoopCompletion(ctx context.Context, loopID string, envelope []byte) error {
+	_, err := s.kv.Put(ctx, loopCompletionKeyPrefix+loopID, envelope)
+	return err
+}
+
 // PutSnapshot writes the envelope at the stable snapshot key.
 func (s *natsLoopStore) PutSnapshot(ctx context.Context, loopID string, envelope []byte) error {
 	_, err := s.kv.Put(ctx, loopStoreKeySynthesizeSnapshot(loopID), envelope)

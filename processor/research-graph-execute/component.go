@@ -13,11 +13,13 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the execute_subqueries processor. Struct
@@ -34,6 +36,11 @@ type Component struct {
 	// natsclient on deps.
 	gq    GraphQueryClient
 	loops LoopStore
+
+	// triplePub stamps research.execute.complete (+ evidence_count) on
+	// the research-pipeline loop entity so R3 of the rule chain can
+	// dispatch assess_sufficiency. Nil-safe.
+	triplePub llmwrap.TriplePublisher
 
 	// Lifecycle state. One mutex guards started/startTime so
 	// concurrent Health / DataFlow reads can't see a torn read of
@@ -77,9 +84,10 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 	logger := deps.GetLoggerWithComponent(ComponentName)
 	return &Component{
-		config: config,
-		deps:   deps,
-		logger: logger,
+		config:    config,
+		deps:      deps,
+		logger:    logger,
+		triplePub: llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 	}, nil
 }
 
@@ -318,6 +326,7 @@ func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte)
 		atomic.AddInt64(&c.errors, 1)
 		return
 	}
+	c.stampExecuteComplete(ctx, loopID, len(output.Evidence))
 	atomic.AddInt64(&c.messagesEmitted, 1)
 	c.logger.Info("execute_subqueries emitted ExecutionOutput",
 		slog.String("loop_id", loopID),
@@ -327,6 +336,23 @@ func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte)
 		slog.Int("subquery_count", output.SubQueryCount),
 		slog.Bool("degraded", output.Degraded),
 		slog.Int("budget_tokens_used", output.BudgetTokensUsed))
+}
+
+// stampExecuteComplete stamps research.execute.complete +
+// research.execute.evidence_count on the research-pipeline loop entity
+// so R3 of the ADR-045 rule chain can dispatch assess_sufficiency.
+// Shared between the happy-path emit and the degraded-fallback emit so
+// the rule chain advances even when execute degrades.
+func (c *Component) stampExecuteComplete(ctx context.Context, loopID string, evidenceCount int) {
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(c.deps.Platform.Org, c.deps.Platform.Platform, loopID)
+	if err != nil {
+		c.logger.Warn("could not construct loop entity ID for triple stamp; R3 will not fire",
+			slog.String("loop_id", loopID),
+			slog.Any("error", err))
+		return
+	}
+	triples := research.BuildExecuteCompleteTriples(loopEntityID, evidenceCount, time.Now())
+	_ = llmwrap.StampOrchestrationTriples(ctx, c.triplePub, c.logger, ComponentName, loopID, triples)
 }
 
 // loadUpstreamPayloads loads the three KV-resident inputs the
@@ -481,7 +507,12 @@ func (c *Component) emitDegradedOutput(ctx context.Context, loopID, topic, actio
 		c.logger.Error("degraded execute.complete trigger write failed; R3 will not fire",
 			slog.String("loop_id", loopID),
 			slog.Any("error", err))
+		return
 	}
+	// Stamp triples on the degraded path too — R3 advances the chain to
+	// assess_sufficiency, which is the right next step even with zero
+	// evidence (assess will fail-sufficient or refine, both observable).
+	c.stampExecuteComplete(ctx, loopID, 0)
 }
 
 // Meta implements Discoverable.

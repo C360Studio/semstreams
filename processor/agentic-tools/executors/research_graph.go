@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // ResearchGraphToolName is the name parents use to invoke the
@@ -76,6 +77,7 @@ type ResearchKVWriter interface {
 // payload.
 type ResearchGraphExecutor struct {
 	kv        ResearchKVWriter
+	triplePub llmwrap.TriplePublisher
 	platform  component.PlatformMeta
 	logger    *slog.Logger
 	now       func() time.Time
@@ -103,6 +105,22 @@ func WithResearchGraphIDGenerator(gen func() string) ResearchGraphOption {
 	return func(e *ResearchGraphExecutor) {
 		if gen != nil {
 			e.newLoopID = gen
+		}
+	}
+}
+
+// WithResearchGraphTriplePublisher injects the TriplePublisher used to
+// stamp kickoff triples (loop.role, research.requested, research.topic,
+// research.loop_id, research.parent_loop/role, research.budget_tokens,
+// research.max_iterations) on the research-pipeline loop entity. R0 of
+// the ADR-045 rule chain fires on these. Nil-safe: leaves the
+// publisher unset, in which case Execute logs warn and continues —
+// useful for tests that don't exercise the rule wiring. Production
+// wires this via llmwrap.NewNATSTriplePublisher(client) at registration.
+func WithResearchGraphTriplePublisher(pub llmwrap.TriplePublisher) ResearchGraphOption {
+	return func(e *ResearchGraphExecutor) {
+		if pub != nil {
+			e.triplePub = pub
 		}
 	}
 }
@@ -304,6 +322,45 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 			Error:     fmt.Sprintf("construct loop entity ID: %v", err),
 			ErrorKind: agentic.ToolErrorInternal,
 		}, errs.WrapInvalid(err, "ResearchGraphExecutor", "researchGraph", "construct loop entity ID")
+	}
+
+	// Stamp the kickoff triples on the research-pipeline loop entity
+	// so R0 of the ADR-045 rule chain can fire. The triples land on
+	// ENTITY_STATES via graph-ingest; the trigger key write above is
+	// the per-stage envelope for downstream component consumption,
+	// the triples are the rule-engine orchestration surface.
+	//
+	// Failure to publish is logged but does NOT fail the tool — the
+	// chain stalls observably (no rule fires; operator sees the gap
+	// in trajectory data) rather than the parent loop crashing.
+	//
+	// parentRole comes from call.Metadata["role"] when the framework's
+	// agentic-loop dispatcher propagates the spawning loop's role onto
+	// each tool call's Metadata (it does; see TaskMessage → ToolCall
+	// metadata threading). Empty when the tool runs outside an agent
+	// loop; R6 then falls back to its configured default_parent_role.
+	parentRole := ""
+	if call.Metadata != nil {
+		if r, ok := call.Metadata["role"].(string); ok {
+			parentRole = r
+		}
+	}
+	kickoffTriples := research.BuildKickoffTriples(
+		loopEntityID,
+		persistedIntent.Topic,
+		loopID,
+		call.LoopID,
+		parentRole,
+		persistedIntent.BudgetTokens,
+		persistedIntent.MaxIterations,
+		e.now(),
+	)
+	if stampErr := llmwrap.StampOrchestrationTriples(ctx, e.triplePub, e.logger, "research_graph_tool", loopID, kickoffTriples); stampErr != nil {
+		// StampOrchestrationTriples already logged warn; suppress here so
+		// the tool's success path stays clean. Operator-side diagnosis is
+		// "no research.classify.complete ever appeared" → check graph-
+		// ingest logs for the triple-batch publish failure.
+		_ = stampErr
 	}
 
 	e.logger.Info("research_graph dispatched",

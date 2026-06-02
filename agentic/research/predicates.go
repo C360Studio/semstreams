@@ -54,6 +54,92 @@ const (
 	// as other agentic loops; lets ops dashboards filter
 	// research-pipeline loops without parsing intent payloads.
 	PredicateLoopRole = "loop.role"
+
+	// PredicateResearchLoopID stamps the raw research-pipeline loop ID
+	// (e.g. "rg_abc12345") on the loop entity as a dedicated triple
+	// so R0-R6 rules can substitute it into NATS publish subjects via
+	// `$entity.triple.research.loop_id`. The 6-part loop-execution
+	// entity ID has the loop ID as its last segment, but the
+	// substitution layer doesn't expose a "last-segment" accessor and
+	// the rules need the raw form for routing. Cheap one-extra-triple
+	// per chain instead of an engine feature.
+	PredicateResearchLoopID = "research.loop_id"
+
+	// PredicateResearchParentRole stamps the parent loop's role so the
+	// continuation rule (R6) can route the SearchResult back to the
+	// correct caller without re-fetching the parent LoopEntity from
+	// AGENT_LOOPS. Empty when the research_graph tool was invoked from
+	// outside an agent loop (rare).
+	PredicateResearchParentRole = "research.parent_role"
+
+	// Per-stage completion predicates emitted by the rule chain's five
+	// components after each stage finishes. R0-R6 trigger on the
+	// false→true transition of these predicates' presence on the loop
+	// entity. Values are RFC3339 timestamps so trajectory viewers can
+	// reconstruct chain timing without joining against a separate log.
+	//
+	// Stage transitions are ATOMIC per-component: every stage writes
+	// its completion predicate together with any per-stage state
+	// (e.g., route.action, assess.sufficient) in a single AddTriplesBatch
+	// so a rule that branches on action+complete won't see a stale
+	// action paired with a fresh completion timestamp.
+
+	// PredicateResearchClassifyComplete marks nl_classify completion.
+	// Stamped together with PredicateResearchClassifyCandidateCount
+	// and PredicateResearchClassifyDegraded.
+	PredicateResearchClassifyComplete = "research.classify.complete"
+
+	// PredicateResearchClassifyCandidateCount is the number of candidate
+	// entities the classifier surfaced. Stored as a string per Triple.Object
+	// shape; consumers parse to int.
+	PredicateResearchClassifyCandidateCount = "research.classify.candidate_count"
+
+	// PredicateResearchClassifyDegraded marks "true" when the classifier
+	// fell back to a degraded path (e.g., semantic-fallback fired).
+	// "false" on the happy path.
+	PredicateResearchClassifyDegraded = "research.classify.degraded"
+
+	// PredicateResearchRouteComplete marks route_search completion.
+	// Stamped together with PredicateResearchRouteAction.
+	PredicateResearchRouteComplete = "research.route.complete"
+
+	// PredicateResearchRouteAction is one of ActionSynthesizeDirectly /
+	// ActionRetighten / ActionWalkSeeds / ActionDecompose. R2 branches
+	// on this value via action-level when clauses (ADR-041).
+	PredicateResearchRouteAction = "research.route.action"
+
+	// PredicateResearchExecuteComplete marks execute_subqueries completion.
+	// Stamped together with PredicateResearchExecuteEvidenceCount.
+	PredicateResearchExecuteComplete = "research.execute.complete"
+
+	// PredicateResearchExecuteEvidenceCount is the number of evidence
+	// items the execute stage assembled (post-dedup, post-budget). Stored
+	// as a string; consumers parse to int.
+	PredicateResearchExecuteEvidenceCount = "research.execute.evidence_count"
+
+	// PredicateResearchAssessComplete marks assess_sufficiency completion.
+	// Stamped together with PredicateResearchAssessSufficient.
+	PredicateResearchAssessComplete = "research.assess.complete"
+
+	// PredicateResearchAssessSufficient is "true" or "false". R4 branches
+	// on this value via action-level when clauses (ADR-041): sufficient
+	// → synthesize_answer; insufficient → execute_subqueries (refine
+	// loop, bounded by per-action MaxIterations=5).
+	PredicateResearchAssessSufficient = "research.assess.sufficient"
+
+	// PredicateResearchSearchResultComplete marks synthesize_answer
+	// completion — the chain's terminal stage. R6 (continuation)
+	// triggers on this predicate's appearance and routes the
+	// SearchResult back to the parent loop via publish_agent.
+	PredicateResearchSearchResultComplete = "research.search_result.complete"
+
+	// PredicateResearchSearchResultRef is the KV key where the
+	// SearchResult envelope lives (search_result.complete.<loopID> in
+	// AGENT_LOOPS). R6's continuation publishes this ref to the parent
+	// so the parent's next iteration can read_loop_result on the
+	// SearchResult without it riding in the rule payload (per ADR-028:
+	// rules carry references, not content).
+	PredicateResearchSearchResultRef = "research.search_result.ref"
 )
 
 // TripleSource is the Source field on triples emitted by the

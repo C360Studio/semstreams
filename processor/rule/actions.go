@@ -1052,10 +1052,16 @@ func (e *ActionExecutor) executePublishAgent(ctx context.Context, action Action,
 func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) error {
 	entityID := ec.EntityID
 
-	// Substitute variables in subject and prompt — iter-var overlay
-	// applies to all substituted strings on this iteration.
+	// Substitute variables in subject, prompt, and role — iter-var
+	// overlay applies to all substituted strings on this iteration.
+	// Role substitution enables continuation patterns (ADR-045 R6)
+	// where the spawned task's role comes from a triple on the
+	// triggering entity (e.g., `$entity.triple.research.parent_role`).
+	// Existing rule packs that hardcode role values are unaffected —
+	// strings without `$`-prefixed tokens pass through unchanged.
 	subject := ec.SubstituteVariablesWithIterVar(action.Subject, iterVarName, iterVarValue)
 	prompt := ec.SubstituteVariablesWithIterVar(action.Prompt, iterVarName, iterVarValue)
+	role := ec.SubstituteVariablesWithIterVar(action.Role, iterVarName, iterVarValue)
 
 	// Generate a unique task ID
 	taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())
@@ -1063,7 +1069,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// Build the TaskMessage
 	task := agentic.TaskMessage{
 		TaskID:       taskID,
-		Role:         action.Role,
+		Role:         role,
 		Model:        action.Model,
 		Prompt:       prompt,
 		WorkflowSlug: ec.SubstituteVariablesWithIterVar(action.WorkflowSlug, iterVarName, iterVarValue),
@@ -1129,7 +1135,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 		e.logger.Debug("Triggering agent task",
 			"subject", subject,
 			"task_id", taskID,
-			"role", action.Role,
+			"role", role,
 			"model", action.Model,
 			"entity_id", entityID)
 	}

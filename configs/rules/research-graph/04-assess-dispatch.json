@@ -1,0 +1,90 @@
+{
+  "id": "research_assess_dispatch",
+  "type": "expression",
+  "name": "R4 — Assess decision dispatch",
+  "description": "ADR-045 R4. Fires on research.assess.complete (assess_sufficiency's terminal stamp). Three action-level branches keyed on research.assess.sufficient and $state.iteration: (1) sufficient=true → synthesize_answer (terminal happy path); (2) sufficient=false AND $state.iteration <= 5 → refine via execute_subqueries after clearing the execute+assess markers (so R3 re-fires); (3) sufficient=false AND $state.iteration >= 6 → synthesize_answer (cap-exhaust fallback — the refine actions hit MaxIterations=5 on the 6th R4 fire and skip, so the fallback action must take over or the chain stalls forever). $state.iteration is the per-rule firing counter (see processor/rule/rule_factory.go Definition.MaxIterations doc) — increments on each TransitionEntered. The 1st R4 fire (initial assess) is iteration=1; refines fire R4 again at iterations 2..6 (each refine creates a new assess.complete after the remove_triple clear), so the 6th fire is the cap-exhaust boundary.",
+  "enabled": true,
+  "conditions": [
+    {
+      "field": "loop.role",
+      "operator": "eq",
+      "value": "research_pipeline"
+    },
+    {
+      "field": "research.assess.complete",
+      "operator": "ne",
+      "value": ""
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "id": "assess_synthesize_when_sufficient",
+      "type": "publish",
+      "subject": "component.synthesize_answer.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.assess.sufficient",
+          "operator": "eq",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "assess_synthesize_when_refine_capped",
+      "type": "publish",
+      "subject": "component.synthesize_answer.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.assess.sufficient",
+          "operator": "eq",
+          "value": "false"
+        },
+        {
+          "field": "$state.iteration",
+          "operator": "gte",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "id": "assess_refine_clear_execute",
+      "type": "remove_triple",
+      "predicate": "research.execute.complete",
+      "when": [
+        {
+          "field": "research.assess.sufficient",
+          "operator": "eq",
+          "value": "false"
+        }
+      ],
+      "max_iterations": 5
+    },
+    {
+      "id": "assess_refine_clear_assess",
+      "type": "remove_triple",
+      "predicate": "research.assess.complete",
+      "when": [
+        {
+          "field": "research.assess.sufficient",
+          "operator": "eq",
+          "value": "false"
+        }
+      ],
+      "max_iterations": 5
+    },
+    {
+      "id": "assess_refine_redispatch",
+      "type": "publish",
+      "subject": "component.execute_subqueries.$entity.triple.research.loop_id",
+      "when": [
+        {
+          "field": "research.assess.sufficient",
+          "operator": "eq",
+          "value": "false"
+        }
+      ],
+      "max_iterations": 5
+    }
+  ]
+}

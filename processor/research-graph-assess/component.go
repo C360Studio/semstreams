@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
@@ -20,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the assess_sufficiency processor. Same shape
@@ -36,6 +38,11 @@ type Component struct {
 	// natsclient + model registry on deps.
 	assessor Assessor
 	loops    LoopStore
+
+	// triplePub stamps research.assess.complete (+ sufficient) on the
+	// research-pipeline loop entity so R4 of the rule chain can branch
+	// (sufficient → synthesize; insufficient → refine via execute). Nil-safe.
+	triplePub llmwrap.TriplePublisher
 
 	// llmClient is the underlying graph/llm.Client owned by the
 	// adapter. Held here so Stop can close it cleanly. Nil when
@@ -90,9 +97,10 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	logger := deps.GetLoggerWithComponent(ComponentName)
 
 	return &Component{
-		config: config,
-		deps:   deps,
-		logger: logger,
+		config:    config,
+		deps:      deps,
+		logger:    logger,
+		triplePub: llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 	}, nil
 }
 
@@ -422,11 +430,24 @@ func (c *Component) writeAssessment(ctx context.Context, loopID string, out *res
 	}
 
 	if err := c.loops.PutAssessmentOutput(ctx, loopID, envelopeBytes); err != nil {
-		c.logger.Error("assess.complete trigger write failed; R3 will not fire",
+		c.logger.Error("assess.complete trigger write failed; R4 will not fire",
 			slog.String("loop_id", loopID),
 			slog.Any("error", err))
 		atomic.AddInt64(&c.errors, 1)
 		return
+	}
+
+	// Stamp research.assess.complete + research.assess.sufficient on
+	// the research-pipeline loop entity so R4 of the ADR-045 rule chain
+	// can branch via action-level when clauses (sufficient → synthesize,
+	// insufficient → refine).
+	if loopEntityID, entityErr := agentic.TryLoopExecutionEntityID(c.deps.Platform.Org, c.deps.Platform.Platform, loopID); entityErr != nil {
+		c.logger.Warn("could not construct loop entity ID for triple stamp; R4 will not fire",
+			slog.String("loop_id", loopID),
+			slog.Any("error", entityErr))
+	} else {
+		triples := research.BuildAssessCompleteTriples(loopEntityID, out.Sufficient, time.Now())
+		_ = llmwrap.StampOrchestrationTriples(ctx, c.triplePub, c.logger, ComponentName, loopID, triples)
 	}
 
 	atomic.AddInt64(&c.messagesEmitted, 1)

@@ -12,6 +12,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/query"
@@ -19,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the nl_classify processor. The struct field
@@ -36,6 +39,15 @@ type Component struct {
 	classifier Classifier
 	retriever  CandidateRetriever
 	loops      LoopStore
+
+	// triplePub is the orchestration-triple stamp surface. Used to
+	// emit research.classify.complete (+ candidate_count + degraded)
+	// on the research-pipeline loop entity after each per-message
+	// success. R1 of the rule chain (ADR-045) watches ENTITY_STATES
+	// for research.classify.complete and dispatches route_search.
+	// Nil-safe: a nil publisher logs warn and continues (degraded
+	// observability, not crash).
+	triplePub llmwrap.TriplePublisher
 
 	// llmClient is non-nil when EnableLLMClassifier is true and the
 	// model registry yields a query_classification capability. Owned
@@ -108,6 +120,7 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		classifier: &classifierChainAdapter{chain: query.NewClassifierChain(query.NewKeywordClassifier(), nil, nil)},
 		retriever:  newSearchGraphRetriever(deps.NATSClient, config.RetrieveTimeout),
 		loops:      nil, // wired in Start() once the bucket is open
+		triplePub:  llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 	}, nil
 }
 
@@ -388,6 +401,23 @@ func (c *Component) handleMessage(ctx context.Context, subject string, _ []byte)
 			slog.Any("error", err))
 		atomic.AddInt64(&c.errors, 1)
 		return
+	}
+
+	// Stamp the orchestration triple batch on the research-pipeline
+	// loop entity in ENTITY_STATES so R1 (ADR-045 rule chain) can
+	// fire on research.classify.complete. The KV envelope above is
+	// for the next stage's payload consumption; the triples are for
+	// rule-engine orchestration. Stamping failure is logged but not
+	// fatal — the chain stalls observably in trajectory data rather
+	// than crashing the handler.
+	loopEntityID, entityErr := agentic.TryLoopExecutionEntityID(c.deps.Platform.Org, c.deps.Platform.Platform, loopID)
+	if entityErr != nil {
+		c.logger.Warn("could not construct loop entity ID for triple stamp; R1 will not fire",
+			slog.String("loop_id", loopID),
+			slog.Any("error", entityErr))
+	} else {
+		triples := research.BuildClassifyCompleteTriples(loopEntityID, len(output.Candidates), output.Degraded, time.Now())
+		_ = llmwrap.StampOrchestrationTriples(ctx, c.triplePub, c.logger, ComponentName, loopID, triples)
 	}
 
 	atomic.AddInt64(&c.messagesEmitted, 1)

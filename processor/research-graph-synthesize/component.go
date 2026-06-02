@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
@@ -20,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Component implements the synthesize_answer processor. Same
@@ -31,6 +33,12 @@ type Component struct {
 
 	synthesizer Synthesizer
 	loops       LoopStore
+
+	// triplePub stamps research.search_result.complete (+ ref) on the
+	// research-pipeline loop entity — the terminal stage signal R6
+	// (continuation) watches to route the result back to the parent
+	// loop. Nil-safe.
+	triplePub llmwrap.TriplePublisher
 
 	llmClient llm.Client
 
@@ -76,9 +84,10 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	logger := deps.GetLoggerWithComponent(ComponentName)
 
 	return &Component{
-		config: config,
-		deps:   deps,
-		logger: logger,
+		config:    config,
+		deps:      deps,
+		logger:    logger,
+		triplePub: llmwrap.NewNATSTriplePublisher(deps.NATSClient),
 	}, nil
 }
 
@@ -401,6 +410,36 @@ func (c *Component) writeResult(ctx context.Context, loopID string, result *rese
 			slog.Any("error", err))
 		atomic.AddInt64(&c.errors, 1)
 		return
+	}
+
+	// Write a duplicate of the SearchResult envelope at the
+	// COMPLETE_<loopID> key so the parent agent can fetch it via the
+	// existing read_loop_result tool (which reads COMPLETE_ keys). The
+	// search_result.complete.<loopID> key remains the per-stage
+	// trigger envelope; this is the operator-consumption surface.
+	// Failure is logged but non-fatal — search_result.complete already
+	// landed, R6 still fires, the parent just can't read the result
+	// via read_loop_result. Operator dashboards see the gap.
+	if err := c.loops.PutLoopCompletion(ctx, loopID, envelopeBytes); err != nil {
+		c.logger.Warn("COMPLETE_ write failed; parent's read_loop_result will return key-not-found",
+			slog.String("loop_id", loopID),
+			slog.Any("error", err))
+	}
+
+	// Stamp the terminal triple batch on the research-pipeline loop
+	// entity: research.search_result.complete + .ref so R6 (the
+	// ADR-045 continuation rule) can route the SearchResult back to
+	// the parent loop via publish_agent. The ref points at the
+	// AGENT_LOOPS key carrying the SearchResult envelope per ADR-028
+	// (rules carry references, not content).
+	resultRef := "search_result.complete." + loopID
+	if loopEntityID, entityErr := agentic.TryLoopExecutionEntityID(c.deps.Platform.Org, c.deps.Platform.Platform, loopID); entityErr != nil {
+		c.logger.Warn("could not construct loop entity ID for triple stamp; continuation rule will not fire",
+			slog.String("loop_id", loopID),
+			slog.Any("error", entityErr))
+	} else {
+		triples := research.BuildSearchResultCompleteTriples(loopEntityID, resultRef, time.Now())
+		_ = llmwrap.StampOrchestrationTriples(ctx, c.triplePub, c.logger, ComponentName, loopID, triples)
 	}
 
 	atomic.AddInt64(&c.messagesEmitted, 1)

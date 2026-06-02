@@ -110,17 +110,49 @@ Six PRs, ordered so each is independently mergeable and reviewable.
 Each builds on prior PRs but does not require all of them to be
 merged before review can start on the next.
 
-| PR | Title (proposed) | Depends on | Approx LOC | Operator decision after |
-|---|---|---|---|---|
-| 1 | `feat(payloads): research_intent / search_result / route_decision + research_graph agent tool` | — | ~400 | Payload schemas (resolves Open Q 6) |
-| 2 | `feat(processor): nl_classify component wrapping graph/query.Classifier` | PR 1 | ~300 | Classifier-output schema |
-| 3 | `feat(processor): route_search component (first LLM judgment step)` | PR 1, 2 | ~450 | Router prompt + action enum (resolves Open Q 4) |
-| 4 | `feat(processor): execute_subqueries multi-tier fan-out (Tier 0+1)` | PR 1 | ~600 | Evidence schema + ranking |
-| 5 | `feat(processor): assess_sufficiency + synthesize_answer components` | PR 1, 4 | ~500 | Assess + synthesize prompts |
-| 6 | `feat(research-graph): R0-R6 rule chain + reference flow config + smoke test` | PR 1–5 | ~400 | End-to-end validation (resolves Open Q 1, 2, 3) |
+| PR | Title (proposed) | Depends on | Approx LOC | Operator decision after | Status |
+|---|---|---|---|---|---|
+| 1 | `feat(payloads): research_intent / search_result / route_decision + research_graph agent tool` | — | ~400 | Payload schemas (resolves Open Q 6) | SHIPPED (PR #131) |
+| 2 | `feat(processor): nl_classify component wrapping graph/query.Classifier` | PR 1 | ~300 | Classifier-output schema | SHIPPED (PR #135) |
+| 3 | `feat(processor): route_search component (first LLM judgment step)` | PR 1, 2 | ~450 | Router prompt + action enum (resolves Open Q 4) | SHIPPED (PR #187) |
+| 4 | `feat(processor): execute_subqueries multi-tier fan-out (Tier 0+1)` | PR 1 | ~600 | Evidence schema + ranking | SHIPPED (PR #195) |
+| 5 | `feat(processor): assess_sufficiency + synthesize_answer components` | PR 1, 4 | ~500 | Assess + synthesize prompts | SHIPPED (PR #197) |
+| 6 | `feat(research-graph): R0-R6 rule chain + reference flow config + smoke test` | PR 1–5 | ~1,400 | End-to-end validation (resolves Open Q 1, 2, 3) | SHIPPED in beta.95 — closes Phase 1 |
 
-Total: ~2,650 LOC across six PRs. Code-to-test ratio expected ~1:1
-per the components' single-purpose nature.
+PR 6 ran wider than the original ~400 LOC estimate because closing
+the chain surfaced a framework gap (the rule engine's entity-state-
+centric trigger surface vs the ADR's pseudo-syntax `kv_write` event
+trigger). Resolution: components additionally stamp orchestration
+triples on the research-pipeline loop entity so rules trigger via
+the standard entity-state path. Cost: ~150 LOC per component
+(triple-builders in `agentic/research/orchestration.go` + shared
+`TriplePublisher` adapter in `processor/research-graph-llmwrap/`) +
+1 small framework addition (`Role` substitution in `publish_agent`
+action — needed for R6's continuation back to the parent role).
+Total Phase 1 close-out: ~1,400 LOC.
+
+Phase 1 deliverables shipped in beta.95:
+
+- `agentic/research/orchestration.go` — kickoff + per-stage triple
+  builders.
+- `processor/research-graph-llmwrap/triplepub.go` — TriplePublisher
+  interface + NATS adapter shared across all five components.
+- Per-component handler updates (5 packages): each stamps its
+  orchestration triple batch after the envelope write.
+- `processor/agentic-tools/executors/research_graph.go` — tool now
+  also stamps kickoff triples on the loop entity.
+- `configs/rules/research-graph/` — R0-R6 rule pack (6 JSON files).
+- `configs/examples/research-graph-pipeline.json` — reference flow
+  composing all 5 components + rule processor.
+- `processor/rule/research_graph_pipeline_integration_test.go` —
+  smoke test driving each rule through the production
+  `EvaluateEntityState` + action `When`-filter wire.
+- `processor/rule/actions.go` — `publishAgentOnce` now substitutes
+  the `Role` field (additive; existing rule packs that hardcode
+  role unaffected).
+- `processor/research-graph-synthesize/` — additionally writes
+  `COMPLETE_<loopID>` so the parent's `read_loop_result` tool can
+  fetch the SearchResult without a new tool.
 
 ## PR 1 — Payload registry + agent tool
 

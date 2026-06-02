@@ -2,8 +2,25 @@
 
 ## Status
 
-**Proposed — 2026-05-19; amended 2026-05-21.** Doc-only ADR; no
-implementation in this tag. Independent of ADR-039 (governance),
+**Phase 1 IMPLEMENTED — 2026-06-02 (v1.0.0-beta.95).** Phase 2 gated
+on operator validation. The five components ship as canonical
+framework substrate under `processor/research-graph-*`; the R0–R6
+rule pack ships under `configs/rules/research-graph/` with the
+reference flow at `configs/examples/research-graph-pipeline.json`.
+PR 6 closed the Phase 1 plan with one framework discovery: the
+chain orchestrates through **entity-state triples** on the research-
+pipeline loop entity, not raw KV-write triggers — the rule engine
+(`processor/rule/entity_watcher.go`) is entity-state-centric, so each
+component additionally stamps a small atomic triple batch on the
+loop entity (`research.classify.complete`, `research.route.action`,
+etc.) for the rules to fire on. The per-stage `<step>.complete.*` KV
+envelopes remain (component-to-component payload consumption); the
+triples are the rule-engine orchestration surface. See PR 6 commit
+for the full wiring + `configs/rules/research-graph/README.md` for
+the operator-side notes.
+
+**Original status (proposed — 2026-05-19; amended 2026-05-21).** Doc-only
+ADR; no implementation in this tag. Independent of ADR-039 (governance),
 ADR-042 (publisher-mode), ADR-043 (detonation corpus), ADR-044 (CS API
 framework split). Builds on existing primitives only: rule engine
 (`processor/rule/` with per-action `MaxIterations`), component

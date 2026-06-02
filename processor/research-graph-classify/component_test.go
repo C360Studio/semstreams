@@ -16,7 +16,42 @@ import (
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/types"
 )
+
+// recordingPublisher captures orchestration triples for the per-stage
+// stamp assertions. Mirrors the shape in
+// processor/research-graph-llmwrap/triplepub_test.go so the five
+// component test suites stay consistent.
+type recordingPublisher struct {
+	mu     sync.Mutex
+	batch  [][]message.Triple
+	addErr error
+}
+
+func (r *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batch = append(r.batch, []message.Triple{triple})
+	return r.addErr
+}
+
+func (r *recordingPublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dup := append([]message.Triple(nil), triples...)
+	r.batch = append(r.batch, dup)
+	return r.addErr
+}
+
+func (r *recordingPublisher) lastBatch() []message.Triple {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.batch) == 0 {
+		return nil
+	}
+	return r.batch[len(r.batch)-1]
+}
 
 // fakeLoopStore replaces the natsLoopStore for handler integration
 // tests. Records GetIntent calls and PutClassifierOutput /
@@ -85,6 +120,10 @@ func newTestComponent(loops LoopStore, classifier Classifier, retriever Candidat
 		retriever:  retriever,
 		loops:      loops,
 		logger:     quietLogger(),
+		triplePub:  &recordingPublisher{},
+		deps: component.Dependencies{
+			Platform: types.PlatformMeta{Org: "acme", Platform: "ops"},
+		},
 	}
 }
 
@@ -264,6 +303,83 @@ func TestComponent_EnvelopeShape_DecodesViaProductionRegistry(t *testing.T) {
 	// payload, separate keys for queryability vs trigger).
 	if string(loops.snapshotEnvelope) != string(loops.classifyEnvelope) {
 		t.Errorf("snapshot vs classify envelope diverged")
+	}
+}
+
+// TestComponent_HandleMessage_StampsOrchestrationTriples locks the
+// PR 6 contract: every successful handler dispatch emits the
+// research.classify.complete batch on the research-pipeline loop
+// entity so R1 of the rule chain (ADR-045) can fire. Batch atomicity
+// (shared Subject) is asserted in agentic/research/orchestration_test.go;
+// here we lock that the handler DOES the stamp on the happy path.
+func TestComponent_HandleMessage_StampsOrchestrationTriples(t *testing.T) {
+	loops := &fakeLoopStore{intent: &research.Intent{Topic: "drone hover anomalies"}}
+	classifier := &fakeClassifier{result: &query.ClassificationResult{Tier: 0, Confidence: 1.0}}
+	retriever := &fakeRetriever{
+		candidates: []research.Candidate{
+			{EntityID: "acme.ops.robotics.gcs.drone.001", Tier: "0", Source: "search_graph", Relevance: 0.9},
+			{EntityID: "acme.ops.robotics.gcs.drone.002", Tier: "0", Source: "search_graph", Relevance: 0.85},
+		},
+		degraded:       true,
+		degradedReason: "semantic fallback fired",
+	}
+	c := newTestComponent(loops, classifier, retriever)
+	pub := c.triplePub.(*recordingPublisher)
+
+	c.handleMessage(context.Background(), "component.nl_classify.rg_test001", nil)
+
+	batch := pub.lastBatch()
+	if len(batch) != 3 {
+		t.Fatalf("expected 3 orchestration triples (complete + candidate_count + degraded), got %d", len(batch))
+	}
+
+	// All triples must share the loop-execution entity ID (the 6-part
+	// form derived from deps.Platform.Org/Platform and loop_id) so
+	// graph-ingest's per-Subject CAS path lands them atomically.
+	const wantSubject = "acme.ops.agent.agentic-loop.execution.rg_test001"
+	byPredicate := map[string]any{}
+	for _, tr := range batch {
+		if tr.Subject != wantSubject {
+			t.Errorf("triple Subject = %q, want %q (loop-execution entity ID for atomic batch)", tr.Subject, wantSubject)
+		}
+		if tr.Source != research.SourceClassify {
+			t.Errorf("triple Source = %q, want %q", tr.Source, research.SourceClassify)
+		}
+		byPredicate[tr.Predicate] = tr.Object
+	}
+
+	if byPredicate[research.PredicateResearchClassifyCandidateCount] != "2" {
+		t.Errorf("candidate_count = %v, want \"2\"", byPredicate[research.PredicateResearchClassifyCandidateCount])
+	}
+	if byPredicate[research.PredicateResearchClassifyDegraded] != "true" {
+		t.Errorf("degraded = %v, want \"true\" (retriever flagged degraded)", byPredicate[research.PredicateResearchClassifyDegraded])
+	}
+	if byPredicate[research.PredicateResearchClassifyComplete] == nil {
+		t.Errorf("classify.complete triple missing")
+	}
+}
+
+// TestComponent_HandleMessage_NoStampWhenPlatformMissing pins the
+// degraded path: if the platform identity isn't configured (e.g.,
+// test/dev environment), the loop-execution entity ID can't be
+// constructed and the chain logs warn rather than crash. The KV
+// envelope still lands so the per-stage queryable snapshot survives
+// even without rule-engine orchestration.
+func TestComponent_HandleMessage_NoStampWhenPlatformMissing(t *testing.T) {
+	loops := &fakeLoopStore{intent: &research.Intent{Topic: "voltage"}}
+	c := newTestComponent(loops, &fakeClassifier{}, &fakeRetriever{})
+	c.deps = component.Dependencies{Platform: types.PlatformMeta{}} // empty Org/Platform
+	pub := c.triplePub.(*recordingPublisher)
+
+	c.handleMessage(context.Background(), "component.nl_classify.rg_x", nil)
+
+	if len(pub.batch) != 0 {
+		t.Errorf("expected no triple stamps when platform identity missing, got %d batches", len(pub.batch))
+	}
+	// But the KV envelope DID land — handler doesn't abort on
+	// triple-stamp failure.
+	if loops.classifyKey != "rg_x" {
+		t.Errorf("classify trigger key missing despite stamp-degraded path: %q", loops.classifyKey)
 	}
 }
 
