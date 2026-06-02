@@ -51,15 +51,21 @@ const (
 	// at MaxIterations=2 on R2's retighten branch.
 	ActionRetighten = "retighten"
 
-	// ActionWalkSeeds dispatches execute_subqueries with the entity IDs
-	// the classifier surfaced. Multi-hop expansion from concrete seeds —
-	// structurally different from topic-wide decompose.
+	// ActionWalkSeeds dispatches execute_subqueries with seed
+	// REFERENCES (names, partial IDs, or candidate-list indices) the
+	// classifier surfaced. Per ADR-045 Amendment 2026-05-23
+	// (intent-not-structure), the model emits references; the backend
+	// resolves to full 6-part entity IDs via the entity index. Multi-
+	// hop expansion from concrete seeds — structurally different from
+	// topic-wide decompose. See WalkSeedsArgs.
 	ActionWalkSeeds = "walk_seeds"
 
-	// ActionDecompose dispatches execute_subqueries with a typed
-	// sub-query list (entity_state / predicate_walk / temporal_range /
-	// spatial_polygon). The v1 default-path now used only when the
-	// classifier shows it's necessary.
+	// ActionDecompose dispatches execute_subqueries with the
+	// decomposition INTENT (axes, focus, scope). Per ADR-045
+	// Amendment 2026-05-23 (intent-not-structure), the model emits
+	// intent; the backend constructs the typed sub-queries from
+	// templates. The v1 default-path now used only when the
+	// classifier shows it's necessary. See DecomposeArgs.
 	ActionDecompose = "decompose"
 )
 

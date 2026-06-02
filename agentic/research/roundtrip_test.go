@@ -257,15 +257,16 @@ func TestClassifierOutput_ValidateRejectsInvalid(t *testing.T) {
 }
 
 func TestRouteDecision_RoundTripThroughDecoder(t *testing.T) {
+	// Intent-shaped args per ADR-045 Amendment 2026-05-23: model
+	// emits axes/focus/scope, backend constructs typed sub-queries.
 	original := &research.RouteDecision{
 		Action: research.ActionDecompose,
 		Args: map[string]any{
-			"sub_queries": []any{
-				map[string]any{"type": "predicate_walk", "predicate": "sosa.observes"},
-				map[string]any{"type": "temporal_range", "start": "2026-05-22T00:00:00Z", "end": "2026-05-22T23:59:59Z"},
-			},
+			"axes":  []any{"entity_type", "time"},
+			"focus": "sensor maintenance events",
+			"scope": research.DecomposeScopeMedium,
 		},
-		Rationale: "Topic spans multiple entity kinds and a 24h window; decompose into a predicate walk plus a temporal range and fuse.",
+		Rationale: "Topic spans multiple entity kinds and a 24h window; decompose along entity_type and time.",
 	}
 
 	envelope := message.NewBaseMessage(original.Schema(), original, "research-roundtrip-test")
@@ -459,5 +460,294 @@ func TestSearchResult_ValidateRejectsInvalidEvidence(t *testing.T) {
 				t.Errorf("Validate error = %q, want substring %q", err, c.wantSub)
 			}
 		})
+	}
+}
+
+// --- ParseDecomposeArgs ---
+
+func TestParseDecomposeArgs_HappyPath(t *testing.T) {
+	d := &research.RouteDecision{
+		Action: research.ActionDecompose,
+		Args: map[string]any{
+			"axes":  []any{"entity_type", "time"},
+			"focus": "drone telemetry anomalies",
+			"scope": research.DecomposeScopeNarrow,
+		},
+	}
+	got, err := d.ParseDecomposeArgs()
+	if err != nil {
+		t.Fatalf("ParseDecomposeArgs error: %v", err)
+	}
+	if len(got.Axes) != 2 || got.Axes[0] != "entity_type" || got.Axes[1] != "time" {
+		t.Errorf("axes drift: got %v", got.Axes)
+	}
+	if got.Focus != "drone telemetry anomalies" {
+		t.Errorf("focus drift: got %q", got.Focus)
+	}
+	if got.Scope != research.DecomposeScopeNarrow {
+		t.Errorf("scope drift: got %q", got.Scope)
+	}
+}
+
+func TestParseDecomposeArgs_EmptyScopeIsValid(t *testing.T) {
+	d := &research.RouteDecision{
+		Action: research.ActionDecompose,
+		Args: map[string]any{
+			"axes":  []any{"entity_type"},
+			"focus": "x",
+		},
+	}
+	got, err := d.ParseDecomposeArgs()
+	if err != nil {
+		t.Fatalf("ParseDecomposeArgs error: %v", err)
+	}
+	if got.Scope != "" {
+		t.Errorf("scope: got %q, want empty", got.Scope)
+	}
+}
+
+func TestParseDecomposeArgs_Rejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    map[string]any
+		action  string
+		wantSub string
+	}{
+		{
+			name:    "wrong action",
+			action:  research.ActionWalkSeeds,
+			args:    map[string]any{"axes": []any{"x"}, "focus": "y"},
+			wantSub: "action is",
+		},
+		{
+			name:    "missing axes",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"focus": "x"},
+			wantSub: "axes required",
+		},
+		{
+			name:    "empty axis",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"axes": []any{"x", "   "}, "focus": "f"},
+			wantSub: "axes[1] is empty",
+		},
+		{
+			name:    "missing focus",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"axes": []any{"x"}},
+			wantSub: "focus required",
+		},
+		{
+			name:    "invalid scope",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"axes": []any{"x"}, "focus": "f", "scope": "wide"},
+			wantSub: "scope",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &research.RouteDecision{Action: c.action, Args: c.args}
+			_, err := d.ParseDecomposeArgs()
+			if err == nil {
+				t.Fatalf("ParseDecomposeArgs = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
+// --- ParseWalkSeedsArgs ---
+
+func TestParseWalkSeedsArgs_HappyPath(t *testing.T) {
+	d := &research.RouteDecision{
+		Action: research.ActionWalkSeeds,
+		Args: map[string]any{
+			"seeds": []any{
+				map[string]any{"ref": "drone-001", "ref_type": research.SeedRefTypeName},
+				map[string]any{"ref": "robotics.gcs.drone", "ref_type": research.SeedRefTypePartialID},
+				map[string]any{"ref": "0", "ref_type": research.SeedRefTypeCandidateIndex},
+			},
+		},
+	}
+	got, err := d.ParseWalkSeedsArgs()
+	if err != nil {
+		t.Fatalf("ParseWalkSeedsArgs error: %v", err)
+	}
+	if len(got.Seeds) != 3 {
+		t.Fatalf("want 3 seeds, got %d", len(got.Seeds))
+	}
+	if got.Seeds[0].Ref != "drone-001" || got.Seeds[0].RefType != research.SeedRefTypeName {
+		t.Errorf("seed[0] drift: %+v", got.Seeds[0])
+	}
+	if got.Seeds[2].RefType != research.SeedRefTypeCandidateIndex {
+		t.Errorf("seed[2] ref_type drift: %q", got.Seeds[2].RefType)
+	}
+}
+
+func TestParseWalkSeedsArgs_Rejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		action  string
+		args    map[string]any
+		wantSub string
+	}{
+		{
+			name:    "wrong action",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"seeds": []any{map[string]any{"ref": "x", "ref_type": "name"}}},
+			wantSub: "action is",
+		},
+		{
+			name:    "empty seeds",
+			action:  research.ActionWalkSeeds,
+			args:    map[string]any{"seeds": []any{}},
+			wantSub: "seeds required",
+		},
+		{
+			name:    "missing seeds key",
+			action:  research.ActionWalkSeeds,
+			args:    map[string]any{},
+			wantSub: "seeds required",
+		},
+		{
+			name:    "empty ref",
+			action:  research.ActionWalkSeeds,
+			args:    map[string]any{"seeds": []any{map[string]any{"ref": "   ", "ref_type": "name"}}},
+			wantSub: "ref is empty",
+		},
+		{
+			name:    "bad ref_type",
+			action:  research.ActionWalkSeeds,
+			args:    map[string]any{"seeds": []any{map[string]any{"ref": "x", "ref_type": "full_id"}}},
+			wantSub: "ref_type",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &research.RouteDecision{Action: c.action, Args: c.args}
+			_, err := d.ParseWalkSeedsArgs()
+			if err == nil {
+				t.Fatalf("ParseWalkSeedsArgs = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
+// --- ParseRetightenArgs ---
+
+func TestParseRetightenArgs_HappyPath(t *testing.T) {
+	d := &research.RouteDecision{
+		Action: research.ActionRetighten,
+		Args: map[string]any{
+			"topic": "drone-001 maintenance events in the last 24 hours",
+			"hints": map[string]any{"entity_type": "drone", "time": "24h"},
+		},
+	}
+	got, err := d.ParseRetightenArgs()
+	if err != nil {
+		t.Fatalf("ParseRetightenArgs error: %v", err)
+	}
+	if got.Topic != "drone-001 maintenance events in the last 24 hours" {
+		t.Errorf("topic drift: %q", got.Topic)
+	}
+	if got.Hints["entity_type"] != "drone" || got.Hints["time"] != "24h" {
+		t.Errorf("hints drift: %v", got.Hints)
+	}
+}
+
+func TestParseRetightenArgs_NoHintsIsValid(t *testing.T) {
+	d := &research.RouteDecision{
+		Action: research.ActionRetighten,
+		Args:   map[string]any{"topic": "refined topic"},
+	}
+	got, err := d.ParseRetightenArgs()
+	if err != nil {
+		t.Fatalf("ParseRetightenArgs error: %v", err)
+	}
+	if len(got.Hints) != 0 {
+		t.Errorf("hints: got %v, want empty", got.Hints)
+	}
+}
+
+func TestParseRetightenArgs_Rejects(t *testing.T) {
+	cases := []struct {
+		name    string
+		action  string
+		args    map[string]any
+		wantSub string
+	}{
+		{
+			name:    "wrong action",
+			action:  research.ActionDecompose,
+			args:    map[string]any{"topic": "x"},
+			wantSub: "action is",
+		},
+		{
+			name:    "missing topic",
+			action:  research.ActionRetighten,
+			args:    map[string]any{"hints": map[string]any{"k": "v"}},
+			wantSub: "topic required",
+		},
+		{
+			name:    "whitespace topic",
+			action:  research.ActionRetighten,
+			args:    map[string]any{"topic": "   "},
+			wantSub: "topic required",
+		},
+		{
+			name:    "empty hint value",
+			action:  research.ActionRetighten,
+			args:    map[string]any{"topic": "x", "hints": map[string]any{"k": ""}},
+			wantSub: "is empty",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &research.RouteDecision{Action: c.action, Args: c.args}
+			_, err := d.ParseRetightenArgs()
+			if err == nil {
+				t.Fatalf("ParseRetightenArgs = nil, want error containing %q", c.wantSub)
+			}
+			if !strings.Contains(err.Error(), c.wantSub) {
+				t.Errorf("error = %q, want substring %q", err, c.wantSub)
+			}
+		})
+	}
+}
+
+// --- enum guards ---
+
+func TestIsValidSeedRefType(t *testing.T) {
+	for _, v := range []string{
+		research.SeedRefTypeName, research.SeedRefTypePartialID, research.SeedRefTypeCandidateIndex,
+	} {
+		if !research.IsValidSeedRefType(v) {
+			t.Errorf("IsValidSeedRefType(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "full_id", "Name", "candidate-index"} {
+		if research.IsValidSeedRefType(v) {
+			t.Errorf("IsValidSeedRefType(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestIsValidDecomposeScope(t *testing.T) {
+	for _, v := range []string{
+		"", research.DecomposeScopeNarrow, research.DecomposeScopeMedium, research.DecomposeScopeBroad,
+	} {
+		if !research.IsValidDecomposeScope(v) {
+			t.Errorf("IsValidDecomposeScope(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"wide", "Narrow", "small"} {
+		if research.IsValidDecomposeScope(v) {
+			t.Errorf("IsValidDecomposeScope(%q) = true, want false", v)
+		}
 	}
 }
