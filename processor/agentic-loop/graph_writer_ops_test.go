@@ -281,24 +281,24 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 		t.Fatalf("expected 4 researcher loops, got %d", len(researcherIterations))
 	}
 
-	// Verify the ops agent can compute: min=3, max=25, avg=10
-	min, max, sum := researcherIterations[0], researcherIterations[0], 0
+	// Verify the ops agent can compute: minIter=3, maxIter=25, avg=10
+	minIter, maxIter, sum := researcherIterations[0], researcherIterations[0], 0
 	for _, v := range researcherIterations {
-		if v < min {
-			min = v
+		if v < minIter {
+			minIter = v
 		}
-		if v > max {
-			max = v
+		if v > maxIter {
+			maxIter = v
 		}
 		sum += v
 	}
 	avg := sum / len(researcherIterations)
 
-	if min != 3 {
-		t.Errorf("min iterations: got %d, want 3", min)
+	if minIter != 3 {
+		t.Errorf("min iterations: got %d, want 3", minIter)
 	}
-	if max != 25 {
-		t.Errorf("max iterations: got %d, want 25", max)
+	if maxIter != 25 {
+		t.Errorf("max iterations: got %d, want 25", maxIter)
 	}
 	if avg != 10 {
 		t.Errorf("avg iterations: got %d, want 10", avg)

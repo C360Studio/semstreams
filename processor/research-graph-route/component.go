@@ -218,8 +218,16 @@ func (c *Component) initRouter() error {
 	if err != nil {
 		return errs.WrapTransient(err, ComponentName, "Start", "construct LLM client")
 	}
+	// gh#189: c.llmClient + c.router writes under c.mu so Stop's
+	// close+nil-assign (also under c.mu) cannot race the write. Without
+	// the lock, `go test -race` flags the read/write pair. Holding the
+	// lock only across the two-field assignment is safe — the I/O-ish
+	// constructor work (ResolveEndpoint, NewOpenAIClient) ran above
+	// without the lock, so we keep the critical section minimal.
+	c.mu.Lock()
 	c.llmClient = client
 	c.router = newLLMRouterAdapter(client)
+	c.mu.Unlock()
 	c.logger.Info("LLM router wired",
 		slog.String("model", resolved.Model),
 		slog.Duration("timeout", c.config.RouteTimeout))
@@ -308,12 +316,26 @@ func (c *Component) Stop(timeout time.Duration) error {
 			slog.Duration("timeout", timeout))
 	}
 
+	// gh#189: c.mu guards the close+nil-assign. The matching write in
+	// initRouter is ALSO under c.mu (see line ~225), so the data race
+	// between Stop's nil-assign and a concurrent Start's write is now
+	// eliminated — `go test -race` is clean on TestRoute_ConcurrentStartStop.
+	//
+	// Acquired AFTER wg.Wait (not during) because handlers route
+	// through c.router, which transitively holds c.llmClient. wg.Wait
+	// ensures every in-flight routeDecision call completes before we
+	// close the client, preventing HTTP connection corruption mid-call.
+	// Holding c.mu through wg.Wait would not deadlock today (handlers
+	// don't touch c.mu) but ordering the close-after-drain is the
+	// load-bearing invariant; the lock is for the assign race.
+	c.mu.Lock()
 	if c.llmClient != nil {
 		if err := c.llmClient.Close(); err != nil {
 			c.logger.Debug("LLM client close failed during stop", slog.Any("error", err))
 		}
 		c.llmClient = nil
 	}
+	c.mu.Unlock()
 	return nil
 }
 

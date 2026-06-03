@@ -3,6 +3,7 @@ package llmwrap
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // ErrPayloadTruncateBytes caps the raw-payload snippet rendered in
@@ -68,9 +69,25 @@ func ExtractJSON(content string) ([]byte, error) {
 // Truncate returns s capped at n bytes with an ellipsis suffix on
 // over-long input. Used in error-message construction so an over-long
 // LLM response doesn't blow up log lines or trajectory captures.
+//
+// gh#190: the cap is walked back to the nearest preceding rune
+// boundary so a multi-byte UTF-8 character can't be split across the
+// cut. Without this, an LLM response containing CJK or emoji (3- or
+// 4-byte runes) at the byte-n boundary produced invalid UTF-8 that
+// slog's JSON handler then rendered as garbled "�" replacement
+// sequences. The walk is at most 3 byte-steps for valid UTF-8 input
+// (the longest legal Go-encoded rune is 4 bytes), so the cost is
+// negligible vs. the readability win.
 func Truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	// Walk back from byte index n until we land on a rune-start byte.
+	// utf8.RuneStart returns true for ASCII (0x00-0x7F) and for the
+	// leading byte of any multi-byte rune. n>0 guards against an
+	// infinite loop on garbage input where no byte is a rune start.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "..."
 }

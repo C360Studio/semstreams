@@ -25,9 +25,9 @@ type Buffer[T any] interface {
 	// Returns the item and true if successful, zero value and false if buffer is empty.
 	Read() (T, bool)
 
-	// ReadBatch retrieves and removes up to max items from the buffer.
-	// Returns a slice containing the retrieved items (may be shorter than max).
-	ReadBatch(max int) []T
+	// ReadBatch retrieves and removes up to maxN items from the buffer.
+	// Returns a slice containing the retrieved items (may be shorter than maxN).
+	ReadBatch(maxN int) []T
 
 	// Peek retrieves one item without removing it from the buffer.
 	// Returns the item and true if successful, zero value and false if buffer is empty.

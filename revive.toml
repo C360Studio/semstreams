@@ -5,7 +5,12 @@ ignoreGeneratedHeader = false
 severity = "warning"
 confidence = 0.8
 errorCode = 1
-warningCode = 0
+# warningCode = 1 enforces the CLAUDE.md policy "revive (warnings = failure)".
+# Prior value of 0 silently let lint warnings ship to CI; flipped 2026-06-03
+# alongside the cleanup of 20 pre-existing warnings (renames of max/min/cap
+# shadows + two SystemPromptMarker docstring comment-block separations).
+# Every future PR is now gated structurally on revive-clean.
+warningCode = 1
 
 [rule.blank-imports]
 [rule.context-as-argument]

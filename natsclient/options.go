@@ -11,9 +11,9 @@ import (
 type ClientOption func(*Client) error
 
 // WithMaxReconnects sets the maximum number of reconnection attempts (-1 for infinite)
-func WithMaxReconnects(max int) ClientOption {
+func WithMaxReconnects(maxN int) ClientOption {
 	return func(c *Client) error {
-		c.maxReconnects = max
+		c.maxReconnects = maxN
 		return nil
 	}
 }

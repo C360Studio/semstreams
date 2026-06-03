@@ -196,7 +196,7 @@ func validateEnum(fieldName string, value any, enumValues []string) *ValidationE
 }
 
 // validateMin checks if numeric value meets minimum
-func validateMin(fieldName string, value any, min int) *ValidationError {
+func validateMin(fieldName string, value any, minV int) *ValidationError {
 	var numValue float64
 	switch v := value.(type) {
 	case int:
@@ -217,10 +217,10 @@ func validateMin(fieldName string, value any, min int) *ValidationError {
 		}
 	}
 
-	if numValue < float64(min) {
+	if numValue < float64(minV) {
 		return &ValidationError{
 			Field:   fieldName,
-			Message: fmt.Sprintf("Field %q must be >= %d", fieldName, min),
+			Message: fmt.Sprintf("Field %q must be >= %d", fieldName, minV),
 			Code:    "min",
 		}
 	}
@@ -228,7 +228,7 @@ func validateMin(fieldName string, value any, min int) *ValidationError {
 }
 
 // validateMax checks if numeric value meets maximum
-func validateMax(fieldName string, value any, max int) *ValidationError {
+func validateMax(fieldName string, value any, maxV int) *ValidationError {
 	var numValue float64
 	switch v := value.(type) {
 	case int:
@@ -249,10 +249,10 @@ func validateMax(fieldName string, value any, max int) *ValidationError {
 		}
 	}
 
-	if numValue > float64(max) {
+	if numValue > float64(maxV) {
 		return &ValidationError{
 			Field:   fieldName,
-			Message: fmt.Sprintf("Field %q must be <= %d", fieldName, max),
+			Message: fmt.Sprintf("Field %q must be <= %d", fieldName, maxV),
 			Code:    "max",
 		}
 	}
