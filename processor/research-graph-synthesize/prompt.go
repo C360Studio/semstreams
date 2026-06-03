@@ -18,8 +18,14 @@ import (
 // section uses concrete examples (good ref vs invented ref). The
 // output contract spells out the exact JSON shape so the LLM does
 // not need to guess.
+// SystemPromptMarker is the first sentence of buildSystemPrompt's
+// output, exported for the e2e mock LLM marker-matching. See
+// processor/research-graph-route/prompt.go SystemPromptMarker for
+// the full rationale.
+const SystemPromptMarker = "You are the synthesis stage of a graph-search pipeline"
+
 func buildSystemPrompt() string {
-	return `You are the synthesis stage of a graph-search pipeline. You receive a research topic and the upstream evidence the retrieval and assessment stages surfaced. You write the answer: a natural-language synthesis grounded in the evidence, with a list of the evidence items you used.
+	return SystemPromptMarker + `. You receive a research topic and the upstream evidence the retrieval and assessment stages surfaced. You write the answer: a natural-language synthesis grounded in the evidence, with a list of the evidence items you used.
 
 You do not invent facts. You do not invent entity IDs, ObjectStore refs, or sources. If the evidence does not support an answer to the topic, say so plainly in the synthesis.
 

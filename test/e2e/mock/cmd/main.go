@@ -12,6 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	researchassess "github.com/c360studio/semstreams/processor/research-graph-assess"
+	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
+	researchsynthesize "github.com/c360studio/semstreams/processor/research-graph-synthesize"
 	"github.com/c360studio/semstreams/test/e2e/mock"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
@@ -254,16 +257,19 @@ func applyOpsPreset(server *mock.OpenAIServer) {
 // (walk_seeds / decompose + assess + iteration cap) is a follow-up;
 // shipping the happy path first locks the wire.
 //
-// Markers are the stable opening sentences of each LLM-wrapping
-// component's system prompt (see processor/research-graph-*/prompt.go).
-// JSON shapes match research.RouteDecision / research.SearchResult /
-// research.AssessmentOutput exactly so the components' JSON extractor
-// + Validate succeed without retries — deterministic e2e timing.
+// Markers are the SystemPromptMarker constants exported from each
+// LLM-wrapping component's prompt.go. Importing rather than inlining
+// the substring means a persona-prose edit that severs the marker
+// breaks the compile, not the e2e silently (per go-reviewer I3 on
+// PR #205). JSON shapes match research.RouteDecision /
+// research.SearchResult / research.AssessmentOutput exactly so the
+// components' JSON extractor + Validate succeed without retries —
+// deterministic e2e timing.
 func applyResearchGraphPreset(server *mock.OpenAIServer) {
 	server.
 		WithRoleResponses([]mock.RoleResponse{
 			{
-				Marker: "You are the routing stage of a graph-search pipeline",
+				Marker: researchroute.SystemPromptMarker,
 				Content: `{
   "action": "synthesize_directly",
   "args": {},
@@ -276,14 +282,14 @@ func applyResearchGraphPreset(server *mock.OpenAIServer) {
 				// regression (e.g. route returns decompose by accident)
 				// surfaces as "chain hung at assess" rather than "mock
 				// returned wrong JSON shape and synthesize never fired."
-				Marker: "You are the sufficiency-assessment stage of a graph-search pipeline",
+				Marker: researchassess.SystemPromptMarker,
 				Content: `{
   "sufficient": true,
   "refined_queries": []
 }`,
 			},
 			{
-				Marker: "You are the synthesis stage of a graph-search pipeline",
+				Marker: researchsynthesize.SystemPromptMarker,
 				Content: `{
   "synthesis": "Drone hover anomalies cluster around the GCS-001 platform during low-altitude maneuvers. Two of the three surfaced candidates show elevated yaw drift telemetry preceding the anomaly. Recommend correlating with wind speed logs.",
   "evidence": [

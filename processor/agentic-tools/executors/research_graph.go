@@ -334,11 +334,28 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 	// chain stalls observably (no rule fires; operator sees the gap
 	// in trajectory data) rather than the parent loop crashing.
 	//
-	// parentRole comes from call.Metadata["role"] when the framework's
-	// agentic-loop dispatcher propagates the spawning loop's role onto
-	// each tool call's Metadata (it does; see TaskMessage → ToolCall
-	// metadata threading). Empty when the tool runs outside an agent
-	// loop; R6 then falls back to its configured default_parent_role.
+	// parentRole comes from call.Metadata["role"], which the framework's
+	// agentic-loop dispatcher populates from the spawning TaskMessage's
+	// Metadata at dispatch time (see agentic-loop/handlers.go
+	// CacheMetadata + the ToolCall.Metadata merge in handlers.go:1053+).
+	//
+	// CONTRACT: any production path that creates a TaskMessage for an
+	// agent capable of calling research_graph MUST populate
+	// TaskMessage.Metadata["role"] with the spawning role's name.
+	// Without it, parentRole is empty, the kickoff triple
+	// research.parent_role is omitted, and R6's continuation
+	// publish_agent substitutes `$entity.triple.research.parent_role`
+	// to a literal — the spawned task's Role field carries the
+	// unresolved template string and downstream role-registry lookups
+	// fail loudly.
+	//
+	// This contract is exercised by
+	// test/e2e/scenarios/research-graph/scenario.go's injectParentTask
+	// stage (the only e2e that drives a parent task directly to
+	// agent.task.*). agentic-dispatch's user-message → task path
+	// already populates Metadata["role"] from the default_role config.
+	// New parent-spawning paths (rule action publish_agent, custom
+	// dispatchers, sister-product chain roots) need to do the same.
 	parentRole := ""
 	if call.Metadata != nil {
 		if r, ok := call.Metadata["role"].(string); ok {

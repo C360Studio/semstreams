@@ -19,13 +19,12 @@
 // Stages, in firing order:
 //
 //  1. verify-components — all 5 research-graph-* + agentic-* + rule processor healthy
-//  2. capture-baseline — Prometheus snapshot for diff diagnostics
-//  3. inject-parent-task — publish a TaskMessage with the research_graph trigger marker
-//  4. wait-for-research-pipeline-loop — poll AGENT_LOOPS for an rg_* entity (chain kickoff)
-//  5. wait-for-search-result-stamp — poll the loop entity for research.search_result.complete
-//  6. verify-orchestration-triples — assert kickoff + per-stage completion triples land
-//  7. verify-search-result-envelope — assert the SearchResult landed at COMPLETE_<rg_loopID>
-//  8. verify-r6-continuation — confirm a continuation agent.task fired back to the parent role
+//  2. inject-parent-task — publish a TaskMessage with the research_graph trigger marker
+//  3. wait-for-research-pipeline-loop — poll AGENT_LOOPS for an rg_* entity (chain kickoff)
+//  4. wait-for-search-result-stamp — poll the loop entity for research.search_result.complete
+//  5. verify-orchestration-triples — assert kickoff + per-stage completion triples land
+//  6. verify-search-result-envelope — assert the SearchResult landed at COMPLETE_<rg_loopID>
+//  7. verify-r6-continuation — confirm a continuation agent.task fired back to the parent role
 //
 // Any stage failure short-circuits with a clear diagnostic. Per-stage
 // duration is recorded in result.Metrics for trajectory dashboards.
@@ -155,7 +154,6 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		fn   func(context.Context, *scenarios.Result) error
 	}{
 		{"verify-components", s.verifyComponents},
-		{"capture-baseline", s.captureBaseline},
 		{"inject-parent-task", s.injectParentTask},
 		{"wait-for-research-pipeline-loop", s.waitForResearchPipelineLoop},
 		{"wait-for-search-result-stamp", s.waitForSearchResultStamp},
@@ -226,17 +224,6 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	if len(unhealthy) > 0 {
 		return fmt.Errorf("unhealthy components: %v", unhealthy)
 	}
-	return nil
-}
-
-// captureBaseline snapshots Prometheus for diff diagnostics on failure.
-func (s *Scenario) captureBaseline(ctx context.Context, result *scenarios.Result) error {
-	snapshot, err := s.metrics.FetchSnapshot(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("baseline snapshot: %v", err))
-		return nil
-	}
-	result.Details["baseline_snapshot"] = snapshot
 	return nil
 }
 
@@ -386,13 +373,23 @@ func (s *Scenario) verifyOrchestrationTriples(ctx context.Context, result *scena
 		got[t.Predicate] = obj
 	}
 
-	// Kickoff predicates (stamped by research_graph tool).
+	// Kickoff predicates (stamped by research_graph tool). The
+	// research_graph tool's parser uses DefaultBudgetTokens=4000 +
+	// DefaultMaxIterations=5 when the parent task omits them (which
+	// this scenario does). The parent_loop value is the scenario's
+	// generated parent loop id. Full 8-predicate set per
+	// BuildKickoffTriples; a drop on refactor surfaces here loudly
+	// rather than letting the chain still run on the minimum trigger
+	// state per go-reviewer I1 on PR #205.
 	requiredKickoff := map[string]string{
-		research.PredicateLoopRole:           research.PipelineRole,
-		research.PredicateResearchRequested:  "true",
-		research.PredicateResearchTopic:      "drone hover anomalies",
-		research.PredicateResearchLoopID:     result.Details["research_loop_id"].(string),
-		research.PredicateResearchParentRole: "general",
+		research.PredicateLoopRole:              research.PipelineRole,
+		research.PredicateResearchRequested:     "true",
+		research.PredicateResearchTopic:         "drone hover anomalies",
+		research.PredicateResearchLoopID:        result.Details["research_loop_id"].(string),
+		research.PredicateResearchParentRole:    "general",
+		research.PredicateResearchParentLoop:    result.Details["parent_loop_id"].(string),
+		research.PredicateResearchBudgetTokens:  "4000",
+		research.PredicateResearchMaxIterations: "5",
 	}
 	missing := []string{}
 	mismatched := []string{}
@@ -430,11 +427,15 @@ func (s *Scenario) verifyOrchestrationTriples(ctx context.Context, result *scena
 	// path — their presence would mean the route mis-fired and the chain
 	// took an unintended branch. Assert absence loudly so a router
 	// regression surfaces here, not in a downstream operator's trajectory
-	// review.
+	// review. Full paired set per Build{Execute,Assess}CompleteTriples
+	// so a batch-split refactor that stamps half a stage's triples
+	// surfaces too (per go-reviewer I2 on PR #205).
 	unexpected := []string{}
 	for _, pred := range []string{
 		research.PredicateResearchExecuteComplete,
+		research.PredicateResearchExecuteEvidenceCount,
 		research.PredicateResearchAssessComplete,
+		research.PredicateResearchAssessSufficient,
 	} {
 		if _, present := got[pred]; present {
 			unexpected = append(unexpected, pred)
