@@ -51,12 +51,15 @@ jobs:
           # Use `v` after the package name to disambiguate from the `tool`
           # directive line (which lacks the version).
           expected=$(awk '/github.com\/mgechev\/revive v/ {print $2}' go.mod | head -1)
-          actual=$(go tool revive --version 2>&1 | awk '{print $NF}')
-          # The 'tool' directive stores versions with the leading 'v',
-          # but revive --version emits without it. Strip for comparison.
+          # `revive --version` output differs by invocation context:
+          # direct install emits "version 1.15.0", `go tool revive` on
+          # CI's setup-go emits "v1.15.0". Strip the leading `v` from
+          # both sides to normalize.
+          actual_raw=$(go tool revive --version 2>&1 | head -1 | awk '{print $NF}')
           expected="${expected#v}"
+          actual="${actual_raw#v}"
           if [ "$expected" != "$actual" ]; then
-            echo "FAIL: revive version mismatch — go.mod pin: $expected, go tool: $actual"
+            echo "FAIL: revive version mismatch — go.mod pin: $expected, go tool raw: $actual_raw (normalized: $actual)"
             exit 1
           fi
           echo "OK: revive $actual matches go.mod pin"
