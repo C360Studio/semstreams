@@ -23,8 +23,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Install revive
-        run: go install github.com/mgechev/revive@latest
+      # gh#221: revive version pinned via go.mod's `tool` directive
+      # (Go 1.24+). No install step — `go tool revive` resolves through
+      # the module's pinned version. A new revive release can't surprise
+      # CI with new ruleset warnings until we deliberately bump the pin
+      # in go.mod. Closes Rule 4 of [[feedback_substrate_flake_discipline]].
 
       - name: Run go vet
         run: go vet ./...
@@ -38,8 +41,31 @@ jobs:
             exit 1
           fi
 
-      - name: Run revive
-        run: revive -config revive.toml -formatter friendly ./...
+      - name: Sanity-check revive version matches go.mod pin
+        # gh#221 review M4 — catches the case where setup-go's cache
+        # serves a stale binary that doesn't match the current go.mod
+        # pin. Cheap (one line of grep) and turns silent drift into
+        # loud failure.
+        run: |
+          # Match the `require` line shape `github.com/mgechev/revive vX.Y.Z`.
+          # Use `v` after the package name to disambiguate from the `tool`
+          # directive line (which lacks the version).
+          expected=$(awk '/github.com\/mgechev\/revive v/ {print $2}' go.mod | head -1)
+          # `revive --version` output differs by invocation context:
+          # direct install emits "version 1.15.0", `go tool revive` on
+          # CI's setup-go emits "v1.15.0". Strip the leading `v` from
+          # both sides to normalize.
+          actual_raw=$(go tool revive --version 2>&1 | head -1 | awk '{print $NF}')
+          expected="${expected#v}"
+          actual="${actual_raw#v}"
+          if [ "$expected" != "$actual" ]; then
+            echo "FAIL: revive version mismatch — go.mod pin: $expected, go tool raw: $actual_raw (normalized: $actual)"
+            exit 1
+          fi
+          echo "OK: revive $actual matches go.mod pin"
+
+      - name: Run revive (pinned via go.mod tool directive)
+        run: go tool revive -config revive.toml -formatter friendly ./...
 
       - name: Substrate-flake guard — fixed-port lint regex matrix test
         # gh#220 review C1 — the lint guard's regex matrix must be

@@ -6,7 +6,10 @@ tasks:
     cmds:
       - go vet ./...
       - go fmt ./...
-      - revive -config revive.toml -formatter friendly ./...
+      # revive: invoked via `go tool` so the pinned version in go.mod
+      # is what runs locally too. gh#221 closed Rule 4 of
+      # feedback_substrate_flake_discipline.md.
+      - go tool revive -config revive.toml -formatter friendly ./...
       - task: test-ports
 
   test-ports:
@@ -26,3 +29,22 @@ tasks:
       matches). Runs scripts/lint-test-ports_fixture_test.sh.
     cmds:
       - bash scripts/lint-test-ports_fixture_test.sh
+
+  tool-versions:
+    desc: |
+      Print versions of pinned developer tools (currently: revive).
+      Versions are pinned via go.mod's `tool` directive (Go 1.24+);
+      `task lint` invokes them via `go tool`, so there's no separate
+      install step. Run this to sanity-check the pinned version matches
+      what's running locally.
+
+      Must be run from inside the module root (anywhere under the
+      semstreams repo). `go tool <pkg>` requires module context to
+      resolve the version.
+
+      gh#221 closed Rule 4 of feedback_substrate_flake_discipline.md —
+      no more local-vs-CI revive version drift surprising you with new
+      warnings.
+    cmds:
+      - echo "pinned tool versions (from go.mod 'tool' directive):"
+      - go tool revive --version
