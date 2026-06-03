@@ -2041,3 +2041,147 @@ func TestBuildIntrospectionSchema_GlobalSearchArgs(t *testing.T) {
 		assert.Contains(t, argNames, expected, "globalSearch should have arg %q", expected)
 	}
 }
+
+// TestGateway_MapGraphQLToNATSSubject_NestedSelectionRouting locks in the
+// gh#206 fix: composite resolvers whose result type carries field names
+// that ALSO match generic single-resolver substring checks must route to
+// the composite, not get hijacked by the substring collision in the
+// selection set.
+//
+// Before the gh#206 fix, the routing function ran the generic
+// `relationships` substring check BEFORE the composite search checks.
+// A `globalSearch` query with a nested `relationships { from to }`
+// selection therefore routed to `graph.query.relationships`, which
+// then bailed with `empty entity_id` because there was no
+// `relationships(entityId: ...)` arg in scope. semconnect's demo UI
+// surfaced it; the fix reorders the checks so composites win.
+//
+// Same shape bug also affects `searchGraph` and `localSearch` (both
+// return `GlobalSearchResult` which carries `relationships`), so all
+// three are covered. The inverse — bare `relationships(entityId)` and
+// bare `capabilities` queries must still route to their dedicated
+// subjects after the reorder — is locked by the regression-safe cases.
+func TestGateway_MapGraphQLToNATSSubject_NestedSelectionRouting(t *testing.T) {
+	comp := createTestGateway(t)
+
+	tests := []struct {
+		name            string
+		query           string
+		expectedSubject string
+	}{
+		// gh#206 reproducer — globalSearch with nested relationships
+		// selection. Pre-fix routed to graph.query.relationships; post-fix
+		// must route to graph.query.globalSearch.
+		{
+			name: "gh#206 -- globalSearch with nested relationships",
+			query: `query GlobalSearch($query: String!) {
+				globalSearch(query: $query) {
+					entities { id }
+					relationships { from to predicate }
+					count
+					duration_ms
+				}
+			}`,
+			expectedSubject: "graph.query.globalSearch",
+		},
+		// searchGraph returns GlobalSearchResult (same as globalSearch),
+		// so the same nested-relationships hijack applies. Lock here.
+		{
+			name: "gh#206 -- searchGraph with nested relationships",
+			query: `query SearchGraph($query: String!) {
+				searchGraph(query: $query) {
+					entities { id }
+					relationships { from to predicate }
+					count
+				}
+			}`,
+			expectedSubject: "graph.query.searchGraph",
+		},
+		// localSearch is the third GraphRAG composite. Same shape.
+		{
+			name: "gh#206 -- localSearch with nested relationships",
+			query: `query LocalSearch($query: String!, $entity: String!) {
+				localSearch(query: $query, anchor_entity: $entity) {
+					entities { id }
+					relationships { from to predicate }
+					count
+				}
+			}`,
+			expectedSubject: "graph.query.localSearch",
+		},
+		// Inverse — a bare relationships(entityId) query must still
+		// route to graph.query.relationships after the reorder. The fix
+		// is about composite-precedence, not removing the relationships
+		// route entirely.
+		{
+			name: "regression-safe -- bare relationships(entityId) routes correctly",
+			query: `query Relationships($id: String!) {
+				relationships(entityId: $id, direction: "out") {
+					from to predicate
+				}
+			}`,
+			expectedSubject: "graph.query.relationships",
+		},
+		// Same regression-safe inverse for capabilities.
+		{
+			name:            "regression-safe -- bare capabilities routes correctly",
+			query:           `query { capabilities { name version } }`,
+			expectedSubject: "graph.query.capabilities",
+		},
+		// Defensive: GlobalSearchResult also carries `sources` —
+		// neither has a generic substring check today, but a future
+		// developer who adds one would hit the same class of bug. This
+		// case documents the discipline: any new substring check for a
+		// name that appears in a composite's result type must be
+		// positioned AFTER the composites.
+		{
+			name: "defensive -- globalSearch with nested sources",
+			query: `query GlobalSearch($query: String!) {
+				globalSearch(query: $query) {
+					entities { id }
+					sources { id }
+					count
+				}
+			}`,
+			expectedSubject: "graph.query.globalSearch",
+		},
+		// Argument-name collision class (gh#206 review I2): a
+		// globalSearch call with `includeRelationships: true` arg
+		// lowercases to a string containing the `relationships`
+		// substring. The pre-fix routing would have hijacked this
+		// even without nested result-field selections. Lock against
+		// future regression.
+		{
+			name: "gh#206 class -- globalSearch with includeRelationships arg",
+			query: `query {
+				globalSearch(query: "x", includeRelationships: true) {
+					entities { id }
+				}
+			}`,
+			expectedSubject: "graph.query.globalSearch",
+		},
+		// pathSearch + predicates arg — accidental safety in the
+		// pre-fix code because `pathsearch` was checked in the "most
+		// specific" tier above the `predicates` substring check. Post-
+		// fix (review I1) pathSearch lives in the composite block;
+		// this case locks the structural placement so the next
+		// reshuffle doesn't reintroduce the collision.
+		{
+			name: "gh#206 class -- pathSearch with predicates arg",
+			query: `query {
+				pathSearch(startEntity: "x", predicates: ["a", "b"]) {
+					entities { id }
+					edges { from to }
+				}
+			}`,
+			expectedSubject: "graph.query.pathSearch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subject := comp.mapGraphQLQueryToNATSSubject(tt.query)
+			assert.Equal(t, tt.expectedSubject, subject)
+		})
+	}
+}
