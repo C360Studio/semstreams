@@ -2,6 +2,7 @@
 package expression
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -713,6 +714,31 @@ func compareValuesWithError(a, b interface{}) (int, error) {
 	return 0, nil
 }
 
+// toFloat64 attempts to coerce v to a float64. Returns (value, true)
+// for any numeric Go type AND for strings that parse cleanly via
+// strconv.ParseFloat. (0, false) otherwise.
+//
+// gh#207 string-widening: before this widening, toFloat64 had no
+// `string` case, so a stringified-numeric Object (e.g. "0.83" produced
+// by the pre-fix substitution path before gh#207 also fixed the
+// stamping side) fell through to the lexicographic string compare in
+// compareValuesWithError. That silently misordered values whose
+// magnitudes crossed a power-of-10 boundary: lex "9.9" > "10.0", but
+// numeric 9.9 < 10.0. Same defect for any external producer that ever
+// stamped a numeric value as a string (e.g. a tool that emits its
+// payload through json.Marshal of a *string field).
+//
+// The widening means two strings that BOTH parse numerically will now
+// numeric-compare instead of lex-compare. Cross-repo survey (semstreams
+// + semteams rule packs) found zero current conditions that depend on
+// lex-of-numeric-shaped-strings, so this is observably additive. Worth
+// flagging in a feedback memo: authors writing string literals that
+// "happen to look numeric" (e.g. version strings "1.2", phone-number
+// fragments) will see them compared as floats — usually fine, but a
+// version literal "1.10" vs "1.9" now compares 1.10 < 1.9 (numerically
+// true; semantically "version 1.10 > 1.9" backward). Rule authors who
+// truly need string semantics should write `regex` / `contains`
+// against the field, not `lt`/`gt`.
 func toFloat64(v interface{}) (float64, bool) {
 	switch val := v.(type) {
 	case float64:
@@ -739,6 +765,46 @@ func toFloat64(v interface{}) (float64, bool) {
 		return float64(val), true
 	case uint64:
 		return float64(val), true
+	case json.Number:
+		// json.Number arrives when a decoder was configured with
+		// UseNumber() to preserve precision (avoiding float64's
+		// 15-digit limit on large integers). Used elsewhere in the
+		// codebase (processor/agentic-loop, message/oms). Forward-
+		// looking: no current rule pack stamps json.Number on a
+		// Triple Object, but the type is in circulation and a future
+		// producer could surface it. Treating it like a numeric Go
+		// type avoids a silent regression where compareValues falls
+		// to lex-compare on the underlying string representation.
+		f, err := val.Float64()
+		if err != nil {
+			return 0, false
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	case string:
+		// Empty string is never numeric — ParseFloat would error and
+		// we'd return (0, false), but the empty check makes the intent
+		// explicit and avoids a tight-loop allocation in
+		// compareValuesWithError when both sides are empty strings.
+		if val == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return 0, false
+		}
+		// NaN/Inf rejection: ParseFloat accepts "NaN", "Inf",
+		// "infinity" (case-insensitive). NaN is especially dangerous
+		// because every comparison (==, <, >) returns false, which
+		// compareValuesWithError converts to `return 0, nil` — silently
+		// equivalent to "equal". Treat both as "not numeric" so the
+		// fallback string-compare path handles them deterministically.
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
 	default:
 		return 0, false
 	}
