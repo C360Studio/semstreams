@@ -89,10 +89,11 @@ func TestTrajectoryManager_AddStep(t *testing.T) {
 		t.Errorf("Duration = %d, want 1500", updatedTraj.Duration)
 	}
 
-	// Original trajectory should not be modified (if manager returns copy)
-	if len(traj.Steps) == 1 {
-		// Manager modifies in place, that's okay
-	}
+	// Original trajectory may have been modified in place by the manager,
+	// or returned as a copy. Either is acceptable — Steps count of 1 just
+	// confirms the manager didn't accidentally append twice. Documented
+	// here rather than asserted to keep both implementations valid.
+	_ = traj.Steps
 }
 
 func TestTrajectoryManager_AddStep_Multiple(t *testing.T) {

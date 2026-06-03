@@ -226,7 +226,7 @@ func TestLoopManager_DeleteLoop(t *testing.T) {
 	}
 }
 
-func TestLoopManager_DeleteLoop_NonExistent(t *testing.T) {
+func TestLoopManager_DeleteLoop_NonExistent(_ *testing.T) {
 	manager := agenticloop.NewLoopManager()
 
 	err := manager.DeleteLoop("loop-does-not-exist")
@@ -513,12 +513,10 @@ func TestLoopManager_PendingTools_NonExistentLoop(t *testing.T) {
 
 	loopID := "loop-does-not-exist"
 
-	// GetPendingTools on non-existent loop should return empty or error
+	// GetPendingTools on non-existent loop should return empty or error.
+	// pending == nil is acceptable (indicates not found); non-nil must be empty.
 	pending := manager.GetPendingTools(loopID)
-	if pending == nil {
-		// If nil, that's okay (indicates not found)
-	} else if len(pending) != 0 {
-		// If non-nil, should be empty
+	if pending != nil && len(pending) != 0 {
 		t.Errorf("GetPendingTools() on non-existent loop should be empty, got %d", len(pending))
 	}
 

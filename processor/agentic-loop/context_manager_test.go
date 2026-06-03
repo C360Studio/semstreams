@@ -537,7 +537,7 @@ func TestContextManager_HeadroomTriggersCompactionEarlier(t *testing.T) {
 	}
 }
 
-func TestContextManager_HeadroomExceedsModelLimit(t *testing.T) {
+func TestContextManager_HeadroomExceedsModelLimit(_ *testing.T) {
 	config := agenticloop.DefaultContextConfig()
 	config.HeadroomRatio = 0
 	config.HeadroomTokens = agenticloop.DefaultContextLimit + 1000 // floor > model limit

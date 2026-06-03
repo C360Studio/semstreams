@@ -15,7 +15,7 @@ type testToolExecutor struct {
 	tools []agentic.ToolDefinition
 }
 
-func (e *testToolExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
+func (e *testToolExecutor) Execute(_ context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	return agentic.ToolResult{CallID: call.ID, Content: "test result"}, nil
 }
 
@@ -1373,11 +1373,11 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 		t.Fatalf("HandleToolResult() iteration 2 error = %v", err)
 	}
 
-	// After 2 iterations, should reach max and mark as failed or complete
-	// Depends on implementation, but should not allow iteration 3
-	if result.State == agentic.LoopStateFailed || result.MaxIterationsReached {
-		// Expected behavior - max iterations enforced
-	} else {
+	// After 2 iterations, should reach max and mark as failed or complete.
+	// If state is LoopStateFailed OR MaxIterationsReached, that's the
+	// expected behavior — max iterations enforced. Otherwise, the
+	// implementation must reject the 3rd iteration attempt below.
+	if !(result.State == agentic.LoopStateFailed || result.MaxIterationsReached) {
 		// Attempt iteration 3 should fail
 		_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 			RequestID: "req-003",

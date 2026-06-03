@@ -253,7 +253,7 @@ func TestStream_DrivesCannedSSE(t *testing.T) {
 		"",
 	}, "\n")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, body)
 	}))
@@ -302,7 +302,7 @@ func TestStream_DrivesCannedSSE(t *testing.T) {
 // *APIError on non-2xx, with the stream nil, matching the
 // ChatCompletionStream contract.
 func TestStream_APIErrorOnNon2xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(w, `{"error":{"type":"rate_limit","code":"rate_limit_exceeded","message":"slow down"}}`)
 	}))
