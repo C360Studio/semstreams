@@ -834,9 +834,6 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	if strings.Contains(query, "entitiesbyprefix") {
 		return "graph.query.prefix"
 	}
-	if strings.Contains(query, "pathsearch") {
-		return "graph.query.pathSearch"
-	}
 	if strings.Contains(query, "spatialsearch") {
 		return "graph.query.spatial"
 	}
@@ -849,32 +846,70 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	if strings.Contains(query, "findsimilar") || strings.Contains(query, "similarentities") {
 		return "graph.query.similar"
 	}
-	if strings.Contains(query, "relationships") {
-		return "graph.query.relationships"
-	}
-	if strings.Contains(query, "capabilities") {
-		return "graph.query.capabilities"
-	}
 
-	// Composite resolvers — match before their lower-level primitives
-	// so the dedicated subject wins. Convention: most specific first
-	// (mirrors the localsearch-before-globalsearch ordering below).
-	// graphSummary is a composite over predicates + prefix; searchGraph
-	// is a composite over globalSearch + semantic fallback. Both must
-	// match before the generic terms further down.
+	// Composite resolvers — match BEFORE the single-resolver substring
+	// checks below (relationships, capabilities, predicates) so a
+	// composite query whose name, arguments, or result-type fields
+	// happen to include one of those substrings doesn't get hijacked
+	// by a collision lower down.
+	//
+	// gh#206 surfaced this: a globalSearch query with a nested
+	// `relationships { from to predicate }` selection routed to
+	// graph.query.relationships because the relationships substring
+	// check fired first, leaving the composite handler unreached and
+	// returning "empty entity_id". The collision surface is broader
+	// than nested result fields — `mapGraphQLQueryToNATSSubject`
+	// scans the WHOLE lowercased query string, so the substring
+	// match can land on:
+	//
+	//   - Result-type field names (gh#206: GlobalSearchResult carries
+	//     `relationships`, `sources`, `entities`, `community_summaries`)
+	//   - Argument names (`includeRelationships`, `includeSources`,
+	//     and pathSearch's `predicates` are real today)
+	//   - Operation names (`query GetRelationships { ... }`)
+	//   - Fragment names (`fragment Relationships on Query { ... }`)
+	//
+	// Anything sitting BEFORE a composite tier whose token matches one
+	// of those is a collision candidate. Default safe placement for any
+	// resolver that returns a composite result type (PathSearchResult,
+	// GlobalSearchResult, GraphSummary) is in THIS block, even if it
+	// "doesn't currently collide" — the next added substring check or
+	// schema change can flip it accidentally.
+	//
+	// Long-term: route by parsed GraphQL root field rather than
+	// substring scan (see gh#206 "Suggested Fix"). Short-term, the
+	// order below is the structural fix.
 	if strings.Contains(query, "graphsummary") {
 		return "graph.query.summary"
 	}
 	if strings.Contains(query, "searchgraph") {
 		return "graph.query.searchGraph"
 	}
-
-	// GraphRAG search patterns - must come before generic "entity" check
 	if strings.Contains(query, "localsearch") {
 		return "graph.query.localSearch"
 	}
 	if strings.Contains(query, "globalsearch") {
 		return "graph.query.globalSearch"
+	}
+	// pathSearch returns PathSearchResult (composite shape) AND takes
+	// `predicates: [String]` as an arg — a pathSearch query lowercases
+	// to a string containing the `predicates` substring, which would
+	// hijack routing to graph.index.query.predicateList if pathsearch
+	// were positioned below. Moved here from the "most specific" tier
+	// per gh#206 review I1 — its accidental safety in the prior
+	// position would have broken on the next reshuffle.
+	if strings.Contains(query, "pathsearch") {
+		return "graph.query.pathSearch"
+	}
+
+	// Single-resolver substring checks — must come AFTER the composite
+	// resolvers above so a composite query's nested result fields don't
+	// hijack routing. gh#206.
+	if strings.Contains(query, "relationships") {
+		return "graph.query.relationships"
+	}
+	if strings.Contains(query, "capabilities") {
+		return "graph.query.capabilities"
 	}
 
 	// Predicate queries - must come before generic "entity" check
