@@ -1,0 +1,71 @@
+version: "3"
+
+# Research-Graph Tier: ADR-045 Phase 1 R0-R6 chain end-to-end
+# Uses the same mock OpenAI server shape as e2e:agentic, scripted via
+# --scenario=research-graph (test/e2e/mock/cmd/main.go).
+#
+# Override with AGENTIC_LLM_URL=http://localhost:11434/v1 for real LLM
+# testing (response quality + JSON-shape adherence at scale).
+
+tasks:
+  default:
+    desc: "Research-graph tier: ADR-045 R0-R6 chain end-to-end (~30s)"
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[RESEARCH-GRAPH] Starting research-graph tier E2E test..."
+      - docker compose -f docker/compose/research-graph.yml up -d --wait --build
+      - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
+      - echo "[RESEARCH-GRAPH] Running research-graph scenario..."
+      - cmd: cd cmd/e2e && ./e2e --scenario research-graph --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
+        ignore_error: true
+      - docker compose -f docker/compose/research-graph.yml down -v --timeout 15
+
+  up:
+    desc: Start research-graph tier services without running tests
+    silent: false
+    cmds:
+      - echo "[RESEARCH-GRAPH] Starting research-graph tier services..."
+      - docker compose -f docker/compose/research-graph.yml up -d --wait --build
+      - echo "[OK] Services are healthy"
+      - 'echo ""'
+      - 'echo "Services:"'
+      - 'echo "  NATS:       nats://localhost:44222"'
+      - 'echo "  Mock LLM:   http://localhost:48180"'
+      - 'echo "  SemStreams: http://localhost:48080"'
+      - 'echo "  Metrics:    http://localhost:49090/metrics"'
+      - 'echo "  PProf:      http://localhost:46060/debug/pprof/ (if SEMSTREAMS_DEBUG=true)"'
+      - 'echo ""'
+      - 'echo "To run tests: task e2e:research-graph:test"'
+      - 'echo "To stop:      task e2e:research-graph:down"'
+
+  test:
+    desc: Run research-graph tests against already-running services
+    silent: false
+    deps: [":build:e2e"]
+    cmds:
+      - echo "[RESEARCH-GRAPH] Running research-graph scenario..."
+      - cd cmd/e2e && ./e2e --scenario research-graph --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
+
+  down:
+    desc: Stop research-graph tier services
+    silent: false
+    cmds:
+      - echo "[RESEARCH-GRAPH] Stopping research-graph tier services..."
+      - docker compose -f docker/compose/research-graph.yml down -v --timeout 15
+      - echo "[OK] Services stopped"
+
+  logs:
+    desc: Tail logs from research-graph services
+    silent: false
+    cmds:
+      - docker compose -f docker/compose/research-graph.yml logs -f
+
+  clean:
+    desc: Clean research-graph tier environment
+    silent: false
+    cmds:
+      - echo "[RESEARCH-GRAPH] Cleaning research-graph tier environment..."
+      - docker compose -f docker/compose/research-graph.yml down -v --timeout 15 2>/dev/null || true
+      - docker volume ls -q --filter name=research-graph | xargs -r docker volume rm 2>/dev/null || true
+      - echo "[OK] Research-graph environment cleaned"

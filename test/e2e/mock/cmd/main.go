@@ -12,6 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	researchassess "github.com/c360studio/semstreams/processor/research-graph-assess"
+	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
+	researchsynthesize "github.com/c360studio/semstreams/processor/research-graph-synthesize"
 	"github.com/c360studio/semstreams/test/e2e/mock"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
@@ -20,7 +23,7 @@ import (
 func main() {
 	port := flag.Int("port", 8080, "Port for OpenAI mock server")
 	agntcyPort := flag.Int("agntcy-port", 8081, "Port for AGNTCY mock server")
-	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops)")
+	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops, research-graph)")
 	flag.Parse()
 
 	openaiAddr := fmt.Sprintf(":%d", *port)
@@ -79,6 +82,8 @@ func applyScenarioPreset(server *mock.OpenAIServer, scenario string) {
 		applyCRUDToolsPreset(server)
 	case "ops":
 		applyOpsPreset(server)
+	case "research-graph":
+		applyResearchGraphPreset(server)
 	default:
 		// "default" leaves the server's base configuration in place —
 		// agentic tier uses this path, plus any future scenario that just
@@ -233,4 +238,95 @@ func applyOpsPreset(server *mock.OpenAIServer) {
 			},
 		},
 	})
+}
+
+// applyResearchGraphPreset scripts the ADR-045 Phase 1 chain end-to-end
+// via marker-matched responses for the three LLM-wrapping components
+// plus a parent-agent research_graph tool call.
+//
+// Happy-path coverage: parent fires `research_graph(topic=...)`, the
+// chain runs nl_classify (deterministic Go code; no LLM in keyword-tier
+// classifier mode), route_search emits `synthesize_directly`, the
+// chain skips execute + assess, synthesize_answer emits a SearchResult
+// envelope, R6 fires the continuation back to the parent, and the
+// parent's continuation iteration completes via the default text path.
+//
+// The synthesize_directly route is the cheapest path that still
+// exercises R0 → R1 → R2 → R6 + every triple-stamp seam — the
+// orchestration claim PR #203 made. Refine-loop coverage
+// (walk_seeds / decompose + assess + iteration cap) is a follow-up;
+// shipping the happy path first locks the wire.
+//
+// Markers are the SystemPromptMarker constants exported from each
+// LLM-wrapping component's prompt.go. Importing rather than inlining
+// the substring means a persona-prose edit that severs the marker
+// breaks the compile, not the e2e silently (per go-reviewer I3 on
+// PR #205). JSON shapes match research.RouteDecision /
+// research.SearchResult / research.AssessmentOutput exactly so the
+// components' JSON extractor + Validate succeed without retries —
+// deterministic e2e timing.
+func applyResearchGraphPreset(server *mock.OpenAIServer) {
+	server.
+		WithRoleResponses([]mock.RoleResponse{
+			{
+				Marker: researchroute.SystemPromptMarker,
+				Content: `{
+  "action": "synthesize_directly",
+  "args": {},
+  "rationale": "Classifier candidate set covers the topic; no graph expansion needed."
+}`,
+			},
+			{
+				// Assess is unreachable on the synthesize_directly happy
+				// path but the marker is wired here so a route-misroute
+				// regression (e.g. route returns decompose by accident)
+				// surfaces as "chain hung at assess" rather than "mock
+				// returned wrong JSON shape and synthesize never fired."
+				Marker: researchassess.SystemPromptMarker,
+				Content: `{
+  "sufficient": true,
+  "refined_queries": []
+}`,
+			},
+			{
+				Marker: researchsynthesize.SystemPromptMarker,
+				Content: `{
+  "synthesis": "Drone hover anomalies cluster around the GCS-001 platform during low-altitude maneuvers. Two of the three surfaced candidates show elevated yaw drift telemetry preceding the anomaly. Recommend correlating with wind speed logs.",
+  "evidence": [
+    {"entity_id": "acme.ops.robotics.gcs.drone.001", "tier": "0", "source": "classifier", "snippet": "Drone 001 telemetry indicates yaw drift during hover at <50m AGL."},
+    {"entity_id": "acme.ops.robotics.gcs.drone.002", "tier": "0", "source": "classifier", "snippet": "Drone 002 sibling unit; identical firmware and GCS link."}
+  ],
+  "decomp_trace": {
+    "router_action": "synthesize_directly",
+    "subquery_count": 0,
+    "evidence_count_pre_dedup": 2,
+    "evidence_count_post_dedup": 2,
+    "tier_breakdown": {"0": 2},
+    "budget_tokens_used": 0
+  },
+  "tokens_used": 120,
+  "iterations": 0
+}`,
+			},
+		}).
+		// Parent agent's task says "use research_graph to investigate
+		// the topic". The mock matches on a unique substring from that
+		// prompt and emits a research_graph tool call. The chain then
+		// runs; when R6's continuation comes back to the parent, the
+		// continuation prompt does NOT contain this marker (it carries
+		// the SearchResult ref + topic from the rule pack), so the
+		// mock falls through to the default completion content + the
+		// parent loop terminates naturally.
+		WithRoleToolCallSequence([]mock.RoleToolCall{
+			{
+				Marker:   "Investigate the research topic via research_graph",
+				ToolName: "research_graph",
+				Args: map[string]any{
+					"topic": "drone hover anomalies",
+					"hints": map[string]any{
+						"domain": "robotics",
+					},
+				},
+			},
+		})
 }

@@ -24,6 +24,7 @@ import (
 	deepresearch "github.com/c360studio/semstreams/test/e2e/scenarios/deep-research"
 	lifecyclescenario "github.com/c360studio/semstreams/test/e2e/scenarios/lifecycle"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
+	researchgraph "github.com/c360studio/semstreams/test/e2e/scenarios/research-graph"
 	"github.com/c360studio/semstreams/test/e2e/scenarios/throughput"
 )
 
@@ -219,6 +220,7 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("  e2e:statistical - BM25 + community detection (~60s)")
 	fmt.Println("  e2e:semantic    - Neural embeddings + LLM (~90s)")
 	fmt.Println("  e2e:agentic     - Agent loop + tools with mock LLM (~30s)")
+	fmt.Println("  e2e:research-graph - ADR-045 R0-R6 chain with mock LLM (~30s)")
 	fmt.Println("")
 	fmt.Println("Individual Scenarios:")
 	fmt.Println("")
@@ -238,6 +240,8 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("                      Override with AGENTIC_LLM_URL for real LLM")
 	fmt.Println("    deep-research   - Rules-driven multi-agent research flow")
 	fmt.Println("                      Requires rule-processor with deep-research rules")
+	fmt.Println("    research-graph  - ADR-045 Phase 1 R0-R6 chain end-to-end")
+	fmt.Println("                      Mock LLM scripted with synthesize_directly happy path")
 	fmt.Println("")
 	fmt.Println("  Lifecycle (ADR-047):")
 	fmt.Println("    lifecycle       - Lifecycle-gateway + rule-engine + Manager round-trip")
@@ -402,6 +406,14 @@ func createScenario(
 		cfg := deepresearch.DefaultConfig()
 		cfg.MetricsURL = flags.metricsURL
 		return deepresearch.NewScenario(edgeClient, cfg)
+
+	// Research-graph scenario (ADR-045 Phase 1 R0-R6 chain)
+	case "research-graph":
+		cfg := researchgraph.DefaultConfig()
+		if flags.metricsURL != "" {
+			cfg.MetricsURL = flags.metricsURL
+		}
+		return researchgraph.NewScenario(edgeClient, cfg)
 
 	// CRUD-tools scenario (ADR-029 Pattern-B CRUD round-trip)
 	case "crud-tools":

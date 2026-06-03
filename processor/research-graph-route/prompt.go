@@ -8,6 +8,17 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 )
 
+// SystemPromptMarker is the first sentence of buildSystemPrompt's
+// output, exported so the e2e mock LLM scenario preset can match
+// against it without copying the substring. A persona-prose edit that
+// changes this sentence forces the importing test code to update too
+// rather than silently failing the mock match (which would surface as
+// "chain hung at route_search" with no link back to the marker drift).
+//
+// Same pattern in processor/research-graph-assess/prompt.go and
+// processor/research-graph-synthesize/prompt.go.
+const SystemPromptMarker = "You are the routing stage of a graph-search pipeline"
+
 // buildSystemPrompt returns the static system message that frames the
 // router's role + decision criteria + output contract. Stable across
 // requests so a per-loop prompt change doesn't ripple into a system-
@@ -22,7 +33,7 @@ import (
 // classifier output alone). Negative-shape for synthesize_directly
 // so the model doesn't default to it when uncertain.
 func buildSystemPrompt() string {
-	return `You are the routing stage of a graph-search pipeline. You receive a research topic and the upstream classifier's initial candidate set. You choose ONE of four next actions and emit a structured JSON object.
+	return SystemPromptMarker + `. You receive a research topic and the upstream classifier's initial candidate set. You choose ONE of four next actions and emit a structured JSON object.
 
 Your job is the structural decision — what shape of work comes next. The downstream stages do the work. You do not synthesize, walk, or refine yourself; you only route.
 

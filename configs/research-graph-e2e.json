@@ -1,0 +1,301 @@
+{
+  "_doc": [
+    "ADR-045 Phase 1 research-graph e2e configuration.",
+    "Wires the five research-graph components + agentic-loop/dispatch/tools/model + graph-ingest/query + rule-processor (loading R0-R6 pack) against a mock LLM endpoint for deterministic e2e validation.",
+    "Used by docker/compose/research-graph.yml + task e2e:research-graph.",
+    "Reference flow at configs/examples/research-graph-pipeline.json is the operator-facing template; this file is the e2e-tuned variant."
+  ],
+  "version": "1.0.0",
+  "platform": {
+    "org": "c360",
+    "id": "research-graph-e2e",
+    "type": "agentic-e2e",
+    "region": "local",
+    "instance_id": "rg-e2e-001",
+    "environment": "test"
+  },
+  "tier": "agentic",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "model_registry": {
+    "endpoints": {
+      "mock": {
+        "provider": "openai",
+        "url": "http://mock-llm:8080/v1",
+        "model": "mock-model",
+        "max_tokens": 4096,
+        "supports_tools": true,
+        "tool_format": "openai",
+        "stream": false
+      }
+    },
+    "defaults": {
+      "model": "mock"
+    },
+    "capabilities": {
+      "general":             { "preferred": ["mock"] },
+      "research_routing":    { "preferred": ["mock"] },
+      "research_assessment": { "preferred": ["mock"] },
+      "research_synthesis":  { "preferred": ["mock"] }
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams ADR-045 Research-Graph E2E",
+          "description": "Phase 1 chain end-to-end against mock LLM.",
+          "version": "0.1.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    },
+    "message-logger": {
+      "name": "message-logger",
+      "enabled": true,
+      "config": {
+        "buffer_size": 10000,
+        "monitor_subjects": ["agent.*", "tool.*", "component.*", "graph.mutation.*"],
+        "enable_kv_query": true,
+        "log_level": "INFO"
+      }
+    },
+    "log-forwarder": {
+      "name": "log-forwarder",
+      "enabled": true,
+      "config": {
+        "min_level": "DEBUG",
+        "exclude_sources": []
+      }
+    }
+  },
+  "components": {
+    "agentic-dispatch": {
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "general",
+        "default_tools": ["research_graph", "read_loop_result"],
+        "auto_continue": false,
+        "stream_name": "USER",
+        "ports": {
+          "inputs": [
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT"},
+            {"name": "user.response", "type": "nats", "subject": "user.response.*"}
+          ]
+        }
+      }
+    },
+    "agentic-loop": {
+      "type": "processor",
+      "name": "agentic-loop",
+      "enabled": true,
+      "config": {
+        "max_iterations": 5,
+        "timeout": "120s",
+        "stream_name": "AGENT",
+        "loops_bucket": "AGENT_LOOPS",
+        "ports": {
+          "inputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
+          ],
+          "kv_write": [
+            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"}
+          ]
+        }
+      }
+    },
+    "agentic-model": {
+      "type": "processor",
+      "name": "agentic-model",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "120s",
+        "ports": {
+          "inputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "agentic-tools": {
+      "type": "processor",
+      "name": "agentic-tools",
+      "enabled": true,
+      "config": {
+        "stream_name": "TOOL",
+        "timeout": "60s",
+        "allowed_tools": ["research_graph", "read_loop_result", "decide"],
+        "loops_bucket": "AGENT_LOOPS",
+        "ports": {
+          "inputs": [
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
+          ],
+          "kv_read": [
+            {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}
+          ]
+        }
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "enable_hierarchy": true,
+        "ports": {
+          "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+          ],
+          "outputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+          ]
+        }
+      }
+    },
+    "graph-query": {
+      "type": "processor",
+      "name": "graph-query",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {"name": "graph.query", "subject": "graph.query.>", "type": "nats", "required": true}
+          ],
+          "kv_read": [
+            {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}
+          ]
+        }
+      }
+    },
+    "research-graph-classify": {
+      "type": "processor",
+      "name": "research-graph-classify",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {"name": "classify_trigger", "type": "nats", "subject": "component.nl_classify.>", "required": true}
+          ]
+        }
+      }
+    },
+    "research-graph-route": {
+      "type": "processor",
+      "name": "research-graph-route",
+      "enabled": true,
+      "config": {
+        "model_capability": "research_routing",
+        "ports": {
+          "inputs": [
+            {"name": "route_trigger", "type": "nats", "subject": "component.route_search.>", "required": true}
+          ]
+        }
+      }
+    },
+    "research-graph-execute": {
+      "type": "processor",
+      "name": "research-graph-execute",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {"name": "execute_trigger", "type": "nats", "subject": "component.execute_subqueries.>", "required": true}
+          ]
+        }
+      }
+    },
+    "research-graph-assess": {
+      "type": "processor",
+      "name": "research-graph-assess",
+      "enabled": true,
+      "config": {
+        "model_capability": "research_assessment",
+        "ports": {
+          "inputs": [
+            {"name": "assess_trigger", "type": "nats", "subject": "component.assess_sufficiency.>", "required": true}
+          ]
+        }
+      }
+    },
+    "research-graph-synthesize": {
+      "type": "processor",
+      "name": "research-graph-synthesize",
+      "enabled": true,
+      "config": {
+        "model_capability": "research_synthesis",
+        "ports": {
+          "inputs": [
+            {"name": "synthesize_trigger", "type": "nats", "subject": "component.synthesize_answer.>", "required": true}
+          ]
+        }
+      }
+    },
+    "rule-processor": {
+      "type": "processor",
+      "name": "rule-processor",
+      "enabled": true,
+      "config": {
+        "rules_files": [
+          "/app/configs/rules/research-graph/00-kickoff-classify.json",
+          "/app/configs/rules/research-graph/01-classify-routes.json",
+          "/app/configs/rules/research-graph/02-route-decision-dispatch.json",
+          "/app/configs/rules/research-graph/03-execute-assesses.json",
+          "/app/configs/rules/research-graph/04-assess-dispatch.json",
+          "/app/configs/rules/research-graph/05-continuation.json"
+        ],
+        "enable_graph_integration": true,
+        "entity_watch_buckets": {
+          "ENTITY_STATES": [">"]
+        },
+        "ports": {
+          "inputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES.>", "type": "kv-watch", "bucket": "ENTITY_STATES"}
+          ],
+          "outputs": [
+            {"name": "component.dispatch", "subject": "component.*", "type": "nats", "description": "Per-stage dispatch published by R0-R4"},
+            {"name": "agent.task", "subject": "agent.task.*", "type": "jetstream", "stream_name": "AGENT", "description": "R6 continuation publishes back to parent role"},
+            {"name": "graph.mutation", "subject": "graph.mutation.*", "type": "nats", "description": "remove_triple actions in R2/R4 reset stage markers"}
+          ]
+        }
+      }
+    }
+  }
+}

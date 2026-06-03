@@ -1,0 +1,100 @@
+# Research-Graph E2E Test Environment for SemStreams (ADR-045 Phase 1)
+#
+# Tests the full R0-R6 chain end-to-end:
+#   parent agent → research_graph tool → kickoff triples →
+#   nl_classify → route_search (mock LLM: synthesize_directly) →
+#   synthesize_answer (mock LLM) → R6 continuation → parent receives
+#
+# Usage:
+#   task e2e:research-graph                                # mock LLM (default)
+#   AGENTIC_LLM_URL=http://localhost:11434/v1 task e2e:research-graph  # Ollama
+#
+# Port range: 4xxxx (distinct from agentic's 3xxxx + lifecycle's 5xxxx)
+# to avoid host port collisions when running tiers concurrently.
+
+services:
+  # NATS Server with JetStream
+  nats:
+    image: nats:2.10-alpine
+    container_name: semstreams-research-graph-nats
+    ports:
+      - "44222:4222"  # Client connections (4xxxx range)
+      - "48222:8222"  # HTTP monitoring
+    command:
+      ["-js", "-sd", "/data", "-m", "8222", "--name", "semstreams-research-graph-nats"]
+    volumes:
+      - nats-research-graph-data:/data
+    networks:
+      - semstreams-research-graph-net
+    healthcheck:
+      test:
+        ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Mock OpenAI Server with the research-graph preset (route + assess +
+  # synthesize marker-matched responses + parent's research_graph tool
+  # call). Per applyResearchGraphPreset in test/e2e/mock/cmd/main.go.
+  mock-llm:
+    build:
+      context: ../..
+      dockerfile: test/e2e/mock/Dockerfile
+    container_name: semstreams-research-graph-mock-llm
+    command: ["--scenario", "research-graph"]
+    ports:
+      - "48180:8080"  # Mock LLM (4xxxx range)
+      - "48181:8081"  # Mock AGNTCY (directory + OTEL — unused but exposed for consistency)
+    networks:
+      - semstreams-research-graph-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # SemStreams Application with research-graph chain
+  semstreams:
+    # Per-target image tag — see docker/compose/e2e.yml for rationale.
+    image: c360studio/semstreams:e2e-production
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: semstreams-research-graph-app
+    command: ["--config", "/app/configs/research-graph-e2e.json"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      mock-llm:
+        condition: service_healthy
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+      - SEMSTREAMS_DEBUG_PORT=6060
+      - AGENTIC_LLM_URL=${AGENTIC_LLM_URL:-http://mock-llm:8080/v1}
+    volumes:
+      - ../../configs:/app/configs:ro
+      - ../../testdata:/data/testdata:ro
+    ports:
+      - "48080:8080"  # HTTP API (health, components)
+      - "49090:9090"  # Prometheus metrics
+      - "46060:6060"  # pprof (when SEMSTREAMS_DEBUG=true)
+    networks:
+      - semstreams-research-graph-net
+    healthcheck:
+      test:
+        ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  semstreams-research-graph-net:
+    driver: bridge
+
+volumes:
+  nats-research-graph-data:
+    driver: local
