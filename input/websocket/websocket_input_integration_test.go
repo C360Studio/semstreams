@@ -5,7 +5,6 @@ package websocket
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -386,19 +385,21 @@ func TestWebSocketInput_MessageEnvelopeTypes(t *testing.T) {
 // HELPER FUNCTIONS
 // =============================================================================
 
+// getAvailablePort asks the kernel for an unused TCP port via :0
+// ephemeral allocation. See gh#220 Subclass 2 — pre-fix the helper
+// scanned port 9082 + offset, which collided under parallel test
+// execution. The :0 pattern inherits the OS ephemeral pool.
+//
+// Race window: between the close here and the websocket server's
+// re-bind, another process could grab the port. Tracked separately
+// — see gh#220 Subclass 2 follow-up for the listener-handoff API fix.
 func getAvailablePort(t *testing.T) int {
 	t.Helper()
-
-	basePort := 9082
-	for i := 0; i < 100; i++ {
-		port := basePort + i
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			_ = ln.Close()
-			return port
-		}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("getAvailablePort: kernel refused :0 ephemeral allocation: %v", err)
 	}
-
-	t.Fatal("Could not find available port for testing")
-	return 9082 // Never reached
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
 }

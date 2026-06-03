@@ -36,8 +36,18 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 	// Wait briefly for the listener to come up. ListenAndServe is async
 	// in a goroutine; we poll until the port is reachable to keep the
 	// test deterministic without a wall-clock sleep.
+	//
+	// gh#209 / gh#220 — budget widened from 3s to 10s. The 3s budget
+	// was empirically tight under parallel test load (race-detector
+	// goroutine-scheduling overhead + Docker daemon contention from
+	// sister tests). 10s is conservative per
+	// [[feedback_substrate_flake_discipline]] (wall-clock assertions
+	// need ≥3× tolerance over expected). Happy-path completion is
+	// fast (test binary finishes in ~0.3s total for 3 health-listener
+	// tests) so the wider budget doesn't slow the suite; the budget
+	// is the timeout cap, not the expected wall-clock.
 	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
-	waitForListener(t, addr+"/healthz", 3*time.Second)
+	waitForListener(t, addr+"/healthz", 10*time.Second)
 
 	// /healthz is the liveness probe — should always 200 once the
 	// listener is up. No service state required.
@@ -130,8 +140,9 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	}
 
 	// Sanity: listener is up before shutdown.
+	// gh#209/gh#220: 3s → 10s for the same reason as the sister test.
 	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
-	waitForListener(t, addr+"/healthz", 3*time.Second)
+	waitForListener(t, addr+"/healthz", 10*time.Second)
 
 	// StopAll is the production shutdown entry point. It must tear
 	// down the dedicated health listener as part of its sequence.
@@ -142,10 +153,16 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	// Port should be free now — re-binding it succeeds. Poll briefly
 	// since Shutdown returns once the listener stops accepting but the
 	// OS may take a moment to release the port (TIME_WAIT etc.).
-	deadline := time.Now().Add(3 * time.Second)
+	// gh#209/gh#220: 3s → 10s. The TIME_WAIT-release window under
+	// heavy parallel load can stretch — 10s gives enough headroom.
+	deadline := time.Now().Add(10 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		// gh#220:allow-fixed-port — rebind to the previously-allocated
+		// ephemeral port is the test's load-bearing semantic (verifying
+		// the OS released it). The port itself came from freePort(t),
+		// so this is NOT a static-range collision risk.
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)) // gh#220:allow-fixed-port
 		if err == nil {
 			_ = l.Close()
 			return
@@ -153,7 +170,7 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 		lastErr = err
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("port %d never freed after StopAll within 3s; last bind error: %v", port, lastErr)
+	t.Fatalf("port %d never freed after StopAll within 10s; last bind error: %v", port, lastErr)
 }
 
 // freePort asks the kernel for an unused TCP port. Used by tests that

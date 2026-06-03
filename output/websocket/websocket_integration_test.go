@@ -329,19 +329,26 @@ func TestWebSocketFederation_MessageEnvelopeProtocol(t *testing.T) {
 // HELPER FUNCTIONS
 // =============================================================================
 
+// getIntegrationPort asks the kernel for an unused TCP port via
+// :0 ephemeral allocation. Previously scanned a fixed range starting
+// at 18082, which collided with other tests under parallel execution
+// and produced the gh#220 Subclass 2 flake shape. The :0 pattern
+// inherits whatever ephemeral-port pool the OS makes available,
+// which is broader than a 100-port fixed window and avoids the
+// allocate-from-known-range contention.
+//
+// Race window: between the close here and the websocket server's
+// re-bind in the test, another process could grab the port. That
+// race is structural to the close-then-pass-port pattern and is
+// tracked separately — see gh#220 Subclass 2 follow-up for the
+// listener-handoff API fix.
 func getIntegrationPort(t *testing.T) int {
 	t.Helper()
-
-	basePort := 18082
-	for i := 0; i < 100; i++ {
-		port := basePort + i
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			ln.Close()
-			return port
-		}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("getIntegrationPort: kernel refused :0 ephemeral allocation: %v", err)
 	}
-
-	t.Fatal("Could not find available port for integration testing")
-	return 18082 // Never reached
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
 }
