@@ -169,15 +169,14 @@ func TestRegister_MultipleRegistrations(t *testing.T) {
 	}
 }
 
-func TestRegister_NilRegistry(t *testing.T) {
-	// Register with nil registry should panic or return error
-	defer func() {
-		if r := recover(); r == nil {
-			// If no panic, then Register should have returned an error
-			// We can't test the return value here since we're in defer
-			// But the absence of panic means Register handled nil gracefully
-		}
-	}()
+func TestRegister_NilRegistry(_ *testing.T) {
+	// Register with nil registry should panic or return error.
+	// The defer-recover here documents both legal outcomes:
+	//   - panic → recover() returns non-nil, the panic is swallowed
+	//   - return error → recover() returns nil, Register handled nil gracefully
+	// We don't assert which path because both are valid implementations;
+	// the test exists to lock that Register(nil) doesn't crash the process.
+	defer func() { _ = recover() }()
 
 	_ = agenticloop.Register(nil)
 }

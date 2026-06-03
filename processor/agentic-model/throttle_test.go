@@ -96,8 +96,8 @@ func TestEndpointThrottle_ConcurrencyLimitEnforced(t *testing.T) {
 
 	wg.Wait()
 
-	if max := int(maxObserved.Load()); max > maxConcurrent {
-		t.Errorf("max concurrent = %d, want <= %d", max, maxConcurrent)
+	if observed := int(maxObserved.Load()); observed > maxConcurrent {
+		t.Errorf("max concurrent = %d, want <= %d", observed, maxConcurrent)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestEndpointThrottle_RateLimitContextCancellation(t *testing.T) {
 	}
 }
 
-func TestEndpointThrottle_Release_IsNoOpWithNoConcurrencyLimit(t *testing.T) {
+func TestEndpointThrottle_Release_IsNoOpWithNoConcurrencyLimit(_ *testing.T) {
 	// Release on a throttle with no concurrency limit must not panic or block.
 	th := agenticmodel.NewEndpointThrottle(0, 0)
 	// Should not block or panic.

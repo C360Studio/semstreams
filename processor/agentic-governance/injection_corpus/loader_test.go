@@ -42,8 +42,8 @@ func TestLoad_InternalSeed(t *testing.T) {
 	// Phase 2 seed shape: enough records to be a meaningful smoke
 	// test and a mix of injection + benign so the classifier has a
 	// discriminatory signal.
-	if got, min := len(d.Examples), 30; got < min {
-		t.Errorf("expected at least %d examples, got %d", min, got)
+	if got, want := len(d.Examples), 30; got < want {
+		t.Errorf("expected at least %d examples, got %d", want, got)
 	}
 
 	signals := make(map[string]int)

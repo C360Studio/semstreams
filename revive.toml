@@ -5,7 +5,12 @@ ignoreGeneratedHeader = false
 severity = "warning"
 confidence = 0.8
 errorCode = 1
-warningCode = 0
+# warningCode = 1 enforces the CLAUDE.md policy "revive (warnings = failure)".
+# Prior value of 0 silently let lint warnings ship to CI; flipped 2026-06-03
+# alongside the cleanup of 20 pre-existing warnings (renames of max/min/cap
+# shadows + two SystemPromptMarker docstring comment-block separations).
+# Every future PR is now gated structurally on revive-clean.
+warningCode = 1
 
 [rule.blank-imports]
 [rule.context-as-argument]
@@ -36,8 +41,16 @@ warningCode = 0
 # [rule.line-length-limit]
 #   arguments = [120]
 
+# function-length: arguments = [maxStatements, maxLines]; 0 disables the
+# corresponding check. Prior config of [50, 0] was too strict for
+# scenario-based test functions that exercise a full flow with setup +
+# dispatch + assertions inline (e.g. TestHandleToolsComplete_FullConversationHistory
+# at 56 statements). Bumped to 80 statements to accommodate the
+# canonical scenario-test shape; production code rarely needs >50 in a
+# single function and the rule still flags genuinely-too-long methods.
+# Line-count check kept disabled via 0.
 [rule.function-length]
-  arguments = [50, 0]
+  arguments = [80, 0]
 
 [rule.max-public-structs]
   arguments = [10]

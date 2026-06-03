@@ -16,7 +16,7 @@ import (
 // sseServer creates an httptest.Server that serves SSE chunks then [DONE].
 func sseServer(t *testing.T, chunks []string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -259,7 +259,7 @@ func TestStreamChatCompletion_WithReasoningContent(t *testing.T) {
 
 func TestStreamChatCompletion_MidStreamError(t *testing.T) {
 	// Server sends a chunk then abruptly kills the TCP connection
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
@@ -293,7 +293,7 @@ func TestStreamChatCompletion_MidStreamError(t *testing.T) {
 
 func TestStreamChatCompletion_MidStreamError_PreservesPartialTokens(t *testing.T) {
 	// Server sends a usage chunk before killing the connection
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
@@ -335,7 +335,7 @@ func TestStreamChatCompletion_MidStreamError_PreservesPartialTokens(t *testing.T
 
 func TestStreamChatCompletion_ConnectionError(t *testing.T) {
 	// Server that is immediately closed
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Return error status to simulate connection failure
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte("Bad Gateway"))
@@ -508,7 +508,7 @@ func TestStreamChatCompletion_GeminiSameNameParallelTools(t *testing.T) {
 
 func TestStreamChatCompletion_NonStreamEndpoint(t *testing.T) {
 	// Non-streaming endpoint should use the regular path
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{
 			"id": "ns1",

@@ -275,13 +275,13 @@ func (a *streamAccumulator) nextToolIndex() int {
 	if len(a.toolCalls) == 0 {
 		return 0
 	}
-	max := -1
+	maxIdx := -1
 	for idx := range a.toolCalls {
-		if idx > max {
-			max = idx
+		if idx > maxIdx {
+			maxIdx = idx
 		}
 	}
-	return max + 1
+	return maxIdx + 1
 }
 
 // setUsage records token counts from the final stream chunk.

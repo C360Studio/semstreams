@@ -20,6 +20,7 @@ import (
 // examples for the two non-obvious failure shapes (looks-adequate-
 // but-isn't, looks-sparse-but-is). Negative-shape for Sufficient=true
 // so the model doesn't default to it when uncertain.
+
 // SystemPromptMarker is the first sentence of buildSystemPrompt's
 // output, exported for the e2e mock LLM marker-matching. See
 // processor/research-graph-route/prompt.go SystemPromptMarker for

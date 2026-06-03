@@ -53,19 +53,19 @@ const (
 	truncationMarker = "…[truncated]"
 )
 
-// truncateForTriple returns s capped at max bytes total (including the
-// truncation marker, if appended). It is UTF-8 safe — the cut point is
-// walked back to the nearest rune boundary to avoid producing invalid UTF-8.
-func truncateForTriple(s string, max int) string {
-	if len(s) <= max {
+// truncateForTriple returns s capped at maxBytes bytes total (including
+// the truncation marker, if appended). It is UTF-8 safe — the cut point
+// is walked back to the nearest rune boundary to avoid producing invalid UTF-8.
+func truncateForTriple(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	// Reserve space for the marker so the final result stays within `max`.
-	budget := max - len(truncationMarker)
+	// Reserve space for the marker so the final result stays within `maxBytes`.
+	budget := maxBytes - len(truncationMarker)
 	if budget <= 0 {
 		// Pathological: cap is smaller than the marker itself. Return an
 		// empty-ish truncation rather than something absurd.
-		return truncationMarker[:max]
+		return truncationMarker[:maxBytes]
 	}
 	cut := budget
 	// Walk backwards until `cut` indexes a rune-start byte. RuneStart

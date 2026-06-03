@@ -178,9 +178,9 @@ func (cb *circularBuffer[T]) Read() (T, bool) {
 	return item, true
 }
 
-// ReadBatch retrieves and removes up to max items from the buffer.
-func (cb *circularBuffer[T]) ReadBatch(max int) []T {
-	if max <= 0 {
+// ReadBatch retrieves and removes up to maxN items from the buffer.
+func (cb *circularBuffer[T]) ReadBatch(maxN int) []T {
+	if maxN <= 0 {
 		return nil
 	}
 
@@ -192,7 +192,7 @@ func (cb *circularBuffer[T]) ReadBatch(max int) []T {
 	}
 
 	// Determine how many items to read
-	readCount := max
+	readCount := maxN
 	if readCount > cb.size {
 		readCount = cb.size
 	}

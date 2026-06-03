@@ -107,7 +107,7 @@ func TestClient_Responses_SuccessfulCall(t *testing.T) {
 // with the status code recorded. Body shape mirrors ChatCompletion's
 // standard error envelope per ADR-051 ("Same envelope shape").
 func TestClient_Responses_APIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":{"type":"invalid_request","code":"missing_param","message":"input is required"}}`)

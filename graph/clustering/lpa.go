@@ -72,15 +72,15 @@ func (d *LPADetector) WithLogger(logger *slog.Logger) *LPADetector {
 }
 
 // WithMaxIterations sets the maximum iteration count with validation
-func (d *LPADetector) WithMaxIterations(max int) *LPADetector {
+func (d *LPADetector) WithMaxIterations(maxN int) *LPADetector {
 	// Validate and apply bounds
-	if max <= 0 {
-		max = DefaultMaxIterations
+	if maxN <= 0 {
+		maxN = DefaultMaxIterations
 	}
-	if max > MaxIterationsLimit {
-		max = MaxIterationsLimit
+	if maxN > MaxIterationsLimit {
+		maxN = MaxIterationsLimit
 	}
-	d.maxIterations = max
+	d.maxIterations = maxN
 	return d
 }
 

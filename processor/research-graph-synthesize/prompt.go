@@ -18,6 +18,7 @@ import (
 // section uses concrete examples (good ref vs invented ref). The
 // output contract spells out the exact JSON shape so the LLM does
 // not need to guess.
+
 // SystemPromptMarker is the first sentence of buildSystemPrompt's
 // output, exported for the e2e mock LLM marker-matching. See
 // processor/research-graph-route/prompt.go SystemPromptMarker for

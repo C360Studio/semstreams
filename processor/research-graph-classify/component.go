@@ -226,12 +226,18 @@ func (c *Component) initLLMClassifierIfEnabled() {
 			slog.Any("error", err))
 		return
 	}
-	c.llmClient = client
 	adapter := query.NewLLMClientAdapter(client, timeout)
 	llmClassifier := query.NewLLMClassifier(adapter, nil)
+	// gh#189: c.llmClient + c.classifier writes under c.mu so Stop's
+	// close+nil-assign (also under c.mu) cannot race the write.
+	// Critical section held only across the field assignments — the
+	// constructor work above runs without the lock.
+	c.mu.Lock()
+	c.llmClient = client
 	c.classifier = &classifierChainAdapter{
 		chain: query.NewClassifierChain(query.NewKeywordClassifier(), nil, llmClassifier),
 	}
+	c.mu.Unlock()
 	c.logger.Info("LLM tier wired into classifier chain",
 		slog.String("model", resolved.Model),
 		slog.Duration("timeout", timeout))
@@ -322,12 +328,25 @@ func (c *Component) Stop(timeout time.Duration) error {
 			slog.Duration("timeout", timeout))
 	}
 
+	// gh#189: c.mu guards the close+nil-assign. The matching write in
+	// initLLMTier (line ~232) is ALSO under c.mu, so the data race
+	// between Stop's nil-assign and a concurrent Start's write is now
+	// eliminated — `go test -race` is clean on
+	// TestClassify_ConcurrentStartStop. Same shape as the
+	// research-graph-route fix; paired per the gh#189 issue body
+	// noting both components share this pattern.
+	//
+	// Acquired AFTER wg.Wait so handlers (which use c.classifier
+	// transitively holding c.llmClient) drain before Close runs,
+	// preventing HTTP connection corruption mid-call.
+	c.mu.Lock()
 	if c.llmClient != nil {
 		if err := c.llmClient.Close(); err != nil {
 			c.logger.Debug("LLM client close failed during stop", slog.Any("error", err))
 		}
 		c.llmClient = nil
 	}
+	c.mu.Unlock()
 	return nil
 }
 

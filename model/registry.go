@@ -528,29 +528,29 @@ func validateEndpoint(name string, ep *EndpointConfig) error {
 	return nil
 }
 
-func (r *Registry) validateCapability(name string, cap *CapabilityConfig) error {
-	if cap == nil {
+func (r *Registry) validateCapability(name string, capCfg *CapabilityConfig) error {
+	if capCfg == nil {
 		return fmt.Errorf("capability %q is nil", name)
 	}
-	if len(cap.Preferred) == 0 {
+	if len(capCfg.Preferred) == 0 {
 		return fmt.Errorf("capability %q: at least one preferred endpoint is required", name)
 	}
 
 	// All referenced endpoints must exist
-	for _, epName := range cap.Preferred {
+	for _, epName := range capCfg.Preferred {
 		if _, ok := r.Endpoints[epName]; !ok {
 			return fmt.Errorf("capability %q: preferred endpoint %q does not exist", name, epName)
 		}
 	}
-	for _, epName := range cap.Fallback {
+	for _, epName := range capCfg.Fallback {
 		if _, ok := r.Endpoints[epName]; !ok {
 			return fmt.Errorf("capability %q: fallback endpoint %q does not exist", name, epName)
 		}
 	}
 
 	// If RequiresTools, at least one endpoint in the chain must support tools
-	if cap.RequiresTools {
-		chain := append(cap.Preferred, cap.Fallback...)
+	if capCfg.RequiresTools {
+		chain := append(capCfg.Preferred, capCfg.Fallback...)
 		hasToolCapable := false
 		for _, epName := range chain {
 			if ep, ok := r.Endpoints[epName]; ok && ep.SupportsTools {
@@ -678,12 +678,12 @@ func (r *Registry) ResolveSummarization() string {
 
 // buildChain constructs the full endpoint chain for a capability,
 // filtering by tool support if RequiresTools is set.
-func (r *Registry) buildChain(cap *CapabilityConfig) []string {
-	all := make([]string, 0, len(cap.Preferred)+len(cap.Fallback))
-	all = append(all, cap.Preferred...)
-	all = append(all, cap.Fallback...)
+func (r *Registry) buildChain(capCfg *CapabilityConfig) []string {
+	all := make([]string, 0, len(capCfg.Preferred)+len(capCfg.Fallback))
+	all = append(all, capCfg.Preferred...)
+	all = append(all, capCfg.Fallback...)
 
-	if !cap.RequiresTools {
+	if !capCfg.RequiresTools {
 		return all
 	}
 
