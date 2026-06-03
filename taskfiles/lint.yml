@@ -2,8 +2,27 @@ version: '3'
 
 tasks:
   default:
-    desc: Run Go linters (vet, fmt, revive)
+    desc: Run Go linters (vet, fmt, revive, substrate-flake-guards)
     cmds:
       - go vet ./...
       - go fmt ./...
       - revive -config revive.toml -formatter friendly ./...
+      - task: test-ports
+
+  test-ports:
+    desc: |
+      Fail if any *_test.go file binds a fixed TCP port via net.Listen.
+      Substrate-flake guard per gh#220 Subclass 2. Regex lives in
+      scripts/lint-test-ports.sh — single source of truth shared with
+      .github/workflows/ci.yml's inline step (review I4).
+    cmds:
+      - echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+      - bash scripts/lint-test-ports.sh
+
+  test-ports:test:
+    desc: |
+      Verify the fixed-port lint guard catches the expected matrix of
+      shapes (positive matches) and exempts the allowed forms (negative
+      matches). Runs scripts/lint-test-ports_fixture_test.sh.
+    cmds:
+      - bash scripts/lint-test-ports_fixture_test.sh

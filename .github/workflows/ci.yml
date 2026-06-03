@@ -41,6 +41,18 @@ jobs:
       - name: Run revive
         run: revive -config revive.toml -formatter friendly ./...
 
+      - name: Substrate-flake guard — fixed-port lint regex matrix test
+        # gh#220 review C1 — the lint guard's regex matrix must be
+        # verified, not implicitly trusted. Runs fixture test that
+        # exercises positive matches + suppression marker.
+        run: bash scripts/lint-test-ports_fixture_test.sh
+
+      - name: Substrate-flake guard — no fixed-port net.Listen in test files
+        # gh#220 Subclass 2 — fixed-port literals in *_test.go collide
+        # under parallel test execution. Single source of truth:
+        # scripts/lint-test-ports.sh, also invoked by task lint.
+        run: bash scripts/lint-test-ports.sh
+
   test:
     name: Test
     runs-on: ubuntu-latest
