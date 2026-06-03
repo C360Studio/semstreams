@@ -848,4 +848,3 @@ func (s *ProgressiveSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
 		s.statistical.BuildCorpusDF(entities)
 	}
 }
-
