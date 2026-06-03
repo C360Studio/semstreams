@@ -578,9 +578,22 @@ func (e *ActionExecutor) ExecuteAddTriple(ctx context.Context, action Action, ec
 		return message.Triple{}, errors.New("predicate is required for add_triple action")
 	}
 
-	// Substitute variables in predicate and object
+	// Substitute variables in predicate (always string — Action.Predicate
+	// is a name, not a value). For Object, attempt typed single-token
+	// resolution first (gh#207): when action.Object is exactly one
+	// supported substitution token, propagate the source type
+	// unchanged (float64 / bool / int / string) so numeric upserts
+	// stay type-faithful. Fall back to string substitution for mixed
+	// templates, literal strings, and unrecognized tokens — those
+	// require string-concat semantics, and the destination Triple.Object
+	// being `any` accepts string Objects without loss.
 	predicate := ec.SubstituteVariables(action.Predicate)
-	object := ec.SubstituteVariables(action.Object)
+	var object any
+	if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
+		object = typed
+	} else {
+		object = ec.SubstituteVariables(action.Object)
+	}
 
 	// Parse TTL
 	ttl, err := action.ParseTTL()
@@ -786,8 +799,19 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 		return errors.New("predicate is required for update_triple action")
 	}
 
+	// Predicate substitution is always string (it's a name). For Object,
+	// attempt typed single-token resolution first so numeric upserts
+	// round-trip the source type (gh#207). String fallback covers
+	// literal Objects, mixed templates, and unrecognized tokens. Same
+	// dispatch shape as ExecuteAddTriple — both actions land their
+	// Object in a `message.Triple{Object: any}`, so symmetry is correct.
 	predicate := ec.SubstituteVariables(action.Predicate)
-	object := ec.SubstituteVariables(action.Object)
+	var object any
+	if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
+		object = typed
+	} else {
+		object = ec.SubstituteVariables(action.Object)
+	}
 
 	if e.logger != nil {
 		e.logger.Debug("Updating triple (remove + add)",
