@@ -1941,6 +1941,9 @@ components:
                 - accepted
                 - timestamp
             type: object
+        StatePatchRequest:
+            additionalProperties: {}
+            type: object
         StatsResponse:
             properties:
                 applied:

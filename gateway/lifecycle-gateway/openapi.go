@@ -178,6 +178,7 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 			},
 		},
 		RequestBodyTypes: []reflect.Type{
+			reflect.TypeOf(StatePatchRequest{}),
 			reflect.TypeOf(TransitionRequest{}),
 		},
 	}
