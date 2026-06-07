@@ -390,6 +390,15 @@ func (h *MessageHandler) configureLoopMetadata(loopID string, task TaskMessage) 
 		}
 	}
 
+	// Set run anchor if provided (ADR-053 D7). Inherited from firing entity's RunID.
+	if task.RunID != "" {
+		if err := h.loopManager.SetRunID(loopID, task.RunID); err != nil {
+			h.logger.Warn("failed to set run ID",
+				slog.String("loop_id", loopID),
+				slog.String("error", err.Error()))
+		}
+	}
+
 	// Set workflow context if provided (for loops created by workflow commands)
 	if task.WorkflowSlug != "" || task.WorkflowStep != "" {
 		if err := h.loopManager.SetWorkflowContext(loopID, task.WorkflowSlug, task.WorkflowStep); err != nil {
@@ -465,6 +474,35 @@ func (h *MessageHandler) buildTaskTrajectoryStep(requestID string, task TaskMess
 	return step
 }
 
+// resolveRunEntityID returns the full 6-part ChainExecutionEntityID for a run
+// when runID is non-empty and the handler has a valid platform identity.
+// Returns empty string when runID is empty, or when org/platform are missing
+// (logs Warn in that case so operators notice the gap without breaking the path).
+//
+// Uses TryChainExecutionEntityID (never the panicking form) because this is
+// called from event-construction goroutines — a panic there would silently
+// kill the publish path (feedback_try_loop_entity_id_for_runtime discipline).
+func (h *MessageHandler) resolveRunEntityID(runID string) string {
+	if runID == "" {
+		return ""
+	}
+	if h.platform.Org == "" || h.platform.Platform == "" {
+		h.logger.Warn("resolveRunEntityID: platform identity missing, RunEntityID will be empty",
+			slog.String("run_id", runID))
+		return ""
+	}
+	id, err := agentic.TryChainExecutionEntityID(h.platform.Org, h.platform.Platform, runID)
+	if err != nil {
+		h.logger.Warn("resolveRunEntityID: failed to build chain execution entity ID",
+			slog.String("run_id", runID),
+			slog.String("org", h.platform.Org),
+			slog.String("platform", h.platform.Platform),
+			slog.Any("error", err))
+		return ""
+	}
+	return id
+}
+
 // buildLoopCreatedData marshals a LoopCreatedEvent for publishing.
 func (h *MessageHandler) buildLoopCreatedData(loopID string, task TaskMessage, entity agentic.LoopEntity) ([]byte, error) {
 	created := agentic.LoopCreatedEvent{
@@ -478,6 +516,8 @@ func (h *MessageHandler) buildLoopCreatedData(loopID string, task TaskMessage, e
 		MaxIterations:    entity.MaxIterations,
 		CreatedAt:        time.Now(),
 		Metadata:         task.Metadata,
+		RunID:            task.RunID,
+		RunEntityID:      h.resolveRunEntityID(task.RunID),
 	}
 	createdMsg := message.NewBaseMessage(created.Schema(), &created, "agentic-loop")
 	return json.Marshal(createdMsg)
@@ -1594,6 +1634,8 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 		ChannelID:   entity.ChannelID,
 		UserID:      entity.UserID,
 		Metadata:    entity.Metadata,
+		RunID:       entity.RunID,
+		RunEntityID: h.resolveRunEntityID(entity.RunID),
 	}
 
 	// Pull token totals from trajectory for cost tracking. Also doubles as
@@ -2120,6 +2162,8 @@ func (h *MessageHandler) buildFailureEvent(loopID, reason, errorMsg string) (*ag
 		ChannelID:    entity.ChannelID,
 		UserID:       entity.UserID,
 		Metadata:     entity.Metadata,
+		RunID:        entity.RunID,
+		RunEntityID:  h.resolveRunEntityID(entity.RunID),
 	}
 
 	// Pull token totals from trajectory for cost tracking

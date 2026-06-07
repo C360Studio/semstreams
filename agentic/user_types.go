@@ -260,8 +260,11 @@ type TaskMessage struct {
 
 	// Multi-agent hierarchy (optional, for parallel/nested agents)
 	ParentLoopID string `json:"parent_loop_id,omitempty"` // Parent loop ID for nested agents
-	Depth        int    `json:"depth,omitempty"`          // Current depth in agent tree (0 = root)
-	MaxDepth     int    `json:"max_depth,omitempty"`      // Maximum allowed depth
+	// RunID is the 6-part-derived run anchor: the run loop-id this loop belongs to.
+	// Empty for loops not in a run. Inherited at spawn (ADR-053 D7).
+	RunID    string `json:"run_id,omitempty"`
+	Depth    int    `json:"depth,omitempty"`     // Current depth in agent tree (0 = root)
+	MaxDepth int    `json:"max_depth,omitempty"` // Maximum allowed depth
 
 	// Pre-constructed context (optional, skips discovery if present)
 	// When set, the agent loop uses this context directly instead of hydrating

@@ -20,6 +20,12 @@ type LoopCreatedEvent struct {
 	MaxIterations    int            `json:"max_iterations"`
 	CreatedAt        time.Time      `json:"created_at"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
+	// RunID is the bare run loop-id this loop belongs to (ADR-053 D8).
+	// Empty when the loop is not part of a run.
+	RunID string `json:"run_id,omitempty"`
+	// RunEntityID is the full 6-part chain execution entity ID for the run
+	// (e.g. "org.platform.agent.chain.execution.<runID>"). Empty when RunID is empty.
+	RunEntityID string `json:"run_entity_id,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -71,6 +77,12 @@ type LoopCompletedEvent struct {
 	ChannelID   string         `json:"channel_id,omitempty"`
 	UserID      string         `json:"user_id,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	// RunID is the bare run loop-id this loop belongs to (ADR-053 D8).
+	// Empty when the loop is not part of a run.
+	RunID string `json:"run_id,omitempty"`
+	// RunEntityID is the full 6-part chain execution entity ID for the run.
+	// Empty when RunID is empty.
+	RunEntityID string `json:"run_entity_id,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -132,6 +144,12 @@ type LoopFailedEvent struct {
 	ChannelID   string         `json:"channel_id,omitempty"`
 	UserID      string         `json:"user_id,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	// RunID is the bare run loop-id this loop belongs to (ADR-053 D8).
+	// Empty when the loop is not part of a run.
+	RunID string `json:"run_id,omitempty"`
+	// RunEntityID is the full 6-part chain execution entity ID for the run.
+	// Empty when RunID is empty.
+	RunEntityID string `json:"run_entity_id,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -164,14 +182,24 @@ func (e *LoopFailedEvent) UnmarshalJSON(data []byte) error {
 
 // LoopCancelledEvent is published when a loop is cancelled by user action.
 type LoopCancelledEvent struct {
-	LoopID       string         `json:"loop_id"`
-	TaskID       string         `json:"task_id"`
-	Outcome      string         `json:"outcome"` // OutcomeCancelled
-	CancelledBy  string         `json:"cancelled_by"`
+	LoopID      string `json:"loop_id"`
+	TaskID      string `json:"task_id"`
+	Outcome     string `json:"outcome"` // OutcomeCancelled
+	CancelledBy string `json:"cancelled_by"`
+	// ParentLoopID enables ancestry walks from cancelled loops (parity with
+	// LoopFailedEvent.ParentLoopID). Populated from LoopEntity.ParentLoopID
+	// at cancellation construction time (ADR-053 D8).
+	ParentLoopID string         `json:"parent_loop,omitempty"`
 	WorkflowSlug string         `json:"workflow_slug,omitempty"`
 	WorkflowStep string         `json:"workflow_step,omitempty"`
 	CancelledAt  time.Time      `json:"cancelled_at"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+	// RunID is the bare run loop-id this loop belongs to (ADR-053 D8).
+	// Empty when the loop is not part of a run.
+	RunID string `json:"run_id,omitempty"`
+	// RunEntityID is the full 6-part chain execution entity ID for the run.
+	// Empty when RunID is empty.
+	RunEntityID string `json:"run_entity_id,omitempty"`
 }
 
 // Validate implements message.Payload

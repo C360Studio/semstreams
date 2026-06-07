@@ -197,3 +197,45 @@ func TestExecutionContext_SubstituteVariables_ScheduleNamespace(t *testing.T) {
 		})
 	}
 }
+
+// TestSubstituteVariables_AgentRunTripleResolves verifies that the
+// $entity.triple.agent.run substitution token resolves correctly through the
+// standard entity-triple substitution layer (M3 grammar-verification per
+// feedback_reference_configs_verify_triple_stamping). The predicate name
+// "agent.run" (LoopRun vocab constant, ADR-053 D7) is verified collision-free
+// against the substitution grammar at implementation time; this test locks the
+// runtime behavior so a future substitution-layer refactor can't silently break
+// the agent.run namespace without surfacing here.
+func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
+	t.Parallel()
+
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop-xyz"
+	ec := &ExecutionContext{
+		EntityID: loopEntityID,
+		Entity: &gtypes.EntityState{
+			ID: loopEntityID,
+			Triples: []message.Triple{
+				{Subject: loopEntityID, Predicate: "agent.run", Object: "root-loop-uuid"},
+			},
+		},
+	}
+
+	got := ec.SubstituteVariables("$entity.triple.agent.run")
+	if got != "root-loop-uuid" {
+		t.Errorf("$entity.triple.agent.run resolved to %q, want %q", got, "root-loop-uuid")
+	}
+
+	// Verify an entity WITHOUT agent.run returns an unresolved token (not empty,
+	// not panic): the substitution layer leaves framework-namespace tokens verbatim.
+	ecNoTriple := &ExecutionContext{
+		EntityID: loopEntityID,
+		Entity: &gtypes.EntityState{
+			ID:      loopEntityID,
+			Triples: []message.Triple{},
+		},
+	}
+	absent := ecNoTriple.SubstituteVariables("$entity.triple.agent.run")
+	if absent == "root-loop-uuid" {
+		t.Errorf("absent agent.run triple must not resolve to a value, got %q", absent)
+	}
+}

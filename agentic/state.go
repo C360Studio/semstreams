@@ -55,6 +55,9 @@ type LoopEntity struct {
 	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
 	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
 	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
+	// RunID is the 6-part-derived run anchor; the run loop-id this loop belongs to.
+	// Empty for loops not in a run. Inherited at spawn (ADR-053 D7).
+	RunID string `json:"run_id,omitempty"`
 
 	// Multi-agent depth tracking
 	Depth    int `json:"depth,omitempty"`     // Current depth in agent tree (0 = root)

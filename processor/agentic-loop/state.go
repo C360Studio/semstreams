@@ -784,6 +784,23 @@ func (m *LoopManager) SetParentLoopID(loopID, parentLoopID string) error {
 	return m.SetParentLoop(loopID, parentLoopID)
 }
 
+// SetRunID sets the run anchor (bare run loop-id) on the loop entity (ADR-053 D7).
+// The run_id identifies which agent run this loop belongs to. Empty string is
+// accepted to allow explicit clearing, though in practice it is only set
+// when the TaskMessage carries a non-empty RunID.
+func (m *LoopManager) SetRunID(loopID, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "operation", "find loop")
+	}
+
+	entity.RunID = runID
+	return nil
+}
+
 // SetDepth sets the depth tracking for a loop in the multi-agent hierarchy
 func (m *LoopManager) SetDepth(loopID string, depth, maxDepth int) error {
 	m.mu.Lock()

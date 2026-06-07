@@ -151,6 +151,10 @@
                   "type": "string",
                   "description": "role"
                 },
+                "run_scope": {
+                  "type": "string",
+                  "description": "run_scope"
+                },
                 "set": {
                   "type": "object",
                   "description": "set"
@@ -417,6 +421,10 @@
                   "type": "string",
                   "description": "role"
                 },
+                "run_scope": {
+                  "type": "string",
+                  "description": "run_scope"
+                },
                 "set": {
                   "type": "object",
                   "description": "set"
@@ -601,6 +609,10 @@
                   "type": "string",
                   "description": "role"
                 },
+                "run_scope": {
+                  "type": "string",
+                  "description": "run_scope"
+                },
                 "set": {
                   "type": "object",
                   "description": "set"
@@ -784,6 +796,10 @@
                 "role": {
                   "type": "string",
                   "description": "role"
+                },
+                "run_scope": {
+                  "type": "string",
+                  "description": "run_scope"
                 },
                 "set": {
                   "type": "object",
@@ -987,6 +1003,10 @@
                 "role": {
                   "type": "string",
                   "description": "role"
+                },
+                "run_scope": {
+                  "type": "string",
+                  "description": "run_scope"
                 },
                 "set": {
                   "type": "object",

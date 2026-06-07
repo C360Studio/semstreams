@@ -185,6 +185,51 @@ func (m *fakeLifecycleManager) AssertRuleWritable(workflow, fieldJSONName string
 	return nil
 }
 
+// Get reads the entity at entityID for the given workflow.
+// Stub: returns ErrEntityNotFound for all queries (tests that need Get
+// behaviour use the agentrun mock, not this lifecycle-action fake).
+func (m *fakeLifecycleManager) Get(_ context.Context, workflow, entityID string) (lifecycle.Participant, error) {
+	entities, ok := m.entities[workflow]
+	if !ok {
+		return nil, lifecycle.ErrEntityNotFound
+	}
+	p, ok := entities[entityID]
+	if !ok {
+		return nil, lifecycle.ErrEntityNotFound
+	}
+	return p, nil
+}
+
+// Create attaches lifecycle to the entity. Stub: always returns nil (success).
+// Tests that need Create behaviour should extend fakeLifecycleManager.
+func (m *fakeLifecycleManager) Create(_ context.Context, initial lifecycle.Participant) error {
+	if _, ok := m.entities[initial.Workflow()]; !ok {
+		m.entities[initial.Workflow()] = make(map[string]*fakeParticipant)
+	}
+	if _, exists := m.entities[initial.Workflow()][initial.EntityID()]; exists {
+		return lifecycle.ErrAlreadyExists
+	}
+	m.entities[initial.Workflow()][initial.EntityID()] = &fakeParticipant{
+		EntityIDF: initial.EntityID(),
+		PhaseF:    initial.Phase(),
+	}
+	return nil
+}
+
+// Transition moves the entity to newPhase. Stub implementation mirrors TransitionWith.
+func (m *fakeLifecycleManager) Transition(_ context.Context, workflow, entityID, newPhase string, _ lifecycle.TransitionSource, _ string) error {
+	entities, ok := m.entities[workflow]
+	if !ok {
+		return fmt.Errorf("workflow %q not found", workflow)
+	}
+	p, ok := entities[entityID]
+	if !ok {
+		return lifecycle.ErrEntityNotFound
+	}
+	p.PhaseF = newPhase
+	return nil
+}
+
 // --- executeLifecycleTransition ---
 
 func TestLifecycleTransition_HappyPath(t *testing.T) {
