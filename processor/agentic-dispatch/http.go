@@ -1001,7 +1001,7 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 							slog.String("key", entry.Key()),
 							slog.String("error", err.Error()))
 					} else {
-						loop, ok = loopFromEntity(&e), true
+						loop, ok = loopFromEntity(&e, c.deps.Platform.Org, c.deps.Platform.Platform), true
 					}
 				}
 				if ok {

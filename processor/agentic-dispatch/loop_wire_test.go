@@ -1,6 +1,7 @@
 package agenticdispatch
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 		UserID:        "user-1",
 		ChannelType:   "cli",
 		ParentLoopID:  "loop-parent",
+		RunID:         "run-root",
 		Outcome:       "",
 		Result:        "",
 		Error:         "",
@@ -40,7 +42,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal LoopEntity: %v", err)
 	}
 
-	got := loopFromEntity(&decoded)
+	got := loopFromEntity(&decoded, "c360", "ops")
 
 	if got.LoopID != entity.ID {
 		t.Errorf("LoopID: got %q, want %q (id→loop_id normalisation)", got.LoopID, entity.ID)
@@ -69,12 +71,62 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 	if got.ParentLoopID != entity.ParentLoopID {
 		t.Errorf("ParentLoopID: got %q, want %q", got.ParentLoopID, entity.ParentLoopID)
 	}
+	// ADR-053: run_id is the bare id; run_entity_id is the derived 6-part the UI
+	// feeds to getEntity() without client-side reconstruction.
+	if got.RunID != entity.RunID {
+		t.Errorf("RunID: got %q, want %q", got.RunID, entity.RunID)
+	}
+	if want := "c360.ops.agent.chain.execution.run-root"; got.RunEntityID != want {
+		t.Errorf("RunEntityID: got %q, want %q (derived from org/platform + RunID)", got.RunEntityID, want)
+	}
 	// Token and prompt fields are absent from live entities.
 	if got.TokensIn != 0 || got.TokensOut != 0 {
 		t.Errorf("expected zero token counts from entity, got in=%d out=%d", got.TokensIn, got.TokensOut)
 	}
 	if got.Prompt != "" {
 		t.Errorf("expected empty Prompt from entity, got %q", got.Prompt)
+	}
+}
+
+// TestLoopRunFields_EmptyRunIDOmitted verifies the run fields stay empty (and so
+// omitempty-drop from the wire) when the loop is not part of a run.
+func TestLoopRunFields_EmptyRunIDOmitted(t *testing.T) {
+	got := loopFromEntity(&agentic.LoopEntity{ID: "loop-x", State: agentic.LoopStateExecuting, MaxIterations: 5}, "c360", "ops")
+	if got.RunID != "" || got.RunEntityID != "" {
+		t.Errorf("expected empty run fields for non-run loop, got run_id=%q run_entity_id=%q", got.RunID, got.RunEntityID)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal Loop: %v", err)
+	}
+	if bytes.Contains(raw, []byte("run_id")) || bytes.Contains(raw, []byte("run_entity_id")) {
+		t.Errorf("expected run fields omitted from JSON, got %s", raw)
+	}
+}
+
+// TestLoopFromCompletion_RunFields verifies run_id + run_entity_id project from a
+// real terminal event (the event carries both; no derivation needed here).
+func TestLoopFromCompletion_RunFields(t *testing.T) {
+	event := agentic.LoopCompletedEvent{
+		LoopID:      "loop-child",
+		TaskID:      "task-1",
+		Outcome:     agentic.OutcomeSuccess,
+		RunID:       "run-root",
+		RunEntityID: "c360.ops.agent.chain.execution.run-root",
+	}
+	raw, err := json.Marshal(&event)
+	if err != nil {
+		t.Fatalf("marshal LoopCompletedEvent: %v", err)
+	}
+	got, ok := loopFromCompletion(raw)
+	if !ok {
+		t.Fatalf("loopFromCompletion returned ok=false")
+	}
+	if got.RunID != event.RunID {
+		t.Errorf("RunID: got %q, want %q", got.RunID, event.RunID)
+	}
+	if got.RunEntityID != event.RunEntityID {
+		t.Errorf("RunEntityID: got %q, want %q", got.RunEntityID, event.RunEntityID)
 	}
 }
 
