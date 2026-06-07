@@ -511,11 +511,15 @@ type ApprovalAcceptResponse struct {
 }
 
 // ActivityEvent represents a real-time activity event sent via SSE.
+// Data is a *Loop projected from the AGENT_LOOPS KV entry. See the Loop schema
+// for the full field set; fields absent from a given source stay empty.
+// (OpenAPI 3.0 cannot express per-event SSE JSON schema — see the Loop and
+// ActivityEvent component schemas for the documented shapes.)
 type ActivityEvent struct {
-	Type      string          `json:"type"` // loop_created, loop_updated, loop_deleted
-	LoopID    string          `json:"loop_id"`
-	Timestamp time.Time       `json:"timestamp"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	Type      string    `json:"type"` // loop_created, loop_updated, loop_deleted
+	LoopID    string    `json:"loop_id"`
+	Timestamp time.Time `json:"timestamp"`
+	Data      *Loop     `json:"data,omitempty"`
 }
 
 // handleListLoops returns all tracked loops with optional filtering.
@@ -553,8 +557,14 @@ func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {
 	c.metrics.recordHTTPRequest("/loops", "GET", "200")
 	c.metrics.recordHTTPDuration("/loops", "GET", time.Since(startTime).Seconds())
 
+	// Project to the canonical wire type before encoding.
+	wireLoops := make([]Loop, len(loops))
+	for i, l := range loops {
+		wireLoops[i] = loopFromInfo(l)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(loops); err != nil {
+	if err := json.NewEncoder(w).Encode(wireLoops); err != nil {
 		c.logger.ErrorContext(ctx, "failed to encode loops list",
 			slog.String("request_id", requestID),
 			slog.String("error", err.Error()))
@@ -589,8 +599,11 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 	c.metrics.recordHTTPRequest("/loops/{id}", "GET", "200")
 	c.metrics.recordHTTPDuration("/loops/{id}", "GET", time.Since(startTime).Seconds())
 
+	// Project to the canonical wire type before encoding.
+	wireLoop := loopFromInfo(loop)
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(loop); err != nil {
+	if err := json.NewEncoder(w).Encode(wireLoop); err != nil {
 		c.logger.ErrorContext(ctx, "failed to encode loop",
 			slog.String("request_id", requestID),
 			slog.String("loop_id", loopID),
@@ -970,12 +983,29 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 				Timestamp: entry.Created(),
 			}
 
-			// Include value for non-delete operations
+			// Project non-delete entries onto the canonical Loop wire type.
+			// COMPLETE_<loopID> keys carry terminal event payloads; all other
+			// keys carry agentic.LoopEntity live state.
 			if entry.Operation() != jetstream.KeyValueDelete {
-				if json.Valid(entry.Value()) {
-					event.Data = entry.Value()
+				var loop Loop
+				var ok bool
+				if strings.HasPrefix(entry.Key(), "COMPLETE_") {
+					if loop, ok = loopFromCompletion(entry.Value()); !ok {
+						c.logger.DebugContext(ctx, "activity stream: dropping undecodable completion payload",
+							slog.String("key", entry.Key()))
+					}
 				} else {
-					event.Data, _ = json.Marshal(string(entry.Value()))
+					var e agentic.LoopEntity
+					if err := json.Unmarshal(entry.Value(), &e); err != nil {
+						c.logger.DebugContext(ctx, "activity stream: dropping undecodable loop entity",
+							slog.String("key", entry.Key()),
+							slog.String("error", err.Error()))
+					} else {
+						loop, ok = loopFromEntity(&e), true
+					}
+				}
+				if ok {
+					event.Data = &loop
 				}
 			}
 
@@ -1180,6 +1210,8 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 						"200": {
 							Description: "List of loops",
 							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/Loop",
+							IsArray:     true,
 						},
 					},
 				},
@@ -1196,6 +1228,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 						"200": {
 							Description: "Loop details",
 							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/Loop",
 						},
 						"404": {
 							Description: "Loop not found",
@@ -1266,11 +1299,11 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/activity": {
 				GET: &service.OperationSpec{
 					Summary:     "Real-time activity events (SSE)",
-					Description: "Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Connect with EventSource or curl -N.",
+					Description: "Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
 					Tags:        []string{"AgenticDispatch"},
 					Responses: map[string]service.ResponseSpec{
 						"200": {
-							Description: "SSE event stream",
+							Description: "SSE event stream of ActivityEvent objects. Each event's data field is a Loop (see #/components/schemas/ActivityEvent and #/components/schemas/Loop).",
 							ContentType: "text/event-stream",
 						},
 					},
@@ -1291,6 +1324,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			},
 		},
 		ResponseTypes: []reflect.Type{
+			reflect.TypeOf(Loop{}),
 			reflect.TypeOf(LoopInfo{}),
 			reflect.TypeOf(HTTPMessageResponse{}),
 			reflect.TypeOf(SignalResponse{}),
