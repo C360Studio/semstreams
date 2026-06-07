@@ -464,6 +464,19 @@ const (
 	// DataType: string (bare loop UUID, NOT a 6-part entity ID)
 	LoopRun = "agent.run"
 
+	// LoopRunEntityID is the FULL 6-part chain.execution entity ID of the run
+	// this loop belongs to (ADR-053). Stamped at spawn alongside LoopRun.
+	// This is the rule-addressable upsert SUBJECT for run-scoped state: a rule
+	// firing on a loop reads $entity.triple.agent.run.entity_id and uses it as
+	// the Subject of add_triple/update_triple (the typed replacement for the
+	// old $entity.triple.lineage.run-loop-entity-id pattern). Rules cannot
+	// derive the 6-part from the bare LoopRun (substitution is string interp,
+	// not function calls), so the framework stamps the full form directly.
+	// For computed run-state, prefer a Go agentrun.MilestoneHandler instead.
+	// Example: "org.platform.agent.chain.execution.<runID>"
+	// DataType: string (6-part federated entity ID)
+	LoopRunEntityID = "agent.run.entity_id"
+
 	// LoopWorkflow is the workflow slug this loop belongs to.
 	// Example: "code-review", "feature-implementation"
 	// DataType: string

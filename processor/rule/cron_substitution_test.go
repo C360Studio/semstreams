@@ -216,6 +216,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 			ID: loopEntityID,
 			Triples: []message.Triple{
 				{Subject: loopEntityID, Predicate: "agent.run", Object: "root-loop-uuid"},
+				{Subject: loopEntityID, Predicate: "agent.run.entity_id", Object: "acme.ops.agent.chain.execution.root-loop-uuid"},
 			},
 		},
 	}
@@ -223,6 +224,14 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	got := ec.SubstituteVariables("$entity.triple.agent.run")
 	if got != "root-loop-uuid" {
 		t.Errorf("$entity.triple.agent.run resolved to %q, want %q", got, "root-loop-uuid")
+	}
+
+	// ADR-053 follow-up: the 6-part run entity ID is the rule-addressable upsert
+	// subject. $entity.triple.agent.run.entity_id must resolve to the full ID so a
+	// rule can use it as an add_triple/update_triple Subject.
+	gotEntity := ec.SubstituteVariables("$entity.triple.agent.run.entity_id")
+	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; gotEntity != want {
+		t.Errorf("$entity.triple.agent.run.entity_id resolved to %q, want %q", gotEntity, want)
 	}
 
 	// Verify an entity WITHOUT agent.run returns an unresolved token (not empty,
