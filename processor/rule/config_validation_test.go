@@ -239,3 +239,85 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 		}
 	})
 }
+
+// --- ADR-053 D4: run_scope validation tests (I2) ---
+
+// TestValidateActionLists_RunScopeValid verifies that valid run_scope values
+// ("new", "inherit", "none", "") pass ValidateDefinition without error.
+func TestValidateActionLists_RunScopeValid(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []string{"new", "inherit", "none", ""} {
+		scope := scope
+		t.Run("scope_"+scope, func(t *testing.T) {
+			t.Parallel()
+			def := Definition{
+				ID:   "run-scope-valid",
+				Type: "expression",
+				Actions: []Action{
+					{
+						Type:     ActionTypePublishAgent,
+						Subject:  "agent.task.test",
+						RunScope: scope,
+					},
+				},
+			}
+			if err := ValidateDefinition(def); err != nil {
+				t.Errorf("run_scope=%q must be accepted by ValidateDefinition, got: %v", scope, err)
+			}
+		})
+	}
+}
+
+// TestValidateActionLists_RunScopeInvalidRejects verifies that an invalid run_scope
+// value ("always", "auto", "foo") is rejected by ValidateDefinition. This exercises
+// the closed-set validator in validateActionLists (previously unexercised per I2).
+func TestValidateActionLists_RunScopeInvalidRejects(t *testing.T) {
+	t.Parallel()
+	for _, scope := range []string{"always", "auto", "foo", "NEW"} {
+		scope := scope
+		t.Run("scope_"+scope, func(t *testing.T) {
+			t.Parallel()
+			def := Definition{
+				ID:   "run-scope-invalid",
+				Type: "expression",
+				Actions: []Action{
+					{
+						Type:     ActionTypePublishAgent,
+						Subject:  "agent.task.test",
+						RunScope: scope,
+					},
+				},
+			}
+			err := ValidateDefinition(def)
+			if err == nil {
+				t.Fatalf("run_scope=%q must be rejected by ValidateDefinition, got nil", scope)
+			}
+			if !strings.Contains(err.Error(), "run_scope") {
+				t.Errorf("error %q must mention 'run_scope', got: %v", scope, err)
+			}
+		})
+	}
+}
+
+// TestValidateActionLists_RunScopeOnlyCheckedForPublishAgent verifies that
+// run_scope is ignored (not rejected) on non-publish_agent action types.
+// A publish action with an invalid run_scope should pass because the field
+// is only validated for publish_agent.
+func TestValidateActionLists_RunScopeOnlyCheckedForPublishAgent(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID:   "run-scope-non-agent",
+		Type: "expression",
+		Actions: []Action{
+			{
+				Type:      ActionTypeAddTriple,
+				Predicate: "some.predicate",
+				Object:    "val",
+				RunScope:  "invalid-but-not-publish-agent",
+			},
+		},
+	}
+	if err := ValidateDefinition(def); err != nil {
+		t.Errorf("run_scope on non-publish_agent action must not be validated, got: %v", err)
+	}
+}

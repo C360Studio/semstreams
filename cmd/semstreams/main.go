@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
 	"github.com/c360studio/semstreams/config"
@@ -182,6 +183,37 @@ func run() error {
 	// [[feedback_verify_main_go_wire_for_sister_asks]] —
 	// half-migrated framework binaries silently break workflows.
 	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
+
+	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
+	// the Manager is constructed so lifecycle_* actions that reference
+	// "agent-run" entities resolve at rule-evaluation time, not at boot.
+	// The framework binary registers no product-level handlers — product
+	// code (semteams, etc.) adds MilestoneHandlers via AddHandler.
+	if err := agentrun.Register(svcDeps.LifecycleManager); err != nil {
+		return fmt.Errorf("register agent-run workflow: %w", err)
+	}
+
+	// 10d. Start the agent-run milestone subscriber (ADR-053 D6).
+	// Subscribes to agent.complete.* and agent.failed.*, pre-resolves
+	// the run, applies zombie-prevention terminal authority (D3), and
+	// fans out to registered product handlers. No product handlers
+	// registered in the framework binary; the subscriber still enforces
+	// D3 (zombie prevention) for runs minted by run_scope=new rules.
+	milestoneSubscriber := agentrun.NewMilestoneSubscriber(
+		svcDeps.LifecycleManager,
+		agentrun.NewNATSLoopTripleReader(natsClient),
+		agentrun.NewNATSTriplePublisher(natsClient),
+		platform.Org,
+		platform.Platform,
+		logger,
+	)
+	stopMilestoneSubscriber, err := milestoneSubscriber.Start(ctx, natsClient, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName,
+	})
+	if err != nil {
+		return fmt.Errorf("start agent-run milestone subscriber: %w", err)
+	}
+	defer stopMilestoneSubscriber()
 
 	// 11. Configure and create services
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {

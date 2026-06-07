@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
@@ -153,6 +154,25 @@ func run() error {
 		return err
 	}
 
+	// Start the agent-run milestone subscriber (ADR-053 D6). Mirrors
+	// cmd/semstreams wiring. No product handlers registered in e2e binary;
+	// D3 zombie-prevention still applies.
+	milestoneSubscriber := agentrun.NewMilestoneSubscriber(
+		svcDeps.LifecycleManager,
+		agentrun.NewNATSLoopTripleReader(natsClient),
+		agentrun.NewNATSTriplePublisher(natsClient),
+		platform.Org,
+		platform.Platform,
+		logger,
+	)
+	stopMilestoneSubscriber, err := milestoneSubscriber.Start(ctx, natsClient, agentrun.StartConfig{
+		StreamName: agentrun.AgentStreamName,
+	})
+	if err != nil {
+		return fmt.Errorf("start agent-run milestone subscriber: %w", err)
+	}
+	defer stopMilestoneSubscriber()
+
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
 	}
@@ -204,6 +224,10 @@ func wireLifecycleManager(_ context.Context, svcDeps *service.Dependencies, _ *n
 	svcDeps.LifecycleManager = lifecycle.NewManager(svcDeps.NATSClient, svcDeps.Logger)
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
 		return fmt.Errorf("register mission workflow: %w", err)
+	}
+	// Register the agent-run workflow (ADR-053 D2). Mirrors cmd/semstreams wiring.
+	if err := agentrun.Register(svcDeps.LifecycleManager); err != nil {
+		return fmt.Errorf("register agent-run workflow: %w", err)
 	}
 	return nil
 }

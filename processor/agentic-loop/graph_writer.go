@@ -516,7 +516,7 @@ func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, o
 		}
 	}
 
-	triples := make([]message.Triple, 0, 7)
+	triples := make([]message.Triple, 0, 8)
 	if task.Role != "" {
 		triples = append(triples, triple(agvocab.LoopRole, task.Role))
 	}
@@ -526,6 +526,13 @@ func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, o
 	if task.ParentLoopID != "" {
 		parentEntityID := agentic.LoopExecutionEntityID(org, platform, task.ParentLoopID)
 		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
+	}
+	// Stamp agent.run when the loop belongs to a run (ADR-053 D7).
+	// The object is the bare RunID (not a 6-part entity ID) — rules read
+	// it via $entity.triple.agent.run; the full chain entity ID is derived
+	// via ChainExecutionEntityID when needed.
+	if task.RunID != "" {
+		triples = append(triples, triple(agvocab.LoopRun, task.RunID))
 	}
 	if task.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, task.WorkflowSlug))

@@ -225,6 +225,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 		TaskID:       "task-count",
 		Role:         "researcher",
 		ParentLoopID: "parent-id",
+		RunID:        "run-anchor-uuid",
 		WorkflowSlug: "wf",
 		WorkflowStep: "step",
 		UserID:       "user",
@@ -232,7 +233,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 	}
 
 	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-count", task, "acme", "ops")
-	want := 7 // role, task, parent, workflow, workflow_step, user, description
+	want := 8 // role, task, parent, run, workflow, workflow_step, user, description
 	if len(triples) != want {
 		preds := make([]string, 0, len(triples))
 		for _, tr := range triples {
@@ -255,5 +256,110 @@ func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
 	}
 	if time.Since(triples[0].Timestamp) > time.Minute {
 		t.Errorf("timestamp suspiciously old: %v", triples[0].Timestamp)
+	}
+}
+
+// --- ADR-053 Pass A: agent.run triple in spawn identity ---
+
+// TestBuildSpawnIdentityTriples_StampsRunID verifies that agent.run is stamped
+// with the bare RunID string when TaskMessage.RunID is set (ADR-053 D7).
+func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-001"
+	task := &agentic.TaskMessage{
+		TaskID: "task-run-001",
+		Role:   "researcher",
+		RunID:  "root-loop-uuid",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	if !predicates[agvocab.LoopRun] {
+		t.Fatalf("expected agent.run triple; got predicates: %v", predicates)
+	}
+
+	runID, ok := objectFor(triples, agvocab.LoopRun).(string)
+	if !ok {
+		t.Fatal("LoopRun object is not a string")
+	}
+	if runID != "root-loop-uuid" {
+		t.Errorf("LoopRun = %q, want %q", runID, "root-loop-uuid")
+	}
+}
+
+// TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty verifies that agent.run is
+// NOT emitted when TaskMessage.RunID is empty — loops not in a run must not
+// carry a zero-value triple.
+func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.solo-loop"
+	task := &agentic.TaskMessage{
+		TaskID: "task-solo",
+		Role:   "researcher",
+		// RunID empty
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	if predicates[agvocab.LoopRun] {
+		t.Errorf("expected agent.run triple to be omitted when RunID is empty")
+	}
+}
+
+// TestBuildSpawnIdentityTriples_RunIDIsNotEntityID guards that the LoopRun
+// object is the BARE run loop-id, not a 6-part entity ID. Rules read
+// $entity.triple.agent.run and pass it to ChainExecutionEntityID on demand;
+// storing the pre-expanded entity ID would double-expand it.
+func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-002"
+	task := &agentic.TaskMessage{
+		TaskID: "task-run-002",
+		Role:   "coordinator",
+		RunID:  "bare-run-uuid",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	runID, ok := objectFor(triples, agvocab.LoopRun).(string)
+	if !ok {
+		t.Fatal("LoopRun object is not a string")
+	}
+
+	// Must be the bare UUID, not a dotted entity ID.
+	if len(runID) > 0 && runID != "bare-run-uuid" {
+		t.Errorf("LoopRun = %q, want bare UUID %q", runID, "bare-run-uuid")
+	}
+	// Defensive: must not contain dots (which would indicate it was expanded to a 6-part ID).
+	for _, ch := range runID {
+		if ch == '.' {
+			t.Errorf("LoopRun %q contains dots — must be bare loop UUID, not a 6-part entity ID", runID)
+			break
+		}
+	}
+}
+
+// TestBuildSpawnIdentityTriples_SharedTimestamp_WithRunID extends the timestamp
+// test to include RunID — all triples in one batch share the same timestamp.
+func TestBuildSpawnIdentityTriples_SharedTimestamp_WithRunID(t *testing.T) {
+	task := &agentic.TaskMessage{
+		TaskID:       "task-shared-ts-run",
+		Role:         "researcher",
+		ParentLoopID: "parent-id",
+		RunID:        "run-id",
+		WorkflowSlug: "wf",
+		WorkflowStep: "step",
+		UserID:       "user",
+		Prompt:       "prompt",
+	}
+
+	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-shared-run", task, "acme", "ops")
+	if len(triples) < 2 {
+		t.Fatalf("expected multiple triples, got %d", len(triples))
+	}
+
+	first := triples[0].Timestamp
+	for i, tr := range triples[1:] {
+		if !tr.Timestamp.Equal(first) {
+			t.Errorf("triple[%d] timestamp %v != triple[0] timestamp %v", i+1, tr.Timestamp, first)
+		}
 	}
 }

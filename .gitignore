@@ -68,3 +68,6 @@ cmd/e2e/test/e2e/results/*.txt
 # Claude Code runtime artifacts (local state, not source)
 .claude/scheduled_tasks.lock
 .agents/
+
+# Playwright MCP session artifacts
+.playwright-mcp/

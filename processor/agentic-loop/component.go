@@ -1616,10 +1616,13 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		TaskID:       entity.TaskID,
 		Outcome:      agentic.OutcomeCancelled,
 		CancelledBy:  signal.UserID,
+		ParentLoopID: entity.ParentLoopID,
 		WorkflowSlug: entity.WorkflowSlug,
 		WorkflowStep: entity.WorkflowStep,
 		CancelledAt:  entity.CancelledAt,
 		Metadata:     entity.Metadata,
+		RunID:        entity.RunID,
+		RunEntityID:  c.handler.resolveRunEntityID(entity.RunID),
 	}
 
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")

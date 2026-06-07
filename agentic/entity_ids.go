@@ -136,24 +136,44 @@ func TrajectoryStepEntityID(org, platform, loopID string, stepIndex int) string 
 //
 // Panics if any input part is empty or contains a dot, as these represent
 // programming errors — the caller is responsible for supplying well-formed identifiers.
+//
+// Runtime callers where a panic would silently crash a goroutine (event-
+// construction in publish goroutines, tool executors) should use
+// TryChainExecutionEntityID instead and surface the error explicitly.
 func ChainExecutionEntityID(org, platform, chainID string) string {
-	if err := validatePart("org", org); err != nil {
+	id, err := TryChainExecutionEntityID(org, platform, chainID)
+	if err != nil {
 		panic(fmt.Sprintf("ChainExecutionEntityID: %s", err))
+	}
+	return id
+}
+
+// TryChainExecutionEntityID is the error-returning variant of
+// ChainExecutionEntityID. Use this from runtime hot paths (event-
+// construction in publish goroutines, milestone subscribers) where a
+// panic would silently crash the goroutine. Boot-time and post-completion
+// callers that own their inputs can keep using the panicking form.
+//
+// Returns ("", error) when any input part is empty or contains a dot,
+// or when the constructed ID fails IsValidEntityID.
+func TryChainExecutionEntityID(org, platform, chainID string) (string, error) {
+	if err := validatePart("org", org); err != nil {
+		return "", fmt.Errorf("ChainExecutionEntityID: %w", err)
 	}
 	if err := validatePart("platform", platform); err != nil {
-		panic(fmt.Sprintf("ChainExecutionEntityID: %s", err))
+		return "", fmt.Errorf("ChainExecutionEntityID: %w", err)
 	}
 	if err := validatePart("chainID", chainID); err != nil {
-		panic(fmt.Sprintf("ChainExecutionEntityID: %s", err))
+		return "", fmt.Errorf("ChainExecutionEntityID: %w", err)
 	}
 
 	id := fmt.Sprintf("%s.%s.agent.chain.execution.%s", org, platform, chainID)
 
 	if !message.IsValidEntityID(id) {
-		panic(fmt.Sprintf("ChainExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id))
+		return "", fmt.Errorf("ChainExecutionEntityID: constructed id %q failed IsValidEntityID — check input values", id)
 	}
 
-	return id
+	return id, nil
 }
 
 // LoopIDFromExecutionEntityID extracts the loop_id segment from a 6-part

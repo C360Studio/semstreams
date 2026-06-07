@@ -456,6 +456,14 @@ const (
 	// DataType: string (entity ID)
 	LoopParent = "agent.loop.parent"
 
+	// LoopRun is the bare run loop-id this loop belongs to (ADR-053 D7).
+	// Stamped at spawn time by buildSpawnIdentityTriples when TaskMessage.RunID is non-empty.
+	// Rules can read this via $entity.triple.agent.run. Grammar-collision-free:
+	// no existing $-regex matches agent.run.* (audited at ADR-053 implementation).
+	// Example: "loop-uuid-of-the-root-coordinator"
+	// DataType: string (bare loop UUID, NOT a 6-part entity ID)
+	LoopRun = "agent.run"
+
 	// LoopWorkflow is the workflow slug this loop belongs to.
 	// Example: "code-review", "feature-implementation"
 	// DataType: string

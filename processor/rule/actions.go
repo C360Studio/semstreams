@@ -12,11 +12,13 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // Action type constants define the supported action types for rule execution.
@@ -199,6 +201,21 @@ type Action struct {
 	// Empty/nil leaves no lineage threaded (back-compat: pre-existing
 	// flows that don't opt in see no Metadata change).
 	RelatedLoops map[string]string `json:"related_loops,omitempty"`
+
+	// RunScope controls agent-run lifecycle management for publish_agent actions (ADR-053 D4).
+	// Three values:
+	//   - "new"     — mint a new AgentRun rooted at the FIRING loop. The spawned task carries
+	//                 the firing loop's ID as its RunID; the framework mints the run entity
+	//                 (idempotent). Use on the coordinator's initial dispatch action.
+	//   - "inherit" — propagate the firing loop's existing agent.run triple to the spawned task.
+	//                 Default when the firing entity already carries a run; preserves the
+	//                 existing run for child loop spawns within the same arc.
+	//   - "none"    — do NOT propagate RunID. Use to suppress run association on standalone
+	//                 loops (CLI-chat, HTTP dispatch) that should not mint runs.
+	//   - ""        — same as "inherit" (backward-compatible default).
+	//
+	// Validated at rule-load time; invalid values return ErrInvalidRunScope.
+	RunScope string `json:"run_scope,omitempty"`
 
 	// WorkflowSlug identifies the workflow for publish_agent actions (e.g., "github-issue-to-pr")
 	WorkflowSlug string `json:"workflow_slug,omitempty"`
@@ -391,7 +408,8 @@ type Publisher interface {
 }
 
 // LifecycleManager is the subset of *lifecycle.Manager used by the
-// rule action executor for the lifecycle_* action family (ADR-047).
+// rule action executor for the lifecycle_* action family (ADR-047) and
+// the agent-run mint path (ADR-053 D4).
 // Defined as an interface so the executor can be tested without a
 // running NATS client.
 type LifecycleManager interface {
@@ -405,6 +423,18 @@ type LifecycleManager interface {
 	// same default-deny as UpdateFromOperator. Identity, phase, and
 	// non-operator-writable fields are protected.
 	AssertRuleWritable(workflow, fieldJSONName string) error
+	// Get reads the entity at entityID for the given workflow. Used by the
+	// RunScope "new" path to read back a run after idempotent mint (ADR-053 D4).
+	Get(ctx context.Context, workflow, entityID string) (lifecycle.Participant, error)
+	// Create attaches lifecycle to the entity at initial.EntityID(). Used by the
+	// RunScope "new" path to mint an AgentRun (ADR-053 D4). Returns
+	// lifecycle.ErrAlreadyExists when already lifecycle-managed.
+	Create(ctx context.Context, initial lifecycle.Participant) error
+	// Note: Transition is NOT part of the rule LifecycleManager interface — the
+	// rule engine never drives terminal transitions directly; that is reserved for
+	// the subscriber's MockableManager (agentrun.MockableManager) which handles
+	// the D3 zombie-prevention path. Keeping the interfaces separate prevents
+	// rule-pack authors from reaching terminal transitions through the rule surface.
 }
 
 // ActionExecutor executes actions for rules.
@@ -1113,6 +1143,123 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// triggered by non-loop entities (no ParentLoopID set, current behavior).
 	if parentLoopID, ok := agentic.LoopIDFromExecutionEntityID(entityID); ok {
 		task.ParentLoopID = parentLoopID
+	}
+
+	// RunScope controls agent-run lifecycle management (ADR-053 D4, Pass B).
+	//
+	//   "new" (or "") when the trigger entity IS a loop-execution entity:
+	//     Mint a new AgentRun rooted at the firing loop. The firing loop's
+	//     loop-id becomes the run-id. task.RunID is set to that loop-id so
+	//     the spawned child inherits the run. If the trigger entity is NOT a
+	//     loop-execution entity, "new" is treated as "inherit" with a warning.
+	//
+	//   "inherit" or "":
+	//     Default Pass A behavior — propagate the agent.run triple from the
+	//     firing loop entity to the spawned TaskMessage (the child belongs to
+	//     the parent's run). Non-loop trigger entities with no agent.run triple
+	//     produce no inheritance (RunID stays empty).
+	//
+	//   "none":
+	//     Suppress RunID propagation entirely. The spawned loop has no run
+	//     association. Used for standalone fire-and-forget dispatches.
+	switch action.RunScope {
+	case "new":
+		// Mint a new AgentRun rooted at the firing loop entity.
+		// The firing loop's loop-id is the run-id.
+		firingLoopID, isLoop := agentic.LoopIDFromExecutionEntityID(entityID)
+		if !isLoop {
+			// Trigger entity is not a loop-execution entity — cannot mint a run.
+			// Fall through to inherit behavior with a warning.
+			if e.logger != nil {
+				e.logger.Warn("publish_agent: run_scope=new on non-loop trigger entity — falling back to inherit",
+					slog.String("entity_id", entityID),
+					slog.String("rule_id", ec.RuleID()))
+			}
+			// Inherit fallthrough:
+			if ec != nil && ec.Entity != nil {
+				if runIDVal, ok := ec.Entity.GetPropertyValue(agvocab.LoopRun); ok {
+					if runID, ok := runIDVal.(string); ok && runID != "" {
+						task.RunID = runID
+					}
+				}
+			}
+		} else if e.lifecycle != nil {
+			// Parse org and platform from the 6-part entity ID.
+			// IsValidEntityID guarantees exactly 6 dot-separated parts; the firing
+			// entity has already passed through ec which validates entity IDs.
+			idParts := strings.SplitN(entityID, ".", 6)
+			if len(idParts) == 6 {
+				org, platform := idParts[0], idParts[1]
+				if _, mintErr := agentrun.Mint(ctx, e.lifecycle, org, platform, firingLoopID); mintErr != nil {
+					// Mint failure is logged but does not abort the dispatch — the
+					// child loop still publishes; the run entity is just absent.
+					if e.logger != nil {
+						e.logger.Error("publish_agent: agentrun.Mint failed — spawning without run association",
+							slog.String("entity_id", entityID),
+							slog.String("firing_loop_id", firingLoopID),
+							slog.String("rule_id", ec.RuleID()),
+							slog.Any("error", mintErr))
+					}
+				} else {
+					task.RunID = firingLoopID
+					// ADR-053 D4: stamp agent.run on the FIRING (root/coordinator)
+					// entity so its own terminal events carry a resolvable run anchor.
+					// Without this triple the root's entity.RunID is empty (it was not
+					// spawned with a RunID), so ev.RunID=="" in its terminal events and
+					// the D3 zombie-prevention guard can never fire.
+					// The triple is best-effort: a write failure does not abort the
+					// dispatch or the child publish.
+					if e.tripleMutator != nil {
+						runTriple := message.Triple{
+							Subject:    entityID,
+							Predicate:  agvocab.LoopRun,
+							Object:     firingLoopID,
+							Source:     "rule_engine",
+							Timestamp:  time.Now(),
+							Confidence: 1.0,
+						}
+						if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), runTriple); tripleErr != nil {
+							if e.logger != nil {
+								e.logger.Warn("publish_agent: run_scope=new: failed to stamp agent.run on firing entity — D3 zombie guard may not fire for root-loop failures",
+									slog.String("entity_id", entityID),
+									slog.String("firing_loop_id", firingLoopID),
+									slog.String("rule_id", ec.RuleID()),
+									slog.Any("error", tripleErr))
+							}
+						}
+					}
+				}
+			}
+		} else {
+			// No lifecycle manager wired — log and fall through to inherit.
+			if e.logger != nil {
+				e.logger.Warn("publish_agent: run_scope=new but no lifecycle manager wired — falling back to inherit",
+					slog.String("entity_id", entityID),
+					slog.String("rule_id", ec.RuleID()))
+			}
+			if ec != nil && ec.Entity != nil {
+				if runIDVal, ok := ec.Entity.GetPropertyValue(agvocab.LoopRun); ok {
+					if runID, ok := runIDVal.(string); ok && runID != "" {
+						task.RunID = runID
+					}
+				}
+			}
+		}
+
+	case "none":
+		// Suppress RunID propagation — no run association on the spawned loop.
+
+	default: // "inherit" or ""
+		// Pass A default: propagate the agent.run triple from the firing entity.
+		// Non-loop trigger entities that have no agent.run triple produce no
+		// inheritance (RunID stays empty), which is correct.
+		if ec != nil && ec.Entity != nil {
+			if runIDVal, ok := ec.Entity.GetPropertyValue(agvocab.LoopRun); ok {
+				if runID, ok := runIDVal.(string); ok && runID != "" {
+					task.RunID = runID
+				}
+			}
+		}
 	}
 
 	// Resolve per-agent tool allowlist from the global registry. Nil

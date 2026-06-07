@@ -265,6 +265,16 @@ func validateConditionFields(def Definition) error {
 //   - Action.MaxIterations, when set, must be non-negative. Sentinel
 //     0 is valid (operator's explicit unlimited opt-out); negative
 //     values are config errors.
+//
+// validRunScopeValues is the closed set of valid run_scope strings for publish_agent
+// actions (ADR-053 D4). Empty string is also valid (treated as "inherit").
+var validRunScopeValues = map[string]bool{
+	"":        true,
+	"new":     true,
+	"inherit": true,
+	"none":    true,
+}
+
 func validateActionLists(def Definition) error {
 	check := func(label string, actions []Action) error {
 		for i, a := range actions {
@@ -273,6 +283,14 @@ func validateActionLists(def Definition) error {
 					fmt.Errorf("rule %s %s[%d] max_iterations must be >= 0 (0 = unlimited), got %d",
 						def.ID, label, i, *a.MaxIterations),
 					"RuleProcessor", "ValidateDefinition", "validate action max_iterations")
+			}
+			// Validate run_scope for publish_agent actions (ADR-053 D4).
+			// Other action types ignore run_scope (no-op, not an error).
+			if a.Type == ActionTypePublishAgent && !validRunScopeValues[a.RunScope] {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] run_scope %q is invalid; valid values: new, inherit, none (or omit for inherit default)",
+						def.ID, label, i, a.RunScope),
+					"RuleProcessor", "ValidateDefinition", "validate action run_scope")
 			}
 		}
 		return nil
