@@ -1214,6 +1214,10 @@ components:
                                 type: string
                             role:
                                 type: string
+                            run_entity_id:
+                                type: string
+                            run_id:
+                                type: string
                             state:
                                 type: string
                             task_id:
@@ -1571,6 +1575,10 @@ components:
                 result:
                     type: string
                 role:
+                    type: string
+                run_entity_id:
+                    type: string
+                run_id:
                     type: string
                 state:
                     type: string

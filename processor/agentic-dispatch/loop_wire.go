@@ -21,12 +21,18 @@ type Loop struct {
 	UserID        string `json:"user_id,omitempty"`
 	ChannelType   string `json:"channel_type,omitempty"`
 	ParentLoopID  string `json:"parent_loop_id,omitempty"`
-	Outcome       string `json:"outcome,omitempty"`
-	Result        string `json:"result,omitempty"`
-	Error         string `json:"error,omitempty"`
-	Prompt        string `json:"prompt,omitempty"`
-	TokensIn      int    `json:"tokens_in,omitempty"`
-	TokensOut     int    `json:"tokens_out,omitempty"`
+	// RunID is the bare run loop-id this loop belongs to (ADR-053). RunEntityID
+	// is the full 6-part chain.execution entity ID — the form a consumer feeds to
+	// graph getEntity() to read chain-level triples, WITHOUT re-deriving it
+	// client-side. Both empty for loops not in a run.
+	RunID       string `json:"run_id,omitempty"`
+	RunEntityID string `json:"run_entity_id,omitempty"`
+	Outcome     string `json:"outcome,omitempty"`
+	Result      string `json:"result,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	TokensIn    int    `json:"tokens_in,omitempty"`
+	TokensOut   int    `json:"tokens_out,omitempty"`
 	// PendingApproval is populated when the loop is in awaiting_approval state.
 	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
 }
@@ -44,6 +50,8 @@ func loopFromInfo(in *LoopInfo) Loop {
 		UserID:          in.UserID,
 		ChannelType:     in.ChannelType,
 		ParentLoopID:    "", // not tracked in LoopInfo today — scoped-out follow-up
+		RunID:           "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
+		RunEntityID:     "", // ditto
 		Outcome:         in.Outcome,
 		Result:          in.Result,
 		Error:           in.Error,
@@ -56,8 +64,18 @@ func loopFromInfo(in *LoopInfo) Loop {
 
 // loopFromEntity projects a framework-owned KV LoopEntity (key=<loopID>) onto Loop.
 // Token and prompt fields are not stored on live entities — they appear only in
-// completion events.
-func loopFromEntity(e *agentic.LoopEntity) Loop {
+// completion events. org/platform are the dispatch component's platform identity,
+// needed to derive RunEntityID (the 6-part chain.execution ID) since LoopEntity
+// stores only the bare RunID.
+func loopFromEntity(e *agentic.LoopEntity, org, platform string) Loop {
+	var runEntityID string
+	if e.RunID != "" {
+		// Best-effort: a malformed RunID/platform leaves RunEntityID empty rather
+		// than failing the projection (the bare RunID still ships).
+		if id, err := agentic.TryChainExecutionEntityID(org, platform, e.RunID); err == nil {
+			runEntityID = id
+		}
+	}
 	return Loop{
 		LoopID:        e.ID,
 		TaskID:        e.TaskID,
@@ -68,6 +86,8 @@ func loopFromEntity(e *agentic.LoopEntity) Loop {
 		UserID:        e.UserID,
 		ChannelType:   e.ChannelType,
 		ParentLoopID:  e.ParentLoopID,
+		RunID:         e.RunID,
+		RunEntityID:   runEntityID,
 		Outcome:       e.Outcome,
 		Result:        e.Result,
 		Error:         e.Error,
@@ -93,7 +113,9 @@ type completionWire struct {
 	Iterations   int    `json:"iterations"`
 	TokensIn     int    `json:"tokens_in"`
 	TokensOut    int    `json:"tokens_out"`
-	ParentLoopID string `json:"parent_loop"` // events.go uses "parent_loop"; normalised onto Loop.ParentLoopID
+	ParentLoopID string `json:"parent_loop"`   // events.go uses "parent_loop"; normalised onto Loop.ParentLoopID
+	RunID        string `json:"run_id"`        // ADR-053: present on terminal events
+	RunEntityID  string `json:"run_entity_id"` // ADR-053: 6-part, present on terminal events
 }
 
 // loopFromCompletion projects a COMPLETE_<loopID> terminal event payload onto Loop.
@@ -119,5 +141,7 @@ func loopFromCompletion(raw []byte) (Loop, bool) {
 		TokensIn:     w.TokensIn,
 		TokensOut:    w.TokensOut,
 		ParentLoopID: w.ParentLoopID,
+		RunID:        w.RunID,
+		RunEntityID:  w.RunEntityID,
 	}, true
 }
