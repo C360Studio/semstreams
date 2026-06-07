@@ -327,11 +327,15 @@ func TestMapKVOperation(t *testing.T) {
 }
 
 func TestActivityEventSerialization(t *testing.T) {
+	loop := &Loop{
+		LoopID: "loop-123",
+		State:  "pending",
+	}
 	event := ActivityEvent{
 		Type:      "loop_created",
 		LoopID:    "loop-123",
 		Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-		Data:      json.RawMessage(`{"state":"pending"}`),
+		Data:      loop,
 	}
 
 	data, err := json.Marshal(event)
@@ -343,7 +347,9 @@ func TestActivityEventSerialization(t *testing.T) {
 
 	assert.Equal(t, "loop_created", decoded.Type)
 	assert.Equal(t, "loop-123", decoded.LoopID)
-	assert.JSONEq(t, `{"state":"pending"}`, string(decoded.Data))
+	require.NotNil(t, decoded.Data)
+	assert.Equal(t, "loop-123", decoded.Data.LoopID)
+	assert.Equal(t, "pending", decoded.Data.State)
 }
 
 func TestSignalResponseSerialization(t *testing.T) {

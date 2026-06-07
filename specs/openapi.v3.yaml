@@ -16,12 +16,12 @@ paths:
     /activity:
         get:
             summary: Real-time activity events (SSE)
-            description: Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Connect with EventSource or curl -N.
+            description: 'Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Each event''s data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.'
             tags:
                 - AgenticDispatch
             responses:
                 "200":
-                    description: SSE event stream
+                    description: 'SSE event stream of ActivityEvent objects. Each event''s data field is a Loop (see #/components/schemas/ActivityEvent and #/components/schemas/Loop).'
     /commands:
         get:
             summary: List available commands
@@ -536,7 +536,9 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/Loop'
     /loops/{id}:
         get:
             summary: Get single loop by ID
@@ -555,7 +557,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/Loop'
                 "404":
                     description: Loop not found
     /loops/{id}/approval:
@@ -1167,8 +1169,65 @@ components:
         ActivityEvent:
             properties:
                 data:
-                    format: byte
-                    type: string
+                    anyOf:
+                        - properties:
+                            channel_type:
+                                type: string
+                            error:
+                                type: string
+                            iterations:
+                                type: integer
+                            loop_id:
+                                type: string
+                            max_iterations:
+                                type: integer
+                            outcome:
+                                type: string
+                            parent_loop_id:
+                                type: string
+                            pending_approval:
+                                anyOf:
+                                    - properties:
+                                        arguments:
+                                            additionalProperties: {}
+                                            type: object
+                                        call_id:
+                                            type: string
+                                        reason:
+                                            type: string
+                                        requested_at:
+                                            format: date-time
+                                            type: string
+                                        tool_name:
+                                            type: string
+                                        trace_id:
+                                            type: string
+                                      required:
+                                        - call_id
+                                        - tool_name
+                                        - requested_at
+                                      type: object
+                                    - type: "null"
+                            prompt:
+                                type: string
+                            result:
+                                type: string
+                            role:
+                                type: string
+                            state:
+                                type: string
+                            task_id:
+                                type: string
+                            tokens_in:
+                                type: integer
+                            tokens_out:
+                                type: integer
+                            user_id:
+                                type: string
+                          required:
+                            - loop_id
+                          type: object
+                        - type: "null"
                 loop_id:
                     type: string
                 timestamp:
@@ -1467,6 +1526,64 @@ components:
                 - source
                 - message
                 - fields
+            type: object
+        Loop:
+            properties:
+                channel_type:
+                    type: string
+                error:
+                    type: string
+                iterations:
+                    type: integer
+                loop_id:
+                    type: string
+                max_iterations:
+                    type: integer
+                outcome:
+                    type: string
+                parent_loop_id:
+                    type: string
+                pending_approval:
+                    anyOf:
+                        - properties:
+                            arguments:
+                                additionalProperties: {}
+                                type: object
+                            call_id:
+                                type: string
+                            reason:
+                                type: string
+                            requested_at:
+                                format: date-time
+                                type: string
+                            tool_name:
+                                type: string
+                            trace_id:
+                                type: string
+                          required:
+                            - call_id
+                            - tool_name
+                            - requested_at
+                          type: object
+                        - type: "null"
+                prompt:
+                    type: string
+                result:
+                    type: string
+                role:
+                    type: string
+                state:
+                    type: string
+                task_id:
+                    type: string
+                tokens_in:
+                    type: integer
+                tokens_out:
+                    type: integer
+                user_id:
+                    type: string
+            required:
+                - loop_id
             type: object
         LoopInfo:
             properties:
@@ -1823,6 +1940,9 @@ components:
                 - signal
                 - accepted
                 - timestamp
+            type: object
+        StatePatchRequest:
+            additionalProperties: {}
             type: object
         StatsResponse:
             properties:
