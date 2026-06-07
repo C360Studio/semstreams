@@ -527,12 +527,16 @@ func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, o
 		parentEntityID := agentic.LoopExecutionEntityID(org, platform, task.ParentLoopID)
 		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
 	}
-	// Stamp agent.run when the loop belongs to a run (ADR-053 D7).
-	// The object is the bare RunID (not a 6-part entity ID) — rules read
-	// it via $entity.triple.agent.run; the full chain entity ID is derived
-	// via ChainExecutionEntityID when needed.
+	// Stamp the run anchor when the loop belongs to a run (ADR-053 D7).
+	// Two triples: agent.run = bare RunID (used by ResolveRun/RunID());
+	// agent.run.entity_id = the full 6-part chain.execution ID, the
+	// rule-addressable upsert SUBJECT (rules cannot derive the 6-part from
+	// the bare id — substitution is string interpolation, not function calls).
 	if task.RunID != "" {
 		triples = append(triples, triple(agvocab.LoopRun, task.RunID))
+		if runEntityID, err := agentic.TryChainExecutionEntityID(org, platform, task.RunID); err == nil {
+			triples = append(triples, triple(agvocab.LoopRunEntityID, runEntityID))
+		}
 	}
 	if task.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, task.WorkflowSlug))

@@ -1210,22 +1210,28 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 					// The triple is best-effort: a write failure does not abort the
 					// dispatch or the child publish.
 					if e.tripleMutator != nil {
-						runTriple := message.Triple{
-							Subject:    entityID,
-							Predicate:  agvocab.LoopRun,
-							Object:     firingLoopID,
-							Source:     "rule_engine",
-							Timestamp:  time.Now(),
-							Confidence: 1.0,
-						}
-						if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), runTriple); tripleErr != nil {
-							if e.logger != nil {
-								e.logger.Warn("publish_agent: run_scope=new: failed to stamp agent.run on firing entity — D3 zombie guard may not fire for root-loop failures",
+						stampRun := func(predicate, object string) {
+							if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), message.Triple{
+								Subject:    entityID,
+								Predicate:  predicate,
+								Object:     object,
+								Source:     "rule_engine",
+								Timestamp:  time.Now(),
+								Confidence: 1.0,
+							}); tripleErr != nil && e.logger != nil {
+								e.logger.Warn("publish_agent: run_scope=new: failed to stamp run anchor on firing entity",
 									slog.String("entity_id", entityID),
+									slog.String("predicate", predicate),
 									slog.String("firing_loop_id", firingLoopID),
 									slog.String("rule_id", ec.RuleID()),
 									slog.Any("error", tripleErr))
 							}
+						}
+						// agent.run (bare) → D3 root resolution; agent.run.entity_id
+						// (6-part) → rule-addressable upsert subject (ADR-053 follow-up).
+						stampRun(agvocab.LoopRun, firingLoopID)
+						if runEntityID, idErr := agentic.TryChainExecutionEntityID(org, platform, firingLoopID); idErr == nil {
+							stampRun(agvocab.LoopRunEntityID, runEntityID)
 						}
 					}
 				}
