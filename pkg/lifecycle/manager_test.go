@@ -450,12 +450,16 @@ func TestManager_GetRawReturnsAllTriples(t *testing.T) {
 	}
 }
 
-// TestManager_DuplicatePredicateAccumulationGetReturnsLatest exercises
-// the production naive-append merge (per ADR-049 reviewer B1).
-// Repeated transitions accumulate duplicate `mission.phase` triples in
-// the stored EntityState; Manager.Get must project the LAST one
-// (per-predicate latest-wins at read time, not write time).
-func TestManager_DuplicatePredicateAccumulationGetReturnsLatest(t *testing.T) {
+// TestManager_TransitionReplacesPhaseTripleNotAppend guards the
+// replace-not-append invariant: Transition must REMOVE the prior phase
+// triple, leaving exactly one. The earlier naive-append behavior left
+// [planning, flying, completed]; extractTripleScalar (last-match) kept
+// Manager.Get correct, but the rule engine's GetFieldValue reads
+// FIRST-match → it saw the stale "planning" and phase guards never
+// re-fired (semteams autoresearch 4a). With the fix, both read paths
+// see the same single value. Single-valued for every predicate
+// Transition writes (phase + audit), not just phase.
+func TestManager_TransitionReplacesPhaseTripleNotAppend(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
 	ctx := context.Background()
@@ -472,21 +476,26 @@ func TestManager_DuplicatePredicateAccumulationGetReturnsLatest(t *testing.T) {
 	}
 
 	stored := bucket.get(id)
-	phaseCount := 0
+	var phaseTriples []message.Triple
 	for _, tr := range stored.Triples {
 		if tr.Predicate == "mission.phase" {
-			phaseCount++
+			phaseTriples = append(phaseTriples, tr)
 		}
 	}
-	if phaseCount < 3 {
-		t.Errorf("expected >= 3 mission.phase triples after Create+2 Transitions (naive append per production), got %d. If this is 1, the fake substrate dedups at write time — the wrong semantic.", phaseCount)
+	if len(phaseTriples) != 1 {
+		t.Fatalf("expected exactly 1 mission.phase triple after Create+2 Transitions (replace, not append), got %d: %+v", len(phaseTriples), phaseTriples)
+	}
+	// The single triple must be the latest phase — so first-match
+	// (rule engine) and last-match (Manager) now agree.
+	if got, _ := phaseTriples[0].Object.(string); got != "completed" {
+		t.Errorf("phase triple object = %q, want completed (both read paths must agree)", got)
 	}
 	got, err := mgr.Get(ctx, "fixture", id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Phase() != "completed" {
-		t.Errorf("after duplicate-predicate accumulation, projected Phase=%q, want completed", got.Phase())
+		t.Errorf("projected Phase=%q, want completed", got.Phase())
 	}
 }
 
