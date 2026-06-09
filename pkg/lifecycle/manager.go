@@ -481,6 +481,18 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 			delta = append(delta, diffProjectedTriples(reg.meta, entityID, state.Triples, projected)...)
 		}
 
+		// Replace, don't append: every field Transition writes (phase,
+		// audit, mutator-changed scalars) is single-valued, so remove the
+		// prior triple for each predicate before adding the new one. Without
+		// this, transitions ACCUMULATE phase triples (e.g. [dispatched,
+		// executing, completed]); extractTripleScalar reads last-match (so the
+		// Manager stays correct) but the rule engine's GetFieldValue reads
+		// first-match → it sees the stale initial phase and phase guards never
+		// re-fire. Mirrors UpdateFromOperator's add+remove replace model.
+		removePreds := make([]string, 0, len(delta))
+		for _, t := range delta {
+			removePreds = append(removePreds, t.Predicate)
+		}
 		emitReq := &graph.UpdateEntityWithTriplesRequest{
 			Entity: &graph.EntityState{
 				ID:          entityID,
@@ -489,6 +501,7 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 				MessageType: lifecycleMessageType,
 			},
 			AddTriples:       delta,
+			RemoveTriples:    removePreds,
 			ExpectedRevision: currentRev,
 		}
 		_, err = m.emitter.update(ctx, emitReq)
