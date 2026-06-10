@@ -232,7 +232,7 @@ Performs community detection with optional structural analysis, anomaly detectio
       "max_anomalies_per_run": 100,
       "core_anomaly": {
         "enabled": true,
-        "min_core_level": 2
+        "min_core_for_hub_analysis": 2
       },
       "semantic_gap": {
         "enabled": false
@@ -261,7 +261,7 @@ For Semantic tier, enable LLM and semantic gap detection:
   "anomaly_config": {
     "semantic_gap": {
       "enabled": true,
-      "similarity_threshold": 0.7,
+      "min_semantic_similarity": 0.7,
       "min_structural_distance": 3
     }
   }

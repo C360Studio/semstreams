@@ -178,8 +178,8 @@ community descriptions using LLM.
   "anomaly_config": {
     "enabled": true,
     "max_anomalies_per_run": 100,
-    "core_anomaly": {"enabled": true, "min_core_level": 2},
-    "semantic_gap": {"enabled": false, "similarity_threshold": 0.7, "min_structural_distance": 3}
+    "core_anomaly": {"enabled": true, "min_core_for_hub_analysis": 2},
+    "semantic_gap": {"enabled": false, "min_semantic_similarity": 0.7, "min_structural_distance": 3}
   },
   "ports": {
     "inputs": [

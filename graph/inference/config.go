@@ -3,6 +3,8 @@
 package inference
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -230,6 +232,30 @@ func DefaultConfig() Config {
 		},
 		DetectionTimeout: 5 * time.Minute,
 	}
+}
+
+// RejectUnknownKeys strict-decodes a raw anomaly-config JSON object into Config
+// and returns a descriptive error if it carries any key that does not bind to a
+// struct field. encoding/json silently discards such keys at runtime — the
+// silent-drop bug class fixed in ADR-054 (e.g. the legacy similarity_threshold
+// and min_core_level keys, whose values vanished while appearing to be set).
+// Callers decoding operator-supplied config should run this so a mistyped knob
+// fails loudly at load instead of binding to nothing. Empty input is a no-op.
+func RejectUnknownKeys(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var probe Config
+	if err := dec.Decode(&probe); err != nil {
+		msg := fmt.Sprintf("anomaly_config has a key that does not bind and would be "+
+			"silently ignored at runtime (ADR-054; legacy renames: "+
+			"similarity_threshold→min_semantic_similarity, "+
+			"min_core_level→min_core_for_hub_analysis): %v", err)
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "inference", "RejectUnknownKeys", msg)
+	}
+	return nil
 }
 
 // Validate checks if the configuration is valid

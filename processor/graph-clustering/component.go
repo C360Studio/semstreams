@@ -351,6 +351,19 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config unmarshal")
 		}
+		// Reject phantom keys in anomaly_config that encoding/json silently drops
+		// (ADR-054). Operator configs bypass the strict checked-in-config test, so
+		// enforce the no-silent-drop contract here, at load time.
+		var rawAnomaly struct {
+			AnomalyConfig json.RawMessage `json:"anomaly_config"`
+		}
+		// rawConfig was already validated as JSON by the unmarshal above, so this
+		// re-extraction into a RawMessage cannot fail; the guard is purely defensive.
+		if err := json.Unmarshal(rawConfig, &rawAnomaly); err == nil {
+			if err := inference.RejectUnknownKeys(rawAnomaly.AnomalyConfig); err != nil {
+				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "anomaly_config")
+			}
+		}
 	} else {
 		config = DefaultConfig()
 	}

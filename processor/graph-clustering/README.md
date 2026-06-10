@@ -71,11 +71,11 @@ When triggered, the component runs through these phases:
       "max_anomalies_per_run": 100,
       "core_anomaly": {
         "enabled": true,
-        "min_core_level": 2
+        "min_core_for_hub_analysis": 2
       },
       "semantic_gap": {
         "enabled": false,
-        "similarity_threshold": 0.7
+        "min_semantic_similarity": 0.7
       },
       "virtual_edges": {
         "auto_apply": {
@@ -117,9 +117,9 @@ When triggered, the component runs through these phases:
 | `enabled` | bool | true | Master enable for anomaly detection |
 | `max_anomalies_per_run` | int | 100 | Limit anomalies per detection cycle |
 | `core_anomaly.enabled` | bool | true | Detect core isolation anomalies |
-| `core_anomaly.min_core_level` | int | 2 | Minimum k-core level to analyze |
+| `core_anomaly.min_core_for_hub_analysis` | int | 2 | Minimum k-core level to analyze |
 | `semantic_gap.enabled` | bool | false | Detect semantic-structural gaps |
-| `semantic_gap.similarity_threshold` | float | 0.7 | Minimum similarity for semantic gaps |
+| `semantic_gap.min_semantic_similarity` | float | 0.7 | Minimum similarity for semantic gaps |
 | `virtual_edges.auto_apply.enabled` | bool | false | Auto-create edges for high-confidence gaps |
 | `virtual_edges.auto_apply.min_confidence` | float | 0.95 | Confidence threshold for auto-apply |
 | `virtual_edges.review_queue.enabled` | bool | false | Queue uncertain gaps for review |

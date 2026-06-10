@@ -858,6 +858,33 @@ func TestCreateGraphClustering_InvalidConfig(t *testing.T) {
 	assert.Nil(t, comp)
 }
 
+func TestCreateGraphClustering_RejectsPhantomAnomalyKey(t *testing.T) {
+	// ADR-054: an operator config carrying a phantom anomaly_config key (one that
+	// encoding/json silently drops) must fail loudly at the factory, not bind to
+	// nothing. Drives the production factory wire, not a helper.
+	phantomJSON := []byte(`{
+		"enable_structural": true,
+		"enable_anomaly_detection": true,
+		"anomaly_config": {
+			"enabled": true,
+			"semantic_gap": {"enabled": true, "similarity_threshold": 0.7}
+		}
+	}`)
+
+	natsClient, err := natsclient.NewClient("nats://localhost:4222")
+	require.NoError(t, err)
+
+	deps := component.Dependencies{
+		NATSClient: natsClient,
+	}
+
+	comp, err := CreateGraphClustering(phantomJSON, deps)
+
+	require.Error(t, err)
+	assert.Nil(t, comp)
+	assert.Contains(t, err.Error(), "similarity_threshold")
+}
+
 func TestCreateGraphClustering_MissingDependencies(t *testing.T) {
 	config := DefaultConfig()
 	configJSON, err := json.Marshal(config)

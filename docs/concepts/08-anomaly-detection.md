@@ -213,7 +213,7 @@ More pivots provide tighter distance bounds but increase memory usage. For most 
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `similarity_threshold` | 0.7 | Minimum embedding similarity to consider |
+| `min_semantic_similarity` | 0.7 | Minimum embedding similarity to consider |
 
 Higher similarity threshold produces fewer but more confident gap detections.
 
@@ -233,7 +233,7 @@ Confidence is a composite score combining similarity, structural distance, and c
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `min_core_level` | 2 | Only analyze entities at this core level or above |
+| `min_core_for_hub_analysis` | 2 | Only analyze entities at this core level or above |
 
 Higher values focus detection on structurally important hub entities.
 
