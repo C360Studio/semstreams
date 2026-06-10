@@ -65,8 +65,8 @@
 //	  "enable_anomaly_detection": true,
 //	  "anomaly_config": {
 //	    "enabled": true,
-//	    "core_anomaly": {"enabled": true, "min_core_level": 2},
-//	    "semantic_gap": {"enabled": true, "similarity_threshold": 0.7},
+//	    "core_anomaly": {"enabled": true, "min_core_for_hub_analysis": 2},
+//	    "semantic_gap": {"enabled": true, "min_semantic_similarity": 0.7},
 //	    "virtual_edges": {
 //	      "auto_apply": {"enabled": false, "min_confidence": 0.95},
 //	      "review_queue": {"enabled": false, "min_confidence": 0.7, "max_confidence": 0.95}
@@ -118,5 +118,10 @@
 //   - graph-embedding: queries for similar entities via NATS request/reply
 //
 // Downstream:
-//   - graph-gateway: reads COMMUNITY_INDEX, STRUCTURAL_INDEX, ANOMALY_INDEX for queries
+//   - graph-query: reads COMMUNITY_INDEX (community cache → GraphRAG / search_graph)
+//   - graph-gateway: reads ANOMALY_INDEX for the optional inference-review API
+//   - STRUCTURAL_INDEX is written here but currently has no production query
+//     consumer (read back only by the anomaly detectors in-memory and by e2e
+//     validation). Wiring k-core / pivot distance into search ranking is a
+//     tracked ADR-054 follow-up.
 package graphclustering
