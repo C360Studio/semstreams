@@ -52,7 +52,13 @@ func (p *recordingPublisher) AddTriplesBatch(_ context.Context, triples []messag
 }
 
 func newDecideExecutor(publisher TriplePublisher) *DecideExecutor {
-	return NewDecideExecutor(publisher, types.PlatformMeta{Org: "acme", Platform: "test"})
+	return NewDecideExecutor(publisher, types.PlatformMeta{Org: "acme", Platform: "test"}, nil)
+}
+
+// newDecideExecutorRestricted builds an executor with a deployment-level
+// decide-action restriction policy (gh#239) for the restriction tests.
+func newDecideExecutorRestricted(publisher TriplePublisher, restricted ...string) *DecideExecutor {
+	return NewDecideExecutor(publisher, types.PlatformMeta{Org: "acme", Platform: "test"}, restricted)
 }
 
 func TestDecideExecutor_ListTools(t *testing.T) {
@@ -307,6 +313,226 @@ func TestDecideExecutor_ActionAllowlist_EmptyAllowlistMeansFreeform(t *testing.T
 	})
 	if res.Error != "" {
 		t.Errorf("empty-allowlist mode rejected: %q", res.Error)
+	}
+}
+
+// --- gh#239: deployment-level decide-action restriction policy ---
+
+// TestDecideExecutor_RestrictedAction_FrontDoorRejects is the core gh#239
+// case: a coordinator that carries NO per-task allowlist (the front door)
+// still has a restricted action structurally barred. Returns
+// ToolErrorInvalidArgs (so the loop iterates and the model re-picks), names
+// the action, and publishes no triples.
+func TestDecideExecutor_RestrictedAction_FrontDoorRejects(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutorRestricted(pub, "ask_user")
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		// No Metadata: the front-door shape gh#239 closes.
+		Arguments: map[string]any{
+			"action": "ask_user",
+			"reason": "need the user to clarify",
+		},
+	})
+	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (restriction gate)", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "ask_user") {
+		t.Errorf("expected Error to name the restricted action; got %q", res.Error)
+	}
+	if res.StopLoop {
+		t.Errorf("StopLoop should be false on restriction rejection — let the loop iterate")
+	}
+	if len(pub.triples) != 0 {
+		t.Errorf("no triples should be published on restriction rejection, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_RestrictedAction_TakesPrecedenceOverAllowlist proves
+// the restriction beats a per-task allowlist that WOULD admit the action.
+// This is the precedence semantics: forbidden ∪ off-allowlist both reject.
+func TestDecideExecutor_RestrictedAction_TakesPrecedenceOverAllowlist(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutorRestricted(pub, "ask_user")
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Metadata: map[string]any{
+			// ask_user IS on the allowlist, yet the deployment policy bars it.
+			agentic.MetadataKeyDecideActionAllowlist: []any{"ask_user", "respond_direct"},
+		},
+		Arguments: map[string]any{
+			"action": "ask_user",
+			"reason": "allowlist admits it but policy forbids it",
+		},
+	})
+	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (restriction precedence over allowlist)", res.ErrorKind)
+	}
+	if len(pub.triples) != 0 {
+		t.Errorf("no triples on restricted action even when allowlisted, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_RestrictedAction_NormalisedDriftStillRejected proves
+// the gate is SAP-normalised on both sides: cased/hyphenated drift in the
+// emitted action ("Ask-User") cannot slip a restricted action, and a
+// config-side drift in the restriction list ("Ask-User") still bars the
+// canonical action ("ask_user"). Either way the gate holds.
+func TestDecideExecutor_RestrictedAction_NormalisedDriftStillRejected(t *testing.T) {
+	t.Run("drift in emitted action", func(t *testing.T) {
+		pub := &recordingPublisher{}
+		e := newDecideExecutorRestricted(pub, "ask_user")
+		res, _ := e.Execute(context.Background(), agentic.ToolCall{
+			ID: "c1", Name: DecideToolName, LoopID: "loop-abc",
+			Arguments: map[string]any{"action": "Ask-User", "reason": "drift"},
+		})
+		if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+			t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs ('Ask-User' must not slip the gate)", res.ErrorKind)
+		}
+	})
+	t.Run("drift in restriction config", func(t *testing.T) {
+		pub := &recordingPublisher{}
+		e := newDecideExecutorRestricted(pub, "Ask-User", "  ", "")
+		res, _ := e.Execute(context.Background(), agentic.ToolCall{
+			ID: "c1", Name: DecideToolName, LoopID: "loop-abc",
+			Arguments: map[string]any{"action": "ask_user", "reason": "canonical"},
+		})
+		if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+			t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (normalised config entry must bar canonical action)", res.ErrorKind)
+		}
+	})
+}
+
+// TestDecideExecutor_RestrictedAction_UnrelatedActionPasses confirms the
+// policy is surgical: an action NOT on the restriction list flows through
+// normally, publishing its triples and stopping the loop.
+func TestDecideExecutor_RestrictedAction_UnrelatedActionPasses(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutorRestricted(pub, "ask_user")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Arguments: map[string]any{
+			"action": "respond_direct",
+			"reason": "resolved autonomously",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res.Error != "" {
+		t.Errorf("unrelated action rejected by restriction policy: %q", res.Error)
+	}
+	if !res.StopLoop {
+		t.Errorf("expected StopLoop=true on a non-restricted action")
+	}
+	if len(pub.triples) != 2 {
+		t.Errorf("expected 2 triples on a non-restricted action, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_RestrictedAction_EmptyPolicyIsPermissive locks the
+// gh#239 default: no restriction list ⇒ no behaviour change. An action that
+// would be barred under a policy flows through when the policy is empty.
+func TestDecideExecutor_RestrictedAction_EmptyPolicyIsPermissive(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutorRestricted(pub) // empty restriction list
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Arguments: map[string]any{
+			"action": "ask_user",
+			"reason": "permissive default",
+		},
+	})
+	if res.Error != "" {
+		t.Errorf("permissive default rejected an action: %q", res.Error)
+	}
+	if !res.StopLoop {
+		t.Errorf("expected StopLoop=true under permissive default")
+	}
+}
+
+// TestDecideExecutor_RestrictedAction_BeatsSAPCoercion proves the
+// restriction is evaluated on the canonical (post-SAP) action and takes
+// precedence over SAP success: an emitted "ask-user" that SAP would coerce
+// to the allowlisted "ask_user" is still rejected, and the SAP-coercion
+// audit triple is NOT published (the action never reached the success path).
+func TestDecideExecutor_RestrictedAction_BeatsSAPCoercion(t *testing.T) {
+	pub := &recordingPublisher{}
+	e := newDecideExecutorRestricted(pub, "ask_user")
+
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Metadata: map[string]any{
+			agentic.MetadataKeyDecideActionAllowlist: []any{"ask_user", "respond_direct"},
+		},
+		Arguments: map[string]any{
+			"action": "ask-user", // SAP would coerce → "ask_user"
+			"reason": "drift that resolves to a restricted action",
+		},
+	})
+	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (restriction beats SAP coercion)", res.ErrorKind)
+	}
+	if len(pub.triples) != 0 {
+		t.Errorf("no triples (incl. SAP audit) should publish when restriction rejects, got %d", len(pub.triples))
+	}
+}
+
+// TestDecideExecutor_RestrictedDecideActions_ConfigRoundTrip drives the
+// full operator → runtime wire: the restricted_decide_actions JSON an
+// operator writes, decoded into the agentic-tools Config, then handed to
+// NewDecideExecutor, must enforce the gate. Guards the operator-configurable
+// surface per the JSON-round-trip discipline.
+func TestDecideExecutor_RestrictedDecideActions_ConfigRoundTrip(t *testing.T) {
+	const raw = `{"timeout":"60s","restricted_decide_actions":["ask_user"]}`
+
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if len(cfg.RestrictedDecideActions) != 1 || cfg.RestrictedDecideActions[0] != "ask_user" {
+		t.Fatalf("config round-trip dropped the field: got %#v", cfg.RestrictedDecideActions)
+	}
+
+	pub := &recordingPublisher{}
+	e := NewDecideExecutor(pub, types.PlatformMeta{Org: "acme", Platform: "test"}, cfg.RestrictedDecideActions)
+	res, _ := e.Execute(context.Background(), agentic.ToolCall{
+		ID:     "c1",
+		Name:   DecideToolName,
+		LoopID: "loop-abc",
+		Arguments: map[string]any{
+			"action": "ask_user",
+			"reason": "config-driven restriction must fire",
+		},
+	})
+	if res.ErrorKind != agentic.ToolErrorInvalidArgs {
+		t.Errorf("ErrorKind = %v, want ToolErrorInvalidArgs (config-sourced restriction must enforce)", res.ErrorKind)
+	}
+	if len(pub.triples) != 0 {
+		t.Errorf("no triples on config-sourced restriction rejection, got %d", len(pub.triples))
+	}
+
+	// And re-marshal preserves the field (full round-trip).
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if !strings.Contains(string(out), `"restricted_decide_actions":["ask_user"]`) {
+		t.Errorf("re-marshal dropped restricted_decide_actions: %s", out)
 	}
 }
 
@@ -733,7 +959,7 @@ func TestDecideExecutor_OptionalFieldsOmitted(t *testing.T) {
 // clear the whole rule chain needs to be updated.
 func TestDecideExecutor_LoopEntityIDFormat(t *testing.T) {
 	pub := &recordingPublisher{}
-	e := NewDecideExecutor(pub, types.PlatformMeta{Org: "c360", Platform: "deep-research-001"})
+	e := NewDecideExecutor(pub, types.PlatformMeta{Org: "c360", Platform: "deep-research-001"}, nil)
 
 	_, _ = e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c1",

@@ -17,8 +17,17 @@ type Config struct {
 	Timeout              string                `json:"timeout"              schema:"type:string,description:Tool execution timeout,category:advanced,default:60s"`
 	AllowedTools         []string              `json:"allowed_tools"        schema:"type:array,description:List of allowed tools (nil/empty allows all),category:advanced"`
 	ApprovalRequired     []string              `json:"approval_required,omitempty" schema:"type:array,description:Tool names requiring human approval before execution,category:advanced"`
-	EnableCategories     bool                  `json:"enable_categories,omitempty" schema:"type:bool,description:Enable tool category filtering for role-based access,category:advanced,default:false"`
-	LoopsBucket          string                `json:"loops_bucket,omitempty" schema:"type:string,description:NATS KV bucket name holding agent loop state (for read_loop_result),default:AGENT_LOOPS,category:advanced"`
+	// RestrictedDecideActions is the deployment-level decide-action
+	// restriction policy (gh#239): decide action names barred for every
+	// coordinator task — front-door and rule-spawned — composing with and
+	// taking precedence over the per-task action_allowlist. Vocabulary-
+	// agnostic: a product shell maps its run mode onto this list (e.g.
+	// SemTeams "autonomous" → ["ask_user"]). Empty = permissive default
+	// (no behaviour change). Sourced at boot into ToolDependencies, mirror
+	// of LoopsBucket.
+	RestrictedDecideActions []string `json:"restricted_decide_actions,omitempty" schema:"type:array,description:Decide-action names barred for every coordinator task (front-door and rule-spawned) — composes with and takes precedence over per-task action_allowlist; vocabulary-agnostic run/deployment clarification policy; empty means permissive default,category:advanced"`
+	EnableCategories        bool     `json:"enable_categories,omitempty" schema:"type:bool,description:Enable tool category filtering for role-based access,category:advanced,default:false"`
+	LoopsBucket             string   `json:"loops_bucket,omitempty" schema:"type:string,description:NATS KV bucket name holding agent loop state (for read_loop_result),default:AGENT_LOOPS,category:advanced"`
 
 	// ToolRetries is an opt-in per-tool retry policy. Tools not listed run
 	// without retries. Use this for tools where transient failures (timeout,

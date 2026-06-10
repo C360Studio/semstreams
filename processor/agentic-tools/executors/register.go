@@ -35,6 +35,8 @@ import (
 //     query_entity) are skipped
 //   - RuleManager nil → rule CRUD tools are skipped
 //   - ComponentRegistry nil → list_components skipped (Pattern-B step 5)
+//   - RestrictedDecideActions nil/empty → permissive default (no decide
+//     action restricted)
 //   - SkipBuiltins nil/empty → all builtins register (today's behaviour)
 //
 // Platform is a value type (not pointer) because PlatformMeta is a small
@@ -55,6 +57,15 @@ type ToolDependencies struct {
 	// the name is frozen at RegisterBuiltins for the lifetime of the
 	// process.
 	LoopsBucket string
+	// RestrictedDecideActions is the deployment-level decide-action
+	// restriction policy (gh#239): decide action names barred for EVERY
+	// coordinator task (front-door and rule-spawned), composing with and
+	// taking precedence over the per-task action_allowlist. Sourced from
+	// the agentic-tools component config's restricted_decide_actions at
+	// boot (main.go) and frozen for the process lifetime, like LoopsBucket.
+	// nil/empty = permissive default. Vocabulary-agnostic: a product shell
+	// maps its run mode (e.g. autonomous) onto this list.
+	RestrictedDecideActions []string
 	// SkipBuiltins is the list of builtin group keys to NOT register.
 	// Product shells set this when they want to register their own
 	// implementation under a canonical tool name (e.g., a chain-scoped
@@ -173,7 +184,9 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
 		gate("read_loop_result", func() error { return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket) })
-		gate("decide", func() error { return registerDecide(reg, deps.NATSClient, deps.Platform, logger) })
+		gate("decide", func() error {
+			return registerDecide(reg, deps.NATSClient, deps.Platform, deps.RestrictedDecideActions, logger)
+		})
 		gate("emit_diagnosis", func() error { return registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger) })
 		gate("graph_query", func() error { return registerGraphQuery(ctx, reg, deps.NATSClient, logger) })
 		gate("write_todos", func() error { return registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger) })
