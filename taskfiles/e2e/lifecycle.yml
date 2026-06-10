@@ -7,7 +7,10 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[E2E LIFECYCLE] Starting SemStreams lifecycle environment..."
-      - docker compose -f docker/compose/lifecycle.yml up -d --wait
+      # --build so the tier exercises CURRENT source, not a stale cached image
+      # (the agentic tier already does this; lifecycle silently reused a stale
+      # build, masking the gh#246 boot fix).
+      - docker compose -f docker/compose/lifecycle.yml up -d --wait --build
       - echo "[OK] All services are healthy"
       - echo "[E2E LIFECYCLE] Running lifecycle scenario..."
       - cmd: cd cmd/e2e && ./e2e --scenario lifecycle
@@ -20,7 +23,7 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports"]
     cmds:
       - echo "[E2E LIFECYCLE DEBUG] Starting SemStreams lifecycle environment..."
-      - docker compose -f docker/compose/lifecycle.yml up -d
+      - docker compose -f docker/compose/lifecycle.yml up -d --build
       - echo "[E2E LIFECYCLE DEBUG] Waiting for NATS..."
       - |
         for i in {1..30}; do

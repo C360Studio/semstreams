@@ -685,6 +685,24 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: StreamName must not be empty")
 	}
 
+	// Graceful no-op when the target stream is absent (gh#246). The
+	// agent-run milestone subscriber only matters when agentic components
+	// run — they create the AGENT stream and publish agent.complete.* /
+	// agent.failed.*. A deployment without them (graph- or lifecycle-only)
+	// has nothing to subscribe to and must still BOOT; before this, the
+	// consumer start surfaced "stream not found" and both binaries
+	// returned it from run() → os.Exit(1). The returned no-op stop is safe
+	// to defer at the call site.
+	if _, streamErr := client.GetStream(ctx, cfg.StreamName); streamErr != nil {
+		if errors.Is(streamErr, jetstream.ErrStreamNotFound) {
+			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
+				slog.String("stream", cfg.StreamName),
+				slog.String("hint", "likely no agentic components in this deployment (or the stream isn't created yet at boot); agent.complete/failed milestones will not be processed"))
+			return func() {}, nil
+		}
+		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: check stream %q: %w", cfg.StreamName, streamErr)
+	}
+
 	makeDurable := func(suffix string) string {
 		name := "agentrun-milestone-" + suffix
 		if cfg.ConsumerNameSuffix != "" {
