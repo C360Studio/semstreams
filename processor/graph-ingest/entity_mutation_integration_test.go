@@ -3,6 +3,7 @@
 package graphingest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -257,6 +258,132 @@ func TestIntegration_HandleEntityUpdateWithTriples_AddAndRemove(t *testing.T) {
 	assert.True(t, predicates["test.keep"], "test.keep should survive")
 	assert.False(t, predicates["test.drop"], "test.drop should be removed")
 	assert.True(t, predicates["test.added"], "test.added should be appended")
+}
+
+// applyUpdateWT runs one update_with_triples against entityID via the
+// requested handler path — the default UpdateWithRetry path (useCAS=false,
+// ExpectedRevision=0) or the CAS-on-condition path (useCAS=true,
+// ExpectedRevision=current rev, the path pkg/lifecycle.Manager uses) —
+// and returns the entity's stored triples. Fails the test on any error.
+func applyUpdateWT(t *testing.T, ctx context.Context, c *Component, entityID string, add []message.Triple, remove []string, useCAS bool) []message.Triple {
+	t.Helper()
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:        &graph.EntityState{ID: entityID, MessageType: testMutationType, Version: 1, UpdatedAt: time.Now()},
+		AddTriples:    add,
+		RemoveTriples: remove,
+	}
+	if useCAS {
+		_, rev, err := c.fetchEntityState(ctx, entityID)
+		require.NoError(t, err, "fetch current revision for CAS path")
+		req.ExpectedRevision = rev
+	}
+	reqBytes, err := json.Marshal(req)
+	require.NoError(t, err)
+	respBytes, err := c.handleEntityUpdateWithTriples(ctx, reqBytes)
+	require.NoError(t, err)
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	require.True(t, resp.Success, "update_with_triples should succeed; err=%q", resp.Error)
+	stored, _, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err, "read back stored entity")
+	return stored.Triples
+}
+
+// objectsForPredicate returns the Objects of every triple matching predicate.
+func objectsForPredicate(triples []message.Triple, predicate string) []any {
+	out := []any{}
+	for _, tr := range triples {
+		if tr.Predicate == predicate {
+			out = append(out, tr.Object)
+		}
+	}
+	return out
+}
+
+// TestIntegration_HandleEntityUpdateWithTriples_ReplaceByPredicate locks the
+// gh#244 fix: the AddTriples leg replaces by (subject,predicate) via
+// MergeTriples — matching the DataManager UpdateEntityWithTriples contract —
+// rather than appending. Run against BOTH handler paths.
+//
+// Before the fix, the single-valued sub-case accumulated duplicate predicates
+// (status [active, completed]) whenever the caller didn't defensively name
+// the predicate in RemoveTriples — the silent re-bloat semspec measured in
+// gh#242. update_with_triples is upsert/replace; incremental append is
+// triple.add_batch's job.
+func TestIntegration_HandleEntityUpdateWithTriples_ReplaceByPredicate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		idtok  string
+		useCAS bool
+	}{
+		{"UpdateWithRetry", "uwr", false},
+		{"CAS", "cas", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, c := startBatchTestComponent(t)
+			entityID := "c360.test.entity.replacepred." + tc.idtok + ".001"
+
+			now := time.Now()
+			seed := &graph.EntityState{
+				ID: entityID, MessageType: testMutationType, Version: 1, UpdatedAt: now,
+				Triples: []message.Triple{
+					{Subject: entityID, Predicate: "test.status", Object: "active", Timestamp: now, Confidence: 1.0},
+					{Subject: entityID, Predicate: "test.keep", Object: "keep-me", Timestamp: now, Confidence: 1.0},
+					{Subject: entityID, Predicate: "test.member", Object: "a", Timestamp: now, Confidence: 1.0},
+					{Subject: entityID, Predicate: "test.member", Object: "b", Timestamp: now, Confidence: 1.0},
+				},
+			}
+			require.NoError(t, c.CreateEntity(ctx, seed), "seed entity")
+
+			// (1) Single-valued replace WITHOUT RemoveTriples: status active→completed.
+			//     Pre-fix this appended, leaving BOTH active and completed.
+			triples := applyUpdateWT(t, ctx, c, entityID, []message.Triple{
+				{Subject: entityID, Predicate: "test.status", Object: "completed", Timestamp: time.Now(), Confidence: 1.0},
+			}, nil, tc.useCAS)
+			assert.Equal(t, []any{"completed"}, objectsForPredicate(triples, "test.status"),
+				"single-valued predicate must be REPLACED (exactly one value), not accumulated")
+
+			// (3) Untouched predicate survives.
+			assert.Equal(t, []any{"keep-me"}, objectsForPredicate(triples, "test.keep"),
+				"a predicate absent from AddTriples must survive untouched")
+
+			// (2) Multi-valued replace: send the FULL new set {c,d} → replaces {a,b}.
+			triples = applyUpdateWT(t, ctx, c, entityID, []message.Triple{
+				{Subject: entityID, Predicate: "test.member", Object: "c", Timestamp: time.Now(), Confidence: 1.0},
+				{Subject: entityID, Predicate: "test.member", Object: "d", Timestamp: time.Now(), Confidence: 1.0},
+			}, nil, tc.useCAS)
+			assert.ElementsMatch(t, []any{"c", "d"}, objectsForPredicate(triples, "test.member"),
+				"multi-valued predicate replaced by the full new set — prior members dropped, not accumulated")
+
+			// (4) Idempotent re-persist: applying the same value again must not duplicate.
+			triples = applyUpdateWT(t, ctx, c, entityID, []message.Triple{
+				{Subject: entityID, Predicate: "test.status", Object: "completed", Timestamp: time.Now(), Confidence: 1.0},
+			}, nil, tc.useCAS)
+			assert.Equal(t, []any{"completed"}, objectsForPredicate(triples, "test.status"),
+				"re-persisting the same value must stay idempotent (no duplicate)")
+		})
+	}
+}
+
+// TestIntegration_HandleEntityUpdateWithTriples_RemoveOnlyPureDelete confirms
+// RemoveTriples still deletes a predicate's values when AddTriples does not
+// re-add it (pure delete — unchanged by the gh#244 replace-by-predicate fix,
+// which only governs the add leg).
+func TestIntegration_HandleEntityUpdateWithTriples_RemoveOnlyPureDelete(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+	const entityID = "c360.test.entity.puredelete.del.001"
+	now := time.Now()
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
+		ID: entityID, MessageType: testMutationType, Version: 1, UpdatedAt: now,
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: "test.status", Object: "active", Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: "test.keep", Object: "keep-me", Timestamp: now, Confidence: 1.0},
+		},
+	}), "seed entity")
+
+	triples := applyUpdateWT(t, ctx, c, entityID, nil, []string{"test.status"}, false)
+	assert.Empty(t, objectsForPredicate(triples, "test.status"), "remove-only must delete the predicate's values")
+	assert.Equal(t, []any{"keep-me"}, objectsForPredicate(triples, "test.keep"), "unrelated predicate untouched")
 }
 
 func TestIntegration_HandleEntityDelete_Existing(t *testing.T) {
