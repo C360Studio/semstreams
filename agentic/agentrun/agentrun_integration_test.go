@@ -109,3 +109,48 @@ func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 	assert.NotContains(t, runID, ".",
 		"bare RunID must not contain dots — if it does, D1 EntityIDField holds a bare ID, not the full 6-part ID")
 }
+
+// TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent pins gh#246:
+// Start MUST NOT abort boot when the AGENT stream is absent (a deployment with no
+// agentic components — e.g. graph/lifecycle-only). It logs and returns a no-op stop
+// + nil error instead of the "stream not found" error that previously propagated out
+// of run() in both binaries → os.Exit(1) (the silent-red e2e:lifecycle/structural
+// tiers and the latent production boot failure).
+func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	ctx := context.Background()
+
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	// reader/pub are unused on the stream-absent early-return path; nil logger
+	// is defaulted by the constructor.
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, nil, "acme", "ops", nil)
+
+	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{StreamName: agentrun.AgentStreamName})
+	require.NoError(t, err, "Start must not error when the AGENT stream is absent (gh#246)")
+	require.NotNil(t, stop, "Start must return a non-nil (no-op) stop func when skipping")
+	stop() // no-op stop must not panic
+}
+
+// TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent confirms the normal
+// path is unchanged by the gh#246 graceful-skip: with the AGENT stream present,
+// Start wires the durable consumers and returns a real stop.
+func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	ctx := context.Background()
+
+	_, err := tc.CreateStream(ctx, agentrun.AgentStreamName, []string{"agent.>"})
+	require.NoError(t, err, "create AGENT stream")
+
+	mgr := lifecycle.NewManager(tc.Client, nil)
+	require.NoError(t, agentrun.Register(mgr))
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, nil, "acme", "ops", nil)
+
+	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
+		StreamName:         agentrun.AgentStreamName,
+		ConsumerNameSuffix: "gh246-present",
+	})
+	require.NoError(t, err, "Start must succeed when the AGENT stream is present")
+	require.NotNil(t, stop)
+	stop()
+}
