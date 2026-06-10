@@ -223,7 +223,16 @@ Jaccard = 3/5 = 0.6
 
 ## Semantic Edges
 
-When embeddings are available, virtual edges are created between semantically similar entities:
+> **⚠️ Not yet wired (as of 2026-06-10).** The `SemanticProvider` implementation
+> exists (`graph/clustering/semantic_provider.go`), but the graph-clustering
+> component does not yet instantiate it, so the `semantic_edges` config block below
+> is **not read** — supplying it has no effect (the keys are silently ignored).
+> This section documents the *intended* configuration; wiring is tracked in
+> [gh#238](https://github.com/C360Studio/semstreams/issues/238). Until it lands,
+> community detection clusters on **explicit relationships only**.
+
+When wired, virtual edges will be created between semantically similar entities
+(requires embeddings):
 
 ```json
 {
@@ -235,14 +244,15 @@ When embeddings are available, virtual edges are created between semantically si
 }
 ```
 
-### How Semantic Edges Work
+### How Semantic Edges Will Work
 
 1. Compare embedding vectors using cosine similarity
 2. Create virtual edge if similarity >= threshold
 3. Limit virtual neighbors to prevent explosion
 4. Include virtual edges in LPA neighbor calculation
 
-This allows semantically related entities to cluster together even without explicit relationships.
+This will allow semantically related entities to cluster together even without
+explicit relationships.
 
 ## Storage
 

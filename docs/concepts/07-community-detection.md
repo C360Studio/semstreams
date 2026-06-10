@@ -189,6 +189,11 @@ Community detection is controlled through clustering configuration. Key paramete
 
 ### Virtual Edge Tuning
 
+> **⚠️ Not yet wired.** Semantic (virtual) edges are implemented but not yet
+> instantiated by the component, so these parameters currently have no effect. See
+> [Semantic Edges](../advanced/01-clustering.md#semantic-edges) and
+> [gh#238](https://github.com/C360Studio/semstreams/issues/238).
+
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `similarity_threshold` | 0.6 | Minimum cosine similarity for virtual edge |
@@ -265,14 +270,18 @@ Labels keep switching between iterations without converging.
 One community absorbs most entities.
 
 **Cause**: Dense hub nodes connecting everything.
-**Mitigation**: Raise `similarity_threshold`, reduce virtual edges.
+**Mitigation**: Reduce hub over-connection in explicit edges. (Raising
+`similarity_threshold` / reducing virtual edges applies once semantic edges are
+wired — [gh#238](https://github.com/C360Studio/semstreams/issues/238).)
 
 ### Singleton Explosion
 
 Many single-entity communities.
 
 **Cause**: Sparse explicit relationships, no virtual edges.
-**Mitigation**: Lower `similarity_threshold`, add more triples, or accept that entities are genuinely disconnected.
+**Mitigation**: Add more explicit triples, or accept that entities are genuinely
+disconnected. (Lowering `similarity_threshold` to add virtual edges applies once
+semantic edges are wired — [gh#238](https://github.com/C360Studio/semstreams/issues/238).)
 
 ## Related
 
