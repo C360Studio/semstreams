@@ -697,7 +697,7 @@ func (s *MilestoneSubscriber) Start(ctx context.Context, client *natsclient.Clie
 		if errors.Is(streamErr, jetstream.ErrStreamNotFound) {
 			s.logger.Info("agentrun: MilestoneSubscriber disabled — stream not present",
 				slog.String("stream", cfg.StreamName),
-				slog.String("hint", "no agentic components in this deployment; agent.complete/failed milestones will not be processed"))
+				slog.String("hint", "likely no agentic components in this deployment (or the stream isn't created yet at boot); agent.complete/failed milestones will not be processed"))
 			return func() {}, nil
 		}
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber.Start: check stream %q: %w", cfg.StreamName, streamErr)
