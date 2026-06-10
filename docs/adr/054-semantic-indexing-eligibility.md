@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** — 2026-06-10. Not yet implemented or tagged. Derived from the
+**Accepted** — 2026-06-10. Not yet implemented or tagged. Derived from the
 graph-clustering anomaly-storm investigation (semspec operational issue) and
 three independent converging design reviews. Builds on
 [ADR-047](047-lifecycle-harness-substrate.md) (Lifecycle harness),
