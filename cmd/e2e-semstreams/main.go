@@ -129,14 +129,15 @@ func run() error {
 	// deps.ToolRegistry. Mirrors cmd/semstreams/main.go — see ADR-029.
 	toolRegistry := agentictools.NewExecutorRegistry()
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
-		NATSClient:          natsClient,
-		Platform:            platform,
-		Logger:              logger,
-		RuleManager:         buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:         buildFlowManager(natsClient, logger),
-		PersonaManager:      buildPersonaManager(natsClient, logger),
-		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
-		ComponentRegistry:   componentRegistry,
+		NATSClient:              natsClient,
+		Platform:                platform,
+		Logger:                  logger,
+		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
+		FlowManager:             buildFlowManager(natsClient, logger),
+		PersonaManager:          buildPersonaManager(natsClient, logger),
+		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
+		ComponentRegistry:       componentRegistry,
+		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
 	}); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
@@ -537,6 +538,30 @@ func extractPlatformMeta(cfg *config.Config) types.PlatformMeta {
 		Org:      cfg.Platform.Org,
 		Platform: platformID,
 	}
+}
+
+// extractRestrictedDecideActions reads the deployment-level decide-action
+// restriction policy (gh#239) from the agentic-tools component config so an
+// e2e flow config can exercise the gate. Mirrors the cmd/semstreams helper;
+// empty means the permissive default.
+func extractRestrictedDecideActions(cfg *config.Config, logger *slog.Logger) []string {
+	for _, cc := range cfg.Components {
+		if cc.Name != "agentic-tools" || !cc.Enabled {
+			continue
+		}
+		var tcfg struct {
+			RestrictedDecideActions []string `json:"restricted_decide_actions"`
+		}
+		if err := json.Unmarshal(cc.Config, &tcfg); err != nil {
+			logger.Warn("could not parse agentic-tools restricted_decide_actions; decide-action restriction disabled (permissive default)",
+				slog.Any("error", err))
+			continue
+		}
+		if len(tcfg.RestrictedDecideActions) > 0 {
+			return tcfg.RestrictedDecideActions
+		}
+	}
+	return nil
 }
 
 func setupRegistriesAndManager(cfg *config.Config) (*component.Registry, *service.Manager, error) {

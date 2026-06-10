@@ -41,6 +41,29 @@ var decideSAPCoercedTotal = promauto.NewCounterVec(
 	[]string{"from_action", "to_action"},
 )
 
+// decideActionRestrictedTotal counts every decide call rejected by the
+// deployment-level decide-action restriction policy (gh#239). The policy
+// is vocabulary-agnostic: the framework restricts whatever action strings
+// the deployment names; a consuming product (e.g. SemTeams "autonomous"
+// mode) maps its product mode onto the restricted set. Operators alert on
+// a sustained non-zero rate — it means the persona prose and the
+// restriction policy disagree (coordinators keep reaching for an action
+// the deployment bars), so the fix is the persona prompt, not loosening
+// the policy.
+//
+// Cardinality bound: action is the SAP-normalised restricted member that
+// was hit, drawn from the configured restriction list, so cardinality
+// stays at the size of that list.
+var decideActionRestrictedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Namespace: "semstreams",
+		Subsystem: "decide_tool",
+		Name:      "action_restricted_total",
+		Help:      "Number of decide calls rejected by the deployment-level decide-action restriction policy (gh#239). High rate signals the persona prose and the restriction policy disagree; fix the persona prompt rather than loosening the policy.",
+	},
+	[]string{"action"},
+)
+
 // DecideToolName is the name agents use to invoke the coordinator's
 // terminal decision tool.
 const DecideToolName = "decide"
@@ -99,15 +122,59 @@ type DecideExecutor struct {
 	publisher TriplePublisher
 	platform  types.PlatformMeta
 	logger    *slog.Logger
+	// restrictedActions is the deployment-level decide-action restriction
+	// set (gh#239), keyed by SAP-normalised action so cased/hyphenated
+	// drift cannot slip the gate. nil/empty ⇒ permissive (interactive)
+	// default: no action is restricted, identical to pre-gh#239 behaviour.
+	restrictedActions map[string]struct{}
 }
 
-// NewDecideExecutor constructs the executor given a triple publisher and
-// the platform identity used to build the coordinator's loop entity ID.
-// Logger defaults to slog.Default(); set explicitly via SetLogger when
-// the caller has a structured logger handy (the registration path does
-// — see executors/register_decide.go).
-func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta) *DecideExecutor {
-	return &DecideExecutor{publisher: publisher, platform: platform, logger: slog.Default()}
+// NewDecideExecutor constructs the executor given a triple publisher, the
+// platform identity used to build the coordinator's loop entity ID, and the
+// deployment-level decide-action restriction list (gh#239).
+//
+// restrictedActions is the run/deployment clarification-policy seam: any
+// action string named here is rejected at decide-resolution time for EVERY
+// coordinator task — front-door and rule-spawned alike — taking precedence
+// over (and composing with) the per-task action_allowlist. The list is
+// vocabulary-agnostic; the framework knows nothing of "interactive" vs
+// "autonomous" — a consuming product maps its mode onto the list (e.g.
+// SemTeams autonomous → ["ask_user"]). nil/empty preserves the historical
+// permissive default (no restriction).
+//
+// Entries are SAP-normalised (lowercase, hyphen→underscore, trimmed) into a
+// set at construction so the runtime check is O(1) and immune to cased /
+// hyphenated drift. Logger defaults to slog.Default(); set explicitly via
+// SetLogger when the caller has a structured logger handy.
+func NewDecideExecutor(publisher TriplePublisher, platform types.PlatformMeta, restrictedActions []string) *DecideExecutor {
+	return &DecideExecutor{
+		publisher:         publisher,
+		platform:          platform,
+		logger:            slog.Default(),
+		restrictedActions: newRestrictedActionSet(restrictedActions),
+	}
+}
+
+// newRestrictedActionSet builds the SAP-normalised restriction lookup from
+// the configured list. Empty/whitespace entries are dropped. Returns nil
+// for an effectively-empty input so isDecideActionRestricted's len check
+// short-circuits the permissive default with zero allocation.
+func newRestrictedActionSet(actions []string) map[string]struct{} {
+	if len(actions) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(actions))
+	for _, a := range actions {
+		n := normaliseActionForSAP(a)
+		if n == "" {
+			continue
+		}
+		set[n] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
 }
 
 // SetLogger replaces the default logger. nil-safe — a nil argument
@@ -224,6 +291,36 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 			ErrorKind: agentic.ToolErrorInvalidArgs,
 		}, nil
 	}
+
+	// Deployment-level decide-action restriction (run clarification
+	// policy, gh#239). Applied AFTER allowlist resolution so it sees the
+	// canonical (post-SAP-coercion) action, and BEFORE the SAP success
+	// signals fire — a restricted action is rejected outright, so emitting
+	// "coercion succeeded" telemetry for it would be misleading. The gate
+	// takes PRECEDENCE over any per-task action_allowlist (a restricted
+	// action is rejected even when the allowlist would admit it) AND
+	// covers coordinators that carry no allowlist at all — the front door,
+	// the structural hole gh#239 closes. Same ToolErrorInvalidArgs →
+	// re-pick treatment as an off-allowlist action: the loop iterates and
+	// the model resolves without the restricted action (no dead-end, no
+	// extra round-trip).
+	if e.isDecideActionRestricted(allowlist.canonicalAction) {
+		decideActionRestrictedTotal.WithLabelValues(normaliseActionForSAP(allowlist.canonicalAction)).Inc()
+		e.logger.Info("decide tool rejected a deployment-restricted action",
+			"loop_id", call.LoopID,
+			"action", allowlist.canonicalAction,
+			"hint", "barred by the deployment's restricted_decide_actions policy; a sustained rate here means the persona prose and the policy disagree — fix the persona prompt rather than loosening the policy")
+		return agentic.ToolResult{
+			CallID: call.ID,
+			Error: fmt.Sprintf(
+				"action %q is restricted by deployment policy and cannot be used in this run; "+
+					"resolve without it and re-emit a different action your role's system prompt enumerates.",
+				allowlist.canonicalAction,
+			),
+			ErrorKind: agentic.ToolErrorInvalidArgs,
+		}, nil
+	}
+
 	sapCoerced := allowlist.coerced
 	if sapCoerced {
 		// Signal 1: slog.Warn — fires per coercion. Warn level so it
@@ -457,6 +554,20 @@ func resolveActionAllowlist(metadata map[string]any, action string) allowlistRes
 			strings.Join(allowlist, ", "),
 		),
 	}
+}
+
+// isDecideActionRestricted reports whether action is barred by the
+// deployment-level decide-action restriction policy (gh#239). The
+// comparison is SAP-normalised (the set was normalised at construction)
+// so cased/hyphenated drift — "Ask-User", "ask_user", " ask-user " —
+// cannot slip a restricted action past the gate. An empty restriction set
+// always returns false (the permissive default), short-circuited cheaply.
+func (e *DecideExecutor) isDecideActionRestricted(action string) bool {
+	if len(e.restrictedActions) == 0 {
+		return false
+	}
+	_, restricted := e.restrictedActions[normaliseActionForSAP(action)]
+	return restricted
 }
 
 // normaliseActionForSAP applies the V1 normalisation rules: lowercase,

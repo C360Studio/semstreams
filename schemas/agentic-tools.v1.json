@@ -49,6 +49,14 @@
       "description": "Port configuration",
       "category": "basic"
     },
+    "restricted_decide_actions": {
+      "type": "array",
+      "description": "Decide-action names barred for every coordinator task (front-door and rule-spawned) — composes with and takes precedence over per-task action_allowlist; vocabulary-agnostic run/deployment clarification policy; empty means permissive default",
+      "items": {
+        "type": "string"
+      },
+      "category": "advanced"
+    },
     "stream_name": {
       "type": "string",
       "description": "JetStream stream name for agentic messages",

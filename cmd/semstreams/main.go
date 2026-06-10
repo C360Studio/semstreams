@@ -155,15 +155,16 @@ func run() error {
 	}
 	toolRegistry := agentictools.NewExecutorRegistry()
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
-		NATSClient:          natsClient,
-		Platform:            platform,
-		Logger:              logger,
-		RuleManager:         buildRuleManager(ctx, natsClient, configManager, logger),
-		FlowManager:         buildFlowManager(natsClient, logger),
-		PersonaManager:      personaMgr,
-		FlowTemplateManager: buildFlowTemplateManager(natsClient, logger),
-		ComponentRegistry:   componentRegistry,
-		LoopsBucket:         extractLoopsBucket(cfg),
+		NATSClient:              natsClient,
+		Platform:                platform,
+		Logger:                  logger,
+		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
+		FlowManager:             buildFlowManager(natsClient, logger),
+		PersonaManager:          personaMgr,
+		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
+		ComponentRegistry:       componentRegistry,
+		LoopsBucket:             extractLoopsBucket(cfg),
+		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
 	}); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
@@ -362,6 +363,37 @@ func extractLoopsBucket(cfg *config.Config) string {
 		}
 	}
 	return ""
+}
+
+// extractRestrictedDecideActions reads the deployment-level decide-action
+// restriction policy (gh#239) from the agentic-tools component config. The
+// decide tool bars these action names for every coordinator task (front-
+// door and rule-spawned); empty means the permissive default. Mirrors
+// extractLoopsBucket — the agentic-tools Config field is the operator/schema
+// surface; this bridges it into the boot-time ToolDependencies.
+func extractRestrictedDecideActions(cfg *config.Config, logger *slog.Logger) []string {
+	for _, cc := range cfg.Components {
+		if cc.Name != "agentic-tools" || !cc.Enabled {
+			continue
+		}
+		var tcfg struct {
+			RestrictedDecideActions []string `json:"restricted_decide_actions"`
+		}
+		if err := json.Unmarshal(cc.Config, &tcfg); err != nil {
+			// Don't silently fall back to permissive: a malformed policy
+			// disables a guard the operator explicitly asked for. The
+			// typed component Config unmarshal backstops genuine type
+			// errors, but warn here so the security-adjacent gate's
+			// non-enforcement is never silent.
+			logger.Warn("could not parse agentic-tools restricted_decide_actions; decide-action restriction disabled (permissive default)",
+				slog.Any("error", err))
+			continue
+		}
+		if len(tcfg.RestrictedDecideActions) > 0 {
+			return tcfg.RestrictedDecideActions
+		}
+	}
+	return nil
 }
 
 // extractPlatformMeta extracts platform identity from config.
