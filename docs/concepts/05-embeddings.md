@@ -268,9 +268,17 @@ ObjectStore is a separate component that stores text content for embedding gener
 1. Verify entity implements `ContentStorable` (not just `Graphable`)
 2. Check `StorageRef` is set (content stored to ObjectStore)
 3. Verify embedding service is running (`provider: "http"`)
-4. Lower `similarity_threshold` if entities are borderline similar
+4. Add explicit relationship triples — semantic (virtual) edges that would cluster
+   borderline-similar entities are **not yet wired**
+   ([gh#238](https://github.com/C360Studio/semstreams/issues/238)); until then
+   clustering uses explicit edges only
 
 ### "Too many virtual edges, communities are too large"
+
+> **⚠️ Not yet applicable.** Semantic (virtual) edges are not yet wired
+> ([gh#238](https://github.com/C360Studio/semstreams/issues/238)), so the component
+> does not currently create virtual edges. The `similarity_threshold` guidance
+> below applies once that lands.
 
 1. Raise `similarity_threshold` (try 0.75)
 2. Improve content quality (more specific text)
