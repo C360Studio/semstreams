@@ -133,3 +133,30 @@ func forEachJSONValueWithKey(node any, key string, fn func(any)) {
 		}
 	}
 }
+
+// TestRejectUnknownKeys covers the runtime guard that makes operator configs
+// (not just checked-in ones) fail loudly on phantom anomaly_config keys.
+func TestRejectUnknownKeys(t *testing.T) {
+	t.Run("empty input is a no-op", func(t *testing.T) {
+		require.NoError(t, RejectUnknownKeys(nil))
+		require.NoError(t, RejectUnknownKeys(json.RawMessage("")))
+	})
+
+	t.Run("clean anomaly_config passes", func(t *testing.T) {
+		raw := json.RawMessage(`{"enabled":true,` +
+			`"core_anomaly":{"enabled":true,"min_core_for_hub_analysis":2},` +
+			`"semantic_gap":{"enabled":true,"min_semantic_similarity":0.7,"min_structural_distance":3}}`)
+		require.NoError(t, RejectUnknownKeys(raw))
+	})
+
+	t.Run("phantom keys are rejected with an ADR-054 hint", func(t *testing.T) {
+		for _, raw := range []string{
+			`{"semantic_gap":{"similarity_threshold":0.7}}`,
+			`{"core_anomaly":{"min_core_level":2}}`,
+		} {
+			err := RejectUnknownKeys(json.RawMessage(raw))
+			require.Error(t, err, "raw=%s", raw)
+			assert.Contains(t, err.Error(), "ADR-054")
+		}
+	})
+}

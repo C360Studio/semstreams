@@ -298,7 +298,7 @@ Everything in Rules-Only, plus:
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
-      "core_anomaly": {"enabled": true, "min_core_level": 2},
+      "core_anomaly": {"enabled": true, "min_core_for_hub_analysis": 2},
       "semantic_gap": {"enabled": false}
     },
     "ports": {
@@ -390,8 +390,8 @@ Everything in Native, plus:
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
-      "core_anomaly": {"enabled": true, "min_core_level": 2},
-      "semantic_gap": {"enabled": true, "similarity_threshold": 0.7, "min_structural_distance": 3}
+      "core_anomaly": {"enabled": true, "min_core_for_hub_analysis": 2},
+      "semantic_gap": {"enabled": true, "min_semantic_similarity": 0.7, "min_structural_distance": 3}
     },
     "ports": {
       "inputs": [

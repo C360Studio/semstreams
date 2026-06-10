@@ -632,7 +632,7 @@
           },
           "virtual_edges": {
             "auto_apply": {
-              "enabled": true,
+              "enabled": false,
               "min_confidence": 0.95,
               "predicate_template": "inferred.semantic.{band}"
             },
