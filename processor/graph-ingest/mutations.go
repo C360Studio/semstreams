@@ -538,7 +538,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		}
 
 		// Re-apply the delta on each attempt: drop triples whose
-		// Predicate appears in RemoveTriples, then append AddTriples.
+		// Predicate appears in RemoveTriples, then merge AddTriples in.
 		// triplesRemoved is reset each attempt so it reflects the
 		// final successful apply.
 		triplesRemoved = 0
@@ -559,7 +559,16 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 			merged = kept
 		}
 		if len(req.AddTriples) > 0 {
-			merged = append(merged, req.AddTriples...)
+			// MergeTriples = replace-by-(subject,predicate): a predicate
+			// present in AddTriples fully replaces its prior values
+			// (upsert), matching the DataManager UpdateEntityWithTriples
+			// contract (graph/datamanager/manager.go) — gh#244. This is
+			// NOT incremental append; a caller that wants to preserve
+			// existing values of a predicate and add more uses
+			// triple.add / triple.add_batch. Replace-by-predicate also
+			// keeps single-valued predicates unique, which is what the
+			// lifecycle replace-not-append fix relies on.
+			merged = graph.MergeTriples(merged, req.AddTriples)
 		}
 
 		// Build the new entity: caller's metadata (req.Entity) +
@@ -656,7 +665,9 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 		merged = kept
 	}
 	if len(req.AddTriples) > 0 {
-		merged = append(merged, req.AddTriples...)
+		// Replace-by-(subject,predicate), matching the UpdateWithRetry
+		// path and the DataManager contract (gh#244) — not append.
+		merged = graph.MergeTriples(merged, req.AddTriples)
 	}
 
 	// Build the new entity: caller's metadata + merged triples.

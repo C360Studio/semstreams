@@ -59,9 +59,18 @@ type CreateEntityWithTriplesRequest struct {
 // CAS succeeds or the retry budget is exhausted. This is correct for
 // the "facts accumulate" model the graph layer was built around.
 type UpdateEntityWithTriplesRequest struct {
-	Entity        *EntityState     `json:"entity"`
+	Entity *EntityState `json:"entity"`
+	// AddTriples are applied with REPLACE-by-(subject,predicate) semantics
+	// (MergeTriples — gh#244): every predicate present in AddTriples has its
+	// prior values on the entity fully replaced. This is upsert, NOT
+	// incremental append. For a SINGLE-valued predicate, send the one new
+	// value (the old one is dropped). For a MULTI-valued predicate, send the
+	// FULL desired set — a partial set drops the omitted siblings. To ADD to
+	// a predicate while preserving existing values, use triple.add /
+	// triple.add_batch instead. Predicates absent from AddTriples are
+	// untouched.
 	AddTriples    []message.Triple `json:"add_triples,omitempty"`
-	RemoveTriples []string         `json:"remove_triples,omitempty"` // Triple predicates to remove
+	RemoveTriples []string         `json:"remove_triples,omitempty"` // Predicates to delete (pure delete; runs before the AddTriples merge)
 	// ExpectedRevision opts into single-pass CAS-on-condition writes.
 	// Non-zero = require entity's current KV revision to match exactly;
 	// zero = existing UpdateWithRetry behavior (no CAS check on caller

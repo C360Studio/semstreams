@@ -70,9 +70,11 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 		}
 		merged = kept
 	}
-	// Naive append — matches mutations.go:559 and :656 exactly. Per-predicate
-	// latest-wins is a READ-time concern, not a write-time merge.
-	merged = append(merged, req.AddTriples...)
+	// Replace-by-(subject,predicate) via MergeTriples — mirrors the
+	// production graph-ingest update_with_triples add-leg (gh#244). Must
+	// match the handler or this mock silently tests a different contract
+	// than the wire it stands in for.
+	merged = graph.MergeTriples(merged, req.AddTriples)
 	state := *req.Entity
 	state.Triples = merged
 	f.bucket.put(req.Entity.ID, &state)
