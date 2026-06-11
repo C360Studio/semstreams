@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TestDispatchToolCall_StampsLoopID is the regression for the wedge
@@ -186,6 +187,263 @@ func TestDispatchToolCall_DequeuedCallStampsLoopID(t *testing.T) {
 	}
 	if got := metadata["loop_id"]; got != loopID {
 		t.Errorf("payload.metadata.loop_id = %v, want %q (the bash-sandbox routing key)", got, loopID)
+	}
+}
+
+// TestDispatchToolCall_StampsRunAnchor is the issue #250 regression:
+// when a loop belongs to a run (ADR-053 D7), dispatch must stamp the run
+// anchor onto the outgoing ToolCall.Metadata so a tool executor reads the
+// run/chain identity directly instead of walking agent.loop.parent
+// ancestry back to the chain root. Both the bare run loop-id
+// (MetadataKeyRunID) and the resolved 6-part chain execution entity ID
+// (MetadataKeyRunEntityID) land on the wire when a platform identity is
+// configured. Drives the production marshal path end-to-end.
+func TestDispatchToolCall_StampsRunAnchor(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	loopID, err := handler.loopManager.CreateLoop("task-run", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	const runID = "run-anchor-1"
+	if err := handler.loopManager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID: %v", err)
+	}
+
+	good := agentic.ToolCall{
+		ID:        "call-run",
+		Name:      "test_tool",
+		Arguments: map[string]any{"q": "hello"},
+	}
+
+	result := &HandlerResult{}
+	dispatched, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good)
+	if storeErr != nil {
+		t.Fatalf("storeErr = %v, want nil", storeErr)
+	}
+	if !dispatched {
+		t.Fatal("dispatched = false, want true")
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, ok := payload["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.metadata not a map: %T", payload["metadata"])
+	}
+	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
+		t.Errorf("payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunID, got, runID)
+	}
+	// org.platform.agent.chain.execution.<runID>
+	wantEntityID := agentic.ChainExecutionEntityID("acme", "ops", runID)
+	if got := metadata[agentic.MetadataKeyRunEntityID]; got != wantEntityID {
+		t.Errorf("payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunEntityID, got, wantEntityID)
+	}
+	// The loop_id soft-fallback must still be stamped alongside.
+	if got := metadata["loop_id"]; got != loopID {
+		t.Errorf("payload.metadata.loop_id = %v, want %q (run-anchor stamp must not displace it)", got, loopID)
+	}
+}
+
+// TestDispatchToolCall_StandaloneLoopNoRunAnchor pins the back-compat
+// contract: a loop that is NOT part of a run (no SetRunID call) must
+// leave both run-anchor keys absent. Stamping an empty/zero run anchor
+// would hand executors a phantom run identity and route attestation /
+// run-scoped triples to a nonexistent chain entity.
+func TestDispatchToolCall_StandaloneLoopNoRunAnchor(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	loopID, err := handler.loopManager.CreateLoop("task-standalone", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	// Intentionally NO SetRunID — this loop is standalone.
+
+	good := agentic.ToolCall{ID: "call-standalone", Name: "test_tool"}
+	result := &HandlerResult{}
+	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
+		t.Fatalf("storeErr = %v, want nil", storeErr)
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, _ := payload["metadata"].(map[string]any)
+	if got, present := metadata[agentic.MetadataKeyRunID]; present {
+		t.Errorf("payload.metadata[%q] = %v, want absent (standalone loop)", agentic.MetadataKeyRunID, got)
+	}
+	if got, present := metadata[agentic.MetadataKeyRunEntityID]; present {
+		t.Errorf("payload.metadata[%q] = %v, want absent (standalone loop)", agentic.MetadataKeyRunEntityID, got)
+	}
+	// loop_id is unconditional and must still be present.
+	if got := metadata["loop_id"]; got != loopID {
+		t.Errorf("payload.metadata.loop_id = %v, want %q", got, loopID)
+	}
+}
+
+// TestDispatchToolCall_RunIDWithoutPlatformOmitsEntityID locks the
+// graceful-degradation contract for a misconfigured deploy: a loop with a
+// run anchor but no platform identity stamps the bare run loop-id (which
+// needs no platform) while omitting the 6-part entity ID (which can't be
+// constructed). resolveRunEntityID returns "" in that case rather than a
+// malformed ID, so the executor can still reconstruct the entity from
+// run_id plus its own platform identity.
+func TestDispatchToolCall_RunIDWithoutPlatformOmitsEntityID(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	// Intentionally NO SetPlatform — org/platform are empty.
+
+	loopID, err := handler.loopManager.CreateLoop("task-noplatform", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	const runID = "run-anchor-2"
+	if err := handler.loopManager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID: %v", err)
+	}
+
+	good := agentic.ToolCall{ID: "call-noplatform", Name: "test_tool"}
+	result := &HandlerResult{}
+	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
+		t.Fatalf("storeErr = %v, want nil", storeErr)
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, _ := payload["metadata"].(map[string]any)
+	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
+		t.Errorf("payload.metadata[%q] = %v, want %q (run_id needs no platform)", agentic.MetadataKeyRunID, got, runID)
+	}
+	if got, present := metadata[agentic.MetadataKeyRunEntityID]; present {
+		t.Errorf("payload.metadata[%q] = %v, want absent (no platform identity)", agentic.MetadataKeyRunEntityID, got)
+	}
+}
+
+// TestDispatchToolCall_RunAnchorOverwritesCallerValue is the symmetric
+// counterpart to TestDispatchToolCall_PreservesExplicitMetadata: where
+// loop_id is don't-clobber (caller value wins), the run anchor is
+// authoritative (framework value wins). A caller that pre-populated a
+// stale/bogus run anchor on the ToolCall must NOT see it survive —
+// otherwise attestation / run-scoped triples route to the wrong chain
+// entity. Pins the deliberate, thrice-documented overwrite contract so a
+// future refactor that copy-pastes the adjacent don't-clobber guard onto
+// the run anchor fails loudly instead of regressing silently.
+func TestDispatchToolCall_RunAnchorOverwritesCallerValue(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	loopID, err := handler.loopManager.CreateLoop("task-overwrite", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	const runID = "run-real-1"
+	if err := handler.loopManager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID: %v", err)
+	}
+
+	good := agentic.ToolCall{
+		ID:   "call-overwrite",
+		Name: "test_tool",
+		Metadata: map[string]any{
+			agentic.MetadataKeyRunID:       "stale-bogus-run",
+			agentic.MetadataKeyRunEntityID: "stale.bogus.entity",
+			"extra":                        "preserved",
+		},
+	}
+
+	result := &HandlerResult{}
+	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
+		t.Fatalf("storeErr = %v, want nil", storeErr)
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, _ := payload["metadata"].(map[string]any)
+	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
+		t.Errorf("payload.metadata[%q] = %v, want framework value %q (authoritative overwrite violated)", agentic.MetadataKeyRunID, got, runID)
+	}
+	wantEntityID := agentic.ChainExecutionEntityID("acme", "ops", runID)
+	if got := metadata[agentic.MetadataKeyRunEntityID]; got != wantEntityID {
+		t.Errorf("payload.metadata[%q] = %v, want framework value %q (authoritative overwrite violated)", agentic.MetadataKeyRunEntityID, got, wantEntityID)
+	}
+	// Unrelated caller keys must still survive the overwrite of the run anchor.
+	if got := metadata["extra"]; got != "preserved" {
+		t.Errorf("payload.metadata.extra = %v, want \"preserved\" (unrelated keys must survive)", got)
+	}
+}
+
+// TestDispatchToolCall_ApprovalRedispatchStampsRunAnchor mirrors the
+// loop_id approval-path regression (TestDispatchToolCall_ApprovalRedispatchStampsLoopID)
+// for the run anchor. dispatchApprovedCall constructs a fresh ToolCall
+// with neither LoopID nor Metadata and lands directly on the
+// dispatchToolCall stamp — the only production caller that bypasses the
+// upstream stamp. This pins the run anchor to that path so a refactor
+// moving the stamp out of dispatchToolCall regresses with a failing test.
+func TestDispatchToolCall_ApprovalRedispatchStampsRunAnchor(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	loopID, err := handler.loopManager.CreateLoop("task-approve-run", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	const runID = "run-approve-1"
+	if err := handler.loopManager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID: %v", err)
+	}
+
+	pending := agentic.PendingApprovalState{CallID: "call-approved-run", ToolName: "test_tool"}
+	result := &HandlerResult{}
+	if err := handler.dispatchApprovedCall(loopID, pending, map[string]any{"q": "x"}, "alice@example.com", result); err != nil {
+		t.Fatalf("dispatchApprovedCall: %v", err)
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, _ := payload["metadata"].(map[string]any)
+	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
+		t.Errorf("approval path: payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunID, got, runID)
+	}
+	wantEntityID := agentic.ChainExecutionEntityID("acme", "ops", runID)
+	if got := metadata[agentic.MetadataKeyRunEntityID]; got != wantEntityID {
+		t.Errorf("approval path: payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunEntityID, got, wantEntityID)
+	}
+}
+
+// TestDispatchToolCall_DequeuedCallStampsRunAnchor mirrors the loop_id
+// dequeue-path regression (TestDispatchToolCall_DequeuedCallStampsLoopID)
+// for the run anchor. Queued tail calls (the most likely path semteams's
+// concurrent-chain repro hit) reach dispatch via dispatchedFromQueue; the
+// run anchor must land there too.
+func TestDispatchToolCall_DequeuedCallStampsRunAnchor(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	loopID, err := handler.loopManager.CreateLoop("task-queue-run", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	const runID = "run-queue-1"
+	if err := handler.loopManager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID: %v", err)
+	}
+
+	handler.loopManager.QueueToolCalls(loopID, []agentic.ToolCall{
+		{ID: "call-queued-run", Name: "test_tool", LoopID: loopID},
+	})
+
+	result := &HandlerResult{}
+	dispatched, sErr := handler.dispatchedFromQueue(result, loopID)
+	if sErr != nil {
+		t.Fatalf("dispatchedFromQueue: %v", sErr)
+	}
+	if !dispatched {
+		t.Fatal("dispatched = false, want true (queue had one call)")
+	}
+
+	payload := findPublishedToolCallPayload(t, result, "test_tool")
+	metadata, _ := payload["metadata"].(map[string]any)
+	if got := metadata[agentic.MetadataKeyRunID]; got != runID {
+		t.Errorf("dequeue path: payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunID, got, runID)
+	}
+	wantEntityID := agentic.ChainExecutionEntityID("acme", "ops", runID)
+	if got := metadata[agentic.MetadataKeyRunEntityID]; got != wantEntityID {
+		t.Errorf("dequeue path: payload.metadata[%q] = %v, want %q", agentic.MetadataKeyRunEntityID, got, wantEntityID)
 	}
 }
 

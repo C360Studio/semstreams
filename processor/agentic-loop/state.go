@@ -801,6 +801,24 @@ func (m *LoopManager) SetRunID(loopID, runID string) error {
 	return nil
 }
 
+// GetRunID returns the run anchor (bare run loop-id) for a loop, or the
+// empty string when the loop is unknown or not part of a run (ADR-053 D7).
+// Read-only counterpart to SetRunID; dispatch reads it to stamp the run
+// anchor onto outgoing ToolCall.Metadata (issue #250). Returns "" rather
+// than an error so the best-effort dispatch stamp stays branchless — an
+// unknown loop and a runless loop are indistinguishable to the consumer
+// (both mean "no run anchor"), and dispatch must never fail over it.
+func (m *LoopManager) GetRunID(loopID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return ""
+	}
+	return entity.RunID
+}
+
 // SetDepth sets the depth tracking for a loop in the multi-agent hierarchy
 func (m *LoopManager) SetDepth(loopID string, depth, maxDepth int) error {
 	m.mu.Lock()

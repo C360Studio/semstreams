@@ -1302,10 +1302,22 @@ func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID strin
 //     against beta.37; cmd/semteams/sandbox/integration_test.go had
 //     to manually populate Metadata["task_id"] to get past 404s.
 //
-// Both writes are conditional ("don't clobber") so an LLM or upstream
-// caller that explicitly set either field keeps its value. New
+// Both loop_id writes are conditional ("don't clobber") so an LLM or
+// upstream caller that explicitly set either field keeps its value. New
 // callers should not need to set either — dispatch propagates loopID
 // naturally.
+//
+// When the loop belongs to a run (ADR-053), dispatch additionally stamps
+// the run anchor onto tc.Metadata so tool executors read the run/chain
+// identity directly rather than walking ancestry (issue #250):
+//
+//   - tc.Metadata[MetadataKeyRunID] — the bare run loop-id.
+//   - tc.Metadata[MetadataKeyRunEntityID] — the resolved 6-part chain
+//     execution entity ID (present only when a platform identity is set).
+//
+// Unlike the loop_id writes these are authoritative (overwrite): the run
+// anchor is a framework fact derived from the loop's typed RunID, not a
+// caller-routable hint. Both keys stay absent for a standalone loop.
 func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, tc agentic.ToolCall) error {
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
@@ -1323,6 +1335,22 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	}
 	if _, ok := tc.Metadata["loop_id"]; !ok {
 		tc.Metadata["loop_id"] = loopID
+	}
+
+	// Stamp the loop's run anchor (ADR-053 D7/D8) so tool executors read
+	// the run/chain identity directly instead of walking agent.loop.parent
+	// ancestry from LoopID back to the chain root (issue #250, semteams
+	// ADR-053 Phase 5). Only stamped when the loop belongs to a run; a
+	// standalone loop leaves both keys absent (back-compat).
+	//
+	// Authoritative, unlike the loop_id soft-fallback above: the run anchor
+	// is a framework fact derived from the loop's typed RunID, so dispatch
+	// overwrites rather than yielding to any caller-supplied value.
+	if runID := h.loopManager.GetRunID(loopID); runID != "" {
+		tc.Metadata[agentic.MetadataKeyRunID] = runID
+		if runEntityID := h.resolveRunEntityID(runID); runEntityID != "" {
+			tc.Metadata[agentic.MetadataKeyRunEntityID] = runEntityID
+		}
 	}
 
 	toolMsg := message.NewBaseMessage(tc.Schema(), &tc, "agentic-loop")
