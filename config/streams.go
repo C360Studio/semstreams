@@ -23,6 +23,19 @@ type StreamConfig struct {
 	MaxBytes  int64    `json:"max_bytes,omitempty"` // Max storage size in bytes (0 = unlimited)
 	Retention string   `json:"retention,omitempty"` // "limits", "interest", "workqueue" (default: limits)
 	Replicas  int      `json:"replicas,omitempty"`  // Replication factor (default: 1)
+
+	// Duplicates is the server-side duplicate-detection window for the
+	// Nats-Msg-Id header (e.g. "2m", "30m", "1h"). Producers using
+	// Client.PublishToStreamWithMsgID rely on this window to collapse
+	// redeliveries of the same logical event (ADR-055 §5, "T1"). Empty
+	// leaves the window unset, so the NATS server applies its default of
+	// 2 minutes — adequate for steady-state redelivery but shorter than a
+	// restart/recovery replay horizon. Streams whose producers need
+	// dedup across that horizon set this explicitly. Must be <= MaxAge:
+	// the NATS server REJECTS (does not clamp) an explicit window larger
+	// than MaxAge, so createStream clamps it down to MaxAge with a warning
+	// rather than letting EnsureStreams abort boot.
+	Duplicates string `json:"duplicates,omitempty"`
 }
 
 // StreamConfigs is a map of stream name to configuration.
@@ -355,6 +368,30 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		maxAge = 7 * 24 * time.Hour // Default: 7 days
 	}
 
+	// Parse duplicate-detection window. Empty leaves Duplicates at zero so
+	// the NATS server applies its default (2 minutes); a parse failure falls
+	// back to that default rather than failing stream creation. See ADR-055
+	// §5 "T1".
+	var duplicates time.Duration
+	if cfg.Duplicates != "" {
+		var dupErr error
+		duplicates, dupErr = parseDurationWithDays(cfg.Duplicates)
+		if dupErr != nil {
+			sm.logger.Warn("Invalid duplicates window, using server default",
+				"stream", name, "duplicates", cfg.Duplicates, "error", dupErr)
+			duplicates = 0
+		}
+	}
+	// The NATS server rejects an explicit duplicate window larger than MaxAge
+	// (it does not clamp it). Clamp down to MaxAge with a warning so a
+	// misconfigured window degrades gracefully instead of aborting boot in
+	// EnsureStreams. maxAge is always > 0 here (defaulted to 7d above).
+	if duplicates > maxAge {
+		sm.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
+			"stream", name, "duplicates", duplicates, "max_age", maxAge)
+		duplicates = maxAge
+	}
+
 	// Replicas default
 	replicas := cfg.Replicas
 	if replicas <= 0 {
@@ -362,26 +399,43 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 	}
 
 	streamCfg := jetstream.StreamConfig{
-		Name:      name,
-		Subjects:  cfg.Subjects,
-		Storage:   storage,
-		Retention: retention,
-		MaxAge:    maxAge,
-		MaxBytes:  cfg.MaxBytes, // 0 means unlimited
-		Discard:   jetstream.DiscardOld,
-		Replicas:  replicas,
+		Name:       name,
+		Subjects:   cfg.Subjects,
+		Storage:    storage,
+		Retention:  retention,
+		MaxAge:     maxAge,
+		MaxBytes:   cfg.MaxBytes, // 0 means unlimited
+		Discard:    jetstream.DiscardOld,
+		Replicas:   replicas,
+		Duplicates: duplicates,
 	}
 
 	// Try to get existing stream
 	existingStream, err := js.Stream(ctx, name)
 	if err == nil {
-		// Stream exists - check if subjects match
+		// Stream exists - update on drift in subjects or the duplicate window.
 		existingCfg := existingStream.CachedInfo().Config
-		if !subjectsEqual(existingCfg.Subjects, cfg.Subjects) {
-			sm.logger.Info("Updating stream subjects",
+
+		// When the framework config doesn't specify a window, preserve the
+		// server-assigned/operator-set one so a subjects-only update doesn't
+		// silently reset it to the server default — and so we never trigger an
+		// update purely because the server reports its default (2m) for our
+		// unset zero.
+		if cfg.Duplicates == "" {
+			streamCfg.Duplicates = existingCfg.Duplicates
+		}
+
+		subjectsDrift := !subjectsEqual(existingCfg.Subjects, cfg.Subjects)
+		duplicatesDrift := cfg.Duplicates != "" && existingCfg.Duplicates != streamCfg.Duplicates
+		if subjectsDrift || duplicatesDrift {
+			sm.logger.Info("Updating stream config",
 				"stream", name,
+				"subjects_drift", subjectsDrift,
+				"duplicates_drift", duplicatesDrift,
 				"old_subjects", existingCfg.Subjects,
-				"new_subjects", cfg.Subjects)
+				"new_subjects", cfg.Subjects,
+				"old_duplicates", existingCfg.Duplicates,
+				"new_duplicates", streamCfg.Duplicates)
 			_, err = js.UpdateStream(ctx, streamCfg)
 			if err != nil {
 				return fmt.Errorf("update stream: %w", err)
@@ -402,7 +456,8 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		"stream", name,
 		"subjects", cfg.Subjects,
 		"storage", cfg.Storage,
-		"max_age", maxAge)
+		"max_age", maxAge,
+		"duplicates", duplicates)
 
 	return nil
 }

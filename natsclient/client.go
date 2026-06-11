@@ -769,6 +769,34 @@ func (m *Client) CreateStream(ctx context.Context, cfg jetstream.StreamConfig) (
 // PublishToStream publishes to a JetStream stream with automatic trace context propagation.
 // If no trace context exists in ctx, one is auto-generated for distributed tracing.
 func (m *Client) PublishToStream(ctx context.Context, subject string, data []byte) error {
+	return m.publishToStream(ctx, subject, data, "")
+}
+
+// PublishToStreamWithMsgID publishes to a JetStream stream stamping the
+// Nats-Msg-Id header so the server's duplicate-detection window collapses
+// re-publishes/redeliveries of the same logical event to a single store.
+//
+// This is the producer half of the at-least-once idempotency contract
+// (ADR-055 §5, "T1"): graph-ingest's stream consumer is at-least-once and
+// MergeEntity APPENDS triples on merge, so a redelivered born-once entity
+// payload would double-apply its triples without dedup. Callers pass a
+// DETERMINISTIC msgID for the logical event (e.g. "<loopID>:spawn",
+// "<entityID>:v<n>") so a retry/redelivery carries the same ID.
+//
+// Scope of the guarantee: dedup only holds WITHIN the stream's configured
+// duplicate window (config.StreamConfig.Duplicates; the NATS server default
+// is 2m when unset). Redelivery outside that window — e.g. DeliverPolicy:all
+// replay on consumer recreation — can still re-append; see ADR-055 Open
+// Question #1. An empty msgID is equivalent to PublishToStream (no dedup),
+// so this is a safe drop-in.
+func (m *Client) PublishToStreamWithMsgID(ctx context.Context, subject string, data []byte, msgID string) error {
+	return m.publishToStream(ctx, subject, data, msgID)
+}
+
+// publishToStream is the shared publish path for PublishToStream and
+// PublishToStreamWithMsgID. A non-empty msgID is stamped as the Nats-Msg-Id
+// header for server-side duplicate detection.
+func (m *Client) publishToStream(ctx context.Context, subject string, data []byte, msgID string) error {
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
 		return ErrCircuitOpen
@@ -793,6 +821,13 @@ func (m *Client) PublishToStream(ctx context.Context, subject string, data []byt
 	msg := &nats.Msg{
 		Subject: subject,
 		Data:    data,
+	}
+	if msgID != "" {
+		// Initialize the header here (rather than relying on InjectTrace,
+		// which early-returns when no trace context is present) so the
+		// dedup ID is always carried.
+		msg.Header = make(nats.Header)
+		msg.Header.Set(nats.MsgIdHdr, msgID)
 	}
 	InjectTrace(ctx, msg)
 
