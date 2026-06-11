@@ -24,6 +24,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -1359,6 +1360,22 @@ func newKVEntityQuerier(entityBucket jetstream.KeyValue, logger *slog.Logger) *k
 }
 
 // GetEntities retrieves entities by their IDs from ENTITY_STATES bucket
+// observeIndexingProfileForClustering emits a Debug observation when an entity
+// carries an indexing profile that ADR-054 Phase 3 would exclude from the
+// community/structural substrates (trace). Phase 1 is LENIENT — it never
+// excludes — so this is purely the dry-run signal that informs the Phase 3
+// policy, never an action. Strict enforcement is gated on gh#238 plus the
+// cost-ledger preconditions (gate-silent-exclusion-flips-with-cost-ledger).
+func observeIndexingProfileForClustering(logger *slog.Logger, es *graph.EntityState) {
+	if v, ok := es.GetPropertyValue(vocabulary.EntityIndexingProfile); ok {
+		if profile, _ := v.(string); profile == vocabulary.IndexingProfileTrace {
+			logger.Debug("entity has trace indexing profile; clustering it anyway (ADR-054 Phase 1 lenient)",
+				slog.String("entity", es.ID),
+				slog.String("indexing_profile", profile))
+		}
+	}
+}
+
 func (q *kvEntityQuerier) GetEntities(ctx context.Context, ids []string) ([]*graph.EntityState, error) {
 	entities := make([]*graph.EntityState, 0, len(ids))
 
@@ -1383,6 +1400,12 @@ func (q *kvEntityQuerier) GetEntities(ctx context.Context, ids []string) ([]*gra
 			q.logger.Warn("failed to unmarshal entity", slog.String("id", id), slog.Any("error", err))
 			continue
 		}
+
+		// ADR-054 Phase 1 (lenient): observe the entity's indexing profile but
+		// never exclude it from clustering. Community/structural eligibility
+		// enforcement is Phase 3, coupled to gh#238 (semantic edges) and gated
+		// on the cost-ledger preconditions — so this is a provable no-op here.
+		observeIndexingProfileForClustering(q.logger, &entity)
 
 		entities = append(entities, &entity)
 	}

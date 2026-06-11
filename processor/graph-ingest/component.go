@@ -23,6 +23,8 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -37,6 +39,9 @@ var (
 var (
 	metricsOnce         sync.Once
 	entitiesUpdatedOnce prometheus.Counter
+
+	indexingProfileOnce       sync.Once
+	indexingProfileDefaultVec *prometheus.CounterVec
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -62,6 +67,31 @@ func getEntitiesUpdatedMetric(registry *metric.MetricsRegistry) prometheus.Count
 		}
 	})
 	return entitiesUpdatedOnce
+}
+
+// getIndexingProfileDefaultMetric returns the process-wide counter that fires
+// whenever graph-ingest falls back to the indexing-profile floor at entity
+// creation — i.e. neither a Graphable IndexingProfiler nor a mutation-envelope
+// indexing_profile field declared a profile (ADR-054 §5). Labeled by
+// message_type so operators can see WHICH producers omit a declaration: a new
+// "content" type nobody declared would otherwise silently default to "control"
+// and never be embedded. message_type is the low-cardinality registry key; the
+// full entity subject is intentionally NOT a label (cardinality bomb).
+func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	indexingProfileOnce.Do(func() {
+		indexingProfileDefaultVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "indexing_profile_default_total",
+			Help:      "Entities whose indexing profile fell back to the default floor (no producer declaration)",
+		}, []string{"message_type"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "indexing_profile_default_total", indexingProfileDefaultVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(indexingProfileDefaultVec)
+		}
+	})
+	return indexingProfileDefaultVec
 }
 
 // Config holds configuration for graph-ingest component
@@ -195,8 +225,9 @@ type Component struct {
 	lastActivity      atomic.Value // stores time.Time
 
 	// Prometheus metrics (for e2e test compatibility with datamanager metrics)
-	entitiesUpdated prometheus.Counter
-	metricsRegistry *metric.MetricsRegistry
+	entitiesUpdated        prometheus.Counter
+	indexingProfileDefault *prometheus.CounterVec
+	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
@@ -234,13 +265,14 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Create component
 	comp := &Component{
-		name:            "graph-ingest",
-		config:          config,
-		decoder:         message.NewDecoder(deps.PayloadRegistry),
-		natsClient:      natsClient,
-		logger:          logger,
-		entitiesUpdated: getEntitiesUpdatedMetric(deps.MetricsRegistry),
-		metricsRegistry: deps.MetricsRegistry,
+		name:                   "graph-ingest",
+		config:                 config,
+		decoder:                message.NewDecoder(deps.PayloadRegistry),
+		natsClient:             natsClient,
+		logger:                 logger,
+		entitiesUpdated:        getEntitiesUpdatedMetric(deps.MetricsRegistry),
+		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
+		metricsRegistry:        deps.MetricsRegistry,
 	}
 
 	// Initialize last activity
@@ -886,7 +918,120 @@ func (c *Component) extractEntityFromMessage(msg *message.BaseMessage) (*graph.E
 		Version:     1,
 	}
 
+	// ADR-054 channel (a): a Graphable payload MAY also declare its indexing
+	// profile via the optional IndexingProfiler interface. Stamp it explicitly
+	// here so it's present on entity.Triples by the time MergeEntity reaches
+	// its create seam; absence (or an invalid value) falls through to the
+	// fallback floor there.
+	if profiler, ok := payload.(message.IndexingProfiler); ok {
+		stampExplicitIndexingProfile(entity, profiler.IndexingProfile())
+	}
+
 	return entity, nil
+}
+
+// removeIndexingProfileTriples drops every entity.indexing.profile triple from
+// the entity (the single-valued predicate is replace-on-write, never appended).
+func removeIndexingProfileTriples(entity *graph.EntityState) {
+	filtered := entity.Triples[:0]
+	for _, t := range entity.Triples {
+		if t.Predicate != vocabulary.EntityIndexingProfile {
+			filtered = append(filtered, t)
+		}
+	}
+	entity.Triples = filtered
+}
+
+// appendIndexingProfileTriple appends one entity.indexing.profile triple.
+// Callers are responsible for having removed any prior value first.
+func appendIndexingProfileTriple(entity *graph.EntityState, profile string) {
+	entity.Triples = append(entity.Triples, message.Triple{
+		Subject:    entity.ID,
+		Predicate:  vocabulary.EntityIndexingProfile,
+		Object:     profile,
+		Source:     "graph-ingest-indexing-profile",
+		Timestamp:  time.Now(),
+		Confidence: 1.0,
+	})
+}
+
+// stampExplicitIndexingProfile sets entity.indexing.profile to an explicitly
+// declared profile (replace-on-write, single-valued). Empty or unrecognized
+// values are ignored — the entity then falls through to the fallback floor at
+// its create seam rather than failing (lenient Phase 1 semantics). Used by the
+// Graphable IndexingProfiler channel (extractEntityFromMessage) and the
+// mutation-envelope channel (handleEntityCreateWithTriples).
+func stampExplicitIndexingProfile(entity *graph.EntityState, profile string) {
+	if entity == nil || !vocabulary.IsValidIndexingProfile(profile) {
+		return
+	}
+	removeIndexingProfileTriples(entity)
+	appendIndexingProfileTriple(entity, profile)
+}
+
+// reconcileIndexingProfile is the entity-CREATION-seam stamp (ADR-054 §5). It
+// runs at every place an entity is born — createEntity, MergeEntity's
+// first-write branch, and the stub→real upgrade in MergeEntity's merge branch —
+// and never on a plain update of an already-profiled entity, so a profile is
+// immutable once set. It enforces the single-valued invariant and applies the
+// fallback floor when nothing was declared:
+//
+//   - ≥1 profile triple present (an explicit declaration was stamped upstream,
+//     or a real producer is upgrading a profile-less stub): keep the FIRST and
+//     drop any duplicates. No floor, no metric.
+//   - 0 profile triples present: derive the floor (deriveIndexingProfileFloor),
+//     append it, and increment indexing_profile_default_total{message_type}.
+func (c *Component) reconcileIndexingProfile(entity *graph.EntityState) {
+	if entity == nil {
+		return
+	}
+	kept := false
+	filtered := entity.Triples[:0]
+	for _, t := range entity.Triples {
+		if t.Predicate == vocabulary.EntityIndexingProfile {
+			if kept {
+				continue // single-valued: drop duplicates, keep the first
+			}
+			kept = true
+		}
+		filtered = append(filtered, t)
+	}
+	entity.Triples = filtered
+	if kept {
+		return
+	}
+	appendIndexingProfileTriple(entity, deriveIndexingProfileFloor(entity))
+	if c.indexingProfileDefault != nil {
+		c.indexingProfileDefault.WithLabelValues(indexingProfileMetricLabel(entity.MessageType)).Inc()
+	}
+}
+
+// deriveIndexingProfileFloor returns the floor profile for an entity that
+// declared none (ADR-054 channel c). Phase 1 is deliberately minimal: it
+// defaults to "control" — the policy "fail toward keeping the substrate
+// reachable" — for every undeclared entity. The EntityID type-segment
+// (parsed below) and the MessageType registry are the seam where Phase 2 adds
+// type-aware floors (telemetry → signal, audit → trace); until then the
+// default-fallback metric surfaces which producers still need a declaration.
+func deriveIndexingProfileFloor(entity *graph.EntityState) string {
+	// Phase 2 hook: branch on parsed.Type / entity.MessageType here. Parsing is
+	// kept now so the floor is computed from the same inputs Phase 2 will use.
+	if _, err := types.ParseEntityID(entity.ID); err != nil {
+		return vocabulary.IndexingProfileControl
+	}
+	return vocabulary.IndexingProfileControl
+}
+
+// indexingProfileMetricLabel renders a message.Type as a stable, low-cardinality
+// metric label, or "unknown" for any incomplete Type. The IsValid guard (all
+// three of Domain/Category/Version present) prevents a partial Type from
+// producing a non-semantic label like ".widget.v1" or "test.widget." — a
+// malformed producer surfaces as "unknown" rather than a junk label key.
+func indexingProfileMetricLabel(mt message.Type) string {
+	if !mt.IsValid() {
+		return "unknown"
+	}
+	return mt.Key()
 }
 
 // ============================================================================
@@ -990,6 +1135,9 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 			if len(hierarchyTriples) > 0 {
 				entity.Triples = append(entity.Triples, hierarchyTriples...)
 			}
+			// ADR-054: first write is entity birth — stamp the profile
+			// (explicit-if-declared via IndexingProfiler, else floor).
+			c.reconcileIndexingProfile(entity)
 			data, err := json.Marshal(entity)
 			if err == nil {
 				bytesWritten = len(data)
@@ -1008,6 +1156,12 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		if entity.StorageRef != nil {
 			existing.StorageRef = entity.StorageRef
 		}
+		// ADR-054: a real producer merging into a profile-less referential-
+		// integrity stub is that entity's true birth — reconcile stamps the
+		// profile (kept from the incoming declaration, else floor). For an
+		// already-profiled entity this is a no-op (keep-first preserves the
+		// create-time value), so a re-arrival never re-profiles.
+		c.reconcileIndexingProfile(&existing)
 		existing.Version++
 		existing.UpdatedAt = time.Now()
 		data, err := json.Marshal(&existing)
@@ -1087,6 +1241,11 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 			entity.Triples = append(entity.Triples, hierarchyTriples...)
 		}
 	}
+
+	// ADR-054: stamp the indexing profile at the creation seam — keeps an
+	// explicit declaration (envelope/Graphable, already on entity.Triples) and
+	// otherwise applies the fallback floor + default metric.
+	c.reconcileIndexingProfile(entity)
 
 	// Serialize entity (now includes hierarchy triples if enabled)
 	data, err := json.Marshal(entity)

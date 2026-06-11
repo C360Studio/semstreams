@@ -290,6 +290,47 @@ const (
 	HierarchyTypeContains = "hierarchy.type.contains"
 )
 
+// Indexing Eligibility (ADR-054)
+// The producer's hint for which semantic substrates should index an entity.
+// Single-valued, stamped once at entity creation by graph-ingest. Gates ONLY
+// the embedding/community/search substrates — never the structural graph,
+// which stays queryable/traversable regardless of profile.
+
+// EntityIndexingProfile is the reserved single-valued predicate carrying an
+// entity's indexing profile (one of the IndexingProfile* values below).
+// Stamped at entity creation (replace-on-write); read by indexing consumers.
+const EntityIndexingProfile = "entity.indexing.profile"
+
+const (
+	// IndexingProfileContent is the retrieval corpus (embed yes, community yes):
+	// memory, documents, research facts, lessons, prose-bearing entities.
+	IndexingProfileContent = "content"
+	// IndexingProfileControl is low-cardinality lifecycle/harness/run machinery
+	// (embed yes — the cardinality guard excludes high-fan-out control types —
+	// community yes). The substrate stays semantically reachable. Default floor.
+	IndexingProfileControl = "control"
+	// IndexingProfileSignal is telemetry readings (embed only summarized
+	// rollups, community aggregate only). Raw readings stay graph-visible, not
+	// embedded.
+	IndexingProfileSignal = "signal"
+	// IndexingProfileTrace is mechanically generated audit/trace entities (embed
+	// no, community no). Fully graph-visible and queryable, but never embedded.
+	IndexingProfileTrace = "trace"
+)
+
+// IsValidIndexingProfile reports whether s is one of the four recognized
+// indexing profiles. Empty and unrecognized strings are invalid (callers
+// treat invalid as "absent" and fall through to the fallback floor rather
+// than failing, per ADR-054 lenient Phase 1 semantics).
+func IsValidIndexingProfile(s string) bool {
+	switch s {
+	case IndexingProfileContent, IndexingProfileControl, IndexingProfileSignal, IndexingProfileTrace:
+		return true
+	default:
+		return false
+	}
+}
+
 // NOTE: The predicates in this file are EXAMPLES for demonstration purposes.
 // SemStreams is a framework - applications should define their own domain-specific
 // vocabulary in their own packages and register predicates using the vocabulary registry.
