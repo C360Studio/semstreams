@@ -38,6 +38,20 @@ func storedEntity(t *testing.T, comp *Component, id string) *graph.EntityState {
 	return &es
 }
 
+// nonProfileTripleCount counts an entity's triples EXCLUDING the framework-
+// stamped entity.indexing.profile (ADR-054). Count-based assertions that
+// predate the stamp use it so they stay robust to the reserved triple instead
+// of hard-coding "+1". Shared with the integration tests (same package).
+func nonProfileTripleCount(es *graph.EntityState) int {
+	n := 0
+	for _, tr := range es.Triples {
+		if tr.Predicate != vocabulary.EntityIndexingProfile {
+			n++
+		}
+	}
+	return n
+}
+
 // profileValues returns every entity.indexing.profile object on the entity, so
 // tests can assert the single-valued invariant (len must be exactly 1).
 func profileValues(es *graph.EntityState) []string {
@@ -75,6 +89,7 @@ func TestIndexingProfile_CreateWithTriples_DefaultsToControlFloor(t *testing.T) 
 	es := storedEntity(t, comp, testProfileEntityID)
 	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
 		"undeclared entity must default to exactly one control-floor profile")
+	assert.Equal(t, 1, nonProfileTripleCount(es), "the stamp must not displace the user triple")
 }
 
 func TestIndexingProfile_CreateWithTriples_EnvelopeProfileWins(t *testing.T) {

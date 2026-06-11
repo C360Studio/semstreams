@@ -461,8 +461,9 @@ func TestComponent_SynchronousHierarchy_DisabledConfig(t *testing.T) {
 		err = json.Unmarshal(entry.Value, &storedEntity)
 		require.NoError(t, err)
 
-		// Should only have the base triple (no hierarchy)
-		assert.Equal(t, 1, len(storedEntity.Triples),
+		// Should only have the base triple (no hierarchy); the ADR-054
+		// indexing-profile stamp is framework metadata, not a hierarchy triple.
+		assert.Equal(t, 1, nonProfileTripleCount(&storedEntity),
 			"disabled hierarchy should not add any triples")
 
 		for _, triple := range storedEntity.Triples {

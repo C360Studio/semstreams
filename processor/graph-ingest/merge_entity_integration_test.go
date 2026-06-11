@@ -58,7 +58,7 @@ func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
 	stored, _, err := c.fetchEntityState(ctx, entityID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Len(t, stored.Triples, 1)
+	assert.Equal(t, 1, nonProfileTripleCount(stored), "ADR-054 profile stamp excluded from the seed-triple count")
 	assert.Equal(t, "merge.kind", stored.Triples[0].Predicate)
 	assert.Equal(t, "alpha", stored.Triples[0].Object)
 }
