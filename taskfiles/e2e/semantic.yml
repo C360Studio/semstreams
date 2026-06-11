@@ -60,7 +60,8 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[COMPARE] Running statistical variant first..."
-      - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait
+      # --build for parity with the semantic-variant step below (gh#246 follow-up).
+      - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
         ignore_error: true
       - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
