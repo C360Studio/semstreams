@@ -79,6 +79,12 @@ type StreamAutoCreateConfig struct {
 	// MaxAge is the maximum age of messages (default 7 days).
 	MaxAge time.Duration
 
+	// Duplicates is the server-side duplicate-detection window for the
+	// Nats-Msg-Id header (ADR-055 §5 "T1"). Zero leaves the NATS server
+	// default (2m). Must be <= MaxAge or the server rejects creation;
+	// ensureStreamForConsumer clamps it down to MaxAge when it exceeds it.
+	Duplicates time.Duration
+
 	// MaxBytes is the maximum total size (0 = unlimited).
 	MaxBytes int64
 
@@ -388,6 +394,17 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 	}
 	if autoConfig.Replicas > 0 {
 		streamCfg.Replicas = autoConfig.Replicas
+	}
+	if autoConfig.Duplicates > 0 {
+		dup := autoConfig.Duplicates
+		// Server rejects an explicit window > MaxAge; clamp to keep auto-create
+		// from failing on a misconfigured window (mirrors config.createStream).
+		if streamCfg.MaxAge > 0 && dup > streamCfg.MaxAge {
+			c.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
+				"stream", cfg.StreamName, "duplicates", dup, "max_age", streamCfg.MaxAge)
+			dup = streamCfg.MaxAge
+		}
+		streamCfg.Duplicates = dup
 	}
 
 	// Create the stream

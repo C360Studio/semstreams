@@ -12,6 +12,16 @@ Working name throughout the design exercise: "ADR-047-prime." This
 is the canonical numbered ADR; the working name remains useful in
 the proposal documents as a continuity marker.
 
+**Extended by [ADR-055](055-graph-write-intent-taxonomy.md)** —
+2026-06-11. ADR-049's bucket-ownership rubric and CAS-on-condition
+state-write choice stand and are validated. ADR-055 generalizes the
+"schema owner over ENTITY_STATES" principle beyond the lifecycle
+harness into a write-intent taxonomy (every entity is born with a
+semantic envelope; `triple.add` loses its auto-vivify-create power),
+and resolves the one gap this ADR left open — Participant *identity*
+gains a Graphable origin via a generic `ParticipantEntity` adapter
+while transitions stay on the CAS wire defined here.
+
 ## Context
 
 ### What ADR-047 shipped
