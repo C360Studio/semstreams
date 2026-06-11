@@ -2,6 +2,15 @@
 
 ## Status
 
+**Audit mechanism amended by [ADR-055](055-graph-write-intent-taxonomy.md) §3a**
+— 2026-06-11. The `approve`/`deny` "auditability via the graph" choice (audit
+triples written to the rule-ID subject) relied on `triple.add` auto-vivify creating
+a phantom non-6-part rule-ID entity. ADR-055 retires auto-vivify entity creation, so
+the verdict audit moves to a registered append-only verdict event on the
+`GOVERNANCE_VERDICT_AUDIT` stream. The explicit-verdict-audit goal and the
+"verdict is structural; audit-write failure must not flip it" discipline are
+preserved; only the storage mechanism changes. The rest of this ADR stands.
+
 **Proposed — 2026-05-12.** Migrates tool-call governance from the
 in-process filter pattern shipped in beta.67+68 onto the rules engine.
 The forcing function: semspec hit unmarshal noise from the
