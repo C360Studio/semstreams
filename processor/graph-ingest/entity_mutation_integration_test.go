@@ -143,7 +143,9 @@ func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testin
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
 	require.True(t, resp.Success, "create_with_triples on fresh ID should succeed; err=%q", resp.Error)
-	assert.Equal(t, 2, resp.TriplesAdded)
+	// 2 request triples + the ADR-054 entity.indexing.profile stamp applied at
+	// the create seam. TriplesAdded reflects the total stored on the entity.
+	assert.Equal(t, 3, resp.TriplesAdded)
 
 	// Verify provenance survived to storage — the load-bearing reason
 	// for the *_with_triples variant over a plain add_batch upsert.
@@ -155,7 +157,7 @@ func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testin
 	assert.NotNil(t, stored.StorageRef, "StorageRef preserved")
 	assert.Equal(t, "test-bucket", stored.StorageRef.StorageInstance)
 	assert.Equal(t, "test/key", stored.StorageRef.Key)
-	assert.Len(t, stored.Triples, 2, "req.Triples should REPLACE Entity.Triples, not append")
+	assert.Equal(t, 2, nonProfileTripleCount(&stored), "req.Triples should REPLACE Entity.Triples, not append (ADR-054 profile stamp excluded)")
 	for _, tr := range stored.Triples {
 		assert.NotEqual(t, "should.be.replaced", tr.Predicate,
 			"distractor predicate from req.Entity.Triples must not survive when req.Triples is non-empty")

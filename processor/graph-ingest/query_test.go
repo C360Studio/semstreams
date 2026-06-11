@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -972,8 +973,14 @@ func TestComponent_HandleQueryPrefix_ReturnsFullEntities(t *testing.T) {
 
 	// Verify it's a full entity with all data
 	assert.Equal(t, entity.ID, resp.Entities[0].ID)
-	assert.Len(t, resp.Entities[0].Triples, 2, "should have 2 triples")
+	// 2 user triples + the ADR-054 entity.indexing.profile stamp (appended at
+	// creation). No producer declared a profile here, so it defaults to the
+	// control floor; the user triples keep their original leading order.
+	assert.Len(t, resp.Entities[0].Triples, 3, "should have 2 user triples + the indexing-profile stamp")
 	assert.Equal(t, "robotics.status.armed", resp.Entities[0].Triples[0].Predicate)
+	profile, ok := resp.Entities[0].GetPropertyValue(vocabulary.EntityIndexingProfile)
+	assert.True(t, ok, "created entity should carry entity.indexing.profile")
+	assert.Equal(t, vocabulary.IndexingProfileControl, profile)
 }
 
 func TestComponent_HandleQueryPrefix_InvalidRequest(t *testing.T) {

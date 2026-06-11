@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/retry"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 const (
@@ -369,6 +370,11 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		req.Entity.Triples = req.Triples
 	}
 
+	// ADR-054 channel (b): stamp an explicitly declared indexing profile from
+	// the mutation envelope (highest precedence). Empty/invalid is ignored and
+	// the createEntity seam applies the fallback floor instead.
+	stampExplicitIndexingProfile(req.Entity, req.IndexingProfile)
+
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityExists,
@@ -499,6 +505,28 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	if req.Entity == nil {
 		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
 			"entity cannot be nil")
+	}
+
+	// ADR-054 §5: the indexing profile is immutable after creation EXCEPT via
+	// an explicit envelope override here. Inject it as a replace-by-predicate
+	// delta (RemoveTriples drops the prior value; AddTriples/MergeTriples adds
+	// the new one) so BOTH the CAS and UpdateWithRetry sub-paths apply it and
+	// the single-valued predicate stays unique. A later triple.add by a
+	// different writer must NOT change the profile — only this envelope does.
+	if req.IndexingProfile != "" {
+		if !vocabulary.IsValidIndexingProfile(req.IndexingProfile) {
+			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
+				fmt.Sprintf("invalid indexing_profile %q (want content|control|signal|trace)", req.IndexingProfile))
+		}
+		req.RemoveTriples = append(req.RemoveTriples, vocabulary.EntityIndexingProfile)
+		req.AddTriples = append(req.AddTriples, message.Triple{
+			Subject:    req.Entity.ID,
+			Predicate:  vocabulary.EntityIndexingProfile,
+			Object:     req.IndexingProfile,
+			Source:     "graph-ingest-indexing-profile",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+		})
 	}
 
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means

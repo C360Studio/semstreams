@@ -116,8 +116,8 @@ func TestIntegration_ConcurrentAddTriple(t *testing.T) {
 		require.NoError(t, json.Unmarshal(entry.Value, &finalEntity))
 
 		expectedTripleCount := 1 + concurrency
-		assert.Equal(t, expectedTripleCount, len(finalEntity.Triples),
-			"entity should have all triples (no lost updates)")
+		assert.Equal(t, expectedTripleCount, nonProfileTripleCount(&finalEntity),
+			"entity should have all triples (no lost updates); ADR-054 profile stamp excluded")
 
 		// Verify version was incremented correctly
 		assert.GreaterOrEqual(t, finalEntity.Version, uint64(concurrency+1),
@@ -339,7 +339,7 @@ func TestIntegration_CASRetryBehavior(t *testing.T) {
 		var finalEntity graph.EntityState
 		require.NoError(t, json.Unmarshal(entry.Value, &finalEntity))
 
-		assert.Equal(t, concurrency, len(finalEntity.Triples),
-			"all triples should be present")
+		assert.Equal(t, concurrency, nonProfileTripleCount(&finalEntity),
+			"all triples should be present; ADR-054 profile stamp excluded")
 	})
 }

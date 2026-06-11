@@ -37,10 +37,21 @@ type DeleteEntityRequest struct {
 
 // CreateEntityWithTriplesRequest creates entity with triples atomically
 type CreateEntityWithTriplesRequest struct {
-	Entity    *EntityState     `json:"entity"`
-	Triples   []message.Triple `json:"triples"`
-	TraceID   string           `json:"trace_id,omitempty"`
-	RequestID string           `json:"request_id,omitempty"`
+	Entity  *EntityState     `json:"entity"`
+	Triples []message.Triple `json:"triples"`
+	// IndexingProfile optionally declares the entity's indexing profile at
+	// creation (ADR-054 channel b): one of "content"|"control"|"signal"|
+	// "trace". When set, graph-ingest stamps entity.indexing.profile from it
+	// (highest precedence). When empty, graph-ingest falls through to the
+	// Graphable IndexingProfiler, then the fallback floor. Invalid values are
+	// treated as absent (lenient). This is the channel the registry-only
+	// design lacked — rule/lifecycle/loop/memory/research-graph writers use it
+	// to declare intent. Only meaningful on CREATE; entity-birth is the only
+	// place a profile is set (see also UpdateEntityWithTriplesRequest for the
+	// explicit-override exception).
+	IndexingProfile string `json:"indexing_profile,omitempty"`
+	TraceID         string `json:"trace_id,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
 }
 
 // UpdateEntityWithTriplesRequest updates entity and modifies triples atomically.
@@ -78,8 +89,15 @@ type UpdateEntityWithTriplesRequest struct {
 	// uses the non-zero path per ADR-049 to preserve state-machine
 	// correctness under concurrent writes.
 	ExpectedRevision uint64 `json:"expected_revision,omitempty"`
-	TraceID          string `json:"trace_id,omitempty"`
-	RequestID        string `json:"request_id,omitempty"`
+	// IndexingProfile, when non-empty, is the EXPLICIT-OVERRIDE channel for an
+	// entity's indexing profile (ADR-054 §5). A profile is otherwise immutable
+	// after creation; setting it here replaces entity.indexing.profile
+	// (RemoveTriples + AddTriples, single-valued). Empty leaves the existing
+	// profile untouched. This is the only post-creation way to re-profile an
+	// entity — a later triple.add by a different writer must NOT change it.
+	IndexingProfile string `json:"indexing_profile,omitempty"`
+	TraceID         string `json:"trace_id,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
 }
 
 // AddTripleRequest adds a triple to an existing entity

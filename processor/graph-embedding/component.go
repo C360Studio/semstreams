@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -909,6 +910,30 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 }
 
 // queueEntityForEmbedding queues an entity for async embedding generation
+// indexingEligible reports whether an entity should be indexed for embeddings
+// based on its ADR-054 indexing profile (entity.indexing.profile).
+//
+// Phase 1 is LENIENT: every entity is eligible regardless of profile, so this
+// always returns true (provable no-op, zero behavior change). It reads the
+// profile and emits a Debug observation for the profiles Phase 3 will exclude
+// (trace, raw signal) — that is the dry-run signal, not an action.
+//
+// Strict enforcement (actually skipping ineligible entities + emitting
+// embedding_skipped_total) is ADR-054 Phase 3, and MUST NOT ship as a bare
+// toggle: it is gated on the cost-ledger preconditions (dry-run report,
+// skipped metric, golden-corpus regression test, backfill) per
+// gate-silent-exclusion-flips-with-cost-ledger. So Phase 1 never excludes.
+func (c *Component) indexingEligible(es *graph.EntityState) bool {
+	if v, ok := es.GetPropertyValue(vocabulary.EntityIndexingProfile); ok {
+		if profile, _ := v.(string); profile == vocabulary.IndexingProfileTrace || profile == vocabulary.IndexingProfileSignal {
+			c.logger.Debug("entity has a non-embedding indexing profile; indexing anyway (ADR-054 Phase 1 lenient)",
+				slog.String("entity", es.ID),
+				slog.String("indexing_profile", profile))
+		}
+	}
+	return true
+}
+
 func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string, data []byte) {
 	// Report embedding stage (throttled to avoid KV spam)
 	if err := c.lifecycleReporter.ReportStage(ctx, "embedding"); err != nil {
@@ -921,6 +946,14 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		return
+	}
+
+	// ADR-054 Phase 1 (lenient): consult the entity's indexing profile but
+	// never exclude — strict enforcement is Phase 3, gated on the cost-ledger
+	// preconditions. indexingEligible always returns true here, so this is a
+	// provable no-op (zero behavior change); it is the seam Phase 3 turns live.
+	if !c.indexingEligible(&entityState) {
 		return
 	}
 

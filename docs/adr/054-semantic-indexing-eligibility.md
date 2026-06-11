@@ -173,9 +173,14 @@ returns.)
   }
   ```
 
-- **(b) Mutation-envelope field** — the mutation API request gains an optional
+- **(b) Mutation-envelope field** — the **create** and **update** mutation
+  requests (`create_with_triples`, `update_with_triples`) gain an optional
   `indexing_profile` field so rule/lifecycle/loop/memory/research-graph writers
-  declare intent. *This is the channel the registry-only design lacked.*
+  declare intent. *This is the channel the registry-only design lacked.* The
+  field is deliberately NOT added to `triple.add` / `triple.add_batch`: a
+  profile is set at entity birth, and per ADR-055 those requests must not create
+  entities (they append evidence to an existing one, whose profile is already
+  set). See §5 forward-compatibility note.
 
 - **(c) graph-ingest fallback** — when neither (a) nor (b) supplies a profile,
   graph-ingest derives a *floor* from `message.Type` (registry) and the parsed
@@ -184,9 +189,24 @@ returns.)
 
 ### 5. graph-ingest enforcement mechanics
 
-- **Stamp at create.** Profile is materialized on entity creation
-  (`create_with_triples`, first `triple.add` that creates an entity, and the
-  referential-integrity stub path `processor/graph-ingest/component.go:1200`).
+- **Stamp at the envelope-establishing creation seam.** Profile is materialized
+  exactly where an entity is *born with a semantic envelope*: the Graphable
+  JetStream arrival (`extractEntityFromMessage` → `MergeEntity` first write) and
+  the `create_with_triples` mutation (`createEntity`). A real producer merging
+  into a profile-less referential-integrity stub is also a birth, so the
+  stub→real upgrade in `MergeEntity`'s merge branch stamps too. The
+  `reconcileIndexingProfile` helper at each seam keeps an explicit declaration
+  (envelope/Graphable, stamped upstream) and otherwise applies the floor.
+- **Forward-compatibility with ADR-055 (no debt).** ADR-054's "stamp the
+  profile at entity birth" and ADR-055's "entity birth requires a semantic
+  envelope" are the **same seam** — the profile rides the envelope. The
+  `triple.add` / `triple.add_batch` *auto-vivify* paths (which create an entity
+  with no envelope) are therefore **NOT** a stamp point: they are the exact
+  ADR-055 defect being removed, so threading a profile through them would build
+  on soon-deleted code. An entity auto-vivified via `triple.add` before ADR-055
+  lands simply carries no profile triple, which lenient Phase-1 consumers handle
+  correctly (absent = index). When ADR-055 makes those paths must-exist, nothing
+  here changes.
 - **Single-valued, replace-on-write.** `entity.indexing.profile` MUST be
   written `RemoveTriples + AddTriples`, never appended. The merge path currently
   appends (`MergeEntity`), and an appended single-valued predicate accumulates
