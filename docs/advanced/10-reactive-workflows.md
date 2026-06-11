@@ -1,5 +1,11 @@
 # Reactive Workflows
 
+> **Legacy reference.** This page describes the retired
+> `processor/reactive` workflow engine. Current SemStreams orchestration uses
+> coordinated rules over lifecycle-managed graph entities; see
+> [Orchestration Layers](../concepts/14-orchestration-layers.md) and
+> [ADR-049](../adr/049-lifecycle-harness-prime-schema-over-entity-states.md).
+
 The reactive workflow engine enables multi-step coordination using typed Go functions instead of JSON configuration with string interpolation. Workflows are defined in Go code, providing compile-time type safety and eliminating serialization bugs.
 
 ## What Reactive Workflows Do

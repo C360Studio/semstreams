@@ -138,7 +138,7 @@ ship via config, not redeploys.
 | `publish_agent` | Spawns an agentic loop with a role + prompt + result subject. | Need rendering, transformation, or any LLM-mediated shape change. |
 | `add_triple` / `update_triple` / `remove_triple` | Mutates the graph. | When the artifact *is* a graph fact (status flag, computed predicate). |
 | `update_kv` | Writes to a KV bucket. | When the artifact is a structured snapshot keyed by entity ID. |
-| `trigger_workflow` | Fires a multi-step reactive workflow. | When emission needs sequencing (render → validate → publish → notify). |
+| `lifecycle_*` | Advances a lifecycle-managed entity through declared phases. | Operator-visible lifecycle steps such as render → validate → publish. |
 
 Pick the smallest tool that fits — a `publish` to an existing output
 component is structurally cheaper than spawning a renderer agent.

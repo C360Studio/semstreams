@@ -1,5 +1,11 @@
 # Reactive Workflow Configuration Reference
 
+> **Legacy reference.** This page describes the retired
+> `processor/reactive` workflow engine. Current SemStreams orchestration uses
+> the rule engine plus `pkg/lifecycle` over `ENTITY_STATES`; see
+> [Orchestration Layers](../concepts/14-orchestration-layers.md) and
+> [ADR-049](../adr/049-lifecycle-harness-prime-schema-over-entity-states.md).
+
 Complete reference for configuring and building reactive workflows in SemStreams. The reactive workflow
 engine replaces JSON-based DAG workflows with Go code that provides compile-time type safety, direct field
 access, and standard Go tooling.
