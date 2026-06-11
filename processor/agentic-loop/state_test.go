@@ -1000,3 +1000,32 @@ func TestLoopManager_HasActiveLoopForTask(t *testing.T) {
 		t.Fatal("HasActiveLoopForTask should return false for terminal loop")
 	}
 }
+
+// TestLoopManager_GetRunID is the read-side counterpart to SetRunID
+// (ADR-053 D7, issue #250). A freshly created loop carries no run anchor;
+// after SetRunID it reads back; an unknown loop reads "" rather than
+// erroring so the best-effort dispatch stamp stays branchless.
+func TestLoopManager_GetRunID(t *testing.T) {
+	manager := agenticloop.NewLoopManager()
+
+	loopID, err := manager.CreateLoop("task-run", "general", "qwen-32b")
+	if err != nil {
+		t.Fatalf("CreateLoop() error = %v", err)
+	}
+
+	if got := manager.GetRunID(loopID); got != "" {
+		t.Errorf("GetRunID() before SetRunID = %q, want \"\" (loop not part of a run)", got)
+	}
+
+	const runID = "run-anchor-xyz"
+	if err := manager.SetRunID(loopID, runID); err != nil {
+		t.Fatalf("SetRunID() error = %v", err)
+	}
+	if got := manager.GetRunID(loopID); got != runID {
+		t.Errorf("GetRunID() after SetRunID = %q, want %q", got, runID)
+	}
+
+	if got := manager.GetRunID("no-such-loop"); got != "" {
+		t.Errorf("GetRunID(unknown) = %q, want \"\" (no error, no panic)", got)
+	}
+}

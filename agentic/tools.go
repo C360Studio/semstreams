@@ -157,6 +157,40 @@ const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 // a Go string) — readers coerce on access.
 const MetadataKeyRelatedLoops = "agent.related_loops"
 
+// MetadataKeyRunID is the ToolCall.Metadata key under which agentic-loop
+// dispatch stamps the loop's run anchor — the bare run loop-id (ADR-053
+// D7/D8) — when the loop belongs to a run. A tool executor reads it to
+// obtain the run/chain identity directly, instead of re-deriving it by
+// walking agent.loop.parent ancestry triples from its LoopID back to the
+// chain root over graph.query.entity (the hand-rolled ancestry resolver
+// the semteams product shell carried for ADR-053 Phase 5, issue #250).
+//
+// Empty/absent when the loop is not part of a run — a standalone loop
+// stamps neither this nor MetadataKeyRunEntityID (back-compat). Paired
+// with MetadataKeyRunEntityID, which carries the resolved 6-part chain
+// execution entity ID for the same run.
+//
+// Stamped authoritatively (overwrite), unlike the loop_id soft-fallback:
+// the run anchor is a framework fact derived from the loop's typed RunID
+// (set via LoopManager.SetRunID at loop creation), and there is no
+// legitimate caller-override use case, so dispatch always supplies it.
+const MetadataKeyRunID = "agent.run_id"
+
+// MetadataKeyRunEntityID is the ToolCall.Metadata key carrying the
+// resolved 6-part chain execution entity ID
+// (org.platform.agent.chain.execution.<runID>) for the loop's run
+// anchor. Mirrors LoopCreatedEvent.RunEntityID / LoopCompletedEvent.
+// RunEntityID so a tool executor and an event subscriber resolve the
+// same run/chain entity.
+//
+// Stamped alongside MetadataKeyRunID by agentic-loop dispatch when the
+// loop belongs to a run AND the handler has a valid platform identity
+// (org+platform). Absent when RunID is empty or the platform identity
+// is missing; a consumer that needs the entity ID under a missing
+// platform can reconstruct it from MetadataKeyRunID plus its own
+// org/platform via agentic.ChainExecutionEntityID.
+const MetadataKeyRunEntityID = "agent.run_entity_id"
+
 // LineageTriplePrefix is the predicate prefix for cross-arc loop-ID
 // lineage triples stamped on a spawned loop's entity at loop-creation
 // time. Each entry in TaskMessage.Metadata[MetadataKeyRelatedLoops]
