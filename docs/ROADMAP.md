@@ -91,21 +91,24 @@ Complete stubbed action implementations in rules processor:
 
 Current state: Stateful ECA rules work. Publish actions implemented for agentic system integration. Update triple actions partially implemented.
 
-### Workflow Processor
-**Status:** Implemented (Reactive Engine)
+### Rule Engine + Lifecycle Harness
+**Status:** Implemented (Reactive rules + `pkg/lifecycle`)
 
-Reactive workflow engine for stateless rules and stateful multi-step workflows:
-- KV watch and stream/subject-based triggers
-- Typed Go condition evaluation (no string interpolation)
-- Cooldown and debounce for temporal deduplication
-- Fire-and-forget publish actions
-- Optional stateful workflow support via `pkg/workflow/` participant pattern
+SemStreams no longer carries a separate reactive workflow engine. Current
+workflow-shaped behavior is expressed as coordinated rule sets over
+lifecycle-managed graph entities:
+- KV watch, NATS subject, and cron triggers
+- Unified typed condition evaluation
+- Cooldown, debounce, dedup, and per-action iteration caps
+- Fire-and-forget publish and publish-agent actions
+- Lifecycle actions (`lifecycle_transition`, `lifecycle_complete`,
+  `lifecycle_fail`) over `ENTITY_STATES`
 
-Current state: The original DAG-based workflow processor (`processor/workflow/`) was removed in favor of the reactive
-engine (`processor/reactive/`). The new engine aligns with semstreams' reactive philosophy where the message topology
-IS the execution graph. Components that need stateful workflows implement `WorkflowParticipant` and manage state via
-KV buckets as a side effect. This reduced code complexity by 55% (~1550 lines) while maintaining all required
-functionality.
+Current state: The retired `processor/reactive/` path has been replaced by the
+rule engine plus `pkg/lifecycle`. Durable phase/progress state that is part of a
+named entity lives as graph triples in `ENTITY_STATES`; opaque execution
+artifacts and high-volume traces stay in component-owned buckets or ObjectStore
+refs. See `docs/concepts/14-orchestration-layers.md` and ADR-049.
 
 ### Agentic Components
 **Status:** Implemented
@@ -149,20 +152,21 @@ Auto-generate abstracts/summaries for content using LLM agents.
 #### Content Analysis Processor
 **Priority:** Medium | **Complexity:** High
 
-LLM-powered analysis of operational documents to suggest rules and workflows:
+LLM-powered analysis of operational documents to suggest rules and
+lifecycle-backed orchestration patterns:
 - Watch for new documents by configurable type/category patterns
 - Two-phase analysis: detect candidates, then extract full definitions
 - Extract conditional logic as rule suggestions
-- Extract multi-step procedures as workflow suggestions
+- Extract multi-step procedures as coordinated rule/lifecycle suggestions
 - User review/approval via HTTP API before deployment
 
 - **Use cases:** Early adopters uploading SOPs before field deployment
 - **Tier requirement:** Semantic (LLM required)
 - **Pattern:** KV-watching async worker
-- **Depends on:** Rules completion, reactive workflow engine
+- **Depends on:** Rule engine, lifecycle harness
 
-Current state: Reactive workflow engine is implemented. Content analysis implementation
-can proceed when prioritized.
+Current state: Rule engine + lifecycle harness are implemented. Content
+analysis implementation can proceed when prioritized.
 
 ---
 

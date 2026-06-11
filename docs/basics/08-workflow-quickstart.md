@@ -1,5 +1,12 @@
 # Workflow Quickstart
 
+> **Legacy guide.** This page describes the retired `processor/reactive`
+> workflow engine. Current SemStreams workflow-shaped behavior is expressed as
+> coordinated rule sets over lifecycle-managed graph entities. Start with
+> [Orchestration Layers](../concepts/14-orchestration-layers.md) and
+> [ADR-049](../adr/049-lifecycle-harness-prime-schema-over-entity-states.md)
+> for the current rule/lifecycle storage boundary.
+
 Get started with SemStreams reactive workflow orchestration for multi-step processes.
 
 ## What are Reactive Workflows?

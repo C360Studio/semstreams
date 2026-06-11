@@ -289,10 +289,11 @@ fan-in rule fires when all expected branches have written.
 ]
 ```
 
-**State**: each worker writes its result to the operation entity and
-increments the synchronizer count. The fan-in rule reads the count.
-No new bucket; the operation entity carries the synchronization
-state.
+**State**: each worker writes a completion fact, result summary, or
+ObjectStore ref to the operation entity and increments the synchronizer
+count. The fan-in rule reads the count. No new bucket; the operation
+entity carries the synchronization state. Bulky outputs, traces, and
+opaque completion payloads stay in the producing component's store.
 
 ## State Storage Boundaries
 
@@ -302,30 +303,44 @@ below).
 
 | Category | Storage | Rule-observable? | In knowledge graph? |
 |---|---|---|---|
-| **Domain entities** | `ENTITY_STATES` KV | Yes | Yes (`Graphable`) |
-| **Operational results** | Component-specific KV (e.g., `AGENT_LOOPS`) | Yes | No |
+| **Domain and lifecycle entities** | `ENTITY_STATES` KV | Yes | Yes (`Graphable`) |
+| **Operational execution artifacts** | Component-specific KV (e.g., `AGENT_LOOPS`) | Yes | No |
 | **Events** | JetStream streams | No (rules watch KV, not streams) | No |
 | **Bulky payloads** | ObjectStore via `ContentStorable`; ref-triples on owning entity | Indirectly (via refs) | Refs only |
 
-### Domain entities (`ENTITY_STATES`)
+### Domain and lifecycle entities (`ENTITY_STATES`)
 
-Semantic domain objects implementing `Graphable`:
+Semantic domain objects and lifecycle-managed coordination roots
+implementing `Graphable`:
 
 - 6-part hierarchical entity ID (`org.platform.domain.system.type.instance`)
 - Persist across multiple events
 - Queryable in the knowledge graph
+- Carry lifecycle facts when phase, progress, ownership, parent/child
+  links, audit source, or operator-writable metadata is itself part of
+  the semantic control surface
 
 **Only `graph-ingest` writes to `ENTITY_STATES`.**
 
-### Operational results (component-specific KV)
+Lifecycle does not violate the "no operational results in triples"
+rule. It is the explicit ADR-049 exception category: low-volume,
+relationship-bearing, operator-queryable control-plane state belongs in
+the graph because rules, dashboards, GraphQL, history, and inference all
+need the same facts. Short-lived traces, model trajectories, request
+logs, raw telemetry samples, and bulky artifacts do not become lifecycle
+triples just because they helped produce a lifecycle transition.
 
-Execution outcomes that are not semantic domain entities:
+### Operational execution artifacts (component-specific KV)
+
+Execution outcomes and internal traces that are not semantic domain or
+lifecycle facts:
 
 - Use `COMPLETE_{id}` key pattern for rules observability
 - Stored in component-specific buckets:
   - `AGENT_LOOPS`: agent + research operation state (`COMPLETE_{loopID}`)
   - Other components may register their own buckets when warranted
-- Transient — represent what happened, not what exists
+- Transient or high-volume — represent how work happened, not what now
+  exists or what phase a named entity is in
 
 Rules can watch multiple buckets via the `entity_watch_buckets`
 config:
@@ -355,10 +370,18 @@ to ObjectStore and put the ref-triple on the owning entity. The rule
 payload carries only the entity ID and ref. Components reading the
 payload dereference on demand.
 
-### Anti-pattern: writing operational results to `ENTITY_STATES`
+### Anti-pattern: writing opaque execution artifacts to `ENTITY_STATES`
 
-Pollutes the knowledge graph with non-semantic data. Breaks
+Pollutes the knowledge graph with non-semantic data. Breaks the
 `Graphable` contract. Makes graph queries less meaningful.
+
+This is different from writing lifecycle facts to `ENTITY_STATES`.
+`mission.phase=flying`, `batch.held_reason=quality_alarm`, and
+`survey.owns_child=capture-session-7` are graph facts about named
+entities. `agent token trace`, `raw completion JSON`, and
+`HTTP request timing sample` are execution artifacts; keep them in the
+owning component's bucket, metrics/tracing, JetStream, or ObjectStore
+with a ref triple when another entity needs to point at them.
 
 ```go
 // WRONG
@@ -413,8 +436,9 @@ Only one layer owns a piece of state.
 | Trigger conditions | Rule engine |
 | Iteration counters | Rule engine (per-action `MatchState`) |
 | Execution state inside a component | Component |
-| Domain entities | `graph-ingest` (writes to `ENTITY_STATES`) |
-| Operational results | Component that produced them (writes to its own bucket) |
+| Domain and lifecycle entities | `graph-ingest` (writes to `ENTITY_STATES`) |
+| Lifecycle transition contract | `pkg/lifecycle.Manager` (emits through `graph-ingest`) |
+| Operational execution artifacts | Component that produced them (writes to its own bucket/ObjectStore) |
 
 ### 5. If you need a new bucket, ask twice
 

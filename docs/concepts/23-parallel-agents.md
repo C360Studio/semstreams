@@ -1,10 +1,17 @@
 # Parallel Agent Execution
 
-Running multiple agents concurrently using reactive workflows and event-driven coordination.
+> **Legacy pattern guide.** This page documents the older
+> `processor/reactive`-based parallel-agent approach. Current fan-out/fan-in
+> should start from [Orchestration Layers](14-orchestration-layers.md):
+> coordinated rules, `for_each` where appropriate, component-internal bounded
+> dispatch for execution parallelism, lifecycle-managed graph entities for
+> durable phase/progress state, and `AGENT_LOOPS` for agent trace artifacts.
+
+Running multiple agents concurrently using event-driven coordination.
 
 ## Overview
 
-The current architecture executes parallel agents through reactive workflows that spawn multiple `TaskMessage`
+The historical architecture executed parallel agents through reactive workflows that spawn multiple `TaskMessage`
 payloads and react to their completion events. Unlike the removed DAG-based parallel steps system, this approach
 uses pure event-driven orchestration with no callbacks or blocking. Each agent runs independently in an
 `agentic-loop`, publishes completion events to NATS subjects, and writes state to the `AGENT_LOOPS` KV bucket.
@@ -137,7 +144,9 @@ NewRuleBuilder("spawn-agents").
 
 ## Reacting to Agent Completions
 
-Reactive workflows can monitor agent completion using KV watches or subject consumers.
+Coordinated rules can monitor agent completion using KV watches. Use
+lifecycle-managed graph entities for durable phase/progress state, and keep
+agent loop traces in `AGENT_LOOPS`.
 
 ### Fan-In Pattern: KV Watch
 
@@ -655,8 +664,8 @@ Mutate(func(ctx *reactive.RuleContext, result any) error {
 ## Related Documentation
 
 - [Agentic Systems](13-agentic-systems.md) - Core agentic concepts and loop architecture
-- [Reactive Workflows](../advanced/10-reactive-workflows.md) - Reactive workflow engine guide
-- [Orchestration Layers](14-orchestration-layers.md) - When to use rules vs workflows
+- [Orchestration Layers](14-orchestration-layers.md) - Current rule/lifecycle orchestration model
+- [Reactive Workflows](../advanced/10-reactive-workflows.md) - Legacy reactive workflow engine guide
 - [Payload Registry](15-payload-registry.md) - Message type registration for deserialization
 
 ## Migration from DAG Workflows
