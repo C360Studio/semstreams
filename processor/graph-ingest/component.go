@@ -41,6 +41,9 @@ var (
 
 	indexingProfileOnce       sync.Once
 	indexingProfileDefaultVec *prometheus.CounterVec
+
+	mutationRejectionsOnce sync.Once
+	mutationRejectionsVec  *prometheus.CounterVec
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -91,6 +94,31 @@ func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *promethe
 		}
 	})
 	return indexingProfileDefaultVec
+}
+
+// getMutationRejectionsMetric returns the process-wide counter for rejected
+// graph-mutation requests, labelled by subject + reason (the MutationResponse
+// ErrorCode — a bounded closed set). It operationalizes ADR-055 §3's "loud
+// fail-fast" observability: when the closing-move must-exist flip lands, a
+// triple.add targeting a non-existent entity surfaces here as
+// reason=entity_not_found instead of silently auto-vivifying. Until the flip it
+// meters existing rejections (validation, CAS conflict, create-or-fail),
+// giving the ADR-054 cost-ledger discipline a pre-flip baseline.
+func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	mutationRejectionsOnce.Do(func() {
+		mutationRejectionsVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "mutation_rejections_total",
+			Help:      "Graph-mutation requests rejected (success=false), by subject and reason (MutationResponse ErrorCode; 'unclassified' when absent)",
+		}, []string{"subject", "reason"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "mutation_rejections_total", mutationRejectionsVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(mutationRejectionsVec)
+		}
+	})
+	return mutationRejectionsVec
 }
 
 // Config holds configuration for graph-ingest component
@@ -226,6 +254,7 @@ type Component struct {
 	// Prometheus metrics (for e2e test compatibility with datamanager metrics)
 	entitiesUpdated        prometheus.Counter
 	indexingProfileDefault *prometheus.CounterVec
+	mutationRejections     *prometheus.CounterVec
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
@@ -271,6 +300,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		logger:                 logger,
 		entitiesUpdated:        getEntitiesUpdatedMetric(deps.MetricsRegistry),
 		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
+		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
