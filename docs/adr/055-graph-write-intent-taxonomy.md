@@ -472,14 +472,35 @@ must-exist last, so `main` is never broken in between.
     (`audit`/`enforce`) is a loop-level setting not threaded to the rule-action
     emit site, so a `mode` label would be permanently `unknown`; revisit if the
     mode is propagated into the proposed-call message. Gates the closing move.
-  - **T1 (three parts)** — `PublishToStreamWithMsgID` + `config.StreamConfig.Duplicates`
-    plumbed into both builders + the existing-stream update path; decide the window
-    size (Open Question #1). Optionally (s,p,o)-idempotent merge in `MergeEntity`.
-  - **T2** WARN-and-regroup-by-Subject + **StorageRef extraction** (both halves) in
-    `extractEntityFromMessage`.
-  - Lane naming + the §3 rejection metric + the body-prefix-error Wave-0 invariant.
-  - In-process `Component.AddTriple` caller audit (§3).
-  - **ADR-054 Phase 1** (IndexingProfiler, lenient) so birth envelopes carry it.
+  - **T1 (three parts)** — **[SHIPPED beta.105 / #251]** `PublishToStreamWithMsgID`
+    + `config.StreamConfig.Duplicates` plumbed into both builders + the
+    existing-stream update path. (s,p,o)-idempotent merge in `MergeEntity` remains
+    the Open Question #1 belt-and-suspenders follow-up.)
+  - **T2** WARN-and-regroup-by-Subject + **StorageRef extraction** (consumer half)
+    in `extractEntityFromMessage` — **[SHIPPED #264]** (`ingestEntity` partition +
+    `partitionTriplesBySubject` + StorageRef lift). Producer-side
+    `TrajectoryStepEntity` exported-field half is Wave 1 (no Fact-stream publish
+    leg exists yet).
+  - **§3 rejection metric** — **[SHIPPED]** `semstreams_graph_ingest_mutation_rejections_total{subject, reason}`
+    via the `meteredMutation` wrapper around every mutation handler; `reason` is the
+    bounded `MutationResponse.ErrorCode` (`entity_not_found` is the must-exist-flip
+    code), `unclassified` when absent. Meters existing rejections now; flip-ready.
+    The **body-prefix-error invariant** (every conjuror migrating to a mutation
+    lane must check the `error:`/`success:false` response, never treat rejection as
+    success) is a Wave-2-onward producer-migration discipline (documented §3).
+    **Lane naming** (subject rename to `state.transition`/`evidence.append`) is
+    **DEFERRED** — Open Question #5, a breaking rename separable from the
+    load-bearing must-exist change.
+  - In-process `Component.AddTriple` caller audit (§3) — **[DONE — SAFE, #267]** no
+    caller relies on auto-vivify ordering; hierarchy inverse-edge writes degrade
+    Warn-only (locked by a regression test). `DirectRelationshipApplier` +
+    `graph/messagemanager` confirmed dead (zero production wiring).
+  - **ADR-054 Phase 1** (IndexingProfiler, lenient) — **[SHIPPED #254 + Phase 2a #255]**
+    so birth envelopes carry the profile.
+
+  **Wave 0 framework substrate is COMPLETE** (2026-06-12): every primitive above is
+  shipped or deliberately deferred (lane-rename OQ#5; (s,p,o) merge OQ#1;
+  TrajectoryStep producer field → Wave 1). Next: the Wave 1 pilots.
 - **Wave 1 — pilots:** model-endpoint (mutation-replace pilot), trajectory-step
   (Fact-arrival + ContentStorable pilot).
 - **Wave 2:** loop-execution. **Precondition:** the agentic graph-ingest input is

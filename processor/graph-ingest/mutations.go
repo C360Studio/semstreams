@@ -2,10 +2,12 @@
 package graphingest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -71,49 +73,49 @@ const (
 // These handlers allow the rule processor (and other components) to modify
 // entity triples via NATS request/reply.
 func (c *Component) setupMutationHandlers(ctx context.Context) error {
-	sub, err := c.natsClient.SubscribeForRequests(ctx, SubjectTripleAdd, c.handleTripleAdd)
+	sub, err := c.natsClient.SubscribeForRequests(ctx, SubjectTripleAdd, c.meteredMutation(SubjectTripleAdd, c.handleTripleAdd))
 	if err != nil {
 		return fmt.Errorf("subscribe triple add: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectTripleAddBatch, c.handleTripleAddBatch)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectTripleAddBatch, c.meteredMutation(SubjectTripleAddBatch, c.handleTripleAddBatch))
 	if err != nil {
 		return fmt.Errorf("subscribe triple add_batch: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectTripleRemove, c.handleTripleRemove)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectTripleRemove, c.meteredMutation(SubjectTripleRemove, c.handleTripleRemove))
 	if err != nil {
 		return fmt.Errorf("subscribe triple remove: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityCreate, c.handleEntityCreate)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityCreate, c.meteredMutation(SubjectEntityCreate, c.handleEntityCreate))
 	if err != nil {
 		return fmt.Errorf("subscribe entity create: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityCreateWithTriples, c.handleEntityCreateWithTriples)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityCreateWithTriples, c.meteredMutation(SubjectEntityCreateWithTriples, c.handleEntityCreateWithTriples))
 	if err != nil {
 		return fmt.Errorf("subscribe entity create_with_triples: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityUpdate, c.handleEntityUpdate)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityUpdate, c.meteredMutation(SubjectEntityUpdate, c.handleEntityUpdate))
 	if err != nil {
 		return fmt.Errorf("subscribe entity update: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityUpdateWithTriples, c.handleEntityUpdateWithTriples)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityUpdateWithTriples, c.meteredMutation(SubjectEntityUpdateWithTriples, c.handleEntityUpdateWithTriples))
 	if err != nil {
 		return fmt.Errorf("subscribe entity update_with_triples: %w", err)
 	}
 	c.subscriptions = append(c.subscriptions, sub)
 
-	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityDelete, c.handleEntityDelete)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, SubjectEntityDelete, c.meteredMutation(SubjectEntityDelete, c.handleEntityDelete))
 	if err != nil {
 		return fmt.Errorf("subscribe entity delete: %w", err)
 	}
@@ -127,6 +129,62 @@ func (c *Component) setupMutationHandlers(ctx context.Context) error {
 			SubjectEntityDelete,
 		})
 	return nil
+}
+
+// mutationHandler is the NATS request/reply handler shape for graph mutations.
+type mutationHandler = func(ctx context.Context, data []byte) ([]byte, error)
+
+// meteredMutation wraps a mutation request handler to meter rejections
+// (ADR-055 §3 observability). A mutation handler encodes a rejection as a
+// MutationResponse with success=false (and a bounded ErrorCode); on that, this
+// increments mutation_rejections_total{subject, reason} and logs the reason at
+// Warn. The handler's (response, error) is passed through UNCHANGED — metering
+// never alters the verdict. The success path costs only one substring scan, no
+// unmarshal. A handler that returns a non-nil error (rare; handlers normally
+// encode failure in the body) is metered as reason="internal".
+func (c *Component) meteredMutation(subject string, h mutationHandler) mutationHandler {
+	return func(ctx context.Context, data []byte) ([]byte, error) {
+		resp, err := h(ctx, data)
+		if err != nil {
+			c.recordMutationRejection(subject, graph.ErrorCodeInternal, err.Error())
+			return resp, err
+		}
+		// A rejection always marshals `"success":false` (the field has no
+		// omitempty), so this cheap gate skips the unmarshal on the success path.
+		// The explicit !Success check below rejects a false-positive substring
+		// that happened to appear inside entity data.
+		if bytes.Contains(resp, []byte(`"success":false`)) {
+			var r struct {
+				Success   bool   `json:"success"`
+				ErrorCode string `json:"error_code"`
+				Error     string `json:"error"`
+			}
+			if json.Unmarshal(resp, &r) == nil && !r.Success {
+				reason := r.ErrorCode
+				if reason == "" {
+					reason = "unclassified"
+				}
+				c.recordMutationRejection(subject, reason, r.Error)
+			}
+		}
+		return resp, err
+	}
+}
+
+// recordMutationRejection increments the rejection counter and logs the
+// rejection so the reason is visible even before the must-exist flip. Both the
+// counter and the logger are nil-guarded so it is safe on a hand-built Component
+// (the test-construction pattern) that reaches it without full wiring.
+func (c *Component) recordMutationRejection(subject, reason, detail string) {
+	if c.mutationRejections != nil {
+		c.mutationRejections.WithLabelValues(subject, reason).Inc()
+	}
+	if c.logger != nil {
+		c.logger.Warn("graph mutation rejected",
+			slog.String("subject", subject),
+			slog.String("reason", reason),
+			slog.String("error", detail))
+	}
 }
 
 // handleTripleAdd handles add triple requests from rule processor and other components
