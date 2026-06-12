@@ -29,7 +29,6 @@ type Component struct {
 	config     Config
 	natsClient *natsclient.Client
 	logger     *slog.Logger
-	platform   component.PlatformMeta
 	decoder    *message.Decoder
 
 	hydrator  *Hydrator
@@ -84,7 +83,6 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		config:     config,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
-		platform:   deps.Platform,
 		decoder:    message.NewDecoder(deps.PayloadRegistry),
 		hydrator:   hydrator,
 		extractor:  extractor,

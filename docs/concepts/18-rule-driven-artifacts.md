@@ -51,25 +51,25 @@ Three pieces, all framework primitives:
 Both publishers and subscribers are configured in the flow JSON; no Go
 code is required for the basic shape.
 
-## Worked example: emit a JSON snapshot per profile change
+## Worked example: emit a JSON snapshot per entity change
 
 ```json
 {
-  "name": "profile-snapshot",
+  "name": "drone-snapshot",
   "type": "rule",
   "config": {
     "rules": [
       {
-        "id": "emit-profile-snapshot",
+        "id": "emit-drone-snapshot",
         "watch": {
           "type": "kv",
           "bucket": "ENTITY_STATES",
-          "key_pattern": "*.user.teams.profile.*"
+          "key_pattern": "*.robotics.gcs.drone.*"
         },
         "actions": [
           {
             "type": "publish",
-            "subject": "output.profile-snapshot.$entity.id"
+            "subject": "output.drone-snapshot.$entity.id"
           }
         ]
       }
@@ -82,23 +82,23 @@ Pair it with an `output/file` component subscribed to that subject:
 
 ```json
 {
-  "name": "profile-snapshot-writer",
+  "name": "drone-snapshot-writer",
   "type": "output/file",
   "config": {
     "format": "json",
     "ports": {
       "inputs": [{
         "name": "snapshots",
-        "subject": "output.profile-snapshot.>",
+        "subject": "output.drone-snapshot.>",
         "type": "jetstream"
       }]
     },
-    "destination": "/var/lib/semstreams/profile-snapshots/"
+    "destination": "/var/lib/semstreams/drone-snapshots/"
   }
 }
 ```
 
-Each profile change now produces a JSON file scoped under the entity
+Each entity change now produces a JSON file scoped under the entity
 ID. Substitute `output/httppost` for outbound webhooks, or wire an
 ObjectStore writer for blob-shaped artifacts.
 
@@ -114,15 +114,15 @@ short-lived agent that owns the template:
   "type": "publish_agent",
   "role": "markdown-renderer",
   "model": "default",
-  "prompt": "Render the operating-model profile at $entity.id as the OB1 USER.md format. Use the read_entity tool to fetch it.",
+  "prompt": "Render a markdown summary for the entity at $entity.id. Use the read_entity tool to fetch its current state.",
   "tools": ["read_entity"],
-  "result_subject": "output.user-md.$entity.id"
+  "result_subject": "output.entity-md.$entity.id"
 }
 ```
 
 The `markdown-renderer` role has a system prompt that owns the
 template; the rule just hands it the entity ID. The agent's terminal
-tool emits the rendered text on `output.user-md.<id>`, and an
+tool emits the rendered text on `output.entity-md.<id>`, and an
 `output/file` component subscribed to that subject persists it.
 
 This puts the template in two places: a product-owned persona file

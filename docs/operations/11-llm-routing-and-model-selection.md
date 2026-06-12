@@ -44,7 +44,7 @@ dedicated endpoint than from concurrency.
 | Tier | Concurrency wins | Capabilities |
 |---|---|---|
 | **Background batch** — fires async after some other event; user not waiting | Yes — pile-ups are common after community detection or KV queue drains | `community_summary`, `anomaly_review`, `embedding` |
-| **Slow path / tolerant** — user-facing but tolerant of fallback to deterministic alternative | Yes — only fires when faster paths fail | `query_classification` (T3 fallback), `summarization` (compaction), `layer_normalization` (onboarding async) |
+| **Slow path / tolerant** — user-facing but tolerant of fallback to deterministic alternative | Yes — only fires when faster paths fail | `query_classification` (T3 fallback), `summarization` (compaction) |
 | **Latency-critical** — fires inline on every user request or every loop step | Concurrency helps less than co-location with a fast model | `answer_synthesis`, `intent_classification` (every user message), agentic chat itself |
 
 The **agentic chat itself** is not in the table because it isn't a
@@ -55,11 +55,10 @@ loop is built around. Keep it on whatever fast endpoint your loops use.
 ## Capability Spec Sheets
 
 Each sheet is a structured table the seminstruct agent can parse. All
-eight LLM call sites are bound via `model.Capability*` constants in
-`model/registry.go:11-37`. The last three (`intent_classification`,
-`layer_normalization`, `anomaly_review`) were lifted in Phase 2 — see
-their fallback notes for the legacy behavior preserved when the
-capability isn't bound.
+seven LLM call sites are bound via `model.Capability*` constants in
+`model/registry.go:11-37`. The last two (`intent_classification`,
+`anomaly_review`) were lifted in Phase 2 — see their fallback notes
+for the legacy behavior preserved when the capability isn't bound.
 
 ### `summarization` — Agentic-Loop Context Compaction
 
@@ -145,20 +144,6 @@ capability isn't bound.
 | **Fallback** | On endpoint-not-found, client-creation error, LLM error, or unparseable response → returns `IntentNewTask` with `confidence=0.5`. The user's message still gets handled but as a brand-new task even if it was a follow-up. When the capability is not bound, the resolution chain falls through to `defaults.model` (preserving the pre-Phase-2 piggyback). |
 | **Prompt source** | `processor/agentic-dispatch/intent_classifier.go:78-90` (system prompt) |
 
-### `layer_normalization` — Onboarding Operating-Model Extractor
-
-| Field | Value |
-|---|---|
-| **Status** | Capability-bound (`model.CapabilityLayerNormalization`) |
-| **Caller** | `processor/agentic-dispatch/normalize_extractor.go:59` (`normalizeLayerAnswerWithLLM`); injected into the component via `SetLayerNormalizer` |
-| **Job** | Convert a freeform user answer (during onboarding interview) into structured `[]operatingmodel.Entry` for the user's operating-model layers. Capped at 4096 bytes of input. |
-| **Input envelope** | System prompt with per-layer focus hint + user answer fenced as `<<<USER_ANSWER … END_USER_ANSWER>>>` (prompt-injection mitigation). Typically 1K–3K tokens. |
-| **Output envelope** | **Strict JSON object** of shape `{"entries": [{"title": "...", "summary": "...", ...}]}`. MaxTokens=2048 (`processor/agentic-dispatch/normalize_extractor.go:31`) sized to absorb verbose JSON from smaller models. |
-| **Required model traits** | **JSON-mode reliability is critical.** Instruction following must hold against prompt-injection attempts inside the data fence. Faithful extraction without invention. 3B+ models handle this; 1B models often hallucinate fields. **Tool calling: not required.** |
-| **Latency budget** | Hardcoded `extractionTimeoutDefault = 30s` (`processor/agentic-dispatch/normalize_extractor.go:36`). User-facing but async during onboarding. |
-| **Fallback** | On any error, returns `(nil, err)` so the caller falls back to the deterministic `NormalizeLayerAnswer` stub (a simple keyword-matching extractor). The user's answer is still recorded; layer entries are coarser. When the capability is not bound, the resolution chain falls through to `defaults.model`. |
-| **Prompt source** | `processor/agentic-dispatch/normalize_extractor.go:223-281` (`buildNormalizationMessages` + `normalizationSystemPrompt` + `layerFocusHint`) |
-
 ### `anomaly_review` — Graph Inference Relationship Reviewer
 
 | Field | Value |
@@ -186,7 +171,6 @@ capability. These are starting points; always validate with the
 | `query_classification` | 3B for tool-free chat models | 7B for reasoning models | `<think>` block leakage into JSON, hallucinated SearchOptions fields |
 | `community_summary` | 3B | 7B | Boring template-y output that doesn't leverage the entity-ID structure the prompt teaches |
 | `anomaly_review` | 3B | 7B | Inverted decisions (APPROVE for things that should reject) or unparseable first-word verdict |
-| `layer_normalization` | 3B | 7B–8B | Prompt-injection vulnerabilities materialize at small sizes; invented entries appear |
 | `summarization` | 3B–7B (depends on context window) | 7B+ with long-context support | Faithfulness drops — entity IDs and error messages get paraphrased away |
 | `answer_synthesis` | 7B | 7B+ tuned for instruction following | Speculation beyond input clusters; missing citations |
 
@@ -280,19 +264,6 @@ User: can you cancel loop_abc123?
 "loop_id": "loop_abc123", "confidence": >0.8}`. Output is parseable
 JSON. No prose preamble.
 
-#### Probe — Layer normalization
-
-```text
-System: <use the actual prompt from processor/agentic-dispatch/normalize_extractor.go (normalizationSystemPrompt for "operating_rhythms")>
-User: <<<USER_ANSWER
-Every Monday at 9am we do planning. Wednesdays I have deep-work blocks 9-11.
-END_USER_ANSWER>>>
-```
-
-**Pass criteria:** Returns
-`{"entries": [{"title": "Weekly planning", "summary": "...", "cadence": "weekly", "trigger": "Monday 9am"}, {"title": "Deep-work block", "summary": "...", "cadence": "weekly", "trigger": "Wednesday 9-11"}]}`.
-Two entries, not one collapsed entry. No invented stakeholders.
-
 #### Probe — Anomaly review
 
 Render `graph/inference/review_worker.go:635-647` system prompt with a
@@ -344,7 +315,6 @@ the small-model backend (or whatever the deployment uses).
       "answer_synthesis":       { "preferred": ["seminstruct-concurrent"], "timeout": "30s" },
       "anomaly_review":         { "preferred": ["seminstruct-concurrent"], "timeout": "30s" },
       "intent_classification":  { "preferred": ["agentic-fast"], "timeout": "15s" },
-      "layer_normalization":    { "preferred": ["seminstruct-concurrent"], "timeout": "30s" },
       "embedding":              { "preferred": ["semembed"] }
     },
     "defaults": {
@@ -357,10 +327,10 @@ the small-model backend (or whatever the deployment uses).
 `intent_classification` is bound to `agentic-fast` (not the concurrent
 backend) because it fires on every user message and benefits more from
 co-location than concurrency — every user-perceptible response waits
-for it. The other lifted capabilities (`anomaly_review`,
-`layer_normalization`) move to the concurrent backend with the rest of
-the offload set. If you omit any binding, the resolution falls back as
-documented in each capability's spec sheet above.
+for it. The other lifted capability (`anomaly_review`) moves to the
+concurrent backend with the rest of the offload set. If you omit any
+binding, the resolution falls back as documented in each capability's
+spec sheet above.
 
 ### Single-backend deployment (semantic.json shape)
 

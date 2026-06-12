@@ -43,7 +43,6 @@
       "answer_synthesis":      { "preferred": ["seminstruct-mid-answer"] },
       "community_summary":     { "preferred": ["seminstruct-mid-summary"] },
       "anomaly_review":        { "preferred": ["seminstruct-mid-summary"] },
-      "layer_normalization":   { "preferred": ["seminstruct-mid-summary"] },
       "embedding":             { "preferred": ["semembed"] }
     },
     "defaults": {

@@ -238,9 +238,11 @@ func (h *MessageHandler) prependIterationContext(ctx context.Context, loopID str
 }
 
 // lookupLoopUserID resolves the owning user for a loop, returning "" when the
-// loop is unknown or has no UserID. Used to stamp ContextEvents so downstream
-// consumers (e.g. agentic-memory's lessons-learned persister) can scope
-// extracted artifacts to a user without a separate KV round-trip.
+// loop is unknown or has no UserID. Stamped onto ContextEvents as a provenance
+// hook so a downstream consumer can scope extracted artifacts to a user without
+// a separate KV round-trip. No in-tree consumer reads it today (the
+// operating-model personalization layer that did was moved to semteams); kept
+// as a forward hook on the generic compaction event.
 func (h *MessageHandler) lookupLoopUserID(loopID string) string {
 	entity, err := h.loopManager.GetLoop(loopID)
 	if err != nil {

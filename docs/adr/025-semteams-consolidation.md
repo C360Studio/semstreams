@@ -2,13 +2,22 @@
 
 ## Status
 
-**Accepted — Phases 1 & 2 shipped.** Phase 1 (framework primitives:
-approval filter, tool governance hooks) and Phase 2 (personalization
-layer upstreamed from semteams) landed in the alpha series. Remaining
-work: complete the per-component upstream sweep and retire the
-duplicated `teams-*` processors. semdragons doesn't import semteams,
-so this ADR has no semdragons-facing surface — but the upstreamed
-primitives are part of the framework downstream consumers will use.
+**Accepted — Phase 1 shipped; Phase 2 REVERTED (2026-06-12).** Phase 1
+(framework primitives: approval filter, tool governance hooks) landed in
+the alpha series and stands. **Phase 2 (the personalization layer) was
+reverted** (`refactor/remove-operating-model-personalization`, −6,929 LOC):
+the operating-model package, the `/onboard` command + interview, the
+`layer_normalization` capability, and profile-context injection were
+premature *product* logic — they crossed the very engine/product boundary
+this ADR draws below ("semstreams is the engine; semteams is the product").
+They write `user.teams.*` entities over a `teams.operating_model.*` flow,
+were wired in no framework config, and are returned to semteams. The
+framework keeps only the generic primitives it always owned (dispatch core,
+the `intent_classifier` capability, approval/governance filters, built-in
+executors). semteams may redesign and re-consume the framework substrates
+(graph-ingest mutation lanes, ADR-054 indexing profile, payload registry,
+rule engine) if it wants the feature back. semdragons doesn't import
+semteams, so this ADR has no semdragons-facing surface.
 
 ## Context
 
@@ -76,7 +85,13 @@ Three config additions gate the new behavior: `approval_required` (list of tool 
 on agentic-tools, `enable_tool_governance` on agentic-governance, and `enable_categories`
 on agentic-tools. All default to disabled.
 
-### Phase 2: Personalization layer
+### Phase 2: Personalization layer — REVERTED (2026-06-12)
+
+> **Reverted.** Everything in this section was removed from semstreams as
+> premature product logic and returned to semteams (see Status). The
+> `intent_classifier` capability is the one piece retained (as a generic,
+> default-off dispatch capability). The rest below is kept only as the
+> historical record of what was upstreamed and then reversed.
 
 The operating model package moves to `agentic/operating-model/`, following the same
 `Graphable`/`Triple` pattern as every other entity type — it is a domain concept, but

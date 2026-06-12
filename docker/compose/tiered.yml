@@ -124,7 +124,7 @@ services:
           memory: 6G
 
   # SemInstruct (summary tier) - qwen3-1.7b dedicated to community_summary +
-  # anomaly_review + layer_normalization. Background batch work that should
+  # anomaly_review. Background batch work that should
   # NOT contend with synthesis on the search hot path. 1.7b is a quality
   # compromise vs the 8b GraphRAG canonical — for the known-answer e2e
   # surface (literal substring match) it suffices; for prod use cases
