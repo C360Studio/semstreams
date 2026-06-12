@@ -17,19 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout semstreams
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: semstreams
 
       - name: Checkout semspec
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: C360Studio/semspec
           path: semspec
           ref: ${{ inputs.semspec_ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true

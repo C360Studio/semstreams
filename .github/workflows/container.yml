@@ -27,7 +27,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Use the commit from the triggering workflow for workflow_run events
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
