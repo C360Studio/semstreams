@@ -462,12 +462,54 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 	})
 }
 
+// preserveStoredEntityMetadata backfills entity metadata the caller left unset
+// from the stored state, so a triple-delta update never silently erases the
+// entity envelope.
+//
+// update_with_triples writes req.Entity wholesale (only its triples are
+// replaced by the merge). A caller that sends a bare EntityState{ID} — carrying
+// just the triple delta, which is a natural shape for "append/replace some
+// predicates" — would otherwise CLOBBER the stored semantic envelope:
+// MessageType (the ADR-055 provenance + ADR-054 indexing-profile registry key)
+// would reset to the zero Type, Version would reset to 0 (breaking
+// optimistic-concurrency monotonicity), and StorageRef (offloaded ContentStorable
+// content) would be dropped. Treat a zero MessageType / zero Version / nil
+// StorageRef on the request as "keep the stored value". Callers that genuinely
+// set these (e.g. pkg/lifecycle.Manager, which passes an explicit MessageType and
+// Version+1 on every transition) are unaffected — their non-zero values win.
+//
+// KNOWN LIMITATION (gh#260): this overloads the zero value to mean "preserve",
+// so there is NO way to deliberately CLEAR these fields to their zero value
+// through update_with_triples — sending zero means "leave as-is". That is the
+// desired invariant for MessageType (the envelope must persist — ADR-055) and
+// Version (monotonic). The only field with a plausible deliberate-clear case is
+// StorageRef (e.g. its offloaded content was GC'd); no caller needs it today. If
+// one ever does, add an explicit signal (a ClearFields list / pointer-optional
+// fields) rather than un-overloading zero. (Triples are unaffected — clear a
+// predicate via UpdateEntityWithTriplesRequest.RemoveTriples.)
+func preserveStoredEntityMetadata(newEntity, stored *graph.EntityState) {
+	if newEntity == nil || stored == nil {
+		return
+	}
+	if newEntity.MessageType == (message.Type{}) {
+		newEntity.MessageType = stored.MessageType
+	}
+	if newEntity.Version == 0 {
+		newEntity.Version = stored.Version
+	}
+	if newEntity.StorageRef == nil {
+		newEntity.StorageRef = stored.StorageRef
+	}
+}
+
 // handleEntityUpdateWithTriples applies a triple-set delta to an
 // existing entity: appends AddTriples, removes triples whose Predicate
 // is named in RemoveTriples, and writes the result via CAS-with-retry.
-// Entity metadata (MessageType, Version, StorageRef) from the request
-// flows through verbatim; the merged triple set replaces what's in
-// req.Entity.Triples.
+// Entity metadata (MessageType, Version, StorageRef) from the request is
+// written, but any field the caller leaves at its zero value is preserved
+// from the stored entity (see preserveStoredEntityMetadata) so a bare
+// triple-delta update does not erase the entity envelope. The merged triple
+// set replaces what's in req.Entity.Triples.
 //
 // PR-B: the delta apply runs inside natsclient.KVStore.UpdateWithRetry,
 // so concurrent writes that bump the entity revision between read
@@ -604,6 +646,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		// caller-owned pointer (see PR-A go-reviewer F2 finding).
 		newEntity := *req.Entity
 		newEntity.Triples = merged
+		preserveStoredEntityMetadata(&newEntity, &currentState)
 
 		return json.Marshal(&newEntity)
 	})
@@ -702,6 +745,7 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	// Shallow-copy so we don't mutate the caller-owned pointer.
 	newEntity := *req.Entity
 	newEntity.Triples = merged
+	preserveStoredEntityMetadata(&newEntity, current)
 
 	// Single-pass CAS via the existing updateEntityAtRevision
 	// primitive. A concurrent writer between our read and write
