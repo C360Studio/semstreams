@@ -13,13 +13,13 @@ import (
 // indexing_profile_default_total{message_type} metric fires — that metric now
 // means "a registry GAP", the operator signal ADR-054 §5 calls for.
 //
-// Deliberately keyed by STRING, not by importing the agentic/research/
-// operating-model domain packages into the generic graph-ingest layer (which
-// imports none of them today). A key that drifts — e.g. a future schema-version
+// Deliberately keyed by STRING, not by importing the agentic/research domain
+// packages into the generic graph-ingest layer (which imports none of them
+// today). A key that drifts — e.g. a future schema-version
 // bump — simply degrades to the control default and is surfaced by the metric:
 // graceful, self-revealing, never a hard failure. The keys were verified
-// against the domain constants (agentic.SchemaVersion / research.SchemaVersion /
-// operating_model.SchemaVersion are all "v1").
+// against the domain constants (agentic.SchemaVersion / research.SchemaVersion
+// are all "v1").
 //
 // These values are LENIENT in Phase 1/2 — no consumer acts on the profile yet.
 // They shape the metric/dry-run data and the Phase-3 strict-exclusion policy.
@@ -29,11 +29,9 @@ import (
 // control, so Phase 3 has sane defaults for the undeclared tail.
 var indexingProfileDefaults = map[string]string{
 	// content — prose-bearing retrieval corpus (embed yes, community yes).
-	"agentic.user_message.v1":            vocabulary.IndexingProfileContent,
-	"agentic.user_response.v1":           vocabulary.IndexingProfileContent,
-	"research.result.v1":                 vocabulary.IndexingProfileContent,
-	"operating_model.layer_approved.v1":  vocabulary.IndexingProfileContent,
-	"operating_model.profile_context.v1": vocabulary.IndexingProfileContent,
+	"agentic.user_message.v1":  vocabulary.IndexingProfileContent,
+	"agentic.user_response.v1": vocabulary.IndexingProfileContent,
+	"research.result.v1":       vocabulary.IndexingProfileContent,
 
 	// control — low-cardinality lifecycle/harness/run machinery (embed yes).
 	// (control is also the unlisted default; listing these documents intent and

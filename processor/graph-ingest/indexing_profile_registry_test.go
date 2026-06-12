@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/agentic"
-	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -42,7 +41,6 @@ func TestIndexingProfileFloorFor(t *testing.T) {
 		{message.Type{Domain: "agentic", Category: "loop_completed", Version: "v1"}, vocabulary.IndexingProfileControl, true},
 		{message.Type{Domain: "agentic", Category: "signal", Version: "v1"}, vocabulary.IndexingProfileSignal, true},
 		{message.Type{Domain: "research", Category: "result", Version: "v1"}, vocabulary.IndexingProfileContent, true},
-		{message.Type{Domain: "operating_model", Category: "layer_approved", Version: "v1"}, vocabulary.IndexingProfileContent, true},
 		// Misses fall to the control floor (fail-safe) and report registered=false.
 		{message.Type{Domain: "unknown", Category: "thing", Version: "v1"}, vocabulary.IndexingProfileControl, false},
 		{message.Type{}, vocabulary.IndexingProfileControl, false},
@@ -78,8 +76,6 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 		{key(agentic.Domain, agentic.CategorySignal, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
 		{key(research.Domain, research.CategoryResult, research.SchemaVersion), vocabulary.IndexingProfileContent},
 		{key(research.Domain, research.CategoryRouteDecision, research.SchemaVersion), vocabulary.IndexingProfileTrace},
-		{key(operatingmodel.Domain, operatingmodel.CategoryLayerApproved, operatingmodel.SchemaVersion), vocabulary.IndexingProfileContent},
-		{key(operatingmodel.Domain, operatingmodel.CategoryProfileContext, operatingmodel.SchemaVersion), vocabulary.IndexingProfileContent},
 	}
 	for _, tc := range cases {
 		got, ok := indexingProfileDefaults[tc.key]
