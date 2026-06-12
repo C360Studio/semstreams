@@ -371,14 +371,16 @@ create-or-fail lane (§6) and is exempt.
   (`sensorml.Asset` is currently unwired — no `MarshalJSON`, no payload registration
   — so the regression is latent-on-wiring, not live-on-main; that is why the guard
   must regroup rather than reject before the ADR-044 Phase 5 bridge lands.)
-  **Sibling consumer — `graph/messagemanager`.** `Manager.ProcessMessage`
-  (`graph/messagemanager/processor.go:274`) is a second Graphable→EntityState
-  consumer that files all `triples` under one `actualEntityID` with the same
-  single-key misfiling; it ALREADY lifts `StorageRef` via the `Storable` assertion
-  (`:200-204`), so the StorageRef half is at parity there, but the T2 regroup is
-  not. It must receive the same WARN-and-regroup under this ADR so the two
-  consumers do not drift. (graph-ingest is migrated first — Wave 0; messagemanager
-  follows.)
+  **Sibling consumer — `graph/messagemanager` (DEAD, reclassified 2026-06-12).**
+  `Manager.ProcessMessage` (`graph/messagemanager/processor.go:274`) is a second
+  Graphable→EntityState consumer that files all `triples` under one `actualEntityID`
+  with the same single-key misfiling (it ALREADY lifts `StorageRef` via the
+  `Storable` assertion `:200-204`). The Wave-0 caller audit found it has **zero
+  non-test importers in semstreams** — it is dead/legacy, not a live ingest path.
+  Reclassified from "must regroup" to **removal candidate**: do NOT fix
+  speculatively (per `feedback_framework_vs_product_boundary` — unwired ≠ broken).
+  If a sister product wires it, it carries the same T2 defect, but that is its
+  call to make.
 - **StorageRef extraction (two halves).** Consumer side: `extractEntityFromMessage`
   must type-assert `ContentStorable` and set `StorageRef` (MergeEntity merges it on
   the existing branch, `:1008-1009`). Producer side: the canonical pilot

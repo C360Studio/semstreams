@@ -264,6 +264,29 @@ design pass; effort S < M < L.
 4. **ADR-054 Phase 1** (IndexingProfiler, LENIENT) — soft; lands before B1/B2 so
    they carry the right envelope.
 
+**Wave 0 audit — in-process `Component.AddTriple` callers (CLEARED 2026-06-12).**
+ADR-055 §3 required a Wave-0 audit confirming no in-process `Component.AddTriple`
+caller relies on auto-vivify ordering before the must-exist flip. Result: **SAFE —
+the in-process bypass imposes no blocker on the closing move.**
+
+- The only production in-process caller via `tripleAdderAdapter` (`component.go:691`)
+  is `HierarchyInference`, and only for INVERSE edges onto OTHER subjects: sibling
+  back-edges (`hierarchy.go:313`, target listed via `ListWithPrefix` = pre-existing)
+  and container contains-edges (`hierarchy.go:368`, target pre-created by
+  `ensureContainerExists`). Both handle a write failure as Warn-only + `edgesFailed`
+  metric — NEVER propagated. So a future must-exist rejection on an inverse write
+  degrades gracefully: the entity's own forward triples still land and ingest does
+  not fail. Locked by `TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal`.
+- `HierarchyInference.OnEntityCreated` (`hierarchy.go:239`, the legacy cascade path)
+  has NO production caller — test-only.
+- `DirectRelationshipApplier.ApplyRelationship` (`applier.go:193`) has ZERO production
+  wiring; production structural inference uses `MutationRelationshipApplier` (the NATS
+  `graph.mutation.*` path, subject to the flip at the consumer, not an in-process
+  bypass).
+- `graph/messagemanager.ProcessMessage` (a second Graphable→EntityState consumer with
+  the same T2 single-key misfiling) has ZERO non-test importers — dead/legacy.
+  Reclassified as a removal candidate, NOT a regroup target.
+
 **Wave 1 — pilots (parallel, prove the patterns):** B3 (lane-ii replace pilot),
 B2 (lane-i ContentStorable pilot, consumes T1/T2/StorageRef).
 
