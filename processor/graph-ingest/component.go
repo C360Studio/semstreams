@@ -865,6 +865,34 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 		return
 	}
 
+	c.ingestEntity(ctx, entity)
+}
+
+// ingestEntity merges an extracted Graphable entity into ENTITY_STATES and
+// regroups any cross-entity edges onto their own subjects (ADR-055 §5 T2). It is
+// the orchestration the Fact-arrival consumer runs once decode+extract have
+// produced an EntityState: split foreign-subject edges off the primary, merge
+// the primary (envelope-bearing), then route the edges via the evidence-append
+// path. Exposed as a method so the merge+regroup wire is testable end-to-end
+// without standing up the decoder.
+func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) {
+	// ADR-055 §5 T2: a Graphable may legitimately emit cross-entity edges whose
+	// Subject != EntityID() (sensorml inverse isHostedBy, federation/objectstore
+	// pass-throughs). extractEntityFromMessage files every triple under the
+	// primary key, silently misfiling those edges onto the wrong entity. Split
+	// them off so the primary merges only its own facts, then route each edge to
+	// its correct subject below — WARN-and-regroup, never reject (multi-Subject
+	// producers stay correct; single-Subject is the target invariant for NEW
+	// Graphables).
+	own, foreign := partitionTriplesBySubject(entity.ID, entity.Triples)
+	if len(foreign) > 0 {
+		entity.Triples = own
+		c.logger.Warn("Graphable emitted cross-entity edges; regrouping onto their subjects",
+			slog.String("entity_id", entity.ID),
+			slog.Int("foreign_triples", len(foreign)),
+			slog.Any("foreign_subjects", distinctSubjects(foreign)))
+	}
+
 	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
 	// used CreateEntity (Put = full-replace) here, which clobbered any
 	// pre-existing triples on the entity. The atomic mutation handlers
@@ -877,6 +905,24 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 			slog.String("entity_id", entity.ID),
 			slog.Any("error", err))
 		return
+	}
+
+	// Route cross-entity edges to their own subject. These are edges onto
+	// entities that own their own envelope, so they ride the evidence-append
+	// path (AddTriples = append-by-subject, no MessageType restamp) rather than
+	// MergeEntity (which would stamp the primary's provenance onto a foreign
+	// entity). Best-effort: a failed edge is logged, not fatal to the primary
+	// ingest that already succeeded. Note AddTriples validates the batch
+	// all-or-nothing — one malformed foreign edge (empty Predicate) drops the
+	// whole foreign batch; no current producer emits one, but a future
+	// multi-edge producer should not assume partial routing.
+	if len(foreign) > 0 {
+		if _, failed, aerr := c.AddTriples(ctx, foreign); aerr != nil {
+			c.logger.Warn("Failed to regroup cross-entity edges onto their subjects",
+				slog.String("entity_id", entity.ID),
+				slog.Int("failed_subjects", len(failed)),
+				slog.Any("error", aerr))
+		}
 	}
 
 	c.logger.Debug("Entity ingested",
@@ -917,6 +963,20 @@ func (c *Component) extractEntityFromMessage(msg *message.BaseMessage) (*graph.E
 		Version:     1,
 	}
 
+	// ADR-055 §5 StorageRef extraction (consumer half): a Graphable payload that
+	// also implements message.Storable carries an ObjectStore reference to its
+	// offloaded content. Lift it onto the EntityState so MergeEntity persists it
+	// (the create branch marshals it verbatim; the existing-entity branch merges
+	// it onto the stored copy). Without this, a ContentStorable producer's offloaded
+	// content (tool results, model responses, document bodies) loses its storage
+	// pointer at the ingest seam and the embedding worker can never find the
+	// text — the "offloaded content stops embedding" gap.
+	if storable, ok := payload.(message.Storable); ok {
+		if ref := storable.StorageRef(); ref != nil {
+			entity.StorageRef = ref
+		}
+	}
+
 	// ADR-054 channel (a): a Graphable payload MAY also declare its indexing
 	// profile via the optional IndexingProfiler interface. Stamp it explicitly
 	// here so it's present on entity.Triples by the time MergeEntity reaches
@@ -927,6 +987,41 @@ func (c *Component) extractEntityFromMessage(msg *message.BaseMessage) (*graph.E
 	}
 
 	return entity, nil
+}
+
+// partitionTriplesBySubject splits a Graphable's triples into those belonging to
+// the primary entity and "foreign" triples whose Subject names a DIFFERENT
+// entity. A triple is primary when its Subject equals entityID, or is empty (the
+// historical filing target — extractEntityFromMessage has always placed
+// subject-less triples on the primary). Foreign triples are cross-entity edges —
+// e.g. sensorml's inverse isHostedBy stamped on the child subject — that the
+// single-key filing in extractEntityFromMessage would otherwise misfile under the
+// primary entity (ADR-055 §5 T2). This function only classifies; the caller
+// routes foreign triples to their correct subject.
+func partitionTriplesBySubject(entityID string, triples []message.Triple) (own, foreign []message.Triple) {
+	for _, t := range triples {
+		if t.Subject == "" || t.Subject == entityID {
+			own = append(own, t)
+			continue
+		}
+		foreign = append(foreign, t)
+	}
+	return own, foreign
+}
+
+// distinctSubjects returns the sorted set of distinct Subjects across the triples,
+// for low-cardinality operator logging of where regrouped edges were routed.
+func distinctSubjects(triples []message.Triple) []string {
+	seen := make(map[string]struct{}, len(triples))
+	for _, t := range triples {
+		seen[t.Subject] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // removeIndexingProfileTriples drops every entity.indexing.profile triple from
