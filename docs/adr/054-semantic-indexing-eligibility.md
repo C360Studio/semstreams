@@ -183,8 +183,14 @@ returns.)
   set). See §5 forward-compatibility note.
 
 - **(c) graph-ingest fallback** — when neither (a) nor (b) supplies a profile,
-  graph-ingest derives a *floor* from `message.Type` (registry) and the parsed
-  `EntityID` type segment, defaulting to `control`, and records a metric (§5).
+  graph-ingest derives a *floor* from `message.Type` via the framework registry
+  seed (`processor/graph-ingest/indexing_profile_registry.go`, Phase 2): a
+  `message.Type.Key()` → profile map that classifies the high-cardinality trace
+  storm (`agentic.request`/`response`/`tool_*`/`context_event`,
+  `research.*_output`) OUT and obvious machinery as `control`/`signal`/`content`.
+  A type absent from the seed falls to `control` (fail-safe toward reachable)
+  AND fires `indexing_profile_default_total{message_type}` (§5) — that metric now
+  means "an unclassified registry GAP", not merely "no explicit declaration".
   Consumers **never** re-derive profile from ID deny-lists.
 
 ### 5. graph-ingest enforcement mechanics
@@ -348,8 +354,22 @@ never discovered in production. If we cannot produce the ledger, we do not flip.
 2. **This ADR, phase 1:** add `IndexingProfiler` interface + mutation-envelope
    field + graph-ingest stamp (replace-semantics) + defaulting metric.
    Consumers honor profile in **lenient** mode (absent = legacy-embed).
-3. **This ADR, phase 2:** migrate `research-graph-llmwrap` + `agentic-memory` to
-   declare `content`; seed the framework registry; backfill existing entities.
+3. **This ADR, phase 2:** seed the framework registry (the type-aware floor,
+   §4c) + migrate the `content` producers. Phase 2a (shipped) is the registry
+   seed. Scoping corrected the producer list:
+   - **`research-graph-llmwrap` needs NO change** — it stamps orchestration
+     triples (`control`) on a *pre-existing, already-profiled* loop-execution
+     entity; its `SearchResult` lives only in `AGENT_LOOPS` KV, never as a graph
+     entity. It is not a `content` producer.
+   - **`agentic-memory`** (the real `content` producer: lessons + layer
+     checkpoints) writes via the `triple.add` **auto-vivify** path, which is
+     exactly the envelope-less entity creation **ADR-055** removes. Its `content`
+     declaration is therefore deferred and designed *jointly* with the ADR-055
+     `add_triples`→`create_with_triples` migration (one rework, not two).
+   - **Backfill** of pre-Phase-1 entities is **deferred to Phase 3** as a
+     strict-flip precondition (there is no existing KV-sweep pattern;
+     stamp-on-touch + the gap metric give Phase-3 planning visibility without a
+     sweep).
 4. **This ADR, phase 3 — gated, not a flag flip.** Flip `strict_indexing_profile`
    ONLY after ALL of the following hold (the cost-ledger / measured-migration
    gate). This phase MUST NOT ship as a bare config toggle:
