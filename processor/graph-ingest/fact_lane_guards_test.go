@@ -1,0 +1,210 @@
+package graphingest
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/vocabulary"
+)
+
+// ADR-055 Wave 0 — Fact-arrival consumer guards in graph-ingest:
+//   - §5 StorageRef extraction (consumer half): a ContentStorable/Storable
+//     Graphable's ObjectStore pointer is lifted onto the EntityState so
+//     offloaded content stays linked and embeddable.
+//   - §5 T2 WARN-and-regroup: a Graphable's cross-entity edges (Subject !=
+//     EntityID) are routed onto their correct subject instead of being misfiled
+//     under the primary key.
+// These drive the production extract → ingest wire (extractEntityFromMessage +
+// ingestEntity), the same orchestration handleMessage runs after decode.
+
+const (
+	flParentID = "c360.platform.test.sys.widget.001"
+	flChildID  = "c360.platform.test.sys.widget.002"
+)
+
+// testStorablePayload implements message.ContentStorable (Storable + content
+// maps) so the consumer can lift its StorageRef. It is a valid message.Payload.
+type testStorablePayload struct {
+	id      string
+	triples []message.Triple
+	ref     *message.StorageReference
+}
+
+func (p *testStorablePayload) EntityID() string                      { return p.id }
+func (p *testStorablePayload) Triples() []message.Triple             { return p.triples }
+func (p *testStorablePayload) StorageRef() *message.StorageReference { return p.ref }
+func (p *testStorablePayload) Validate() error                       { return nil }
+func (p *testStorablePayload) MarshalJSON() ([]byte, error)          { return []byte("{}"), nil }
+func (p *testStorablePayload) UnmarshalJSON([]byte) error            { return nil }
+func (p *testStorablePayload) Schema() message.Type {
+	return message.Type{Domain: "test", Category: "storable", Version: "v1"}
+}
+func (p *testStorablePayload) ContentFields() map[string]string {
+	return map[string]string{message.ContentRoleBody: "body"}
+}
+func (p *testStorablePayload) RawContent() map[string]string {
+	return map[string]string{"body": "offloaded text"}
+}
+
+func hasPredicate(es *graph.EntityState, predicate string) bool {
+	for _, t := range es.Triples {
+		if t.Predicate == predicate {
+			return true
+		}
+	}
+	return false
+}
+
+// --- §5 T2 partition helper (pure) ---
+
+func TestPartitionTriplesBySubject(t *testing.T) {
+	primary := flParentID
+	triples := []message.Triple{
+		{Subject: primary, Predicate: "own.a", Object: 1},
+		{Subject: flChildID, Predicate: "foreign.b", Object: 2},
+		{Subject: "", Predicate: "empty.subject.files.onto.primary", Object: 3},
+		{Subject: primary, Predicate: "own.c", Object: 4},
+		{Subject: "c360.platform.test.sys.widget.003", Predicate: "foreign.d", Object: 5},
+	}
+
+	own, foreign := partitionTriplesBySubject(primary, triples)
+
+	require.Len(t, own, 3, "own = subject==entityID plus the empty-subject (historical primary filing)")
+	require.Len(t, foreign, 2, "foreign = every triple naming a different subject")
+	assert.True(t, hasPredicateInTriples(own, "empty.subject.files.onto.primary"),
+		"an empty Subject must stay on the primary (preserves pre-ADR filing)")
+	assert.True(t, hasPredicateInTriples(foreign, "foreign.b"))
+	assert.True(t, hasPredicateInTriples(foreign, "foreign.d"))
+}
+
+func TestPartitionTriplesBySubject_AllOwn(t *testing.T) {
+	own, foreign := partitionTriplesBySubject(flParentID, []message.Triple{
+		{Subject: flParentID, Predicate: "a"},
+		{Subject: flParentID, Predicate: "b"},
+	})
+	assert.Len(t, own, 2)
+	assert.Empty(t, foreign, "a single-Subject Graphable produces no foreign edges")
+}
+
+func TestDistinctSubjects_SortedAndDeduped(t *testing.T) {
+	got := distinctSubjects([]message.Triple{
+		{Subject: "b"}, {Subject: "a"}, {Subject: "b"}, {Subject: "c"}, {Subject: "a"},
+	})
+	assert.Equal(t, []string{"a", "b", "c"}, got)
+}
+
+func hasPredicateInTriples(triples []message.Triple, predicate string) bool {
+	for _, t := range triples {
+		if t.Predicate == predicate {
+			return true
+		}
+	}
+	return false
+}
+
+// --- §5 StorageRef extraction (consumer half) ---
+
+func TestStorageRefExtraction_ConsumerLiftsRefOntoEntity(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ref := &message.StorageReference{
+		StorageInstance: "objectstore-primary",
+		Key:             "2026/06/12/step-001",
+		ContentType:     "application/json",
+		Size:            128,
+	}
+	payload := &testStorablePayload{
+		id:      flParentID,
+		triples: []message.Triple{{Subject: flParentID, Predicate: "doc.body.ref", Object: "body", Timestamp: time.Now()}},
+		ref:     ref,
+	}
+	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
+
+	entity, err := comp.extractEntityFromMessage(msg)
+	require.NoError(t, err)
+	require.NotNil(t, entity.StorageRef, "a Storable payload's ref must be lifted onto the EntityState at extract")
+	assert.Equal(t, ref.Key, entity.StorageRef.Key)
+
+	// And it must survive the merge into the bucket (create-branch marshal).
+	comp.ingestEntity(context.Background(), entity)
+	es := storedEntity(t, comp, flParentID)
+	require.NotNil(t, es.StorageRef, "StorageRef must persist through MergeEntity to the stored entity")
+	assert.Equal(t, "objectstore-primary", es.StorageRef.StorageInstance)
+	assert.Equal(t, ref.Key, es.StorageRef.Key)
+	assert.Equal(t, int64(128), es.StorageRef.Size)
+}
+
+func TestStorageRefExtraction_NonStorablePayloadLeavesRefNil(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	// testGraphablePayload (indexing_profile_test.go) is Graphable but NOT Storable.
+	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{userTriple("k", "v")}}
+	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
+
+	entity, err := comp.extractEntityFromMessage(msg)
+	require.NoError(t, err)
+	assert.Nil(t, entity.StorageRef, "a plain Graphable carries no StorageRef")
+}
+
+// --- §5 T2 WARN-and-regroup through the ingest wire ---
+
+func TestIngestEntity_RegroupsForeignSubjectEdgeOntoChild(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+
+	// A parent Graphable that, like sensorml.Asset, emits an inverse edge whose
+	// Subject is the CHILD, not the parent (its EntityID).
+	entity := &graph.EntityState{
+		ID:          flParentID,
+		MessageType: testWidgetMessageType(),
+		Version:     1,
+		Triples: []message.Triple{
+			{Subject: flParentID, Predicate: "rel.hosts", Object: flChildID, Timestamp: time.Now()},
+			{Subject: flChildID, Predicate: "rel.isHostedBy", Object: flParentID, Timestamp: time.Now()},
+		},
+	}
+
+	comp.ingestEntity(ctx, entity)
+
+	// Parent keeps only its own fact (+ the framework profile stamp); the inverse
+	// edge must NOT be misfiled onto it.
+	parent := storedEntity(t, comp, flParentID)
+	assert.True(t, hasPredicate(parent, "rel.hosts"), "parent keeps its own forward edge")
+	assert.False(t, hasPredicate(parent, "rel.isHostedBy"),
+		"the child-subject inverse edge must not stay misfiled on the parent")
+
+	// The inverse edge lands on the CHILD entity, under the correct subject.
+	child := storedEntity(t, comp, flChildID)
+	require.True(t, hasPredicate(child, "rel.isHostedBy"), "the inverse edge must be regrouped onto its own subject")
+	for _, tr := range child.Triples {
+		if tr.Predicate == "rel.isHostedBy" {
+			assert.Equal(t, flChildID, tr.Subject, "the regrouped edge keeps its child Subject")
+		}
+	}
+}
+
+func TestIngestEntity_SingleSubjectNoForeignEntityCreated(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+
+	entity := &graph.EntityState{
+		ID:          flParentID,
+		MessageType: testWidgetMessageType(),
+		Version:     1,
+		Triples:     []message.Triple{{Subject: flParentID, Predicate: "rel.hosts", Object: "x", Timestamp: time.Now()}},
+	}
+	comp.ingestEntity(ctx, entity)
+
+	parent := storedEntity(t, comp, flParentID)
+	assert.True(t, hasPredicate(parent, "rel.hosts"))
+	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(parent),
+		"a single-Subject entity still gets the floor profile and is otherwise unchanged")
+
+	// No phantom child entity should have been conjured.
+	_, err := comp.entityBucket.Get(ctx, flChildID)
+	assert.Error(t, err, "a single-Subject Graphable must not create any other entity")
+}
