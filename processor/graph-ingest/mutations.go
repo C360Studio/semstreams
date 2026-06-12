@@ -477,6 +477,16 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 // StorageRef on the request as "keep the stored value". Callers that genuinely
 // set these (e.g. pkg/lifecycle.Manager, which passes an explicit MessageType and
 // Version+1 on every transition) are unaffected — their non-zero values win.
+//
+// KNOWN LIMITATION (gh#260): this overloads the zero value to mean "preserve",
+// so there is NO way to deliberately CLEAR these fields to their zero value
+// through update_with_triples — sending zero means "leave as-is". That is the
+// desired invariant for MessageType (the envelope must persist — ADR-055) and
+// Version (monotonic). The only field with a plausible deliberate-clear case is
+// StorageRef (e.g. its offloaded content was GC'd); no caller needs it today. If
+// one ever does, add an explicit signal (a ClearFields list / pointer-optional
+// fields) rather than un-overloading zero. (Triples are unaffected — clear a
+// predicate via UpdateEntityWithTriplesRequest.RemoveTriples.)
 func preserveStoredEntityMetadata(newEntity, stored *graph.EntityState) {
 	if newEntity == nil || stored == nil {
 		return

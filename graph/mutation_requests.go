@@ -69,6 +69,14 @@ type CreateEntityWithTriplesRequest struct {
 // semantics: re-read + re-apply the delta on each retry until the
 // CAS succeeds or the retry budget is exhausted. This is correct for
 // the "facts accumulate" model the graph layer was built around.
+//
+// Entity metadata (MessageType / Version / StorageRef) is PRESERVE-WHEN-ZERO:
+// to change one, send a non-zero value (it wins); leaving it zero keeps the
+// stored value, so a bare Entity{ID} delta does not erase the envelope (see
+// graphingest.preserveStoredEntityMetadata). Corollary: there is no way to
+// deliberately CLEAR a metadata field through this lane (gh#260) — that is the
+// desired invariant for MessageType/Version; StorageRef is the only plausible
+// future clear case. Triples ARE clearable: name predicates in RemoveTriples.
 type UpdateEntityWithTriplesRequest struct {
 	Entity *EntityState `json:"entity"`
 	// AddTriples are applied with REPLACE-by-(subject,predicate) semantics
