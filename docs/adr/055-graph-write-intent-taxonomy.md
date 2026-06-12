@@ -449,10 +449,19 @@ migrate every producer to a birth lane first, then flip `triple.add`/`add_batch`
 must-exist last, so `main` is never broken in between.
 
 - **Wave 0 — framework primitives:**
-  - **B-1 governance-audit migration** (§3a) — move `rule.deny`/`rule.approve` from
-    the rule-ID triple write to the `GOVERNANCE_VERDICT_AUDIT` verdict-event stream
-    (registered payload, append-only) + failure metric + regression test + ops-doc
-    update. Gates the closing move.
+  - **B-1 governance-audit migration** (§3a) — **[IMPLEMENTED]** moved
+    `rule.deny`/`rule.approve` from the rule-ID triple write to the
+    `GOVERNANCE_VERDICT_AUDIT` verdict-event stream (registered
+    `governance.verdict.v1` payload in the new `governance` package, append-only,
+    subject `governance.verdict.{decision}.{rule_token}`) via a framework-owned
+    `VerdictAuditor` injected into the rule `ActionExecutor` (independent of the
+    operator `Publisher`). Adds `semstreams_rule_governance_verdict_audit_failures_total{decision}`,
+    deletes the dead `PredicateRuleDeny`/`PredicateRuleApprove` consts, and
+    redirects the ops-doc-17 read path to stream replay. The metric `mode`
+    dimension from the §3a sketch is deferred — the governance mode
+    (`audit`/`enforce`) is a loop-level setting not threaded to the rule-action
+    emit site, so a `mode` label would be permanently `unknown`; revisit if the
+    mode is propagated into the proposed-call message. Gates the closing move.
   - **T1 (three parts)** — `PublishToStreamWithMsgID` + `config.StreamConfig.Duplicates`
     plumbed into both builders + the existing-stream update path; decide the window
     size (Open Question #1). Optionally (s,p,o)-idempotent merge in `MergeEntity`.

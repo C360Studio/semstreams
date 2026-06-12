@@ -21,7 +21,8 @@ Use subject-mode governance when policy needs to:
 - Compose across signals (a deny condition depending on caller role
   AND tool name AND time-of-day).
 - Be operator-editable without a recompile.
-- Emit audit triples that downstream rules can match on.
+- Record an append-only audit trail of every deny/approve verdict
+  (the `GOVERNANCE_VERDICT_AUDIT` stream, ADR-055 §3a).
 - Vary across rule-engine deployments without code changes in
   agentic-loop.
 
@@ -154,7 +155,8 @@ pair.
 
 The `publish` action emits the rejection to the loop's verdict
 subject. `deny` short-circuits the rule's remaining actions and
-records an audit triple under `rule.deny`.
+emits a deny verdict event to the append-only `GOVERNANCE_VERDICT_AUDIT`
+stream (ADR-055 §3a; subject `governance.verdict.deny.{rule_token}`).
 
 ### Allow read-only tools
 
@@ -176,10 +178,11 @@ records an audit triple under `rule.deny`.
 }
 ```
 
-`approve` writes the audit triple (predicate `rule.approve`) AND
-publishes the verdict in one action. It does NOT short-circuit
-subsequent actions — operators may want to add metric-counter actions
-or downstream notifications on the same firing.
+`approve` emits an approve verdict event to the `GOVERNANCE_VERDICT_AUDIT`
+stream (subject `governance.verdict.approve.{rule_token}`, ADR-055 §3a)
+AND publishes the routing verdict to the loop in one action. It does NOT
+short-circuit subsequent actions — operators may want to add metric-counter
+actions or downstream notifications on the same firing.
 
 ### Consolidated blocklist with fallback approve (recommended)
 
@@ -312,6 +315,21 @@ Three Prometheus metrics drive the operational view:
 | `semstreams_agentic_loop_tool_call_governance_verdict_duration_seconds` | `decision`, `mode` | Buckets 1ms → 5s. Drives the timeout-tuning decision in beta.70 — set `timeout` after measuring p99 from this histogram. |
 | `semstreams_agentic_loop_tool_call_governance_verdict_total` | `decision`, `mode` | Sum of approved+rejected+timeout per mode. Sustained `decision=timeout` rate signals undersized timeout or stuck rule engine. |
 | `semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` | (none) | Increments when a verdict arrives without a registered waiter. Non-zero rate is the canonical signal that the subscribe-before-publish race-fix regressed; investigate immediately. |
+| `semstreams_rule_governance_verdict_audit_failures_total` | `decision` | A deny/approve verdict was applied but its append-only audit record failed to publish (ADR-055 §3a). The verdict still holds — but a non-zero value is a compliance-visibility gap, critical in `enforce` mode. |
+
+### Verdict audit trail
+
+Every explicit `deny`/`approve` verdict is recorded as a registered
+event on the append-only `GOVERNANCE_VERDICT_AUDIT` JetStream stream
+(ADR-055 §3a), subject `governance.verdict.{decision}.{rule_token}`
+(`rule_token` is a subject-safe hash of the rule ID; the canonical
+`rule_id` travels in the payload). This replaces the former
+`rule.deny`/`rule.approve` audit triples. To review verdict history,
+replay/filter the stream (e.g. `governance.verdict.deny.>` for all
+denials); the payload carries `{decision, rule_id, reason, entity_id,
+timestamp, loop_id?, call_id?}`. The audit emit is best-effort — a
+failed emit never flips a verdict — and lost records are surfaced via
+`semstreams_rule_governance_verdict_audit_failures_total`.
 
 ## Troubleshooting
 

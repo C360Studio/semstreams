@@ -21,6 +21,12 @@ type Metrics struct {
 	activeRules           prometheus.Gauge
 	stateTransitionsTotal *prometheus.CounterVec // OnEnter/OnExit transitions
 	debounceDelaysTotal   prometheus.Counter     // Coalesced updates due to debouncing
+	// governanceVerdictAuditFailures counts failed governance verdict-audit
+	// emits (ADR-055 §3a). A non-zero value means a deny/approve verdict was
+	// applied but its append-only audit record was lost — observable so the gap
+	// is not silent (critical in enforce mode). The emit is best-effort: a
+	// failure increments this counter but NEVER flips the verdict.
+	governanceVerdictAuditFailures *prometheus.CounterVec
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -123,6 +129,13 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Name:      "debounce_delays_total",
 				Help:      "Total number of debounced rule evaluations (coalesced updates)",
 			}),
+
+			governanceVerdictAuditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "governance_verdict_audit_failures_total",
+				Help:      "Governance verdict-audit emits that failed (verdict applied but audit record lost; ADR-055 §3a)",
+			}, []string{"decision"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -138,6 +151,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.activeRules,
 			ruleMetrics.stateTransitionsTotal,
 			ruleMetrics.debounceDelaysTotal,
+			ruleMetrics.governanceVerdictAuditFailures,
 		)
 	})
 

@@ -135,6 +135,24 @@ var flowsStreamConfig = StreamConfig{
 	Replicas: 1,
 }
 
+// governanceVerdictAuditStreamConfig defines the GOVERNANCE_VERDICT_AUDIT stream
+// (ADR-055 §3a). It is the append-only home for governance deny/approve verdict
+// events, replacing the prior rule-ID audit triple. Each verdict is a new stream
+// sequence (append-only by construction — no key to overwrite, so last-write-wins
+// audit loss is structurally impossible). Subject pattern:
+// governance.verdict.{decision}.{rule_token} (decision ∈ deny|approve; rule_token
+// is a subject-safe hash of the rule ID, canonical rule_id in the payload).
+// File storage + a long MaxAge sized to the audit/compliance horizon — its own
+// knob, the reason for a dedicated stream rather than riding AGENT.
+var governanceVerdictAuditStreamConfig = StreamConfig{
+	Subjects:  []string{"governance.verdict.>"},
+	Storage:   "file",            // Durable: an audit trail must survive restarts
+	MaxAge:    "2160h",           // ~90 days audit/compliance horizon
+	MaxBytes:  500 * 1024 * 1024, // 500MB cap
+	Retention: "limits",          // Append-only event log (NOT interest/workqueue)
+	Replicas:  1,
+}
+
 // VerifyJetStreamLimits reads the operator's MaxMemory / MaxFileStore
 // hints from cfg.NATS.JetStream and logs a Warn for each value that
 // exceeds the server's actual account limit. JetStream account limits
@@ -225,8 +243,12 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 	streams["HEALTH"] = healthStreamConfig
 	streams["METRICS"] = metricsStreamConfig
 	streams["FLOWS"] = flowsStreamConfig
+	// GOVERNANCE_VERDICT_AUDIT is a framework guarantee (ADR-055 §3a): the
+	// append-only verdict audit must exist wherever the rule engine can issue
+	// deny/approve verdicts, independent of operator stream config.
+	streams["GOVERNANCE_VERDICT_AUDIT"] = governanceVerdictAuditStreamConfig
 	sm.logger.Debug("Adding system streams",
-		"streams", []string{"LOGS", "HEALTH", "METRICS", "FLOWS"})
+		"streams", []string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT"})
 
 	// 2. Explicit streams from config (can override system streams)
 	for name, sc := range cfg.Streams {

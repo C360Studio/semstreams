@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
@@ -60,16 +61,13 @@ const (
 	ActionTypeLifecycleFail = "lifecycle_fail"
 )
 
-// PredicateRuleDeny is the audit-triple predicate written by deny actions.
-// Downstream rules that gate on denials should match against this constant
-// so they stay in sync with any future rename.
-const PredicateRuleDeny = "rule.deny"
-
-// PredicateRuleApprove is the audit-triple predicate written by approve
-// actions. Downstream rules that gate on approvals (rate-limit a caller's
-// successful tool-call rate, audit-log every approve, etc.) should match
-// against this constant so they stay in sync with any future rename.
-const PredicateRuleApprove = "rule.approve"
+// NOTE: the former PredicateRuleDeny/PredicateRuleApprove audit-triple
+// predicates ("rule.deny"/"rule.approve") were retired in ADR-055 §3a. Deny and
+// approve no longer write an audit triple onto a phantom rule-ID entity (that
+// rode the graph-ingest auto-vivify path ADR-055 deletes); they emit a
+// registered verdict event to the append-only GOVERNANCE_VERDICT_AUDIT stream
+// (see VerdictAuditor + governance.VerdictEvent). This amends ADR-039's audit
+// mechanism while preserving its explicit-verdict-audit goal.
 
 // Action represents an action to execute when a rule fires.
 // Actions are triggered by state transitions (OnEnter, OnExit) or
@@ -407,6 +405,22 @@ type Publisher interface {
 	Publish(ctx context.Context, subject string, data []byte) error
 }
 
+// VerdictAuditor records a governance deny/approve verdict to the append-only
+// GOVERNANCE_VERDICT_AUDIT stream (ADR-055 §3a). It is a FRAMEWORK-owned
+// dependency, distinct from the operator-configured routing Publisher: piggy-
+// backing the Publisher would let config drift silently disable the audit trail,
+// so the audit emit has its own always-wired path. It REPLACES the prior
+// rule-ID audit triple (which rode the graph-ingest auto-vivify path ADR-055
+// deletes). The emit is best-effort — the caller must NOT flip a structural
+// verdict on an emit error — and increments a failure metric so a lost audit
+// record is observable rather than silent.
+type VerdictAuditor interface {
+	// EmitVerdict publishes a verdict event. Returns an error on emit failure;
+	// callers treat the error as a (metered, logged) audit gap, never a verdict
+	// change.
+	EmitVerdict(ctx context.Context, ev governance.VerdictEvent) error
+}
+
 // LifecycleManager is the subset of *lifecycle.Manager used by the
 // rule action executor for the lifecycle_* action family (ADR-047) and
 // the agent-run mint path (ADR-053 D4).
@@ -446,6 +460,10 @@ type ActionExecutor struct {
 	kvWriter      KVWriter                     // Optional: if nil, update_kv actions are logged but not executed
 	lifecycle     LifecycleManager             // Optional: if nil, lifecycle_* actions return an error explaining no Manager is wired
 	toolRegistry  component.ToolRegistryReader // Optional: if nil, publish_agent default_tools resolution returns empty
+	// verdictAuditor records governance deny/approve verdicts to the append-only
+	// audit stream (ADR-055 §3a). Optional: if nil, verdicts are still applied
+	// and logged but no audit event is emitted (e.g. NATS-less test executors).
+	verdictAuditor VerdictAuditor
 }
 
 // SetToolRegistry installs the shared tool registry used by
@@ -464,6 +482,15 @@ func (e *ActionExecutor) SetToolRegistry(r component.ToolRegistryReader) {
 // access to the registered Manager.
 func (e *ActionExecutor) SetLifecycleManager(m LifecycleManager) {
 	e.lifecycle = m
+}
+
+// SetVerdictAuditor installs the framework verdict auditor used by deny/approve
+// actions to record governance verdicts (ADR-055 §3a). nil-valued arg leaves
+// verdicts un-audited (still applied + logged). Set explicitly after
+// construction by the rule processor once it has a NATS client. It is wired
+// independently of the operator Publisher so config drift cannot disable audit.
+func (e *ActionExecutor) SetVerdictAuditor(a VerdictAuditor) {
+	e.verdictAuditor = a
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -1391,31 +1418,49 @@ func (e *ActionExecutor) executeDeny(ctx context.Context, action Action, ec *Exe
 	reason := ec.SubstituteVariables(action.Reason)
 	ruleID := ec.RuleID()
 
-	// Best-effort audit triple. Mirror executePublishAgent's triple-write pattern.
-	// If AddTriple fails, we log Error but DO NOT return that error — the deny
-	// verdict is the structural outcome and must not be flipped to "allow" by
-	// an audit-write failure.
-	if e.tripleMutator != nil {
-		auditTriple := message.Triple{
-			Subject:    ruleID,
-			Predicate:  PredicateRuleDeny,
-			Object:     reason,
-			Source:     "rule_engine",
-			Timestamp:  time.Now(),
-			Confidence: 1.0,
-		}
-		if _, err := e.tripleMutator.AddTriple(ctx, ruleID, auditTriple); err != nil {
-			if e.logger != nil {
-				e.logger.Error("deny verdict audit triple write failed; verdict still applies",
-					"rule_id", ruleID,
-					"reason", reason,
-					"error", err)
-			}
-			// intentionally fall through — verdict is structural
-		}
-	}
+	// Best-effort governance audit (ADR-055 §3a): emit a registered verdict event
+	// to the append-only GOVERNANCE_VERDICT_AUDIT stream, replacing the prior
+	// rule-ID audit triple that rode graph-ingest's auto-vivify path. An emit
+	// failure is logged + metered but MUST NOT flip the verdict from deny to allow.
+	e.emitVerdictAudit(ctx, governance.DecisionDeny, ruleID, reason, ec)
 
 	return &DenyVerdict{RuleID: ruleID, Reason: reason}
+}
+
+// emitVerdictAudit records a governance verdict to the append-only audit stream
+// (ADR-055 §3a). Best-effort by construction: a nil auditor (NATS-less executor)
+// is a no-op, and an emit error is logged at Error level so operators see the
+// audit gap — but the caller's structural verdict is NEVER changed by an audit
+// failure. The auditor meters failures via governance_verdict_audit_failures_total.
+func (e *ActionExecutor) emitVerdictAudit(ctx context.Context, decision, ruleID, reason string, ec *ExecutionContext) {
+	if e.verdictAuditor == nil {
+		return
+	}
+	ev := governance.VerdictEvent{
+		Decision:  decision,
+		RuleID:    ruleID,
+		Reason:    reason,
+		EntityID:  ec.EntityID,
+		Timestamp: time.Now(),
+	}
+	// loop_id/call_id are OPTIONAL — echoed from the proposed-call message when
+	// the verdict fires on a tool-call. Nil MessageData (entity-state-driven or
+	// cron-fired rules) leaves them empty; the audit record stays valid.
+	if ec.MessageData != nil {
+		if v, ok := ec.MessageData["loop_id"].(string); ok {
+			ev.LoopID = v
+		}
+		if v, ok := ec.MessageData["call_id"].(string); ok {
+			ev.CallID = v
+		}
+	}
+	if err := e.verdictAuditor.EmitVerdict(ctx, ev); err != nil && e.logger != nil {
+		e.logger.Error("governance verdict audit emit failed; verdict still applies",
+			"decision", decision,
+			"rule_id", ruleID,
+			"reason", reason,
+			"error", err)
+	}
 }
 
 // executeApprove issues an approve verdict — writes a best-effort audit triple
@@ -1442,29 +1487,11 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 	ruleID := ec.RuleID()
 	entityID := ec.EntityID
 
-	// Best-effort audit triple. Mirror executeDeny's pattern: audit-write
-	// failure must NOT change the verdict — approve still proceeds to
-	// publish so downstream consumers see the decision.
-	if e.tripleMutator != nil {
-		auditTriple := message.Triple{
-			Subject:    ruleID,
-			Predicate:  PredicateRuleApprove,
-			Object:     reason,
-			Source:     "rule_engine",
-			Timestamp:  time.Now(),
-			Confidence: 1.0,
-		}
-		if _, err := e.tripleMutator.AddTriple(ctx, ruleID, auditTriple); err != nil {
-			if e.logger != nil {
-				e.logger.Error("approve verdict audit triple write failed; verdict still applies",
-					"rule_id", ruleID,
-					"subject", subject,
-					"reason", reason,
-					"error", err)
-			}
-			// fall through — verdict is structural, publish below must run
-		}
-	}
+	// Best-effort governance audit (ADR-055 §3a): same mechanism as deny — emit
+	// a verdict event to the audit stream. Audit failure must NOT change the
+	// verdict; approve still proceeds to the routing publish below so downstream
+	// consumers see the decision.
+	e.emitVerdictAudit(ctx, governance.DecisionApprove, ruleID, reason, ec)
 
 	// Publish the verdict payload. The subject itself carries the routing
 	// identity (e.g. `agent.toolcall.approved.<loop_id>.<call_id>`); the

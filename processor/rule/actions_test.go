@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -406,6 +407,22 @@ func (m *mockPublisher) Publish(_ context.Context, subject string, data []byte) 
 		return m.err
 	}
 	m.published = append(m.published, publishedMessage{subject: subject, data: data})
+	return nil
+}
+
+// mockVerdictAuditor captures emitted governance verdict events (ADR-055 §3a),
+// or fails when err is set, so tests can assert the deny/approve audit emit and
+// the best-effort "audit failure never flips the verdict" invariant.
+type mockVerdictAuditor struct {
+	emitted []governance.VerdictEvent
+	err     error
+}
+
+func (m *mockVerdictAuditor) EmitVerdict(_ context.Context, ev governance.VerdictEvent) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.emitted = append(m.emitted, ev)
 	return nil
 }
 
@@ -2541,8 +2558,9 @@ func TestExecuteDeny_AuditFailureDoesNotFlipDeny(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{addErr: errors.New("nats unavailable")}
-	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	aud := &mockVerdictAuditor{err: errors.New("nats unavailable")}
+	executor := NewActionExecutor(slog.Default())
+	executor.SetVerdictAuditor(aud)
 	ec := newDenyTestEC("deny-rule-audit-fail", nil)
 	action := Action{Type: ActionTypeDeny, Reason: "must deny"}
 
@@ -2559,36 +2577,39 @@ func TestExecuteDeny_AuditFailureDoesNotFlipDeny(t *testing.T) {
 	assert.Equal(t, "must deny", dv.Reason)
 }
 
-// TestExecuteDeny_WritesAuditTriple verifies that executeDeny calls
-// tripleMutator.AddTriple with predicate "rule.deny" and the expected reason object.
-func TestExecuteDeny_WritesAuditTriple(t *testing.T) {
+// TestExecuteDeny_EmitsVerdictAudit verifies that executeDeny emits a governance
+// verdict event (ADR-055 §3a) carrying decision=deny, the rule ID, the reason,
+// and the entity ID — replacing the prior rule.deny audit triple.
+func TestExecuteDeny_EmitsVerdictAudit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	aud := &mockVerdictAuditor{}
+	executor := NewActionExecutor(slog.Default())
+	executor.SetVerdictAuditor(aud)
 	ec := newDenyTestEC("deny-rule-audit", nil)
 	action := Action{Type: ActionTypeDeny, Reason: "blocked by policy"}
 
 	_ = executor.executeDeny(ctx, action, ec)
 
-	require.Len(t, mut.addedTriples, 1, "AddTriple must be called exactly once")
-	triple := mut.addedTriples[0]
-	assert.Equal(t, PredicateRuleDeny, triple.Predicate,
-		"audit triple predicate must be %q", PredicateRuleDeny)
-	assert.Equal(t, "blocked by policy", triple.Object,
-		"audit triple object must be the reason string")
+	require.Len(t, aud.emitted, 1, "EmitVerdict must be called exactly once")
+	ev := aud.emitted[0]
+	assert.Equal(t, governance.DecisionDeny, ev.Decision)
+	assert.Equal(t, "deny-rule-audit", ev.RuleID)
+	assert.Equal(t, "blocked by policy", ev.Reason)
+	assert.Equal(t, "acme.ops.test.svc.entity.001", ev.EntityID)
 }
 
 // TestExecuteDeny_VariableSubstitutionInReason verifies that $caller.role and
 // other template variables are substituted into the reason before it travels
-// in the DenyVerdict and the audit triple.
+// in the DenyVerdict and the emitted verdict event.
 func TestExecuteDeny_VariableSubstitutionInReason(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	aud := &mockVerdictAuditor{}
+	executor := NewActionExecutor(slog.Default())
+	executor.SetVerdictAuditor(aud)
 	ec := newDenyTestEC("deny-rule-subst", &CallerContext{ID: "alice", Role: "viewer", Org: "acme"})
 	action := Action{Type: ActionTypeDeny, Reason: "caller $caller.id with role $caller.role is denied"}
 
@@ -2599,15 +2620,15 @@ func TestExecuteDeny_VariableSubstitutionInReason(t *testing.T) {
 	require.True(t, errors.As(err, &dv))
 	assert.Equal(t, "caller alice with role viewer is denied", dv.Reason)
 
-	require.Len(t, mut.addedTriples, 1)
-	assert.Equal(t, "caller alice with role viewer is denied", mut.addedTriples[0].Object)
+	require.Len(t, aud.emitted, 1)
+	assert.Equal(t, "caller alice with role viewer is denied", aud.emitted[0].Reason)
 }
 
 // --- executeApprove tests ---
 //
 // Approve is asymmetric to deny: it returns nil (does NOT short-circuit
 // subsequent actions), publishes a verdict payload to the configured
-// Subject, and writes an audit triple under PredicateRuleApprove. These
+// Subject, and emits an approve verdict audit event (ADR-055 §3a). These
 // tests pin those invariants and the parity with deny on audit-failure
 // handling.
 
@@ -2696,17 +2717,17 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 	assert.Equal(t, "policy permits", envelope.Payload.Data["reason"])
 }
 
-// TestExecuteApprove_WritesAuditTriple verifies the audit triple is written
-// with PredicateRuleApprove and the substituted reason as the object.
-// Downstream rules that count approvals by caller can match on this
-// predicate.
-func TestExecuteApprove_WritesAuditTriple(t *testing.T) {
+// TestExecuteApprove_EmitsVerdictAudit verifies approve emits a governance
+// verdict event (ADR-055 §3a) with decision=approve and the substituted reason,
+// in addition to (and independent of) the routing publish.
+func TestExecuteApprove_EmitsVerdictAudit(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{}
+	aud := &mockVerdictAuditor{}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	executor := NewActionExecutorFull(slog.Default(), nil, pub)
+	executor.SetVerdictAuditor(aud)
 	ec := newApproveTestEC("approve-rule-audit", nil, nil)
 	action := Action{
 		Type:    ActionTypeApprove,
@@ -2716,12 +2737,11 @@ func TestExecuteApprove_WritesAuditTriple(t *testing.T) {
 
 	require.NoError(t, executor.executeApprove(ctx, action, ec))
 
-	require.Len(t, mut.addedTriples, 1, "AddTriple must be called exactly once")
-	triple := mut.addedTriples[0]
-	assert.Equal(t, PredicateRuleApprove, triple.Predicate,
-		"audit triple predicate must be %q", PredicateRuleApprove)
-	assert.Equal(t, "policy permits", triple.Object,
-		"audit triple object must be the substituted reason")
+	require.Len(t, aud.emitted, 1, "EmitVerdict must be called exactly once")
+	ev := aud.emitted[0]
+	assert.Equal(t, governance.DecisionApprove, ev.Decision)
+	assert.Equal(t, "approve-rule-audit", ev.RuleID)
+	assert.Equal(t, "policy permits", ev.Reason)
 }
 
 // TestExecuteApprove_AuditFailureDoesNotBlockPublish is the deny-parity
@@ -2734,9 +2754,10 @@ func TestExecuteApprove_AuditFailureDoesNotBlockPublish(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{addErr: errors.New("nats unavailable")}
+	aud := &mockVerdictAuditor{err: errors.New("nats unavailable")}
 	pub := &mockPublisher{}
-	executor := NewActionExecutorFull(slog.Default(), mut, pub)
+	executor := NewActionExecutorFull(slog.Default(), nil, pub)
+	executor.SetVerdictAuditor(aud)
 	ec := newApproveTestEC("approve-rule-audit-fail", nil, nil)
 	action := Action{
 		Type:    ActionTypeApprove,
@@ -2747,6 +2768,32 @@ func TestExecuteApprove_AuditFailureDoesNotBlockPublish(t *testing.T) {
 	err := executor.executeApprove(ctx, action, ec)
 	assert.NoError(t, err, "audit failure must NOT propagate; publish ran")
 	require.Len(t, pub.published, 1, "publish must still fire when audit fails")
+}
+
+// TestEmitVerdictAudit_EchoesLoopAndCallID verifies the OPTIONAL identifiers are
+// sourced from MessageData (the proposed-call message) when present, and left
+// empty otherwise (entity-state / cron rules have no inbound call identity).
+func TestEmitVerdictAudit_EchoesLoopAndCallID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	withMsg := &mockVerdictAuditor{}
+	exec1 := NewActionExecutor(slog.Default())
+	exec1.SetVerdictAuditor(withMsg)
+	ecWith := newApproveTestEC("rule-echo", nil, map[string]any{"loop_id": "loop-abc", "call_id": "call-001"})
+	exec1.emitVerdictAudit(ctx, governance.DecisionApprove, "rule-echo", "ok", ecWith)
+	require.Len(t, withMsg.emitted, 1)
+	assert.Equal(t, "loop-abc", withMsg.emitted[0].LoopID)
+	assert.Equal(t, "call-001", withMsg.emitted[0].CallID)
+
+	noMsg := &mockVerdictAuditor{}
+	exec2 := NewActionExecutor(slog.Default())
+	exec2.SetVerdictAuditor(noMsg)
+	ecNone := newDenyTestEC("rule-no-msg", nil) // nil MessageData
+	exec2.emitVerdictAudit(ctx, governance.DecisionDeny, "rule-no-msg", "blocked", ecNone)
+	require.Len(t, noMsg.emitted, 1)
+	assert.Empty(t, noMsg.emitted[0].LoopID, "no MessageData → empty loop_id")
+	assert.Empty(t, noMsg.emitted[0].CallID, "no MessageData → empty call_id")
 }
 
 // TestExecuteApprove_PublishFailureReturnsError diverges from audit-failure
@@ -2791,19 +2838,20 @@ func TestExecuteApprove_RequiresSubject(t *testing.T) {
 
 // TestExecuteApprove_NoPublisherIsNoOp covers the early-boot or
 // publisher-not-configured scenario: approve must still complete (return
-// nil) and write the audit triple. The publish step is skipped without
+// nil) and emit the verdict audit event. The publish step is skipped without
 // error so dev/test environments without a NATS publisher don't break.
 func TestExecuteApprove_NoPublisherIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	mut := &mockTripleMutator{}
-	executor := NewActionExecutorWithMutator(slog.Default(), mut)
+	aud := &mockVerdictAuditor{}
+	executor := NewActionExecutor(slog.Default())
+	executor.SetVerdictAuditor(aud)
 	ec := newApproveTestEC("approve-no-pub", nil, nil)
 	action := Action{Type: ActionTypeApprove, Subject: "agent.toolcall.approved.x", Reason: "permit"}
 
 	assert.NoError(t, executor.executeApprove(ctx, action, ec))
-	assert.Len(t, mut.addedTriples, 1, "audit triple still written without publisher")
+	assert.Len(t, aud.emitted, 1, "verdict audit still emitted without publisher")
 }
 
 // --- ADR-053 Pass A: RunID inheritance in executePublishAgent ---
