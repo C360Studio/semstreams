@@ -1,9 +1,11 @@
 //go:build integration
 
-// Integration tests for the deny action against real NATS + KV.
+// Integration tests for the deny/approve actions against real NATS + JetStream.
 //
-// These tests exercise the full deny machinery end-to-end: CallerContext
-// substitution, action short-circuit, and audit triple write.
+// These exercise the full verdict machinery end-to-end: CallerContext
+// substitution, action short-circuit, and the governance verdict audit
+// (ADR-055 §3a) — a registered verdict event published to the append-only
+// GOVERNANCE_VERDICT_AUDIT stream, replacing the prior rule-ID audit triple.
 //
 // Per-rule revision guard against cascade-fires is unit-tested separately in
 // revision_tracking_test.go (shouldSkipRule, ownRevisions injection).
@@ -16,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,22 +27,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/governance"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/processor/rule"
 )
 
-// natsTripleMutator is a test-only implementation of rule.TripleMutator
-// that performs real NATS request/reply against a test responder.
-type natsTripleMutator struct {
-	natsClient *natsclient.Client
-}
-
-// natsPublisher is a test-only implementation of rule.Publisher that
-// publishes to a real NATS connection. Used in TestIntegration_DenyFlow to
-// let publish actions actually reach the NATS broker so the test can count
-// deliveries via a subscription.
+// natsPublisher is a test-only implementation of rule.Publisher that publishes
+// to a real NATS connection so the test can count deliveries via a subscription.
 type natsPublisher struct {
 	natsClient *natsclient.Client
 }
@@ -48,117 +45,21 @@ func (p *natsPublisher) Publish(ctx context.Context, subject string, data []byte
 	return p.natsClient.Publish(ctx, subject, data)
 }
 
-func (m *natsTripleMutator) AddTriple(ctx context.Context, _ string, triple message.Triple) (uint64, error) {
-	req := gtypes.AddTripleRequest{Triple: triple}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return 0, err
-	}
-
-	respData, err := m.natsClient.RequestWithRetry(
-		ctx,
-		rule.SubjectTripleAdd,
-		data,
-		5*time.Second,
-		natsclient.DefaultRetryConfig(),
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	var resp gtypes.AddTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return 0, err
-	}
-	if !resp.Success {
-		return 0, errors.New(resp.Error)
-	}
-
-	return resp.KVRevision, nil
+// denyTestVerdictAuditor is a test rule.VerdictAuditor that publishes verdict
+// events to the real GOVERNANCE_VERDICT_AUDIT stream via PublishToStream — the
+// same wire (subject + BaseMessage envelope) the production auditor uses
+// (ADR-055 §3a).
+type denyTestVerdictAuditor struct {
+	nc *natsclient.Client
 }
 
-func (m *natsTripleMutator) RemoveTriple(ctx context.Context, _ string, subject, predicate string) (uint64, error) {
-	req := gtypes.RemoveTripleRequest{Subject: subject, Predicate: predicate}
-	data, err := json.Marshal(req)
+func (a *denyTestVerdictAuditor) EmitVerdict(ctx context.Context, ev governance.VerdictEvent) error {
+	baseMsg := message.NewBaseMessage(ev.Schema(), &ev, "rule_engine")
+	data, err := json.Marshal(baseMsg)
 	if err != nil {
-		return 0, err
+		return err
 	}
-
-	respData, err := m.natsClient.RequestWithRetry(
-		ctx,
-		rule.SubjectTripleRemove,
-		data,
-		5*time.Second,
-		natsclient.DefaultRetryConfig(),
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	var resp gtypes.RemoveTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return 0, err
-	}
-	if !resp.Success {
-		return 0, errors.New(resp.Error)
-	}
-	return resp.KVRevision, nil
-}
-
-// startGraphResponder registers NATS request/reply responders for both
-// triple mutation subjects. The add-responder stores triples in collector
-// and returns a synthetic KVRevision (auto-incrementing). The remove-
-// responder simply acknowledges. Both reply with Success=true.
-//
-// Returns a channel that receives every triple added (for assertions).
-// Cleanup is handled by testcontainer teardown at test end.
-func startGraphResponder(t *testing.T, nc *natsclient.Client) (added chan message.Triple) {
-	t.Helper()
-	ctx := context.Background()
-
-	ch := make(chan message.Triple, 64)
-	var revision atomic.Uint64
-
-	addHandler := func(_ context.Context, data []byte) ([]byte, error) {
-		var req gtypes.AddTripleRequest
-		if err := json.Unmarshal(data, &req); err != nil {
-			return nil, err
-		}
-		rev := revision.Add(1)
-		ch <- req.Triple
-		resp := gtypes.AddTripleResponse{
-			MutationResponse: gtypes.MutationResponse{
-				Success:    true,
-				KVRevision: rev,
-				Timestamp:  time.Now().UnixNano(),
-			},
-		}
-		return json.Marshal(resp)
-	}
-
-	removeHandler := func(_ context.Context, data []byte) ([]byte, error) {
-		var req gtypes.RemoveTripleRequest
-		if err := json.Unmarshal(data, &req); err != nil {
-			return nil, err
-		}
-		rev := revision.Add(1)
-		resp := gtypes.RemoveTripleResponse{
-			MutationResponse: gtypes.MutationResponse{
-				Success:    true,
-				KVRevision: rev,
-				Timestamp:  time.Now().UnixNano(),
-			},
-		}
-		return json.Marshal(resp)
-	}
-
-	_, err := nc.SubscribeForRequests(ctx, rule.SubjectTripleAdd, addHandler)
-	require.NoError(t, err, "failed to subscribe to triple add subject")
-
-	_, err = nc.SubscribeForRequests(ctx, rule.SubjectTripleRemove, removeHandler)
-	require.NoError(t, err, "failed to subscribe to triple remove subject")
-
-	return ch
+	return a.nc.PublishToStream(ctx, governance.VerdictSubject(ev.Decision, ev.RuleID), data)
 }
 
 // publishActionForTest returns a publish action scoped to subject so test
@@ -182,60 +83,63 @@ func makeEC(ruleID, entityID string, caller *rule.CallerContext) *rule.Execution
 	}
 }
 
-// drainTriples reads up to n triples from ch within timeout, returning
-// however many arrived. Used to assert both "some triples arrived" and
-// "no triples arrived" without relying on arbitrary sleeps.
-func drainTriples(ch chan message.Triple, n int, timeout time.Duration) []message.Triple {
-	var out []message.Triple
-	deadline := time.After(timeout)
-	for {
-		if len(out) >= n {
-			return out
-		}
-		select {
-		case t := <-ch:
-			out = append(out, t)
-		case <-deadline:
-			return out
-		}
-	}
-}
-
 // ----- Test 1: end-to-end deny flow ----------------------------------------
 
 // TestIntegration_DenyFlow exercises the full deny action pipeline against
 // real NATS + JetStream. Two sub-cases:
 //
 //   - Case A (admin caller): action list [publish, publish, publish] — no deny.
-//     All 3 reach NATS, zero audit triples written. Verifies the executor +
-//     publisher + triple mutator are all correctly wired to real NATS.
+//     All 3 reach NATS, zero verdict events emitted.
 //
 //   - Case B (viewer caller): action list [publish, deny, publish]. The deny is
 //     the second action. It fires unconditionally, short-circuits the third
 //     publish, returns *DenyVerdict with $caller.id substituted into the reason,
-//     and writes exactly one rule.deny audit triple to the graph responder.
+//     and emits exactly one deny verdict event to GOVERNANCE_VERDICT_AUDIT.
 //
-// "Graph integration" is provided by a lightweight in-process NATS responder
-// (startGraphResponder) — no graph-gateway process is needed.
+// The audit stream is provisioned via the real config.StreamsManager, which also
+// live-validates the GOVERNANCE_VERDICT_AUDIT stream config (createStream must
+// accept it). Verdict events are checked two ways: a core subscription on the
+// stream subject proves live delivery + decode (and lets the admin case assert
+// NO verdict), and a JetStream GetLastMsgForSubject read-back proves the deny
+// verdict is durably persisted and replayable — the actual audit guarantee, not
+// just that a publish went out.
 //
 // Why two different action lists instead of a single list with a When-guarded
 // deny: ActionExecutor.Execute does not evaluate When clauses — that is the
-// StatefulEvaluator.runActions responsibility. Calling Execute directly (Option
-// A from the chunk spec) bypasses When evaluation. Using two purpose-built
-// action lists keeps the integration boundary clean and the assertions precise.
+// StatefulEvaluator.runActions responsibility. Calling Execute directly bypasses
+// When evaluation. Using two purpose-built action lists keeps the integration
+// boundary clean and the assertions precise.
 func TestIntegration_DenyFlow(t *testing.T) {
 	nc := getTestNATSClient(t)
 	ctx := context.Background()
 
-	addedCh := startGraphResponder(t, nc)
+	// ADR-055 §3a: provision the audit stream and wire the framework verdict
+	// auditor so deny/approve emit verdict events. EnsureStreams is idempotent
+	// and live-validates the GOVERNANCE_VERDICT_AUDIT stream config.
+	sm := config.NewStreamsManager(nc, slog.Default())
+	require.NoError(t, sm.EnsureStreams(ctx, &config.Config{}))
 
-	mut := &natsTripleMutator{natsClient: nc}
 	pub := &natsPublisher{natsClient: nc}
-	executor := rule.NewActionExecutorFull(nil, mut, pub)
+	executor := rule.NewActionExecutorFull(nil, nil, pub)
+	executor.SetVerdictAuditor(&denyTestVerdictAuditor{nc: nc})
+
+	// Capture verdict events landing on the audit stream subject.
+	verdictCh := make(chan *governance.VerdictEvent, 8)
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	_, err := nc.Subscribe(ctx, "governance.verdict.>", func(_ context.Context, m *nats.Msg) {
+		bm, derr := decoder.Decode(m.Data)
+		if derr != nil {
+			return
+		}
+		if ev, ok := bm.Payload().(*governance.VerdictEvent); ok {
+			verdictCh <- ev
+		}
+	})
+	require.NoError(t, err)
 
 	// Track publish dispatches via a NATS subscription.
 	var publishCount atomic.Int64
-	_, err := nc.Subscribe(ctx, "deny.test.publish", func(_ context.Context, _ *nats.Msg) {
+	_, err = nc.Subscribe(ctx, "deny.test.publish", func(_ context.Context, _ *nats.Msg) {
 		publishCount.Add(1)
 	})
 	require.NoError(t, err)
@@ -266,9 +170,14 @@ func TestIntegration_DenyFlow(t *testing.T) {
 			return publishCount.Load() == 3
 		}, 2*time.Second, 25*time.Millisecond, "expected 3 NATS publish deliveries for admin caller")
 
-		// No audit triple must have been written.
-		written := drainTriples(addedCh, 1, 200*time.Millisecond)
-		assert.Empty(t, written, "admin caller must not produce a rule.deny audit triple")
+		// No verdict event must be emitted for an allowed (admin) caller. There
+		// is no positive signal to wait for, so a bounded negative window is the
+		// correct technique here.
+		select {
+		case ev := <-verdictCh:
+			t.Fatalf("admin caller must not emit a verdict event, got %+v", ev)
+		case <-time.After(300 * time.Millisecond):
+		}
 	})
 
 	// ---- Case B: viewer caller — deny short-circuits in middle of chain -----
@@ -326,17 +235,41 @@ func TestIntegration_DenyFlow(t *testing.T) {
 		assert.Equal(t, int64(1), publishCount.Load(),
 			"exactly one publish must run; the action after deny must be skipped")
 
-		// Exactly one rule.deny audit triple must reach the graph responder.
-		auditTriples := drainTriples(addedCh, 1, 2*time.Second)
-		require.Len(t, auditTriples, 1,
-			"deny action must write exactly one audit triple")
+		// Exactly one deny verdict event must be delivered live on the audit
+		// subject, carrying the substituted reason + the originating rule and
+		// entity (ADR-055 §3a).
+		select {
+		case ev := <-verdictCh:
+			assert.Equal(t, governance.DecisionDeny, ev.Decision,
+				"verdict event decision must be deny")
+			assert.Equal(t, "role-gate-rule", ev.RuleID,
+				"verdict event must carry the originating rule ID")
+			assert.Equal(t, "user viewer-user-1 is not admin", ev.Reason,
+				"verdict event reason must carry the substituted reason")
+			assert.Equal(t, "acme.ops.test.svc.entity.002", ev.EntityID,
+				"verdict event must carry the entity ID")
+		case <-time.After(2 * time.Second):
+			t.Fatal("deny action must emit exactly one verdict event to the audit stream")
+		}
 
-		at := auditTriples[0]
-		assert.Equal(t, rule.PredicateRuleDeny, at.Predicate,
-			"audit triple predicate must be %q", rule.PredicateRuleDeny)
-		assert.Equal(t, "user viewer-user-1 is not admin", at.Object,
-			"audit triple object must carry the substituted reason")
-		assert.Equal(t, "role-gate-rule", at.Subject,
-			"audit triple subject must be the rule ID (from ec.RuleID())")
+		// Persistence gate: the verdict must be DURABLY recorded on the stream,
+		// not merely published. PublishToStream returns only after the PubAck, so
+		// by now the record is persisted; read the last message on the deny
+		// subject back and decode it. Robust to testcontainer reuse —
+		// GetLastMsgForSubject returns the most recent (this run's) event, and
+		// the reason is deterministic.
+		js, jerr := nc.JetStream()
+		require.NoError(t, jerr)
+		stream, serr := js.Stream(ctx, "GOVERNANCE_VERDICT_AUDIT")
+		require.NoError(t, serr)
+		raw, gerr := stream.GetLastMsgForSubject(ctx, governance.VerdictSubject(governance.DecisionDeny, "role-gate-rule"))
+		require.NoError(t, gerr, "deny verdict must be persisted + replayable on the audit stream")
+		persisted, derr := decoder.Decode(raw.Data)
+		require.NoError(t, derr, "persisted record must decode through the production registry")
+		pev, ok := persisted.Payload().(*governance.VerdictEvent)
+		require.True(t, ok, "persisted payload must be a *VerdictEvent, got %T", persisted.Payload())
+		assert.Equal(t, governance.DecisionDeny, pev.Decision)
+		assert.Equal(t, "user viewer-user-1 is not admin", pev.Reason,
+			"the persisted (replayable) record must carry this run's deny reason")
 	})
 }

@@ -567,6 +567,20 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		}
 	}
 
+	// ADR-055 §3a: wire the framework verdict auditor so deny/approve actions
+	// record governance verdicts to the append-only GOVERNANCE_VERDICT_AUDIT
+	// stream. Wired independently of the operator Publisher — audit is a
+	// framework guarantee, not an operator opt-in, so config drift cannot
+	// silently disable it. Only when a NATS client is present (the auditor
+	// publishes to a stream).
+	if rp.natsClient != nil {
+		if setter, ok := actionExecutor.(interface {
+			SetVerdictAuditor(VerdictAuditor)
+		}); ok {
+			setter.SetVerdictAuditor(newVerdictAuditor(rp))
+		}
+	}
+
 	// Persist the executor on the processor so the cron scheduler
 	// (initializeCronScheduler) can dispatch through the same instance
 	// the StatefulEvaluator uses. Single shared executor keeps publishing
