@@ -538,6 +538,16 @@ func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, o
 			triples = append(triples, triple(agvocab.LoopRunEntityID, runEntityID))
 		}
 	}
+	// Stamp the reply pointer when this loop is a reply (gh#256). Mirrors
+	// LoopParent: a 6-part loop entity reference, so a resume rule reading
+	// $entity.triple.agent.loop.reply_to gets a navigable reference, not a bare
+	// id. Distinct from RunID (which run this loop belongs to) — reply_to marks
+	// THIS loop as the reply so a marker rule can fire on it and drive the run
+	// from awaiting_approval back to executing (ADR-053 §4b-2).
+	if task.InReplyTo != "" {
+		replyEntityID := agentic.LoopExecutionEntityID(org, platform, task.InReplyTo)
+		triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
+	}
 	if task.WorkflowSlug != "" {
 		triples = append(triples, triple(agvocab.LoopWorkflow, task.WorkflowSlug))
 	}

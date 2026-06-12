@@ -226,6 +226,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 		Role:         "researcher",
 		ParentLoopID: "parent-id",
 		RunID:        "run-anchor-uuid",
+		InReplyTo:    "asking-loop-uuid",
 		WorkflowSlug: "wf",
 		WorkflowStep: "step",
 		UserID:       "user",
@@ -233,7 +234,7 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 	}
 
 	triples := buildSpawnIdentityTriples("acme.ops.agent.agentic-loop.execution.spawn-count", task, "acme", "ops")
-	want := 9 // role, task, parent, run, run.entity_id, workflow, workflow_step, user, description
+	want := 10 // role, task, parent, run, run.entity_id, reply_to, workflow, workflow_step, user, description
 	if len(triples) != want {
 		preds := make([]string, 0, len(triples))
 		for _, tr := range triples {
@@ -350,6 +351,58 @@ func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
 			t.Errorf("LoopRun %q contains dots — must be bare loop UUID, not a 6-part entity ID", runID)
 			break
 		}
+	}
+}
+
+// --- gh#256: agent.loop.reply_to in spawn identity ---
+
+// TestBuildSpawnIdentityTriples_StampsReplyTo verifies that agent.loop.reply_to
+// is stamped as a valid 6-part loop entity reference (mirroring agent.loop.parent)
+// when TaskMessage.InReplyTo is set, so a resume rule reading
+// $entity.triple.agent.loop.reply_to gets a navigable reference and can fire on
+// the reply (ADR-053 §4b-2 clarification resume).
+func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.reply-001"
+	task := &agentic.TaskMessage{
+		TaskID:    "task-reply-001",
+		Role:      "coordinator",
+		InReplyTo: "asking-loop-uuid",
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	predicates := predicateSet(triples)
+
+	if !predicates[agvocab.LoopReplyTo] {
+		t.Fatalf("expected agent.loop.reply_to triple; got predicates: %v", predicates)
+	}
+
+	replyTo, ok := objectFor(triples, agvocab.LoopReplyTo).(string)
+	if !ok {
+		t.Fatal("LoopReplyTo object is not a string")
+	}
+	want := "acme.ops.agent.agentic-loop.execution.asking-loop-uuid"
+	if replyTo != want {
+		t.Errorf("LoopReplyTo = %q, want %q", replyTo, want)
+	}
+	if !message.IsValidEntityID(replyTo) {
+		t.Errorf("LoopReplyTo %q is not a valid 6-part entity ID", replyTo)
+	}
+}
+
+// TestBuildSpawnIdentityTriples_OmitsReplyToWhenEmpty verifies that
+// agent.loop.reply_to is NOT emitted for a non-reply loop — an ordinary
+// continuation must not be mis-marked as a reply.
+func TestBuildSpawnIdentityTriples_OmitsReplyToWhenEmpty(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.non-reply"
+	task := &agentic.TaskMessage{
+		TaskID: "task-non-reply",
+		Role:   "researcher",
+		// InReplyTo empty
+	}
+
+	triples := buildSpawnIdentityTriples(loopEntityID, task, "acme", "ops")
+	if predicateSet(triples)[agvocab.LoopReplyTo] {
+		t.Errorf("expected agent.loop.reply_to triple to be omitted when InReplyTo is empty")
 	}
 }
 

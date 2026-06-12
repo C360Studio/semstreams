@@ -456,6 +456,19 @@ const (
 	// DataType: string (entity ID)
 	LoopParent = "agent.loop.parent"
 
+	// LoopReplyTo is an entity reference to the loop this loop is a reply to
+	// (gh#256). Stamped at spawn time by buildSpawnIdentityTriples when
+	// TaskMessage.InReplyTo is non-empty. Distinct from LoopParent (tree
+	// ancestry): a reply re-enters a paused run (ADR-053 §4b-2 interactive
+	// clarification) rather than nesting under a parent. A resume rule fires on
+	// $entity.triple.agent.loop.reply_to to distinguish a reply from any other
+	// run loop, then drives the run entity back from awaiting_approval to
+	// executing. Grammar-collision-free: agent.loop.* is already a substitution
+	// namespace; reply_to adds no new $-prefix token.
+	// Example: "org.platform.agent.agentic-loop.execution.<askingLoopID>"
+	// DataType: string (6-part entity ID)
+	LoopReplyTo = "agent.loop.reply_to"
+
 	// LoopRun is the bare run loop-id this loop belongs to (ADR-053 D7).
 	// Stamped at spawn time by buildSpawnIdentityTriples when TaskMessage.RunID is non-empty.
 	// Rules can read this via $entity.triple.agent.run. Grammar-collision-free:

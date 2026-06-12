@@ -1483,11 +1483,15 @@ components:
                     type: string
                 content:
                     type: string
+                in_reply_to:
+                    type: string
                 metadata:
                     additionalProperties:
                         type: string
                     type: object
                 reply_to:
+                    type: string
+                run_id:
                     type: string
                 user_id:
                     type: string

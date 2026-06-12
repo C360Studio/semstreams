@@ -38,6 +38,23 @@ type UserMessage struct {
 	Metadata         map[string]string `json:"metadata,omitempty"`           // channel-specific
 	ContextRequestID string            `json:"context_request_id,omitempty"` // links to assembled context
 
+	// Resumable-reply context (gh#256). These are distinct from ReplyTo:
+	// ReplyTo routes the message to a loop to continue; the two below let a
+	// reply re-enter and resume a *paused run*.
+	//
+	// RunID is the bare run anchor the reply should re-attach to. A client
+	// resuming a paused run (ADR-053) echoes the RunID it held from the pause
+	// state so the resumed loop carries agent.run / agent.run.entity_id even
+	// when the prior loop entity was evicted during the pause. Empty for
+	// non-run submissions.
+	RunID string `json:"run_id,omitempty"`
+	// InReplyTo marks this message as a reply to a specific loop's question
+	// (e.g. an ask_user clarification), stamped onto the resumed loop as the
+	// agent.loop.reply_to triple so a rule can fire on it. Deliberately
+	// separate from ReplyTo so ordinary continuations are NOT marked as
+	// replies. Empty for non-reply submissions.
+	InReplyTo string `json:"in_reply_to,omitempty"`
+
 	// Timing
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -265,6 +282,14 @@ type TaskMessage struct {
 	RunID    string `json:"run_id,omitempty"`
 	Depth    int    `json:"depth,omitempty"`     // Current depth in agent tree (0 = root)
 	MaxDepth int    `json:"max_depth,omitempty"` // Maximum allowed depth
+
+	// InReplyTo is the bare loop-id this task is a reply to (gh#256). When
+	// set, agentic-loop stamps an agent.loop.reply_to triple (a 6-part loop
+	// entity reference, mirroring agent.loop.parent) on the spawned loop so a
+	// rule can detect a reply via $entity.triple.agent.loop.reply_to. Empty
+	// for non-reply tasks. Distinct from ParentLoopID (tree ancestry) — a
+	// reply re-enters a paused run rather than nesting under a parent.
+	InReplyTo string `json:"in_reply_to,omitempty"`
 
 	// Pre-constructed context (optional, skips discovery if present)
 	// When set, the agent loop uses this context directly instead of hydrating
