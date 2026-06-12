@@ -36,6 +36,14 @@ type HTTPMessageRequest struct {
 	ChannelID   string            `json:"channel_id,omitempty"`
 	ReplyTo     string            `json:"reply_to,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+
+	// Resumable-reply anchors (gh#256). Distinct from ReplyTo (which routes to
+	// a loop to continue): these let a reply re-enter and resume a paused run.
+	// RunID is the bare run anchor the resumed loop re-attaches to; InReplyTo
+	// marks the message as a reply to a specific loop's question so a rule can
+	// fire on the resumed loop. Both optional; absent for ordinary submissions.
+	RunID     string `json:"run_id,omitempty"`
+	InReplyTo string `json:"in_reply_to,omitempty"`
 }
 
 // HTTPMessageResponse represents the response from the HTTP message endpoint.
@@ -144,6 +152,8 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		Content:     req.Content,
 		ReplyTo:     req.ReplyTo,
 		Metadata:    req.Metadata,
+		RunID:       req.RunID,
+		InReplyTo:   req.InReplyTo,
 		Timestamp:   time.Now(),
 	}
 
@@ -298,28 +308,8 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 
 	taskID := uuid.New().String()
 
-	// Create task message
-	task := agentic.TaskMessage{
-		LoopID:           loopID,
-		TaskID:           taskID,
-		Role:             c.config.DefaultRole,
-		Model:            c.resolveModel(),
-		Prompt:           msg.Content,
-		ContextRequestID: msg.ContextRequestID,
-	}
-
-	// Propagate inbound trace_id onto TaskMessage.Metadata so the
-	// downstream LoopEntity.Metadata surfaces it for wedge investigation.
-	// See stampTraceIDFromCtx in component.go.
-	stampTraceIDFromCtx(ctx, &task)
-
-	// Scope the initial agent's tools to DefaultTools when configured.
-	// Mirrors the bus-dispatch path in handleTaskSubmission so HTTP-
-	// spawned loops honor the same scoping contract — pre-fix the HTTP
-	// path left task.Tools nil and the spawned loop fell back to global
-	// discovery, sending the full agentic-tools registry to the LLM
-	// regardless of operator default_tools configuration.
-	c.scopeTaskTools(&task)
+	// Create task message (shared builder — see buildTaskMessage; gh#256).
+	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
 
 	// Track the loop
 	c.loopTracker.Track(&LoopInfo{

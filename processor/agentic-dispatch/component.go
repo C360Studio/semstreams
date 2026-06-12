@@ -612,6 +612,41 @@ func (c *Component) resolveModel() string {
 	return c.modelRegistry.GetDefault()
 }
 
+// buildTaskMessage assembles the TaskMessage published to agentic-loop from an
+// inbound UserMessage. Shared by the bus path (handleTaskSubmission) and the
+// HTTP sync path (processTaskSubmissionSync) so the propagation contract is
+// identical regardless of dispatch surface — a single place that can't drift on
+// which fields a reply carries (the gh#256 defect class: the reply path silently
+// dropping RunID + the reply marker the other path would have carried).
+func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessage, loopID, taskID string) agentic.TaskMessage {
+	task := agentic.TaskMessage{
+		LoopID:           loopID,
+		TaskID:           taskID,
+		Role:             c.config.DefaultRole,
+		Model:            c.resolveModel(),
+		Prompt:           msg.Content,
+		ContextRequestID: msg.ContextRequestID,
+		// Resumable-reply anchors (gh#256). Both omitempty and client-set, so an
+		// ordinary submission carries neither: RunID re-attaches the resumed loop
+		// to its paused run (→ agent.run / agent.run.entity_id), InReplyTo marks
+		// it as a reply (→ agent.loop.reply_to) so a resume rule can fire on it.
+		RunID:     msg.RunID,
+		InReplyTo: msg.InReplyTo,
+	}
+
+	// Propagate inbound trace_id onto TaskMessage.Metadata so the downstream
+	// LoopEntity.Metadata surfaces it for wedge investigation
+	// (curl /loops/<id> → metadata.trace_id → message-logger lookup).
+	stampTraceIDFromCtx(ctx, &task)
+
+	// Scope the initial agent's tools to DefaultTools when configured, so an
+	// HTTP- or bus-spawned loop honors the operator default_tools contract
+	// instead of falling back to global discovery.
+	c.scopeTaskTools(&task)
+
+	return task
+}
+
 // handleTaskSubmission creates a new agent task
 func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) {
 	// Check submit permission
@@ -643,25 +678,8 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 
 	taskID := uuid.New().String()
 
-	// Create task message
-	task := agentic.TaskMessage{
-		LoopID:           loopID,
-		TaskID:           taskID,
-		Role:             c.config.DefaultRole,
-		Model:            c.resolveModel(),
-		Prompt:           msg.Content,
-		ContextRequestID: msg.ContextRequestID,
-	}
-
-	// Propagate inbound trace_id onto TaskMessage.Metadata so the
-	// downstream LoopEntity.Metadata surfaces it for wedge investigation
-	// (curl /loops/<id> → metadata.trace_id → message-logger lookup).
-	stampTraceIDFromCtx(ctx, &task)
-
-	// Scope the initial agent's tools to DefaultTools when configured.
-	// Bus and HTTP paths share scopeTaskTools so the scoping contract
-	// is identical regardless of dispatch surface.
-	c.scopeTaskTools(&task)
+	// Create task message (shared builder — see buildTaskMessage; gh#256).
+	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
 
 	// Track the loop
 	c.loopTracker.Track(&LoopInfo{
