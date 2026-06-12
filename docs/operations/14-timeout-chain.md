@@ -49,7 +49,6 @@ recipe for tuning each layer in lockstep.
 │  answer_synthesis              default 15s   (ADR-024)                │
 │  query_classification          default  5s   (ADR-024)                │
 │  intent_classification         default 15s                            │
-│  layer_normalization           default 30s                            │
 │  embedding                     default 30s                            │
 │  All resolved via model.ResolveCapabilityTimeout — endpoint           │
 │  override > capability config > caller-supplied default.              │

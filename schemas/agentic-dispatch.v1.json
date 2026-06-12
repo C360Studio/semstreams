@@ -42,12 +42,6 @@
       "default": false,
       "category": "advanced"
     },
-    "enable_onboarding": {
-      "type": "boolean",
-      "description": "Enable /onboard command for operating model interview",
-      "default": false,
-      "category": "advanced"
-    },
     "permissions": {
       "type": "object",
       "description": "Permission configuration",

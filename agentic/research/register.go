@@ -12,8 +12,8 @@ import (
 // bootstrap so every production binary picks up the types without
 // extra wiring.
 //
-// Mirrors the agentic.RegisterPayloads + agentic/operating-model
-// shape so the bootstrap aggregator can call this uniformly.
+// Mirrors the agentic.RegisterPayloads shape so the bootstrap aggregator
+// can call this uniformly.
 func RegisterPayloads(reg *payloadregistry.Registry) error {
 	registrations := []*payloadregistry.Registration{
 		{

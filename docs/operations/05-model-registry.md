@@ -98,7 +98,7 @@ Defined in `model/registry.go:124-140`.
 
 ## LLM Capability Inventory
 
-The registry defines eight capability constants in `model/registry.go:11-37`.
+The registry defines seven capability constants in `model/registry.go:11-37`.
 Components resolve them via `model.ResolveEndpoint(registry, model.Capability*)`
 or, where the call site has its own resolution chain, by passing the
 capability constant as the resolution key.
@@ -111,44 +111,41 @@ capability constant as the resolution key.
 | `answer_synthesis` | `model.CapabilityAnswerSynthesis` | graph-query `globalSearch` answer composition (`processor/graph-query/component.go:406`) | User-facing, blocking | Unbound by default; falls back to template synthesis |
 | `embedding` | `model.CapabilityEmbedding` | graph-embedding (`processor/graph-embedding/component.go:622`) | Background batch | `semembed` (HTTP embedder, **not** chat completions — different protocol) |
 | `intent_classification` | `model.CapabilityIntentClassification` | agentic-dispatch (`processor/agentic-dispatch/intent_classifier.go`) — fires on every incoming user message | User-facing, blocking — most-frequent user-facing LLM call in the system | Falls through to `defaults.model` |
-| `layer_normalization` | `model.CapabilityLayerNormalization` | agentic-dispatch (`processor/agentic-dispatch/normalize_extractor.go`) — extracts structured operating-model entries from freeform onboarding answers | User-facing, async during onboarding | Falls through to `defaults.model` |
 | `anomaly_review` | `model.CapabilityAnomalyReview` | graph-inference ReviewWorker (`graph/inference/review_worker.go`) — classifies suggested missing relationships | Background batch | Falls through to the `community_summary` endpoint (legacy piggyback preserved) |
 
 Per-capability **model selection guidance** (input/output envelope,
 required model traits, latency budget, suggested probe prompts) lives
 in [11-llm-routing-and-model-selection.md](11-llm-routing-and-model-selection.md).
 
-### Resolution semantics for the last three capabilities
+### Resolution semantics for the last two capabilities
 
-`intent_classification`, `layer_normalization`, and `anomaly_review`
-were lifted into capabilities in Phase 2 from previously hardcoded call
-sites. To keep upgrades zero-ceremony, each has slightly different
-fallback semantics:
+`intent_classification` and `anomaly_review` were lifted into
+capabilities in Phase 2 from previously hardcoded call sites. To keep
+upgrades zero-ceremony, each has slightly different fallback semantics:
 
-- **`intent_classification` and `layer_normalization`** — when the
-  capability is not bound, the call-site's resolution chain falls
-  through to `defaults.model`. This is the same endpoint these calls
-  used pre-Phase-2 via the hardcoded `"default"` string. Operators who
-  previously tuned `defaults.model` for these workloads see no change;
-  binding the capability gives them a per-site override.
+- **`intent_classification`** — when the capability is not bound, the
+  call-site's resolution chain falls through to `defaults.model`. This
+  is the same endpoint these calls used pre-Phase-2 via the hardcoded
+  `"default"` string. Operators who previously tuned `defaults.model`
+  for this workload see no change; binding the capability gives them a
+  per-site override.
 - **`anomaly_review`** — when the capability is not bound, the review
   worker reuses graph-clustering's `community_summary` LLM client, the
   same endpoint it piggybacked on pre-Phase-2. Operators who want a
   separate model for review (e.g. a smaller, faster classifier) bind
   `anomaly_review` explicitly.
 
-In all three cases, **doing nothing on upgrade preserves prior
-behavior bit-for-bit.** Binding the new capability is opt-in.
+In both cases, **doing nothing on upgrade preserves prior behavior
+bit-for-bit.** Binding the new capability is opt-in.
 
 ## Defaults
 
 `defaults.model` is the endpoint used when a capability resolves nowhere
 else (no preferred chain, no fallback). For the `intent_classification`
-and `layer_normalization` capabilities, `defaults.model` is the
-fallback target when those capabilities are not bound — preserving the
-pre-Phase-2 hardcoded behavior. Operators who want per-site routing for
-those workloads should bind the relevant capability explicitly rather
-than reshaping `defaults.model`.
+capability, `defaults.model` is the fallback target when the capability
+is not bound — preserving the pre-Phase-2 hardcoded behavior. Operators
+who want per-site routing for that workload should bind the capability
+explicitly rather than reshaping `defaults.model`.
 
 `defaults.capability` is used when an `AgentRequest` arrives without a
 specified `Model` or `Capability`. The named capability is resolved

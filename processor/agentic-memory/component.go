@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	operatingmodel "github.com/c360studio/semstreams/agentic/operating-model"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -30,12 +29,10 @@ type Component struct {
 	config     Config
 	natsClient *natsclient.Client
 	logger     *slog.Logger
-	platform   component.PlatformMeta
 	decoder    *message.Decoder
 
-	hydrator      *Hydrator
-	extractor     *LLMExtractor
-	profileReader atomic.Pointer[operatingmodel.ProfileReader]
+	hydrator  *Hydrator
+	extractor *LLMExtractor
 
 	// Lifecycle management
 	running   bool
@@ -86,12 +83,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		config:     config,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
-		platform:   deps.Platform,
 		decoder:    message.NewDecoder(deps.PayloadRegistry),
 		hydrator:   hydrator,
 		extractor:  extractor,
 	}
-	initProfileReader(&comp.profileReader)
 	return comp, nil
 }
 

@@ -234,7 +234,7 @@ func (e *LoopCancelledEvent) UnmarshalJSON(data []byte) error {
 type ContextEvent struct {
 	Type        string  `json:"type"` // ContextEventCompactionStarting, ContextEventCompactionComplete, ContextEventGCComplete
 	LoopID      string  `json:"loop_id"`
-	UserID      string  `json:"user_id,omitempty"` // owning user; consumers persist user-scoped artifacts (e.g. lessons-learned) when present
+	UserID      string  `json:"user_id,omitempty"` // owning user (provenance hook); lets a consumer scope user-scoped artifacts without a separate KV lookup
 	Iteration   int     `json:"iteration"`
 	Utilization float64 `json:"utilization,omitempty"`
 	TokensSaved int     `json:"tokens_saved,omitempty"`

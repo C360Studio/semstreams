@@ -29,10 +29,6 @@ const (
 	// question / meta) before routing. The most-frequent user-facing LLM call
 	// in the system. Unbound deployments fall back to defaults.model.
 	CapabilityIntentClassification = "intent_classification"
-	// CapabilityLayerNormalization is used by agentic-dispatch to extract
-	// structured operating-model entries from freeform onboarding answers.
-	// Unbound deployments fall back to defaults.model.
-	CapabilityLayerNormalization = "layer_normalization"
 	// CapabilityAnomalyReview is used by graph/inference's ReviewWorker to
 	// classify suggested missing relationships as approve/reject. Unbound
 	// deployments fall back to the community_summary endpoint (the legacy

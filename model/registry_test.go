@@ -1028,7 +1028,6 @@ func TestCapabilityConstants_Values(t *testing.T) {
 		{"query_classification", CapabilityQueryClassification, "query_classification"},
 		{"answer_synthesis", CapabilityAnswerSynthesis, "answer_synthesis"},
 		{"intent_classification", CapabilityIntentClassification, "intent_classification"},
-		{"layer_normalization", CapabilityLayerNormalization, "layer_normalization"},
 		{"anomaly_review", CapabilityAnomalyReview, "anomaly_review"},
 		{"research_routing", CapabilityResearchRouting, "research_routing"},
 		{"research_assessment", CapabilityResearchAssessment, "research_assessment"},

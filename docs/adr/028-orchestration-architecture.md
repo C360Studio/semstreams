@@ -181,8 +181,10 @@ Commit to a three-layer agentic orchestration architecture:
 
 ## Related decisions
 
-- ADR-025 — semteams consolidation, which upstreamed the personalization
-  layer this architecture sits on top of.
+- ADR-025 — semteams consolidation, which upstreamed the framework
+  primitives (Phase 1) this architecture sits on top of. (Its Phase 2
+  personalization layer was later reverted to semteams; this architecture
+  depends only on the Phase-1 primitives, not that layer.)
 - ADR-026 — coordinator agent (proposed, pending refresh with this
   framing).
 - ADR-027 — ops agent (proposed, pending refresh with this framing).
