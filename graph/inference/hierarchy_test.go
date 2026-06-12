@@ -110,6 +110,47 @@ func (m *mockEntityManager) addExistingEntity(id string) {
 	m.entities[id] = true
 }
 
+// TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal locks the ADR-055 §3
+// in-process-bypass safety property. HierarchyInference is the only production
+// caller of the in-process Component.AddTriple (via tripleAdderAdapter), and it
+// uses it ONLY for inverse edges onto OTHER subjects — sibling back-edges
+// (hierarchy.go:313) and container contains-edges (hierarchy.go:368). Those
+// targets pre-exist (siblings via ListWithPrefix, containers via
+// ensureContainerExists), but the Wave-0 audit must ASSERT — not assume — that a
+// write failure on one of them is non-fatal: it degrades to a logged warning +
+// edgesFailed metric and NEVER propagates. This is what makes the closing-move
+// must-exist flip safe here — if a future must-exist rejection hits an inverse
+// write, the entity's own forward hierarchy triples still land and ingest does
+// not fail. A refactor that made these propagate would break the flip; this test
+// catches that.
+func TestHierarchyInference_InverseEdgeWriteFailureIsNonFatal(t *testing.T) {
+	// Every in-process inverse-edge write rejects — simulating a must-exist
+	// "entity not found" on the sibling/container target.
+	failingAdder := &hierarchyMockTripleAdder{err: errors.New("entity not found (simulated must-exist rejection)")}
+	entityManager := newMockEntityManager()
+	// An existing sibling so createSiblingEdges attempts an inverse back-edge.
+	entityManager.addExistingEntity("c360.logistics.environmental.sensor.temperature.temp-002")
+
+	config := HierarchyConfig{
+		Enabled:            true,
+		CreateTypeEdges:    true,
+		CreateSystemEdges:  true,
+		CreateDomainEdges:  true,
+		CreateTypeSiblings: true,
+	}
+	hi := NewHierarchyInference(entityManager, failingAdder, config, nil)
+
+	// GetHierarchyTriples is the production entry (graph-ingest MergeEntity calls
+	// it on the create branch). Every inverse-edge write inside it hits the
+	// failing adder; container creation goes through the (working) entityManager.
+	triples, err := hi.GetHierarchyTriples(context.Background(), "c360.logistics.environmental.sensor.temperature.temp-001")
+
+	require.NoError(t, err,
+		"inverse-edge write failures must NOT propagate — the forward hierarchy triples must still return")
+	assert.NotEmpty(t, triples,
+		"the entity's own forward hierarchy/sibling edges must still be produced despite the failing inverse writes")
+}
+
 func TestHierarchyInference_OnEntityCreated_Disabled(t *testing.T) {
 	tripleAdder := &hierarchyMockTripleAdder{}
 	entityManager := newMockEntityManager()
