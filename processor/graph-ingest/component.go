@@ -23,7 +23,6 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -83,7 +82,7 @@ func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *promethe
 			Namespace: "semstreams",
 			Subsystem: "graph_ingest",
 			Name:      "indexing_profile_default_total",
-			Help:      "Entities whose indexing profile fell back to the default floor (no producer declaration)",
+			Help:      "Entities whose message type was unclassified (no producer declaration AND not in the indexing-profile registry) and defaulted to control — a registry gap",
 		}, []string{"message_type"})
 		if registry != nil {
 			_ = registry.RegisterCounterVec("graph-ingest", "indexing_profile_default_total", indexingProfileDefaultVec)
@@ -979,8 +978,10 @@ func stampExplicitIndexingProfile(entity *graph.EntityState, profile string) {
 //   - ≥1 profile triple present (an explicit declaration was stamped upstream,
 //     or a real producer is upgrading a profile-less stub): keep the FIRST and
 //     drop any duplicates. No floor, no metric.
-//   - 0 profile triples present: derive the floor (deriveIndexingProfileFloor),
-//     append it, and increment indexing_profile_default_total{message_type}.
+//   - 0 profile triples present: apply the registry floor
+//     (indexingProfileFloorFor) and append it; increment
+//     indexing_profile_default_total{message_type} ONLY when the type was not in
+//     the registry (an unclassified gap, not a deliberate registered floor).
 func (c *Component) reconcileIndexingProfile(entity *graph.EntityState) {
 	if entity == nil {
 		return
@@ -1000,26 +1001,16 @@ func (c *Component) reconcileIndexingProfile(entity *graph.EntityState) {
 	if kept {
 		return
 	}
-	appendIndexingProfileTriple(entity, deriveIndexingProfileFloor(entity))
-	if c.indexingProfileDefault != nil {
+	// No explicit declaration → apply the registry floor (ADR-054 channel c).
+	// The default-fallback metric fires ONLY on a registry MISS — a type that is
+	// neither producer-declared nor classified in the seed and silently took the
+	// control default. A registered floor (e.g. agentic.request → trace) is a
+	// deliberate classification, not an operator gap.
+	profile, registered := indexingProfileFloorFor(entity.MessageType)
+	appendIndexingProfileTriple(entity, profile)
+	if !registered && c.indexingProfileDefault != nil {
 		c.indexingProfileDefault.WithLabelValues(indexingProfileMetricLabel(entity.MessageType)).Inc()
 	}
-}
-
-// deriveIndexingProfileFloor returns the floor profile for an entity that
-// declared none (ADR-054 channel c). Phase 1 is deliberately minimal: it
-// defaults to "control" — the policy "fail toward keeping the substrate
-// reachable" — for every undeclared entity. The EntityID type-segment
-// (parsed below) and the MessageType registry are the seam where Phase 2 adds
-// type-aware floors (telemetry → signal, audit → trace); until then the
-// default-fallback metric surfaces which producers still need a declaration.
-func deriveIndexingProfileFloor(entity *graph.EntityState) string {
-	// Phase 2 hook: branch on parsed.Type / entity.MessageType here. Parsing is
-	// kept now so the floor is computed from the same inputs Phase 2 will use.
-	if _, err := types.ParseEntityID(entity.ID); err != nil {
-		return vocabulary.IndexingProfileControl
-	}
-	return vocabulary.IndexingProfileControl
 }
 
 // indexingProfileMetricLabel renders a message.Type as a stable, low-cardinality
