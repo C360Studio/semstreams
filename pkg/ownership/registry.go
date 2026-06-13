@@ -51,11 +51,78 @@ type Registration struct {
 	Waivers      []CoordinationWaiver
 }
 
-// validate checks structural well-formedness AND owner consistency: every claim
-// must name the registering owner (a registration cannot smuggle in a claim
-// attributed to someone else). Waivers must be declared BY the registrant (its
-// half of a mutual-consent waiver).
-func (r Registration) validate() error {
+// Validate checks structural well-formedness AND internal consistency: every
+// claim names the registering owner, and no two of the registration's OWN
+// owning claims select an overlapping (pattern, predicate) cell (a single owner
+// declaring the same cell twice in an owning mode is ambiguous — which claim
+// reconciles it?). Cross-OWNER overlap is checked separately at RegisterOwner
+// against the epoch. Callers that DERIVE a registration (pkg/projection) call
+// this at boot for early, owner-bound feedback.
+func (r Registration) Validate() error {
+	if err := r.validateStructural(); err != nil {
+		return err
+	}
+	if err := r.selfOverlap(); err != nil {
+		return err
+	}
+	return r.modeConsistency()
+}
+
+// modeConsistency rejects a predicate declared in BOTH an owning mode and
+// append-evidence over INTERSECTING patterns within one registration — "P is
+// single-valued owned" and "P is multi-valued append" cannot both hold for one
+// owner on the same entities. Disjoint patterns are fine (P may be owned on one
+// entity type and appended on another). This catches across the aggregated
+// claims of pkg/projection.Derive, where the per-contract one-mode check can't
+// see the other contract.
+func (r Registration) modeConsistency() error {
+	for i := range r.Claims {
+		for j := i + 1; j < len(r.Claims); j++ {
+			a, b := r.Claims[i], r.Claims[j]
+			if a.Mode.isOwning() == b.Mode.isOwning() {
+				continue // both owning (selfOverlap's job) or both append (legitimate)
+			}
+			if !patternsIntersect(a.Pattern, b.Pattern) {
+				continue
+			}
+			if hit := predicatesIntersection(a.Predicates, b.Predicates); len(hit) > 0 {
+				return fmt.Errorf("%w: owner %q declares predicate(s) %v in both an owning and an append-evidence mode over overlapping patterns %q / %q",
+					ErrInvalidClaim, r.Owner, hit, a.Pattern, b.Pattern)
+			}
+		}
+	}
+	return nil
+}
+
+// selfOverlap reports an *OverlapError (Owner == With == r.Owner) when two of the
+// registration's own owning OwnerClaims select an overlapping cell.
+func (r Registration) selfOverlap() error {
+	for i := range r.Claims {
+		a := r.Claims[i]
+		if !a.Mode.isOwning() {
+			continue
+		}
+		for j := i + 1; j < len(r.Claims); j++ {
+			b := r.Claims[j]
+			if !b.Mode.isOwning() {
+				continue
+			}
+			if !patternsIntersect(a.Pattern, b.Pattern) {
+				continue
+			}
+			if hit := predicatesIntersection(a.Predicates, b.Predicates); len(hit) > 0 {
+				return &OverlapError{
+					Owner: r.Owner, With: r.Owner,
+					Pattern: a.Pattern, WithPattern: b.Pattern,
+					Predicates: hit,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (r Registration) validateStructural() error {
 	if !validOwnerID(r.Owner) {
 		return fmt.Errorf("%w: registration owner %q is empty or not subject-safe", ErrInvalidClaim, r.Owner)
 	}
@@ -118,7 +185,7 @@ func (r Registration) hasNoEnforceableClaim() bool {
 // Returns a *OverlapError (errors.Is(err, ErrOwnershipOverlap)) on collision,
 // or ErrInvalidClaim on a malformed registration.
 func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
-	if err := r.validate(); err != nil {
+	if err := r.Validate(); err != nil {
 		return err
 	}
 	if r.hasNoEnforceableClaim() {
