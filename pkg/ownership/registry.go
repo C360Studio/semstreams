@@ -314,6 +314,27 @@ func (reg *Registry) OwnerOf(ctx context.Context, entityID, predicate string) (o
 	return o, true, nil
 }
 
+// ForeignEdgeClaimFor returns the ForeignEdgeClaim covering a foreign-subject
+// triple emitted by a Graphable of `messageType` carrying `predicate` — the
+// T2-regroup seam reject lookup (ADR-056 Decision 4). ok=false means the foreign
+// edge is UNCLAIMED, which the seam rejects (or routes deprecated-on-arrival
+// with the foreign_edge_unclaimed_total metric until the producer migrates).
+func (reg *Registry) ForeignEdgeClaimFor(ctx context.Context, messageType, predicate string) (ForeignEdgeClaim, bool, error) {
+	entry, err := reg.claims.Get(ctx, registryKey)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return ForeignEdgeClaim{}, false, nil // empty registry: nothing claimed yet
+		}
+		return ForeignEdgeClaim{}, false, fmt.Errorf("ownership: read epoch for ForeignEdgeClaimFor: %w", err)
+	}
+	ep, err := decodeEpoch(entry.Value)
+	if err != nil {
+		return ForeignEdgeClaim{}, false, err
+	}
+	c, ok := ep.foreignEdgeClaimFor(messageType, predicate)
+	return c, ok, nil
+}
+
 // livePresence returns the set of live owner ids — each OWNER_PRESENCE key minus
 // its prefix. Liveness is the canonical owner id (no hash); compactStale tests
 // membership directly. Keys() ignores deletes/expiry, so an absent key is a

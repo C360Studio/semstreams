@@ -107,6 +107,62 @@ func TestEpoch_OwnerOf(t *testing.T) {
 	}
 }
 
+func TestEpoch_ForeignEdgeClaimFor(t *testing.T) {
+	ep := newEpoch()
+	ep.Owners["p"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{
+		{Owner: "p", Predicate: "edge.specific", Mode: EdgeConditional, Producer: "type.a"},
+		{Owner: "p", Predicate: "edge.any", Mode: EdgeStrict, Producer: ""},
+	}}
+
+	if c, ok := ep.foreignEdgeClaimFor("type.a", "edge.specific"); !ok || c.Producer != "type.a" {
+		t.Errorf("exact producer match: got %+v ok=%v", c, ok)
+	}
+	if _, ok := ep.foreignEdgeClaimFor("type.b", "edge.specific"); ok {
+		t.Error("a producer-specific claim must not match a different producer")
+	}
+	if _, ok := ep.foreignEdgeClaimFor("any.type.at.all", "edge.any"); !ok {
+		t.Error("an empty-producer (any) claim should match any message type")
+	}
+	if _, ok := ep.foreignEdgeClaimFor("type.a", "edge.unknown"); ok {
+		t.Error("an unknown predicate must not match")
+	}
+}
+
+func TestEpoch_ForeignEdgeClaimFor_ExactBeatsAny(t *testing.T) {
+	ep := newEpoch()
+	ep.Owners["p1"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p1", Predicate: "e", Mode: EdgeStrict, Producer: ""}}}
+	ep.Owners["p2"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p2", Predicate: "e", Mode: EdgeConditional, Producer: "type.x"}}}
+	c, ok := ep.foreignEdgeClaimFor("type.x", "e")
+	if !ok || c.Producer != "type.x" {
+		t.Errorf("an exact producer match must win over an any-producer claim, got %+v ok=%v", c, ok)
+	}
+}
+
+// TestEpoch_ForeignEdgeClaimFor_Deterministic: two owners legitimately register
+// the same predicate as a foreign edge (FE×FE is allowed) with DIFFERENT modes.
+// The returned claim — whose Mode the seam consumer branches on — must be stable
+// across calls (sorted-owner scan), not a map-iteration coin-flip.
+func TestEpoch_ForeignEdgeClaimFor_Deterministic(t *testing.T) {
+	ep := newEpoch()
+	ep.Owners["zeta"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "zeta", Predicate: "e", Mode: EdgeStrict, Producer: ""}}}
+	ep.Owners["alpha"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "alpha", Predicate: "e", Mode: EdgeConditional, Producer: ""}}}
+
+	first, ok := ep.foreignEdgeClaimFor("any.type", "e")
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	for i := 0; i < 50; i++ {
+		got, _ := ep.foreignEdgeClaimFor("any.type", "e")
+		if got.Owner != first.Owner || got.Mode != first.Mode {
+			t.Fatalf("non-deterministic foreign-edge lookup: got %+v, first %+v", got, first)
+		}
+	}
+	// Sorted-owner scan ⇒ "alpha" wins over "zeta".
+	if first.Owner != "alpha" {
+		t.Errorf("deterministic pick should be the sorted-first owner (alpha), got %q", first.Owner)
+	}
+}
+
 func TestEpoch_CompactStale(t *testing.T) {
 	ep := newEpoch()
 	ep.Owners["live"] = ownerEntry{Claims: []OwnerClaim{oc("live", "a.b.c.d.e.f", ModeReplaceOwned, "p")}}

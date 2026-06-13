@@ -130,6 +130,34 @@ func TestRegistry_OwnerOf(t *testing.T) {
 	}
 }
 
+// TestRegistry_ForeignEdgeClaimFor proves the T2-seam reject lookup: a
+// registered ForeignEdgeClaim is found by (producer message type, predicate),
+// and an unclaimed foreign edge reports ok=false (the seam rejects it).
+func TestRegistry_ForeignEdgeClaimFor(t *testing.T) {
+	r, _, ctx := newTestRegistry(t)
+	const isHostedBy = "sensorml.component.isHostedBy"
+	if err := r.RegisterOwner(ctx, Registration{
+		Owner: "sensorml-producer",
+		ForeignEdges: []ForeignEdgeClaim{{
+			Owner: "sensorml-producer", Predicate: isHostedBy, Mode: EdgeNoBirthStub,
+			Producer: "sensorml.asset.v1", TargetPattern: sysPat,
+		}},
+	}); err != nil {
+		t.Fatalf("register foreign-edge claim: %v", err)
+	}
+
+	c, ok, err := r.ForeignEdgeClaimFor(ctx, "sensorml.asset.v1", isHostedBy)
+	if err != nil || !ok || c.Owner != "sensorml-producer" {
+		t.Errorf("ForeignEdgeClaimFor(claimed) = %+v,%v,%v", c, ok, err)
+	}
+	if _, ok, _ := r.ForeignEdgeClaimFor(ctx, "sensorml.asset.v1", "unclaimed.edge"); ok {
+		t.Error("an unclaimed foreign edge must report ok=false (the seam rejects it)")
+	}
+	if _, ok, _ := r.ForeignEdgeClaimFor(ctx, "other.type.v1", isHostedBy); ok {
+		t.Error("a producer-specific claim must not cover a different producer")
+	}
+}
+
 // TestRegistry_StaleCompaction proves a crashed owner's claim is compacted out
 // by the next registrant — the availability-over-stale-claim call. We simulate
 // the crash by deleting the dead owner's presence key (TTL expiry, sans wait).

@@ -100,6 +100,39 @@ func (e *epoch) compactStale(registrant string, livePresence map[string]struct{}
 	return evicted
 }
 
+// foreignEdgeClaimFor returns the ForeignEdgeClaim covering a foreign-subject
+// triple emitted by `messageType` carrying `predicate` — the T2-seam reject
+// lookup (ADR-056 Decision 4). An exact Producer match wins; a Producer-empty
+// ("any producer", transitional) claim is the fallback. ok=false means the edge
+// is UNCLAIMED (the seam rejects / routes deprecated-on-arrival).
+//
+// Owners are scanned in SORTED order so the returned claim is DETERMINISTIC.
+// FE×FE is allowed (two producers may both claim a predicate), so >1 claim can
+// match; the allow/deny (ok) is order-immaterial, but the returned claim's Mode
+// is what the seam consumer branches on (Conditional→buffer, Strict→drop,
+// NoBirthStub→stub), so a stable pick matters.
+func (e *epoch) foreignEdgeClaimFor(messageType, predicate string) (ForeignEdgeClaim, bool) {
+	var anyProducer ForeignEdgeClaim
+	haveAny := false
+	for _, owner := range sortedOwners(e.Owners) {
+		for _, f := range e.Owners[owner].ForeignEdges {
+			if f.Predicate != predicate {
+				continue
+			}
+			if f.Producer == messageType {
+				return f, true // exact producer match wins
+			}
+			if f.Producer == "" && !haveAny {
+				anyProducer, haveAny = f, true
+			}
+		}
+	}
+	if haveAny {
+		return anyProducer, true
+	}
+	return ForeignEdgeClaim{}, false
+}
+
 // ownerOf returns the owner id of the OwnerClaim that, in an OWNING mode,
 // governs (entityID, predicate) — the write-time lease lookup. ok is false when
 // no owner claims that cell (an un-claimed predicate, or an append-evidence

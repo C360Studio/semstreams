@@ -41,6 +41,9 @@ func (m WriteMode) valid() bool {
 
 // EdgeMode is the mode of a ForeignEdgeClaim (Decision 4). It governs the
 // inverse-gate / pending-edge behaviour, NOT the Decision-2 overlap check.
+// Decision 4 names three modes (Conditional / Backfill / Strict); the fourth,
+// EdgeNoBirthStub, is the no-birth-target lane added by the fourth-path ruling
+// (lane ii — sensorml children that have no independent birth to drain against).
 type EdgeMode string
 
 const (
@@ -66,6 +69,16 @@ func (m EdgeMode) valid() bool {
 	default:
 		return false
 	}
+}
+
+// requiresInverse reports whether this edge mode reconstructs the inverse edge
+// and therefore requires the predicate to have a registered inverse (the
+// Decision-4 inverse-gate). Conditional defers-and-applies and Backfill
+// re-derives — both unrecoverable after a birth race without a registered
+// inverse. Strict drops-if-absent and NoBirthStub materialises a stub, so
+// neither needs an inverse. See ownership.CheckInverseGate.
+func (m EdgeMode) requiresInverse() bool {
+	return m == EdgeConditional || m == EdgeBackfill
 }
 
 // OwnerClaim is owned current state: for entities matching Pattern, Owner is
@@ -115,6 +128,12 @@ type ForeignEdgeClaim struct {
 	Owner     string   `json:"owner"`
 	Predicate string   `json:"predicate"` // single edge predicate
 	Mode      EdgeMode `json:"mode"`
+	// Producer is the payload MessageType whose Graphable emits this foreign
+	// edge. The T2-regroup seam keys its reject on (message_type, predicate)
+	// (ADR-056 Decision 4), so a fully-specified claim names the producing type.
+	// Empty means "any producer" — the transitional shape before a producer has
+	// declared its type; ForeignEdgeClaimFor prefers an exact producer match.
+	Producer string `json:"producer,omitempty"`
 	// TargetPattern is the 6-part glob of entities the edge lands on (its
 	// foreign Subject). Empty means match-any — the conservative default for
 	// the cross-type check. cs-api declares its target pattern so its OwnerClaim

@@ -17,6 +17,7 @@ const sysPat = "c360.semconnect.systems.csapi.system.*"
 func csapiSystem() Contract {
 	return Contract{
 		Name:          "cs-api.system",
+		MessageType:   "sensorml.asset.v1",
 		EntityPattern: sysPat,
 		Groups: []PredicateGroup{{
 			Mode: ownership.ModeReplaceOwned,
@@ -77,6 +78,11 @@ func TestContract_Derive_Single(t *testing.T) {
 	}
 	if len(reg.ForeignEdges) != 1 || reg.ForeignEdges[0].Owner != "cs-api" {
 		t.Errorf("expected one ForeignEdgeClaim bound to cs-api, got %+v", reg.ForeignEdges)
+	}
+	// The contract's MessageType is stamped onto the derived foreign edge as its
+	// Producer, so the T2-seam can key its reject on (message_type, predicate).
+	if reg.ForeignEdges[0].Producer != "sensorml.asset.v1" {
+		t.Errorf("derived foreign edge Producer = %q, want sensorml.asset.v1", reg.ForeignEdges[0].Producer)
 	}
 	// The dual-use isHostedBy (owned + foreign, same owner) derives cleanly:
 	// Derive runs the self-overlap validator (OwnerClaim×OwnerClaim only), and

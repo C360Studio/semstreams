@@ -48,6 +48,12 @@ type Contract struct {
 	// co-located with, or a logical projection name. Used as the registry key
 	// and in error messages.
 	Name string `json:"name"`
+	// MessageType is the payload type whose Graphable this contract projects for.
+	// Stamped onto every derived ForeignEdgeClaim as its Producer so the T2-seam
+	// reject can key on (message_type, predicate) (ADR-056 Decision 4). Optional:
+	// empty derives Producer-empty ("any producer") foreign edges — the
+	// transitional shape. A contract WITH foreign edges should name its type.
+	MessageType string `json:"message_type,omitempty"`
 	// EntityPattern is the 6-part entity-ID glob the projection writes (the
 	// entity it owns).
 	EntityPattern string `json:"entity_pattern"`
@@ -120,6 +126,7 @@ func (c Contract) registration(owner string) ownership.Registration {
 			Owner:         owner,
 			Predicate:     f.Predicate,
 			Mode:          f.Mode,
+			Producer:      c.MessageType,
 			TargetPattern: f.TargetPattern,
 		})
 	}
