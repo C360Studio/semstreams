@@ -2,6 +2,8 @@ package agenticmodel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -456,9 +458,21 @@ func (c *Client) ChatCompletion(ctx context.Context, req agentic.AgentRequest) (
 	})
 }
 
+// fullPayloadLogEnvVar gates emission of the entire serialized request
+// body in debug logs. Off by default: a deep agent loop accumulates the
+// whole conversation (system prompt + every turn + tool results) into the
+// payload, so dumping it on every model call produces multi-GB logs and
+// grep-poisons docker logs (prompt text matches event patterns). Set to
+// "1" only for targeted repros. See semspec#165.
+const fullPayloadLogEnvVar = "SEMSTREAMS_LOG_FULL_PAYLOAD"
+
 // debugLogRequest emits a debug log of the outgoing chat completion
 // payload when logger debug is enabled. Generic across SDK and wire
 // payload shapes via json.Marshal.
+//
+// By default it logs only the size, a short content hash, and the message
+// count — enough to correlate and dedup requests without the volume. The
+// full body is emitted only when SEMSTREAMS_LOG_FULL_PAYLOAD=1.
 func (c *Client) debugLogRequest(requestID, model string, messageCount int, payload any) {
 	if c.logger == nil || !c.logger.Enabled(context.Background(), slog.LevelDebug) {
 		return
@@ -467,11 +481,18 @@ func (c *Client) debugLogRequest(requestID, model string, messageCount int, payl
 	if err != nil {
 		return
 	}
-	c.logger.Debug("OpenAI API request payload",
+	sum := sha256.Sum256(body)
+	attrs := []any{
 		slog.String("request_id", requestID),
 		slog.String("model", model),
 		slog.Int("message_count", messageCount),
-		slog.String("payload", string(body)))
+		slog.Int("payload_bytes", len(body)),
+		slog.String("payload_sha8", hex.EncodeToString(sum[:])[:8]),
+	}
+	if os.Getenv(fullPayloadLogEnvVar) == "1" {
+		attrs = append(attrs, slog.String("payload", string(body)))
+	}
+	c.logger.Debug("OpenAI API request payload", attrs...)
 }
 
 // runRetryLoop drives the two-curve backoff for transient errors and
