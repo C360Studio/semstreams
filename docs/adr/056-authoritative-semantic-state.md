@@ -23,7 +23,9 @@ v5 pins the remaining **implementation contracts** the v4 review (Codex 1 BLOCKI
 and the verification gate flagged — these are contract-precision fixes, **no architectural
 forks**. This ADR names and **enforces** a responsibility the framework has been carrying
 implicitly since ADR-049 and patching symptomatically through ADR-055. The architecture is
-SETTLED — Decisions 1–5 are unchanged from v3/v4; v5 makes the load-bearing mechanisms
+SETTLED — Decisions 1–5 are unchanged from v3/v4 (v6 ADDS Decision 6 — claims derive from graph
+projection contracts — which is additive and constrains the layer ABOVE the substrate, not 1–5);
+v5 makes the load-bearing mechanisms
 *mechanically buildable* (valid NATS KV keys + a real TTL bucket split; producer identity
 threaded to the T2 seam; the hosts-vs-isHostedBy foreign-edge distinction corrected;
 the crash-recovery drain made exactly-once-asserting; the Watch-revival made fatal-halt;
@@ -93,6 +95,26 @@ shape.
   - **Both fixtures pass with NO Decision re-architecture** — the only changes either forced are
     prose (the two ownership clarifications). The "if it can describe the consumers, the design is
     real" gate is passed on both the write axis and the rule/lifecycle axis.
+- **Decision 6 ADDED — claims derive from graph projection contracts (review concern, 2026-06-13).**
+  A reviewer flagged the real risk that ADR-056 could become "…also register your ownership strings
+  over here" — a parallel semantic registry that drifts from the flow-based design and rots. Closed
+  by naming the three layers as ONE declarative chain (payload-type registry → graph projection
+  contract → ownership enforcement) and making it a HARD requirement that ownership claims DERIVE
+  from a registered projection contract (declared beside the type/Graphable/resource-projection),
+  with manual `RegisterOwner` only as the low-level escape hatch (lifecycle `Manager` dynamic
+  patterns; migration scaffolding). `pkg/ownership` is the enforcement substrate ONLY. Additive —
+  constrains the layer ABOVE the substrate, changes none of Decisions 1–5.
+- **W0 spine implemented + reviewed (`pkg/ownership`).** Increment 1 of the implementation landed
+  alongside this revision: the claim types, the single-epoch-key registry with overlap rejection
+  (glob × exact-predicate, incl. Owner×ForeignEdge cross-type), stale-owner compaction, and the
+  `OwnerOf` lease lookup — pure-logic + testcontainer-integration tested, `task lint` clean. A
+  pre-merge go-reviewer pass hardened it: liveness/lease keyed on the canonical owner id (no FNV
+  hash on the correctness path), waivers moved to epoch scope with MUTUAL consent (neither owner can
+  unilaterally waive into the other's cell), presence rolled back on a fresh owner's failed
+  registration, and compaction grace pinned to the OWNER_PRESENCE bucket TTL. Deferred to later
+  increments (named in `pkg/ownership/doc.go`): the T2-seam reject + inverse-gate, the PENDING_EDGES
+  buffer + crash-recovery flip-gate, the `OwnerToken` wire field + handler lease check, and the
+  graph-ingest boot wiring + projection-contract derivation (Decision 6).
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
@@ -1354,6 +1376,72 @@ not a parallel path. **New framework surface flagged for the final review:**
 
 These are additive but they are genuinely new spine, not "rename an existing field." Target
 all of them in the final review.
+
+### Decision 6 — Claims DERIVE from graph projection contracts (one declarative chain, not a parallel registry)
+
+> **Ownership claims MUST be derived from a registered graph projection contract wherever the
+> owner is driven by a payload type / Graphable. A hand-maintained list of ownership strings,
+> registered in a boot block divorced from the projection that emits the facts, is the
+> anti-pattern this decision forbids. `pkg/ownership` is the distributed-ENFORCEMENT substrate
+> only — never a second user-facing model.**
+
+The concern this closes (raised in review, 2026-06-13): if ADR-056 lands as "…and also register
+your ownership strings over here," we will have built a **parallel semantic registry** that drifts
+from the flow-based design and rots — the registry and the projection saying different things,
+maintained in different places, by hand. That is exactly the failure mode the framework's existing
+registries were designed to avoid.
+
+The fix is to see that these are **three layers of ONE declarative chain**, not three registries:
+
+| Layer | Question it answers | Where it lives today |
+|---|---|---|
+| **Payload type registration** | "When I see `agentic.task.v1`, what Go type do I decode?" — in-process type dispatch | `payloadregistry/registry.go` (point-to-point graph mutation request/reply is intentionally exempt, `graph/mutation_requests.go:7`) |
+| **Graph projection contract** | "What graph facts does this type emit, and in what write mode is each predicate group?" | THE MISSING LAYER — today `Graphable.Triples()` (`graph/messagemanager/processor.go:259`) is treated as the whole truth; it says *what* triples but not whether they are append-evidence, owned current state, CAS-transition state, or foreign edges |
+| **Ownership enforcement** | "Who may author/reconcile those facts at runtime, and is anyone else already there?" | `pkg/ownership` (this ADR) — substrate only |
+
+The missing middle layer is the **graph projection contract**, declared ONCE beside the type /
+Graphable / gateway-resource projection code, co-locating:
+
+- the **entity-ID pattern** the projection writes,
+- the **emitted predicates** grouped by **write mode** (replace-owned / cas-transition /
+  append-evidence — Decision 1),
+- the **foreign-edge claims** it produces (Decision 4),
+- and the **indexing profile** (ADR-054 — already a per-type declaration, so the projection
+  contract subsumes a thing that already exists rather than inventing a new surface).
+
+The runtime chain is then **derivation, not duplication**:
+
+```text
+payload type registration
+  └─ optionally declares a graph projection contract
+       (entity pattern · predicates × write mode · foreign-edge claims · indexing profile)
+component / gateway boot
+  └─ binds each projection to an OWNER ID and DERIVES the OwnerClaim/ForeignEdgeClaim set,
+     registering it with pkg/ownership.RegisterOwner
+graph-ingest
+  └─ enforces the registered claims at the write boundary (overlap reject, lease check, T2 seam)
+```
+
+**Manual `RegisterOwner` is the low-level ESCAPE HATCH, not the default.** Two legitimate
+escape-hatch users: (1) owners whose entity-ID pattern is not derivable from a single payload type
+(the lifecycle `Manager`'s `Workflow.Schema` — already claim-shaped, Decision 1 §500-503 — registers
+directly), and (2) migration scaffolding before a producer has declared its projection contract
+(the Decision-3 / Decision-4 deprecated-on-arrival hatch). Everything else derives.
+
+**Why this is now a HARD requirement, not a nicety.** The semconnect acceptance fixture is the
+proof and the cautionary tale at once: cs-api's System claim is six `sensorml.*` vocabulary
+predicates over `…csapi.system.*` (Consequences → Acceptance fixture). If those live as a
+hand-edited slice in a boot function, the day someone adds a predicate to the System triple-builder
+(`systems_post.go`) and forgets the slice, the projection emits a fact the registry doesn't know is
+owned — silent drift. Derived from a projection contract declared *beside the builder*, the claim
+and the emission cannot disagree. semconnect should declare "the CS-API System projection owns these
+predicates on this pattern; the Deployment projection owns these; SensorML emits this foreign
+edge" next to the resource projection code — never as a parallel hand-maintained registry.
+
+This decision does **not** change `pkg/ownership` (the W0 spine is correctly substrate-only); it
+constrains the **layer above** it. The projection-contract type and the boot-time derivation are a
+named deliverable of the enforcement-wiring increment, and graph-ingest enforces what derivation
+registers. The spine's `RegisterOwner` is the seam both the derivation and the escape hatch call.
 
 ### The CQRS boundary, made explicit
 
