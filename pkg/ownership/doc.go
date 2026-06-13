@@ -20,17 +20,41 @@
 //     make), and OwnerOf, the write-time lease lookup the graph-ingest
 //     mutation handlers consult.
 //
+// W0 first consumer (landed — Decision 5 embed):
+//
+//   - EnsureBuckets creates the two framework buckets (OWNER_CLAIMS with audit
+//     history; OWNER_PRESENCE with the PresenceTTL staleness backstop) and
+//     returns a Registry. It is called EAGERLY in the framework boot path,
+//     before lifecycle registration — NOT in graph-ingest, which boots after.
+//   - Heartbeater is the substrate-owned liveness ticker an embedder drives over
+//     its app-root context (no Close to adopt; ctx cancellation stops it).
+//   - lifecycle.Manager embeds the registry via AttachOwnership: each registered
+//     Workflow derives an owner claim (phase=cas-transition, audit+writable
+//     fields=replace-owned) and registers through the shared epoch. The first
+//     consumer's runtime posture is OBSERVE-ONLY — a cross-owner overlap is
+//     logged, not bricked (Decision 5); the substrate still REJECTS it (the
+//     Manager swallows the rejection deliberately).
+//
 // What is deliberately NOT here yet (later W0 increments, each with its own
 // review):
 //
-//   - The ForeignEdgeClaim T2-regroup-seam reject + inverse-gate in
-//     graph-ingest (Decision 4 BLOCKING-B).
+//   - The ForeignEdgeClaim T2-regroup-seam reject in graph-ingest (Decision 4
+//     BLOCKING-B). The registration-time inverse-gate (CheckInverseGate) is
+//     pure-logic-present; the graph-ingest write-boundary wiring is deferred.
 //   - The PENDING_EDGES Conditional-edge buffer + delete-after-apply drain +
 //     boot re-drain + the counting crash-recovery flip-gate test (Decision 4).
+//     EnsureBuckets does NOT create PENDING_EDGES yet (no consumer).
 //   - The OwnerToken wire field on the graph mutation requests + the handler
-//     lease check returning ErrorCodeOwnerLeaseStale (Decision 2 write seam).
-//   - graph-ingest boot wiring (bucket creation, Registry instantiation) and
-//     the lifecycle.Manager embedding (Decision 5).
+//     lease check returning ErrorCodeOwnerLeaseStale (Decision 2 write seam),
+//     and the post-registration Watch-revival fatal-halt. These two are the
+//     write-gating half of the story; until they land, an evicted-then-revived
+//     owner only churns the epoch (no dropped writes), which is why the embed
+//     ships observe-only rather than hard-fail.
+//   - The hard-fail-on-overlap flip + observability metric for the Manager embed
+//     (gated behind explicit enforcement, alongside the write-lease above).
+//   - The projection-contract auto-derivation wiring into graph-ingest boot
+//     (Decision 6): pkg/projection.Bind exists; graph-ingest does not yet call
+//     it.
 //
 // See docs/adr/056-authoritative-semantic-state.md.
 package ownership

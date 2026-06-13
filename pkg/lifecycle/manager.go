@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -52,6 +53,21 @@ type Manager struct {
 
 	mu            sync.RWMutex
 	registrations map[string]*registration
+
+	// Ownership wiring (ADR-056 Decision 5 embed). Set via AttachOwnership in
+	// the framework boot path, AFTER ownership.EnsureBuckets and BEFORE the
+	// first Register. All three are written once at attach time and read under
+	// m.mu. A nil ownerRegistry — the default, and every nil-client / test /
+	// unmigrated-deploy path — makes the ownership axis a pure no-op, so
+	// Register behaves exactly as it did pre-ADR-056.
+	//
+	// Runtime posture for the first consumer is OBSERVE-ONLY: a cross-owner
+	// overlap is logged, not bricked (Decision 5 — a partial migration must not
+	// fail boot). The hard-fail flip and the write-time owner-lease check are a
+	// later increment (see pkg/ownership/doc.go).
+	ownerRegistry *ownership.Registry
+	ownerCtx      context.Context // app-root ctx; its cancellation stops the heartbeat (no Close needed)
+	heartbeater   *ownership.Heartbeater
 
 	// driftSeen memoizes phase-drift Warn-log emissions so List
 	// callers polling at dashboard frequencies don't generate
@@ -122,13 +138,62 @@ func (m *Manager) Register(workflow Workflow) error {
 		return err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.registrations[workflow.Name]; exists {
+	// Snapshot the ownership wiring + check for a duplicate name under the lock,
+	// then RELEASE it before any NATS I/O. RegisterOwner is a CAS loop with
+	// network round-trips; holding the registrations RWMutex across it would
+	// serialize every concurrent Get/Transition (all take RLock) behind it.
+	m.mu.RLock()
+	reg := m.ownerRegistry
+	ownerCtx := m.ownerCtx
+	hb := m.heartbeater
+	_, dup := m.registrations[workflow.Name]
+	m.mu.RUnlock()
+	if dup {
 		return fmt.Errorf("%w: workflow %q", ErrWorkflowAlreadyRegistered, workflow.Name)
 	}
 
+	// Ownership registration (Decision 5 embed) — outside the lock. Only on
+	// success is the local registration committed below, so a registry-rejected
+	// owner never half-lands; an observe-only overlap still commits (the workflow
+	// must keep working through a partial migration).
+	if reg != nil {
+		if ownerCtx == nil {
+			ownerCtx = context.Background()
+		}
+		regn := deriveOwnerRegistration(workflow, meta)
+		switch err := reg.RegisterOwner(ownerCtx, regn); {
+		case err == nil:
+			hb.Add(workflow.Name)
+		case errors.Is(err, ownership.ErrOwnershipOverlap):
+			// Cross-owner collision. OBSERVE-ONLY for the first consumer: the
+			// claim is not recorded in the epoch, but the workflow still
+			// registers locally and functions (Decision 5 — do not brick a
+			// partial migration). Logged loud so the collision is visible now;
+			// the hard-fail flip is the enforcement increment.
+			m.logger.Warn("lifecycle: ownership overlap registering workflow — observe-only (claim NOT recorded; resolve before the enforcement increment)",
+				slog.String("workflow", workflow.Name),
+				slog.String("pattern", workflow.EntityIDPattern),
+				slog.Any("error", err))
+		case errors.Is(err, ownership.ErrInvalidClaim):
+			// A malformed claim is a bug in THIS workflow's own declaration
+			// (e.g. a Name that is not a subject-safe owner id) — not a
+			// partial-migration condition. Always fatal.
+			return fmt.Errorf("lifecycle: register %q ownership: %w", workflow.Name, err)
+		default:
+			// Transient NATS/registry error. Don't brick the workflow in
+			// observe-only mode; the claim simply isn't recorded this boot and
+			// is re-asserted on the next registrant pass or redeploy.
+			m.logger.Warn("lifecycle: ownership registration failed — continuing without claim record",
+				slog.String("workflow", workflow.Name),
+				slog.Any("error", err))
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.registrations[workflow.Name]; exists {
+		return fmt.Errorf("%w: workflow %q", ErrWorkflowAlreadyRegistered, workflow.Name)
+	}
 	m.registrations[workflow.Name] = &registration{
 		workflow: workflow,
 		meta:     meta,
@@ -140,8 +205,43 @@ func (m *Manager) Register(workflow Workflow) error {
 		slog.Int("operator_writable_predicates", len(workflow.OperatorWritablePredicates)),
 		slog.Int("child_workflows", len(workflow.ChildWorkflows)),
 		slog.Int("reference_predicates", len(workflow.ReferencePredicates)),
+		slog.Bool("ownership_attached", reg != nil),
 	)
 	return nil
+}
+
+// AttachOwnership wires the Manager to the ADR-056 owner registry (Decision 5
+// embed). Call it in the framework boot path AFTER ownership.EnsureBuckets and
+// BEFORE the first Register, passing a context that is CANCELLED ON SHUTDOWN:
+// AttachOwnership spawns a heartbeat goroutine bound to it, and ctx cancellation
+// (not a separate Close) is what stops that goroutine. context.Background() will
+// LEAK the goroutine until process exit — derive a cancellable context and
+// cancel it on the way down (see cmd/semstreams/main.go). A Manager with no
+// registry attached (the default, and every nil-client / test / unmigrated-deploy
+// path) treats ownership as a pure no-op.
+//
+// Each subsequently-registered workflow derives an owner claim (deriveOwnerRegistration),
+// registers it through the shared epoch (cross-process overlap surfaced —
+// Decision 2, observe-only for the first consumer), and is enrolled for liveness
+// heartbeating so a later-booting registrant never falsely compacts it.
+//
+// A nil registry is a no-op (so callers can pass the result of EnsureBuckets
+// unconditionally — a resourceless deploy that skipped EnsureBuckets passes nil).
+// Idempotent only in the trivial sense; call it once at boot.
+func (m *Manager) AttachOwnership(ctx context.Context, reg *ownership.Registry) {
+	if reg == nil {
+		return
+	}
+	m.mu.Lock()
+	m.ownerRegistry = reg
+	m.ownerCtx = ctx
+	m.heartbeater = reg.NewHeartbeater(ownership.HeartbeatInterval)
+	hb := m.heartbeater
+	m.mu.Unlock()
+
+	// One heartbeat goroutine ticks every enrolled owner's presence key until
+	// ctx is cancelled. Started here with no owners yet; Register enrolls each.
+	go hb.Run(ctx)
 }
 
 // lookupByWorkflow finds the registration for the given workflow type.

@@ -115,6 +115,29 @@ shape.
   increments (named in `pkg/ownership/doc.go`): the T2-seam reject + inverse-gate, the PENDING_EDGES
   buffer + crash-recovery flip-gate, the `OwnerToken` wire field + handler lease check, and the
   graph-ingest boot wiring + projection-contract derivation (Decision 6).
+- **W0 first consumer landed — the `lifecycle.Manager` embed (Decision 5).** Increment 2: the Manager
+  is the first framework consumer of the registry. A pre-implementation architect review reshaped the
+  seam around a confirmed boot-ordering hazard — in every binary, `NewManager`/`Register` run BEFORE
+  the flow service (and graph-ingest) starts (`cmd/semstreams/main.go:186,193` vs `:220,:225`), so
+  creating the ownership buckets in graph-ingest's `initStorage` would make every registration a
+  silent no-op. The increment therefore: (1) **`ownership.EnsureBuckets`** creates OWNER_CLAIMS
+  (history, no TTL) + OWNER_PRESENCE (bucket TTL = `PresenceTTL`, the whole staleness backstop) and
+  is called EAGERLY in the boot path BEFORE `Register`, not in graph-ingest; (2) **`Manager.AttachOwnership(ctx, reg)`**
+  embeds the registry and derives each `Workflow` into TWO claims by mode (phase = `cas-transition`;
+  audit + writable projected fields = `replace-owned`; read-only/reference/child-link predicates the
+  Manager does not author are NOT claimed); (3) the **owner id is the workflow Name** (the workflow
+  TYPE is the owner, shared idempotently across processes; presence reflects "≥1 process of this type
+  live"); (4) a substrate-owned **`Heartbeater`** ticks liveness over the **app-root ctx** (cancellation
+  stops it — no `Close` for sister repos to adopt); (5) the runtime posture is **OBSERVE-ONLY** — a
+  cross-owner overlap is LOGGED, not bricked (consistent with Decision 5's observe-only runtime
+  enforcement; the substrate still rejects it, the Manager swallows the rejection), while a malformed
+  self-claim stays fatal. The hard-fail flip + the `OwnerToken` write-lease + the Watch-revival are the
+  deferred write-gating half (an evicted-then-revived owner only churns the epoch until then — no
+  dropped writes — which is why observe-only is safe to ship first). Sister repos (semspec/semteams/
+  semconnect) opt in by adding the same `EnsureBuckets` + `AttachOwnership` pair; absent it, behaviour
+  is exactly pre-ADR-056 (graceful-skip for resourceless/unmigrated deploys). Pure-logic + testcontainer
+  tested through `Manager.Register` (the production entry), `task lint` clean; an `e2e:lifecycle` tier
+  run gates the merge (Manager boot-surface change).
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 

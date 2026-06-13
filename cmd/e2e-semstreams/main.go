@@ -33,6 +33,7 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
@@ -151,7 +152,15 @@ func run() error {
 	// emit retry holds the goroutine that would otherwise call
 	// StartAll, so the responder we are waiting for can never come
 	// up. The seed is run as a post-start hook below. See gh#170.
-	if err := wireLifecycleManager(ctx, svcDeps, natsClient, logger); err != nil {
+	// The heartbeat goroutine AttachOwnership spawns must stop on shutdown.
+	// `ctx` is context.Background() (the signal-cancelled context is a downstream
+	// child created in runWithSignalHandling), so derive a cancellable context
+	// here and cancel it as run() unwinds. Registered after natsClient.Close's
+	// defer, so by LIFO it fires FIRST — the heartbeat stops before the client
+	// closes. Threaded through wireLifecycleManager to AttachOwnership.
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	if err := wireLifecycleManager(hbCtx, svcDeps, natsClient, logger); err != nil {
 		return err
 	}
 
@@ -221,8 +230,21 @@ func buildPayloadRegistry() (*payloadregistry.Registry, error) {
 // bucket provisioning. State changes emit through graph-ingest like
 // every other write; reads project triples into the registered
 // Schema struct.
-func wireLifecycleManager(_ context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger) error {
+func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger) error {
 	svcDeps.LifecycleManager = lifecycle.NewManager(svcDeps.NATSClient, svcDeps.Logger)
+
+	// ADR-056 Decision 5 — attach the owner registry BEFORE Register so each
+	// workflow's claim registers through the shared epoch (cross-process overlap
+	// surfaced, observe-only for the first consumer). EnsureBuckets is eager:
+	// graph-ingest (which creates the other framework buckets) boots later than
+	// this wiring, so the ownership buckets must be created here. A NATS hiccup
+	// logs + skips — ownership is best-effort observe-only, never a boot gate.
+	if ownerReg, err := ownership.EnsureBuckets(ctx, svcDeps.NATSClient, svcDeps.Logger); err != nil {
+		svcDeps.Logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
+	} else {
+		svcDeps.LifecycleManager.AttachOwnership(ctx, ownerReg)
+	}
+
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
 		return fmt.Errorf("register mission workflow: %w", err)
 	}
