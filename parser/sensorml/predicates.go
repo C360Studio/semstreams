@@ -93,8 +93,19 @@ func init() {
 	vocabulary.Register(PredDefinition,
 		vocabulary.WithIRI("http://www.w3.org/2000/01/rdf-schema#isDefinedBy"))
 
-	vocabulary.Register(PredHosts, vocabulary.WithIRI(sosa.Hosts))
-	vocabulary.Register(PredIsHostedBy, vocabulary.WithIRI(sosa.IsHostedBy))
+	// PredHosts/PredIsHostedBy are mutual inverses (the doc-comment above has
+	// asserted this since the start; the registration now honors it — ADR-056
+	// Decision 4). The registered inverse is the Backfill recoverability floor for
+	// the foreign isHostedBy edge and lets it pass the inverse-gate should it ever
+	// be declared Conditional/Backfill. (The no-birth sensorml child's correct
+	// edge-mode is NoBirthStub, which needs no inverse; the inverse is correct and
+	// free regardless.)
+	vocabulary.Register(PredHosts,
+		vocabulary.WithIRI(sosa.Hosts),
+		vocabulary.WithInverseOf(PredIsHostedBy))
+	vocabulary.Register(PredIsHostedBy,
+		vocabulary.WithIRI(sosa.IsHostedBy),
+		vocabulary.WithInverseOf(PredHosts))
 	vocabulary.Register(PredHasSubSystem, vocabulary.WithIRI(sosa.SSNHasSubSystem))
 	vocabulary.Register(PredUsedProcedure, vocabulary.WithIRI(sosa.UsedProcedure))
 	vocabulary.Register(PredAttachedTo, vocabulary.WithIRI(sosa.IsHostedBy))

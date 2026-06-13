@@ -33,7 +33,7 @@ func TestIntegration_ManagerOwnership_FirstConsumerEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	reg, err := ownership.EnsureBuckets(ctx, tc.Client, nil)
+	reg, err := ownership.EnsureBuckets(ctx, tc.Client, nil, nil)
 	require.NoError(t, err, "EnsureBuckets must create the framework buckets against real NATS")
 
 	// Process A registers the fixture workflow through the registry.
@@ -50,7 +50,7 @@ func TestIntegration_ManagerOwnership_FirstConsumerEndToEnd(t *testing.T) {
 	// Process B: a DIFFERENT owner claiming the SAME pattern + phase predicate.
 	// A separate Registry over the same (idempotently re-ensured) buckets
 	// simulates a second process.
-	regB, err := ownership.EnsureBuckets(ctx, tc.Client, nil)
+	regB, err := ownership.EnsureBuckets(ctx, tc.Client, nil, nil)
 	require.NoError(t, err)
 	mgrB := NewManager(tc.Client, nil)
 	mgrB.AttachOwnership(ctx, regB)
@@ -87,7 +87,7 @@ func TestIntegration_ManagerOwnership_DisjointOwnersCoexist(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	reg, err := ownership.EnsureBuckets(ctx, tc.Client, nil)
+	reg, err := ownership.EnsureBuckets(ctx, tc.Client, nil, nil)
 	require.NoError(t, err)
 
 	mgr := NewManager(tc.Client, nil)

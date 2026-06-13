@@ -37,6 +37,7 @@ import (
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // Build information constants
@@ -195,7 +196,7 @@ func run() error {
 	// the ownership buckets there would make every registration a silent no-op.
 	// A NATS hiccup logs + skips; ownership is best-effort observe-only, never a
 	// boot gate ([[feedback_unconditional_resource_wiring_breaks_resourceless_deploys]]).
-	if ownerReg, err := ownership.EnsureBuckets(ctx, natsClient, logger); err != nil {
+	if ownerReg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver); err != nil {
 		logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
 	} else {
 		// The heartbeat goroutine must stop on shutdown. `ctx` here is

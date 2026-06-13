@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -26,6 +27,15 @@ type Registry struct {
 	claims   *natsclient.KVStore // OWNER_CLAIMS — the single `_registry` epoch key
 	presence *natsclient.KVStore // OWNER_PRESENCE — heartbeat.<owner> keys (TTL = grace window)
 	logger   *slog.Logger
+
+	// inverseResolver, when non-nil, enforces the Decision-4 inverse-gate over
+	// every registered ForeignEdgeClaim (a Conditional/Backfill edge predicate
+	// must have a registered inverse). Injected so pkg/ownership stays free of
+	// the vocabulary dependency; set by EnsureBuckets. nil = gate skipped (with a
+	// one-time WARN if a claim would have been gated) — the observe-only / read-
+	// only / test default.
+	inverseResolver    InverseResolver
+	noResolverWarnOnce sync.Once
 }
 
 // NewRegistry constructs a Registry over the two pre-opened KV stores. The
@@ -188,6 +198,14 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
+	// Decision-4 inverse-gate: a Conditional/Backfill foreign edge with no
+	// registered inverse is unrecoverable after a birth race. Enforce before any
+	// KV I/O so a gated violation fails the registration cleanly (ErrInvalidClaim
+	// — a config bug, fatal at the caller). Skipped (warn-once) when no resolver
+	// is wired.
+	if err := reg.checkInverseGate(r.ForeignEdges); err != nil {
+		return err
+	}
 	if r.hasNoEnforceableClaim() {
 		reg.logger.Warn("ownership: registration has no enforceable (owning or foreign-edge) claim — it will not be protected",
 			slog.String("owner", r.Owner))
@@ -244,6 +262,27 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 	if err != nil {
 		reg.rollbackPresence(ctx, r.Owner, preExisted)
 		return fmt.Errorf("ownership: register %q: %w", r.Owner, err)
+	}
+	return nil
+}
+
+// checkInverseGate runs the Decision-4 inverse-gate over the registration's
+// foreign edges using the Registry's injected resolver. With a resolver, a
+// Conditional/Backfill edge predicate lacking a registered inverse FAILS
+// (ErrInvalidClaim). With no resolver wired, the gate is skipped — a deploy that
+// SHOULD enforce but forgot the resolver is surfaced by a one-time WARN the first
+// time a would-be-gated claim is seen, not silently.
+func (reg *Registry) checkInverseGate(edges []ForeignEdgeClaim) error {
+	if reg.inverseResolver != nil {
+		return CheckInverseGate(reg.inverseResolver, edges...)
+	}
+	for _, e := range edges {
+		if e.Mode.requiresInverse() {
+			reg.noResolverWarnOnce.Do(func() {
+				reg.logger.Warn("ownership: no inverse-resolver wired — Decision-4 inverse-gate SKIPPED for inverse-requiring foreign-edge claims (wire one via EnsureBuckets to enforce)")
+			})
+			break
+		}
 	}
 	return nil
 }

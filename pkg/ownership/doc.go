@@ -35,15 +35,30 @@
 //     logged, not bricked (Decision 5); the substrate still REJECTS it (the
 //     Manager swallows the rejection deliberately).
 //
+// W0 4a landed (Decision 4 T2-seam reject, OBSERVE-ONLY):
+//
+//   - The inverse-gate is now ENFORCED at registration: RegisterOwner runs
+//     CheckInverseGate over the registration's foreign edges using an injected
+//     InverseResolver (set via EnsureBuckets; nil → skip-with-warn-once).
+//   - FE-claim-only owners are EXEMPT from liveness compaction (see compactStale)
+//     — they are not leases. KNOWN 4b/4c follow-up: a dead FE-only owner now
+//     persists, so the cross-type overlap check could strand a live owning-claim
+//     registrant against it (not reachable today; see the compactStale comment).
+//   - ClaimReader is the read-only view graph-ingest uses to classify foreign
+//     edges at the T2-seam (observe-only: meter unclaimed + route anyway). The
+//     graph-ingest seam wiring + the foreign_edge_unclaimed_total metric live in
+//     processor/graph-ingest.
+//
 // What is deliberately NOT here yet (later W0 increments, each with its own
 // review):
 //
-//   - The ForeignEdgeClaim T2-regroup-seam reject in graph-ingest (Decision 4
-//     BLOCKING-B). The registration-time inverse-gate (CheckInverseGate) is
-//     pure-logic-present; the graph-ingest write-boundary wiring is deferred.
+//   - The HARD T2-seam reject (4c) — 4a routes unclaimed foreign edges
+//     deprecated-on-arrival; the hard reject is gated on the metric reading zero
+//     over a bake window.
 //   - The PENDING_EDGES Conditional-edge buffer + delete-after-apply drain +
-//     boot re-drain + the counting crash-recovery flip-gate test (Decision 4).
-//     EnsureBuckets does NOT create PENDING_EDGES yet (no consumer).
+//     boot re-drain + the fourth-path (ensureReferencedEntityExists) fold + the
+//     counting crash-recovery flip-gate test (Decision 4 / 4b). EnsureBuckets
+//     does NOT create PENDING_EDGES yet (no consumer).
 //   - The OwnerToken wire field on the graph mutation requests + the handler
 //     lease check returning ErrorCodeOwnerLeaseStale (Decision 2 write seam),
 //     and the post-registration Watch-revival fatal-halt. These two are the

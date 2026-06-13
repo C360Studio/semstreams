@@ -138,6 +138,28 @@ shape.
   is exactly pre-ADR-056 (graceful-skip for resourceless/unmigrated deploys). Pure-logic + testcontainer
   tested through `Manager.Register` (the production entry), `task lint` clean; an `e2e:lifecycle` tier
   run gates the merge (Manager boot-surface change).
+- **W0 4a landed — the T2-seam reject (OBSERVE-ONLY).** Increment 3: the foreign-routing seam
+  (`ingestEntity`, `component.go`) now CLASSIFIES each foreign-subject edge against the registered
+  `ForeignEdgeClaim`s and counts the unclaimed ones on `foreign_edge_unclaimed_total{message_type,predicate}`
+  with a one-time WARN per `(message_type,predicate)` — **it does NOT change routing** (edges are
+  still appended, deprecated-on-arrival; the hard reject + the ADR-055 must-exist flip are 4c).
+  graph-ingest is a **reader** of `OWNER_CLAIMS` via a read-only `ownership.ClaimReader` (one epoch
+  read per foreign-bearing ingest; graceful-skip to no-classification when the bucket is absent).
+  The boot-time **inverse-gate** is wired (`RegisterOwner` runs `CheckInverseGate` over the
+  registration's foreign edges using a `vocabulary.InverseResolver` injected at `EnsureBuckets`;
+  nil-resolver → skip-with-WARN), and the **FE-claim-only compaction exemption** (an FE claim is not
+  a lease — it contests nothing — so it is not liveness-reaped, which otherwise made the metric flap
+  every `PresenceTTL`). sensorml's `WithInverseOf` is registered. **Two caveats pinned by a
+  pre-implementation architect review and load-bearing for 4c's gate:** (1) **No production producer
+  emits foreign edges today** — OMS and StoredMessage (the Graphables that reach the seam in
+  `cmd/semstreams`) emit none, and sensorml is not a registered payload nor ingested by any binary.
+  So `foreign_edge_unclaimed_total` reads **zero in production BY ABSENCE**, NOT because producers
+  migrated — 4c's "hatch-empty over a bake window" gate must not read this zero as "migrated," and
+  the seam is exercised by a **registered test-fixture producer**, not sensorml-in-prod (wiring
+  sensorml into the framework binary would be the framework-vs-product boundary trap). A real
+  SensorML ingest path is separate, larger work. (2) The metric counts edges **CLASSIFIED-unclaimed
+  at the seam**, NOT routing failures (it fires before `AddTriples`' all-or-nothing batch), which is
+  the semantics 4c's gate must assume.
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
@@ -1067,19 +1089,26 @@ broken; this ADR fixes both (KV-backed pending buffer + the registration-time in
    foreign-edge predicate with no registered inverse and no KV-durable producer guarantee
    lands HERE by the gate, not in a silent Conditional drop.
 
-**BLOCKING-B fix part 4 — wire `WithInverseOf` for sensorml (change described, not
-implemented).** `parser/sensorml/predicates.go:96-97` registers `PredHosts`/`PredIsHostedBy`
-with `WithIRI` only. The change: add `WithInverseOf(PredIsHostedBy)` to the `PredHosts`
-registration and `WithInverseOf(PredHosts)` to the `PredIsHostedBy` registration (mirroring
-the 6 hierarchy predicates at `vocabulary/hierarchy.go:25-64` and the 2 delegation predicates at
+**BLOCKING-B fix part 4 — wire `WithInverseOf` for sensorml (landed in W0 4a).**
+`parser/sensorml/predicates.go:96-97` registered `PredHosts`/`PredIsHostedBy` with `WithIRI`
+only. The change: add `WithInverseOf(PredIsHostedBy)` to the `PredHosts` registration and
+`WithInverseOf(PredHosts)` to the `PredIsHostedBy` registration (mirroring the 6 hierarchy
+predicates at `vocabulary/hierarchy.go:25-64` and the 2 delegation predicates at
 `vocabulary/agentic/register.go:162,168`, the only existing inverse-bearing predicates). Then
 `GetInversePredicate("sensorml.system.hosts") == "sensorml.component.isHostedBy"` and vice
-versa, so sensorml's foreign `isHostedBy` edge becomes genuinely Backfill-recoverable AND
-passes the inverse-gate as `Conditional`. (This honors the doc-comment at
-`predicates.go:29-30` that already *asserts* the inverse relationship the registration omitted.
-sensorml already emits both directions explicitly at parse time, `graphable.go:122-125`, so
-the registered inverse is also the correct semantic backstop if the explicit child-subject
-write ever races.)
+versa, so sensorml's foreign `isHostedBy` edge becomes genuinely Backfill-recoverable.
+
+**The registered inverse makes `Conditional` LEGAL for this edge — it does NOT make it the
+edge's mode (contradiction resolved).** An earlier draft said the edge "passes the inverse-gate
+*as Conditional*," which read as a mode recommendation and contradicted the fourth-path ruling
+above (the sensorml child has no independent birth, so its correct mode is **`NoBirthStub`** —
+lane ii — which `requiresInverse() == false` and passes the gate trivially, with or without the
+inverse). The `WithInverseOf` change is about gate *eligibility* (Conditional/Backfill become
+permissible should the edge ever be re-classified) and about the **Backfill recoverability
+floor**, not about declaring the no-birth child Conditional. (It also honors the doc-comment at
+`predicates.go:29-30` that already *asserted* the inverse the registration omitted; sensorml
+emits both directions explicitly at parse time, `graphable.go:122-125`, so the registered inverse
+is the correct semantic backstop if the explicit child-subject write ever races.)
 
 **Fix part 5 — the sharpened flip-gate predicate (hatch-empty, not merely wired).** ADR-055's
 closing move (delete both auto-vivify branches, flip `triple.add`/`add_batch` to must-exist) must
