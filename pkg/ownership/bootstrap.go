@@ -1,0 +1,68 @@
+package ownership
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+// ownerClaimsHistory is how many past epoch revisions OWNER_CLAIMS retains.
+// The epoch write IS the registration audit trail (the KV-twofer), so a modest
+// history depth answers "who registered what, when" across the last several
+// deploys without unbounded growth on a single small key.
+const ownerClaimsHistory = 10
+
+// EnsureBuckets idempotently creates the framework-owned ownership buckets and
+// returns a Registry over them.
+//
+// Call this EAGERLY in the framework boot path, BEFORE any
+// lifecycle.Manager.Register — registration heartbeats into OWNER_PRESENCE and
+// CAS-writes OWNER_CLAIMS, so both buckets must already exist. graph-ingest's
+// initStorage runs AFTER registration in every binary's wiring (NewManager →
+// Register → service start), so creating these alongside ENTITY_STATES there
+// would make every registration a silent no-op (the buckets would not yet
+// exist). That is why this is a standalone eager call, not graph-ingest work.
+//
+// Bucket layout (ADR-056 Decision 2):
+//   - OWNER_CLAIMS — the single `_registry` epoch key; History for audit, NO
+//     TTL (a TTL would age out the durable epoch between deploys).
+//   - OWNER_PRESENCE — per-owner heartbeat keys; a bucket-level TTL = PresenceTTL
+//     IS the entire staleness backstop (an absent presence key means the owner
+//     has been silent beyond the grace window and is compactable). Without this
+//     TTL a crashed owner is never reaped and its stale claim blocks every future
+//     registrant forever — so the TTL is not optional.
+//
+// PENDING_EDGES (BucketPendingEdges) is deliberately NOT created here: its
+// consumer (the Decision-4 foreign-edge buffer) is a later increment, and a
+// bucket created with no reader reads as a half-wired bug.
+func EnsureBuckets(ctx context.Context, client *natsclient.Client, logger *slog.Logger) (*Registry, error) {
+	if client == nil {
+		return nil, fmt.Errorf("ownership: EnsureBuckets requires a non-nil NATS client")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	claims, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      BucketOwnerClaims,
+		Description: "ADR-056 owner-claim registry — single _registry epoch key (no TTL)",
+		History:     ownerClaimsHistory,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ownership: create %s bucket: %w", BucketOwnerClaims, err)
+	}
+
+	presence, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      BucketOwnerPresence,
+		Description: "ADR-056 owner liveness heartbeats — bucket-TTL staleness backstop",
+		TTL:         PresenceTTL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ownership: create %s bucket: %w", BucketOwnerPresence, err)
+	}
+
+	return NewRegistry(client.NewKVStore(claims), client.NewKVStore(presence), logger), nil
+}

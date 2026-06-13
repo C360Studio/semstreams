@@ -204,6 +204,10 @@ The core Graphable interface intentionally excludes:
 
 This keeps the interface minimal. Additional capabilities are added via separate interfaces when needed.
 
+Graphable also does not declare ownership. A payload can say "these are the triples I emit"; a graph projection contract
+says whether those predicates are replace-owned state, CAS-transition state, append-only evidence, or foreign edges. See
+[Governed Semantic State](../concepts/28-governed-semantic-state.md) for how shared graph writes are governed.
+
 ## Interface Composition
 
 Graphable is the foundation of a composable interface hierarchy:

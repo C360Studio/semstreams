@@ -2,13 +2,30 @@
 
 ## Status
 
-**Proposed** — 2026-06-13 (v5, final precision pass; Accept pending human sign-off).
+**Accepted** — 2026-06-13 (v6, post-merge review thread closed; human sign-off received).
+v6 threads the final pre-Accept review (2 P1 + 1 P2): the fourth-path stub-lane
+self-contradiction is resolved (the no-birth referential stub is promoted to a first-class,
+envelope-bearing framework artifact with a named `ForeignEdgeClaim` owner — Decision 4 lane ii —
+reconciled across the framework-surface summary and the ADR-055 narrowing); the write-time
+owner-token lease check is given a concrete WIRE CONTRACT (`OwnerToken` field on the graph-ingest
+mutation request structs + `ErrorCodeOwnerLeaseStale`, Decision 2); and the stale "sensorml
+declares `hosts`/`isHostedBy`" changelog line is corrected to "only `isHostedBy`." No
+architectural change — these are contract-precision fixes at the enforcement points. v6 also adds
+**two acceptance fixtures** (Consequences §) on complementary axes: **semconnect cs-api** (gateway-write,
+Decisions 1–4) and **semteams** (rule/lifecycle, Decision 5 + "rules observe, don't own"). Both are run
+against the real consumers' ownership surfaces and described exactly with no Decision re-architecture;
+the only thing either forced is prose (a shared-vocabulary-ownership note, and a predicate-group-scoped
+correction to "rules observe, don't own" that the semteams run-entity pattern falsified the old wording
+of). The gate Coby set for Accept ("if 056 can describe how the consumers register their claims, the
+design is real") is passed on both axes.
 The architecture is VALIDATED across four adversarial rounds (verdict: 6/6 no hard FAIL);
 v5 pins the remaining **implementation contracts** the v4 review (Codex 1 BLOCKING + P1s)
 and the verification gate flagged — these are contract-precision fixes, **no architectural
 forks**. This ADR names and **enforces** a responsibility the framework has been carrying
 implicitly since ADR-049 and patching symptomatically through ADR-055. The architecture is
-SETTLED — Decisions 1–5 are unchanged from v3/v4; v5 makes the load-bearing mechanisms
+SETTLED — Decisions 1–5 are unchanged from v3/v4 (v6 ADDS Decision 6 — claims derive from graph
+projection contracts — which is additive and constrains the layer ABOVE the substrate, not 1–5);
+v5 makes the load-bearing mechanisms
 *mechanically buildable* (valid NATS KV keys + a real TTL bucket split; producer identity
 threaded to the T2 seam; the hosts-vs-isHostedBy foreign-edge distinction corrected;
 the crash-recovery drain made exactly-once-asserting; the Watch-revival made fatal-halt;
@@ -16,15 +33,111 @@ the flip-gate predicate sharpened to hatch-empty). No new architectural forks. E
 load-bearing claim cites `file:line` against code read on 2026-06-13. Where this ADR
 disagrees with a summary in `CLAUDE.md` or `MEMORY.md`, the cited code wins.
 
-The Status flip to Proposed and the eventual git commit are the human author's call; this
-revision sets Proposed because every v5 punch-list item is pinned with **no remaining
-BLOCKING** — see the v4 → v5 changelog. **Accept pending human sign-off.**
+v5 set Proposed with every punch-list item pinned and **no remaining BLOCKING** (see the
+v4 → v5 changelog). v6 flips to **Accepted**: the human author signed off conditional on
+threading the post-merge review (2 P1 + 1 P2), and that thread is now closed in this revision
+(see the v5 → v6 changelog below). No BLOCKING remains.
 
 This ADR **does not supersede** ADR-049 or ADR-055. It is the missing parent. ADR-049's
 `Manager` is one *implementation* of the contract; ADR-055 **narrows** to a single
 enforcement rule under it (see "How ADR-055 narrows under this parent"). The
 cryptographic-provenance follow-up is scoped (not designed) in
 [ADR-057](057-cryptographic-provenance.md).
+
+### v5 → v6: post-merge review thread closed (2 P1 + 1 P2; no architectural change)
+
+ADR-056 merged to main (PR #270) at Status Proposed. The pre-Accept review raised three findings,
+all at enforcement points; v6 threads them and flips Status to **Accepted**. No Decision changes
+shape.
+
+- **P1 — the fourth auto-vivify path contradicted itself across three places.** Decision 4 lane (ii)
+  said no-birth targets "keep an EXPLICIT referential-stub lane with a must-exist exemption"; the
+  framework-surface summary said `ensureReferencedEntityExists → enqueue, not stub Put`; the ADR-055
+  narrowing said "no envelope-less stub." Load-bearing, not cosmetic. **Closed by choosing horn (a):**
+  the no-birth referential stub is **promoted to a first-class, envelope-bearing framework artifact**
+  with a named owner/claim — `MessageType = core.identity.stub` (domain `core`/category `identity`),
+  creating owner recorded as the producer's registered `ForeignEdgeClaim` in a `core.identity.stub_owner`
+  triple. Horn (b) (remove the lane) is rejected because sensorml's child has no birth to drain and no
+  registered inverse to backfill, so removal would dangle the edge forever. The framework-surface
+  summary and the ADR-055 narrowing are reworded to match (both lanes named; "no ENVELOPE-LESS stub"
+  is now literally true — the surviving stub carries an envelope).
+- **P1 — the write-time owner-token check asserted enforcement but named no wire surface.** Decision 2
+  now pins it: `OwnerToken` is a typed field on `Update`/`CreateEntityWithTriplesRequest`
+  (`graph/mutation_requests.go:80,38`) — the registry-exempt point-to-point structs that already carry
+  `ExpectedRevision`/`TraceID` — NOT a NATS header and NOT a `BaseMessage` envelope. The value is the
+  lease handle minted at `RegisterOwner`; graph-ingest rejects a mismatch with a new
+  `ErrorCodeOwnerLeaseStale` through the same response path `ErrorCodeRevisionMismatch` uses
+  (`pkg/lifecycle/graph_emit.go:134-139`).
+- **P2 — stale sensorml changelog line.** The BLOCKING-B changelog said sensorml declares both
+  `hosts` and `isHostedBy` as `ForeignEdgeClaim`s; the corrected design (056:872) says only
+  `isHostedBy` is the foreign-subject claim (`hosts` carries the parent's own id as Subject). The
+  changelog line is corrected to match.
+- **Acceptance fixtures added — semconnect cs-api AND semteams (the gate Coby set for Accept).** A new
+  "Consequences → Acceptance fixture" subsection runs the design against TWO real consumers on
+  complementary axes, both read 2026-06-13.
+  - **semconnect (`../semconnect/gateway/cs-api/`) — gateway-write axis (Decisions 1–4).** 11 entity
+    types, ~30 `cs-api.*` predicates plus shared `sensorml.*`/`csapi.*`/`sosa:*` vocabulary. 056
+    describes the registrations EXACTLY with no new mechanism. Four sharpenings: (1) owned sets are
+    dominated by shared vocabulary predicates owned-by-the-writer not the vocab package; (2)
+    disjoint-id-space is the cross-producer contract, overlap-reject is the design working; (3)
+    `sensorml.component.isHostedBy` is owned AND foreign by subject position, no collision because
+    subject-partitioned, no-birth-stub lane because no inverse; (4) two named cs-api migration sites
+    (`systems_crd.go:145` blanket replace, `systems_post.go:317` single-subject ingest).
+  - **semteams (`../semteams/`) — rule/lifecycle axis (Decision 5 + "rules observe, don't own").**
+    Q1 dual-write probe CLEAN (no private `*_STATES` mirror; Decision 5 grounded in a 2nd consumer).
+    Q2 found 22 agent-run rules stamping the FOREIGN run entity — correct ADR-053 coordination, but
+    it **falsified the ADR's own prose** ("rules cleared only because they stamp their trigger
+    entity"). Fixed: *For the architectural identity* now states the invariant is
+    PREDICATE-GROUP-scoped — the run entity is **multi-owned** (lifecycle-Manager phase + a disjoint
+    rule-marker group), the anti-pattern is REPLACING another owner's group, not writing a foreign
+    entity. semteams's marker-group classification (append-evidence vs registered rule-pack owner) is
+    its migration question, expressible today.
+  - **Both fixtures pass with NO Decision re-architecture** — the only changes either forced are
+    prose (the two ownership clarifications). The "if it can describe the consumers, the design is
+    real" gate is passed on both the write axis and the rule/lifecycle axis.
+- **Decision 6 ADDED — claims derive from graph projection contracts (review concern, 2026-06-13).**
+  A reviewer flagged the real risk that ADR-056 could become "…also register your ownership strings
+  over here" — a parallel semantic registry that drifts from the flow-based design and rots. Closed
+  by naming the three layers as ONE declarative chain (payload-type registry → graph projection
+  contract → ownership enforcement) and making it a HARD requirement that ownership claims DERIVE
+  from a registered projection contract (declared beside the type/Graphable/resource-projection),
+  with manual `RegisterOwner` only as the low-level escape hatch (lifecycle `Manager` dynamic
+  patterns; migration scaffolding). `pkg/ownership` is the enforcement substrate ONLY. Additive —
+  constrains the layer ABOVE the substrate, changes none of Decisions 1–5.
+- **W0 spine implemented + reviewed (`pkg/ownership`).** Increment 1 of the implementation landed
+  alongside this revision: the claim types, the single-epoch-key registry with overlap rejection
+  (glob × exact-predicate, incl. Owner×ForeignEdge cross-type), stale-owner compaction, and the
+  `OwnerOf` lease lookup — pure-logic + testcontainer-integration tested, `task lint` clean. A
+  pre-merge go-reviewer pass hardened it: liveness/lease keyed on the canonical owner id (no FNV
+  hash on the correctness path), waivers moved to epoch scope with MUTUAL consent (neither owner can
+  unilaterally waive into the other's cell), presence rolled back on a fresh owner's failed
+  registration, and compaction grace pinned to the OWNER_PRESENCE bucket TTL. Deferred to later
+  increments (named in `pkg/ownership/doc.go`): the T2-seam reject + inverse-gate, the PENDING_EDGES
+  buffer + crash-recovery flip-gate, the `OwnerToken` wire field + handler lease check, and the
+  graph-ingest boot wiring + projection-contract derivation (Decision 6).
+- **W0 first consumer landed — the `lifecycle.Manager` embed (Decision 5).** Increment 2: the Manager
+  is the first framework consumer of the registry. A pre-implementation architect review reshaped the
+  seam around a confirmed boot-ordering hazard — in every binary, `NewManager`/`Register` run BEFORE
+  the flow service (and graph-ingest) starts (`cmd/semstreams/main.go:186,193` vs `:220,:225`), so
+  creating the ownership buckets in graph-ingest's `initStorage` would make every registration a
+  silent no-op. The increment therefore: (1) **`ownership.EnsureBuckets`** creates OWNER_CLAIMS
+  (history, no TTL) + OWNER_PRESENCE (bucket TTL = `PresenceTTL`, the whole staleness backstop) and
+  is called EAGERLY in the boot path BEFORE `Register`, not in graph-ingest; (2) **`Manager.AttachOwnership(ctx, reg)`**
+  embeds the registry and derives each `Workflow` into TWO claims by mode (phase = `cas-transition`;
+  audit + writable projected fields = `replace-owned`; read-only/reference/child-link predicates the
+  Manager does not author are NOT claimed); (3) the **owner id is the workflow Name** (the workflow
+  TYPE is the owner, shared idempotently across processes; presence reflects "≥1 process of this type
+  live"); (4) a substrate-owned **`Heartbeater`** ticks liveness over the **app-root ctx** (cancellation
+  stops it — no `Close` for sister repos to adopt); (5) the runtime posture is **OBSERVE-ONLY** — a
+  cross-owner overlap is LOGGED, not bricked (consistent with Decision 5's observe-only runtime
+  enforcement; the substrate still rejects it, the Manager swallows the rejection), while a malformed
+  self-claim stays fatal. The hard-fail flip + the `OwnerToken` write-lease + the Watch-revival are the
+  deferred write-gating half (an evicted-then-revived owner only churns the epoch until then — no
+  dropped writes — which is why observe-only is safe to ship first). Sister repos (semspec/semteams/
+  semconnect) opt in by adding the same `EnsureBuckets` + `AttachOwnership` pair; absent it, behaviour
+  is exactly pre-ADR-056 (graceful-skip for resourceless/unmigrated deploys). Pure-logic + testcontainer
+  tested through `Manager.Register` (the production entry), `task lint` clean; an `e2e:lifecycle` tier
+  run gates the merge (Manager boot-surface change).
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
@@ -131,8 +244,10 @@ mechanisms (no new architectural fork) and folds three MEDIUMs.
   emits a foreign-subject triple MUST have declared that predicate as a
   `ForeignEdgeClaim` (validated at boot the same way payload registration is); a
   foreign-subject triple with no registered claim is the reject (or a flagged,
-  deprecated-on-arrival migration escape hatch). sensorml declares `hosts`/`isHostedBy`
-  as `ForeignEdgeClaim`s. v4 also (1) **enumerates `ensureReferencedEntityExists`
+  deprecated-on-arrival migration escape hatch). sensorml declares ONLY `isHostedBy` as a
+  `ForeignEdgeClaim` — the child-subject edge; `hosts` carries the parent's OWN id as Subject
+  (`Subject == entityID`), so it files as `own` and is NOT a foreign edge (corrected in
+  Decision 4, 056:872). v4 also (1) **enumerates `ensureReferencedEntityExists`
   (`component.go:1424-1525`) as a FOURTH auto-vivify path** that survives ADR-055's flip
   (the flip deletes only the `AddTriple`/`AddTriples` branches, `:1691-1698`/`:1790-1796`)
   and rules on its fate; (2) **strikes the physically-impossible "single-revision-atomic
@@ -627,6 +742,26 @@ unconditional third-party delete:
   been re-claimed **fails the write at the write seam** (a cheap epoch read, cache-friendly), not
   only at its next registration or Watch fire. This is the chosen close — a lightweight write-time
   lease verified against the epoch — over merely declaring the window an accepted availability cost.
+- **Where the `owner_token` lives — the WIRE CONTRACT, not prose (P1 close).** The token is a
+  new typed field `OwnerToken string` on the graph-ingest mutation request structs —
+  `UpdateEntityWithTriplesRequest` and `CreateEntityWithTriplesRequest`
+  (`graph/mutation_requests.go:80,38`), the SAME point-to-point request/reply structs that already
+  carry `ExpectedRevision`, `IndexingProfile`, and `TraceID`. It is **NOT a NATS header and NOT a
+  `BaseMessage` envelope field**: graph mutation request/reply is intentionally registry-exempt
+  (`graph/mutation_requests.go:7-10`) because the subject already selects the handler, so the
+  authorization context rides as a typed request field exactly like the CAS condition
+  (`ExpectedRevision`) does — no envelope, no header indirection, one struct the handler already
+  deserializes. The token's VALUE is the lease handle minted at `RegisterOwner` time (the owner's
+  entry in the `OWNER_CLAIMS` epoch for that `(pattern, predicate)` cell). graph-ingest's
+  `update_with_triples` / `create_with_triples` handler reads the current epoch, looks up the live
+  owner of the target cell, and rejects with a new `ErrorCodeOwnerLeaseStale` when the request's
+  `OwnerToken` does not match — surfaced through the **same response-classification path**
+  `ErrorCodeRevisionMismatch` already uses (`pkg/lifecycle/graph_emit.go:134-139`), so the lifecycle
+  `Manager` (which already emits through these exact subjects — `graph_emit.go:12-15`) gets the
+  check for free. Append-evidence (`triple.add`/`add_batch`) and unowned writes carry no token and
+  skip the lookup — only `replace-owned` / `cas-transition` writes (Decision 1's two owning modes)
+  are gated. This is the enforcement point the reviewer flagged: the lease check is now a wire field
+  with a named owner, a named handler seam, and a named error code, not a sentence.
 - **The availability-vs-safety tradeoff, stated.** Compaction prioritizes *availability* (a
   crashed owner's claim must not block a restart forever) at the cost of a bounded *registration*
   window: during `[entry compacted, owner revives + Watch halt]` a freed cell could be re-claimed
@@ -1072,10 +1207,23 @@ ADR-055's "no ownerless births" closing move is **incomplete** until it accounts
 > package defines only ONE `EntityID()` (`parser/sensorml/graphable.go:37`, `Asset` returns the
 > PARENT id); a child id comes only from the optional `ChildIDFn` (`:166-175`) and is never the
 > subject of its own published Graphable. For this subclass the stub IS load-bearing — it is the
-> only thing that ever materializes the child node — so it stays as an EXPLICIT referential-stub
-> lane carrying a **must-exist EXEMPTION** in ADR-055's flip text (the stub-creating write is
-> named and exempted, not silently surviving). The exemption is bounded to no-birth targets and is
-> declared, not a blanket carve-out.
+> only thing that ever materializes the child node — so it stays, but it is **promoted from the
+> envelope-less ownerless `Put` it is today (`component.go:1488-1519`: Version 1, no `MessageType`,
+> no envelope, last-writer-wins) to a FIRST-CLASS, ENVELOPE-BEARING framework artifact with a named
+> owner/claim.** This resolves the reviewer's first horn — we choose horn (a) (first-class stub),
+> not horn (b) (remove the lane), because removal would dangle sensorml's child edge forever
+> (no birth to drain, no registered inverse to backfill). Concretely, the referential-stub creator
+> (`ensureReferencedEntityExists`) stamps the stub `EntityState` with a framework semantic envelope
+> — `MessageType = core.identity.stub`, domain `core` / category `identity` / version, the same
+> discriminator shape the payload registry uses — and records the CREATING owner (the producer's
+> registered `ForeignEdgeClaim` `MessageType`) in a `core.identity.stub_owner` triple alongside the
+> existing `core.identity.referenced_by`. The stub is therefore **NOT "an envelope-less ownerless
+> stub that silently survives the flip"**; it is a NAMED framework birth lane (the referential-
+> integrity producer) whose creation is AUTHORIZED by a registered `ForeignEdgeClaim` declaring
+> `edge-mode` with the **must-exist EXEMPTION** in ADR-055's flip text. The exemption is bounded to
+> no-birth targets whose producer registered that `edge-mode` claim — declared, not a blanket
+> carve-out: a foreign edge whose producer registered NO no-birth claim still trips the
+> unclaimed-foreign reject (Decision 4 BLOCKING-B) and never reaches the stub lane.
 
 How the seam decides which subclass a target is in: a referenced target whose `(message_type)`
 maps to a registered birth-producer (it WILL be born) takes lane (i); a target with no registered
@@ -1228,14 +1376,21 @@ not a parallel path. **New framework surface flagged for the final review:**
   CAS-write-at-read-revision → retry-on-mismatch-against-the-now-larger-epoch; plus the
   **post-registration epoch Watch** that re-checks overlap if a compacted-then-revived owner
   reappears — **a re-detected overlap there is a FATAL HALT of the revived process (v5), not a log**;
-  plus the **write-time owner-token lease check** (v5) verifying the writer against the epoch's owner
-  of the `(pattern, predicate)` cell to close the double-WRITE window.
+  plus the **write-time owner-token lease check** (v5; wire surface pinned v6) verifying the writer
+  against the epoch's owner of the `(pattern, predicate)` cell to close the double-WRITE window — the
+  token rides as the `OwnerToken` field on `Update`/`CreateEntityWithTriplesRequest` (NOT a header or
+  `BaseMessage` envelope; the structs are registry-exempt), rejected with `ErrorCodeOwnerLeaseStale`
+  through graph-ingest's existing response-classification path (Decision 2, "Where the `owner_token`
+  lives").
 - **The T2-seam foreign-edge enforcement** (Decision 4 BLOCKING-B): the unclaimed-foreign-edge
   reject at `ingestEntity`/`partitionTriplesBySubject` (`component.go:917-955,1031-1040`),
   boot-time `ForeignEdgeClaim` validation including the **inverse-gate** (`Conditional` requires
   a registered `InverseOf` — `vocabulary/registry.go:368-381` — else `Strict`), the
   delete-after-apply drain + boot re-drain sweep, and the **fourth-path fold**
-  (`ensureReferencedEntityExists` → enqueue, not stub `Put`).
+  (`ensureReferencedEntityExists`): enqueue into `PENDING_EDGES` for birth-bearing targets (lane i),
+  OR materialize via the framework's envelope-bearing referential-stub lane — named owner = the
+  producer's registered `ForeignEdgeClaim`, `MessageType = core.identity.stub` — for no-birth
+  targets like sensorml children (lane ii). Never an anonymous, envelope-less, ownerless `Put`.
 - **The base `OwnerRegistry` type** and the `RegisterOwner` entrypoint; the overlap algorithm
   (glob-vs-glob *entity-ID-pattern* intersection × exact-string *predicate* intersection,
   over the epoch union).
@@ -1244,6 +1399,72 @@ not a parallel path. **New framework surface flagged for the final review:**
 
 These are additive but they are genuinely new spine, not "rename an existing field." Target
 all of them in the final review.
+
+### Decision 6 — Claims DERIVE from graph projection contracts (one declarative chain, not a parallel registry)
+
+> **Ownership claims MUST be derived from a registered graph projection contract wherever the
+> owner is driven by a payload type / Graphable. A hand-maintained list of ownership strings,
+> registered in a boot block divorced from the projection that emits the facts, is the
+> anti-pattern this decision forbids. `pkg/ownership` is the distributed-ENFORCEMENT substrate
+> only — never a second user-facing model.**
+
+The concern this closes (raised in review, 2026-06-13): if ADR-056 lands as "…and also register
+your ownership strings over here," we will have built a **parallel semantic registry** that drifts
+from the flow-based design and rots — the registry and the projection saying different things,
+maintained in different places, by hand. That is exactly the failure mode the framework's existing
+registries were designed to avoid.
+
+The fix is to see that these are **three layers of ONE declarative chain**, not three registries:
+
+| Layer | Question it answers | Where it lives today |
+|---|---|---|
+| **Payload type registration** | "When I see `agentic.task.v1`, what Go type do I decode?" — in-process type dispatch | `payloadregistry/registry.go` (point-to-point graph mutation request/reply is intentionally exempt, `graph/mutation_requests.go:7`) |
+| **Graph projection contract** | "What graph facts does this type emit, and in what write mode is each predicate group?" | THE MISSING LAYER — today `Graphable.Triples()` (`graph/messagemanager/processor.go:259`) is treated as the whole truth; it says *what* triples but not whether they are append-evidence, owned current state, CAS-transition state, or foreign edges |
+| **Ownership enforcement** | "Who may author/reconcile those facts at runtime, and is anyone else already there?" | `pkg/ownership` (this ADR) — substrate only |
+
+The missing middle layer is the **graph projection contract**, declared ONCE beside the type /
+Graphable / gateway-resource projection code, co-locating:
+
+- the **entity-ID pattern** the projection writes,
+- the **emitted predicates** grouped by **write mode** (replace-owned / cas-transition /
+  append-evidence — Decision 1),
+- the **foreign-edge claims** it produces (Decision 4),
+- and the **indexing profile** (ADR-054 — already a per-type declaration, so the projection
+  contract subsumes a thing that already exists rather than inventing a new surface).
+
+The runtime chain is then **derivation, not duplication**:
+
+```text
+payload type registration
+  └─ optionally declares a graph projection contract
+       (entity pattern · predicates × write mode · foreign-edge claims · indexing profile)
+component / gateway boot
+  └─ binds each projection to an OWNER ID and DERIVES the OwnerClaim/ForeignEdgeClaim set,
+     registering it with pkg/ownership.RegisterOwner
+graph-ingest
+  └─ enforces the registered claims at the write boundary (overlap reject, lease check, T2 seam)
+```
+
+**Manual `RegisterOwner` is the low-level ESCAPE HATCH, not the default.** Two legitimate
+escape-hatch users: (1) owners whose entity-ID pattern is not derivable from a single payload type
+(the lifecycle `Manager`'s `Workflow.Schema` — already claim-shaped, Decision 1 §500-503 — registers
+directly), and (2) migration scaffolding before a producer has declared its projection contract
+(the Decision-3 / Decision-4 deprecated-on-arrival hatch). Everything else derives.
+
+**Why this is now a HARD requirement, not a nicety.** The semconnect acceptance fixture is the
+proof and the cautionary tale at once: cs-api's System claim is six `sensorml.*` vocabulary
+predicates over `…csapi.system.*` (Consequences → Acceptance fixture). If those live as a
+hand-edited slice in a boot function, the day someone adds a predicate to the System triple-builder
+(`systems_post.go`) and forgets the slice, the projection emits a fact the registry doesn't know is
+owned — silent drift. Derived from a projection contract declared *beside the builder*, the claim
+and the emission cannot disagree. semconnect should declare "the CS-API System projection owns these
+predicates on this pattern; the Deployment projection owns these; SensorML emits this foreign
+edge" next to the resource projection code — never as a parallel hand-maintained registry.
+
+This decision does **not** change `pkg/ownership` (the W0 spine is correctly substrate-only); it
+constrains the **layer above** it. The projection-contract type and the boot-time derivation are a
+named deliverable of the enforcement-wiring increment, and graph-ingest enforces what derivation
+registers. The spine's `RegisterOwner` is the seam both the derivation and the escape hatch call.
 
 ### The CQRS boundary, made explicit
 
@@ -1387,8 +1608,13 @@ that rule gets *more* teeth, not less:
 > `triple.add`/`add_batch` auto-vivify branches (`component.go:1691-1698`, `1790-1796`) are
 > deleted (`triple.add`/`add_batch` become must-exist), AND the FOURTH auto-vivify path
 > `ensureReferencedEntityExists` (`component.go:1424-1525`) is covered — folded into the
-> Decision-4 pending-edge buffer (enqueue, don't `Put` a stub), or explicitly exempted in this
-> flip text. No ownerless births; no auto-vivify producer path; no envelope-less stub.**
+> Decision-4 pending-edge buffer (enqueue) for birth-bearing targets, OR materialized via the
+> framework's envelope-bearing referential-stub lane (named owner = the producer's registered
+> `ForeignEdgeClaim`, `MessageType = core.identity.stub`) for no-birth targets like sensorml
+> children. No ownerless births; no auto-vivify PRODUCER path; no ENVELOPE-LESS stub — the only
+> stub that survives is the framework's own referential-stub artifact, which now carries a semantic
+> envelope and a named creating claim (Decision 4 lane ii), not the anonymous envelope-less `Put`
+> the flip deletes.**
 
 What moves OUT of ADR-055 and INTO 056 (this ADR), making 055 narrower:
 
@@ -1442,8 +1668,10 @@ concern (above), not an owned-predicate concern. No conflict.
   final review.
 - All FOUR auto-vivify paths are accounted for by ADR-055's closing move, now gated on Decision
   4: the two `AddTriple`/`AddTriples` branches (`component.go:1691-1698`, `1790-1796`) are
-  deleted, and the fourth path `ensureReferencedEntityExists` (`component.go:1424-1525`) is
-  folded into the pending-edge buffer (enqueue, not stub `Put`).
+  deleted, and the fourth path `ensureReferencedEntityExists` (`component.go:1424-1525`) is folded
+  into the pending-edge buffer (enqueue) for birth-bearing targets, or routed through the
+  envelope-bearing referential-stub lane for no-birth targets (Decision 4 lane ii) — never an
+  anonymous, envelope-less `Put`.
 
 ### For lifecycle (`pkg/lifecycle`)
 
@@ -1461,16 +1689,140 @@ concern (above), not an owned-predicate concern. No conflict.
   the Decision-3 escape hatch, one site at a time, then registry-backed). The cost is real and
   per-producer; the value is stopping the next reinvention.
 
+### Acceptance fixture — semconnect cs-api (the design, made concrete)
+
+> **The gate (Coby, 2026-06-13): if 056 cannot describe EXACTLY how semconnect registers claims
+> for its entity types, the ADR is still too abstract.** This subsection runs that gate against the
+> real code (`../semconnect/gateway/cs-api/`, read 2026-06-13). It is the worked example, not an
+> abstraction — every claim cites `file:line`.
+
+semconnect's cs-api gateway writes **11 entity types** into `ENTITY_STATES` through
+`graph.mutation.entity.create_with_triples` / `update_with_triples` (`systems_post.go:27-30`).
+Under 056 each becomes one `OwnerClaim` keyed to its entity-ID glob (the per-type prefix from
+`config.go:180-190`, e.g. `c360.semconnect.systems.csapi.system.*`) enumerating its full predicate
+set. Representative registrations (the rest follow the same shape):
+
+| Entity (glob) | `OwnerClaim` predicate set (exact strings) | Write mode | Foreign-subject edge → `ForeignEdgeClaim` |
+|---|---|---|---|
+| System `…csapi.system.*` | `sensorml.process.{type,uid,label,description,position}`, `sensorml.component.isHostedBy` (own→parent) | replace-owned | YES (SensorML path only — see below) |
+| Deployment `…csapi.deployment.*` | `cs-api.deployment.{parent,deployedSystems}` + `sensorml.process.{type,uid,label,description,position}` | replace-owned | none (object-only refs) |
+| Datastream `…csapi.datastream.*` | `cs-api.datastream.{phenomenonTime,resultTime}` + `csapi.{ProducedBy,HasResultSchema}` + `sensorml.process.{label,description}` + `sosa:observedProperty` | replace-owned | none (object-only refs) |
+| SchemaArtifact `…csapi.schema.*` | `sensorml.process.type` (=`SWESchemaDocument`) | replace-owned (cs-api-created target) | none |
+
+This worked example surfaces four things the abstract design only implied — all **resolved by the
+existing mechanism**, which is exactly why the gate is passed and not failed:
+
+1. **A consumer's owned set is DOMINATED by shared vocabulary predicates, not its own namespace.**
+   cs-api's System claim is six `sensorml.*` predicates and ZERO `cs-api.*` ones; the owner is the
+   **writing component (cs-api), not the `parser/sensorml` package** whose constants it reuses
+   (`systems_post.go:209-237`). The design already supports this because a claim is
+   `(entity-ID glob × EXACT predicate string)` (Decision 1/2) — cs-api owns `sensorml.process.label`
+   *only on `…csapi.system.*`*; an input-component SensorML-ingest path owning the same predicate on
+   a **disjoint** id-glob does NOT collide. **This must be stated or a reader concludes shared
+   predicates are unownable.** (Stated here.)
+
+2. **Disjoint-id-space is the cross-producer contract, and overlap rejection is the design WORKING.**
+   If a non-cs-api SensorML-ingest path were ever configured to mint entity IDs under
+   `…csapi.system.*` AND own `sensorml.process.label` there, registration is rejected at boot
+   (Decision 2) — the correct outcome, because two producers replace-owning the same cell is the
+   dual-write 056 exists to retire. cs-api owns its id-space exclusively; that is its half of the
+   contract.
+
+3. **The SensorML child edge is the flagship `ForeignEdgeClaim` — and `isHostedBy` is owned AND
+   foreign, disambiguated by SUBJECT position.** On the GeoJSON-Feature path cs-api emits
+   `{Subject: <own System>, isHostedBy, Object: parent}` — an OWN edge to a foreign object
+   (`systems_post.go:237`), governed by the System `OwnerClaim`, its object a fourth-path reference
+   target. On the SensorML path `buildSystemTriplesFromSensorML` calls `asset.Triples()`
+   (`systems_post.go:151`), which for a `PhysicalSystem` with `Components` emits
+   `{Subject: childID, isHostedBy, Object: <System>}` — a FOREIGN-subject edge
+   (`parser/sensorml/graphable.go:124`). The same predicate is therefore in BOTH cs-api's
+   `OwnerClaim` (own→parent) and a `ForeignEdgeClaim` (child→System); they do **not** trip the
+   Owner×FE collision check (Decision 2 MEDIUM) because `partitionTriplesBySubject` files them on
+   **different subject entities** — replace-owned on the System never touches the child. The
+   `ForeignEdgeClaim` is the **no-birth referential-stub lane** (Decision 4 lane ii): the child has
+   no independent birth (sensorml defines one `EntityID()`, the parent — `graphable.go:37`) and
+   `sensorml.component.isHostedBy` carries **no registered inverse** (`predicates.go:97`,
+   `WithIRI` only), so neither the pending-edge drain nor backfill can reconstruct it — the
+   envelope-bearing stub is load-bearing.
+
+4. **Two concrete cs-api migration sites, named.** (a) The blanket replace — `replaceEntityTriples`
+   sets `RemoveTriples: uniquePredicates(current.Triples)` (`systems_crd.go:145`; same shape in the
+   PATCH paths), which today erases EVERY predicate on the entity including lifecycle/provenance/
+   inferred/foreign facts from other owners. Under 056 it becomes replace-**owned**: `RemoveTriples`
+   = the System claim's declared set (Decision 3). (b) The single-subject assumption — `ingestTriples`
+   runs `singleSubject(triples)` (`systems_post.go:317`) and **errors** on the multi-subject set a
+   rich SensorML hierarchy produces, so cs-api cannot round-trip embedded `Components` at all today;
+   the `ForeignEdgeClaim` + T2-regroup seam (Decision 4) is the path that makes it work.
+
+**Verdict: the gate is PASSED.** 056 describes semconnect's registrations exactly — one `OwnerClaim`
+per entity-type id-glob, the shared-vocabulary-owned-by-writer rule, one `ForeignEdgeClaim` for the
+SensorML child edge in no-birth-stub mode, and two named replace/ingest migration sites — without a
+single new mechanism beyond Decisions 1–4. The cs-api migration is real, per-site, and breaking-ish
+(boot-time claim failures and write-time lease failures replace silent corruption); it needs tests
+and a compatibility window, tracked as the first 056 consumer-migration.
+
+#### Second fixture — semteams (the rule/lifecycle axis semconnect didn't exercise)
+
+semconnect grounds the **gateway-write** axis (Decisions 1–4). semteams — the heaviest rule/lifecycle
+consumer — grounds the axis 056 made its strongest *unverified* claims about: Decision 5 (product
+buckets ≠ a second authoritative source) and "rules observe, don't own." A bounded two-question probe
+(`../semteams/`, read 2026-06-13):
+
+- **Q1 — dual-write / private-authoritative bucket: CLEAN.** semteams creates **no** state bucket of
+  its own. Every KV bucket it touches is a framework read-cache / work-queue / config (`PERSONAS`,
+  `FLOW_TEMPLATES`, `AGENT_LOOPS`, `RULES`, `semstreams_config`); there is **no `*_STATES`-style
+  authoritative-mirror** like semspec's `PLAN_STATES`. All entity state flows through graph-ingest.
+  Decision 5 is now grounded in a **second independent consumer**, not just asserted.
+
+- **Q2 — foreign-subject rule writes: FOUND (22 agent-run rules), and they are CORRECT — but they
+  falsified the ADR's prose, now fixed above.** The rules stamp coordination markers
+  (`agent.run.outcome`, `agent.run.handoff`, `agent.run.clarification_pending`, the per-pack
+  `*.completed`/`*.task_failed`) onto the **run entity** while firing on a different loop, then a
+  sibling rule consumes the marker and triggers the lifecycle Manager's `lifecycle_transition`
+  (`configs/rules/agent-run/04-*.json`). Phase moves **only** through the Manager; the markers are a
+  **disjoint predicate group**. This is the **multi-owned-by-predicate-group** pattern — load-bearing
+  ADR-053 coordination, not the anti-pattern — and it forced the "rules observe, don't own"
+  correction in *For the architectural identity* above (the old "cleared only because they stamp
+  their trigger entity" rationale would have wrongly flagged 22 production rules).
+
+- **semteams's migration question** (its half of the contract, for the semteams team — recorded here
+  for ground truth, not actioned): the run-marker predicate group needs a 056 classification —
+  **append-evidence exemption** (the natural fit: write-once trigger conditions, and two
+  mutually-exclusive rules can write the same marker) **or** a registered rule-pack owner. Either is
+  expressible today (Decision 2's append-evidence exemption already exists); nothing new is required.
+
+**Both fixtures pass with no Decision re-architecture.** semconnect exercised replace-owned +
+foreign-edge + the fourth-path stub; semteams exercised Decision 5 + multi-owner-per-entity + the
+rules-don't-own boundary. The only design-doc change either forced is **prose** (the shared-vocabulary
+ownership note, and the predicate-group-scoped correction to "rules observe, don't own"). The design
+center — authoritative semantic state, owned per `(entity × predicate-group)` — held against both.
+
 ### For the architectural identity
 
 KV-twofer preserved (single-revision replace, atomicity section). Facts-vs-Requests preserved.
 State ownership exclusive — **sharpened from "only graph-ingest writes" to "exactly one
-registered owner per predicate group, overlap rejected at registration."** Rules trigger, they
-don't own — a rule action writing authoritative state (vs requesting a transition through the
-owner) makes the rule a second owner and is the anti-pattern; the ADR-055 audit cleared the
-rule-engine derived-fact stamps (`actions.go:600/684/821/1353`) *only* because they stamp the
-rule's own trigger entity, which already exists (`graphable-bypass-audit.md:240-244`) — that
-clearance depends on this rule.
+registered owner per predicate group, overlap rejected at registration."**
+
+**"Rules observe, don't own" is PREDICATE-GROUP-scoped, not entity-scoped or
+trigger-entity-scoped (semteams correction).** An earlier draft cleared the rule-engine
+derived-fact stamps (`actions.go:600/684/821/1353`) *"only because they stamp the rule's own
+trigger entity"* (`graphable-bypass-audit.md:240-244`). The semteams acceptance probe (below)
+falsifies that rationale as a general principle: **22 production agent-run rules deliberately
+stamp a FOREIGN entity** — the run entity, via `$entity.triple.agent.run.entity_id`, while firing
+on a coordinator/reviewer/execute loop (`configs/rules/agent-run/05-*.json`). That is not the
+anti-pattern; it is the load-bearing ADR-053 coordination pattern. The correct invariant is
+therefore: a rule may write a predicate group on **any** entity, including one it does not own,
+**provided** (a) that group is registered to the rule pack as an owner OR is append-evidence
+(multi-writer, Decision 2 exemption), and (b) it is **disjoint** from every other owner's group on
+that entity. The actual anti-pattern is narrower and sharper: **a rule REPLACING another owner's
+owned group** — e.g. writing `agent.run.phase` directly instead of requesting the transition
+through the lifecycle Manager's `lifecycle_transition` action. semteams obeys exactly this line:
+phase moves *only* through the Manager (the registered owner), while the rule markers
+(`agent.run.outcome`, `agent.run.clarification_pending`, …) are a **disjoint coordination group**
+on the same entity, consumed by a sibling rule that then triggers the owner's transition. The run
+entity is thus **MULTI-OWNED by predicate group** (lifecycle-Manager phase + rule-pack marker
+group), which the predicate-group ownership model already expresses — "single ownership per
+entity" was never the rule; "single ownership per `(entity × predicate-group)`" always was.
 
 ## Open Questions (genuinely deferrable only — none of Decisions 1–5 or the BLOCKING fixes are here)
 

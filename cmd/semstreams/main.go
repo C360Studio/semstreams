@@ -31,6 +31,7 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
@@ -184,6 +185,29 @@ func run() error {
 	// [[feedback_verify_main_go_wire_for_sister_asks]] —
 	// half-migrated framework binaries silently break workflows.
 	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
+
+	// 10b. ADR-056 Decision 5 — attach the owner registry BEFORE Register so the
+	// agent-run workflow's claim registers through the shared OWNER_CLAIMS epoch
+	// (cross-process overlap surfaced, observe-only for the first consumer).
+	// EnsureBuckets is EAGER and deliberately here, not in graph-ingest:
+	// graph-ingest's initStorage runs only after services start
+	// (configureAndCreateServices below), long after this Register — so creating
+	// the ownership buckets there would make every registration a silent no-op.
+	// A NATS hiccup logs + skips; ownership is best-effort observe-only, never a
+	// boot gate ([[feedback_unconditional_resource_wiring_breaks_resourceless_deploys]]).
+	if ownerReg, err := ownership.EnsureBuckets(ctx, natsClient, logger); err != nil {
+		logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
+	} else {
+		// The heartbeat goroutine must stop on shutdown. `ctx` here is
+		// context.Background() (the signal-cancelled context is a downstream
+		// CHILD created in runWithSignalHandling, and a child cancelling never
+		// cancels its parent), so derive a cancellable context and cancel it as
+		// run() unwinds. Registered after natsClient.Close's defer, so by LIFO it
+		// fires FIRST — the heartbeat stops before the client closes.
+		hbCtx, hbCancel := context.WithCancel(ctx)
+		defer hbCancel()
+		svcDeps.LifecycleManager.AttachOwnership(hbCtx, ownerReg)
+	}
 
 	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
 	// the Manager is constructed so lifecycle_* actions that reference
