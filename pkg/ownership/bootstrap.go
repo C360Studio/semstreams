@@ -38,7 +38,13 @@ const ownerClaimsHistory = 10
 // PENDING_EDGES (BucketPendingEdges) is deliberately NOT created here: its
 // consumer (the Decision-4 foreign-edge buffer) is a later increment, and a
 // bucket created with no reader reads as a half-wired bug.
-func EnsureBuckets(ctx context.Context, client *natsclient.Client, logger *slog.Logger) (*Registry, error) {
+//
+// resolver is the Decision-4 inverse-gate's InverseResolver (an adapter over
+// vocabulary.GetInversePredicate, wired by the caller so this package stays free
+// of the vocabulary dependency). Pass nil to skip the gate (observe-only / read-
+// only consumers) — RegisterOwner then warns once if a would-be-gated claim is
+// registered, rather than silently admitting an unrecoverable foreign edge.
+func EnsureBuckets(ctx context.Context, client *natsclient.Client, logger *slog.Logger, resolver InverseResolver) (*Registry, error) {
 	if client == nil {
 		return nil, fmt.Errorf("ownership: EnsureBuckets requires a non-nil NATS client")
 	}
@@ -64,5 +70,7 @@ func EnsureBuckets(ctx context.Context, client *natsclient.Client, logger *slog.
 		return nil, fmt.Errorf("ownership: create %s bucket: %w", BucketOwnerPresence, err)
 	}
 
-	return NewRegistry(client.NewKVStore(claims), client.NewKVStore(presence), logger), nil
+	reg := NewRegistry(client.NewKVStore(claims), client.NewKVStore(presence), logger)
+	reg.inverseResolver = resolver
+	return reg, nil
 }

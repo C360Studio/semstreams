@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -44,6 +45,9 @@ var (
 
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
+
+	foreignEdgeUnclaimedOnce sync.Once
+	foreignEdgeUnclaimedVec  *prometheus.CounterVec
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -119,6 +123,34 @@ func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.C
 		}
 	})
 	return mutationRejectionsVec
+}
+
+// getForeignEdgeUnclaimedMetric returns the process-wide counter for the
+// ADR-056 Decision-4 T2-seam reject: a foreign-subject edge (Subject != the
+// ingested entity) whose producing (message_type, predicate) has no registered
+// ForeignEdgeClaim. For W0 increment 4a this is OBSERVE-ONLY — the edge is still
+// routed (deprecated-on-arrival); the metric counts edges CLASSIFIED-unclaimed at
+// the seam, NOT routing failures. The hard reject + the ADR-055 must-exist flip
+// are gated on this reading zero over a bake window (4c). NOTE: today no
+// production producer emits foreign edges (OMS/StoredMessage emit none), so this
+// reads zero in cmd/semstreams BY ABSENCE, not because producers migrated.
+// Labels: message_type (the dotted registry key, '_invalid' for an unregistered/
+// zero type — both bounded, closed sets) and predicate (exact vocabulary string).
+func getForeignEdgeUnclaimedMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	foreignEdgeUnclaimedOnce.Do(func() {
+		foreignEdgeUnclaimedVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "foreign_edge_unclaimed_total",
+			Help:      "Unclaimed foreign-subject (message_type,predicate) pairs at the T2-seam — no registered ForeignEdgeClaim (ADR-056 Decision 4; observe-only, edge still routed). Counted once per ingest per pair (deduped), so it is a hatch-not-empty signal, not a per-edge volume",
+		}, []string{"message_type", "predicate"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "foreign_edge_unclaimed_total", foreignEdgeUnclaimedVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(foreignEdgeUnclaimedVec)
+		}
+	})
+	return foreignEdgeUnclaimedVec
 }
 
 // Config holds configuration for graph-ingest component
@@ -217,6 +249,15 @@ func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Tripl
 	return a.component.AddTriple(ctx, triple)
 }
 
+// foreignEdgeClassifier classifies a producer's foreign-edge predicates against
+// the registered ForeignEdgeClaims (ADR-056 Decision 4): it returns the subset
+// with no covering claim. *ownership.ClaimReader is the production
+// implementation (one epoch read per call); tests inject a fake. Kept as an
+// interface so the observe-only seam is unit-testable without NATS.
+type foreignEdgeClassifier interface {
+	UnclaimedForeignEdges(ctx context.Context, producer string, predicates []string) ([]string, error)
+}
+
 // Component implements the graph-ingest processor
 type Component struct {
 	// Component metadata
@@ -233,6 +274,15 @@ type Component struct {
 	entityCache  cache.Cache[graph.EntityState] // Read-through cache for query handlers
 	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
 	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
+
+	// ADR-056 Decision-4 T2-seam: read-only view of registered ForeignEdgeClaims.
+	// nil when OWNER_CLAIMS is absent (resourceless/unmigrated deploy) — the seam
+	// then skips classification (observe-only graceful-skip). An interface so the
+	// seam is unit-testable with a fake; *ownership.ClaimReader is production.
+	// foreignEdgeWarnedKeys dedupes the one-time WARN per (message_type|predicate)
+	// so an unclaimed producer logs once, not per message.
+	claimReader           foreignEdgeClassifier
+	foreignEdgeWarnedKeys sync.Map
 
 	// Inference components
 	hierarchyInference *inference.HierarchyInference
@@ -255,6 +305,7 @@ type Component struct {
 	entitiesUpdated        prometheus.Counter
 	indexingProfileDefault *prometheus.CounterVec
 	mutationRejections     *prometheus.CounterVec
+	foreignEdgeUnclaimed   *prometheus.CounterVec
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
@@ -301,6 +352,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		entitiesUpdated:        getEntitiesUpdatedMetric(deps.MetricsRegistry),
 		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
 		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
+		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -673,6 +725,19 @@ func (c *Component) initStorage(ctx context.Context) error {
 	}
 	c.suffixCache = suffixCacheInst
 
+	// ADR-056 Decision-4 T2-seam: open OWNER_CLAIMS read-only to classify
+	// foreign-subject edges against registered ForeignEdgeClaims. graph-ingest
+	// boots AFTER main's EnsureBuckets, so in an ownership-enabled deploy the
+	// bucket exists. If it is absent (resourceless / unmigrated deploy) or
+	// transiently unopenable, graceful-skip: leave claimReader nil and the seam
+	// routes without classifying (observe-only, no behavior change).
+	if reader, err := ownership.NewClaimReader(ctx, c.natsClient, c.logger); err != nil {
+		c.logger.Info("graph-ingest: ownership claim reader unavailable — foreign-edge classification disabled this boot (observe-only seam skipped)",
+			slog.Any("error", err))
+	} else {
+		c.claimReader = reader
+	}
+
 	return nil
 }
 
@@ -947,6 +1012,11 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	// whole foreign batch; no current producer emits one, but a future
 	// multi-edge producer should not assume partial routing.
 	if len(foreign) > 0 {
+		// ADR-056 Decision-4 T2-seam (observe-only, 4a): classify each foreign
+		// edge against the registered ForeignEdgeClaims and meter the unclaimed
+		// ones. This does NOT change routing — the edges are still appended below
+		// (deprecated-on-arrival); the hard reject + must-exist flip are 4c.
+		c.classifyForeignEdges(ctx, entity.MessageType, foreign)
 		if _, failed, aerr := c.AddTriples(ctx, foreign); aerr != nil {
 			c.logger.Warn("Failed to regroup cross-entity edges onto their subjects",
 				slog.String("entity_id", entity.ID),
@@ -958,6 +1028,52 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	c.logger.Debug("Entity ingested",
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
+}
+
+// classifyForeignEdges runs the ADR-056 Decision-4 T2-seam reject in OBSERVE-ONLY
+// mode (W0 increment 4a): it classifies the foreign-subject edges' predicates
+// against the registered ForeignEdgeClaims for this producer (one epoch read) and
+// counts the unclaimed ones on foreign_edge_unclaimed_total, with a one-time WARN
+// per (message_type,predicate). It does NOT change routing — the edges are still
+// appended by the caller's AddTriples (deprecated-on-arrival). The hard reject +
+// the ADR-055 must-exist flip are 4c. No-op when no claim reader is wired
+// (graceful-skip). The metric counts edges CLASSIFIED-unclaimed at the seam, NOT
+// routing failures (relevant to 4c's hatch-empty gate semantics).
+func (c *Component) classifyForeignEdges(ctx context.Context, mt message.Type, foreign []message.Triple) {
+	if c.claimReader == nil {
+		return
+	}
+	// Producer key = the dotted registry MessageType. An invalid/zero type (a
+	// producer that registered none) cannot match an exact-producer claim; bound
+	// its metric label to "_invalid" so a malformed producer can't smear
+	// cardinality, but still classify (a Producer-empty claim may cover it).
+	producer := mt.Key()
+	label := producer
+	if !mt.IsValid() {
+		label = "_invalid"
+	}
+
+	preds := make([]string, 0, len(foreign))
+	for _, t := range foreign {
+		preds = append(preds, t.Predicate)
+	}
+	unclaimed, err := c.claimReader.UnclaimedForeignEdges(ctx, producer, preds)
+	if err != nil {
+		// Read blip — stay observe-only and fail-open (never block ingest). One
+		// log, no metric (this batch could not be classified).
+		c.logger.Warn("graph-ingest: foreign-edge claim classification failed — routing without classifying (observe-only)",
+			slog.String("message_type", label), slog.Any("error", err))
+		return
+	}
+	for _, p := range unclaimed {
+		c.foreignEdgeUnclaimed.WithLabelValues(label, p).Inc()
+		warnKey := label + "|" + p
+		if _, warned := c.foreignEdgeWarnedKeys.LoadOrStore(warnKey, struct{}{}); !warned {
+			c.logger.Warn("graph-ingest: foreign-subject edge has no registered ForeignEdgeClaim — routed deprecated-on-arrival (ADR-056 Decision 4; register a claim before the must-exist flip)",
+				slog.String("message_type", label),
+				slog.String("predicate", p))
+		}
+	}
 }
 
 // extractEntityFromMessage extracts an EntityState from a BaseMessage

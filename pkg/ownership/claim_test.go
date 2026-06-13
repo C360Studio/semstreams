@@ -2,6 +2,7 @@ package ownership
 
 import (
 	"errors"
+	"log/slog"
 	"testing"
 )
 
@@ -184,6 +185,79 @@ func TestEpoch_CompactStale(t *testing.T) {
 	}
 	if _, ok := ep.Owners["registrant"]; !ok {
 		t.Error("registrant must never be compacted (it is registering now)")
+	}
+}
+
+// A dead owner whose entry is FE-claim-ONLY is exempt from compaction: a
+// ForeignEdgeClaim is not a lease and is not heartbeat-enrolled, so reaping it
+// on liveness only makes the T2-seam reject flap. A dead owner that ALSO holds
+// an OwnerClaim is still reaped (it holds a contested cell).
+func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
+	ep := newEpoch()
+	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{fe("fe-only", "x.edge", "", EdgeNoBirthStub)}}
+	ep.Owners["mixed"] = ownerEntry{
+		Claims:       []OwnerClaim{oc("mixed", "a.b.c.d.e.f", ModeReplaceOwned, "p")},
+		ForeignEdges: []ForeignEdgeClaim{fe("mixed", "y.edge", "", EdgeStrict)},
+	}
+	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{oc("owning-dead", "a.b.c.d.e.g", ModeReplaceOwned, "p")}}
+	// A degenerate empty entry (no claims, no edges) is NOT exempt — the
+	// exemption guards FE-claim-only owners, not empties. validateStructural
+	// prevents registering one, so this is defense-in-depth.
+	ep.Owners["empty-dead"] = ownerEntry{}
+
+	// No owner has presence — all are "dead". Registrant is a fresh fifth owner.
+	evicted := ep.compactStale("registrant", map[string]struct{}{})
+
+	if _, ok := ep.Owners["fe-only"]; !ok {
+		t.Error("FE-claim-only owner must be exempt from compaction")
+	}
+	if _, ok := ep.Owners["mixed"]; ok {
+		t.Error("owner with an OwnerClaim (even alongside a foreign edge) must still be compacted when dead")
+	}
+	if _, ok := ep.Owners["owning-dead"]; ok {
+		t.Error("dead owning owner must be compacted")
+	}
+	if _, ok := ep.Owners["empty-dead"]; ok {
+		t.Error("a degenerate empty entry must still be compacted (the exemption is FE-only, not empty)")
+	}
+	// evicted names the three non-exempt owners, not the FE-only one.
+	if len(evicted) != 3 {
+		t.Fatalf("evicted = %v, want [empty-dead mixed owning-dead]", evicted)
+	}
+}
+
+// The Registry-level inverse-gate (Decision 4): with a resolver wired,
+// RegisterOwner rejects a Conditional/Backfill foreign edge lacking a registered
+// inverse; NoBirthStub/Strict pass; with NO resolver the gate is skipped
+// (observe-only fail-open). Exercises the wrapper without NATS — checkInverseGate
+// touches only the resolver + logger, not the buckets.
+func TestRegistry_checkInverseGate(t *testing.T) {
+	resolve := func(p string) (string, bool) {
+		if p == "has.inverse" {
+			return "inv.of.it", true
+		}
+		return "", false
+	}
+	withResolver := &Registry{logger: slog.Default(), inverseResolver: resolve}
+
+	condNoInv := fe("o", "no.inverse", "", EdgeConditional)
+	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condNoInv}); !errors.Is(err, ErrInvalidClaim) {
+		t.Errorf("Conditional edge without a registered inverse must fail the gate; got %v", err)
+	}
+	condWithInv := fe("o", "has.inverse", "", EdgeConditional)
+	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condWithInv}); err != nil {
+		t.Errorf("Conditional edge WITH a registered inverse must pass; got %v", err)
+	}
+	stub := fe("o", "no.inverse", "", EdgeNoBirthStub)
+	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{stub}); err != nil {
+		t.Errorf("NoBirthStub needs no inverse, must pass; got %v", err)
+	}
+
+	// No resolver wired: the gate is skipped (fail-open), even for a Conditional
+	// edge that would otherwise be rejected.
+	noResolver := &Registry{logger: slog.Default()}
+	if err := noResolver.checkInverseGate([]ForeignEdgeClaim{condNoInv}); err != nil {
+		t.Errorf("nil resolver must skip the gate (observe-only); got %v", err)
 	}
 }
 

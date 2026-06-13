@@ -39,6 +39,7 @@ import (
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 const (
@@ -239,7 +240,7 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 	// graph-ingest (which creates the other framework buckets) boots later than
 	// this wiring, so the ownership buckets must be created here. A NATS hiccup
 	// logs + skips — ownership is best-effort observe-only, never a boot gate.
-	if ownerReg, err := ownership.EnsureBuckets(ctx, svcDeps.NATSClient, svcDeps.Logger); err != nil {
+	if ownerReg, err := ownership.EnsureBuckets(ctx, svcDeps.NATSClient, svcDeps.Logger, vocabulary.InverseResolver); err != nil {
 		svcDeps.Logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
 	} else {
 		svcDeps.LifecycleManager.AttachOwnership(ctx, ownerReg)

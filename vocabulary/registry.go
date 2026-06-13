@@ -380,6 +380,16 @@ func GetInversePredicate(predicate string) string {
 	return meta.InverseOf
 }
 
+// InverseResolver reports a predicate's registered inverse in the (inverse, ok)
+// shape the ADR-056 Decision-4 inverse-gate expects (assignable to
+// ownership.InverseResolver). ok is false when no inverse is registered. Wiring
+// this into ownership.EnsureBuckets keeps pkg/ownership free of the vocabulary
+// dependency while the gate consults the real registry.
+func InverseResolver(predicate string) (inverse string, ok bool) {
+	inv := GetInversePredicate(predicate)
+	return inv, inv != ""
+}
+
 // IsRuleOpaque reports whether a predicate is marked rule-opaque.
 // Returns false for unregistered predicates so that vocabulary
 // registration is the only path to opacity — undeclared predicates

@@ -84,11 +84,34 @@ func (e *epoch) setWaiversFor(declarer string, waivers []CoordinationWaiver) {
 // for never blocking a restart on a dead owner's stale claim (Decision 2).
 func (e *epoch) compactStale(registrant string, livePresence map[string]struct{}) []string {
 	var evicted []string
-	for owner := range e.Owners {
+	for owner, entry := range e.Owners {
 		if owner == registrant {
 			continue
 		}
 		if _, live := livePresence[owner]; live {
+			continue
+		}
+		// FE-claim-only owners are exempt from liveness compaction. A
+		// ForeignEdgeClaim is NOT a lease — it contests nothing (FE×FE never
+		// overlap; the inverse-gate, not the Decision-2 overlap check, governs
+		// it), so reaping a dead FE-claim owner frees no contested cell. It is
+		// registered once at boot from a static contract and is NOT enrolled in
+		// any heartbeater (unlike a lifecycle.Manager OwnerClaim), so without this
+		// exemption its presence key TTL-expires after PresenceTTL and the next
+		// registrant evicts it — making the T2-seam reject flap (claim seen for
+		// ~120s after each boot, then gone). An owner holding ANY OwnerClaim is
+		// still reaped: those DO hold contested cells a live owner may need.
+		//
+		// KNOWN FOLLOW-UP (4b/4c): a dead FE-only owner now persists indefinitely
+		// (nothing heartbeats the projection/Bind path — only lifecycle.Manager
+		// enrolls a Heartbeater), so the cross-type check (checkOverlap #2,
+		// overlap.go) could later flag a LIVE owning-claim registrant against this
+		// DEAD FE incumbent — the "stale claim blocks a restart" shape for the
+		// OwnerClaim-vs-dead-FE direction. Not reachable today (no production FE
+		// producer; Bind has no production caller). The fix — skip dead incumbents
+		// in the cross-type check, heartbeat-enroll FE owners, or declare FE claims
+		// permanent-until-resign — is a 4b/4c decision.
+		if len(entry.Claims) == 0 && len(entry.ForeignEdges) > 0 {
 			continue
 		}
 		evicted = append(evicted, owner)

@@ -19,7 +19,7 @@ func TestIntegration_EnsureBuckets_ConfigAndUsable(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	ctx := context.Background()
 
-	r, err := EnsureBuckets(ctx, tc.Client, nil)
+	r, err := EnsureBuckets(ctx, tc.Client, nil, nil)
 	if err != nil {
 		t.Fatalf("EnsureBuckets: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestIntegration_EnsureBuckets_ConfigAndUsable(t *testing.T) {
 	}
 	// EnsureBuckets is idempotent — a second call (a second process) returns a
 	// working Registry over the same buckets and sees the first's claim.
-	r2, err := EnsureBuckets(ctx, tc.Client, nil)
+	r2, err := EnsureBuckets(ctx, tc.Client, nil, nil)
 	if err != nil {
 		t.Fatalf("EnsureBuckets (2nd): %v", err)
 	}
