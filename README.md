@@ -136,6 +136,12 @@ The graph builds situational awareness; rules and agents close the loop.
 Two core patterns power this:
 - **Graphable** — Your types become graph entities ([docs](docs/basics/03-graphable-interface.md))
 - **Payload Registry** — Messages serialize with type discrimination ([docs](docs/concepts/15-payload-registry.md))
+- **Governed Semantic State** — Shared graph facts declare who may replace them, who may append evidence, and how
+  cross-entity edges are handled ([docs](docs/concepts/28-governed-semantic-state.md))
+
+`Graphable` is enough for simple fact ingestion. Domains with multiple writers, lifecycle state, regulated audit, or
+agentic automation also need ownership for stateful predicate groups. That keeps `ENTITY_STATES` queryable without
+letting unrelated components silently overwrite each other's facts.
 
 ## Progressive Capabilities
 

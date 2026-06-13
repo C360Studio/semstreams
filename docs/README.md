@@ -48,6 +48,7 @@
 - [Rules Engine](advanced/06-rules-engine.md) - Condition-based actions
 - [Community Detection](concepts/07-community-detection.md) - LPA algorithm
 - [Query Access](concepts/11-query-access.md) - GraphQL and MCP gateway
+- [Governed Semantic State](concepts/28-governed-semantic-state.md) - Ownership for shared graph facts
 
 ## Vocabulary & Standards
 

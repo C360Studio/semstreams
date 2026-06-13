@@ -102,6 +102,19 @@ Entities stored in NATS KV with version tracking:
 }
 ```
 
+### Governed Semantic State
+
+For single-writer ingestion, triples can simply be merged into the entity. For shared graph state, SemStreams treats
+predicate groups as owned state: a component declares which predicates it may replace, which facts it only appends as
+evidence, and which cross-entity edges it can produce.
+
+This matters for domains where graph facts are operational state, not just observations: lifecycle phases, resource
+PATCH/PUT fields, command status, mission progress, quality records, topology, or agent-written findings. The graph
+remains the queryable audit trail, while the write contract prevents unrelated components from silently overwriting each
+other.
+
+See [Governed Semantic State](../concepts/28-governed-semantic-state.md) for the contract.
+
 ### Indexes
 
 **Core Indexes** (always available):
