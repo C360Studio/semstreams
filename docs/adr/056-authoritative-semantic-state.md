@@ -174,6 +174,24 @@ shape.
   batches), so this is a behavioural no-op today and the foundation semconnect builds on when it drops
   `singleSubject` (`systems_post.go:317`, a migration guard for the previously-missing framework
   support, NOT the desired architecture). See the "Lane-independence correction" note under Decision 4.
+- **W0 4b fourth-path fold landed — envelope-bearing referential stub (re-evaluated WITH the consumer
+  correction).** `ensureReferencedEntityExists`'s envelope-less stub `Put` is promoted to a
+  first-class envelope-bearing artifact: `MessageType = core.identity.stub.v1` + a
+  `core.identity.stub_owner` triple (the reachable SOURCE `MessageType`; the ADR's "producer's
+  `ForeignEdgeClaim` `MessageType`" was unreachable at this seam — corrected above). The stub stays
+  PROFILE-LESS, so `MergeEntity`'s true-birth detection (profile-absence keyed) is intact — directly
+  unit-tested (`TestReferentialStub_RealMergeStillDetectsTrueBirth`, the architect's flagged risk).
+  This is the lane-ii fold ONLY; the `PENDING_EDGES`/lane-i buffer is still deferred, and the
+  re-evaluation against the semconnect-consumer correction CONFIRMS that's right: cs-api's single
+  `POST /systems` references the no-birth child via the parent's own `hosts` edge, so the stub
+  materializes it BEFORE `routeForeignEdges` lands the foreign `isHostedBy` — no future-birth drain
+  (lane-i) is triggered. This fold is what makes cs-api's no-birth children survive the eventual
+  must-exist flip (4c). **E2E coverage gap (tracked, gated to 4c):** no e2e tier drives a production
+  Graphable through the fourth path today (OMS relationship objects are IRIs, not entity IDs; mission
+  uses literal-string objects), so the stub-shape change is unit + integration covered but not yet
+  e2e-exercised end-to-end. Closing it (a relationship-target-bearing e2e fixture) is a prerequisite
+  for the 4c must-exist flip, NOT for this additive fold — the fold keeps auto-vivify working, so it
+  does not change observable behaviour for any current path.
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
@@ -1286,13 +1304,21 @@ ADR-055's "no ownerless births" closing move is **incomplete** until it accounts
 > not horn (b) (remove the lane), because removal would dangle sensorml's child edge forever
 > (no birth to drain, no registered inverse to backfill). Concretely, the referential-stub creator
 > (`ensureReferencedEntityExists`) stamps the stub `EntityState` with a framework semantic envelope
-> — `MessageType = core.identity.stub`, domain `core` / category `identity` / version, the same
-> discriminator shape the payload registry uses — and records the CREATING owner (the producer's
-> registered `ForeignEdgeClaim` `MessageType`) in a `core.identity.stub_owner` triple alongside the
-> existing `core.identity.referenced_by`. The stub is therefore **NOT "an envelope-less ownerless
-> stub that silently survives the flip"**; it is a NAMED framework birth lane (the referential-
-> integrity producer) whose creation is AUTHORIZED by a registered `ForeignEdgeClaim` declaring
-> `edge-mode` with the **must-exist EXEMPTION** in ADR-055's flip text. The exemption is bounded to
+> — `MessageType` from the framework stub family (`{Domain: core, Category: identity.stub, Version:
+> v1}`, Key `core.identity.stub.v1`), the same discriminator shape the payload registry uses — and
+> records the referencing producer in a `core.identity.stub_owner` triple alongside the existing
+> `core.identity.referenced_by`. **Implementation precision (4b fold landed — the cited code wins,
+> 056:34):** the original prose said `stub_owner` is "the producer's registered `ForeignEdgeClaim`
+> `MessageType`," but that is NOT reachable at this seam — `ensureReferencedEntityExists` holds only
+> the target id + the SOURCE `EntityState`'s `MessageType` (the entity that referenced it), never a
+> `ForeignEdgeClaim`. So `stub_owner` records the reachable SOURCE `MessageType` (`referencedByType.Key()`);
+> an untyped source (a gateway that does not stamp `Entity.MessageType`, e.g. cs-api today) attributes
+> to the framework referential producer (`graph-ingest-referential-integrity`). The stub also stays
+> **profile-less** so a real producer's later merge is still detected as the entity's true birth
+> (`reconcileIndexingProfile` keys on profile-absence). The stub is therefore **NOT "an envelope-less
+> ownerless stub that silently survives the flip"**; it is a NAMED framework birth lane (the
+> referential-integrity producer) carrying a valid envelope, eligible for the **must-exist EXEMPTION**
+> in ADR-055's flip text. The exemption is bounded to
 > no-birth targets whose producer registered that `edge-mode` claim — declared, not a blanket
 > carve-out: a foreign edge whose producer registered NO no-birth claim still trips the
 > unclaimed-foreign reject (Decision 4 BLOCKING-B) and never reaches the stub lane.
