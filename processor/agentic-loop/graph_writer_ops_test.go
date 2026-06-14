@@ -81,7 +81,7 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 		// the loop entity from KV which carries BOTH spawn-time and
 		// completion-time triples; simulate the same union here.
 		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
-		allTriples = append(allTriples, buildSpawnIdentityTriples(entityID, spawnTask, testOrg, testPlatform)...)
+		allTriples = append(allTriples, buildSpawnTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		if r.outcome == "success" {
 			event := &agentic.LoopCompletedEvent{
 				LoopID:      r.loopID,
@@ -247,7 +247,7 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 		entityID := testLoopEntityID(r.loopID)
 		// gh#159: role is now spawn-stamped; mirror production flow.
 		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
-		allTriples = append(allTriples, buildSpawnIdentityTriples(entityID, spawnTask, testOrg, testPlatform)...)
+		allTriples = append(allTriples, buildSpawnTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		event := &agentic.LoopCompletedEvent{
 			LoopID:      r.loopID,
 			TaskID:      "task-" + r.loopID,

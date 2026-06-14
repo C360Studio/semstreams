@@ -846,12 +846,17 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
 
-	// Stamp the loop's canonical identity triples (parent, role, task,
-	// workflow, workflow_step, user, description) at spawn time so
-	// rules + tools observe them throughout the loop's lifetime, not
-	// just after completion. gh#159 — closes the agent.loop.outcome
-	// vs agent.loop.parent race that made ADR-046 Phase 1's example-
-	// fan-out reference pattern unwritable for real-LLM consumers.
+	// Birth the loop-execution entity via create_with_triples (ADR-056 4c-pre-1):
+	// gives the entity a typed MessageType envelope and a proper origin contract
+	// instead of the old triple.add_batch auto-vivify path.
+	//
+	// WriteSpawnIdentity returns an error on genuine birth failure (not
+	// already-exists — idempotent re-spawn is fine). A failed birth means graph
+	// semantics are NOT intact for this loop: subsequent completion/failure/
+	// trajectory writes would reference an entity the ownership substrate cannot
+	// attribute. We treat this as a hard precondition failure and halt the loop
+	// so it enters a clean failure state rather than silently producing
+	// unattributed graph mutations.
 	//
 	// Stamp cross-arc lineage triples (Metadata[MetadataKeyRelatedLoops]
 	// set by rule.executePublishAgent from rule.Action.RelatedLoops)
@@ -859,7 +864,13 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 	// read both families via the existing $entity.triple.<predicate>
 	// substitution. No-op when the producer didn't set RelatedLoops.
 	if c.graphWriter != nil {
-		c.graphWriter.WriteSpawnIdentity(ctx, result.LoopID, task)
+		if err := c.graphWriter.WriteSpawnIdentity(ctx, result.LoopID, task); err != nil {
+			c.logger.Error("graph_writer: loop-execution entity birth failed — halting loop spawn",
+				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+			entity, _ := c.handler.GetLoop(result.LoopID)
+			c.handleLoopFailure(ctx, result.LoopID, entity, "spawn_identity_birth_failed", err)
+			return
+		}
 		if rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops].(map[string]any); ok {
 			c.graphWriter.WriteLineageTriples(ctx, result.LoopID, rawLineage)
 		}
