@@ -600,6 +600,31 @@ func TestWriteSpawnIdentity_NilTask_Integration(t *testing.T) {
 	}
 }
 
+// ADR-056 4c-pre-1: missing platform identity is a graceful SKIP (return nil,
+// no request), NOT a birth failure — there is no valid 6-part entity ID to
+// build, so there is nothing to birth. Matches every sibling graph-write method
+// and the nil-client / nil-task / empty-triples guards. Regression guard: a
+// missing-platform error here would hard-halt every loop in a degenerate/test
+// config (the CI failure that surfaced this).
+func TestWriteSpawnIdentity_MissingPlatformSkipsWithoutError_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	responder := &createWithTriplesResponder{}
+	responder.subscribe(t, ctx, tc.Client)
+
+	// Empty PlatformMeta — no org/platform → no valid entity ID.
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{})
+	task := &agentic.TaskMessage{TaskID: "task-noplat", Role: "researcher"}
+
+	if err := w.WriteSpawnIdentity(ctx, "loop-noplat", task); err != nil {
+		t.Errorf("missing platform identity must be a graceful skip (nil), got error: %v", err)
+	}
+	if got := len(responder.getReceived()); got != 0 {
+		t.Errorf("missing platform identity must send zero create_with_triples requests, got %d", got)
+	}
+}
+
 func TestWriteLoopCancellation_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()

@@ -552,13 +552,17 @@ func buildLineageTriples(loopEntityID string, related map[string]any) []message.
 // Idempotency: an already-exists response is treated as success — re-spawn
 // and retry are safe (the entity is born either way).
 //
-// Returns an error on genuine birth failure. The caller MUST NOT proceed
-// as if graph semantics are intact when an error is returned — the loop
-// must be halted. The pre-4c-pre-1 best-effort-Warn behaviour is now a
-// hard precondition at the call site.
+// Returns an error ONLY on genuine birth failure (the create_with_triples
+// round-trip — transport error, a non-idempotent failure, or an EntityExists
+// that is not our typed origin). The caller MUST NOT proceed as if graph
+// semantics are intact when an error is returned — the loop must be halted.
+// The pre-4c-pre-1 best-effort-Warn behaviour is now a hard precondition at
+// the call site, but ONLY for that birth-failure class.
 //
-// Nil natsClient or nil task are no-ops (return nil), matching the previous
-// caller guards.
+// No-op skips (return nil), matching the previous caller guards and every
+// sibling graph-write method: nil natsClient, nil task, empty triples, and
+// missing platform identity (no valid 6-part entity ID to build → nothing to
+// birth). These are NOT failures and MUST NOT halt the loop.
 func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) error {
 	if w.natsClient == nil {
 		return nil
@@ -566,10 +570,18 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 	if task == nil {
 		return nil
 	}
+	// Platform identity missing = there is no valid 6-part entity ID to build,
+	// so there is NOTHING to birth — a graceful skip, NOT a birth failure. This
+	// matches every sibling graph-write method (WriteSyntheticDecide /
+	// WriteModelEndpoints / WriteLoopCompletion / WriteLoopFailure /
+	// WriteTrajectory all Warn+return here) and the nil-client / nil-task /
+	// empty-triples guards above. An ERROR from this method is reserved for a
+	// genuine birth FAILURE (the create_with_triples round-trip below); only
+	// that halts the loop at the caller.
 	if w.platform.Org == "" || w.platform.Platform == "" {
 		w.logger.Warn("graph_writer: cannot write spawn identity, platform identity missing",
 			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return fmt.Errorf("spawn identity: platform identity missing (org=%q platform=%q)", w.platform.Org, w.platform.Platform)
+		return nil
 	}
 
 	entity := &agentic.LoopExecutionEntity{
