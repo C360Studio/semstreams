@@ -660,14 +660,12 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	// unchanged.
 	if req.ExpectedRevision > 0 {
 		resp, err := c.handleEntityUpdateWithTriplesCAS(ctx, &req)
-		// Route foreign edges only when the CAS call returned no transport error.
-		// A LOGICAL CAS failure (revision mismatch) returns (errorBytes, nil), so
-		// this would route foreign on a primary that did not land — harmless today
-		// because foreign is empty for every current caller (the lifecycle Manager's
-		// CAS deltas are single-subject).
-		// TODO(4b): gate on resp.Success (or a typed revision-mismatch sentinel) so
-		// a real foreign-edge producer never orphans an edge onto a failed-CAS primary.
-		if err == nil {
+		// Route foreign edges ONLY when the CAS primary write actually COMMITTED.
+		// A logical CAS failure (revision mismatch) returns (Success=false, nil
+		// err), so gating on err==nil alone would orphan a foreign edge onto a
+		// primary that never landed. Gate on the decoded Success; the unmarshal is
+		// skipped on the no-foreign-edge happy path (every current caller).
+		if err == nil && len(foreign) > 0 && casUpdateCommitted(resp) {
 			c.routeForeignEdges(ctx, req.Entity.ID, foreign)
 		}
 		return resp, err
@@ -771,6 +769,17 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		TriplesRemoved: triplesRemoved,
 		Version:        int64(stored.Version),
 	})
+}
+
+// casUpdateCommitted reports whether a handleEntityUpdateWithTriplesCAS response
+// represents an actually-committed primary write. The CAS handler returns
+// (Success=false, nil err) on a logical revision mismatch, so the shared-seam
+// foreign-edge routing must gate on this decoded Success — not on err==nil — or a
+// stale-CAS request carrying a foreign edge would orphan it onto a primary that
+// never landed (ADR-056 Decision 4).
+func casUpdateCommitted(resp []byte) bool {
+	var r graph.UpdateEntityWithTriplesResponse
+	return json.Unmarshal(resp, &r) == nil && r.Success
 }
 
 // handleEntityUpdateWithTriplesCAS is the CAS-on-condition branch of
