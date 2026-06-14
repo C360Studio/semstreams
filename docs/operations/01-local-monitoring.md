@@ -78,6 +78,21 @@ Access dashboards: Grafana sidebar > Dashboards > SemStreams folder.
 
 Index types: `predicate`, `incoming`, `outgoing`, `alias`, `spatial`, `temporal`, `structural`, `embedding`, `community`.
 
+### Graph-Ingest Ownership / Foreign Edges (ADR-056)
+
+| Metric | Description | Useful query |
+|--------|-------------|--------------|
+| `semstreams_graph_ingest_foreign_edge_unclaimed_total{message_type,predicate}` | Foreign-subject edges (Subject ≠ the written entity) classified at the graph-ingest write boundary with **no registered `ForeignEdgeClaim`** for the producing `(message_type, predicate)` | `sum by (message_type, predicate) (increase(semstreams_graph_ingest_foreign_edge_unclaimed_total[1h]))` → which producers emit unclaimed foreign edges |
+
+**What it means.** When a producer writes a relationship edge whose Subject is a *different* entity than the one it owns (e.g. a SensorML `isHostedBy` edge from a child component onto its parent system), graph-ingest classifies it against the registered foreign-edge claims at the shared write boundary (fact-arrival *and* the mutation API). This counter increments — once per `(message_type, predicate)` per ingest — when no claim covers it. It is **observe-only today**: the edge is still routed to its subject (deprecated-on-arrival); nothing is dropped or rejected.
+
+**How to read it.**
+
+- **Zero = healthy** — either no producer emits foreign edges, or every foreign-edge producer has registered its `ForeignEdgeClaim` (the migrated/conformant state). A conformant gateway (e.g. semconnect cs-api once it registers its `isHostedBy` claim + stamps `Entity.MessageType`) reads zero here.
+- **Non-zero = a producer is emitting foreign edges without a declared claim.** Action: that producer registers a `ForeignEdgeClaim` (via a `projection.Contract` bound at boot) for the named `(message_type, predicate)`. If `message_type` shows as `_invalid`, the producer is not stamping `Entity.MessageType` on its mutation requests — a prerequisite for the claim to match.
+
+**Why it matters.** A future release adds a HARD reject for unclaimed foreign edges (the ADR-055 must-exist closing move). That flip is gated on this counter reading **zero over a bake window**, so a non-zero value is the pre-flip migration signal: it names exactly which producers must register claims before strict enforcement turns on. Watch it after any new foreign-edge-emitting producer ships.
+
 ### Rules Engine
 
 | Metric | Description |

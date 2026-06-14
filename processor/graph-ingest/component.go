@@ -1596,7 +1596,7 @@ func (c *Component) ensureRelationshipTargetsExist(ctx context.Context, entity *
 				return
 			}
 
-			if err := c.ensureReferencedEntityExists(ctx, id, entity.ID); err != nil {
+			if err := c.ensureReferencedEntityExists(ctx, id, entity.ID, entity.MessageType); err != nil {
 				c.logger.Debug("failed to ensure referenced entity exists",
 					slog.String("target", id),
 					slog.String("referenced_by", entity.ID),
@@ -1608,43 +1608,60 @@ func (c *Component) ensureRelationshipTargetsExist(ctx context.Context, entity *
 	wg.Wait()
 }
 
-// ensureReferencedEntityExists creates a stub entity if the referenced entity doesn't exist.
-// This is a fallback mechanism to guarantee referential integrity - if an entity references
-// another entity by ID, that entity must exist in the graph.
-func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, referencedBy string) error {
+// Referential-integrity stub identity (ADR-056 Decision 4 lane-ii). The stub is
+// the framework's no-birth referential producer: a referenced target with no
+// independent producer (e.g. sensorml/cs-api children, only ever referenced via
+// a parent's hierarchy) is materialized here. The stub is now a FIRST-CLASS,
+// ENVELOPE-BEARING artifact — it carries stubMessageType so the ADR-055
+// "no envelope-less ownerless births" invariant is literally true — but it stays
+// PROFILE-LESS so MergeEntity still detects the real producer's later merge as
+// the entity's true birth (reconcileIndexingProfile keys on profile-absence,
+// component.go:1414-1419).
+var stubMessageType = message.Type{Domain: "core", Category: "identity.stub", Version: "v1"}
+
+const (
+	predStubMarker        = "core.identity.stub"
+	predStubReferencedBy  = "core.identity.referenced_by"
+	predStubOwner         = "core.identity.stub_owner"
+	stubReferentialSource = "graph-ingest-referential-integrity"
+)
+
+// ensureReferencedEntityExists creates a stub entity if the referenced entity
+// doesn't exist — the referential-integrity guarantee that a referenced ID
+// always resolves to a node (ADR-056 Decision 4 lane-ii). referencedByType is
+// the MessageType of the entity that referenced it (the reachable producer
+// identity at this seam); the ADR's "the producer's registered ForeignEdgeClaim
+// MessageType" is NOT reachable here (we hold only the source entity, not a
+// claim), so the stub records the source type — or, for an untyped source (a
+// gateway that does not stamp MessageType), the framework referential producer.
+func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, referencedBy string, referencedByType message.Type) error {
 	// Check if entity already exists
 	_, err := c.entityBucket.Get(ctx, entityID)
 	if err == nil {
 		return nil // Entity exists, nothing to do
 	}
 
-	// Entity doesn't exist - create a stub.
+	stubOwner := stubReferentialSource
+	if referencedByType.IsValid() {
+		stubOwner = referencedByType.Key()
+	}
+
+	// Entity doesn't exist - create an envelope-bearing stub.
 	// Version is set to 1 to match the invariant held by every other
 	// EntityState write path (see component.go:872, messagemanager/
 	// processor.go:276, datamanager/manager.go:792). When the real entity
-	// later arrives, the merge path increments Version to 2.
+	// later arrives, the merge path increments Version to 2 and overwrites
+	// MessageType with the real producer's (component.go:1410).
 	now := time.Now()
 	stub := &graph.EntityState{
-		ID:        entityID,
-		Version:   1,
-		UpdatedAt: now,
+		ID:          entityID,
+		Version:     1,
+		UpdatedAt:   now,
+		MessageType: stubMessageType,
 		Triples: []message.Triple{
-			{
-				Subject:    entityID,
-				Predicate:  "core.identity.stub",
-				Object:     true,
-				Source:     "graph-ingest-referential-integrity",
-				Timestamp:  now,
-				Confidence: 1.0,
-			},
-			{
-				Subject:    entityID,
-				Predicate:  "core.identity.referenced_by",
-				Object:     referencedBy,
-				Source:     "graph-ingest-referential-integrity",
-				Timestamp:  now,
-				Confidence: 1.0,
-			},
+			{Subject: entityID, Predicate: predStubMarker, Object: true, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: predStubReferencedBy, Object: referencedBy, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: predStubOwner, Object: stubOwner, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
 		},
 	}
 
@@ -1657,9 +1674,10 @@ func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, 
 		return fmt.Errorf("store stub entity: %w", err)
 	}
 
-	c.logger.Debug("created stub entity for referential integrity",
+	c.logger.Debug("created envelope-bearing referential-integrity stub",
 		slog.String("entity_id", entityID),
-		slog.String("referenced_by", referencedBy))
+		slog.String("referenced_by", referencedBy),
+		slog.String("stub_owner", stubOwner))
 
 	return nil
 }
