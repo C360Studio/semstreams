@@ -44,6 +44,39 @@ enforcement rule under it (see "How ADR-055 narrows under this parent"). The
 cryptographic-provenance follow-up is scoped (not designed) in
 [ADR-057](057-cryptographic-provenance.md).
 
+### v6 → v6.1: rule packs are a config-level projection producer (gh#278; additive, no Decision re-architecture)
+
+semteams (the Decision-5 acceptance-fixture consumer) mapped its full rule-pack exposure and
+surfaced a producer class Decision 6's derivation chain did not yet reach: the rule engine's triple
+actions. All rule triple actions are on the legacy bare-triple lane (`graph.mutation.triple.add` /
+`.remove`, `processor/rule/triple_mutator.go:17-18`) and NONE can declare ownership — yet a rule pack
+can legitimately OWN a coordination predicate group (the ADR-053 HITL `*_pending` markers,
+`autoresearch.best.value`). This amendment NAMES that class and corrects two framings; it adds NO new
+model (the `projection.Contract` + `pkg/ownership` substrate already accommodate it — `Contract.Validate`
+requires only a logical `Name` + ≥1 group, `MessageType` is optional, `pkg/projection/contract.go`) and
+re-architects no Decision:
+
+- **Decision 6a (new subsection)** — a rule pack is a config-level projection producer: it may declare
+  `projection.Contract`s beside its rule definitions and `Bind` them at rule-pack load under a stable
+  subject-safe owner id `rule-pack.<pack-id>` (the `validOwnerID` charset `[A-Za-z0-9._=-]`,
+  `pkg/ownership/glob.go:21` — NOT a colon, NOT a `RuleToken` hash; the owner id is compared and keyed
+  as the canonical string). Two packs claiming the same cell collide via the same epoch-CAS overlap
+  check as any owner — no parallel registry.
+- **Decision 4 flip-gate gets a bare-triple-lane precondition (Fix part 6)** — for a product rule pack
+  that stamps a framework-born entity via `triple.add`, the flip signal is
+  `mutation_rejections_total{subject="graph.mutation.triple.add", reason="entity_not_found"}` reading
+  zero over a bake window + product e2e (anchors born before markers), NOT `foreign_edge_unclaimed_total`
+  (a bare `triple.add` never enters the foreign-edge classifier — Lane-independence correction). Note the
+  live metric is `mutation_rejections_total` (`processor/graph-ingest/component.go:111-126`); the
+  `unregistered_authoritative_write_total` counter named in the upstream feedback does NOT exist today
+  (it is Decision-5 enforcement surface, not yet built).
+- Two SEPARATE follow-up increments (named here, not designed): the rule-pack contract-binding wiring,
+  and a single declared `replace-owned` rule action (`update_with_triples`, scoped to contract-declared
+  owned predicates — NOT `cas-transition`; phase stays with the lifecycle `Manager`). `add_triple` is
+  unchanged (append-evidence, must-exist after the flip).
+
+Status stays **Accepted**: additive, grounded in code read 2026-06-14, no BLOCKING.
+
 ### v5 → v6: post-merge review thread closed (2 P1 + 1 P2; no architectural change)
 
 ADR-056 merged to main (PR #270) at Status Proposed. The pre-Accept review raised three findings,
@@ -1208,6 +1241,30 @@ verifiable**:
 > reject means a producer is still on the hatch, and flipping must-exist then would hard-break that
 > producer's foreign edges. The gate is hatch-EMPTY, not hatch-EXISTS.**
 
+**Fix part 6 — the bare-triple-lane (product rule-pack) flip precondition (gh#278, semteams).** The
+hatch-empty gate above covers the FOREIGN-EDGE lane (the T2-seam classifier). It does NOT cover the
+OTHER producer whose writes the must-exist flip touches: product rule packs whose triple actions write
+bare `graph.mutation.triple.add` onto framework-born entities (loop-execution, plan-loop). A bare
+`triple.add` never enters the foreign-edge classifier (Lane-independence correction, 056:34), so
+`foreign_edge_unclaimed_total` is the WRONG signal for it — that counter reads zero by structure while
+the flip would still hard-break a rule pack whose target anchor is not yet born-first. The precondition
+for THIS lane is:
+
+> For every product rule pack that stamps a framework-born entity via `triple.add`:
+> 1. the target anchor's OWN birth lane is migrated to a born-first path (e.g. loop-execution via
+>    4c-pre-1's `create_with_triples` birth), AND
+> 2. `mutation_rejections_total{subject="graph.mutation.triple.add", reason="entity_not_found"}`
+>    reads **zero over a bake window** (the existing metric, `processor/graph-ingest/component.go:111-126`
+>    — `reason` is the `MutationResponse` ErrorCode; post-flip a `triple.add` to an absent entity
+>    surfaces as `reason=entity_not_found`), AND
+> 3. a targeted product e2e proves every marker's anchor entity EXISTS before the marker write fires.
+>
+> NOT `unregistered_authoritative_write_total` (a Decision-5 enforcement counter that does not exist
+> today); the live signal is `mutation_rejections_total{reason=entity_not_found}`.
+
+The flip is declared safe only when BOTH the foreign-edge gate (parts 1–4) AND this bare-triple-lane
+precondition hold — never from the framework producers' view alone.
+
 **Why "single-revision-atomic drain with birth" is STRUCK (BLOCKING-B fix, the atomicity
 strike).** v3's gate clause (3) required the pending edges to apply *in the same revision that
 births the target*. That is **physically impossible**: `ENTITY_STATES` and `PENDING_EDGES` are
@@ -1574,6 +1631,86 @@ This decision does **not** change `pkg/ownership` (the W0 spine is correctly sub
 constrains the **layer above** it. The projection-contract type and the boot-time derivation are a
 named deliverable of the enforcement-wiring increment, and graph-ingest enforces what derivation
 registers. The spine's `RegisterOwner` is the seam both the derivation and the escape hatch call.
+
+#### Decision 6a — Rule packs are a config-level projection producer (gh#278, semteams)
+
+Decision 6's derivation chain enters via **payload-type registration** ("a Graphable optionally
+declares a projection contract"). There is a THIRD producer shape that is neither a payload-typed
+Graphable nor a gateway resource: the **rule engine's triple actions**. semteams mapped its full
+rule-pack exposure and found the gap precisely:
+
+- **Every** rule triple action is on the legacy **bare-triple lane** and **none can declare
+  ownership** (subject consts `processor/rule/triple_mutator.go:17-18`; the executor switch + the
+  non-atomic `update_triple` = remove-then-add at `processor/rule/actions.go:848`):
+
+  | Rule action | Path | Graph-ingest write semantics |
+  |---|---|---|
+  | `add_triple` | `triple.add` | append-evidence (auto-vivifies today; must-exist after the flip) |
+  | `remove_triple` | `triple.remove` | CAS-destructive (removes all triples for the predicate) |
+  | `update_triple` | `triple.remove` then `triple.add` | **non-atomic** remove-plus-add, two revisions, no `ExpectedRevision` |
+
+- So a rule pack that legitimately OWNS a coordination predicate group has **no place in Decision 6's
+  derivation model and no atomic owned-write lane**. The clearable-coordination class lives on the
+  non-atomic `update_triple` today (a reader between the two revisions sees no value; two writers race
+  with no conflict detection — the ADR-055 §4 smell).
+
+A rule pack is a **permanent config-level producer class**, not a payload type and not a gateway
+resource. This decision NAMES it inside Decision 6's chain. It adds **no new model**: the
+`projection.Contract` type already carries a logical `Name` (not only a payload `MessageType`) and an
+owner bound at `Bind` time, and `Contract.Validate` requires only `Name` + at least one predicate group
+— `MessageType` is optional (`pkg/projection/contract.go`). What is missing is the **wiring**.
+
+**The two write-classes (semteams's classification, confirmed).** Rule-written predicate groups split
+by actual lifecycle, and only the second class is in scope:
+
+1. **Write-once append-evidence** — set once, never cleared; multi-writer-safe; genuinely unowned
+   (Decision 1 already exempts these, no change). E.g. `agent.run.outcome` (terminal scalar),
+   `agent.run.handoff`, `*.completed` markers. These keep using `add_triple` (append-evidence).
+   They are NOT exempt from the flip, though: a write-once marker stamped on a **framework-born
+   anchor** (loop-execution, plan-loop) is still flip-exposed via that ANCHOR's birth lane (the
+   marker write hard-fails if the anchor is not born-first) — see Decision 4, Fix part 6,
+   precondition (1). The append semantics are unchanged; the exposure is the anchor's existence.
+2. **Clearable coordination / current-state** — set then removed, or replaced; a SINGLE writer pack;
+   presence/value is current-state, not accumulating evidence. E.g. the ADR-053 HITL
+   `*_pending`/`*_resumed` markers (set then cleared on reply), `autoresearch.iteration.pending`,
+   `autoresearch.best.value` (a running max). These are **owned coordination state** managed today with
+   non-atomic remove / remove-plus-add and zero ownership registration.
+
+**The decision (three parts; the model is unchanged, the wiring + one action are new):**
+
+- **Rule packs declare and `Bind` `projection.Contract`s at rule-pack load**, under a stable
+  subject-safe owner id `rule-pack.<pack-id>` — `<pack-id>` constrained to `validOwnerID`'s charset
+  `[A-Za-z0-9._=-]` (`pkg/ownership/glob.go:21`), so the separator is a **dot, not a colon**
+  (`rule-pack:<pack>` is not a valid NATS KV key), and the owner id is the **canonical string, not a
+  `RuleToken` hash**. Two packs claiming the same cell then collide via `ownership.RegisterOwner`
+  against the live epoch exactly like any other owner — **no parallel registry, no drift**. (Wiring is
+  a follow-up increment: rule-pack config declares contracts beside the rule definitions and binds them
+  via `projection.Bind(ctx, reg, "rule-pack.<pack-id>", contracts...)` at load.)
+- **One declared `replace-owned` rule action** emits `update_with_triples` (atomic
+  replace-by-(subject,predicate)), valid **only** for predicates a bound contract declares the pack
+  owns. It writes under the bound owner identity and carries the `OwnerToken` once that write-lease
+  field lands (deferred — `pkg/ownership/doc.go`). The clearable-coordination class migrates onto this
+  action; `add_triple` is unchanged for the write-once class.
+- **Scope red line — NOT a state-machine substrate.** The action is `replace-owned`, **not**
+  `cas-transition`: a rule has no real target revision to condition on, and phase transitions stay with
+  the lifecycle `Manager` via `lifecycle_transition`. Rules must not become a parallel state-machine
+  runtime — consistent with the retired `processor/reactive/` and the no-DSL / no-state-machine-runtime
+  rule (CLAUDE.md). The generator/action COMPILES to ownership claims + an owned-write; it does not
+  introduce a new executor.
+
+**Object-token discipline for rule-written edges (gh#278 Finding D).** A rule that stamps an object
+which is an entity REFERENCE must use `$entity.id` (the full 6-part entity ID,
+`processor/rule/execution_context.go:179`), **not** `$entity.instance` (the bare instance segment —
+the 6th part only; `processor/rule/entity_substitution.go:55-56`).
+The two are distinct tokens: `$entity.id` is the whole address, `$entity.org`/`…`/`$entity.instance` are
+the individual parts, and `$entity.triple.<predicate>` resolves to a triple object on the entity. Mixing
+them — one marker stamping a full ref, a sibling stamping the bare segment — forces consumers to
+normalize and has broken run-resume in practice. Rule authors emitting entity references should default
+to `$entity.id`.
+
+**Sequencing.** This subsection NAMES the producer class + the conventions + the flip-gate signal (Fix
+part 6, Decision 4). The **contract-binding wiring** and the **`replace-owned` action** are two separate,
+independently-reviewed follow-up increments — not designed here.
 
 ### The CQRS boundary, made explicit
 
