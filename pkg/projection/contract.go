@@ -174,3 +174,28 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 	}
 	return ownerReg.RegisterOwner(ctx, registration)
 }
+
+// BindAndHeartbeat is Bind plus liveness enrollment for a STATIC projection owner
+// — one registered once at boot for the whole process lifetime (a graph-writer, a
+// rule pack), as opposed to a lifecycle.Manager workflow owner (which the Manager
+// enrolls into its own heartbeater). A static owner that derives a real OwnerClaim
+// MUST heartbeat: RegisterOwner bumps its OWNER_PRESENCE key once at registration,
+// but without ongoing heartbeats that key ages out after ownership.PresenceTTL and
+// the next registrant compacts the claim out of the epoch — the FE-only compaction
+// exemption (epoch.go) does NOT cover an owning claim.
+//
+// Enrollment happens ONLY on a successful Bind: a rejected/overlapping owner holds
+// no recorded claim to keep alive. A nil hb binds without enrolling (caller opted
+// out of liveness, e.g. FE-only owners). The caller owns the Heartbeater's lifetime
+// — build it once at the composition root (ownerReg.NewHeartbeater), run it on a
+// shutdown-cancelled context (go hb.Run(ctx)), and pass it here for every static
+// owner it binds.
+func BindAndHeartbeat(ctx context.Context, ownerReg *ownership.Registry, hb *ownership.Heartbeater, owner string, contracts ...Contract) error {
+	if err := Bind(ctx, ownerReg, owner, contracts...); err != nil {
+		return err
+	}
+	if hb != nil {
+		hb.Add(owner)
+	}
+	return nil
+}

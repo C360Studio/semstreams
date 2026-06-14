@@ -217,7 +217,15 @@ func run() error {
 		// origin predicates on every loop-execution entity (*.*.agent.agentic-loop.execution.*)
 		// in replace-owned mode. Best-effort: a registration failure logs a warning
 		// but does not block boot — ownership is observe-only, never a boot gate.
-		if err := projection.Bind(ctx, ownerReg, "agentic-loop-graph-writer",
+		//
+		// Static projection owners (not lifecycle.Manager workflows) need their OWN
+		// heartbeater: they derive a real OwnerClaim, so without ongoing heartbeats
+		// their OWNER_PRESENCE key ages out after PresenceTTL and the next registrant
+		// compacts the claim out of the epoch (Codex review of #277). Run on hbCtx so
+		// the ticker stops on shutdown; the one-shot Bind itself uses ctx.
+		staticOwnerHB := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+		go staticOwnerHB.Run(hbCtx)
+		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
 			logger.Warn("ownership: loop-execution projection contract registration failed",
 				slog.Any("error", err))
