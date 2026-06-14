@@ -250,7 +250,16 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 
 		// ADR-056 4c-pre-1: register the loop-execution entity projection contract.
 		// Mirrors cmd/semstreams wiring — best-effort, never a boot gate.
-		if err := projection.Bind(ctx, ownerReg, "agentic-loop-graph-writer",
+		//
+		// Static projection owners (not lifecycle.Manager workflows) need their OWN
+		// heartbeater: they derive a real OwnerClaim, so without ongoing heartbeats
+		// their OWNER_PRESENCE key ages out after PresenceTTL and the next registrant
+		// compacts the claim out of the epoch (Codex review of #277). ctx here is the
+		// shutdown-cancellable context (hbCtx, threaded from run()), so the ticker
+		// stops on shutdown.
+		staticOwnerHB := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+		go staticOwnerHB.Run(ctx)
+		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
 			svcDeps.Logger.Warn("ownership: loop-execution projection contract registration failed",
 				slog.Any("error", err))

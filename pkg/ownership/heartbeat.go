@@ -65,6 +65,16 @@ func (h *Heartbeater) Add(owner string) {
 	h.owners[owner] = struct{}{}
 }
 
+// IsEnrolled reports whether owner is currently enrolled for heartbeating.
+// Enrollment is the property that keeps a live owner's OWNER_PRESENCE key fresh
+// (and therefore its claim compaction-safe); used by observability and tests.
+func (h *Heartbeater) IsEnrolled(owner string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.owners[owner]
+	return ok
+}
+
 // snapshot copies the enrolled owner set under lock for lock-free tick iteration.
 func (h *Heartbeater) snapshot() []string {
 	h.mu.Lock()

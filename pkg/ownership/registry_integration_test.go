@@ -189,6 +189,45 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 	}
 }
 
+// TestRegistry_HeartbeatedOwnerSurvivesCompaction is the inverse of
+// TestRegistry_StaleCompaction and the durability property the static-projection
+// heartbeat fix depends on (Codex review of #277): an owner whose presence key
+// ages out but is RE-BUMPED (as a live owner's Heartbeater does each tick) is NOT
+// compacted by the next registrant. owner-a holds a real OwnerClaim, so it is not
+// covered by the FE-only compaction exemption — heartbeating is the only thing
+// keeping its claim alive.
+func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
+	r, claims, ctx := newTestRegistry(t)
+	entity := "c360.semconnect.systems.csapi.system.drone-001"
+
+	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "p")); err != nil {
+		t.Fatal(err)
+	}
+	// owner-a's presence key ages out (TTL expiry, sans wait)...
+	if err := r.Resign(ctx, "owner-a"); err != nil {
+		t.Fatalf("resign owner-a: %v", err)
+	}
+	// ...but owner-a is still ALIVE: its Heartbeater re-bumps the presence key.
+	if err := r.Heartbeat(ctx, "owner-a"); err != nil {
+		t.Fatalf("heartbeat owner-a: %v", err)
+	}
+
+	// owner-b registers on a DISJOINT cell, triggering a compaction sweep.
+	// owner-a's presence is live again → it must survive.
+	if err := r.RegisterOwner(ctx, reg("owner-b", depPat, "p")); err != nil {
+		t.Fatalf("register owner-b: %v", err)
+	}
+
+	ep := readEpoch(t, claims, ctx)
+	if _, ok := ep.Owners["owner-a"]; !ok {
+		t.Error("heartbeated owner-a must NOT be compacted out of the epoch")
+	}
+	owner, ok, _ := r.OwnerOf(ctx, entity, "p")
+	if !ok || owner != "owner-a" {
+		t.Errorf("owner-a should still own its cell, got %q,%v", owner, ok)
+	}
+}
+
 // TestRegistry_ConcurrentDisjoint proves the single-epoch CAS serializes
 // concurrent registrants with no lost update: N disjoint owners registered in
 // parallel all land in the epoch.
