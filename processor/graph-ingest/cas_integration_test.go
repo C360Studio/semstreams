@@ -343,3 +343,81 @@ func TestIntegration_CASRetryBehavior(t *testing.T) {
 			"all triples should be present; ADR-054 profile stamp excluded")
 	})
 }
+
+// TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign locks the ADR-056
+// Decision-4 invariant that routeForeignEdges runs ONLY after the primary commit
+// succeeds — on the CAS lane too. A stale ExpectedRevision fails the primary
+// update_with_triples; the foreign edge it carried must NOT be routed onto the
+// child subject (the bug: routing on err==nil instead of decoded Success).
+func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
+	ctx := context.Background()
+	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+
+	config := DefaultConfig()
+	configJSON, err := json.Marshal(config)
+	require.NoError(t, err)
+	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	require.NoError(t, c.Initialize())
+	require.NoError(t, c.Start(ctx))
+	defer func() { _ = c.Stop(5 * time.Second) }()
+	time.Sleep(100 * time.Millisecond)
+
+	const parentID = "c360.test.seam.cas.system.001"
+	const childID = "c360.test.seam.cas.child.001"
+
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
+		ID: parentID, Version: 1, UpdatedAt: time.Now(),
+		Triples: []message.Triple{{Subject: parentID, Predicate: "system.label", Object: "P", Timestamp: time.Now(), Confidence: 1}},
+	}))
+
+	foreignEdge := message.Triple{Subject: childID, Predicate: "child.isHostedBy", Object: parentID, Timestamp: time.Now(), Confidence: 1}
+
+	t.Run("stale_revision_does_not_route_foreign", func(t *testing.T) {
+		req := graph.UpdateEntityWithTriplesRequest{
+			Entity: &graph.EntityState{ID: parentID},
+			AddTriples: []message.Triple{
+				{Subject: parentID, Predicate: "system.note", Object: "n", Timestamp: time.Now(), Confidence: 1}, // own
+				foreignEdge, // foreign
+			},
+			ExpectedRevision: 9999, // stale → CAS fails
+		}
+		data, _ := json.Marshal(req)
+		respData, err := c.handleEntityUpdateWithTriples(ctx, data)
+		require.NoError(t, err)
+		var resp graph.UpdateEntityWithTriplesResponse
+		require.NoError(t, json.Unmarshal(respData, &resp))
+		require.False(t, resp.Success, "stale-revision CAS must fail")
+
+		// The failed primary write must NOT have routed the foreign edge — the
+		// child was never created.
+		_, getErr := c.entityBucket.Get(ctx, childID)
+		assert.ErrorIs(t, getErr, natsclient.ErrKVKeyNotFound,
+			"foreign edge must NOT be routed when the CAS primary write failed")
+	})
+
+	t.Run("correct_revision_routes_foreign", func(t *testing.T) {
+		_, rev, err := c.fetchEntityState(ctx, parentID)
+		require.NoError(t, err)
+		req := graph.UpdateEntityWithTriplesRequest{
+			Entity:           &graph.EntityState{ID: parentID},
+			AddTriples:       []message.Triple{foreignEdge},
+			ExpectedRevision: rev, // current → CAS succeeds
+		}
+		data, _ := json.Marshal(req)
+		respData, err := c.handleEntityUpdateWithTriples(ctx, data)
+		require.NoError(t, err)
+		var resp graph.UpdateEntityWithTriplesResponse
+		require.NoError(t, json.Unmarshal(respData, &resp))
+		require.True(t, resp.Success, "current-revision CAS must succeed: %s", resp.Error)
+
+		// On success the foreign edge IS routed onto the child.
+		entry, getErr := c.entityBucket.Get(ctx, childID)
+		require.NoError(t, getErr, "foreign edge must be routed onto the child when the CAS primary write committed")
+		var child graph.EntityState
+		require.NoError(t, json.Unmarshal(entry.Value, &child))
+		assert.True(t, hasPredicate(&child, "child.isHostedBy"))
+	})
+}

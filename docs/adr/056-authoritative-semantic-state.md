@@ -160,6 +160,20 @@ shape.
   SensorML ingest path is separate, larger work. (2) The metric counts edges **CLASSIFIED-unclaimed
   at the seam**, NOT routing failures (it fires before `AddTriples`' all-or-nothing batch), which is
   the semantics 4c's gate must assume.
+- **Shared projection-normalization seam landed — 4a RELOCATED, lane-independence corrected (Coby,
+  post-4a).** The 4a hook lived only on the fact-arrival `ingestEntity` lane, so its zero metric did
+  NOT prove "no consumer" — it proved the observation point missed the **mutation API**, which is how
+  the framework's real consumers write (semconnect cs-api `POST /systems` → `create_with_triples`;
+  semteams rules → `triple.add`). The "no production producer" caveat above is corrected: it was a
+  fact-arrival-only artefact. The fix is one **shared `normalizeProjection`** seam (partition against
+  the primary subject + classify foreign edges) called from `ingestEntity`, `create_with_triples`,
+  AND `update_with_triples` (bare `triple.add` stays a direct ownership-checked write to its subject,
+  not a foreign-edge producer, until the request grows origin context). A foreign edge sent via the
+  mutation API is now partitioned off the primary (no longer misfiled onto `Entity.ID`), classified,
+  and routed onto its own subject — for every current caller `foreign` is empty (single-subject
+  batches), so this is a behavioural no-op today and the foundation semconnect builds on when it drops
+  `singleSubject` (`systems_post.go:317`, a migration guard for the previously-missing framework
+  support, NOT the desired architecture). See the "Lane-independence correction" note under Decision 4.
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
@@ -949,12 +963,36 @@ wire-level caller must *opt in* to removal by sending a non-nil set.
 > legitimate cross-entity write (a `ForeignEdgeClaim`, Decision 1) that may RACE the target's
 > birth. It does NOT ride the owner-reconcile contract (it is not the writer's owned state),
 > and it must NOT silently vanish under must-exist. The framework enforces this at the
-> ONE seam every foreign edge already flows through — the T2-regroup foreign-routing path —
-> NOT at claim registration (which a no-claim Graphable like sensorml bypasses): a
-> foreign-subject triple with no registered `ForeignEdgeClaim` is rejected at the seam. The
-> edge survives a restart (KV-backed `PENDING_EDGES` buffer) and is reconstructable (the
-> inverse-gate). ADR-055's closing-move flip (delete auto-vivify) is GATED on this contract
-> shipping.**
+> SHARED projection-normalization seam every graph-ingest write path passes through before the
+> `ENTITY_STATES` mutation — fact-arrival Graphable ingestion AND the mutation API
+> (`create_with_triples`/`update_with_triples`) — NOT at claim registration (which a no-claim
+> producer bypasses) and NOT on the fact-arrival lane alone (which the real gateway consumers,
+> writing via the mutation API, bypass): a foreign-subject triple with no registered
+> `ForeignEdgeClaim` is rejected at the seam, on whichever lane it arrives. The edge survives a
+> restart (KV-backed `PENDING_EDGES` buffer) and is reconstructable (the inverse-gate). ADR-055's
+> closing-move flip (delete auto-vivify) is GATED on this contract shipping.**
+
+> **Lane-independence correction (post-4a, the cited code wins — 056:34).** An earlier draft called
+> the fact-arrival `ingestEntity`/T2-regroup path "the ONE seam every foreign edge already flows
+> through." That is FALSE: it is the one seam every *Graphable* foreign edge flows through, but the
+> framework's real consumers are GATEWAYS (semconnect cs-api `POST /systems`, semteams rules) that
+> write through the **mutation API** (`graph.mutation.entity.create_with_triples` /
+> `update_with_triples` / `triple.add`), which never reached `ingestEntity` and so were classified by
+> nothing. A foreign edge sent via `create_with_triples` was silently MISfiled onto the request's
+> primary `Entity.ID` (cs-api's `singleSubject()` guard, `systems_post.go:317`, is a *migration
+> guard* for this missing support, not the desired architecture). The mutation API is a graph WRITE
+> API, not a bypass; it must participate in the same projection/ownership/foreign-edge enforcement.
+> The canonical seam is therefore **not `ingestEntity`** — it is the **shared projection-
+> normalization step** (`normalizeProjection`, `processor/graph-ingest/component.go`) that
+> partitions a projected triple set against its primary subject and classifies the foreign-subject
+> edges, called from EVERY write path that accepts projected triples (fact-arrival ingestEntity,
+> `create_with_triples`, `update_with_triples`; bare `triple.add` is a direct write to
+> `Triple.Subject`, ownership-checked per (subject,predicate), and is NOT treated as a foreign-edge
+> producer unless the request grows explicit origin/projection context). 4a's observe-only
+> classification reruns inside this shared seam (lane-independent). Once mutation-lane normalization
+> exists, cs-api drops `singleSubject` for registered foreign-edge projections — its blocked
+> SensorML-hierarchy round-trip is the immediate consumer, making the "no producer" reading a
+> fact-arrival-only artefact, not a real absence of consumers.**
 
 The problem must-exist creates: today these edges auto-vivify the target if it is absent. Two
 live sources:
@@ -979,26 +1017,31 @@ live sources:
   and the least-observable of the two (container) has no metric at all, which strengthens the
   case that this is a correctness bug, not a degradation knob.**
 
-**The enforcement seam is T2-regroup, not claim-registration (BLOCKING-B fix part 1 — the core
-bypass).** v3 placed the inverse-gate on `ForeignEdgeClaim` REGISTRATION. But registration is
-not on the path a raw foreign triple takes: `ingestEntity` calls `partitionTriplesBySubject`
-(`component.go:1031-1040`), which classifies **any** triple whose `Subject != entity.ID` as
-foreign by pure string comparison, then routes the whole foreign batch via `AddTriples`
-(`component.go:950`) — **with no claim lookup whatsoever.** A Graphable that never registers a
-`ForeignEdgeClaim` flows straight through. sensorml is exactly this: it emits
-`{Subject: childID, Predicate: PredIsHostedBy, Object: parentID}`
-(`parser/sensorml/graphable.go:122-125`) as part of the *parent's* Graphable, registers **no**
-claim, and its `isHostedBy` edge is routed at the seam — so v3's registration-time gate
-**never sees it.** The flagship motivating edge bypassed the flagship fix.
+**The enforcement seam is the SHARED projection-normalization step, not claim-registration
+(BLOCKING-B fix part 1 — the core bypass) and not one lane (the lane-independence correction
+above).** v3 placed the inverse-gate on `ForeignEdgeClaim` REGISTRATION. But registration is not on
+the path a raw foreign triple takes: every graph-ingest write path that accepts projected triples
+calls `normalizeProjection` (`processor/graph-ingest/component.go`), which classifies **any** triple
+whose `Subject != primaryID` as foreign by pure string comparison, then `routeForeignEdges` routes
+the whole foreign batch via `AddTriples` — **with no claim lookup gating it.** A producer that never
+registers a `ForeignEdgeClaim` flows straight through. sensorml is exactly this on the fact-arrival
+lane: it emits `{Subject: childID, Predicate: PredIsHostedBy, Object: parentID}`
+(`parser/sensorml/graphable.go:122-125`) as part of the *parent's* Graphable, registers **no** claim,
+and its `isHostedBy` edge is routed at the seam — so v3's registration-time gate **never sees it.**
+And cs-api emits the same edge on the MUTATION lane (`create_with_triples`), which v3's gate — and
+4a's fact-arrival-only hook — also never saw. The flagship motivating edge bypassed the flagship fix,
+on every lane.
 
-**Fix: make the T2-regroup foreign-routing path THE enforcement seam.** The classification at
-`component.go:917-955,1031-1040` is exactly where a foreign edge is *recognized as foreign*, so
-it is exactly where the claim contract must bind:
+**Fix: make the SHARED projection-normalization step THE enforcement seam — `normalizeProjection`,
+called from `ingestEntity`, `create_with_triples`, AND `update_with_triples` (bare `triple.add`
+stays a direct ownership-checked write to its subject).** That step is exactly where a foreign edge
+is *recognized as foreign* on any lane, so it is exactly where the claim contract must bind:
 
-> **A Graphable that emits a foreign-subject triple MUST have declared that predicate as a
-> `ForeignEdgeClaim`, validated at boot the same way payload registration is. At the
-> T2-regroup seam, a foreign-subject triple whose `(message_type, predicate)` has NO registered
-> `ForeignEdgeClaim` covering the producer is the REJECT** — counted on a
+> **A producer that emits a foreign-subject triple MUST have declared that predicate as a
+> `ForeignEdgeClaim`, validated at boot the same way payload registration is. At the shared
+> projection-normalization seam — on whichever lane the write arrives (fact-arrival Graphable
+> ingestion OR the mutation API) — a foreign-subject triple whose `(message_type, predicate)` has
+> NO registered `ForeignEdgeClaim` covering the producer is the REJECT** — counted on a
 > `foreign_edge_unclaimed_total{message_type,predicate}` metric, dropped-loud, never silently
 > routed.
 
@@ -1781,7 +1824,17 @@ existing mechanism**, which is exactly why the gate is passed and not failed:
    = the System claim's declared set (Decision 3). (b) The single-subject assumption — `ingestTriples`
    runs `singleSubject(triples)` (`systems_post.go:317`) and **errors** on the multi-subject set a
    rich SensorML hierarchy produces, so cs-api cannot round-trip embedded `Components` at all today;
-   the `ForeignEdgeClaim` + T2-regroup seam (Decision 4) is the path that makes it work.
+   the `ForeignEdgeClaim` + the shared projection-normalization seam (Decision 4, now lane-independent
+   — it covers cs-api's `create_with_triples` lane, not just fact-arrival) is the path that makes it
+   work. **Migration rider (open question, named for the fixture):** dropping `singleSubject` is
+   necessary but not sufficient — the seam keys the foreign-edge claim lookup + the metric on
+   `req.Entity.MessageType`, and cs-api's `createEntityWithTriples` builds the request with a
+   MessageType-less `&graph.EntityState{ID, Triples}` (`systems_post.go:321`). A zero MessageType is
+   metered as `message_type="_invalid"` and can only match a `Producer:""` (any-producer) claim, never
+   cs-api's exact-producer `ForeignEdgeClaim`. So the cs-api migration MUST also STAMP a non-zero
+   `Entity.MessageType` (the cs-api System producer type it registers its claim under) on its mutation
+   requests, or its foreign edges read as unclaimed forever. This belongs in the semconnect migration
+   fixture explicitly.
 
 **Verdict: the gate is PASSED.** 056 describes semconnect's registrations exactly — one `OwnerClaim`
 per entity-type id-glob, the shared-vocabulary-owned-by-writer rule, one `ForeignEdgeClaim` for the
