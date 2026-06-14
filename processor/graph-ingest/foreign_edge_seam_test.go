@@ -11,13 +11,18 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/ownership"
 )
 
 // fakeClassifier is an injected foreignEdgeClassifier for unit-testing the
-// observe-only T2-seam (ADR-056 Decision 4) without NATS. It records what the
-// seam asked and returns a configured unclaimed set.
+// T2-seam (ADR-056 Decision 4) without NATS. It records what the seam asked and
+// returns a configured unclaimed set + per-predicate EdgeMode. A predicate
+// absent from `modes` is reported UNCLAIMED by ForeignEdgeMode (ok=false), so
+// the observe-only seam tests (which configure only `unclaimed`) keep routing
+// unchanged.
 type fakeClassifier struct {
-	unclaimed   map[string]bool // predicate -> reported unclaimed
+	unclaimed   map[string]bool               // predicate -> reported unclaimed (UnclaimedForeignEdges)
+	modes       map[string]ownership.EdgeMode // predicate -> covering mode (ForeignEdgeMode; absent = unclaimed)
 	err         error
 	gotProducer string
 	gotPreds    []string
@@ -36,6 +41,15 @@ func (f *fakeClassifier) UnclaimedForeignEdges(_ context.Context, producer strin
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeClassifier) ForeignEdgeMode(_ context.Context, producer, predicate string) (ownership.EdgeMode, bool, error) {
+	f.gotProducer = producer
+	if f.err != nil {
+		return "", false, f.err
+	}
+	m, ok := f.modes[predicate]
+	return m, ok, nil
 }
 
 // The seam meters an unclaimed foreign edge, leaves a claimed one quiet, never

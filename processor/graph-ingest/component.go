@@ -48,6 +48,9 @@ var (
 
 	foreignEdgeUnclaimedOnce sync.Once
 	foreignEdgeUnclaimedVec  *prometheus.CounterVec
+
+	foreignEdgeDroppedOnce sync.Once
+	foreignEdgeDroppedVec  *prometheus.CounterVec
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -153,6 +156,35 @@ func getForeignEdgeUnclaimedMetric(registry *metric.MetricsRegistry) *prometheus
 	return foreignEdgeUnclaimedVec
 }
 
+// getForeignEdgeDroppedMetric returns the process-wide counter for foreign edges
+// the routing seam DROPPED rather than routed (ADR-056 Decision-4 4c-pre-2). It
+// is DISTINCT from foreign_edge_unclaimed_total on purpose: that counter is the
+// flip-gate's hatch-empty signal (a CLAIMED-as-unclaimed pair); this counter
+// meters a *claimed* edge that could not be routed because its target was absent
+// and its mode forbade materialising it. Folding the two would corrupt the
+// flip-gate reading (a Strict drop would keep the hatch counter non-zero for an
+// unrelated reason). Labels: message_type ('_invalid' for an unregistered/zero
+// type), predicate (exact vocabulary string), and reason — a bounded closed set:
+// 'strict_absent_target' (EdgeStrict, target absent) and 'conditional_deferred'
+// (EdgeConditional/EdgeBackfill, routed-with-warn until the PENDING_EDGES buffer
+// lands).
+func getForeignEdgeDroppedMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	foreignEdgeDroppedOnce.Do(func() {
+		foreignEdgeDroppedVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "foreign_edge_dropped_total",
+			Help:      "Foreign-subject edges dropped or deferred at the routing seam by claim mode (ADR-056 Decision 4). Labels: message_type, predicate, reason (strict_absent_target|conditional_deferred). DISTINCT from foreign_edge_unclaimed_total (the hatch-empty flip-gate signal)",
+		}, []string{"message_type", "predicate", "reason"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "foreign_edge_dropped_total", foreignEdgeDroppedVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(foreignEdgeDroppedVec)
+		}
+	})
+	return foreignEdgeDroppedVec
+}
+
 // Config holds configuration for graph-ingest component
 type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -250,12 +282,16 @@ func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Tripl
 }
 
 // foreignEdgeClassifier classifies a producer's foreign-edge predicates against
-// the registered ForeignEdgeClaims (ADR-056 Decision 4): it returns the subset
-// with no covering claim. *ownership.ClaimReader is the production
-// implementation (one epoch read per call); tests inject a fake. Kept as an
-// interface so the observe-only seam is unit-testable without NATS.
+// the registered ForeignEdgeClaims (ADR-056 Decision 4). UnclaimedForeignEdges
+// returns the subset with no covering claim (the observe-only seam metric);
+// ForeignEdgeMode returns one predicate's covering EdgeMode so the routing seam
+// can branch (NoBirthStub→stub, Strict→drop, Conditional/Backfill→deferred).
+// *ownership.ClaimReader is the production implementation (one epoch read per
+// call); tests inject a fake. Kept as an interface so the seam is unit-testable
+// without NATS.
 type foreignEdgeClassifier interface {
 	UnclaimedForeignEdges(ctx context.Context, producer string, predicates []string) ([]string, error)
+	ForeignEdgeMode(ctx context.Context, producer, predicate string) (ownership.EdgeMode, bool, error)
 }
 
 // Component implements the graph-ingest processor
@@ -306,6 +342,7 @@ type Component struct {
 	indexingProfileDefault *prometheus.CounterVec
 	mutationRejections     *prometheus.CounterVec
 	foreignEdgeUnclaimed   *prometheus.CounterVec
+	foreignEdgeDropped     *prometheus.CounterVec
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
@@ -353,6 +390,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
 		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
 		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
+		foreignEdgeDropped:     getForeignEdgeDroppedMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -995,7 +1033,7 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 		return
 	}
 
-	c.routeForeignEdges(ctx, entity.ID, foreign)
+	c.routeForeignEdges(ctx, entity.ID, entity.MessageType, foreign)
 
 	c.logger.Debug("Entity ingested",
 		slog.String("entity_id", entity.ID),
@@ -1034,14 +1072,134 @@ func (c *Component) normalizeProjection(ctx context.Context, primaryID string, m
 	return own, foreign
 }
 
-// routeForeignEdges appends foreign-subject edges onto their own subjects via the
+const (
+	// invalidMessageTypeLabel bounds the metric label for a producer that
+	// registered no/zero MessageType — it cannot match an exact-producer claim,
+	// so it gets a single bounded label rather than smearing cardinality.
+	invalidMessageTypeLabel = "_invalid"
+	// dropReasonStrictAbsent — an EdgeStrict foreign edge dropped because its
+	// target was absent (the target must pre-exist by causal ordering).
+	dropReasonStrictAbsent = "strict_absent_target"
+	// dropReasonConditionalDeferred — an EdgeConditional/EdgeBackfill foreign
+	// edge routed-with-warn pending the PENDING_EDGES buffer increment.
+	dropReasonConditionalDeferred = "conditional_deferred"
+)
+
+// foreignTargetExists reports whether a foreign-edge target entity already
+// exists, so routeForeignEdges can decide stub-vs-append-vs-drop WITHOUT relying
+// on AddTriples' auto-vivify else-branch (which the ADR-055 must-exist flip
+// later removes). A transient read error fails toward the LESS destructive
+// outcome — treat as "exists" so the edge is APPENDED (matching today's
+// best-effort behaviour) rather than DROPPED; a Strict drop on a read blip would
+// lose a legitimately-present edge. TOCTOU note: a concurrent DeleteEntity
+// between this Get and the AddTriples append is benign WHILE auto-vivify is
+// present (the append re-vivifies); the flip increment makes the post-check
+// append must-exist and owns closing that window.
+func (c *Component) foreignTargetExists(ctx context.Context, subject string) bool {
+	if _, err := c.entityBucket.Get(ctx, subject); err == nil {
+		return true
+	} else if natsclient.IsKVNotFoundError(err) {
+		return false
+	}
+	return true
+}
+
+// routeForeignEdges regroups foreign-subject edges onto their own subjects after
+// the primary commit (ADR-056 Decision 4). It is best-effort and called AFTER
+// the primary write succeeds — a failed edge is logged, not fatal to the primary
+// write that already landed.
+//
+// 4c-pre-2 replaces the old bare-AddTriples append with a per-edge must-exist
+// policy: for an absent target it branches on the covering ForeignEdgeClaim's
+// EdgeMode — NoBirthStub materialises the framework's referential-integrity stub
+// then appends (the only thing that ever births the sensorml-child target;
+// load-bearing especially on the update_with_triples lane, which — unlike the
+// fact-arrival/create_with_triples lanes — does NOT run ensureRelationshipTargetsExist
+// upstream); Strict drops the edge loudly (metric + one-time WARN); an UNCLAIMED
+// edge stays routed deprecated-on-arrival so the hatch-empty flip-gate can still
+// drain it; Conditional/Backfill are deferred to a later increment (PENDING_EDGES
+// buffer) and route-with-warn in the interim. A present target always appends,
+// regardless of mode. When no claim reader is wired (resourceless/unmigrated
+// deploy) the seam graceful-skips to the legacy bare append.
+//
+// mt is the producer identity (entity.MessageType) for the claim lookup + metric
+// label. AddTriples validates the batch all-or-nothing, so one malformed edge
+// drops the whole appended batch; no current producer emits one.
+func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, mt message.Type, foreign []message.Triple) {
+	if len(foreign) == 0 {
+		return
+	}
+
+	// Graceful-skip: with no registered-claim view we cannot resolve modes, so
+	// fall back to the legacy bare append (preserves the observe-only contract on
+	// a resourceless/unmigrated deploy).
+	if c.claimReader == nil {
+		c.appendForeignEdges(ctx, primaryID, foreign)
+		return
+	}
+
+	label := mt.Key()
+	if !mt.IsValid() {
+		label = invalidMessageTypeLabel
+	}
+
+	toAppend := make([]message.Triple, 0, len(foreign))
+	for _, edge := range foreign {
+		// Present target: append regardless of mode. The own existence check
+		// makes this correct both before and after the flip removes auto-vivify.
+		if c.foreignTargetExists(ctx, edge.Subject) {
+			toAppend = append(toAppend, edge)
+			continue
+		}
+
+		mode, claimed, err := c.claimReader.ForeignEdgeMode(ctx, mt.Key(), edge.Predicate)
+		if err != nil {
+			// Read blip — fail-open (never block routing), route deprecated-on-arrival.
+			c.logger.Warn("graph-ingest: foreign-edge mode lookup failed — routing edge anyway (observe-only fail-open)",
+				slog.String("message_type", label), slog.String("predicate", edge.Predicate), slog.Any("error", err))
+			toAppend = append(toAppend, edge)
+			continue
+		}
+
+		switch {
+		case !claimed:
+			// UNCLAIMED + absent: the deprecated-on-arrival hatch. Stay routed so
+			// foreign_edge_unclaimed_total (metered upstream in classifyForeignEdges)
+			// can still reach zero over the flip-gate bake window.
+			toAppend = append(toAppend, edge)
+		case mode == ownership.EdgeNoBirthStub:
+			// Backstop: materialise the envelope-bearing stub then append. Idempotent
+			// (no-op if the upstream ensureRelationshipTargetsExist already won the race).
+			if serr := c.ensureReferencedEntityExists(ctx, edge.Subject, primaryID, mt); serr != nil {
+				c.logger.Warn("graph-ingest: no-birth-stub materialisation failed — routing edge anyway (target may dangle)",
+					slog.String("message_type", label), slog.String("predicate", edge.Predicate),
+					slog.String("target", edge.Subject), slog.Any("error", serr))
+			}
+			toAppend = append(toAppend, edge)
+		case mode == ownership.EdgeStrict:
+			// Loud-drop: a Strict edge's target must pre-exist by causal ordering.
+			c.foreignEdgeDropped.WithLabelValues(label, edge.Predicate, dropReasonStrictAbsent).Inc()
+			c.warnForeignEdgeDropOnce(dropReasonStrictAbsent, label, edge)
+			// NOT appended.
+		case mode == ownership.EdgeConditional || mode == ownership.EdgeBackfill:
+			// DEFERRED to the PENDING_EDGES increment. No live producer reaches here
+			// today; route-with-warn (keeps auto-vivify) so it is observable, not silent.
+			c.foreignEdgeDropped.WithLabelValues(label, edge.Predicate, dropReasonConditionalDeferred).Inc()
+			c.warnForeignEdgeDropOnce(dropReasonConditionalDeferred, label, edge)
+			toAppend = append(toAppend, edge)
+		default:
+			// Unknown/forward-compat mode: treat as hatch, route-with-warn.
+			toAppend = append(toAppend, edge)
+		}
+	}
+
+	c.appendForeignEdges(ctx, primaryID, toAppend)
+}
+
+// appendForeignEdges routes a foreign-edge batch onto its subjects via the
 // evidence-append path (AddTriples = append-by-subject, no MessageType restamp),
-// deprecated-on-arrival (observe-only; the hard reject + Conditional pending
-// buffer are 4b/4c). Best-effort and called AFTER the primary commit succeeds —
-// a failed edge is logged, not fatal to the primary write that already landed.
-// AddTriples validates the batch all-or-nothing, so one malformed foreign edge
-// drops the whole foreign batch; no current producer emits one.
-func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, foreign []message.Triple) {
+// logging a partial failure without failing the primary write.
+func (c *Component) appendForeignEdges(ctx context.Context, primaryID string, foreign []message.Triple) {
 	if len(foreign) == 0 {
 		return
 	}
@@ -1051,6 +1209,21 @@ func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, for
 			slog.Int("failed_subjects", len(failed)),
 			slog.Any("error", aerr))
 	}
+}
+
+// warnForeignEdgeDropOnce logs a one-time WARN per (reason, message_type,
+// predicate), deduped via foreignEdgeWarnedKeys with a distinct "fe-drop|" prefix
+// so it never collides with classifyForeignEdges' unclaimed-WARN keys.
+func (c *Component) warnForeignEdgeDropOnce(reason, label string, edge message.Triple) {
+	warnKey := "fe-drop|" + reason + "|" + label + "|" + edge.Predicate
+	if _, warned := c.foreignEdgeWarnedKeys.LoadOrStore(warnKey, struct{}{}); warned {
+		return
+	}
+	c.logger.Warn("graph-ingest: foreign-subject edge dropped/deferred at routing seam (ADR-056 Decision 4)",
+		slog.String("message_type", label),
+		slog.String("predicate", edge.Predicate),
+		slog.String("target", edge.Subject),
+		slog.String("reason", reason))
 }
 
 // classifyForeignEdges runs the ADR-056 Decision-4 T2-seam reject in OBSERVE-ONLY
@@ -1073,7 +1246,7 @@ func (c *Component) classifyForeignEdges(ctx context.Context, mt message.Type, f
 	producer := mt.Key()
 	label := producer
 	if !mt.IsValid() {
-		label = "_invalid"
+		label = invalidMessageTypeLabel
 	}
 
 	preds := make([]string, 0, len(foreign))

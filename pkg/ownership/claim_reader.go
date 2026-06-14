@@ -80,6 +80,34 @@ func (cr *ClaimReader) UnclaimedForeignEdges(ctx context.Context, producer strin
 	return unclaimed, nil
 }
 
+// ForeignEdgeMode returns the EdgeMode of the ForeignEdgeClaim covering a
+// foreign-subject triple emitted by `producer` carrying `predicate` — the
+// ADR-056 Decision-4 seam consumer's mode branch (NoBirthStub→stub,
+// Strict→drop, Conditional/Backfill→buffer). ok=false means the edge is
+// UNCLAIMED (no covering claim — the deprecated-on-arrival hatch). An empty/
+// absent registry is not an error: nothing is claimed yet, so ok=false. Reuses
+// the deterministic epoch.foreignEdgeClaimFor (an exact-producer claim wins; a
+// Producer-empty "any producer" claim is the fallback), one epoch read per call
+// (production foreign-edge volume is zero today; see the type doc).
+func (cr *ClaimReader) ForeignEdgeMode(ctx context.Context, producer, predicate string) (EdgeMode, bool, error) {
+	entry, err := cr.claims.Get(ctx, registryKey)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return "", false, nil // empty registry: nothing claimed yet → unclaimed
+		}
+		return "", false, fmt.Errorf("ownership: read epoch for foreign-edge mode: %w", err)
+	}
+	ep, err := decodeEpoch(entry.Value)
+	if err != nil {
+		return "", false, err
+	}
+	claim, ok := ep.foreignEdgeClaimFor(producer, predicate)
+	if !ok {
+		return "", false, nil
+	}
+	return claim.Mode, true, nil
+}
+
 // dedupeStrings returns the sorted, de-duplicated set of non-empty strings.
 func dedupeStrings(in []string) []string {
 	if len(in) == 0 {
