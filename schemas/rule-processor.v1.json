@@ -1093,10 +1093,82 @@
       },
       "category": "basic"
     },
+    "pack_id": {
+      "type": "string",
+      "description": "owner = rule-pack.\u003cpack_id\u003e",
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration for inputs (KV watch: ENTITY_STATES PREDICATE_INDEX) and outputs (NATS: control commands)",
       "category": "basic"
+    },
+    "projection_contracts": {
+      "type": "array",
+      "description": "projection_contracts",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entity_pattern": {
+            "type": "string",
+            "description": "entity_pattern"
+          },
+          "foreign_edges": {
+            "type": "array",
+            "description": "foreign_edges",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "description": "mode"
+                },
+                "predicate": {
+                  "type": "string",
+                  "description": "predicate"
+                },
+                "target_pattern": {
+                  "type": "string",
+                  "description": "target_pattern"
+                }
+              }
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "groups",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "description": "mode"
+                },
+                "predicates": {
+                  "type": "array",
+                  "description": "predicates",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "indexing_profile": {
+            "type": "string",
+            "description": "indexing_profile"
+          },
+          "message_type": {
+            "type": "string",
+            "description": "message_type"
+          },
+          "name": {
+            "type": "string",
+            "description": "name"
+          }
+        }
+      },
+      "category": "advanced"
     },
     "rules": {
       "type": "object",

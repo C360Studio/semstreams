@@ -164,7 +164,8 @@ func run() error {
 	// closes. Threaded through wireLifecycleManager to AttachOwnership.
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	defer hbCancel()
-	if err := wireLifecycleManager(hbCtx, svcDeps, natsClient, logger); err != nil {
+	ownerReg, staticOwnerHB, err := wireLifecycleManager(hbCtx, svcDeps, natsClient, logger)
+	if err != nil {
 		return err
 	}
 
@@ -189,6 +190,16 @@ func run() error {
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
+	}
+
+	// ADR-056 #278 inc 2 — bind each rule pack's projection contracts under the
+	// ownership substrate. Done HERE (after configureAndCreateServices constructs
+	// the rule processors) and BEFORE StartAll runs inside runWithSignalHandling.
+	// SAME shared helper as cmd/semstreams. Pack contracts are read ONCE,
+	// statically; this is the ONLY rule-pack bind site and must NEVER be invoked
+	// from the hot-reload path. Best-effort / observe-only.
+	if ownerReg != nil {
+		service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger)
 	}
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout, func(seedCtx context.Context) error {
@@ -234,8 +245,15 @@ func buildPayloadRegistry() (*payloadregistry.Registry, error) {
 // bucket provisioning. State changes emit through graph-ingest like
 // every other write; reads project triples into the registered
 // Schema struct.
-func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger) error {
+// It returns the owner registry and static heartbeater (nil when ownership is
+// disabled this boot) so run() can bind rule-pack projection contracts AFTER
+// the rule processors are constructed (ADR-056 #278 inc 2) using the same
+// registry/heartbeater.
+func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ *natsclient.Client, _ *slog.Logger) (*ownership.Registry, *ownership.Heartbeater, error) {
 	svcDeps.LifecycleManager = lifecycle.NewManager(svcDeps.NATSClient, svcDeps.Logger)
+
+	var ownerReg *ownership.Registry
+	var staticOwnerHB *ownership.Heartbeater
 
 	// ADR-056 Decision 5 — attach the owner registry BEFORE Register so each
 	// workflow's claim registers through the shared epoch (cross-process overlap
@@ -243,9 +261,10 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 	// graph-ingest (which creates the other framework buckets) boots later than
 	// this wiring, so the ownership buckets must be created here. A NATS hiccup
 	// logs + skips — ownership is best-effort observe-only, never a boot gate.
-	if ownerReg, err := ownership.EnsureBuckets(ctx, svcDeps.NATSClient, svcDeps.Logger, vocabulary.InverseResolver); err != nil {
+	if reg, err := ownership.EnsureBuckets(ctx, svcDeps.NATSClient, svcDeps.Logger, vocabulary.InverseResolver); err != nil {
 		svcDeps.Logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
 	} else {
+		ownerReg = reg
 		svcDeps.LifecycleManager.AttachOwnership(ctx, ownerReg)
 
 		// ADR-056 4c-pre-1: register the loop-execution entity projection contract.
@@ -257,7 +276,7 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 		// compacts the claim out of the epoch (Codex review of #277). ctx here is the
 		// shutdown-cancellable context (hbCtx, threaded from run()), so the ticker
 		// stops on shutdown.
-		staticOwnerHB := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+		staticOwnerHB = ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
 		go staticOwnerHB.Run(ctx)
 		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
@@ -267,13 +286,13 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 	}
 
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
-		return fmt.Errorf("register mission workflow: %w", err)
+		return nil, nil, fmt.Errorf("register mission workflow: %w", err)
 	}
 	// Register the agent-run workflow (ADR-053 D2). Mirrors cmd/semstreams wiring.
 	if err := agentrun.Register(svcDeps.LifecycleManager); err != nil {
-		return fmt.Errorf("register agent-run workflow: %w", err)
+		return nil, nil, fmt.Errorf("register agent-run workflow: %w", err)
 	}
-	return nil
+	return ownerReg, staticOwnerHB, nil
 }
 
 // seedMission Creates a mission Participant at the given entity ID

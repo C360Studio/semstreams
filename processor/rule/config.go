@@ -2,10 +2,12 @@ package rule
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/c360studio/semstreams/pkg/projection"
 )
 
 // Config holds configuration for the RuleProcessor
@@ -52,6 +54,20 @@ type Config struct {
 		MaxDeliver     int    `json:"max_deliver"`      // Max delivery attempts
 		ReplayPolicy   string `json:"replay_policy"`    // "instant" or "original"
 	} `json:"consumer"`
+
+	// PackID identifies this rule pack as a graph-projection PRODUCER
+	// (ADR-056 #278 inc 2). When set, the composition root binds the pack's
+	// ProjectionContracts under the ownership substrate as owner
+	// "rule-pack.<PackID>". The id must be subject-safe (see Validate); it is
+	// read ONCE at bind time, before the watcher starts — pack-level and
+	// STATIC, never per-rule and never re-derived on hot-reload.
+	PackID string `json:"pack_id,omitempty" schema:"type:string,category:advanced,description:owner = rule-pack.<pack_id>"`
+
+	// ProjectionContracts are the graph-projection contracts this rule pack
+	// owns (ADR-056 Decision 6). Bound to owner "rule-pack.<PackID>" at the
+	// composition root before StartAll. Pack-level and static: the binding is
+	// derived once and is NOT re-bound when rules hot-reload.
+	ProjectionContracts []projection.Contract `json:"projection_contracts,omitempty" schema:"type:array,category:advanced"`
 }
 
 // MarshalJSON implements custom JSON marshaling for Config
@@ -79,6 +95,32 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	c.DebounceDelayMs = time.Duration(aux.DebounceDelayMs) * time.Millisecond
+	return nil
+}
+
+// packIDCharset is the subject-safe charset a PackID may use. It mirrors
+// pkg/ownership.validOwnerID exactly (glob.go) so a config that passes this
+// check can never be rejected later by RegisterOwner — the owner id is
+// "rule-pack.<PackID>", and the "rule-pack." prefix plus any char in this set
+// is itself subject-safe.
+const packIDCharset = "[A-Za-z0-9._=-]"
+
+// Validate checks pack-level invariants on the rule config. Today it only
+// guards PackID: a non-empty PackID must be subject-safe so the derived owner
+// id "rule-pack.<PackID>" is usable directly as a NATS KV key segment (no
+// hashing — ownership identity is compared as the canonical string). An empty
+// PackID is valid (the pack declares no projection ownership).
+func (c Config) Validate() error {
+	for _, r := range c.PackID {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '=', r == '.':
+		default:
+			return fmt.Errorf(
+				"rule config: invalid pack_id %q — owner id rule-pack.%s must use only %s (offending char %q)",
+				c.PackID, c.PackID, packIDCharset, string(r))
+		}
+	}
 	return nil
 }
 
