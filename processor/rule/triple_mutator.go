@@ -12,11 +12,15 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 )
 
-// NATS subjects for graph mutations (must match processor/graph/mutations.go)
+// NATS subjects for graph mutations (must match processor/graph-ingest/mutations.go)
 const (
 	SubjectTripleAdd    = "graph.mutation.triple.add"
 	SubjectTripleRemove = "graph.mutation.triple.remove"
-	MutationTimeout     = 5 * time.Second
+	// SubjectEntityUpdateWithTriples is the atomic entity+triples update lane
+	// used by replace_owned (ADR-056 Decision 3). Must match
+	// graphingest.SubjectEntityUpdateWithTriples.
+	SubjectEntityUpdateWithTriples = "graph.mutation.entity.update_with_triples"
+	MutationTimeout                = 5 * time.Second
 )
 
 // tripleMutator implements TripleMutator using NATS request/response.
@@ -125,6 +129,78 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 
 	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
 		m.revisionTracker.trackRuleRevision(ruleID, subject, resp.KVRevision)
+	}
+
+	return resp.KVRevision, nil
+}
+
+// ReplaceOwned atomically replaces (or clears) the owned value of a
+// single-valued predicate on entityID via ONE update_with_triples mutation
+// (ADR-056 Decision 3). The predicate is named in RemoveTriples (dropping any
+// prior value) and the new value(s) carried in objects (AddTriples); an empty
+// objects slice clears the predicate. This is atomic where update_triple's
+// remove-then-add is not — a watcher never sees the predicate absent between
+// the two operations.
+//
+// ExpectedRevision is left zero: this is owned-current-state reconciliation,
+// NOT a CAS transition. The owner parameter is threaded for audit/diagnostics
+// only — it is NOT placed on the request envelope (the owner wire field is
+// deferred to a later increment per ADR-056).
+//
+// Unlike AddTriple/RemoveTriple, this checks resp.Success (NOT the body-prefix
+// convention) and surfaces the handler's ErrorCode on failure. On a
+// non-existent entity the handler returns ErrorCodeEntityNotFound; that is
+// returned verbatim as an error (no auto-vivify).
+//
+// The owner parameter (interface position 3) is intentionally unused here: it
+// is threaded to the boundary so the audit/diagnostics shape is in place, but
+// the request envelope deliberately carries NO owner field (deferred per
+// ADR-056). Named `_` to keep that explicit and revive-clean.
+func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, _, entityID, predicate string, objects []message.Triple) (uint64, error) {
+	if m.natsClient == nil {
+		return 0, fmt.Errorf("NATS client not available")
+	}
+
+	// Build the atomic update: RemoveTriples drops the prior value of the
+	// predicate (it runs before the AddTriples merge on the handler side),
+	// AddTriples carries the new value(s). ExpectedRevision stays zero —
+	// replace_owned is NEVER a CAS write (ADR-056 Decision 3). The owner is
+	// not placed on the request (wire field deferred); it is logged below.
+	req := gtypes.UpdateEntityWithTriplesRequest{
+		Entity:        &gtypes.EntityState{ID: entityID},
+		RemoveTriples: []string{predicate},
+		AddTriples:    objects,
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
+
+	// RequestWithRetry: same transient-no-responders rationale as AddTriple.
+	// The replace is idempotent (replace-by-predicate converges to the same
+	// single-valued state on a duplicate delivery), so retry is safe.
+	respData, err := m.natsClient.RequestWithRetry(ctx, SubjectEntityUpdateWithTriples, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
+	if err != nil {
+		return 0, fmt.Errorf("NATS request failed: %w", err)
+	}
+
+	var resp gtypes.UpdateEntityWithTriplesResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return 0, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if !resp.Success {
+		// Surface the machine-readable error code so callers (and operators)
+		// can distinguish must-exist failures (entity_not_found) from
+		// transport/internal errors without substring-matching.
+		if resp.ErrorCode != "" {
+			return 0, fmt.Errorf("replace_owned mutation failed [%s]: %s", resp.ErrorCode, resp.Error)
+		}
+		return 0, fmt.Errorf("replace_owned mutation failed: %s", resp.Error)
+	}
+
+	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
+		m.revisionTracker.trackRuleRevision(ruleID, entityID, resp.KVRevision)
 	}
 
 	return resp.KVRevision, nil

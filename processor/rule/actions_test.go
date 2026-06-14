@@ -684,6 +684,23 @@ type mockTripleMutator struct {
 	removedRuleIDs []string
 	addErr         error
 	removeErr      error
+
+	// replaceOwnedCalls captures every ReplaceOwned invocation (ADR-056
+	// Decision 3) so tests can assert on the owner identity, target entity,
+	// predicate, and the constructed objects (including the clear sub-case,
+	// where objects is empty). replaceOwnedErr lets a test force the mutator
+	// to fail (e.g. simulating ErrorCodeEntityNotFound).
+	replaceOwnedCalls []replaceOwnedCall
+	replaceOwnedErr   error
+}
+
+// replaceOwnedCall records the arguments of one ReplaceOwned invocation.
+type replaceOwnedCall struct {
+	ruleID    string
+	owner     string
+	entityID  string
+	predicate string
+	objects   []message.Triple
 }
 
 func (m *mockTripleMutator) AddTriple(_ context.Context, ruleID string, triple message.Triple) (uint64, error) {
@@ -705,6 +722,20 @@ func (m *mockTripleMutator) RemoveTriple(_ context.Context, ruleID, subject, pre
 	}{subject, predicate})
 	m.removedRuleIDs = append(m.removedRuleIDs, ruleID)
 	return 1, nil
+}
+
+func (m *mockTripleMutator) ReplaceOwned(_ context.Context, ruleID, owner, entityID, predicate string, objects []message.Triple) (uint64, error) {
+	if m.replaceOwnedErr != nil {
+		return 0, m.replaceOwnedErr
+	}
+	m.replaceOwnedCalls = append(m.replaceOwnedCalls, replaceOwnedCall{
+		ruleID:    ruleID,
+		owner:     owner,
+		entityID:  entityID,
+		predicate: predicate,
+		objects:   objects,
+	})
+	return uint64(len(m.replaceOwnedCalls)), nil
 }
 
 // T045: Test Action UpdateTriple - updates a triple (remove + add)
