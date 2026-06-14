@@ -267,7 +267,7 @@ const maxAncestryHops = 32
 //
 // Resolution order:
 //  1. Typed-first: read the loop entity's agent.run triple (the RunID stamped at
-//     spawn by buildSpawnIdentityTriples). If present, construct the run entity ID
+//     spawn by LoopExecutionEntity.Triples()). If present, construct the run entity ID
 //     directly.
 //  2. Ancestry-walk fallback (for pre-migration / un-threaded loops): walk
 //     agent.loop.parent triples up to the root (bounded at maxAncestryHops), then

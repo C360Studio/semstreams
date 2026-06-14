@@ -113,6 +113,89 @@ func (tc *tripleCollector) predicateSet() map[string]bool {
 	return s
 }
 
+// createWithTriplesResponder is a NATS responder for
+// graph.mutation.entity.create_with_triples requests (ADR-056 4c-pre-1).
+// It captures the triples from the request body and replies with success
+// (or with ErrorCodeEntityExists when alreadyExists is set, to exercise
+// the idempotency path).
+type createWithTriplesResponder struct {
+	mu            sync.Mutex
+	received      []gtypes.CreateEntityWithTriplesRequest
+	alreadyExists bool   // when true, reply with ErrorCodeEntityExists
+	failWith      string // when non-empty, reply with this error (and ErrorCodeInternal)
+}
+
+func (r *createWithTriplesResponder) handler(_ context.Context, data []byte) ([]byte, error) {
+	var req gtypes.CreateEntityWithTriplesRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	r.received = append(r.received, req)
+	r.mu.Unlock()
+
+	resp := gtypes.CreateEntityWithTriplesResponse{}
+	switch {
+	case r.alreadyExists:
+		resp.MutationResponse = gtypes.MutationResponse{
+			Success:   false,
+			Error:     "entity already exists",
+			ErrorCode: gtypes.ErrorCodeEntityExists,
+			Timestamp: time.Now().UnixNano(),
+		}
+	case r.failWith != "":
+		resp.MutationResponse = gtypes.MutationResponse{
+			Success:   false,
+			Error:     r.failWith,
+			ErrorCode: gtypes.ErrorCodeInternal,
+			Timestamp: time.Now().UnixNano(),
+		}
+	default:
+		resp.MutationResponse = gtypes.MutationResponse{
+			Success:   true,
+			Timestamp: time.Now().UnixNano(),
+		}
+		resp.TriplesAdded = len(req.Triples)
+	}
+	return json.Marshal(resp)
+}
+
+func (r *createWithTriplesResponder) subscribe(t *testing.T, ctx context.Context, client *natsclient.Client) {
+	t.Helper()
+	if _, err := client.SubscribeForRequests(ctx, "graph.mutation.entity.create_with_triples", r.handler); err != nil {
+		t.Fatalf("subscribe create_with_triples: %v", err)
+	}
+}
+
+func (r *createWithTriplesResponder) getReceived() []gtypes.CreateEntityWithTriplesRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]gtypes.CreateEntityWithTriplesRequest, len(r.received))
+	copy(out, r.received)
+	return out
+}
+
+// queryEntityResponder is a NATS responder for graph.ingest.query.entity reads
+// (ADR-056 4c-pre-1 EntityExists guardrail). It replies with a fixed EntityState
+// so verifyExistingLoopOrigin can read back the existing entity's MessageType and
+// decide whether an EntityExists response is a safe same-origin re-birth or a
+// non-origin shell it must refuse to bless.
+type queryEntityResponder struct {
+	entity gtypes.EntityState
+}
+
+func (r *queryEntityResponder) handler(_ context.Context, _ []byte) ([]byte, error) {
+	return json.Marshal(r.entity)
+}
+
+func (r *queryEntityResponder) subscribe(t *testing.T, ctx context.Context, client *natsclient.Client) {
+	t.Helper()
+	if _, err := client.SubscribeForRequests(ctx, "graph.ingest.query.entity", r.handler); err != nil {
+		t.Fatalf("subscribe query.entity: %v", err)
+	}
+}
+
 // newTestGraphWriter creates a graphWriter wired to a real NATS test client.
 // Exported fields are accessed via the agenticloop package's NewGraphWriter constructor
 // which we can't use from _test package, so we test via the exported Write* methods
@@ -323,18 +406,23 @@ func TestWriteLoopFailure_Integration(t *testing.T) {
 	}
 }
 
-// gh#159: WriteSpawnIdentity stamps all canonical identity triples on
-// the loop-execution entity in one atomic batch at spawn time.
-// Reproduces the production wire path so a refactor that splits the
-// stamp back into per-triple writes (re-introducing the
-// agent.loop.outcome <-> agent.loop.parent race that broke ADR-046
-// Phase 1's example-fan-out reference pattern) fails this test.
+// ADR-056 4c-pre-1: WriteSpawnIdentity births the loop-execution entity via
+// create_with_triples so it has a typed origin contract (MessageType = agentic.loop_execution.v1)
+// instead of being auto-vivified by triple.add_batch. This test verifies:
+//   - The request goes to graph.mutation.entity.create_with_triples (not add_batch).
+//   - The Entity.ID is the correct 6-part loop-execution entity ID.
+//   - The MessageType key is "agentic.loop_execution.v1".
+//   - The Triples body carries all expected spawn-identity predicates.
+//   - Parent triple is a valid 6-part entity ID.
+//   - The call returns nil (success) on a clean responder.
 func TestWriteSpawnIdentity_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
-	collector := &tripleCollector{}
-	collector.subscribeMutations(t, ctx, tc.Client)
+	// Wire create_with_triples responder. The old tripleCollector
+	// (add/add_batch) is NOT wired — the birth must NOT touch those subjects.
+	responder := &createWithTriplesResponder{}
+	responder.subscribe(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
@@ -348,9 +436,36 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 		Prompt:       "Investigate MQTT retained messages",
 	}
 
-	w.WriteSpawnIdentity(ctx, "loop-spawn-int", task)
+	if err := w.WriteSpawnIdentity(ctx, "loop-spawn-int", task); err != nil {
+		t.Fatalf("WriteSpawnIdentity: unexpected error: %v", err)
+	}
 
-	preds := collector.predicateSet()
+	received := responder.getReceived()
+	if len(received) != 1 {
+		t.Fatalf("expected exactly 1 create_with_triples request, got %d", len(received))
+	}
+	req := received[0]
+
+	// Entity ID must be the loop-execution 6-part ID.
+	wantEntityID := "acme.ops.agent.agentic-loop.execution.loop-spawn-int"
+	if req.Entity == nil {
+		t.Fatal("Entity field is nil in create_with_triples request")
+	}
+	if req.Entity.ID != wantEntityID {
+		t.Errorf("Entity.ID = %q, want %q", req.Entity.ID, wantEntityID)
+	}
+
+	// MessageType must be agentic.loop_execution.v1.
+	wantMsgType := "agentic.loop_execution.v1"
+	if got := req.Entity.MessageType.Key(); got != wantMsgType {
+		t.Errorf("MessageType.Key() = %q, want %q", got, wantMsgType)
+	}
+
+	// Verify the required predicates are present in the Triples body.
+	predSet := make(map[string]bool, len(req.Triples))
+	for _, tr := range req.Triples {
+		predSet[tr.Predicate] = true
+	}
 	required := []string{
 		agvocab.LoopRole,
 		agvocab.LoopTask,
@@ -361,13 +476,13 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 		agvocab.LoopDescription,
 	}
 	for _, pred := range required {
-		if !preds[pred] {
-			t.Errorf("expected %s in spawn identity stamp", pred)
+		if !predSet[pred] {
+			t.Errorf("expected predicate %s in create_with_triples Triples body", pred)
 		}
 	}
 
 	// Parent must be a valid 6-part entity ID.
-	for _, tr := range collector.getTriples() {
+	for _, tr := range req.Triples {
 		if tr.Predicate != agvocab.LoopParent {
 			continue
 		}
@@ -383,37 +498,130 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 			t.Errorf("LoopParent = %q, want %q", parent, want)
 		}
 	}
+}
 
-	// gh#159 atomicity: all 7 identity triples land in exactly ONE
-	// batch request.
-	single, batch, sizes := collector.requestCounts()
-	if single != 0 {
-		t.Errorf("expected zero single-triple add requests, got %d", single)
-	}
-	if batch != 1 {
-		t.Errorf("expected exactly one batch request, got %d (sizes=%v)", batch, sizes)
-	}
-	if batch == 1 && sizes[0] != len(required) {
-		t.Errorf("expected batch size %d, got %d", len(required), sizes[0])
+// ADR-056 4c-pre-1: WriteSpawnIdentity treats an already-exists response as
+// success ONLY after the read-back guardrail confirms the existing entity is the
+// SAME typed origin (MessageType == agentic.loop_execution.v1). Re-spawn / retry
+// / redelivery on our own loop origin must not fail.
+func TestWriteSpawnIdentity_IdempotentOnSameTypedOrigin_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	responder := &createWithTriplesResponder{alreadyExists: true}
+	responder.subscribe(t, ctx, tc.Client)
+
+	// The read-back must find the SAME typed origin for EntityExists to count
+	// as a safe idempotent re-birth.
+	q := &queryEntityResponder{entity: gtypes.EntityState{
+		ID:          "acme.ops.agent.agentic-loop.execution.loop-idem",
+		MessageType: agentic.LoopExecutionMessageType(),
+	}}
+	q.subscribe(t, ctx, tc.Client)
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+	task := &agentic.TaskMessage{TaskID: "task-idem", Role: "researcher"}
+
+	if err := w.WriteSpawnIdentity(ctx, "loop-idem", task); err != nil {
+		t.Errorf("WriteSpawnIdentity should return nil on already-exists SAME typed origin, got: %v", err)
 	}
 }
 
-// gh#159: WriteSpawnIdentity must no-op for a nil task without
-// panicking. Callers (component.go's handleTaskMessage path) guard with
-// nil checks but the helper should be robust to the contract anyway.
+// ADR-056 4c-pre-1 guardrail: EntityExists is success ONLY when the existing
+// entity is the SAME typed origin. If the pre-existing entity is an envelope-less
+// auto-vivified shell (empty MessageType) or a foreign entity colliding on the id
+// (different MessageType), WriteSpawnIdentity must return an error so the caller
+// halts — never silently bless a non-origin as "born."
+func TestWriteSpawnIdentity_EntityExistsNotOurTypedOrigin_Integration(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing message.Type
+	}{
+		{"envelope-less auto-vivified shell", message.Type{}},
+		{"foreign entity colliding on id", message.Type{Domain: "cs", Category: "system", Version: "v1"}},
+	}
+	for _, tcase := range cases {
+		t.Run(tcase.name, func(t *testing.T) {
+			tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+			ctx := context.Background()
+
+			responder := &createWithTriplesResponder{alreadyExists: true}
+			responder.subscribe(t, ctx, tc.Client)
+
+			q := &queryEntityResponder{entity: gtypes.EntityState{
+				ID:          "acme.ops.agent.agentic-loop.execution.loop-shell",
+				MessageType: tcase.existing,
+			}}
+			q.subscribe(t, ctx, tc.Client)
+
+			w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+			task := &agentic.TaskMessage{TaskID: "task-shell", Role: "researcher"}
+
+			if err := w.WriteSpawnIdentity(ctx, "loop-shell", task); err == nil {
+				t.Error("WriteSpawnIdentity must return an error when the existing entity is NOT our typed origin (refuse to bless a shell/foreign as born)")
+			}
+		})
+	}
+}
+
+// ADR-056 4c-pre-1: WriteSpawnIdentity returns an error on genuine birth failure
+// (non-already-exists). The caller must be able to detect and halt.
+func TestWriteSpawnIdentity_ReturnsErrorOnGenuineFailure_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	responder := &createWithTriplesResponder{failWith: "disk full"}
+	responder.subscribe(t, ctx, tc.Client)
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+	task := &agentic.TaskMessage{TaskID: "task-fail", Role: "researcher"}
+
+	if err := w.WriteSpawnIdentity(ctx, "loop-fail", task); err == nil {
+		t.Error("WriteSpawnIdentity should return an error on genuine failure, got nil")
+	}
+}
+
+// ADR-056 4c-pre-1 / gh#159: WriteSpawnIdentity must no-op for a nil task
+// without panicking (returns nil — caller already checked).
 func TestWriteSpawnIdentity_NilTask_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
-	collector := &tripleCollector{}
-	collector.subscribeMutations(t, ctx, tc.Client)
+	responder := &createWithTriplesResponder{}
+	responder.subscribe(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
-	w.WriteSpawnIdentity(ctx, "loop-nil", nil)
+	if err := w.WriteSpawnIdentity(ctx, "loop-nil", nil); err != nil {
+		t.Errorf("expected nil for nil task, got: %v", err)
+	}
 
-	single, batch, _ := collector.requestCounts()
-	if single+batch != 0 {
-		t.Errorf("expected zero requests for nil task, got single=%d batch=%d", single, batch)
+	if got := len(responder.getReceived()); got != 0 {
+		t.Errorf("expected zero requests for nil task, got %d", got)
+	}
+}
+
+// ADR-056 4c-pre-1: missing platform identity is a graceful SKIP (return nil,
+// no request), NOT a birth failure — there is no valid 6-part entity ID to
+// build, so there is nothing to birth. Matches every sibling graph-write method
+// and the nil-client / nil-task / empty-triples guards. Regression guard: a
+// missing-platform error here would hard-halt every loop in a degenerate/test
+// config (the CI failure that surfaced this).
+func TestWriteSpawnIdentity_MissingPlatformSkipsWithoutError_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	responder := &createWithTriplesResponder{}
+	responder.subscribe(t, ctx, tc.Client)
+
+	// Empty PlatformMeta — no org/platform → no valid entity ID.
+	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{})
+	task := &agentic.TaskMessage{TaskID: "task-noplat", Role: "researcher"}
+
+	if err := w.WriteSpawnIdentity(ctx, "loop-noplat", task); err != nil {
+		t.Errorf("missing platform identity must be a graceful skip (nil), got error: %v", err)
+	}
+	if got := len(responder.getReceived()); got != 0 {
+		t.Errorf("missing platform identity must send zero create_with_triples requests, got %d", got)
 	}
 }
 

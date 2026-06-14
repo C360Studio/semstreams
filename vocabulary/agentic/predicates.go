@@ -457,7 +457,7 @@ const (
 	LoopParent = "agent.loop.parent"
 
 	// LoopReplyTo is an entity reference to the loop this loop is a reply to
-	// (gh#256). Stamped at spawn time by buildSpawnIdentityTriples when
+	// (gh#256). Stamped at spawn time by LoopExecutionEntity.Triples() when
 	// TaskMessage.InReplyTo is non-empty. Distinct from LoopParent (tree
 	// ancestry): a reply re-enters a paused run (ADR-053 §4b-2 interactive
 	// clarification) rather than nesting under a parent. A resume rule fires on
@@ -470,7 +470,7 @@ const (
 	LoopReplyTo = "agent.loop.reply_to"
 
 	// LoopRun is the bare run loop-id this loop belongs to (ADR-053 D7).
-	// Stamped at spawn time by buildSpawnIdentityTriples when TaskMessage.RunID is non-empty.
+	// Stamped at spawn time by LoopExecutionEntity.Triples() when TaskMessage.RunID is non-empty.
 	// Rules can read this via $entity.triple.agent.run. Grammar-collision-free:
 	// no existing $-regex matches agent.run.* (audited at ADR-053 implementation).
 	// Example: "loop-uuid-of-the-root-coordinator"

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	graphMutationSubject      = "graph.mutation.triple.add"
-	graphMutationBatchSubject = "graph.mutation.triple.add_batch"
-	graphWriterTimeout        = 5 * time.Second
-	graphWriterSource         = "agentic-loop"
+	graphMutationSubject               = "graph.mutation.triple.add"
+	graphMutationBatchSubject          = "graph.mutation.triple.add_batch"
+	graphMutationCreateWithTriplesSubj = "graph.mutation.entity.create_with_triples"
+	graphWriterTimeout                 = 5 * time.Second
+	graphWriterSource                  = "agentic-loop"
 	// syntheticDecideSource is the Source on triples emitted by
 	// WriteSyntheticDecide (#133). Distinct from graphWriterSource
 	// ("agentic-loop") and decideToolSource ("coordinator-decide") so
@@ -151,6 +152,99 @@ func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) 
 	}
 
 	return nil
+}
+
+// createEntityWithTriples sends a CreateEntityWithTriplesRequest to
+// graph.mutation.entity.create_with_triples via NATS request/reply, using the
+// same transport config (timeout, retry) as writeBatch.
+//
+// Idempotency contract (ADR-056 typed-origin): a response with ErrorCode ==
+// graph.ErrorCodeEntityExists is treated as success ONLY after a read-back
+// confirms the existing entity is the SAME typed origin (MessageType) the spawn
+// intended — a genuine re-spawn / retry. If the pre-existing entity is an
+// envelope-less auto-vivified shell or a foreign entity colliding on the id,
+// EntityExists is a birth FAILURE, never a silent "born." See
+// verifyExistingLoopOrigin.
+//
+// Returns a non-nil error only on genuine birth failures (transport error,
+// handler-internal error, an EntityExists that is not our typed origin, any
+// other non-success failure). The caller must not proceed as if graph semantics
+// are intact when an error is returned.
+func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtypes.EntityState, triples []message.Triple) error {
+	req := gtypes.CreateEntityWithTriplesRequest{
+		Entity:  entity,
+		Triples: triples,
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal create_with_triples request: %w", err)
+	}
+
+	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationCreateWithTriplesSubj, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
+	if err != nil {
+		return fmt.Errorf("NATS create_with_triples request failed: %w", err)
+	}
+
+	var resp gtypes.CreateEntityWithTriplesResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("unmarshal create_with_triples response: %w", err)
+	}
+
+	if !resp.Success {
+		// EntityExists is idempotent-success ONLY if the existing entity is
+		// already this typed origin (same MessageType) — a genuine retry /
+		// redelivery / re-spawn of OUR origin. Blessing any EntityExists blindly
+		// would launder a pre-existing auto-vivified shell (Version-0 / no
+		// envelope) or a foreign entity into a "born" loop origin, defeating the
+		// typed-origin contract (ADR-056). Read + verify before treating it as born.
+		if resp.ErrorCode == gtypes.ErrorCodeEntityExists {
+			return w.verifyExistingLoopOrigin(ctx, entity.ID, entity.MessageType)
+		}
+		return fmt.Errorf("create_with_triples failed (code=%s): %s", resp.ErrorCode, resp.Error)
+	}
+
+	return nil
+}
+
+// verifyExistingLoopOrigin guards the EntityExists idempotency path: it reads the
+// already-existing entity and confirms it carries the SAME typed origin
+// MessageType the spawn intended. A match means a safe idempotent re-birth
+// (retry / redelivery / re-spawn). A mismatch (an envelope-less auto-vivified
+// shell, or a foreign entity colliding on the id) or an unreadable entity is a
+// birth FAILURE the caller halts on — never a silent "born." Reuses the
+// same-package graph.ingest.query.entity read surface (see todos.go).
+//
+// Canonicality note (gh#276): a same-MessageType match treats the
+// FIRST spawn's identity triples as canonical — a divergent re-spawn that reuses
+// the same loop_id under a DIFFERENT task_id is accepted as idempotent and its
+// new identity triples are NOT written (create_with_triples returns before any
+// merge on EntityExists). This is intentional: refusing a same-MessageType match
+// would break genuine retry/redelivery, and the normal redelivery path is already
+// short-circuited upstream by the task_id dedup before birth is reached. The only
+// trigger is a producer contract violation (loop_id reuse), and this is strictly
+// safer than the pre-4c-pre-1 triple.add_batch path, which would have APPENDED
+// conflicting role/parent values onto the existing entity.
+func (w *graphWriter) verifyExistingLoopOrigin(ctx context.Context, entityID string, want message.Type) error {
+	reqData, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: entityID})
+	if err != nil {
+		return fmt.Errorf("marshal origin-verify query for %s: %w", entityID, err)
+	}
+	respData, err := w.natsClient.RequestClassified(ctx, queryEntitySubject, reqData, graphWriterTimeout)
+	if err != nil {
+		// Cannot confirm the existing entity is our origin → do not bless it.
+		return fmt.Errorf("create_with_triples returned entity_exists for %s but the read-back to verify the typed origin failed: %w", entityID, err)
+	}
+	var existing gtypes.EntityState
+	if err := json.Unmarshal(respData, &existing); err != nil {
+		return fmt.Errorf("create_with_triples entity_exists: unmarshal existing entity %s: %w", entityID, err)
+	}
+	if existing.MessageType == want {
+		return nil // same typed origin — idempotent re-birth, safe to treat as born
+	}
+	return fmt.Errorf("create_with_triples: %s already exists but is NOT a %s typed origin (existing message_type=%q) — refusing to bless a non-origin shell as born",
+		entityID, want.Key(), existing.MessageType.Key())
 }
 
 // WriteSyntheticDecide stamps the synthetic decide triples (#133) onto
@@ -448,119 +542,71 @@ func buildLineageTriples(loopEntityID string, related map[string]any) []message.
 	return triples
 }
 
-// WriteSpawnIdentity stamps the loop's canonical identity triples on
-// its execution entity at spawn time. These predicates are known the
-// moment the TaskMessage arrives at the loop component, so deferring
-// them to completion (the pre-gh#159 shape) creates two problems:
+// WriteSpawnIdentity births the loop-execution entity via a typed origin
+// contract (ADR-056 W0 4c-pre-1). It constructs a LoopExecutionEntity from
+// the spawn parameters, gets the full origin triple set from its Triples()
+// method (IDENTICAL predicate set to the pre-4c-pre-1 buildSpawnIdentityTriples),
+// and sends a synchronous create_with_triples request so the entity is born
+// with a proper MessageType envelope rather than auto-vivified by triple.add_batch.
 //
-//   - Mid-loop reads can't observe them. Trajectory inspection,
-//     ancestry walks from a still-running child, and rules firing
-//     on intermediate signals all see the loop entity without
-//     these attributes until completion.
-//   - Completion-path stamping arrives staggered across N events
-//     (per-triple writes), letting rules fire on agent.loop.outcome
-//     before agent.loop.parent lands — the gh#159 race that breaks
-//     ADR-046 Phase 1's example-fan-out reference pattern.
+// Idempotency: an already-exists response is treated as success — re-spawn
+// and retry are safe (the entity is born either way).
 //
-// Atomic-batch stamp on the loop entity. Conditional triples (parent,
-// workflow, workflow_step, user, description) are omitted when their
-// TaskMessage source field is empty so the entity isn't polluted with
-// zero-value triples.
+// Returns an error ONLY on genuine birth failure (the create_with_triples
+// round-trip — transport error, a non-idempotent failure, or an EntityExists
+// that is not our typed origin). The caller MUST NOT proceed as if graph
+// semantics are intact when an error is returned — the loop must be halted.
+// The pre-4c-pre-1 best-effort-Warn behaviour is now a hard precondition at
+// the call site, but ONLY for that birth-failure class.
 //
-// Failure handling matches WriteLineageTriples: log and continue. A
-// failed stamp surfaces downstream as $entity.triple.agent.loop.parent
-// (etc.) tripping the unresolvedTemplateVarRe warning — same shape
-// rule authors already debug.
-func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) {
+// No-op skips (return nil), matching the previous caller guards and every
+// sibling graph-write method: nil natsClient, nil task, empty triples, and
+// missing platform identity (no valid 6-part entity ID to build → nothing to
+// birth). These are NOT failures and MUST NOT halt the loop.
+func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) error {
 	if w.natsClient == nil {
-		return
+		return nil
 	}
 	if task == nil {
-		return
+		return nil
 	}
+	// Platform identity missing = there is no valid 6-part entity ID to build,
+	// so there is NOTHING to birth — a graceful skip, NOT a birth failure. This
+	// matches every sibling graph-write method (WriteSyntheticDecide /
+	// WriteModelEndpoints / WriteLoopCompletion / WriteLoopFailure /
+	// WriteTrajectory all Warn+return here) and the nil-client / nil-task /
+	// empty-triples guards above. An ERROR from this method is reserved for a
+	// genuine birth FAILURE (the create_with_triples round-trip below); only
+	// that halts the loop at the caller.
 	if w.platform.Org == "" || w.platform.Platform == "" {
 		w.logger.Warn("graph_writer: cannot write spawn identity, platform identity missing",
 			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
+		return nil
 	}
 
-	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
-	triples := buildSpawnIdentityTriples(loopEntityID, task, w.platform.Org, w.platform.Platform)
+	entity := &agentic.LoopExecutionEntity{
+		Org:      w.platform.Org,
+		Platform: w.platform.Platform,
+		LoopID:   loopID,
+		Task:     task,
+	}
+
+	triples := entity.Triples()
 	if len(triples) == 0 {
-		return
-	}
-	if err := w.writeBatch(ctx, triples); err != nil {
-		w.logger.Warn("graph_writer: failed to write spawn identity batch",
-			"loop_id", loopID, "predicate_count", len(triples), "error", err)
-	}
-}
-
-// buildSpawnIdentityTriples constructs the spawn-time identity triples
-// on the loop-execution entity. Pure (clock-injection via time.Now is
-// the same shape as buildLoopCompletionTriples), so it's unit-testable
-// without NATS.
-//
-// Always emits: agent.loop.role, agent.loop.task. Conditionally emits
-// parent, workflow, workflow_step, user, description when the
-// corresponding TaskMessage field is non-empty.
-func buildSpawnIdentityTriples(loopEntityID string, task *agentic.TaskMessage, org, platform string) []message.Triple {
-	now := time.Now()
-	triple := func(predicate string, object any) message.Triple {
-		return message.Triple{
-			Subject:    loopEntityID,
-			Predicate:  predicate,
-			Object:     object,
-			Source:     graphWriterSource,
-			Timestamp:  now,
-			Confidence: 1.0,
-		}
+		return nil
 	}
 
-	triples := make([]message.Triple, 0, 8)
-	if task.Role != "" {
-		triples = append(triples, triple(agvocab.LoopRole, task.Role))
+	entityState := &gtypes.EntityState{
+		ID:          entity.EntityID(),
+		MessageType: agentic.LoopExecutionMessageType(),
+		Triples:     triples,
 	}
-	if task.TaskID != "" {
-		triples = append(triples, triple(agvocab.LoopTask, task.TaskID))
+
+	if err := w.createEntityWithTriples(ctx, entityState, triples); err != nil {
+		return fmt.Errorf("spawn identity birth failed for loop %s: %w", loopID, err)
 	}
-	if task.ParentLoopID != "" {
-		parentEntityID := agentic.LoopExecutionEntityID(org, platform, task.ParentLoopID)
-		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
-	}
-	// Stamp the run anchor when the loop belongs to a run (ADR-053 D7).
-	// Two triples: agent.run = bare RunID (used by ResolveRun/RunID());
-	// agent.run.entity_id = the full 6-part chain.execution ID, the
-	// rule-addressable upsert SUBJECT (rules cannot derive the 6-part from
-	// the bare id — substitution is string interpolation, not function calls).
-	if task.RunID != "" {
-		triples = append(triples, triple(agvocab.LoopRun, task.RunID))
-		if runEntityID, err := agentic.TryChainExecutionEntityID(org, platform, task.RunID); err == nil {
-			triples = append(triples, triple(agvocab.LoopRunEntityID, runEntityID))
-		}
-	}
-	// Stamp the reply pointer when this loop is a reply (gh#256). Mirrors
-	// LoopParent: a 6-part loop entity reference, so a resume rule reading
-	// $entity.triple.agent.loop.reply_to gets a navigable reference, not a bare
-	// id. Distinct from RunID (which run this loop belongs to) — reply_to marks
-	// THIS loop as the reply so a marker rule can fire on it and drive the run
-	// from awaiting_approval back to executing (ADR-053 §4b-2).
-	if task.InReplyTo != "" {
-		replyEntityID := agentic.LoopExecutionEntityID(org, platform, task.InReplyTo)
-		triples = append(triples, triple(agvocab.LoopReplyTo, replyEntityID))
-	}
-	if task.WorkflowSlug != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflow, task.WorkflowSlug))
-	}
-	if task.WorkflowStep != "" {
-		triples = append(triples, triple(agvocab.LoopWorkflowStep, task.WorkflowStep))
-	}
-	if task.UserID != "" {
-		triples = append(triples, triple(agvocab.LoopUser, task.UserID))
-	}
-	if task.Prompt != "" {
-		triples = append(triples, triple(agvocab.LoopDescription, truncateForTriple(task.Prompt, maxPromptTripleBytes)))
-	}
-	return triples
+
+	return nil
 }
 
 // WriteLoopCancellation emits triples for a loop that was cancelled.

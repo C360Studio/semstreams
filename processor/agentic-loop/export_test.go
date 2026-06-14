@@ -51,6 +51,6 @@ func (g *GraphWriterForTest) WriteTrajectorySteps(ctx context.Context, loopID st
 func (g *GraphWriterForTest) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) {
 	g.w.WriteLineageTriples(ctx, loopID, related)
 }
-func (g *GraphWriterForTest) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) {
-	g.w.WriteSpawnIdentity(ctx, loopID, task)
+func (g *GraphWriterForTest) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) error {
+	return g.w.WriteSpawnIdentity(ctx, loopID, task)
 }

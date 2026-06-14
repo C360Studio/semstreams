@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
@@ -34,12 +35,14 @@ import (
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	"github.com/c360studio/semstreams/vocabulary"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 const (
@@ -244,6 +247,14 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 		svcDeps.Logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
 	} else {
 		svcDeps.LifecycleManager.AttachOwnership(ctx, ownerReg)
+
+		// ADR-056 4c-pre-1: register the loop-execution entity projection contract.
+		// Mirrors cmd/semstreams wiring — best-effort, never a boot gate.
+		if err := projection.Bind(ctx, ownerReg, "agentic-loop-graph-writer",
+			loopExecutionProjectionContract()); err != nil {
+			svcDeps.Logger.Warn("ownership: loop-execution projection contract registration failed",
+				slog.Any("error", err))
+		}
 	}
 
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
@@ -775,5 +786,31 @@ func startPProfServer(port int) {
 	fmt.Printf("Starting pprof server on %s\n", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
 		fmt.Printf("pprof server error: %v\n", err)
+	}
+}
+
+// loopExecutionProjectionContract returns the graph projection contract for
+// loop-execution entities (ADR-056 W0 4c-pre-1). Mirrors cmd/semstreams/main.go.
+// See that function's godoc for the full rationale.
+func loopExecutionProjectionContract() projection.Contract {
+	return projection.Contract{
+		Name:          "agentic.loop-execution",
+		MessageType:   agentic.LoopExecutionMessageType().Key(),
+		EntityPattern: "*.*.agent.agentic-loop.execution.*",
+		Groups: []projection.PredicateGroup{{
+			Mode: ownership.ModeReplaceOwned,
+			Predicates: []string{
+				agvocab.LoopRole,
+				agvocab.LoopTask,
+				agvocab.LoopParent,
+				agvocab.LoopRun,
+				agvocab.LoopRunEntityID,
+				agvocab.LoopReplyTo,
+				agvocab.LoopWorkflow,
+				agvocab.LoopWorkflowStep,
+				agvocab.LoopUser,
+				agvocab.LoopDescription,
+			},
+		}},
 	}
 }

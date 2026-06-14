@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
@@ -32,12 +33,14 @@ import (
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	"github.com/c360studio/semstreams/vocabulary"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // Build information constants
@@ -208,6 +211,17 @@ func run() error {
 		hbCtx, hbCancel := context.WithCancel(ctx)
 		defer hbCancel()
 		svcDeps.LifecycleManager.AttachOwnership(hbCtx, ownerReg)
+
+		// ADR-056 4c-pre-1: register the loop-execution entity projection contract.
+		// This declares that "agentic-loop-graph-writer" owns the spawn-identity
+		// origin predicates on every loop-execution entity (*.*.agent.agentic-loop.execution.*)
+		// in replace-owned mode. Best-effort: a registration failure logs a warning
+		// but does not block boot — ownership is observe-only, never a boot gate.
+		if err := projection.Bind(ctx, ownerReg, "agentic-loop-graph-writer",
+			loopExecutionProjectionContract()); err != nil {
+			logger.Warn("ownership: loop-execution projection contract registration failed",
+				slog.Any("error", err))
+		}
 	}
 
 	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
@@ -761,6 +775,40 @@ func registerPayloads() (*payloadregistry.Registry, error) {
 		return nil, fmt.Errorf("register document payloads: %w", err)
 	}
 	return reg, nil
+}
+
+// loopExecutionProjectionContract returns the graph projection contract for
+// loop-execution entities (ADR-056 W0 4c-pre-1). The contract declares that
+// the "agentic-loop-graph-writer" owner holds the spawn-identity origin
+// predicates on every entity matching *.*.agent.agentic-loop.execution.* in
+// replace-owned mode.
+//
+// The predicate list matches exactly what LoopExecutionEntity.Triples() can
+// emit (always-on + conditional). Conditional predicates (parent, run,
+// run.entity_id, reply_to, workflow, workflow_step, user, description) are
+// included in the owned set even though they are not emitted on every birth —
+// ownership declares authority over the cell, not guaranteed emission.
+func loopExecutionProjectionContract() projection.Contract {
+	return projection.Contract{
+		Name:          "agentic.loop-execution",
+		MessageType:   agentic.LoopExecutionMessageType().Key(),
+		EntityPattern: "*.*.agent.agentic-loop.execution.*",
+		Groups: []projection.PredicateGroup{{
+			Mode: ownership.ModeReplaceOwned,
+			Predicates: []string{
+				agvocab.LoopRole,
+				agvocab.LoopTask,
+				agvocab.LoopParent,
+				agvocab.LoopRun,
+				agvocab.LoopRunEntityID,
+				agvocab.LoopReplyTo,
+				agvocab.LoopWorkflow,
+				agvocab.LoopWorkflowStep,
+				agvocab.LoopUser,
+				agvocab.LoopDescription,
+			},
+		}},
+	}
 }
 
 // startPProfServer starts the pprof HTTP server for profiling.
