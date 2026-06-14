@@ -2,10 +2,12 @@ package graphingest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -137,3 +139,76 @@ var assertErr = errForTest("classifier read blip")
 type errForTest string
 
 func (e errForTest) Error() string { return string(e) }
+
+// The SHARED projection-normalization seam (ADR-056 Decision 4) applies on the
+// MUTATION API lane too, not just fact-arrival: a create_with_triples carrying a
+// foreign-subject edge (Subject != Entity.ID) has it partitioned off the primary,
+// classified, and routed onto its own subject — instead of being misfiled onto
+// Entity.ID (the bug cs-api's singleSubject guard works around today).
+func TestSharedSeam_CreateWithTriples_PartitionsClassifiesRoutesForeign(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	fake := &fakeClassifier{unclaimed: map[string]bool{"child.isHostedBy": true}}
+	comp.claimReader = fake
+
+	mt := message.Type{Domain: "test", Category: "fixture", Version: "v1"}
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: flParentID, MessageType: mt},
+		Triples: []message.Triple{
+			{Subject: flParentID, Predicate: "system.label", Object: "Parent"},      // own
+			{Subject: flChildID, Predicate: "child.isHostedBy", Object: flParentID}, // foreign
+		},
+	}
+	data, _ := json.Marshal(req)
+
+	before := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "child.isHostedBy"))
+
+	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
+	require.NoError(t, err)
+	var resp graph.CreateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.True(t, resp.Success, "create should succeed: %s", resp.Error)
+
+	// The primary stores ONLY its own triple — the foreign edge is not misfiled.
+	parent := storedEntity(t, comp, flParentID)
+	assert.True(t, hasPredicate(parent, "system.label"))
+	assert.False(t, hasPredicate(parent, "child.isHostedBy"),
+		"foreign edge must NOT be misfiled onto the primary entity")
+
+	// The foreign edge was classified at the shared seam (metric fired)…
+	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "child.isHostedBy")), 0.0001,
+		"the mutation-lane foreign edge must be classified by the shared seam")
+	assert.Equal(t, mt.Key(), fake.gotProducer)
+	// …and routed onto its own subject (the child entity).
+	child := storedEntity(t, comp, flChildID)
+	assert.True(t, hasPredicate(child, "child.isHostedBy"),
+		"foreign edge must be routed onto its own subject, not dropped")
+}
+
+// A single-subject create_with_triples (every current caller) is a pure no-op for
+// the shared seam — no classification, no routing, behaviour identical to before.
+func TestSharedSeam_CreateWithTriples_SingleSubjectUnchanged(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	fake := &fakeClassifier{}
+	comp.claimReader = fake
+
+	mt := message.Type{Domain: "test", Category: "fixture", Version: "v1"}
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: flParentID, MessageType: mt},
+		Triples: []message.Triple{
+			{Subject: flParentID, Predicate: "system.label", Object: "Parent"},
+			{Subject: flParentID, Predicate: "system.uid", Object: "u-1"},
+		},
+	}
+	data, _ := json.Marshal(req)
+
+	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
+	require.NoError(t, err)
+	var resp graph.CreateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.True(t, resp.Success)
+
+	parent := storedEntity(t, comp, flParentID)
+	assert.True(t, hasPredicate(parent, "system.label"))
+	assert.True(t, hasPredicate(parent, "system.uid"))
+	assert.Nil(t, fake.gotPreds, "a single-subject batch must never reach the classifier")
+}

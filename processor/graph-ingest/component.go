@@ -971,22 +971,15 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 // path. Exposed as a method so the merge+regroup wire is testable end-to-end
 // without standing up the decoder.
 func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) {
-	// ADR-055 §5 T2: a Graphable may legitimately emit cross-entity edges whose
-	// Subject != EntityID() (sensorml inverse isHostedBy, federation/objectstore
-	// pass-throughs). extractEntityFromMessage files every triple under the
-	// primary key, silently misfiling those edges onto the wrong entity. Split
-	// them off so the primary merges only its own facts, then route each edge to
-	// its correct subject below — WARN-and-regroup, never reject (multi-Subject
-	// producers stay correct; single-Subject is the target invariant for NEW
-	// Graphables).
-	own, foreign := partitionTriplesBySubject(entity.ID, entity.Triples)
-	if len(foreign) > 0 {
-		entity.Triples = own
-		c.logger.Warn("Graphable emitted cross-entity edges; regrouping onto their subjects",
-			slog.String("entity_id", entity.ID),
-			slog.Int("foreign_triples", len(foreign)),
-			slog.Any("foreign_subjects", distinctSubjects(foreign)))
-	}
+	// ADR-055 §5 T2 + ADR-056 Decision 4: a Graphable may legitimately emit
+	// cross-entity edges whose Subject != EntityID() (sensorml inverse isHostedBy,
+	// federation/objectstore pass-throughs); extractEntityFromMessage files every
+	// triple under the primary key. Normalize at the shared write boundary (split
+	// the foreign-subject edges off the primary + classify them), merge only the
+	// primary's own facts (envelope-bearing), then route the foreign edges onto
+	// their own subjects below.
+	own, foreign := c.normalizeProjection(ctx, entity.ID, entity.MessageType, entity.Triples)
+	entity.Triples = own
 
 	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
 	// used CreateEntity (Put = full-replace) here, which clobbered any
@@ -1002,32 +995,62 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 		return
 	}
 
-	// Route cross-entity edges to their own subject. These are edges onto
-	// entities that own their own envelope, so they ride the evidence-append
-	// path (AddTriples = append-by-subject, no MessageType restamp) rather than
-	// MergeEntity (which would stamp the primary's provenance onto a foreign
-	// entity). Best-effort: a failed edge is logged, not fatal to the primary
-	// ingest that already succeeded. Note AddTriples validates the batch
-	// all-or-nothing — one malformed foreign edge (empty Predicate) drops the
-	// whole foreign batch; no current producer emits one, but a future
-	// multi-edge producer should not assume partial routing.
-	if len(foreign) > 0 {
-		// ADR-056 Decision-4 T2-seam (observe-only, 4a): classify each foreign
-		// edge against the registered ForeignEdgeClaims and meter the unclaimed
-		// ones. This does NOT change routing — the edges are still appended below
-		// (deprecated-on-arrival); the hard reject + must-exist flip are 4c.
-		c.classifyForeignEdges(ctx, entity.MessageType, foreign)
-		if _, failed, aerr := c.AddTriples(ctx, foreign); aerr != nil {
-			c.logger.Warn("Failed to regroup cross-entity edges onto their subjects",
-				slog.String("entity_id", entity.ID),
-				slog.Int("failed_subjects", len(failed)),
-				slog.Any("error", aerr))
-		}
-	}
+	c.routeForeignEdges(ctx, entity.ID, foreign)
 
 	c.logger.Debug("Entity ingested",
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
+}
+
+// normalizeProjection is the SHARED projection-normalization seam (ADR-056
+// Decision 4): EVERY graph-ingest write path that accepts a set of projected
+// triples — fact-arrival ingestEntity AND the mutation API create_with_triples /
+// update_with_triples — passes them through here before committing to
+// ENTITY_STATES, so foreign-edge enforcement is LANE-INDEPENDENT (not
+// fact-arrival-only; the mutation API is a graph write API, not a bypass). It
+// splits the triples against their primary subject, classifies the foreign-
+// subject edges against the registered ForeignEdgeClaims (observe-only — the
+// foreign_edge_unclaimed_total metric + once-WARN; see classifyForeignEdges),
+// and returns the own-subject triples to commit on the primary plus the foreign
+// edges for the caller to route via routeForeignEdges AFTER the primary commit
+// (so a failed primary write never orphans a routed edge).
+//
+// primaryID is the entity the projected write targets (entity.ID for
+// fact-arrival, req.Entity.ID for the mutation API). mt is the producer identity
+// (entity.MessageType) for the claim lookup + metric label. For all current
+// callers foreign is empty (single-subject batches; cs-api's singleSubject guard
+// is a migration guard for missing framework support, not the desired shape) —
+// so this is a behavioural no-op today and the foundation a foreign-edge producer
+// (e.g. cs-api SensorML hierarchies, once it drops singleSubject) builds on.
+func (c *Component) normalizeProjection(ctx context.Context, primaryID string, mt message.Type, triples []message.Triple) (own, foreign []message.Triple) {
+	own, foreign = partitionTriplesBySubject(primaryID, triples)
+	if len(foreign) > 0 {
+		c.logger.Warn("projected write emitted cross-entity edges; regrouping onto their subjects",
+			slog.String("primary_id", primaryID),
+			slog.Int("foreign_triples", len(foreign)),
+			slog.Any("foreign_subjects", distinctSubjects(foreign)))
+		c.classifyForeignEdges(ctx, mt, foreign)
+	}
+	return own, foreign
+}
+
+// routeForeignEdges appends foreign-subject edges onto their own subjects via the
+// evidence-append path (AddTriples = append-by-subject, no MessageType restamp),
+// deprecated-on-arrival (observe-only; the hard reject + Conditional pending
+// buffer are 4b/4c). Best-effort and called AFTER the primary commit succeeds —
+// a failed edge is logged, not fatal to the primary write that already landed.
+// AddTriples validates the batch all-or-nothing, so one malformed foreign edge
+// drops the whole foreign batch; no current producer emits one.
+func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, foreign []message.Triple) {
+	if len(foreign) == 0 {
+		return
+	}
+	if _, failed, aerr := c.AddTriples(ctx, foreign); aerr != nil {
+		c.logger.Warn("failed to regroup cross-entity edges onto their subjects",
+			slog.String("primary_id", primaryID),
+			slog.Int("failed_subjects", len(failed)),
+			slog.Any("error", aerr))
+	}
 }
 
 // classifyForeignEdges runs the ADR-056 Decision-4 T2-seam reject in OBSERVE-ONLY

@@ -428,6 +428,15 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		req.Entity.Triples = req.Triples
 	}
 
+	// Shared projection-normalization seam (ADR-056 Decision 4): the mutation API
+	// is a graph write API, not a bypass — split off any foreign-subject edge
+	// (Subject != Entity.ID) before committing the primary, so it is classified
+	// and routed to its own subject instead of being misfiled onto Entity.ID.
+	// foreign is empty for every current caller (single-subject batches; cs-api's
+	// singleSubject guard blocks multi-subject today).
+	own, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.Entity.Triples)
+	req.Entity.Triples = own
+
 	// ADR-054 channel (b): stamp an explicitly declared indexing profile from
 	// the mutation envelope (highest precedence). Empty/invalid is ignored and
 	// the createEntity seam applies the fallback floor instead.
@@ -440,6 +449,10 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		}
 		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
 	}
+
+	// Primary committed — route foreign edges onto their own subjects (after the
+	// commit so a failed create never orphans a routed edge).
+	c.routeForeignEdges(ctx, req.Entity.ID, foreign)
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
@@ -629,6 +642,15 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		})
 	}
 
+	// Shared projection-normalization seam (ADR-056 Decision 4): split off any
+	// foreign-subject edge from the AddTriples delta so it is classified + routed
+	// to its own subject instead of merged onto Entity.ID. Both the CAS and the
+	// UpdateWithRetry sub-paths apply req.AddTriples, so normalize once here.
+	// foreign is empty for every current caller (the lifecycle Manager's CAS
+	// deltas are single-subject; cs-api's singleSubject guard blocks multi-subject).
+	addOwn, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.AddTriples)
+	req.AddTriples = addOwn
+
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
 	// the caller requires the entity's current KV revision to match
 	// exactly; mismatch fails the request without silently merging.
@@ -637,7 +659,18 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	// callers pass zero and get the UpdateWithRetry merge behavior
 	// unchanged.
 	if req.ExpectedRevision > 0 {
-		return c.handleEntityUpdateWithTriplesCAS(ctx, &req)
+		resp, err := c.handleEntityUpdateWithTriplesCAS(ctx, &req)
+		// Route foreign edges only when the CAS call returned no transport error.
+		// A LOGICAL CAS failure (revision mismatch) returns (errorBytes, nil), so
+		// this would route foreign on a primary that did not land — harmless today
+		// because foreign is empty for every current caller (the lifecycle Manager's
+		// CAS deltas are single-subject).
+		// TODO(4b): gate on resp.Success (or a typed revision-mismatch sentinel) so
+		// a real foreign-edge producer never orphans an edge onto a failed-CAS primary.
+		if err == nil {
+			c.routeForeignEdges(ctx, req.Entity.ID, foreign)
+		}
+		return resp, err
 	}
 
 	// PR-B: the delta apply runs *inside* UpdateWithRetry's update
@@ -715,6 +748,9 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		}
 		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
 	}
+
+	// Primary update committed — route foreign edges onto their own subjects.
+	c.routeForeignEdges(ctx, req.Entity.ID, foreign)
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
