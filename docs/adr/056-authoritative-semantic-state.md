@@ -364,9 +364,13 @@ and a review obligation and cannot silently become permanent — this also resol
 deferred waiver-audit OQ; (P2) Decision 5 sharpened with the explicit invariant *"a
 product bucket may be authoritative ONLY for data that is NOT also authoritative state
 in `ENTITY_STATES`"*; (P2) **cryptographic provenance is RESERVED, not implemented** —
-owner registration is an AUTHORIZATION/provenance contract, NOT cryptographic proof of
-authorship (today's envelope is unauthenticated — `message/base_message.go:158-180`, a
-SHA256 of type+payload with no signing), and the follow-up is scoped in ADR-057.
+owner registration is a **provenance + write-semantics** contract (an authorization MODEL whose
+runtime enforcement is **observe-only on the current tag** — overlaps and unclaimed foreign edges
+are metered/logged, not rejected; the hard reject + owner-token write lease are later increments,
+so this is NOT yet an enforced authorization gate), and it is NOT cryptographic proof of authorship
+(today's envelope is unauthenticated — `message/base_message.go:158-180`, a SHA256 of type+payload
+with no signing); the signing follow-up is scoped in ADR-057. (Don't overclaim security: per the
+semconnect review, label this provenance + write-semantics discipline, not authorization-enforced.)
 
 Folded **re-review HIGHs**: predicate sets are **exact-string enumeration only — no
 prefix/namespace/glob on predicates** (wildcards apply to the entity-ID pattern only);
@@ -835,6 +839,13 @@ explicitly. Without this rule the *first* namespace-registration attempt would s
 false-negative (a glob predicate would fail to intersect a sibling glob, or over-match), and
 the check would ship feeling-like-coverage while catching nothing — the exact failure class
 MEMORY.md warns about. Exact-string is verifiable and total.
+
+**Corollary — aliases are read-compatibility, NOT equal write/ownership keys (semconnect review).**
+Because ownership claims AND indexes are exact-predicate driven, two predicates that mean the same
+thing semantically (e.g. `rdf.type` ↔ `sensorml.process.type`) are NOT interchangeable here. A read
+path may resolve both, but a producer MUST write the canonical framework constant — an alias is a
+*read*-compatibility shim, never an equal write contract or an equal ownership key. Owning `rdf.type`
+does not own `sensorml.process.type`; writing the alias bypasses the claim that names the constant.
 
 **Append-evidence is exempt.** Multi-valued evidence predicates have no single owner by
 design; many writers may append (web/ops back-links). The overlap check covers only the two
@@ -1575,6 +1586,14 @@ The framework owns deterministic projection; products do not hand-roll mirrors.
 | **Events / work items** (tasks, requests) | JetStream streams or product command buckets | producers; consumed via ack | n/a (different substrate) |
 | **Product private bucket** (PLAN_STATES) | product KV | product | NO (honest) — but its `ENTITY_STATES` mirror leg IS (Decision 5) |
 
+**Ownership arbitration is NOT a domain fact — but provenance CAN be (semconnect review).** Sharpened
+two-part rule: (1) *Do not* encode ownership ARBITRATION as domain triples — who-may-write lives in the
+`OWNER_CLAIMS` substrate, never as facts on the entity. (2) *Do* allow explicit provenance triples when
+they describe entity **materialization, source, audit, or lineage**. `core.identity.stub_owner` (the 4b
+fold) and `core.identity.referenced_by` are provenance-on-entity — facts about *how a node came to exist*
+— NOT ownership claims and NOT enforcement rules. The distinction matters for graph readers: CS API clients
+will see provenance-like facts and must not read them as authorization or write ownership.
+
 ## The atomicity guarantee (the KV-twofer is preserved)
 
 Replace-owned does **not** break "the write IS the event." `RemoveTriples` + `AddTriples`
@@ -1971,6 +1990,16 @@ sequencing:
    (does the base `OwnerRegistry` + `OWNER_CLAIMS`/`PENDING_EDGES` land in a 056 Wave 0 before
    ADR-055 Wave 1 pilots, or alongside?) is a sequencing call for the implementation plan, not a
    design decision. Naming the responsibility does not reorder the producer migrations.
+6. **Explicit NON-GOAL — semantic dedupe (semconnect review).** Ownership arbitrates *writes* over
+   `(entity-ID pattern, predicate)` cells; it does NOT reconcile two distinct entity IDs that denote
+   the same real-world object. Flagship case: a no-birth child gets a deterministic child ID under
+   its parent's instance token (Decision 4 lane-ii stub), but a later client that posts that same
+   physical object as a *standalone* entity under a DIFFERENT id/UID creates a SECOND graph entity
+   for one real thing — and governance will NOT merge them. Id-canonicalization / `sameAs`
+   reconciliation is a separate concern, out of scope here. This ADR guarantees only that a
+   referenced id resolves to a node and that writes to a given `(id, predicate)` cell are arbitrated
+   — not that two ids for one object are unified. (Listed as a non-goal so it is labeled, not implied
+   solved.)
 
 > Confirmed: **none of Decisions 1–5 (ownership granularity, overlap rejection, schema-backed
 > reconcile, foreign-edge birth, product-bucket enforcement), neither v3 BLOCKING fix, NOR either
