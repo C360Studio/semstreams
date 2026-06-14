@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -332,6 +333,22 @@ func (rp *Processor) OutputPorts() []component.Port {
 // ConfigSchema returns configuration schema for component interface
 func (rp *Processor) ConfigSchema() component.ConfigSchema {
 	return schema
+}
+
+// ProjectionBindings returns the pack-level ownership declaration for this rule
+// processor: the pack id (owner becomes "rule-pack.<packID>") and the
+// projection contracts the pack owns.
+//
+// INVARIANT (ADR-056 #278 inc 2): this is read ONCE at the composition root,
+// BEFORE manager.StartAll, and the binding is NEVER re-derived on hot-reload.
+// Rule-pack contracts are PACK-LEVEL and STATIC — they are not per-rule and do
+// not change when the rule set hot-reloads. Adding a re-bind call anywhere
+// downstream of StartAll would violate the ownership-epoch invariant.
+//
+// The processor is substrate-agnostic: it returns a declaration and never
+// touches the ownership registry. All binding happens main-side.
+func (rp *Processor) ProjectionBindings() (packID string, contracts []projection.Contract) {
+	return rp.config.PackID, rp.config.ProjectionContracts
 }
 
 // Health returns current health status

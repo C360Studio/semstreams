@@ -69,7 +69,20 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 		}
 		ruleConfig.Consumer = userConfig.Consumer
 
+		// ADR-056 #278 inc 2: the pack-level projection-producer declaration.
+		// These ride the operator config through to ProjectionBindings(), which
+		// the composition root reads ONCE before StartAll to bind ownership.
+		ruleConfig.PackID = userConfig.PackID
+		ruleConfig.ProjectionContracts = userConfig.ProjectionContracts
+
 		// Note: InputSubjects no longer supported - use Ports configuration only
+	}
+
+	// Fail fast on a malformed pack_id: the derived owner id "rule-pack.<id>"
+	// must be subject-safe, and a config-time reject is far clearer than a
+	// silent RegisterOwner failure at the composition root.
+	if err := ruleConfig.Validate(); err != nil {
+		return nil, errs.WrapInvalid(err, "rule-processor-factory", "create", "validate config")
 	}
 
 	// Create processor with metrics if available

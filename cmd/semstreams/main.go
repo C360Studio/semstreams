@@ -199,16 +199,27 @@ func run() error {
 	// the ownership buckets there would make every registration a silent no-op.
 	// A NATS hiccup logs + skips; ownership is best-effort observe-only, never a
 	// boot gate ([[feedback_unconditional_resource_wiring_breaks_resourceless_deploys]]).
-	if ownerReg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver); err != nil {
+	//
+	// ownerReg/staticOwnerHB/hbCtx are lifted to run() scope (nil/ctx until the
+	// EnsureBuckets else-branch assigns them) so the rule-pack contract bind
+	// below — which must run AFTER configureAndCreateServices has constructed the
+	// rule processors — can reuse the same registry and heartbeater (ADR-056 #278
+	// inc 2).
+	var ownerReg *ownership.Registry
+	var staticOwnerHB *ownership.Heartbeater
+	hbCtx := ctx
+	if reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver); err != nil {
 		logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
 	} else {
+		ownerReg = reg
 		// The heartbeat goroutine must stop on shutdown. `ctx` here is
 		// context.Background() (the signal-cancelled context is a downstream
 		// CHILD created in runWithSignalHandling, and a child cancelling never
 		// cancels its parent), so derive a cancellable context and cancel it as
 		// run() unwinds. Registered after natsClient.Close's defer, so by LIFO it
 		// fires FIRST — the heartbeat stops before the client closes.
-		hbCtx, hbCancel := context.WithCancel(ctx)
+		var hbCancel context.CancelFunc
+		hbCtx, hbCancel = context.WithCancel(ctx)
 		defer hbCancel()
 		svcDeps.LifecycleManager.AttachOwnership(hbCtx, ownerReg)
 
@@ -223,7 +234,7 @@ func run() error {
 		// their OWNER_PRESENCE key ages out after PresenceTTL and the next registrant
 		// compacts the claim out of the epoch (Codex review of #277). Run on hbCtx so
 		// the ticker stops on shutdown; the one-shot Bind itself uses ctx.
-		staticOwnerHB := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+		staticOwnerHB = ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
 		go staticOwnerHB.Run(hbCtx)
 		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
@@ -266,6 +277,18 @@ func run() error {
 	// 11. Configure and create services
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
+	}
+
+	// 11b. ADR-056 #278 inc 2 — bind each rule pack's projection contracts under
+	// the ownership substrate. Done HERE (after the rule processors are
+	// constructed by configureAndCreateServices) and BEFORE StartAll runs inside
+	// runWithSignalHandling. Pack contracts are read ONCE, statically — this is
+	// the ONLY rule-pack bind site, and it must NEVER be called from the
+	// hot-reload path (re-binding would self-overlap the pack's own claims and
+	// churn the ownership epoch). Best-effort / observe-only: a nil registry is a
+	// no-op and per-pack errors are logged, never a boot gate.
+	if ownerReg != nil {
+		service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger)
 	}
 
 	// 12. Run application with signal handling
