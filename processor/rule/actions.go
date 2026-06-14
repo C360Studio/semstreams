@@ -32,6 +32,20 @@ const (
 	ActionTypeRemoveTriple = "remove_triple"
 	// ActionTypeUpdateTriple updates metadata on an existing triple
 	ActionTypeUpdateTriple = "update_triple"
+	// ActionTypeReplaceOwned replaces (or clears) the OWNED value of a
+	// single-valued predicate the rule pack is the projection owner of
+	// (ADR-056 Decision 3). Unlike update_triple's remove-then-add, this
+	// is a SINGLE atomic update_with_triples mutation: RemoveTriples names
+	// the predicate (dropping any prior value) and AddTriples carries the
+	// new value, so a watcher never observes the predicate absent between
+	// the two operations. Empty Object clears the predicate (RemoveTriples
+	// only). The Predicate MUST be a literal (no `$` substitution) and MUST
+	// fall inside one of the pack's ModeReplaceOwned projection-contract
+	// groups — both enforced at load/hot-reload time (HARD-FAIL on
+	// violation). NEVER a CAS write: the constructed request always carries
+	// ExpectedRevision == 0; this is owned-current-state reconciliation, not
+	// a state-machine transition (that is cas-transition's lane).
+	ActionTypeReplaceOwned = "replace_owned"
 	// ActionTypePublishAgent triggers an agentic loop by publishing a TaskMessage
 	ActionTypePublishAgent = "publish_agent"
 	// ActionTypeUpdateKV writes JSON to a named KV bucket with optional CAS merge
@@ -394,6 +408,18 @@ type TripleMutator interface {
 	AddTriple(ctx context.Context, ruleID string, triple message.Triple) (uint64, error)
 	// RemoveTriple removes a triple via NATS request/response and returns the KV revision.
 	RemoveTriple(ctx context.Context, ruleID, subject, predicate string) (uint64, error)
+	// ReplaceOwned atomically replaces (or clears) the owned value of a
+	// single-valued predicate on entityID via a single update_with_triples
+	// mutation (ADR-056 Decision 3): the predicate is named in RemoveTriples
+	// and the new value(s) carried in objects (AddTriples). An empty objects
+	// slice clears the predicate. ExpectedRevision is ALWAYS zero — this is
+	// owned-current-state reconciliation, never a CAS transition. The owner
+	// identity ("rule-pack.<packID>") is threaded for audit/diagnostics; it
+	// is NOT placed on the request envelope (the owner wire field is deferred
+	// to a later increment). On a non-existent entity the underlying handler
+	// surfaces ErrorCodeEntityNotFound, which is returned as an error (no
+	// auto-vivify). Returns the post-write KV revision.
+	ReplaceOwned(ctx context.Context, ruleID, owner, entityID, predicate string, objects []message.Triple) (uint64, error)
 }
 
 // Publisher handles publishing messages to NATS subjects.
@@ -464,6 +490,14 @@ type ActionExecutor struct {
 	// audit stream (ADR-055 §3a). Optional: if nil, verdicts are still applied
 	// and logged but no audit event is emitted (e.g. NATS-less test executors).
 	verdictAuditor VerdictAuditor
+	// ownerID is the rule pack's projection-owner identity
+	// ("rule-pack.<packID>", ADR-056 Decision 3). Threaded to the
+	// TripleMutator.ReplaceOwned boundary for audit/diagnostics. Empty when
+	// the pack declares no PackID — a replace_owned action firing with an
+	// empty ownerID is an error (an unowned projection cannot reconcile an
+	// owned predicate group). Set by the processor after construction via
+	// SetProjectionOwner.
+	ownerID string
 }
 
 // SetToolRegistry installs the shared tool registry used by
@@ -491,6 +525,17 @@ func (e *ActionExecutor) SetLifecycleManager(m LifecycleManager) {
 // independently of the operator Publisher so config drift cannot disable audit.
 func (e *ActionExecutor) SetVerdictAuditor(a VerdictAuditor) {
 	e.verdictAuditor = a
+}
+
+// SetProjectionOwner installs the rule pack's projection-owner identity
+// ("rule-pack.<packID>", ADR-056 Decision 3) used by replace_owned actions.
+// The owner is threaded to TripleMutator.ReplaceOwned for audit/diagnostics.
+// An empty owner disables replace_owned (the action returns an error rather
+// than reconciling an owned predicate on behalf of an unidentified owner).
+// Set explicitly after construction by the rule processor when the pack
+// declares a PackID. Mirrors SetToolRegistry / SetLifecycleManager.
+func (e *ActionExecutor) SetProjectionOwner(owner string) {
+	e.ownerID = owner
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -556,6 +601,8 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executePublish(ctx, action, ec)
 	case ActionTypeUpdateTriple:
 		return e.executeUpdateTriple(ctx, action, ec)
+	case ActionTypeReplaceOwned:
+		return e.executeReplaceOwned(ctx, action, ec)
 	case ActionTypePublishAgent:
 		return e.executePublishAgent(ctx, action, ec)
 	case ActionTypeUpdateKV:
@@ -933,6 +980,110 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 			"predicate", predicate)
 	}
 
+	return nil
+}
+
+// executeReplaceOwned executes a replace_owned action (ADR-056 Decision 3),
+// atomically replacing — or, when action.Object is empty, clearing — the owned
+// value of a single-valued predicate on the target entity via ONE
+// update_with_triples mutation. This differs from update_triple's remove-then-add
+// two-step in being atomic: a watcher never observes the predicate absent
+// between operations.
+//
+// Routing decision is made on the RAW action.Object BEFORE substitution
+// (per ADR-056 Decision 3): empty Object → clear (RemoveTriples only);
+// non-empty Object → replace (RemoveTriples + AddTriples). This keeps the
+// clear-vs-replace branch independent of what the substitution resolves to —
+// a clear is authored by omitting Object, never by an Object that happens to
+// resolve to "".
+//
+// Predicate is always a literal (validation rejects any `$` in the predicate of
+// a replace_owned action), so it is NOT run through substitution. Object IS
+// substituted through the same typed dispatch as add_triple / update_triple so
+// numeric / bool values round-trip their source type.
+//
+// The owner identity ("rule-pack.<packID>") is required: a replace_owned firing
+// with an empty ownerID is an authoring/wiring error (an unidentified owner
+// cannot reconcile an owned predicate group) and returns an error before any
+// mutation.
+func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action, ec *ExecutionContext) error {
+	entityID, err := resolveTripleSubject(action, ec)
+	if err != nil {
+		return fmt.Errorf("resolve replace_owned subject: %w", err)
+	}
+
+	// Predicate is a literal (validation forbids `$`), so it is used as-is.
+	if action.Predicate == "" {
+		return errors.New("predicate is required for replace_owned action")
+	}
+
+	// Owner identity must be wired — replace_owned reconciles an OWNED
+	// predicate group on behalf of "rule-pack.<packID>". An empty owner means
+	// the pack declared no PackID (or the processor never wired the owner),
+	// which makes the ownership claim that authorizes this write unresolvable.
+	if e.ownerID == "" {
+		return fmt.Errorf("replace_owned action on predicate %q requires a projection owner, but none is wired (rule pack must declare pack_id; see ADR-056 Decision 3)", action.Predicate)
+	}
+
+	// Clear vs replace is decided on the RAW Object before substitution.
+	// Empty → clear (RemoveTriples only, zero objects). Non-empty → replace.
+	var objects []message.Triple
+	if action.Object != "" {
+		var object any
+		if typed, ok := ec.SubstituteVariablesTyped(action.Object); ok {
+			object = typed
+		} else {
+			object = ec.SubstituteVariables(action.Object)
+		}
+
+		ttl, err := action.ParseTTL()
+		if err != nil {
+			return fmt.Errorf("parse TTL: %w", err)
+		}
+		var expiresAt *time.Time
+		if ttl > 0 {
+			expTime := time.Now().Add(ttl)
+			expiresAt = &expTime
+		}
+
+		objects = []message.Triple{{
+			Subject:    entityID,
+			Predicate:  action.Predicate,
+			Object:     object,
+			Source:     "rule_engine",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+			ExpiresAt:  expiresAt,
+		}}
+	}
+
+	if e.logger != nil {
+		e.logger.Debug("Replacing owned predicate",
+			"entity_id", entityID,
+			"predicate", action.Predicate,
+			"owner", e.ownerID,
+			"clear", len(objects) == 0)
+	}
+
+	if e.tripleMutator == nil {
+		if e.logger != nil {
+			e.logger.Debug("Owned predicate not replaced (no mutator configured)",
+				"entity_id", entityID,
+				"predicate", action.Predicate)
+		}
+		return nil
+	}
+
+	revision, err := e.tripleMutator.ReplaceOwned(ctx, ec.RuleID(), e.ownerID, entityID, action.Predicate, objects)
+	if err != nil {
+		return fmt.Errorf("replace owned predicate %q on %s: %w", action.Predicate, entityID, err)
+	}
+	if e.logger != nil {
+		e.logger.Debug("Owned predicate replaced",
+			"entity_id", entityID,
+			"predicate", action.Predicate,
+			"kv_revision", revision)
+	}
 	return nil
 }
 

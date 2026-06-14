@@ -126,6 +126,19 @@ func (rp *Processor) loadRules() error {
 			continue
 		}
 
+		// ADR-056 Decision 3: enforce the replace_owned envelope at the
+		// PROCESSOR level (the envelope is rp.config.ProjectionContracts, which
+		// the stateless rule factory does not see). A replace_owned action
+		// naming a predicate outside the pack's owned-replace contracts — or a
+		// non-literal predicate — HARD-FAILS the load. Unlike a malformed
+		// individual rule (which is logged + skipped so siblings still load), a
+		// broken owned-write claim must NOT silently ship: return the error so
+		// boot aborts. Runs before the cron/expression split so it covers
+		// def.Actions (cron) and the transition lists (expression) uniformly.
+		if err := rp.validateRuleReplaceOwnedActions(def); err != nil {
+			return fmt.Errorf("replace_owned envelope validation failed for rule %s: %w", def.ID, err)
+		}
+
 		// Cron rules take a separate construction path: they don't go through
 		// the factory registry because CronRule does not implement the Rule
 		// interface (Subscribe/Evaluate/ExecuteEvents are message-driven and

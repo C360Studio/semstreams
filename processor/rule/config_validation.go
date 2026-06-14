@@ -93,17 +93,36 @@ func (rp *Processor) validateSingleRuleConfig(ruleID string, ruleConfig any) err
 			"RuleProcessor", "validateSingleRuleConfig", "check rule type")
 	}
 
+	// ADR-056 Decision 3: enforce the replace_owned envelope on the hot-reload
+	// path. validateSingleRuleConfig is a *Processor method so it reaches the
+	// pack's ProjectionContracts. Build the Definition ONCE (definitionFromMap
+	// walks all five action lists) and run the envelope check; a violation
+	// returns an error, which ValidateConfigUpdate surfaces as a HARD-REJECT of
+	// the change (the proposed rule set is not applied). Runs for ALL rule kinds
+	// — cron rules carry replace_owned in def.Actions; expression rules in the
+	// transition lists — so it must precede the cron/expression branch split.
+	//
+	// A definitionFromMap parse error is itself a HARD-REJECT (go-reviewer I1):
+	// skipping the envelope check when the Definition fails to parse would couple
+	// the envelope's hard-fail guarantee to the apply path re-hitting the same
+	// parse error (runtime_config.go) — a coupling a future refactor could
+	// silently break, reopening the envelope bypass. Rejecting here makes the
+	// envelope check unconditional on a parseable action list, and a malformed
+	// rule could never apply anyway.
+	def, err := definitionFromMap(ruleID, ruleMap)
+	if err != nil {
+		return errs.WrapInvalid(err, "RuleProcessor", "validateSingleRuleConfig",
+			fmt.Sprintf("parse rule %s", ruleID))
+	}
+	if verr := rp.validateRuleReplaceOwnedActions(def); verr != nil {
+		return verr
+	}
+
 	// Cron rules carry a different shape — schedule + actions, no
-	// conditions, no logic. Build the Definition and round-trip it through
-	// NewCronRule so the same validation surface (forbidden fields,
-	// schedule parse, cooldown parse, action type non-empty) catches both
-	// file-loaded and hot-reloaded rules.
+	// conditions, no logic. Round-trip the parsed Definition through NewCronRule
+	// so the same validation surface (forbidden fields, schedule parse, cooldown
+	// parse, action type non-empty) catches both file-loaded and hot-reloaded rules.
 	if ruleTypeStr == CronRuleType {
-		def, err := definitionFromMap(ruleID, ruleMap)
-		if err != nil {
-			return errs.Wrap(err, "RuleProcessor", "validateSingleRuleConfig",
-				fmt.Sprintf("parse cron rule %s", ruleID))
-		}
 		if _, err := NewCronRule(def); err != nil {
 			return errs.WrapInvalid(err, "RuleProcessor", "validateSingleRuleConfig",
 				fmt.Sprintf("validate cron rule %s", ruleID))

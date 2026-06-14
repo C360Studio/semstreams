@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -595,6 +596,22 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 			SetVerdictAuditor(VerdictAuditor)
 		}); ok {
 			setter.SetVerdictAuditor(newVerdictAuditor(rp))
+		}
+	}
+
+	// ADR-056 Decision 3: wire the rule pack's projection-owner identity onto
+	// the executor so replace_owned actions can thread it to the mutator
+	// boundary. The owner is "rule-pack.<PackID>" — the SAME identity the
+	// composition root binds the pack's ProjectionContracts under (inc 2). Only
+	// when the pack declares a PackID; an empty PackID leaves the owner unset
+	// and any replace_owned action returns an error (an unowned pack cannot
+	// reconcile an owned predicate group). Same type-assert setter pattern as
+	// SetToolRegistry / SetLifecycleManager.
+	if rp.config.PackID != "" {
+		if setter, ok := actionExecutor.(interface {
+			SetProjectionOwner(string)
+		}); ok {
+			setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
 		}
 	}
 
@@ -1185,6 +1202,92 @@ func (rp *Processor) DebugStatus() any {
 		LastEvaluationTime: rp.lastEvaluationTime,
 		TrackedRevisions:   rp.trackedRevisionCount(),
 	}
+}
+
+// ownedReplacePredicates returns the union of every predicate this rule pack
+// declares in a ModeReplaceOwned group across all of its ProjectionContracts
+// (ADR-056 Decision 3). This is the envelope a replace_owned action must stay
+// inside: a replace_owned naming a predicate NOT in this set is reaching outside
+// the pack's owned-current-state claim and is rejected at load/hot-reload time.
+//
+// Validation runs against the processor's OWN contracts — there is no registry
+// injection. The contracts are pack-level and static, so the set is stable for
+// the processor lifetime; computing it per-validation-call is cheap (contracts
+// are a handful of predicates) and avoids any cache-invalidation question.
+func (rp *Processor) ownedReplacePredicates() map[string]struct{} {
+	owned := make(map[string]struct{})
+	for _, c := range rp.config.ProjectionContracts {
+		for _, g := range c.Groups {
+			if g.Mode != ownership.ModeReplaceOwned {
+				continue
+			}
+			for _, p := range g.Predicates {
+				owned[p] = struct{}{}
+			}
+		}
+	}
+	return owned
+}
+
+// validateReplaceOwnedAction enforces the ADR-056 Decision 3 envelope on a
+// single action. It is a no-op for any non-replace_owned action. For a
+// replace_owned action it requires:
+//
+//   - a non-empty Predicate;
+//   - a LITERAL Predicate (no `$` substitution tokens — the predicate names the
+//     owned cell and must be statically checkable against the contract);
+//   - the Predicate to fall inside one of the pack's ModeReplaceOwned groups.
+//
+// A violation returns an error; both load paths treat that as a HARD-FAIL
+// (file-load aborts boot; hot-reload rejects the change). The owned-predicate
+// set is the processor's OWN ProjectionContracts — no registry injection.
+func (rp *Processor) validateReplaceOwnedAction(ruleID string, a Action) error {
+	if a.Type != ActionTypeReplaceOwned {
+		return nil
+	}
+	if a.Predicate == "" {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s replace_owned action requires a non-empty predicate", ruleID),
+			"RuleProcessor", "validateReplaceOwnedAction", "check predicate present")
+	}
+	if strings.Contains(a.Predicate, "$") {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s replace_owned predicate %q must be a literal (no `$` substitution); the predicate names the owned cell and must be statically checkable against the projection contract (ADR-056 Decision 3)", ruleID, a.Predicate),
+			"RuleProcessor", "validateReplaceOwnedAction", "check predicate literal")
+	}
+	owned := rp.ownedReplacePredicates()
+	if _, ok := owned[a.Predicate]; !ok {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule %s replace_owned predicate %q is outside this pack's owned-replace projection contracts; declare it in a replace-owned group of a projection_contract (owner rule-pack.%s) or use add_triple/update_triple (ADR-056 Decision 3)", ruleID, a.Predicate, rp.config.PackID),
+			"RuleProcessor", "validateReplaceOwnedAction", "check predicate in envelope")
+	}
+	return nil
+}
+
+// validateRuleReplaceOwnedActions walks every action list on a Definition
+// (OnEnter, OnExit, WhileTrue, OnRecovery, Actions) and runs the ADR-056
+// Decision 3 envelope check on each replace_owned action. Called from the
+// file-load path (loadRules) at PROCESSOR level — not in the stateless factory
+// — because the envelope is the PROCESSOR's ProjectionContracts, which the
+// factory does not see. A violation HARD-FAILS the load (returns the error,
+// aborting boot) rather than skipping the rule, so a broken owned-write claim
+// can never silently ship.
+func (rp *Processor) validateRuleReplaceOwnedActions(def Definition) error {
+	for label, actions := range map[string][]Action{
+		"on_enter":    def.OnEnter,
+		"on_exit":     def.OnExit,
+		"while_true":  def.WhileTrue,
+		"on_recovery": def.OnRecovery,
+		"actions":     def.Actions,
+	} {
+		for i, a := range actions {
+			if err := rp.validateReplaceOwnedAction(def.ID, a); err != nil {
+				return errs.Wrap(err, "RuleProcessor", "validateRuleReplaceOwnedActions",
+					fmt.Sprintf("rule %s %s[%d]", def.ID, label, i))
+			}
+		}
+	}
+	return nil
 }
 
 // Per-rule revision tracking for feedback loop prevention.
