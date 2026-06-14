@@ -452,7 +452,7 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 
 	// Primary committed — route foreign edges onto their own subjects (after the
 	// commit so a failed create never orphans a routed edge).
-	c.routeForeignEdges(ctx, req.Entity.ID, foreign)
+	c.routeForeignEdges(ctx, req.Entity.ID, req.Entity.MessageType, foreign)
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
@@ -666,7 +666,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		// primary that never landed. Gate on the decoded Success; the unmarshal is
 		// skipped on the no-foreign-edge happy path (every current caller).
 		if err == nil && len(foreign) > 0 && casUpdateCommitted(resp) {
-			c.routeForeignEdges(ctx, req.Entity.ID, foreign)
+			c.routeForeignEdges(ctx, req.Entity.ID, req.Entity.MessageType, foreign)
 		}
 		return resp, err
 	}
@@ -748,7 +748,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	}
 
 	// Primary update committed — route foreign edges onto their own subjects.
-	c.routeForeignEdges(ctx, req.Entity.ID, foreign)
+	c.routeForeignEdges(ctx, req.Entity.ID, req.Entity.MessageType, foreign)
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {

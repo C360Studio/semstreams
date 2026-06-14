@@ -225,6 +225,30 @@ shape.
   e2e-exercised end-to-end. Closing it (a relationship-target-bearing e2e fixture) is a prerequisite
   for the 4c must-exist flip, NOT for this additive fold — the fold keeps auto-vivify working, so it
   does not change observable behaviour for any current path.
+- **W0 4c-pre-2 landed — `routeForeignEdges` per-edge must-exist policy (stub-materialize-or-loud-drop,
+  not bare `AddTriples`).** The routing seam now does its OWN target-existence check
+  (`foreignTargetExists`) and, for an ABSENT target, branches on the covering `ForeignEdgeClaim`'s
+  `EdgeMode` (a new `ClaimReader.ForeignEdgeMode` reader reusing `epoch.foreignEdgeClaimFor`):
+  `EdgeNoBirthStub` materializes the 4b stub then appends; `EdgeStrict` loud-drops (the new
+  `foreign_edge_dropped_total{message_type,predicate,reason=strict_absent_target}` metric — kept
+  DISTINCT from `foreign_edge_unclaimed_total` so a Strict drop can't corrupt the flip-gate's
+  hatch-empty signal); `EdgeConditional`/`EdgeBackfill` are DEFERRED (the `PENDING_EDGES` buffer is a
+  later increment) and route-with-warn + `reason=conditional_deferred` in the interim; an UNCLAIMED
+  edge stays routed deprecated-on-arrival so the hatch can still drain to zero. A PRESENT target
+  appends regardless of mode; `claimReader == nil` graceful-skips to the legacy bare append; a read
+  blip on either the existence check or the mode lookup fails OPEN (route-toward-append, never
+  Strict-drop on a transient error). The own existence check is what makes routing correct BOTH before
+  and after the eventual flip removes `AddTriples`' auto-vivify else-branch. **Lane-asymmetry note
+  (corrects the 4b "stub materializes BEFORE `routeForeignEdges`" claim):** that upstream stub
+  (`ensureRelationshipTargetsExist` walking the parent's own `hosts` edge) runs only on the
+  fact-arrival and `create_with_triples` lanes; `update_with_triples` does NOT call it, so on the
+  update lane `routeForeignEdges`'s own `ensureReferencedEntityExists` call for `EdgeNoBirthStub` is
+  load-bearing, not redundant. Additive / observe-leaning: only `EdgeStrict`+absent drops, and no live
+  producer registers `EdgeStrict` today (sensorml's `isHostedBy` is `EdgeNoBirthStub`). Does NOT by
+  itself enable the flip — that remains gated on the `PENDING_EDGES` increment (if any Conditional
+  producer ever ships), the bare-triple-lane precondition (Fix part 6), the hatch-empty bake, and the
+  e2e fourth-path fixture. *(Source-line anchors elsewhere in this Decision-4 section predate W0 and
+  have drifted; trust symbol names over line numbers when reading the code.)*
 
 ### v4 → v5: implementation contracts pinned (1 BLOCKING + P1s; no architectural forks)
 
