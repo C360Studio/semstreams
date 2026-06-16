@@ -57,6 +57,37 @@ The payload registry and ownership registry are not competing systems. The paylo
 `BaseMessage` decoding. The ownership registry is distributed arbitration for shared graph state. Projection contracts
 are the bridge between them.
 
+## Runtime Config vs Contract Migration
+
+SemStreams has runtime-configurable surfaces: rule thresholds, routes, model selection, prompts, flow shape, and
+component behavior can be changed while the system is running when the component supports it.
+
+Ownership contracts are different. They declare data-plane authority over entity patterns, predicate groups, write
+modes, producer identities, and foreign-edge behavior. Changing that authority is closer to a schema migration or
+online DDL than ordinary hot config.
+
+Runtime config may change behavior *inside* an already declared ownership contract. For example, a rule pack can
+hot-reload the threshold that decides when it emits `alert.active` if that predicate is already part of its projection
+contract. A new owned predicate, write mode, entity pattern, producer identity, or foreign-edge mode is a contract
+migration.
+
+The current model treats static projection contracts as deployment-time declarations with runtime liveness. Owners
+renew presence through `OWNER_PRESENCE`; they do not renegotiate predicate-claim shape during normal hot reload.
+
+Future online contract migration would need an explicit protocol:
+
+1. Register the proposed contract and check for overlapping claims.
+2. Quiesce or fence old writes that would conflict with the new authority.
+3. Backfill, reconcile, or validate existing graph state as needed.
+4. Flip producers to the new contract.
+5. Observe the new owner and retire the old contract when safe.
+
+The practical rule is:
+
+```text
+Hot reload changes behavior. Contract migration changes authority.
+```
+
 ## What Governance Does Not Do
 
 Keep these edges sharp:

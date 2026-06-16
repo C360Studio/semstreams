@@ -41,6 +41,11 @@ SemStreams persists state in two NATS JetStream KV buckets:
 
 The config bucket stores the runtime configuration that the ComponentManager watches and reacts to. The flows bucket stores visual flow definitions that the UI displays and modifies.
 
+Runtime configuration can change operational behavior, but governed projection ownership is data-plane authority rather
+than ordinary component config. Changes to entity patterns, predicate ownership, write modes, producer identity, or
+foreign-edge behavior should follow the contract-migration model in
+[Governed Semantic State](28-governed-semantic-state.md).
+
 ## Static Config → Flow Bridge
 
 When you start with a static config file, SemStreams automatically creates a Flow entry in the flows bucket. This bridges the gap between headless and UI modes:
