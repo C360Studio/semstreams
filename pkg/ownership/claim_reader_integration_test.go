@@ -73,6 +73,26 @@ func TestIntegration_ClaimReader_Classification(t *testing.T) {
 	if len(got) != 1 || got[0] != "claimed.edge" {
 		t.Fatalf("other producer: got %v, want [claimed.edge] (shared.edge covered by any-producer claim)", got)
 	}
+
+	// ForeignEdgeMode is the routing seam's mode lookup (routeForeignEdges
+	// branches NoBirthStub/Strict/... on it) — prove it resolves the REGISTERED
+	// mode against the live epoch, not just claimed/unclaimed. Same claims as
+	// above (claimed.edge = exact-producer NoBirthStub; shared.edge = any-producer
+	// NoBirthStub).
+	if mode, ok, err := cr.ForeignEdgeMode(ctx, "test.fixture.v1", "claimed.edge"); err != nil || !ok || mode != EdgeNoBirthStub {
+		t.Fatalf("ForeignEdgeMode(exact claimed.edge) = %q,%v,%v; want %q,true,nil", mode, ok, err, EdgeNoBirthStub)
+	}
+	if mode, ok, err := cr.ForeignEdgeMode(ctx, "test.fixture.v1", "unclaimed.edge"); err != nil || ok {
+		t.Fatalf("ForeignEdgeMode(unclaimed.edge) = %q,%v,%v; want \"\",false,nil (no covering claim)", mode, ok, err)
+	}
+	// any-producer claim: a DIFFERENT producer still matches the Producer-empty claim.
+	if mode, ok, err := cr.ForeignEdgeMode(ctx, "other.type.v1", "shared.edge"); err != nil || !ok || mode != EdgeNoBirthStub {
+		t.Fatalf("ForeignEdgeMode(any-producer shared.edge) = %q,%v,%v; want %q,true,nil", mode, ok, err, EdgeNoBirthStub)
+	}
+	// exact-producer claim does NOT match a different producer.
+	if mode, ok, err := cr.ForeignEdgeMode(ctx, "other.type.v1", "claimed.edge"); err != nil || ok {
+		t.Fatalf("ForeignEdgeMode(other producer, exact claimed.edge) = %q,%v,%v; want \"\",false,nil (exact-producer miss)", mode, ok, err)
+	}
 }
 
 // NewClaimReader on a deploy that never created OWNER_CLAIMS returns an error so
