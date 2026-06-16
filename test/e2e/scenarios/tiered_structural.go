@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 )
 
 // Structural variant validation functions for rules-only testing
@@ -244,6 +247,118 @@ func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, resul
 		fmt.Printf("[HUMIDITY DEBUG] percent value: %v, type value: %v, conditions met: %v\n", percentValue, typeValue, conditionsMet)
 	}
 
+	return nil
+}
+
+// executeValidateReferentialStub validates ADR-056 Decision-4's fourth path: when
+// a write carries a RELATIONSHIP triple whose Object is a valid 6-part entity ID
+// that no producer independently creates, graph-ingest materialises an
+// envelope-bearing referential-integrity stub for that target so the reference
+// always resolves to a node (load-bearing for traversal, and what makes the
+// must-exist flip safe). This is the e2e coverage gap ADR-056 tracked as "gated to
+// 4c": the only relationship-emitting production processor (IoT sensor) also
+// emits its zone target, so nothing else exercises this path. Structural tier — no ML.
+//
+// The fixture drives the create_with_triples mutation lane (the cs-api lane that
+// runs ensureRelationshipTargetsExist) directly, with a target under a dedicated
+// e2e prefix that no processor emits, so the stub is the ONLY thing that can create it.
+func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, result *Result) error {
+	const (
+		referrerID    = "c360.platform.e2e.referential.referrer.001"
+		danglingID    = "c360.platform.e2e.referential.target.001"
+		relationPred  = "test.e2e.references"
+		createSubject = "graph.mutation.entity.create_with_triples"
+	)
+
+	// 1. Create the referrer carrying a relationship triple to the dangling target.
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          referrerID,
+			MessageType: message.Type{Domain: "e2e", Category: "referential", Version: "v1"},
+		},
+		Triples: []message.Triple{
+			{Subject: referrerID, Predicate: relationPred, Object: danglingID, Confidence: 1.0},
+		},
+		RequestID: "e2e-referential-stub",
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal create_with_triples request: %w", err)
+	}
+
+	respData, err := s.natsClient.Request(ctx, createSubject, reqData, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("create_with_triples request failed: %w", err)
+	}
+	var resp graph.CreateEntityWithTriplesResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return fmt.Errorf("parse create_with_triples response (%q): %w", string(respData), err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("create_with_triples failed: %s", resp.Error)
+	}
+
+	// 2. Poll for the referential stub on the dangling target. ensureRelationshipTargetsExist
+	//    blocks (wg.Wait) before the mutation reply, so this typically resolves on the first
+	//    read; the bounded poll absorbs any KV/cache visibility lag.
+	stub, getErr := s.natsClient.GetEntity(ctx, danglingID)
+	for attempt := 0; (getErr != nil || stub == nil) && attempt < 20; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+		stub, getErr = s.natsClient.GetEntity(ctx, danglingID)
+	}
+	if stub == nil {
+		return fmt.Errorf("referential stub %s was not created within timeout — fourth path (ensureReferencedEntityExists) did not fire", danglingID)
+	}
+
+	// 3. Assert the envelope-bearing stub markers (ADR-056 4b): the core.identity.stub
+	//    marker and core.identity.referenced_by = the referrer that named it.
+	hasMarker, hasReferencedBy, hasStubOwner := false, false, false
+	var referencedByValue, stubOwnerValue any
+	for _, t := range stub.Triples {
+		switch t.Predicate {
+		case "core.identity.stub":
+			hasMarker = true
+		case "core.identity.referenced_by":
+			hasReferencedBy = true
+			referencedByValue = t.Object
+		case "core.identity.stub_owner":
+			hasStubOwner = true
+			stubOwnerValue = t.Object
+		}
+	}
+
+	result.Metrics["referential_stub_triples"] = len(stub.Triples)
+	result.Details["referential_stub_validation"] = map[string]any{
+		"referrer_id":         referrerID,
+		"dangling_target_id":  danglingID,
+		"stub_created":        true,
+		"has_stub_marker":     hasMarker,
+		"has_referenced_by":   hasReferencedBy,
+		"has_stub_owner":      hasStubOwner,
+		"referenced_by_value": referencedByValue,
+		"stub_owner_value":    stubOwnerValue,
+		"stub_version":        stub.Version,
+		"message":             fmt.Sprintf("Fourth path created referential stub %s (marker=%v, referenced_by=%v, owner=%v)", danglingID, hasMarker, referencedByValue, stubOwnerValue),
+	}
+
+	if !hasMarker || !hasReferencedBy || !hasStubOwner {
+		return fmt.Errorf("referential stub %s missing required markers: core.identity.stub=%v, core.identity.referenced_by=%v, core.identity.stub_owner=%v",
+			danglingID, hasMarker, hasReferencedBy, hasStubOwner)
+	}
+	if got := fmt.Sprintf("%v", referencedByValue); got != referrerID {
+		return fmt.Errorf("referential stub %s core.identity.referenced_by = %q, want %q", danglingID, got, referrerID)
+	}
+	// Envelope-bearing stub must record a non-empty owner — the ADR-055
+	// "no ownerless births" property the must-exist flip relies on.
+	if owner, ok := stubOwnerValue.(string); !ok || owner == "" {
+		return fmt.Errorf("referential stub %s core.identity.stub_owner is empty — an envelope-bearing stub must record an owner", danglingID)
+	}
+
+	result.Metrics["referential_stub_valid"] = 1
 	return nil
 }
 
