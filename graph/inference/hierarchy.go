@@ -366,7 +366,14 @@ func (h *HierarchyInference) ensureContainerAndReturnEdge(ctx context.Context, e
 		}
 
 		if err := h.tripleAdder.AddTriple(ctx, inverseTriple); err != nil {
-			// Log warning but don't fail - forward edge will still be returned
+			// Log warning but don't fail - forward edge will still be returned.
+			// Count it on edgesFailed for parity with the sibling-inverse drop
+			// above — ADR-056 Decision 4 flagged this container-inverse drop as
+			// the least-observable (Warn-only, no counter). NOTE: the container
+			// is materialised by ensureContainerExists above before this write,
+			// so an absent target is not the cause here — this is a CAS/storage
+			// failure, not a must-exist drop (the flip does not touch this path).
+			h.edgesFailed.Add(1)
 			h.logger.Warn("Failed to create inverse edge",
 				"container_id", containerID,
 				"entity_id", entityID,

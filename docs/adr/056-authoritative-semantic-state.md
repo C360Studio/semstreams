@@ -1102,6 +1102,13 @@ live sources:
   DROP is a correctness question (the graph loses a traversal edge), not a free degradation —
   and the least-observable of the two (container) has no metric at all, which strengthens the
   case that this is a correctness bug, not a degradation knob.**
+  - **4c-pre-3 update (code-traced):** the container-inverse drop now increments `edgesFailed`
+    for parity with the sibling drop (`hierarchy.go`). The trace also clarified its NATURE: the
+    container is materialised by `ensureContainerExists` *before* the inverse write, so an absent
+    target is never the cause — this drop is a CAS/storage failure, NOT a must-exist/absent-target
+    drop, and the closing-move flip does not touch this in-process `AddTriple` path. The
+    observability gap is closed; the "correctness drop" framing applies to the foreign-edge lane
+    (the `PENDING_EDGES`/Conditional story), not to this container-inverse counter.
 
 **The enforcement seam is the SHARED projection-normalization step, not claim-registration
 (BLOCKING-B fix part 1 — the core bypass) and not one lane (the lane-independence correction

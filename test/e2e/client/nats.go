@@ -171,6 +171,22 @@ func (c *NATSValidationClient) Publish(ctx context.Context, subject string, data
 	return c.client.PublishToStream(ctx, subject, data)
 }
 
+// Request sends a NATS request/reply and returns the raw response payload.
+// Used by validation steps that drive a request/reply API directly — notably
+// the graph mutation lane (graph.mutation.entity.create_with_triples), which
+// replies with a structured MutationResponse rather than the natsclient
+// "error: <msg>" payload convention, so callers parse and check Success.
+func (c *NATSValidationClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	c.mu.Unlock()
+
+	return c.client.Request(ctx, subject, data, timeout)
+}
+
 // CountEntities counts the number of entities in the ENTITY_STATES bucket
 // Returns 0, nil if bucket doesn't exist (graceful degradation)
 func (c *NATSValidationClient) CountEntities(ctx context.Context) (int, error) {

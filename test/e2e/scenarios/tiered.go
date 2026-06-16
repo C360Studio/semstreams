@@ -295,6 +295,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-zero-clusters", s.executeValidateZeroClusters, []string{"structural"}},
 		{"validate-rule-transitions", s.executeValidateRuleTransitions, []string{"structural"}},
 		{"validate-entity-triples", s.executeValidateEntityTriples, []string{"structural"}},
+		// ADR-056 Decision-4 fourth path: a dangling entity-ID relationship target
+		// is materialised as an envelope-bearing referential stub (structural — no ML).
+		{"validate-referential-stub", s.executeValidateReferentialStub, []string{"structural"}},
 
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
