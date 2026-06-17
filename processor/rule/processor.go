@@ -206,6 +206,14 @@ type Processor struct {
 	// See also: cmd/semstreams/main.go buildRuleManager — a second ConfigManager
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
+
+	// projectionIncarnation is the per-process boot nonce from the ownership
+	// Registry (ADR-056 PR-1). Set via SetProjectionIncarnation by
+	// service.BindRulePackContracts (which holds the Registry) BEFORE
+	// initializeStateTracker. The executor reads it at initializeStateTracker
+	// time and stamps it on every replace_owned request as the incarnation half
+	// of the OwnerToken "<owner>#<incarnation>".
+	projectionIncarnation string
 }
 
 // NewProcessor creates a new rule processor
@@ -350,6 +358,15 @@ func (rp *Processor) ConfigSchema() component.ConfigSchema {
 // touches the ownership registry. All binding happens main-side.
 func (rp *Processor) ProjectionBindings() (packID string, contracts []projection.Contract) {
 	return rp.config.PackID, rp.config.ProjectionContracts
+}
+
+// SetProjectionIncarnation stores the per-process boot nonce from the ownership
+// Registry so initializeStateTracker can forward it to the ActionExecutor. Must
+// be called by service.BindRulePackContracts BEFORE Start (which calls
+// initializeStateTracker). Mirrors SetProjectionOwner's timing contract.
+// A nil/empty incarnation is a no-op — test paths and unowned packs skip it.
+func (rp *Processor) SetProjectionIncarnation(incarnation string) {
+	rp.projectionIncarnation = incarnation
 }
 
 // Health returns current health status
@@ -612,6 +629,19 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 			SetProjectionOwner(string)
 		}); ok {
 			setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
+		}
+		// ADR-056 PR-1: forward the per-process incarnation nonce so the
+		// executor can stamp the full "<owner>#<incarnation>" OwnerToken on
+		// every replace_owned request. The incarnation is set by
+		// service.BindRulePackContracts (which holds the Registry) BEFORE
+		// Start is called. Empty when the Registry is not wired — the executor
+		// falls back to owner-only, which is correct for test / unowned paths.
+		if rp.projectionIncarnation != "" {
+			if setter, ok := actionExecutor.(interface {
+				SetProjectionIncarnation(string)
+			}); ok {
+				setter.SetProjectionIncarnation(rp.projectionIncarnation)
+			}
 		}
 	}
 

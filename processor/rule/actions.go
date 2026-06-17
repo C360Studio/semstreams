@@ -413,13 +413,15 @@ type TripleMutator interface {
 	// mutation (ADR-056 Decision 3): the predicate is named in RemoveTriples
 	// and the new value(s) carried in objects (AddTriples). An empty objects
 	// slice clears the predicate. ExpectedRevision is ALWAYS zero — this is
-	// owned-current-state reconciliation, never a CAS transition. The owner
-	// identity ("rule-pack.<packID>") is threaded for audit/diagnostics; it
-	// is NOT placed on the request envelope (the owner wire field is deferred
-	// to a later increment). On a non-existent entity the underlying handler
-	// surfaces ErrorCodeEntityNotFound, which is returned as an error (no
-	// auto-vivify). Returns the post-write KV revision.
-	ReplaceOwned(ctx context.Context, ruleID, owner, entityID, predicate string, objects []message.Triple) (uint64, error)
+	// owned-current-state reconciliation, never a CAS transition. The
+	// ownerToken is the pre-composed lease token "<owner>#<incarnation>",
+	// or EMPTY when the Registry incarnation is unavailable (two-state
+	// contract: empty = lease check SKIPs; never a bare "<owner>"), stamped
+	// onto UpdateEntityWithTriplesRequest.OwnerToken for the graph-ingest
+	// lease check (ADR-056 PR-1). On a non-existent entity the underlying
+	// handler surfaces ErrorCodeEntityNotFound, which is returned as an error
+	// (no auto-vivify). Returns the post-write KV revision.
+	ReplaceOwned(ctx context.Context, ruleID, ownerToken, entityID, predicate string, objects []message.Triple) (uint64, error)
 }
 
 // Publisher handles publishing messages to NATS subjects.
@@ -498,6 +500,13 @@ type ActionExecutor struct {
 	// owned predicate group). Set by the processor after construction via
 	// SetProjectionOwner.
 	ownerID string
+	// incarnation is the per-process boot nonce from the ownership Registry
+	// (ADR-056 PR-1). Set via SetProjectionIncarnation after construction.
+	// Together with ownerID it forms the OwnerToken "<ownerID>#<incarnation>"
+	// stamped on every replace_owned mutation request. Empty when the Registry
+	// is not wired (test paths, unowned packs) — ReplaceOwned stamps only the
+	// owner in that case (no fence, which is fine for the deferred comparison).
+	incarnation string
 }
 
 // SetToolRegistry installs the shared tool registry used by
@@ -536,6 +545,19 @@ func (e *ActionExecutor) SetVerdictAuditor(a VerdictAuditor) {
 // declares a PackID. Mirrors SetToolRegistry / SetLifecycleManager.
 func (e *ActionExecutor) SetProjectionOwner(owner string) {
 	e.ownerID = owner
+}
+
+// SetProjectionIncarnation installs the per-process boot nonce from the
+// ownership Registry (ADR-056 PR-1). Together with the owner id it forms the
+// OwnerToken "<owner>#<incarnation>" stamped on every replace_owned request.
+// Set by the processor after initializeStateTracker reads it from
+// Processor.projectionIncarnation (which BindRulePackContracts writes). An
+// empty incarnation is tolerated — the token is then the EMPTY string (the
+// two-state contract; the lease check skips an empty token), for test /
+// unowned-pack / resourceless-deploy paths where the Registry is not wired.
+// It is never a bare "<owner>".
+func (e *ActionExecutor) SetProjectionIncarnation(incarnation string) {
+	e.incarnation = incarnation
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -1074,7 +1096,20 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		return nil
 	}
 
-	revision, err := e.tripleMutator.ReplaceOwned(ctx, ec.RuleID(), e.ownerID, entityID, action.Predicate, objects)
+	// Compose the OwnerToken: "<owner>#<incarnation>" (ADR-056 PR-1). The owner
+	// is guaranteed non-empty here (validated above). When the incarnation is
+	// NOT wired (resourceless deploy / Registry absent / test path) the token
+	// degrades to the EMPTY string — NOT a bare "<owner>". This matches the
+	// lifecycle producer's two-state wire contract (manager.go ownerToken()), so
+	// the deferred graph-ingest lease check has a single rule: empty = skip,
+	// "<owner>#<incarnation>" = compare. A bare unfenced "<owner>" would be an
+	// uninterpretable third state for that comparison.
+	ownerToken := ""
+	if e.incarnation != "" {
+		ownerToken = e.ownerID + "#" + e.incarnation
+	}
+
+	revision, err := e.tripleMutator.ReplaceOwned(ctx, ec.RuleID(), ownerToken, entityID, action.Predicate, objects)
 	if err != nil {
 		return fmt.Errorf("replace owned predicate %q on %s: %w", action.Predicate, entityID, err)
 	}
@@ -1082,6 +1117,7 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		e.logger.Debug("Owned predicate replaced",
 			"entity_id", entityID,
 			"predicate", action.Predicate,
+			"owner_token", ownerToken,
 			"kv_revision", revision)
 	}
 	return nil

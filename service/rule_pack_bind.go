@@ -62,6 +62,12 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 // per-pack bind error is logged and skipped — it never aborts boot. An owner id
 // is "rule-pack.<pack_id>"; the pack_id is validated subject-safe at config
 // time (rule.Config.Validate), so RegisterOwner cannot reject it on charset.
+//
+// ADR-056 PR-1: also calls SetProjectionIncarnation (if the binder implements
+// it) with ownerReg.Incarnation() so the pack's ActionExecutor can stamp the
+// full "<owner>#<incarnation>" OwnerToken on replace_owned mutation requests.
+// This is the only point where the process-local Registry incarnation is
+// reachable alongside the binders.
 func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *ownership.Registry, hb *ownership.Heartbeater, logger *slog.Logger) {
 	if ownerReg == nil {
 		return
@@ -82,6 +88,13 @@ func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *owne
 			continue
 		}
 		bound[packID] = struct{}{}
+
+		// ADR-056 PR-1: stamp the incarnation fence onto the binder BEFORE
+		// Start so initializeStateTracker forwards it to the ActionExecutor.
+		// Duck-typed to keep service→processor/rule free of a direct import.
+		if setter, ok := b.(interface{ SetProjectionIncarnation(string) }); ok {
+			setter.SetProjectionIncarnation(ownerReg.Incarnation())
+		}
 
 		if len(contracts) == 0 {
 			// A pack_id with no contracts declares ownership identity but emits

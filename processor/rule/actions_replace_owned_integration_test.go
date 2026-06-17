@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -167,6 +168,57 @@ func TestIntegration_ReplaceOwned_MustExist(t *testing.T) {
 	require.Error(t, err, "replace_owned on a non-existent entity must error (no auto-vivify)")
 	assert.Contains(t, err.Error(), gtypes.ErrorCodeEntityNotFound,
 		"the handler's entity_not_found code must surface to the caller")
+}
+
+// --- The production tripleMutator stamps OwnerToken onto the wire (M2) ---
+
+// TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire drives the REAL
+// tripleMutator.ReplaceOwned and captures the marshalled
+// UpdateEntityWithTriplesRequest off the wire via a fake responder, asserting the
+// OwnerToken field is actually placed on the request (the literal
+// `req.OwnerToken = ownerToken` line PR-1 adds at triple_mutator.go). A unit test
+// cannot cover this seam — tripleMutator holds a concrete *natsclient.Client, not
+// an interface — so the production marshal path is only reachable through live
+// NATS. The fake responder stands in for graph-ingest so the assertion is purely
+// on the bytes the production mutator emits.
+// (feedback_integration_tests_must_drive_production_wire)
+func TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	natsClient := tc.Client
+
+	captured := make(chan gtypes.UpdateEntityWithTriplesRequest, 1)
+	_, err := natsClient.Subscribe(ctx, SubjectEntityUpdateWithTriples, func(_ context.Context, msg *nats.Msg) {
+		var req gtypes.UpdateEntityWithTriplesRequest
+		if err := json.Unmarshal(msg.Data, &req); err == nil {
+			select {
+			case captured <- req:
+			default:
+			}
+		}
+		resp, _ := json.Marshal(gtypes.UpdateEntityWithTriplesResponse{
+			MutationResponse: gtypes.MutationResponse{Success: true, KVRevision: 1},
+		})
+		_ = msg.Respond(resp)
+	})
+	require.NoError(t, err)
+	// Let the subscription propagate before the request fires.
+	time.Sleep(100 * time.Millisecond)
+
+	const entityID = "acme.ops.robotics.gcs.drone.001"
+	const wantToken = "rule-pack.test#deadbeef01234567"
+	mutator := newTripleMutator(natsClient, nil)
+	_, err = mutator.ReplaceOwned(ctx, "rule-1", wantToken, entityID, "status.phase",
+		[]message.Triple{{Subject: entityID, Predicate: "status.phase", Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
+	require.NoError(t, err, "fake responder replies success; the call must round-trip")
+
+	select {
+	case req := <-captured:
+		assert.Equal(t, wantToken, req.OwnerToken,
+			"production tripleMutator.ReplaceOwned must stamp the ownerToken argument onto req.OwnerToken")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no update_with_triples request captured on the wire")
+	}
 }
 
 // --- Processor owner-wiring (requires NATS for initializeStateTracker) ---

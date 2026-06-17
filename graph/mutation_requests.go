@@ -50,8 +50,17 @@ type CreateEntityWithTriplesRequest struct {
 	// place a profile is set (see also UpdateEntityWithTriplesRequest for the
 	// explicit-override exception).
 	IndexingProfile string `json:"indexing_profile,omitempty"`
-	TraceID         string `json:"trace_id,omitempty"`
-	RequestID       string `json:"request_id,omitempty"`
+	// OwnerToken is the writer's owner-identity lease token in the format
+	// "<owner>#<incarnation>", where <owner> is the canonical owner id
+	// (e.g. "rule-pack.my-pack", "mission-planner") and <incarnation> is a
+	// per-process boot nonce (crypto/rand hex) that fences revived-stale
+	// writers even when the owner id is unchanged. Empty = unowned or
+	// legacy writer; graph-ingest skips the lease check when empty.
+	// Compared at graph-ingest by a later increment (ADR-056); PR-1 stamps
+	// it here for observe-only transit.
+	OwnerToken string `json:"owner_token,omitempty"`
+	TraceID    string `json:"trace_id,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
 }
 
 // UpdateEntityWithTriplesRequest updates entity and modifies triples atomically.
@@ -104,8 +113,17 @@ type UpdateEntityWithTriplesRequest struct {
 	// profile untouched. This is the only post-creation way to re-profile an
 	// entity — a later triple.add by a different writer must NOT change it.
 	IndexingProfile string `json:"indexing_profile,omitempty"`
-	TraceID         string `json:"trace_id,omitempty"`
-	RequestID       string `json:"request_id,omitempty"`
+	// OwnerToken is the writer's owner-identity lease token in the format
+	// "<owner>#<incarnation>", where <owner> is the canonical owner id
+	// (e.g. "rule-pack.my-pack", "mission-planner") and <incarnation> is a
+	// per-process boot nonce (crypto/rand hex) that fences revived-stale
+	// writers even when the owner id is unchanged. Empty = unowned or
+	// legacy writer; graph-ingest skips the lease check when empty.
+	// Compared at graph-ingest by a later increment (ADR-056); PR-1 stamps
+	// it here for observe-only transit.
+	OwnerToken string `json:"owner_token,omitempty"`
+	TraceID    string `json:"trace_id,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
 }
 
 // AddTripleRequest adds a triple to an existing entity

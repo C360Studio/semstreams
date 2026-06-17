@@ -406,14 +406,18 @@ func TestReplaceOwned_OwnerIdentityThreaded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	executor := executorWithOwner(mutator, testReplaceOwnedOwner)
+	// The owner identity reaches the mutator embedded in the fenced token. Under
+	// the two-state contract the owner is observable on the wire only when an
+	// incarnation is wired (without one the token is empty — see
+	// TestReplaceOwned_OwnerToken_WithoutIncarnation).
+	executor := executorWithOwnerAndIncarnation(mutator, testReplaceOwnedOwner, testIncarnation)
 
 	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"}
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.001"}))
 
 	require.Len(t, mutator.replaceOwnedCalls, 1)
-	assert.Equal(t, testReplaceOwnedOwner, mutator.replaceOwnedCalls[0].owner,
-		"mutator must receive owner == rule-pack.<PackID>")
+	assert.Equal(t, testReplaceOwnedOwner+"#"+testIncarnation, mutator.replaceOwnedCalls[0].owner,
+		"mutator must receive owner == rule-pack.<PackID> threaded into the fenced token")
 }
 
 func TestReplaceOwned_EmptyOwner_Errors(t *testing.T) {
