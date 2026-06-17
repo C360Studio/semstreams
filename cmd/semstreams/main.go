@@ -236,7 +236,7 @@ func run() error {
 		// the ticker stops on shutdown; the one-shot Bind itself uses ctx.
 		staticOwnerHB = ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
 		go staticOwnerHB.Run(hbCtx)
-		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
+		if _, err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
 			logger.Warn("ownership: loop-execution projection contract registration failed",
 				slog.Any("error", err))

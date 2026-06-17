@@ -31,8 +31,15 @@ func newOwnershipRegistry(t *testing.T) (*ownership.Registry, context.Context) {
 // to the write-time lease lookup.
 func TestBind_DerivesAndRegisters(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	if err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
+	token, err := Bind(ctx, reg, "cs-api", csapiSystem())
+	if err != nil {
 		t.Fatalf("bind cs-api System projection: %v", err)
+	}
+	// ADR-056 PR-3.5: Bind surfaces the bound owner's typed OwnerToken so the
+	// producer can stamp it without hand-composing the credential. It must equal
+	// the registry's own mint for the same owner.
+	if got, want := token.Wire(), reg.OwnerToken("cs-api").Wire(); got != want || got == "" {
+		t.Errorf("Bind returned token.Wire() = %q, want %q (non-empty)", got, want)
 	}
 	owner, ok, err := reg.OwnerOf(ctx, "c360.semconnect.systems.csapi.system.drone-001", "sensorml.process.label")
 	if err != nil || !ok || owner != "cs-api" {
@@ -47,7 +54,7 @@ func TestBind_DerivesAndRegisters(t *testing.T) {
 // one Registry, so this proves cross-OWNER rejection.)
 func TestBind_CrossOwnerOverlapRejected(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	if err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
+	if _, err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
 		t.Fatal(err)
 	}
 	poacher := Contract{
@@ -55,8 +62,14 @@ func TestBind_CrossOwnerOverlapRejected(t *testing.T) {
 		EntityPattern: sysPat,
 		Groups:        []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}},
 	}
-	if err := Bind(ctx, reg, "other", poacher); !errors.Is(err, ownership.ErrOwnershipOverlap) {
+	token, err := Bind(ctx, reg, "other", poacher)
+	if !errors.Is(err, ownership.ErrOwnershipOverlap) {
 		t.Errorf("cross-owner overlap via Bind should reject with ErrOwnershipOverlap, got %v", err)
+	}
+	// ADR-056 PR-3.5: a rejected bind surfaces the zero token, never a usable
+	// credential for an owner that holds no recorded claim.
+	if !token.IsZero() {
+		t.Errorf("Bind on overlap must return the zero token, got Wire()=%q", token.Wire())
 	}
 }
 
@@ -69,7 +82,7 @@ func TestBindAndHeartbeat_EnrollsOnSuccess(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
 	hb := reg.NewHeartbeater(ownership.HeartbeatInterval)
 
-	if err := BindAndHeartbeat(ctx, reg, hb, "cs-api", csapiSystem()); err != nil {
+	if _, err := BindAndHeartbeat(ctx, reg, hb, "cs-api", csapiSystem()); err != nil {
 		t.Fatalf("BindAndHeartbeat: %v", err)
 	}
 	if !hb.IsEnrolled("cs-api") {
@@ -86,7 +99,7 @@ func TestBindAndHeartbeat_EnrollsOnSuccess(t *testing.T) {
 // it would heartbeat a presence key for a non-owner.
 func TestBindAndHeartbeat_SkipsEnrollOnBindFailure(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	if err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
+	if _, err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
 		t.Fatal(err)
 	}
 	hb := reg.NewHeartbeater(ownership.HeartbeatInterval)
@@ -95,7 +108,7 @@ func TestBindAndHeartbeat_SkipsEnrollOnBindFailure(t *testing.T) {
 		EntityPattern: sysPat,
 		Groups:        []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}},
 	}
-	if err := BindAndHeartbeat(ctx, reg, hb, "other", poacher); !errors.Is(err, ownership.ErrOwnershipOverlap) {
+	if _, err := BindAndHeartbeat(ctx, reg, hb, "other", poacher); !errors.Is(err, ownership.ErrOwnershipOverlap) {
 		t.Fatalf("overlap should reject with ErrOwnershipOverlap, got %v", err)
 	}
 	if hb.IsEnrolled("other") {

@@ -13,7 +13,8 @@
 //	       (entity pattern · predicates × write mode · foreign-edge claims · indexing profile)
 //	component / gateway boot
 //	  └─ projection.Bind(ctx, ownerRegistry, ownerID, contracts...)
-//	       derives the ownership.OwnerClaim/ForeignEdgeClaim set and registers it
+//	       derives the ownership.OwnerClaim/ForeignEdgeClaim set, registers it, and
+//	       returns the owner's typed ownership.OwnerToken to stamp on its writes
 //	graph-ingest
 //	  └─ enforces the registered claims at the write boundary (a later increment)
 //

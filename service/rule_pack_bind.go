@@ -63,11 +63,12 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 // is "rule-pack.<pack_id>"; the pack_id is validated subject-safe at config
 // time (rule.Config.Validate), so RegisterOwner cannot reject it on charset.
 //
-// ADR-056 PR-1: also calls SetProjectionIncarnation (if the binder implements
-// it) with ownerReg.Incarnation() so the pack's ActionExecutor can stamp the
-// full "<owner>#<incarnation>" OwnerToken on replace_owned mutation requests.
-// This is the only point where the process-local Registry incarnation is
-// reachable alongside the binders.
+// ADR-056 PR-3.5: also mints the typed OwnerToken via ownerReg.OwnerToken and
+// stamps it on the binder (if it implements SetProjectionOwnerToken) so the
+// pack's ActionExecutor can put the credential on replace_owned mutation
+// requests. This is the only point where the process-local Registry is reachable
+// alongside the binders; minting here keeps producers from hand-composing the
+// "<owner>#<incarnation>" format.
 func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *ownership.Registry, hb *ownership.Heartbeater, logger *slog.Logger) {
 	if ownerReg == nil {
 		return
@@ -89,11 +90,21 @@ func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *owne
 		}
 		bound[packID] = struct{}{}
 
-		// ADR-056 PR-1: stamp the incarnation fence onto the binder BEFORE
-		// Start so initializeStateTracker forwards it to the ActionExecutor.
-		// Duck-typed to keep service→processor/rule free of a direct import.
-		if setter, ok := b.(interface{ SetProjectionIncarnation(string) }); ok {
-			setter.SetProjectionIncarnation(ownerReg.Incarnation())
+		ownerID := "rule-pack." + packID
+
+		// ADR-056 PR-3.5: mint the typed OwnerToken from the Registry and stamp
+		// it on the binder BEFORE Start so initializeStateTracker forwards it to
+		// the ActionExecutor. Minting via Registry.OwnerToken keeps the
+		// "<owner>#<incarnation>" credential format inside pkg/ownership — the
+		// pack never hand-composes it. Stamped even for no-contract packs (which
+		// own nothing and never reach BindAndHeartbeat below) so a replace_owned
+		// action on an unowned predicate still presents a comparable token to the
+		// observe-only lease check. Duck-typed to keep service→processor/rule
+		// free of a direct import.
+		if setter, ok := b.(interface {
+			SetProjectionOwnerToken(ownership.OwnerToken)
+		}); ok {
+			setter.SetProjectionOwnerToken(ownerReg.OwnerToken(ownerID))
 		}
 
 		if len(contracts) == 0 {
@@ -103,8 +114,7 @@ func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *owne
 			continue
 		}
 
-		ownerID := "rule-pack." + packID
-		if err := projection.BindAndHeartbeat(ctx, ownerReg, hb, ownerID, contracts...); err != nil {
+		if _, err := projection.BindAndHeartbeat(ctx, ownerReg, hb, ownerID, contracts...); err != nil {
 			if errors.Is(err, ownership.ErrOwnershipOverlap) {
 				logger.Warn("ownership overlap on rule pack bind — continuing (observe-only)",
 					"owner_id", ownerID, "err", err)

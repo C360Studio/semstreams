@@ -8,8 +8,10 @@
 //     fields (unit-level field-preservation only). The GENUINE register-time
 //     storage assertion (real RegisterOwner → epoch read-back) lives in
 //     registry_integration_test.go (TestRegistry_RegisterStampsIncarnationOnStoredClaim).
-//   - OwnerToken composition: "<owner>#<incarnation>" shape verified in isolation
-//     (Registry.Incarnation is the raw nonce without the owner prefix).
+//   - OwnerToken composition (ADR-056 PR-3.5): Registry.OwnerToken mints
+//     "<owner>#<incarnation>"; the producer mint and the verifier reconstruction
+//     (ExpectedOwnerToken) agree; an empty incarnation collapses to the zero
+//     token; two processes mint distinct tokens for the same owner (the fence).
 package ownership
 
 import (
@@ -110,6 +112,59 @@ func TestOwnerClaim_StampPreservesSiblingFields(t *testing.T) {
 		"stamp must not mutate other fields")
 	assert.Equal(t, original.Predicates, stamped.Predicates,
 		"stamp must not mutate other fields")
+}
+
+// TestOwnerToken_Wire_Format proves Registry.OwnerToken mints a token whose wire
+// form is exactly "<owner>#<incarnation>" — the credential producers stamp on
+// mutation requests (ADR-056 PR-3.5). The format lives only in pkg/ownership;
+// this test is the single place that asserts the literal "#" composition.
+func TestOwnerToken_Wire_Format(t *testing.T) {
+	t.Parallel()
+	reg := newNoopRegistry(t)
+	tok := reg.OwnerToken("rule-pack.demo")
+	assert.False(t, tok.IsZero(), "a token minted from a live registry is not the zero token")
+	assert.Equal(t, "rule-pack.demo#"+reg.Incarnation(), tok.Wire(),
+		"minted token Wire() must be exactly <owner>#<incarnation>")
+}
+
+// TestOwnerToken_ProducerMatchesVerifier proves the producer mint
+// (Registry.OwnerToken) and the verifier reconstruction (ExpectedOwnerToken) agree
+// for the same owner + incarnation — the core lease-check round-trip. If they
+// diverged, every legitimate write would log a false mismatch.
+func TestOwnerToken_ProducerMatchesVerifier(t *testing.T) {
+	t.Parallel()
+	reg := newNoopRegistry(t)
+	const owner = "mission-planner"
+	produced := reg.OwnerToken(owner)
+	expected := ExpectedOwnerToken(owner, reg.Incarnation())
+	assert.Equal(t, produced.Wire(), expected.Wire(),
+		"producer mint and verifier reconstruction must yield the same wire token")
+	assert.NotEmpty(t, produced.Wire(), "round-trip token must be non-empty")
+}
+
+// TestOwnerToken_EmptyIncarnation_IsZero proves the two-state contract: an empty
+// incarnation (a legacy / pre-fence owner, or no Registry wired) collapses to the
+// zero token whose Wire() is "" — never a bare "<owner>#" or "<owner>". The
+// graph-ingest lease check skips an empty token.
+func TestOwnerToken_EmptyIncarnation_IsZero(t *testing.T) {
+	t.Parallel()
+	tok := ExpectedOwnerToken("some-owner", "")
+	assert.True(t, tok.IsZero(), "empty incarnation must yield the zero token")
+	assert.Equal(t, "", tok.Wire(), "zero token Wire() must be the empty string, never a bare owner")
+	assert.True(t, OwnerToken{}.IsZero(), "the zero value is the zero token")
+	assert.Equal(t, "", OwnerToken{}.Wire(), "the zero value Wire() is empty")
+}
+
+// TestOwnerToken_DistinctAcrossIncarnations proves two processes (two NewRegistry
+// constructions) mint DIFFERENT tokens for the SAME owner — the fence that lets
+// the lease check reject a revived-stale writer that re-registered the same owner
+// id in a new process.
+func TestOwnerToken_DistinctAcrossIncarnations(t *testing.T) {
+	t.Parallel()
+	r1 := newNoopRegistry(t)
+	r2 := newNoopRegistry(t)
+	assert.NotEqual(t, r1.OwnerToken("same-owner").Wire(), r2.OwnerToken("same-owner").Wire(),
+		"two processes must mint different tokens for the same owner (the incarnation fence)")
 }
 
 // newNoopRegistry builds a Registry with nil KV stores for unit tests that

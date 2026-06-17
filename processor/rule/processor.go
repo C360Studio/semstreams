@@ -207,13 +207,13 @@ type Processor struct {
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
 
-	// projectionIncarnation is the per-process boot nonce from the ownership
-	// Registry (ADR-056 PR-1). Set via SetProjectionIncarnation by
+	// projectionOwnerToken is the typed write-lease credential minted by the
+	// ownership Registry (ADR-056 PR-3.5). Set via SetProjectionOwnerToken by
 	// service.BindRulePackContracts (which holds the Registry) BEFORE
-	// initializeStateTracker. The executor reads it at initializeStateTracker
-	// time and stamps it on every replace_owned request as the incarnation half
-	// of the OwnerToken "<owner>#<incarnation>".
-	projectionIncarnation string
+	// initializeStateTracker, which forwards it to the ActionExecutor. The
+	// executor stamps token.Wire() on every replace_owned request — the
+	// "<owner>#<incarnation>" format lives only in pkg/ownership.
+	projectionOwnerToken ownership.OwnerToken
 }
 
 // NewProcessor creates a new rule processor
@@ -360,13 +360,14 @@ func (rp *Processor) ProjectionBindings() (packID string, contracts []projection
 	return rp.config.PackID, rp.config.ProjectionContracts
 }
 
-// SetProjectionIncarnation stores the per-process boot nonce from the ownership
-// Registry so initializeStateTracker can forward it to the ActionExecutor. Must
-// be called by service.BindRulePackContracts BEFORE Start (which calls
-// initializeStateTracker). Mirrors SetProjectionOwner's timing contract.
-// A nil/empty incarnation is a no-op — test paths and unowned packs skip it.
-func (rp *Processor) SetProjectionIncarnation(incarnation string) {
-	rp.projectionIncarnation = incarnation
+// SetProjectionOwnerToken stores the typed write-lease credential minted by the
+// ownership Registry so initializeStateTracker can forward it to the
+// ActionExecutor. Must be called by service.BindRulePackContracts BEFORE Start
+// (which calls initializeStateTracker). Mirrors SetProjectionOwner's timing
+// contract. A zero token is tolerated — test paths and unowned packs stamp an
+// empty wire string, which the lease check skips.
+func (rp *Processor) SetProjectionOwnerToken(token ownership.OwnerToken) {
+	rp.projectionOwnerToken = token
 }
 
 // Health returns current health status
@@ -630,17 +631,17 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		}); ok {
 			setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
 		}
-		// ADR-056 PR-1: forward the per-process incarnation nonce so the
-		// executor can stamp the full "<owner>#<incarnation>" OwnerToken on
-		// every replace_owned request. The incarnation is set by
-		// service.BindRulePackContracts (which holds the Registry) BEFORE
-		// Start is called. Empty when the Registry is not wired — the executor
-		// falls back to owner-only, which is correct for test / unowned paths.
-		if rp.projectionIncarnation != "" {
+		// ADR-056 PR-3.5: forward the typed OwnerToken so the executor can stamp
+		// its wire form on every replace_owned request. The token is minted by
+		// the ownership Registry and set by service.BindRulePackContracts (which
+		// holds the Registry) BEFORE Start is called. A zero token (Registry not
+		// wired) yields an empty wire string — correct for test / unowned paths,
+		// where the lease check skips an empty token.
+		if !rp.projectionOwnerToken.IsZero() {
 			if setter, ok := actionExecutor.(interface {
-				SetProjectionIncarnation(string)
+				SetProjectionOwnerToken(ownership.OwnerToken)
 			}); ok {
-				setter.SetProjectionIncarnation(rp.projectionIncarnation)
+				setter.SetProjectionOwnerToken(rp.projectionOwnerToken)
 			}
 		}
 	}

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,12 +26,13 @@ import (
 const testIncarnation = "deadbeef01234567"
 
 // executorWithOwnerAndIncarnation builds a fully-wired executor carrying both
-// the owner and the per-process incarnation, matching the production path where
-// BindRulePackContracts calls SetProjectionIncarnation before Start.
+// the owner and a typed OwnerToken forged from the owner + per-process
+// incarnation, matching the production path where BindRulePackContracts mints the
+// token via Registry.OwnerToken and calls SetProjectionOwnerToken before Start.
 func executorWithOwnerAndIncarnation(mutator TripleMutator, owner, incarnation string) *ActionExecutor {
 	e := NewActionExecutorFull(nil, mutator, nil)
 	e.SetProjectionOwner(owner)
-	e.SetProjectionIncarnation(incarnation)
+	e.SetProjectionOwnerToken(ownership.ExpectedOwnerToken(owner, incarnation))
 	return e
 }
 
@@ -69,7 +71,7 @@ func TestReplaceOwned_OwnerToken_WithoutIncarnation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mutator := &mockTripleMutator{}
-	// No SetProjectionIncarnation — incarnation field stays "".
+	// No SetProjectionOwnerToken — the executor's ownerToken stays the zero token.
 	executor := executorWithOwner(mutator, testReplaceOwnedOwner)
 
 	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"}

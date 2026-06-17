@@ -278,7 +278,7 @@ func wireLifecycleManager(ctx context.Context, svcDeps *service.Dependencies, _ 
 		// stops on shutdown.
 		staticOwnerHB = ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
 		go staticOwnerHB.Run(ctx)
-		if err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
+		if _, err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
 			loopExecutionProjectionContract()); err != nil {
 			svcDeps.Logger.Warn("ownership: loop-execution projection contract registration failed",
 				slog.Any("error", err))
