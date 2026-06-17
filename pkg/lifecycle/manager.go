@@ -256,6 +256,25 @@ func (m *Manager) lookupByWorkflow(workflow string) (*registration, error) {
 	return reg, nil
 }
 
+// ownerToken composes the OwnerToken for a lifecycle write (ADR-056 PR-1):
+// "<workflowName>#<incarnation>". When no Registry is attached (nil, test
+// paths, unmigrated deploys) the token is left empty — graph-ingest skips
+// the lease check on an empty token, so the Manager's behaviour is unchanged
+// for those paths.
+func (m *Manager) ownerToken(workflowName string) string {
+	m.mu.RLock()
+	reg := m.ownerRegistry
+	m.mu.RUnlock()
+	if reg == nil {
+		return ""
+	}
+	inc := reg.Incarnation()
+	if inc == "" {
+		return ""
+	}
+	return workflowName + "#" + inc
+}
+
 // ensureBucket lazy-initializes the ENTITY_STATES bucket handle.
 // graph-ingest owns the bucket's lifecycle; the Manager just opens
 // an existing handle.
@@ -414,6 +433,10 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	// Per ADR-049 reviewer B2 this split closes the silent concurrent-
 	// create race that ExpectedRevision=0 had on the prior code.
 	now := time.Now()
+	// ownerTok is the OwnerToken for all writes in this Create call (ADR-056
+	// PR-1). Empty when the Registry is not wired — graph-ingest skips the
+	// lease check for empty tokens.
+	ownerTok := m.ownerToken(reg.workflow.Name)
 	state, rev, err := m.getEntity(ctx, entityID)
 	switch {
 	case errors.Is(err, ErrEntityNotFound):
@@ -425,7 +448,8 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 				UpdatedAt:   now,
 				MessageType: lifecycleMessageType,
 			},
-			Triples: delta,
+			Triples:    delta,
+			OwnerToken: ownerTok,
 		}
 		if _, err := m.emitter.create(ctx, createReq); err != nil {
 			if errors.Is(err, ErrAlreadyExists) {
@@ -453,6 +477,7 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 		},
 		AddTriples:       delta,
 		ExpectedRevision: rev,
+		OwnerToken:       ownerTok,
 	}
 	if _, err := m.emitter.update(ctx, updateReq); err != nil {
 		if errors.Is(err, errEmitRevisionMismatch) {
@@ -603,6 +628,7 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 			AddTriples:       delta,
 			RemoveTriples:    removePreds,
 			ExpectedRevision: currentRev,
+			OwnerToken:       m.ownerToken(reg.workflow.Name),
 		}
 		_, err = m.emitter.update(ctx, emitReq)
 		if err == nil {
@@ -729,6 +755,7 @@ func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID str
 			AddTriples:       adds,
 			RemoveTriples:    removes,
 			ExpectedRevision: currentRev,
+			OwnerToken:       m.ownerToken(reg.workflow.Name),
 		}
 		_, err = m.emitter.update(ctx, emitReq)
 		if err == nil {

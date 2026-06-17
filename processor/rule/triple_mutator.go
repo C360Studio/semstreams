@@ -143,20 +143,17 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 // the two operations.
 //
 // ExpectedRevision is left zero: this is owned-current-state reconciliation,
-// NOT a CAS transition. The owner parameter is threaded for audit/diagnostics
-// only — it is NOT placed on the request envelope (the owner wire field is
-// deferred to a later increment per ADR-056).
+// NOT a CAS transition. The ownerToken parameter carries the pre-composed
+// lease token ("<owner>#<incarnation>" or just "<owner>" when the incarnation
+// is not available); it is stamped directly onto the request's OwnerToken field
+// for the graph-ingest lease check (a later increment). Token composition is
+// the caller's responsibility (ActionExecutor.executeReplaceOwned).
 //
 // Unlike AddTriple/RemoveTriple, this checks resp.Success (NOT the body-prefix
 // convention) and surfaces the handler's ErrorCode on failure. On a
 // non-existent entity the handler returns ErrorCodeEntityNotFound; that is
 // returned verbatim as an error (no auto-vivify).
-//
-// The owner parameter (interface position 3) is intentionally unused here: it
-// is threaded to the boundary so the audit/diagnostics shape is in place, but
-// the request envelope deliberately carries NO owner field (deferred per
-// ADR-056). Named `_` to keep that explicit and revive-clean.
-func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, _, entityID, predicate string, objects []message.Triple) (uint64, error) {
+func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, ownerToken, entityID, predicate string, objects []message.Triple) (uint64, error) {
 	if m.natsClient == nil {
 		return 0, fmt.Errorf("NATS client not available")
 	}
@@ -164,12 +161,12 @@ func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, _, entityID, p
 	// Build the atomic update: RemoveTriples drops the prior value of the
 	// predicate (it runs before the AddTriples merge on the handler side),
 	// AddTriples carries the new value(s). ExpectedRevision stays zero —
-	// replace_owned is NEVER a CAS write (ADR-056 Decision 3). The owner is
-	// not placed on the request (wire field deferred); it is logged below.
+	// replace_owned is NEVER a CAS write (ADR-056 Decision 3).
 	req := gtypes.UpdateEntityWithTriplesRequest{
 		Entity:        &gtypes.EntityState{ID: entityID},
 		RemoveTriples: []string{predicate},
 		AddTriples:    objects,
+		OwnerToken:    ownerToken,
 	}
 	reqData, err := json.Marshal(req)
 	if err != nil {

@@ -2,6 +2,8 @@ package ownership
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +30,16 @@ type Registry struct {
 	presence *natsclient.KVStore // OWNER_PRESENCE — heartbeat.<owner> keys (TTL = grace window)
 	logger   *slog.Logger
 
+	// incarnation is the per-process boot nonce (8 bytes crypto/rand hex). It
+	// is generated once at NewRegistry time and is stable for the lifetime of
+	// the process. Combined with the owner id it forms the OwnerToken
+	// "<owner>#<incarnation>" written on every update_with_triples /
+	// create_with_triples request (ADR-056 PR-1). The graph-ingest lease check
+	// (a later increment) compares this token against the live claim's
+	// incarnation to reject a revived-stale writer that re-registered the same
+	// owner id in a new process without the token changing.
+	incarnation string
+
 	// inverseResolver, when non-nil, enforces the Decision-4 inverse-gate over
 	// every registered ForeignEdgeClaim (a Conditional/Backfill edge predicate
 	// must have a registered inverse). Injected so pkg/ownership stays free of
@@ -45,11 +57,40 @@ type Registry struct {
 // ttl_hint ≥ 3×max(boot_time, gc_pause_budget) so a single missed heartbeat
 // never evicts a live owner (compactStale treats presence-key absence as
 // "silent beyond grace"; the TTL is what makes absence mean that).
+//
+// A per-process incarnation nonce (8 bytes, crypto/rand hex) is generated here
+// and stored for the lifetime of the Registry. It forms the incarnation half of
+// every OwnerToken ("<owner>#<incarnation>") stamped on outgoing mutation
+// requests (ADR-056 PR-1). Callers access it via Registry.Incarnation().
 func NewRegistry(claims, presence *natsclient.KVStore, logger *slog.Logger) *Registry {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Registry{claims: claims, presence: presence, logger: logger}
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is extremely rare and almost always indicates a
+		// broken OS RNG. Panic rather than silently stamping a zero-token that
+		// would make every token identical across processes — defeating the
+		// incarnation fence entirely.
+		panic(fmt.Sprintf("ownership: generate incarnation nonce: %v", err))
+	}
+	return &Registry{
+		claims:      claims,
+		presence:    presence,
+		logger:      logger,
+		incarnation: hex.EncodeToString(b),
+	}
+}
+
+// Incarnation returns the per-process boot nonce generated at NewRegistry time.
+// It is stable for the lifetime of this Registry instance. Together with the
+// canonical owner id it forms the OwnerToken "<owner>#<incarnation>" stamped by
+// producers on every update_with_triples / create_with_triples request
+// (ADR-056 PR-1). The graph-ingest lease-check increment (PR-2+) uses this to
+// reject revived-stale writers that re-registered the same owner id in a new
+// process without presenting the live incarnation.
+func (reg *Registry) Incarnation() string {
+	return reg.incarnation
 }
 
 // Registration is one owner's full set of claims, registered atomically against
@@ -217,10 +258,21 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 		return fmt.Errorf("ownership: heartbeat before register %q: %w", r.Owner, err)
 	}
 
+	// Stamp the per-process incarnation onto each claim before writing to the
+	// epoch so a later PR's OwnerOf can return the live owner's incarnation
+	// for the lease-check comparison (ADR-056 PR-1). We copy the slice
+	// rather than mutating the caller's input to preserve Registration
+	// immutability at the call site.
+	stampedClaims := make([]OwnerClaim, len(r.Claims))
+	for i, c := range r.Claims {
+		c.Incarnation = reg.incarnation
+		stampedClaims[i] = c
+	}
+
 	var (
 		overlapErr error
 		preExisted bool
-		cand       = ownerEntry{Claims: r.Claims, ForeignEdges: r.ForeignEdges}
+		cand       = ownerEntry{Claims: stampedClaims, ForeignEdges: r.ForeignEdges}
 	)
 	err := reg.claims.UpdateWithRetry(ctx, registryKey, func(current []byte) ([]byte, error) {
 		ep, err := decodeEpoch(current)

@@ -89,6 +89,16 @@ type OwnerClaim struct {
 	Pattern    string    `json:"pattern"`    // 6-part entity-ID glob
 	Predicates []string  `json:"predicates"` // EXACT strings (no prefix/glob on predicates)
 	Mode       WriteMode `json:"mode"`
+	// Incarnation is the per-process boot nonce (8 bytes crypto/rand hex)
+	// recorded at RegisterOwner time from Registry.Incarnation(). It is the
+	// incarnation half of the OwnerToken "<owner>#<incarnation>" that
+	// producers stamp on mutation requests (ADR-056 PR-1). A later
+	// increment's graph-ingest lease check reads this field via OwnerOf to
+	// compare against the incoming request's token, rejecting a revived-stale
+	// writer whose incarnation no longer matches the live claim.
+	// Empty on claims registered before the incarnation fence was shipped
+	// (legacy / test paths that use NewRegistry with empty claims stores).
+	Incarnation string `json:"incarnation,omitempty"`
 }
 
 // Validate checks the claim is well-formed: a 6-part glob pattern, a non-empty

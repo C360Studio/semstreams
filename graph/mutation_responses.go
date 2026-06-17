@@ -94,6 +94,15 @@ const (
 	// failures (KV transport errors, unmarshal failures on stored
 	// state, etc.). Callers may retry as appropriate.
 	ErrorCodeInternal = "internal"
+
+	// ErrorCodeOwnerLeaseStale indicates the request's OwnerToken does not
+	// match the live owner recorded in the owner registry for the contested
+	// (entity, predicate) cell — the writer is either a different process or
+	// a revived-stale incarnation of the same owner id. Callers should NOT
+	// retry without resolving the ownership conflict. No handler emits this
+	// code yet (ADR-056 PR-1 is additive plumbing only); the reject logic
+	// arrives in a later increment.
+	ErrorCodeOwnerLeaseStale = "owner_lease_stale"
 )
 
 // CreateEntityResponse response for entity creation
