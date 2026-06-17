@@ -437,6 +437,12 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	own, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.Entity.Triples)
 	req.Entity.Triples = own
 
+	// ADR-056 PR-3: observe-only owner-lease check. The owned-predicate set is
+	// the own-subject triples after normalizeProjection (the non-foreign portion
+	// committed to the primary). Write ALWAYS commits — never blocks here.
+	c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
+		predicatesOf(own))
+
 	// ADR-054 channel (b): stamp an explicitly declared indexing profile from
 	// the mutation envelope (highest precedence). Empty/invalid is ignored and
 	// the createEntity seam applies the fallback floor instead.
@@ -650,6 +656,15 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	// deltas are single-subject; cs-api's singleSubject guard blocks multi-subject).
 	addOwn, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.AddTriples)
 	req.AddTriples = addOwn
+
+	// ADR-056 PR-3: observe-only owner-lease check. The owned-predicate set is
+	// the union of own add-triples predicates (the replace-merge set) and
+	// remove-triples predicates (a predicate named only in RemoveTriples is the
+	// owned cell being cleared — the write targets that owned predicate even
+	// though no new triple is added for it). Deduped by checkOwnerLease's loop.
+	// Write ALWAYS commits — never blocks here.
+	c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
+		dedupePredicates(predicatesOf(addOwn), req.RemoveTriples))
 
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
 	// the caller requires the entity's current KV revision to match
@@ -943,6 +958,62 @@ func (c *Component) fetchEntityState(ctx context.Context, entityID string) (*gra
 		return nil, 0, fmt.Errorf("unmarshal entity state: %w", err)
 	}
 	return &state, entry.Revision, nil
+}
+
+// predicatesOf extracts the Predicate strings from a triple slice, for use in
+// the owner-lease check's owned-predicate set computation.
+func predicatesOf(triples []message.Triple) []string {
+	if len(triples) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(triples))
+	for _, t := range triples {
+		if t.Predicate != "" {
+			out = append(out, t.Predicate)
+		}
+	}
+	return out
+}
+
+// dedupePredicates merges two predicate slices and returns a deduped result,
+// preserving the first appearance of each predicate. Used by checkOwnerLease to
+// build the union of add-triples and remove-triples predicate sets.
+func dedupePredicates(a, b []string) []string {
+	total := len(a) + len(b)
+	if total == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, total)
+	out := make([]string, 0, total)
+	for _, s := range a {
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; !dup {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if s == "" {
+			continue
+		}
+		if _, dup := seen[s]; !dup {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// labelForMessageType returns a metric-safe label for the given MessageType:
+// the dotted Key() when valid, or "_invalid" when zero/unregistered (cardinality
+// guard matching the existing foreign-edge metric convention).
+func labelForMessageType(mt message.Type) string {
+	if mt.IsValid() {
+		return mt.Key()
+	}
+	return invalidMessageTypeLabel
 }
 
 // Per-response-shape error marshalers. The body-prefix error
