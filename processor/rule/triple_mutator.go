@@ -144,10 +144,11 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 //
 // ExpectedRevision is left zero: this is owned-current-state reconciliation,
 // NOT a CAS transition. The ownerToken parameter carries the pre-composed
-// lease token ("<owner>#<incarnation>" or just "<owner>" when the incarnation
-// is not available); it is stamped directly onto the request's OwnerToken field
-// for the graph-ingest lease check (a later increment). Token composition is
-// the caller's responsibility (ActionExecutor.executeReplaceOwned).
+// lease token "<owner>#<incarnation>", or the EMPTY string when the incarnation
+// is unavailable (the two-state contract — an empty token tells the graph-ingest
+// lease check to SKIP; it is never a bare "<owner>"). It is stamped directly
+// onto the request's OwnerToken field for the lease check (a later increment).
+// Token composition is the caller's responsibility (ActionExecutor.executeReplaceOwned).
 //
 // Unlike AddTriple/RemoveTriple, this checks resp.Success (NOT the body-prefix
 // convention) and surfaces the handler's ErrorCode on failure. On a

@@ -414,8 +414,9 @@ type TripleMutator interface {
 	// and the new value(s) carried in objects (AddTriples). An empty objects
 	// slice clears the predicate. ExpectedRevision is ALWAYS zero — this is
 	// owned-current-state reconciliation, never a CAS transition. The
-	// ownerToken is the pre-composed lease token "<owner>#<incarnation>"
-	// (or just "<owner>" when the Registry incarnation is unavailable) stamped
+	// ownerToken is the pre-composed lease token "<owner>#<incarnation>",
+	// or EMPTY when the Registry incarnation is unavailable (two-state
+	// contract: empty = lease check SKIPs; never a bare "<owner>"), stamped
 	// onto UpdateEntityWithTriplesRequest.OwnerToken for the graph-ingest
 	// lease check (ADR-056 PR-1). On a non-existent entity the underlying
 	// handler surfaces ErrorCodeEntityNotFound, which is returned as an error
@@ -551,8 +552,10 @@ func (e *ActionExecutor) SetProjectionOwner(owner string) {
 // OwnerToken "<owner>#<incarnation>" stamped on every replace_owned request.
 // Set by the processor after initializeStateTracker reads it from
 // Processor.projectionIncarnation (which BindRulePackContracts writes). An
-// empty incarnation is silently tolerated — the token is then just "<owner>"
-// for test / unowned-pack paths where the Registry is not wired.
+// empty incarnation is tolerated — the token is then the EMPTY string (the
+// two-state contract; the lease check skips an empty token), for test /
+// unowned-pack / resourceless-deploy paths where the Registry is not wired.
+// It is never a bare "<owner>".
 func (e *ActionExecutor) SetProjectionIncarnation(incarnation string) {
 	e.incarnation = incarnation
 }
