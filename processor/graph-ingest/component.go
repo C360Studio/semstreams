@@ -1365,8 +1365,10 @@ func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, 
 			// Fail-open — no metric, no Warn, no reject.
 			continue
 		}
-		// Compare the request token against the live "<owner>#<incarnation>".
-		expected := owner + "#" + incarnation
+		// Compare the request token against the live owner's expected token.
+		// ExpectedOwnerToken keeps the "<owner>#<incarnation>" format in
+		// pkg/ownership — graph-ingest never composes it (ADR-056 PR-3.5).
+		expected := ownership.ExpectedOwnerToken(owner, incarnation).Wire()
 		if ownerToken != expected {
 			c.ownerLeaseMismatch.WithLabelValues(messageType, pred).Inc()
 			c.logger.Warn("graph-ingest: OwnerToken mismatch — write proceeds (observe-only; reject is PR-5)",

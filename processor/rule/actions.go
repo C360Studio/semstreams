@@ -18,6 +18,7 @@ import (
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -500,13 +501,17 @@ type ActionExecutor struct {
 	// owned predicate group). Set by the processor after construction via
 	// SetProjectionOwner.
 	ownerID string
-	// incarnation is the per-process boot nonce from the ownership Registry
-	// (ADR-056 PR-1). Set via SetProjectionIncarnation after construction.
-	// Together with ownerID it forms the OwnerToken "<ownerID>#<incarnation>"
-	// stamped on every replace_owned mutation request. Empty when the Registry
-	// is not wired (test paths, unowned packs) — ReplaceOwned stamps only the
-	// owner in that case (no fence, which is fine for the deferred comparison).
-	incarnation string
+	// ownerToken is the typed write-lease credential the rule pack's
+	// replace_owned actions stamp on every mutation request (ADR-056 PR-3.5).
+	// It is minted by the ownership Registry (Registry.OwnerToken) and forwarded
+	// from the rule Processor, which the composition root
+	// (service.BindRulePackContracts) sets via SetProjectionOwnerToken BEFORE
+	// Start. The executor stamps ownerToken.Wire() verbatim — it never composes
+	// the "<owner>#<incarnation>" format itself. The zero token (Registry not
+	// wired: test paths, unowned packs, resourceless deploys) yields an empty
+	// wire string, which the graph-ingest lease check skips (the two-state
+	// contract: empty = skip, "<owner>#<incarnation>" = compare).
+	ownerToken ownership.OwnerToken
 }
 
 // SetToolRegistry installs the shared tool registry used by
@@ -547,17 +552,18 @@ func (e *ActionExecutor) SetProjectionOwner(owner string) {
 	e.ownerID = owner
 }
 
-// SetProjectionIncarnation installs the per-process boot nonce from the
-// ownership Registry (ADR-056 PR-1). Together with the owner id it forms the
-// OwnerToken "<owner>#<incarnation>" stamped on every replace_owned request.
-// Set by the processor after initializeStateTracker reads it from
-// Processor.projectionIncarnation (which BindRulePackContracts writes). An
-// empty incarnation is tolerated — the token is then the EMPTY string (the
-// two-state contract; the lease check skips an empty token), for test /
-// unowned-pack / resourceless-deploy paths where the Registry is not wired.
-// It is never a bare "<owner>".
-func (e *ActionExecutor) SetProjectionIncarnation(incarnation string) {
-	e.incarnation = incarnation
+// SetProjectionOwnerToken installs the typed write-lease credential the rule
+// pack's replace_owned actions stamp on every mutation request (ADR-056
+// PR-3.5). The token is minted by the ownership Registry (Registry.OwnerToken)
+// and forwarded by the rule Processor, which the composition root
+// (service.BindRulePackContracts) sets after initializeStateTracker reads it
+// from Processor.projectionOwnerToken. The zero token is tolerated — its Wire()
+// is the EMPTY string (the two-state contract; the lease check skips an empty
+// token) for test / unowned-pack / resourceless-deploy paths where the Registry
+// is not wired. The executor stamps token.Wire() verbatim; it never composes the
+// "<owner>#<incarnation>" format itself.
+func (e *ActionExecutor) SetProjectionOwnerToken(token ownership.OwnerToken) {
+	e.ownerToken = token
 }
 
 // NewActionExecutor creates a new ActionExecutor with the given logger.
@@ -1096,18 +1102,14 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		return nil
 	}
 
-	// Compose the OwnerToken: "<owner>#<incarnation>" (ADR-056 PR-1). The owner
-	// is guaranteed non-empty here (validated above). When the incarnation is
-	// NOT wired (resourceless deploy / Registry absent / test path) the token
-	// degrades to the EMPTY string — NOT a bare "<owner>". This matches the
-	// lifecycle producer's two-state wire contract (manager.go ownerToken()), so
-	// the deferred graph-ingest lease check has a single rule: empty = skip,
-	// "<owner>#<incarnation>" = compare. A bare unfenced "<owner>" would be an
-	// uninterpretable third state for that comparison.
-	ownerToken := ""
-	if e.incarnation != "" {
-		ownerToken = e.ownerID + "#" + e.incarnation
-	}
+	// Stamp the typed OwnerToken's wire form (ADR-056 PR-3.5). The credential is
+	// minted by the ownership Registry and forwarded to this executor — the
+	// "<owner>#<incarnation>" format lives only in pkg/ownership, never here.
+	// The zero token (Registry not wired: resourceless deploy / absent / test
+	// path) yields an empty string, which matches the lifecycle producer's
+	// two-state wire contract (manager.go ownerToken()): the graph-ingest lease
+	// check skips empty and compares "<owner>#<incarnation>".
+	ownerToken := e.ownerToken.Wire()
 
 	revision, err := e.tripleMutator.ReplaceOwned(ctx, ec.RuleID(), ownerToken, entityID, action.Predicate, objects)
 	if err != nil {

@@ -32,7 +32,8 @@ func bindClaimAndBootIngest(t *testing.T, ownerID string, contract projection.Co
 
 	reg, err := ownership.EnsureBuckets(ctx, testClient.Client, nil, nil)
 	require.NoError(t, err, "EnsureBuckets (OWNER_CLAIMS)")
-	require.NoError(t, projection.Bind(ctx, reg, ownerID, contract), "Bind foreign-edge contract")
+	_, bindErr := projection.Bind(ctx, reg, ownerID, contract)
+	require.NoError(t, bindErr, "Bind foreign-edge contract")
 
 	configJSON, err := json.Marshal(DefaultConfig())
 	require.NoError(t, err)

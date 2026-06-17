@@ -188,7 +188,7 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 	// it, so assert against a direct derive to keep the test honest).
 	_, derr := projection.Derive("rule-pack.pack-b", overlapping)
 	require.NoError(t, derr, "derive itself is valid; the overlap is cross-owner at register time")
-	berr := projection.Bind(ctx, ownerReg, "rule-pack.pack-c", overlapping)
+	_, berr := projection.Bind(ctx, ownerReg, "rule-pack.pack-c", overlapping)
 	require.True(t, errors.Is(berr, ownership.ErrOwnershipOverlap),
 		"a fresh owner binding the same cell must hit ErrOwnershipOverlap")
 }

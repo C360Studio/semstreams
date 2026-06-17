@@ -256,11 +256,13 @@ func (m *Manager) lookupByWorkflow(workflow string) (*registration, error) {
 	return reg, nil
 }
 
-// ownerToken composes the OwnerToken for a lifecycle write (ADR-056 PR-1):
-// "<workflowName>#<incarnation>". When no Registry is attached (nil, test
-// paths, unmigrated deploys) the token is left empty — graph-ingest skips
-// the lease check on an empty token, so the Manager's behaviour is unchanged
-// for those paths.
+// ownerToken returns the wire form of the OwnerToken for a lifecycle write
+// (ADR-056 PR-3.5). The token is minted by the attached ownership Registry
+// (Registry.OwnerToken) — the Manager never composes the
+// "<workflowName>#<incarnation>" format itself. When no Registry is attached
+// (nil, test paths, unmigrated deploys) the token is the empty string —
+// graph-ingest skips the lease check on an empty token, so the Manager's
+// behaviour is unchanged for those paths.
 func (m *Manager) ownerToken(workflowName string) string {
 	m.mu.RLock()
 	reg := m.ownerRegistry
@@ -268,11 +270,7 @@ func (m *Manager) ownerToken(workflowName string) string {
 	if reg == nil {
 		return ""
 	}
-	inc := reg.Incarnation()
-	if inc == "" {
-		return ""
-	}
-	return workflowName + "#" + inc
+	return reg.OwnerToken(workflowName).Wire()
 }
 
 // ensureBucket lazy-initializes the ENTITY_STATES bucket handle.
