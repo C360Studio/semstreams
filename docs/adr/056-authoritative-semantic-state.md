@@ -752,6 +752,21 @@ silently vanish between deploys):
   deployment), well under the 1MB `MaxValueSize` (`natsclient/kv.go:39`); if a deployment ever
   outgrew that, the staleness compaction (below) bounds it and a sharded-epoch-by-pattern-prefix
   variant is the deferred optimization (OQ).
+
+  > **Implementation note (PR-1, 2026-06-17) — the shipped lease-token format supersedes the
+  > `owner_token` + `process_instance_id` sketch above.** The OwnerToken write-lease (workstream #2)
+  > shipped its wire field as a single string `"<owner>#<incarnation>"`, NOT the `RuleToken(owner_id)`
+  > FNV hash plus a separate `process_instance_id`. Rationale: (1) the shipped substrate already keys
+  > and compares owners by their **raw canonical identity** (`Registry.OwnerOf` returns the exact
+  > `owner_id` — "no hash"; `pkg/ownership/registry.go`), so a hash handle would be a lossy second
+  > encoding of an id the code already treats as exact; (2) the per-process incarnation is a
+  > `crypto/rand` boot nonce stored on each `OwnerClaim` at `RegisterOwner` time and folded into the
+  > token itself (`<owner>#<incarnation>`) rather than carried as a sibling `process_instance_id`
+  > field — one wire value, one comparison. The two-state wire contract is: **empty token = unowned /
+  > legacy writer, the lease check skips it; `"<owner>#<incarnation>"` = compare against the live
+  > owner+incarnation** (the comparison/reject is a later increment). This note governs the lease
+  > TOKEN only; the presence-key naming (`heartbeat.<...>`) and the key-safety question for free-form
+  > owner ids are a SEPARATE, pre-existing concern, unchanged by PR-1.
 - **Bucket `OWNER_PRESENCE` (bucket-level TTL):** the per-owner liveness keys, SEPARATE from the
   epoch precisely so the TTL applies to presence WITHOUT endangering the durable epoch. Each owner
   bumps a valid, dot-segmented presence key `heartbeat.<owner_token>` on an interval (a plain `Put`,

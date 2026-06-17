@@ -4,8 +4,10 @@
 // Tests coverage:
 //   - With incarnation set, ReplaceOwned request carries "<owner>#<incarnation>"
 //     as the ownerToken argument to the mutator.
-//   - Without incarnation (legacy / test path), the ownerToken is just the owner
-//     string (no "#" suffix) — backward-compatible.
+//   - Without incarnation (resourceless deploy / Registry not wired / test path)
+//     the ownerToken degrades to the EMPTY string — matching the lifecycle
+//     producer's two-state wire contract (empty = the deferred lease check skips
+//     it); it is NEVER a bare unfenced "<owner>".
 //   - The UpdateEntityWithTriplesRequest.OwnerToken field is wired correctly in
 //     the production tripleMutator.ReplaceOwned implementation (via round-trip on
 //     the capturing mock).
@@ -59,9 +61,10 @@ func TestReplaceOwned_OwnerToken_WithIncarnation(t *testing.T) {
 }
 
 // TestReplaceOwned_OwnerToken_WithoutIncarnation proves that when no incarnation
-// is set (test path, unowned pack, Registry not wired) the executor falls back to
-// passing just the owner string — no "#" suffix — preserving backward compatibility
-// for legacy callers.
+// is set (resourceless deploy, Registry not wired, test path) the executor emits
+// an EMPTY ownerToken — NOT a bare "<owner>". This matches the lifecycle
+// producer's two-state contract so the deferred lease check has a single rule:
+// empty = skip. An unfenced "<owner>" would be an uninterpretable third state.
 func TestReplaceOwned_OwnerToken_WithoutIncarnation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -75,9 +78,8 @@ func TestReplaceOwned_OwnerToken_WithoutIncarnation(t *testing.T) {
 	require.Len(t, mutator.replaceOwnedCalls, 1)
 	call := mutator.replaceOwnedCalls[0]
 
-	// Without incarnation the owner is passed through unchanged (no "#").
-	assert.Equal(t, testReplaceOwnedOwner, call.owner,
-		"without incarnation the mutator receives just the owner id (backward-compatible)")
-	assert.NotContains(t, call.owner, "#",
-		"without incarnation the token must not contain '#'")
+	// Without incarnation the token is EMPTY (two-state contract with lifecycle);
+	// the deferred graph-ingest lease check skips an empty token.
+	assert.Empty(t, call.owner,
+		"without incarnation the mutator must receive an EMPTY token, never a bare '<owner>'")
 }

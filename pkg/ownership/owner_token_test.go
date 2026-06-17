@@ -4,8 +4,10 @@
 //   - Registry.Incarnation is non-empty, stable across calls within a process,
 //     and DIFFERENT across two NewRegistry constructions (proves per-process
 //     uniqueness).
-//   - OwnerClaim.Incarnation is set at RegisterOwner time (epoch storage round-
-//     trip via the internal decodeEpoch helper).
+//   - The copy-stamp that RegisterOwner applies preserves a claim's sibling
+//     fields (unit-level field-preservation only). The GENUINE register-time
+//     storage assertion (real RegisterOwner → epoch read-back) lives in
+//     registry_integration_test.go (TestRegistry_RegisterStampsIncarnationOnStoredClaim).
 //   - OwnerToken composition: "<owner>#<incarnation>" shape verified in isolation
 //     (Registry.Incarnation is the raw nonce without the owner prefix).
 package ownership
@@ -64,16 +66,17 @@ func TestRegistry_Incarnation_HexFormat(t *testing.T) {
 	}
 }
 
-// TestOwnerClaim_IncarnationStoredAtRegister proves that after RegisterOwner
-// the epoch stores the registry's incarnation on each OwnerClaim. This is the
-// storage side of the incarnation fence: a later PR's read path retrieves this
-// value via OwnerOf/ClaimFor for the write-time comparison.
+// TestOwnerClaim_StampPreservesSiblingFields verifies, in isolation, the
+// copy-stamp semantics RegisterOwner uses: stamping Incarnation onto a claim
+// copy carries the registry nonce WITHOUT mutating the claim's other fields.
 //
-// This test is a UNIT test — it uses a no-op Registry (nil KV clients) with
-// an overridden in-memory claims store so no NATS container is needed. For the
-// full integration path (real NATS, CAS, compaction), see
-// registry_integration_test.go.
-func TestOwnerClaim_IncarnationStoredAtRegister(t *testing.T) {
+// This is deliberately a narrow UNIT test of the copy logic — it does NOT drive
+// RegisterOwner (which needs NATS) and therefore does NOT prove the epoch
+// actually persists the incarnation. That genuine register-time storage
+// assertion (real RegisterOwner → epoch read-back, would fail if the stamp loop
+// were deleted) lives in registry_integration_test.go
+// (TestRegistry_RegisterStampsIncarnationOnStoredClaim).
+func TestOwnerClaim_StampPreservesSiblingFields(t *testing.T) {
 	t.Parallel()
 	reg := newNoopRegistry(t)
 	inc := reg.Incarnation()

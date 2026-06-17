@@ -1093,11 +1093,15 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		return nil
 	}
 
-	// Compose the OwnerToken: "<owner>#<incarnation>" (ADR-056 PR-1). When
-	// the incarnation is empty (test paths, unowned packs, Registry not wired)
-	// the token degrades to just the owner — still a valid identity for the
-	// deferred graph-ingest lease check (which skips an empty token).
-	ownerToken := e.ownerID
+	// Compose the OwnerToken: "<owner>#<incarnation>" (ADR-056 PR-1). The owner
+	// is guaranteed non-empty here (validated above). When the incarnation is
+	// NOT wired (resourceless deploy / Registry absent / test path) the token
+	// degrades to the EMPTY string — NOT a bare "<owner>". This matches the
+	// lifecycle producer's two-state wire contract (manager.go ownerToken()), so
+	// the deferred graph-ingest lease check has a single rule: empty = skip,
+	// "<owner>#<incarnation>" = compare. A bare unfenced "<owner>" would be an
+	// uninterpretable third state for that comparison.
+	ownerToken := ""
 	if e.incarnation != "" {
 		ownerToken = e.ownerID + "#" + e.incarnation
 	}

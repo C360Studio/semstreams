@@ -109,6 +109,39 @@ func TestRegistry_Idempotent(t *testing.T) {
 	}
 }
 
+// TestRegistry_RegisterStampsIncarnationOnStoredClaim drives the REAL
+// RegisterOwner through live NATS KV and reads the stored epoch back, asserting
+// every persisted OwnerClaim carries the registry's per-process incarnation
+// nonce (the storage side of the ADR-056 PR-1 fence — a later PR's read path
+// returns this for the write-time lease comparison). Unlike the unit test that
+// replicates the copy-stamp in isolation, this would FAIL if RegisterOwner's
+// stamp loop were deleted.
+func TestRegistry_RegisterStampsIncarnationOnStoredClaim(t *testing.T) {
+	r, claims, ctx := newTestRegistry(t)
+
+	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "sensorml.process.label")); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	ep := readEpoch(t, claims, ctx)
+	entry, ok := ep.Owners["cs-api"]
+	if !ok {
+		t.Fatal("cs-api should be present in the stored epoch")
+	}
+	if len(entry.Claims) == 0 {
+		t.Fatal("cs-api entry should carry its registered claim")
+	}
+	for _, c := range entry.Claims {
+		if c.Incarnation == "" {
+			t.Error("stored claim must carry a non-empty incarnation (the fence)")
+		}
+		if c.Incarnation != r.Incarnation() {
+			t.Errorf("stored claim Incarnation = %q, want the registry's per-process nonce %q",
+				c.Incarnation, r.Incarnation())
+		}
+	}
+}
+
 func TestRegistry_OwnerOf(t *testing.T) {
 	r, _, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
