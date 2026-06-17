@@ -14,18 +14,27 @@ import (
 	"github.com/c360studio/semstreams/pkg/ownership"
 )
 
-// fakeClassifier is an injected foreignEdgeClassifier for unit-testing the
-// T2-seam (ADR-056 Decision 4) without NATS. It records what the seam asked and
-// returns a configured unclaimed set + per-predicate EdgeMode. A predicate
-// absent from `modes` is reported UNCLAIMED by ForeignEdgeMode (ok=false), so
-// the observe-only seam tests (which configure only `unclaimed`) keep routing
-// unchanged.
+// fakeClassifier is an injected ownershipClaimReader for unit-testing the
+// T2-seam (ADR-056 Decision 4) and the PR-3 owner-lease check without NATS. It
+// records what the seam asked and returns a configured unclaimed set, per-predicate
+// EdgeMode, and per-predicate OwnerOf results. A predicate absent from `modes` is
+// reported UNCLAIMED by ForeignEdgeMode (ok=false), and absent from `owners` is
+// reported unclaimed by OwnerOf (ok=false), so the observe-only seam tests (which
+// configure only `unclaimed`) keep routing unchanged.
 type fakeClassifier struct {
 	unclaimed   map[string]bool               // predicate -> reported unclaimed (UnclaimedForeignEdges)
 	modes       map[string]ownership.EdgeMode // predicate -> covering mode (ForeignEdgeMode; absent = unclaimed)
+	owners      map[string]fakeOwnerEntry     // predicate -> OwnerOf result (absent = ok=false)
 	err         error
 	gotProducer string
 	gotPreds    []string
+}
+
+// fakeOwnerEntry is the result fakeClassifier.OwnerOf returns for a predicate.
+type fakeOwnerEntry struct {
+	owner       string
+	incarnation string
+	err         error
 }
 
 func (f *fakeClassifier) UnclaimedForeignEdges(_ context.Context, producer string, preds []string) ([]string, error) {
@@ -50,6 +59,16 @@ func (f *fakeClassifier) ForeignEdgeMode(_ context.Context, producer, predicate 
 	}
 	m, ok := f.modes[predicate]
 	return m, ok, nil
+}
+
+func (f *fakeClassifier) OwnerOf(_ context.Context, _, predicate string) (owner, incarnation string, ok bool, err error) {
+	if entry, found := f.owners[predicate]; found {
+		if entry.err != nil {
+			return "", "", false, entry.err
+		}
+		return entry.owner, entry.incarnation, true, nil
+	}
+	return "", "", false, nil
 }
 
 // The seam meters an unclaimed foreign edge, leaves a claimed one quiet, never

@@ -51,6 +51,9 @@ var (
 
 	foreignEdgeDroppedOnce sync.Once
 	foreignEdgeDroppedVec  *prometheus.CounterVec
+
+	ownerLeaseMismatchOnce sync.Once
+	ownerLeaseMismatchVec  *prometheus.CounterVec
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -185,6 +188,30 @@ func getForeignEdgeDroppedMetric(registry *metric.MetricsRegistry) *prometheus.C
 	return foreignEdgeDroppedVec
 }
 
+// getOwnerLeaseMismatchMetric returns the process-wide counter for the
+// ADR-056 PR-3 observe-only lease check: an owned write whose OwnerToken does
+// not match the live owner claim's "<owner>#<incarnation>" at the graph-ingest
+// write seam. OBSERVE-ONLY — the write always commits in PR-3; the reject flip
+// is a later PR. Labels: message_type (dotted registry key; '_invalid' for
+// unregistered/zero) and predicate (the specific owned predicate whose live
+// incarnation differed). Mirrors getForeignEdgeUnclaimedMetric in structure.
+func getOwnerLeaseMismatchMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	ownerLeaseMismatchOnce.Do(func() {
+		ownerLeaseMismatchVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "owner_lease_mismatch_total",
+			Help:      "Observe-only count of owned writes whose OwnerToken did not match the live owner lease (ADR-056 PR-3; reject is a later PR — write always commits here). Labels: message_type, predicate.",
+		}, []string{"message_type", "predicate"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "owner_lease_mismatch_total", ownerLeaseMismatchVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(ownerLeaseMismatchVec)
+		}
+	})
+	return ownerLeaseMismatchVec
+}
+
 // Config holds configuration for graph-ingest component
 type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -281,17 +308,28 @@ func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Tripl
 	return a.component.AddTriple(ctx, triple)
 }
 
-// foreignEdgeClassifier classifies a producer's foreign-edge predicates against
-// the registered ForeignEdgeClaims (ADR-056 Decision 4). UnclaimedForeignEdges
-// returns the subset with no covering claim (the observe-only seam metric);
+// ownershipClaimReader classifies a producer's foreign-edge predicates and
+// resolves the live owner+incarnation for the ADR-056 write-time lease check.
+//
+// UnclaimedForeignEdges returns the subset of predicates with no covering
+// ForeignEdgeClaim (the observe-only seam metric, Decision 4).
+//
 // ForeignEdgeMode returns one predicate's covering EdgeMode so the routing seam
 // can branch (NoBirthStub→stub, Strict→drop, Conditional/Backfill→deferred).
-// *ownership.ClaimReader is the production implementation (one epoch read per
-// call); tests inject a fake. Kept as an interface so the seam is unit-testable
-// without NATS.
-type foreignEdgeClassifier interface {
+//
+// OwnerOf returns the live (owner, incarnation) recorded at RegisterOwner time
+// for the OwnerClaim that governs (entityID, predicate) in an owning mode
+// (Decision 2). ok=false means the predicate is unclaimed or append-evidence —
+// the lease check skips it. incarnation may be "" even when ok=true for a
+// legacy/pre-fence claim; the PR-3 check MUST fail-open in that case (do NOT
+// reject — the lease is not enforceable against a legacy owner).
+//
+// *ownership.ClaimReader is the production implementation; tests inject a fake.
+// Kept as an interface so all seams are unit-testable without NATS.
+type ownershipClaimReader interface {
 	UnclaimedForeignEdges(ctx context.Context, producer string, predicates []string) ([]string, error)
 	ForeignEdgeMode(ctx context.Context, producer, predicate string) (ownership.EdgeMode, bool, error)
+	OwnerOf(ctx context.Context, entityID, predicate string) (owner, incarnation string, ok bool, err error)
 }
 
 // Component implements the graph-ingest processor
@@ -311,13 +349,13 @@ type Component struct {
 	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
 	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
 
-	// ADR-056 Decision-4 T2-seam: read-only view of registered ForeignEdgeClaims.
-	// nil when OWNER_CLAIMS is absent (resourceless/unmigrated deploy) — the seam
-	// then skips classification (observe-only graceful-skip). An interface so the
-	// seam is unit-testable with a fake; *ownership.ClaimReader is production.
-	// foreignEdgeWarnedKeys dedupes the one-time WARN per (message_type|predicate)
-	// so an unclaimed producer logs once, not per message.
-	claimReader           foreignEdgeClassifier
+	// ADR-056 Decision-4 T2-seam + PR-3 owner-lease check: read-only view of
+	// registered ForeignEdgeClaims and owning OwnerClaims. nil when OWNER_CLAIMS
+	// is absent (resourceless/unmigrated deploy) — both seams graceful-skip.
+	// An interface so seams are unit-testable with a fake; *ownership.ClaimReader
+	// is production. foreignEdgeWarnedKeys dedupes the one-time WARN per
+	// (message_type|predicate) so an unclaimed producer logs once, not per message.
+	claimReader           ownershipClaimReader
 	foreignEdgeWarnedKeys sync.Map
 
 	// Inference components
@@ -343,6 +381,7 @@ type Component struct {
 	mutationRejections     *prometheus.CounterVec
 	foreignEdgeUnclaimed   *prometheus.CounterVec
 	foreignEdgeDropped     *prometheus.CounterVec
+	ownerLeaseMismatch     *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
@@ -391,6 +430,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
 		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
 		foreignEdgeDropped:     getForeignEdgeDroppedMetric(deps.MetricsRegistry),
+		ownerLeaseMismatch:     getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -1268,6 +1308,73 @@ func (c *Component) classifyForeignEdges(ctx context.Context, mt message.Type, f
 			c.logger.Warn("graph-ingest: foreign-subject edge has no registered ForeignEdgeClaim — routed deprecated-on-arrival (ADR-056 Decision 4; register a claim before the must-exist flip)",
 				slog.String("message_type", label),
 				slog.String("predicate", p))
+		}
+	}
+}
+
+// checkOwnerLease is the ADR-056 PR-3 observe-only lease check. It inspects
+// each owned predicate being written against the live OwnerClaim in the registry
+// and emits owner_lease_mismatch_total + a Warn when the request's OwnerToken
+// does not match the live "<owner>#<incarnation>". The write ALWAYS COMMITS —
+// this is strictly observe-only; the reject flip is PR-5.
+//
+// ownedPredicates is the deduped set of owned-write predicates for this request
+// (own/addOwn predicates + RemoveTriples predicates on the update lanes).
+// messageType is the bounded metric label (registry key or "_invalid").
+//
+// Two-state contract:
+//   - ownerToken == ""  → skip (legacy/unowned writer; the single agreed skip signal).
+//   - claimReader == nil → skip (resourceless/unmigrated deploy graceful-skip).
+//
+// Per-predicate:
+//   - err != nil  → Warn + return (fail-open, never block on a reader blip).
+//   - ok == false → continue (unclaimed/append-evidence — not lease-governed).
+//   - ok == true && incarnation == "" → fail-open (legacy/pre-fence owner; lease
+//     not enforceable — do NOT emit metric, do NOT Warn, do NOT reject).
+//   - ok == true && incarnation != "" → compare ownerToken vs "<owner>#<incarnation>";
+//     mismatch → increment metric + Warn, then continue (OBSERVE-ONLY).
+func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, ownerToken string, ownedPredicates []string) {
+	// Two-state skip.
+	if ownerToken == "" {
+		return
+	}
+	if c.claimReader == nil {
+		return
+	}
+	if len(ownedPredicates) == 0 {
+		return
+	}
+
+	for _, pred := range ownedPredicates {
+		owner, incarnation, ok, err := c.claimReader.OwnerOf(ctx, entityID, pred)
+		if err != nil {
+			// Fail-open: a transient reader blip must never block a write.
+			c.logger.Warn("graph-ingest: owner-lease read failed — skipping lease check for this predicate (observe-only fail-open)",
+				slog.String("entity_id", entityID),
+				slog.String("predicate", pred),
+				slog.String("message_type", messageType),
+				slog.Any("error", err))
+			return
+		}
+		if !ok {
+			// Unclaimed / append-evidence — not lease-governed.
+			continue
+		}
+		if incarnation == "" {
+			// Legacy/pre-fence owning claim: the lease is not enforceable.
+			// Fail-open — no metric, no Warn, no reject.
+			continue
+		}
+		// Compare the request token against the live "<owner>#<incarnation>".
+		expected := owner + "#" + incarnation
+		if ownerToken != expected {
+			c.ownerLeaseMismatch.WithLabelValues(messageType, pred).Inc()
+			c.logger.Warn("graph-ingest: OwnerToken mismatch — write proceeds (observe-only; reject is PR-5)",
+				slog.String("entity_id", entityID),
+				slog.String("predicate", pred),
+				slog.String("message_type", messageType),
+				slog.String("owner_token", ownerToken),
+				slog.String("expected_token", expected))
 		}
 	}
 }
