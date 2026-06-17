@@ -108,6 +108,49 @@ func (cr *ClaimReader) ForeignEdgeMode(ctx context.Context, producer, predicate 
 	return claim.Mode, true, nil
 }
 
+// OwnerOf returns the owner id and the per-process incarnation nonce recorded
+// at RegisterOwner time for the OwnerClaim that, in an OWNING mode, governs
+// (entityID, predicate) — the read half of the ADR-056 write-time lease check.
+// ok=true means an owning claim was found; the caller (PR-3) compares the
+// returned (owner, incarnation) pair against the request's OwnerToken
+// "<owner>#<incarnation>" to detect a revived-stale writer.
+//
+// ok=false is returned (not an error) in three normal cases:
+//   - the predicate is unclaimed (no owning OwnerClaim covers it);
+//   - the entity does not match any registered pattern;
+//   - the registry is empty / absent (no RegisterOwner has run yet).
+//
+// The structure mirrors ForeignEdgeMode exactly: one epoch read per call,
+// ErrKVKeyNotFound treated as empty-registry (not an error), any other Get
+// error wrapped and returned.
+//
+// NOTE for PR-3: a returned incarnation MAY be "" even when ok=true — an owning
+// claim registered by a legacy / pre-fence owner carries no incarnation
+// (OwnerClaim.Incarnation is omitempty). The lease check must handle this
+// deliberately: a naive "<owner>#<incarnation>" string compare would never match
+// a fenced request token against an unfenced live owner. The consistent reading
+// is the two-state contract's fail-open — an empty live incarnation means the
+// lease is not enforceable for that owner, so SKIP the reject; do NOT fail-closed
+// and reject every legitimate write against a legacy owner.
+func (cr *ClaimReader) OwnerOf(ctx context.Context, entityID, predicate string) (owner, incarnation string, ok bool, err error) {
+	entry, err := cr.claims.Get(ctx, registryKey)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return "", "", false, nil // empty registry: nothing claimed yet
+		}
+		return "", "", false, fmt.Errorf("ownership: read epoch for OwnerOf: %w", err)
+	}
+	ep, err := decodeEpoch(entry.Value)
+	if err != nil {
+		return "", "", false, err
+	}
+	o, inc, found := ep.ownerWithIncarnationOf(entityID, predicate)
+	if !found {
+		return "", "", false, nil
+	}
+	return o, inc, true, nil
+}
+
 // dedupeStrings returns the sorted, de-duplicated set of non-empty strings.
 func dedupeStrings(in []string) []string {
 	if len(in) == 0 {

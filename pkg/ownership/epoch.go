@@ -163,8 +163,23 @@ func (e *epoch) foreignEdgeClaimFor(messageType, predicate string) (ForeignEdgeC
 // one owning owner per cell, so the order is immaterial for a well-formed
 // epoch.
 func (e *epoch) ownerOf(entityID, predicate string) (owner string, ok bool) {
-	for ownerID, entry := range e.Owners {
-		for _, c := range entry.Claims {
+	o, _, found := e.ownerWithIncarnationOf(entityID, predicate)
+	return o, found
+}
+
+// ownerWithIncarnationOf is the full-detail sibling of ownerOf: it returns the
+// owner id AND the Incarnation nonce recorded at RegisterOwner time for the
+// matching OwnerClaim. The incarnation is the "<owner>#<incarnation>" token
+// half that a later PR's write-time lease check compares against the incoming
+// request's OwnerToken (ADR-056 PR-2). ok is false when no owning claim covers
+// (entityID, predicate) — an un-claimed predicate or append-evidence cell.
+// Owners are iterated in SORTED order (matching foreignEdgeClaimFor) so the
+// result is deterministic — defense-in-depth for a lease lookup that feeds a
+// reject decision, should a malformed epoch ever carry two owning owners for a
+// cell; the overlap check guarantees at most one in a well-formed epoch.
+func (e *epoch) ownerWithIncarnationOf(entityID, predicate string) (owner, incarnation string, ok bool) {
+	for _, ownerID := range sortedOwners(e.Owners) {
+		for _, c := range e.Owners[ownerID].Claims {
 			if !c.Mode.isOwning() {
 				continue
 			}
@@ -173,10 +188,10 @@ func (e *epoch) ownerOf(entityID, predicate string) (owner string, ok bool) {
 			}
 			for _, p := range c.Predicates {
 				if p == predicate {
-					return ownerID, true
+					return ownerID, c.Incarnation, true
 				}
 			}
 		}
 	}
-	return "", false
+	return "", "", false
 }
