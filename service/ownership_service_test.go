@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
 
 // TestOwnershipService_NilRegistry_DisabledPath verifies the R1 infallible-Start
@@ -43,5 +46,53 @@ func TestOwnershipService_ReentrancyGuard(t *testing.T) {
 	err := svc.Start(context.Background())
 	if err == nil {
 		t.Fatal("double-Start must return an error (re-entrancy guard)")
+	}
+}
+
+// TestWireOwnershipShutdown_CancelsCtxAndJoinsCleanly proves the ADR-058 step-2
+// drift-killer: the returned cleanup cancels the heartbeat ctx AND returns
+// promptly when no registry is attached (WaitOwnership is a no-op — R3 symmetric
+// independence). A hang would mean the join blocked on a goroutine never spawned.
+func TestWireOwnershipShutdown_CancelsCtxAndJoinsCleanly(t *testing.T) {
+	t.Parallel()
+	mgr := lifecycle.NewManager(nil, slog.Default()) // no AttachOwnership → WaitOwnership no-op
+
+	hbCtx, shutdown := WireOwnershipShutdown(context.Background(), mgr)
+	if hbCtx.Err() != nil {
+		t.Fatalf("hbCtx must be live before shutdown, got: %v", hbCtx.Err())
+	}
+
+	done := make(chan struct{})
+	go func() { shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown hung — WaitOwnership must be a no-op when no registry is attached (R3)")
+	}
+
+	if hbCtx.Err() == nil {
+		t.Error("shutdown must cancel the heartbeat ctx (signal the Manager-internal heartbeater)")
+	}
+}
+
+// TestWireOwnershipShutdown_ParentCancelPropagates proves the heartbeat ctx is
+// derived from the caller's ctx — so the heartbeater stops on parent cancel too,
+// not only via the returned cleanup (preserves the pre-refactor WithCancel(ctx)).
+func TestWireOwnershipShutdown_ParentCancelPropagates(t *testing.T) {
+	t.Parallel()
+	mgr := lifecycle.NewManager(nil, slog.Default())
+	parent, cancelParent := context.WithCancel(context.Background())
+
+	hbCtx, shutdown := WireOwnershipShutdown(parent, mgr)
+	defer shutdown()
+
+	if hbCtx.Err() != nil {
+		t.Fatalf("hbCtx must be live before parent cancel, got: %v", hbCtx.Err())
+	}
+	cancelParent()
+	select {
+	case <-hbCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("hbCtx must cancel when its parent cancels (derived context)")
 	}
 }

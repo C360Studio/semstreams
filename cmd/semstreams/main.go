@@ -194,12 +194,13 @@ func run() error {
 	// (ownership disabled this boot, best-effort — never a boot gate).
 	//
 	// The Manager-internal heartbeater (spawned by AttachOwnership inside
-	// WireOwnership) runs on hbCtx; WaitOwnership joins it on shutdown.
-	// hbCtx/hbCancel STAY in run() scope until the lifecycle Manager is
-	// itself a Phase-B Service (ADR-058 rollout step 2).
-	defer svcDeps.LifecycleManager.WaitOwnership() // join (runs second — LIFO)
-	hbCtx, hbCancel := context.WithCancel(ctx)
-	defer hbCancel() // signal (runs first — LIFO)
+	// WireOwnership) runs on hbCtx. ADR-058 rollout step 2: the Manager is
+	// deliberately NOT wrapped as a Service (it fails the Is-it-a-Service test —
+	// WaitOwnership already provides the join). Its shutdown cancel+join is
+	// factored into one shared helper so the two mains cannot drift; the deferred
+	// cleanup runs (cancel→join) before the earlier-registered NATS Close defer.
+	hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, svcDeps.LifecycleManager)
+	defer ownershipShutdown()
 
 	ownerReg, staticOwnerHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger,
 		loopExecutionProjectionContract())
