@@ -76,9 +76,11 @@ phase enum, no container.
 
 **Phase B — runtime lifecycle.** Background goroutine(s) and runtime resources
 that need a clean `Start` and a join-on-`Stop`: the static-owner heartbeater,
-`WatchRevival`, the milestone subscriber, the pprof server. Phase B lives in a
+`WatchRevival`, the milestone subscriber. Phase B lives in a
 `service.Service` registered with the `ServiceManager`, which gives us
-ordered shutdown and uniform health/metrics for free.
+ordered shutdown and uniform health/metrics for free. (The pprof server looks
+Phase-B but fails the Is-it-a-Service test — no state to flush, needs no clean
+Stop — so it stays a Phase-A fire-and-forget helper; see rollout step 4.)
 
 ### The "Is it a Service?" test
 
@@ -103,7 +105,7 @@ helper-function call, not a Service.
 | lifecycle `Manager` construct + workflow `Register` | A | inline / helper | shared helper |
 | lifecycle Manager-internal heartbeater (`AttachOwnership` spawns it) | B | already joined via `WaitOwnership` | NOT a Service — cancel+join factored into shared `WireOwnershipShutdown` helper (step 2) |
 | milestone subscriber (`Start()`→stop-func) | B | hand-managed stop-func | wrap as Service |
-| pprof server | B | hand-started HTTP | wrap as Service |
+| pprof server | A | hand-started HTTP, duplicated | shared `service.MaybeStartPProf` helper — NOT a Service (step 4) |
 
 ### Robustness constraints (non-negotiable)
 
@@ -382,7 +384,15 @@ mains in the same PR and verify the call sites are shape-identical.
    Behavior-preserving: the heartbeater spawn point is unchanged.
 3. **Milestone subscriber** (`cmd/semstreams/main.go:283-297`): already
    `Start()`-returns-a-stop-func — Service-shaped, wrap it.
-4. **pprof server** (`cmd/semstreams/main.go:867`): background HTTP, wrap it.
+4. **pprof server** (DONE): the duplicated `startPProfServer` (both mains) is
+   factored into the shared `service.MaybeStartPProf(debug, port)` helper — and
+   deliberately NOT a Service. Applying the Is-it-a-Service test (like step 2 did
+   for the lifecycle Manager): pprof fails criterion 3 — an HTTP `/debug/pprof`
+   mux has no process state to flush, so process exit cleans it with no
+   correctness loss (it is fire-and-forget today). And it is started EARLY, before
+   NATS, so a wedged/slow boot stays profilable; a StartAll-timed Service would
+   lose that window. So, mirroring step 2, the duplication is killed by a shared
+   helper, keeping the early fire-and-forget start. Behavior-preserving.
 
 Each PR is independently revertible and adds nothing to the public surface
 beyond a new internal Service type.

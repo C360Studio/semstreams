@@ -8,8 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
-	_ "net/http/pprof" // Register pprof handlers on DefaultServeMux
+	_ "net/http/pprof" // Register pprof handlers on DefaultServeMux (served by service.MaybeStartPProf)
 	"os"
 	"os/signal"
 	"runtime"
@@ -77,10 +76,10 @@ func run() error {
 		return err
 	}
 
-	// 2.5. Start pprof server if debug mode enabled (before NATS - independent)
-	if cliCfg.Debug && cliCfg.DebugPort > 0 {
-		go startPProfServer(cliCfg.DebugPort)
-	}
+	// 2.5. Start pprof server if debug mode enabled (before NATS - independent).
+	// ADR-058 step 4: shared helper, deliberately NOT a Service (see
+	// service.MaybeStartPProf) — kept early so a wedged boot stays profilable.
+	service.MaybeStartPProf(cliCfg.Debug, cliCfg.DebugPort)
 
 	// 3. Load and validate configuration
 	cfg, err := loadConfig(cliCfg.ConfigPath)
@@ -804,17 +803,5 @@ func loopExecutionProjectionContract() projection.Contract {
 				agvocab.LoopDescription,
 			},
 		}},
-	}
-}
-
-// startPProfServer starts the pprof HTTP server for profiling.
-// The server runs on http.DefaultServeMux which has pprof handlers
-// registered via the blank import of net/http/pprof.
-func startPProfServer(port int) {
-	addr := fmt.Sprintf(":%d", port)
-	// Use a simple logger that works before slog is configured
-	fmt.Printf("Starting pprof server on %s\n", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
-		fmt.Printf("pprof server error: %v\n", err)
 	}
 }
