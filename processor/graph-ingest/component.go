@@ -217,6 +217,14 @@ type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
 	EnableHierarchy    bool                  `json:"enable_hierarchy" schema:"type:bool,description:Enable hierarchy inference,default:false,category:advanced"`
 	EnableTypeSiblings *bool                 `json:"enable_type_siblings" schema:"type:bool,description:Enable sibling edges between same-type entities (default true when hierarchy enabled),category:advanced"`
+	// EnforceOwnerLease flips the ADR-056 owner-lease check from observe-only
+	// (PR-3: meter owner_lease_mismatch_total + Warn, write commits) to a hard
+	// reject (PR-5): a write whose OwnerToken does not match the live owner of a
+	// contested predicate is refused with ErrorCodeOwnerLeaseStale. Default false
+	// preserves the observe-only bake posture; operators flip it on per-deploy
+	// once the mismatch metric reads zero. All fail-open cases (empty token,
+	// no claim reader, legacy/pre-fence owner, reader blip) stay fail-open.
+	EnforceOwnerLease bool `json:"enforce_owner_lease" schema:"type:bool,description:Reject writes whose OwnerToken does not match the live owner lease (ADR-056 PR-5); default false keeps observe-only metering,default:false,category:advanced"`
 }
 
 // Validate implements component.Validatable interface
@@ -1312,49 +1320,79 @@ func (c *Component) classifyForeignEdges(ctx context.Context, mt message.Type, f
 	}
 }
 
-// checkOwnerLease is the ADR-056 PR-3 observe-only lease check. It inspects
-// each owned predicate being written against the live OwnerClaim in the registry
-// and emits owner_lease_mismatch_total + a Warn when the request's OwnerToken
-// does not match the live "<owner>#<incarnation>". The write ALWAYS COMMITS —
-// this is strictly observe-only; the reject flip is PR-5.
+// leaseViolation is the first confirmed owner-lease mismatch found in a
+// request's owned-predicate set. checkOwnerLease returns a non-nil
+// *leaseViolation ONLY when enforcement (Config.EnforceOwnerLease) is on AND a
+// mismatch is confirmed; the handler then rejects the write with
+// ErrorCodeOwnerLeaseStale. In the default observe-only posture it is always nil
+// (the mismatch is still metered + Warn-logged).
+type leaseViolation struct {
+	predicate     string // the contested owned predicate
+	expectedOwner string // live owner id (no incarnation nonce — safe for the caller-facing error)
+	got           string // the request's presented OwnerToken
+}
+
+// detail renders the caller-facing reject message. It names the live owner that
+// holds the lease and the contested predicate, but deliberately omits the live
+// incarnation nonce (a liveness fence surfaced only in the operator Warn log).
+func (v *leaseViolation) detail() string {
+	return fmt.Sprintf("owner lease stale: predicate %q is held by live owner %q; the request's OwnerToken does not match",
+		v.predicate, v.expectedOwner)
+}
+
+// checkOwnerLease is the ADR-056 owner-lease check at the graph-ingest write
+// seam. It inspects each owned predicate being written against the live
+// OwnerClaim in the registry. On a mismatch (the request's OwnerToken != the
+// live "<owner>#<incarnation>") it ALWAYS meters owner_lease_mismatch_total + a
+// Warn. Whether it BLOCKS depends on Config.EnforceOwnerLease:
+//
+//   - PR-3 default (EnforceOwnerLease=false): observe-only — returns nil, the
+//     write always commits. This is the bake posture.
+//   - PR-5 enforce (EnforceOwnerLease=true): a confirmed mismatch returns a
+//     non-nil *leaseViolation; the handler rejects the write before it commits
+//     with ErrorCodeOwnerLeaseStale.
 //
 // ownedPredicates is the deduped set of owned-write predicates for this request
 // (own/addOwn predicates + RemoveTriples predicates on the update lanes).
 // messageType is the bounded metric label (registry key or "_invalid").
 //
-// Two-state contract:
-//   - ownerToken == ""  → skip (legacy/unowned writer; the single agreed skip signal).
-//   - claimReader == nil → skip (resourceless/unmigrated deploy graceful-skip).
+// Two-state skip (return nil — never reject):
+//   - ownerToken == ""  → legacy/unowned writer (the single agreed skip signal).
+//   - claimReader == nil → resourceless/unmigrated deploy graceful-skip.
 //
-// Per-predicate:
-//   - err != nil  → Warn + return (fail-open, never block on a reader blip).
+// Per-predicate (fail-open paths return nil even under enforcement):
+//   - err != nil  → Warn + stop (fail-open; honor a mismatch already confirmed
+//     on an earlier predicate, but never block on a reader blip alone).
 //   - ok == false → continue (unclaimed/append-evidence — not lease-governed).
 //   - ok == true && incarnation == "" → fail-open (legacy/pre-fence owner; lease
-//     not enforceable — do NOT emit metric, do NOT Warn, do NOT reject).
+//     not enforceable — no metric, no Warn, no reject).
 //   - ok == true && incarnation != "" → compare ownerToken vs "<owner>#<incarnation>";
-//     mismatch → increment metric + Warn, then continue (OBSERVE-ONLY).
-func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, ownerToken string, ownedPredicates []string) {
+//     mismatch → meter + Warn, capture the first violation, continue.
+func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, ownerToken string, ownedPredicates []string) *leaseViolation {
 	// Two-state skip.
 	if ownerToken == "" {
-		return
+		return nil
 	}
 	if c.claimReader == nil {
-		return
+		return nil
 	}
 	if len(ownedPredicates) == 0 {
-		return
+		return nil
 	}
 
+	var violation *leaseViolation
 	for _, pred := range ownedPredicates {
 		owner, incarnation, ok, err := c.claimReader.OwnerOf(ctx, entityID, pred)
 		if err != nil {
-			// Fail-open: a transient reader blip must never block a write.
-			c.logger.Warn("graph-ingest: owner-lease read failed — skipping lease check for this predicate (observe-only fail-open)",
+			// Fail-open: a transient reader blip must never block a write. Stop
+			// checking here (PR-3 behavior), but still honor a mismatch already
+			// confirmed on an earlier predicate when enforcing.
+			c.logger.Warn("graph-ingest: owner-lease read failed — skipping lease check for this predicate (fail-open)",
 				slog.String("entity_id", entityID),
 				slog.String("predicate", pred),
 				slog.String("message_type", messageType),
 				slog.Any("error", err))
-			return
+			return c.leaseVerdict(violation)
 		}
 		if !ok {
 			// Unclaimed / append-evidence — not lease-governed.
@@ -1371,14 +1409,38 @@ func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, 
 		expected := ownership.ExpectedOwnerToken(owner, incarnation).Wire()
 		if ownerToken != expected {
 			c.ownerLeaseMismatch.WithLabelValues(messageType, pred).Inc()
-			c.logger.Warn("graph-ingest: OwnerToken mismatch — write proceeds (observe-only; reject is PR-5)",
-				slog.String("entity_id", entityID),
-				slog.String("predicate", pred),
-				slog.String("message_type", messageType),
-				slog.String("owner_token", ownerToken),
-				slog.String("expected_token", expected))
+			if c.config.EnforceOwnerLease {
+				c.logger.Warn("graph-ingest: OwnerToken mismatch — write REJECTED (owner_lease_stale; enforce_owner_lease on)",
+					slog.String("entity_id", entityID),
+					slog.String("predicate", pred),
+					slog.String("message_type", messageType),
+					slog.String("owner_token", ownerToken),
+					slog.String("expected_token", expected))
+			} else {
+				c.logger.Warn("graph-ingest: OwnerToken mismatch — write proceeds (observe-only; set enforce_owner_lease to reject)",
+					slog.String("entity_id", entityID),
+					slog.String("predicate", pred),
+					slog.String("message_type", messageType),
+					slog.String("owner_token", ownerToken),
+					slog.String("expected_token", expected))
+			}
+			if violation == nil {
+				violation = &leaseViolation{predicate: pred, expectedOwner: owner, got: ownerToken}
+			}
 		}
 	}
+	return c.leaseVerdict(violation)
+}
+
+// leaseVerdict gates the reject on the enforcement toggle: it surfaces a
+// confirmed violation ONLY when Config.EnforceOwnerLease is set, so the default
+// observe-only path never blocks a write even after a mismatch has been
+// metered + Warn-logged.
+func (c *Component) leaseVerdict(v *leaseViolation) *leaseViolation {
+	if v != nil && c.config.EnforceOwnerLease {
+		return v
+	}
+	return nil
 }
 
 // extractEntityFromMessage extracts an EntityState from a BaseMessage

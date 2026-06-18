@@ -40,6 +40,15 @@ func bootIngestWithOwnerClaim(
 	t *testing.T, ownerID, entityPattern, pred string,
 ) (*Component, *ownership.Registry, context.Context) {
 	t.Helper()
+	return bootIngestWithOwnerClaimCfg(t, ownerID, entityPattern, pred, DefaultConfig())
+}
+
+// bootIngestWithOwnerClaimCfg is bootIngestWithOwnerClaim with an explicit
+// Config so PR-5 tests can boot with EnforceOwnerLease=true.
+func bootIngestWithOwnerClaimCfg(
+	t *testing.T, ownerID, entityPattern, pred string, cfg Config,
+) (*Component, *ownership.Registry, context.Context) {
+	t.Helper()
 	ctx := context.Background()
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
 	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
@@ -63,7 +72,7 @@ func bootIngestWithOwnerClaim(
 	}))
 
 	// Boot graph-ingest; Start() self-wires the real ClaimReader.
-	configJSON, err := json.Marshal(DefaultConfig())
+	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: tc.Client})
 	require.NoError(t, err)
@@ -241,4 +250,163 @@ func TestIntegration_OwnerLease_UpdateWithTriples_StaleToken(t *testing.T) {
 	}
 	assert.Equal(t, "updated", updatedValue,
 		"entity predicate must reflect the written value after observe-only stale-token update")
+}
+
+// ─── PR-5 enforce-mode reject (EnforceOwnerLease=true) ────────────────────────
+//
+// These drive the SAME production wire with enforce_owner_lease on and prove the
+// reject is durable: the write never lands. A matching token still commits.
+
+func enforceCfg() Config {
+	cfg := DefaultConfig()
+	cfg.EnforceOwnerLease = true
+	return cfg
+}
+
+// TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected proves the
+// create lane rejects a stale token AND the entity is never created.
+func TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected(t *testing.T) {
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	label := labelForMessageType(intMT)
+	stale := ownerToken(intOwnerID, "deadbeef-stale-enf0")
+
+	eid := "c360.platform.test.sys.w.enfcrt"
+	before := testutil.ToFloat64(c.ownerLeaseMismatch.WithLabelValues(label, intPred))
+
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: eid, MessageType: intMT},
+		Triples: []message.Triple{
+			{Subject: eid, Predicate: intPred, Object: "active", Timestamp: time.Now(), Confidence: 1},
+		},
+		OwnerToken: stale,
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := c.handleEntityCreateWithTriples(ctx, data)
+	require.NoError(t, handlerErr, "reject is encoded in the body, never a transport error")
+	var resp graph.CreateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.False(t, resp.Success, "enforce on: create with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+
+	// Metric still fires.
+	after := testutil.ToFloat64(c.ownerLeaseMismatch.WithLabelValues(label, intPred))
+	assert.InDelta(t, before+1, after, 0.0001, "enforce on still meters the mismatch")
+
+	// The entity must NOT exist — the reject returned before CreateEntityStrict.
+	_, _, readErr := c.fetchEntityState(ctx, eid)
+	require.Error(t, readErr, "rejected create must NOT have committed the entity")
+}
+
+// TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected proves the
+// update lane rejects a stale token AND the prior state is unchanged.
+func TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected(t *testing.T) {
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	stale := ownerToken(intOwnerID, "deadbeef-stale-enfu")
+
+	eid := "c360.platform.test.sys.w.enfupd"
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
+		ID: eid, MessageType: intMT, Version: 1, UpdatedAt: time.Now(),
+		Triples: []message.Triple{{Subject: eid, Predicate: intPred, Object: "init", Timestamp: time.Now(), Confidence: 1}},
+	}))
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:     &graph.EntityState{ID: eid, MessageType: intMT},
+		AddTriples: []message.Triple{{Subject: eid, Predicate: intPred, Object: "updated", Timestamp: time.Now(), Confidence: 1}},
+		OwnerToken: stale,
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := c.handleEntityUpdateWithTriples(ctx, data)
+	require.NoError(t, handlerErr)
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.False(t, resp.Success, "enforce on: update with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+
+	// Prior state unchanged.
+	stored, _, readErr := c.fetchEntityState(ctx, eid)
+	require.NoError(t, readErr)
+	var got string
+	for _, tr := range stored.Triples {
+		if tr.Predicate == intPred {
+			got = tr.Object.(string)
+		}
+	}
+	assert.Equal(t, "init", got, "rejected update must NOT have applied the delta")
+}
+
+// TestIntegration_OwnerLease_Enforce_UpdateWithTriplesCAS_StaleRejected proves
+// the CAS lane (ExpectedRevision > 0 — the lifecycle Manager's production write
+// path) rejects a stale token through the real wire AND the prior state and
+// revision are untouched (the CAS write never ran).
+func TestIntegration_OwnerLease_Enforce_UpdateWithTriplesCAS_StaleRejected(t *testing.T) {
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	stale := ownerToken(intOwnerID, "deadbeef-stale-enfc")
+
+	eid := "c360.platform.test.sys.w.enfcas"
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
+		ID: eid, MessageType: intMT, Version: 1, UpdatedAt: time.Now(),
+		Triples: []message.Triple{{Subject: eid, Predicate: intPred, Object: "init", Timestamp: time.Now(), Confidence: 1}},
+	}))
+	_, revBefore, err := c.fetchEntityState(ctx, eid)
+	require.NoError(t, err)
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:           &graph.EntityState{ID: eid, MessageType: intMT},
+		AddTriples:       []message.Triple{{Subject: eid, Predicate: intPred, Object: "active", Timestamp: time.Now(), Confidence: 1}},
+		ExpectedRevision: revBefore,
+		OwnerToken:       stale,
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := c.handleEntityUpdateWithTriples(ctx, data)
+	require.NoError(t, handlerErr)
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.False(t, resp.Success, "enforce on: CAS update with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+
+	// Prior state AND revision unchanged — the CAS write never ran.
+	stored, revAfter, readErr := c.fetchEntityState(ctx, eid)
+	require.NoError(t, readErr)
+	assert.Equal(t, revBefore, revAfter, "rejected CAS update must NOT have advanced the revision")
+	var got string
+	for _, tr := range stored.Triples {
+		if tr.Predicate == intPred {
+			got = tr.Object.(string)
+		}
+	}
+	assert.Equal(t, "init", got, "rejected CAS update must NOT have applied the delta")
+}
+
+// TestIntegration_OwnerLease_Enforce_MatchingToken_Commits proves enforcement
+// does not block the legitimate live owner: a matching token still commits.
+func TestIntegration_OwnerLease_Enforce_MatchingToken_Commits(t *testing.T) {
+	c, reg, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	token := ownerToken(intOwnerID, reg.Incarnation())
+
+	eid := "c360.platform.test.sys.w.enfok"
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: eid, MessageType: intMT},
+		Triples: []message.Triple{
+			{Subject: eid, Predicate: intPred, Object: "planning", Timestamp: time.Now(), Confidence: 1},
+		},
+		OwnerToken: token,
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := c.handleEntityCreateWithTriples(ctx, data)
+	require.NoError(t, handlerErr)
+	var resp graph.CreateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.True(t, resp.Success, "enforce on: the live owner's matching token must still commit: %s", resp.Error)
+
+	stored, _, readErr := c.fetchEntityState(ctx, eid)
+	require.NoError(t, readErr, "committed entity must be readable")
+	assert.True(t, hasPredicate(stored, intPred))
 }

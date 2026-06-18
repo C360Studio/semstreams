@@ -99,9 +99,11 @@ const (
 	// match the live owner recorded in the owner registry for the contested
 	// (entity, predicate) cell — the writer is either a different process or
 	// a revived-stale incarnation of the same owner id. Callers should NOT
-	// retry without resolving the ownership conflict. No handler emits this
-	// code yet (ADR-056 PR-1 is additive plumbing only); the reject logic
-	// arrives in a later increment.
+	// retry without resolving the ownership conflict. Emitted by graph-ingest's
+	// create_with_triples / update_with_triples handlers ONLY when the
+	// enforce_owner_lease config is set (ADR-056 PR-5). The default observe-only
+	// posture (PR-3) meters owner_lease_mismatch_total + Warn-logs the mismatch
+	// and commits the write instead.
 	ErrorCodeOwnerLeaseStale = "owner_lease_stale"
 )
 

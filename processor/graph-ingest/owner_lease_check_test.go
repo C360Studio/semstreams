@@ -14,12 +14,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Unit tests for checkOwnerLease (ADR-056 PR-3, observe-only)
+// Unit tests for checkOwnerLease (ADR-056 PR-3 observe-only + PR-5 gated reject)
 // ---------------------------------------------------------------------------
 //
 // All tests use a fakeClassifier (defined in foreign_edge_seam_test.go) as the
-// injected ownershipClaimReader so no NATS is needed. checkOwnerLease is a
-// void method; writes always commit. Tests assert metric delta only.
+// injected ownershipClaimReader so no NATS is needed. checkOwnerLease returns a
+// *leaseViolation: nil in the default observe-only posture (writes always commit,
+// tests assert metric delta only); non-nil ONLY when Config.EnforceOwnerLease is
+// set AND a mismatch is confirmed (PR-5 reject). The fail-open cases stay nil
+// even under enforcement.
 
 const (
 	leaseEntityID    = "c360.platform.test.sys.widget.001"
@@ -320,4 +323,266 @@ func TestOwnerLease_EmptyToken_AllLanes_NoMetric(t *testing.T) {
 		after := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues(label, pred))
 		assert.InDelta(t, before, after, 0.0001, "update_with_triples: empty OwnerToken → no mismatch metric")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// PR-5 enforce-mode unit tests for checkOwnerLease (the gated reject).
+// ---------------------------------------------------------------------------
+//
+// The enforce toggle (Config.EnforceOwnerLease) ONLY changes the verdict on a
+// CONFIRMED mismatch (ok=true, incarnation!="", token!=expected). It must NEVER
+// turn a fail-open path (empty token, nil reader, legacy incarnation, reader
+// blip) into a reject — those stay nil even under enforcement.
+
+// TestCheckOwnerLease_EnforceOff_StaleToken_NoViolation proves the default
+// posture: a stale token meters the mismatch but returns nil (write commits).
+func TestCheckOwnerLease_EnforceOff_StaleToken_NoViolation(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = false // explicit: the default
+	comp.claimReader = leaseFake(leasePred, leaseOwner, leaseIncarnation)
+	label := "test.rule.v1"
+
+	before := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues(label, leasePred))
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, label, staleToken(), []string{leasePred})
+	after := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues(label, leasePred))
+
+	assert.Nil(t, v, "observe-only (enforce off): a stale token must NOT yield a reject verdict")
+	assert.InDelta(t, before+1, after, 0.0001, "observe-only still meters the mismatch")
+}
+
+// TestCheckOwnerLease_EnforceOn_StaleToken_Violation proves the reject verdict
+// carries the contested predicate, the live owner id (not the nonce), and the
+// presented token — and still meters the mismatch.
+func TestCheckOwnerLease_EnforceOn_StaleToken_Violation(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	comp.claimReader = leaseFake(leasePred, leaseOwner, leaseIncarnation)
+	label := "test.rule.v1"
+
+	before := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues(label, leasePred))
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, label, staleToken(), []string{leasePred})
+	after := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues(label, leasePred))
+
+	require.NotNil(t, v, "enforce on: a stale token must yield a reject verdict")
+	assert.Equal(t, leasePred, v.predicate)
+	assert.Equal(t, leaseOwner, v.expectedOwner, "expectedOwner is the owner id only — no incarnation nonce")
+	assert.NotContains(t, v.expectedOwner, "#", "the caller-facing owner must not leak the live incarnation nonce")
+	assert.Equal(t, staleToken(), v.got)
+	assert.InDelta(t, before+1, after, 0.0001, "enforce on still meters the mismatch")
+}
+
+// TestCheckOwnerLease_EnforceOn_MatchingToken_NoViolation proves a matching
+// token never rejects, even with enforcement on.
+func TestCheckOwnerLease_EnforceOn_MatchingToken_NoViolation(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	comp.claimReader = leaseFake(leasePred, leaseOwner, leaseIncarnation)
+
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", liveToken(), []string{leasePred})
+	assert.Nil(t, v, "enforce on: a matching token must NOT reject")
+}
+
+// TestCheckOwnerLease_EnforceOn_LegacyIncarnation_FailOpen is the critical
+// invariant: a legacy/pre-fence owner (ok=true, incarnation="") must fail-open
+// even under enforcement — a naive compare against a fenced token would always
+// mismatch and brick every legacy owner's writes.
+func TestCheckOwnerLease_EnforceOn_LegacyIncarnation_FailOpen(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	comp.claimReader = leaseFake(leasePred, leaseOwner, "") // legacy owner
+
+	before := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues("test.rule.v1", leasePred))
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", liveToken(), []string{leasePred})
+	after := testutil.ToFloat64(comp.ownerLeaseMismatch.WithLabelValues("test.rule.v1", leasePred))
+
+	assert.Nil(t, v, "enforce on: a legacy/pre-fence owner must fail-open (no reject)")
+	assert.InDelta(t, before, after, 0.0001, "legacy owner: no metric even under enforcement")
+}
+
+// TestCheckOwnerLease_EnforceOn_ReaderError_FailOpen proves a transient reader
+// blip never blocks, even under enforcement.
+func TestCheckOwnerLease_EnforceOn_ReaderError_FailOpen(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	comp.claimReader = &fakeClassifier{owners: map[string]fakeOwnerEntry{leasePred: {err: assertErr}}}
+
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", staleToken(), []string{leasePred})
+	assert.Nil(t, v, "enforce on: a reader error must fail-open (no reject)")
+}
+
+// TestCheckOwnerLease_EnforceOn_EmptyTokenAndNilReader_NoViolation proves the
+// two-state skips never reject under enforcement.
+func TestCheckOwnerLease_EnforceOn_EmptyTokenAndNilReader_NoViolation(t *testing.T) {
+	// empty token
+	{
+		comp := createTestComponentWithMockKV(t)
+		comp.config.EnforceOwnerLease = true
+		comp.claimReader = leaseFake(leasePred, leaseOwner, leaseIncarnation)
+		v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", "", []string{leasePred})
+		assert.Nil(t, v, "enforce on: empty OwnerToken (legacy writer) must NOT reject")
+	}
+	// nil reader
+	{
+		comp := createTestComponentWithMockKV(t)
+		comp.config.EnforceOwnerLease = true
+		comp.claimReader = nil
+		v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", liveToken(), []string{leasePred})
+		assert.Nil(t, v, "enforce on: nil claimReader must graceful-skip (no reject)")
+	}
+}
+
+// TestCheckOwnerLease_EnforceOn_MismatchThenReaderError_HonorsEarlierMismatch
+// proves the err-path return still surfaces a mismatch confirmed on an EARLIER
+// predicate (the reader blip on a later predicate must not erase a real reject).
+func TestCheckOwnerLease_EnforceOn_MismatchThenReaderError_HonorsEarlierMismatch(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	const predA, predB = "a.pred", "b.pred"
+	comp.claimReader = &fakeClassifier{owners: map[string]fakeOwnerEntry{
+		predA: {owner: leaseOwner, incarnation: leaseIncarnation}, // confirmed mismatch vs stale token
+		predB: {err: assertErr},                                   // reader blip on the next predicate
+	}}
+
+	v := comp.checkOwnerLease(context.Background(), leaseEntityID, "test.rule.v1", staleToken(), []string{predA, predB})
+	require.NotNil(t, v, "a mismatch on predA must reject even though predB hit a reader error")
+	assert.Equal(t, predA, v.predicate)
+}
+
+// ---------------------------------------------------------------------------
+// PR-5 lane-wiring reject tests: enforce on → handler returns the coded reject
+// and (for update lanes) the prior state is unchanged.
+// ---------------------------------------------------------------------------
+
+// TestOwnerLease_CreateWithTriples_EnforceOn_Rejects proves the create lane
+// returns Success=false + ErrorCodeOwnerLeaseStale on a stale token.
+func TestOwnerLease_CreateWithTriples_EnforceOn_Rejects(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
+	pred := "mission.phase"
+	eid := "c360.test.lease.sys.w.crtrej"
+	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
+
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
+		Triples:    []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		OwnerToken: staleToken(),
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := comp.handleEntityCreateWithTriples(context.Background(), data)
+	require.NoError(t, handlerErr, "handler encodes the reject in the body, never a transport error")
+
+	var resp graph.CreateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	assert.False(t, resp.Success, "enforce on: create with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+}
+
+// TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects proves the update lane
+// rejects AND leaves the prior state untouched (the delta never applied).
+func TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
+	pred := "mission.phase"
+	eid := "c360.test.lease.sys.w.updrej"
+	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
+
+	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
+		ID: eid, MessageType: mt, Version: 1,
+		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+	}))
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
+		AddTriples: []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		OwnerToken: staleToken(),
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := comp.handleEntityUpdateWithTriples(context.Background(), data)
+	require.NoError(t, handlerErr)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	assert.False(t, resp.Success, "enforce on: update with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+
+	// The prior value must be untouched — the reject returns before UpdateWithRetry.
+	stored, _, readErr := comp.fetchEntityState(context.Background(), eid)
+	require.NoError(t, readErr)
+	var got string
+	for _, tr := range stored.Triples {
+		if tr.Predicate == pred {
+			got, _ = tr.Object.(string)
+		}
+	}
+	assert.Equal(t, "init", got, "rejected update must NOT have applied the delta")
+}
+
+// TestOwnerLease_UpdateWithTriplesCAS_EnforceOn_Rejects proves the CAS lane is
+// covered by the single pre-dispatch check (reject before the CAS write).
+func TestOwnerLease_UpdateWithTriplesCAS_EnforceOn_Rejects(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
+	pred := "mission.phase"
+	eid := "c360.test.lease.sys.w.casrej"
+	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
+
+	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
+		ID: eid, MessageType: mt, Version: 1,
+		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+	}))
+	_, rev, err := comp.fetchEntityState(context.Background(), eid)
+	require.NoError(t, err)
+
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:           &graph.EntityState{ID: eid, MessageType: mt},
+		AddTriples:       []message.Triple{{Subject: eid, Predicate: pred, Object: "active"}},
+		ExpectedRevision: rev,
+		OwnerToken:       staleToken(),
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respData, handlerErr := comp.handleEntityUpdateWithTriples(context.Background(), data)
+	require.NoError(t, handlerErr)
+
+	var resp graph.UpdateEntityWithTriplesResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	assert.False(t, resp.Success, "enforce on: CAS update with a stale token must be rejected")
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+}
+
+// TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection proves the reject
+// flows through meteredMutation as mutation_rejections_total{reason=owner_lease_stale}
+// — the operator-facing rejection metric, for free via the wrapper.
+func TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.config.EnforceOwnerLease = true
+	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
+	pred := "mission.phase"
+	eid := "c360.test.lease.sys.w.metrej"
+	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
+
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
+		Triples:    []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		OwnerToken: staleToken(),
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	before := testutil.ToFloat64(comp.mutationRejections.WithLabelValues(SubjectEntityCreateWithTriples, graph.ErrorCodeOwnerLeaseStale))
+	handler := comp.meteredMutation(SubjectEntityCreateWithTriples, comp.handleEntityCreateWithTriples)
+	_, handlerErr := handler(context.Background(), data)
+	require.NoError(t, handlerErr)
+	after := testutil.ToFloat64(comp.mutationRejections.WithLabelValues(SubjectEntityCreateWithTriples, graph.ErrorCodeOwnerLeaseStale))
+
+	assert.InDelta(t, before+1, after, 0.0001,
+		"meteredMutation must record mutation_rejections_total{reason=owner_lease_stale} on the gated reject")
 }
