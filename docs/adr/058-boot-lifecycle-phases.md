@@ -101,7 +101,7 @@ helper-function call, not a Service.
 | ownership static heartbeater goroutine | B | `go`+WG+`defer` | `OwnershipService` |
 | ownership `WatchRevival` goroutine | B | `go`+WG+`defer` (PR-4) | `OwnershipService` |
 | lifecycle `Manager` construct + workflow `Register` | A | inline / helper | shared helper |
-| lifecycle Manager-internal heartbeater (`AttachOwnership` spawns it) | B | already joined via `WaitOwnership` | leave alone — already lifecycle-managed |
+| lifecycle Manager-internal heartbeater (`AttachOwnership` spawns it) | B | already joined via `WaitOwnership` | NOT a Service — cancel+join factored into shared `WireOwnershipShutdown` helper (step 2) |
 | milestone subscriber (`Start()`→stop-func) | B | hand-managed stop-func | wrap as Service |
 | pprof server | B | hand-started HTTP | wrap as Service |
 
@@ -284,13 +284,14 @@ one shared Phase-A call + one Phase-B registration + the existing
 post-construction bind:
 
 ```go
-// Manager-internal heartbeater (spawned by AttachOwnership) needs a
-// shutdown-cancellable ctx + a join — these STAY until the lifecycle Manager is
-// itself a Service (rollout step 2). Registered so LIFO runs hbCancel (signal)
-// then WaitOwnership (join), both before the NATS Close defer from earlier.
-defer svcDeps.LifecycleManager.WaitOwnership() // join (runs second)
-hbCtx, hbCancel := context.WithCancel(ctx)
-defer hbCancel()                               // signal (runs first)
+// Manager-internal heartbeater (spawned eagerly by AttachOwnership in Phase A)
+// needs a shutdown-cancellable ctx + a join. The Manager is deliberately NOT a
+// Service (rollout step 2 — it fails the Is-it-a-Service test; WaitOwnership
+// already provides the join). The cancel+join is factored into one shared helper
+// so the two mains cannot drift; the deferred cleanup runs cancel→join, both
+// before the earlier-registered NATS Close defer (gh#279).
+hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, svcDeps.LifecycleManager)
+defer ownershipShutdown()
 
 ownerReg, staticHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger) // Phase A
 manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticHB, metricsRegistry, logger)) // Phase B
@@ -306,18 +307,21 @@ move into `OwnershipService`, which `StopAll` cancels-then-joins in reverse
 registration order before `run()` returns to the NATS `Close` defer.
 
 What STAYS (corrected — do not over-claim the cleanup): the Manager-internal
-heartbeater is **not** a Service in this phase (rollout step 2 leaves it), so its
-`hbCtx`/`hbCancel` and the `WaitOwnership()` join — the gh#279 fix from ADR-056
-PR-4 — must remain in the mains until that heartbeater also becomes
-framework-managed. Deleting them here would silently regress that join.
+heartbeater is **not** a Service, and is **never** wrapped as one (see rollout
+step 2 below). It stays **Phase-A-spawned** by `AttachOwnership` so its boot-time
+spawn behavior is preserved. Its `hbCtx`/cancel and the `WaitOwnership()` join —
+the gh#279 fix from ADR-056 PR-4 — are factored into the shared
+`service.WireOwnershipShutdown` helper rather than left hand-rolled per binary.
+PR-1 (ownership) left them hand-rolled identically in both mains; rollout step 2
+folds them into the helper.
 
-**Half-migration guard:** the two mains differ in shutdown shape today —
-`cmd/semstreams` uses three separate defers (`ownershipWG.Wait` / `WaitOwnership`
-/ `hbCancel`) while `cmd/e2e-semstreams` bundles all three into a single deferred
-closure (`cmd/e2e-semstreams/main.go:173-179`). PR-1 must edit BOTH: drop only the
-`ownershipWG` half on each, KEEP `hbCancel` + `WaitOwnership`. Pattern-matching one
-main's shape onto the other is exactly the beta.18 half-migration this ADR exists
-to prevent — verify the e2e closure is split, not copied.
+**Half-migration guard:** PR-1 already converged the two mains to the identical
+three-line `hbCtx`/`hbCancel`/`WaitOwnership` pattern (`cmd/semstreams/main.go`
+and `cmd/e2e-semstreams/main.go`). The drift risk is therefore *prospective* — a
+future editor diverging one main's three lines from the other's. Rollout step 2
+eliminates that class structurally by replacing the three lines with one shared
+`WireOwnershipShutdown(ctx, mgr)` call both mains make identically. Edit BOTH
+mains in the same PR and verify the call sites are shape-identical.
 
 ## Consequences
 
@@ -345,9 +349,13 @@ to prevent — verify the e2e closure is split, not copied.
   boot gate. Mitigation: state it in the Service's doc comment and cover it
   with a test that asserts `Start` returns `nil` on the disabled path. It is a
   review checklist item, not a new mechanism.
-- Phase 1 does NOT fully clean the mains: the lifecycle Manager-internal
-  heartbeater's cancel + `WaitOwnership` join stay until rollout step 2. The
-  win is real but partial until lifecycle is also a Service.
+- Phase 1 (PR-1, ownership) does NOT fully clean the mains: the lifecycle
+  Manager-internal heartbeater's cancel + `WaitOwnership` join stay hand-rolled
+  in both mains. Rollout step 2 resolves this — NOT by making lifecycle a Service
+  (it isn't one; `WaitOwnership` already joins), but by factoring the cancel+join
+  into the shared `service.WireOwnershipShutdown` helper. The heartbeater stays
+  permanently Phase-A-spawned by design; there is no further "until lifecycle is a
+  Service" step.
 
 **Neutral**
 
@@ -363,9 +371,15 @@ to prevent — verify the e2e closure is split, not copied.
    `OwnershipService`, delete the inline blocks and `wireLifecycleManager`'s
    ownership half. Behavior-preserving: same goroutines, same shutdown order,
    same observe-only posture.
-2. **Lifecycle Manager**: `construct + workflow Register` stays Phase A; the
-   Manager-internal heartbeater is already lifecycle-joined via
-   `WaitOwnership` — confirm it needs no Service wrapper, leave it.
+2. **Lifecycle Manager** (DONE): `construct + workflow Register` stays Phase A.
+   The Manager is deliberately NOT wrapped as a Service — it fails the
+   Is-it-a-Service test (criterion 3's clean Stop/join is already provided by
+   `WaitOwnership`), and a wrapper would be import-cycle-forced ceremony that
+   either moves the heartbeater spawn from Phase A to `StartAll` (a behavior
+   change) or has a no-op `Start`. Instead, the hand-rolled
+   `hbCtx`/`hbCancel`/`WaitOwnership` is factored into the shared
+   `service.WireOwnershipShutdown(ctx, mgr)` helper so the two mains cannot drift.
+   Behavior-preserving: the heartbeater spawn point is unchanged.
 3. **Milestone subscriber** (`cmd/semstreams/main.go:283-297`): already
    `Start()`-returns-a-stop-func — Service-shaped, wrap it.
 4. **pprof server** (`cmd/semstreams/main.go:867`): background HTTP, wrap it.

@@ -155,3 +155,33 @@ func WireOwnership(
 	}
 	return reg, staticHB
 }
+
+// WireOwnershipShutdown is the ADR-058 rollout-step-2 drift-killer. It returns
+// the shutdown-cancellable context that governs the lifecycle Manager-internal
+// ownership heartbeater (spawned eagerly in Phase A by AttachOwnership inside
+// WireOwnership — see manager.go) and a single cleanup func that, on shutdown,
+// SIGNALS (cancel) then JOINS (WaitOwnership) it, in that order.
+//
+// Why a shared helper and not a Service: per ADR-058 the lifecycle Manager is
+// deliberately NOT wrapped as a service.Service — the heartbeater stays
+// Phase-A-spawned (preserving boot-time spawn behavior; an import cycle would
+// force a ceremony wrapper anyway). But the cancel+join was hand-rolled
+// identically in both mains, which is the beta.18 half-migration drift class
+// ADR-058 exists to prevent. Folding it into one call both mains make
+// identically removes that prospective drift structurally.
+//
+// The caller MUST pass the returned ctx to WireOwnership (so AttachOwnership's
+// heartbeater binds to it) and `defer` the returned func at the same point the
+// hand-rolled hbCancel/WaitOwnership defers lived, so LIFO still runs cancel+join
+// BEFORE the earlier-registered NATS Close defer (the gh#279 join, ADR-056 PR-4).
+//
+// With no registry attached (resourceless/unmigrated deploy, or a nil-client
+// Manager), WaitOwnership is a no-op (manager.go) so the cleanup returns
+// immediately — R3 symmetric independence.
+func WireOwnershipShutdown(ctx context.Context, lcm *lifecycle.Manager) (context.Context, func()) {
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	return hbCtx, func() {
+		hbCancel()          // signal the Manager-internal ownership heartbeater
+		lcm.WaitOwnership() // join it before NATS Close (gh#279)
+	}
+}
