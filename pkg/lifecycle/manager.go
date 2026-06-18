@@ -295,6 +295,22 @@ func (m *Manager) ownerToken(workflowName string) string {
 	return reg.OwnerToken(workflowName).Wire()
 }
 
+// checkQuiesced returns ErrOwnerQuiesced when the attached ownership Registry has
+// QUIESCED workflowName (ADR-056 PR-4): WatchRevival detected another process
+// re-registered the same owner id with a different incarnation, so this process
+// is the stale writer and must not clobber the live owner's authoritative state.
+// A nil Registry (ownership disabled this boot) or an un-quiesced owner returns
+// nil — the common case, a single field read on the hot path.
+func (m *Manager) checkQuiesced(workflowName string) error {
+	m.mu.RLock()
+	reg := m.ownerRegistry
+	m.mu.RUnlock()
+	if reg != nil && reg.IsQuiesced(workflowName) {
+		return fmt.Errorf("%w: workflow=%q", ErrOwnerQuiesced, workflowName)
+	}
+	return nil
+}
+
 // ensureBucket lazy-initializes the ENTITY_STATES bucket handle.
 // graph-ingest owns the bucket's lifecycle; the Manager just opens
 // an existing handle.
@@ -428,6 +444,11 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	}
 	reg, err := m.lookupByWorkflow(initial.Workflow())
 	if err != nil {
+		return err
+	}
+	// ADR-056 PR-4: refuse the write if this owner was superseded by another
+	// process (WatchRevival quiesce) — we are the stale writer, do not clobber.
+	if err := m.checkQuiesced(reg.workflow.Name); err != nil {
 		return err
 	}
 	entityID := initial.EntityID()
@@ -565,6 +586,10 @@ func (m *Manager) Transition(ctx context.Context, workflow, entityID, newPhase s
 func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPhase string, source TransitionSource, note string, mutator func(Participant) error) error {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
+		return err
+	}
+	// ADR-056 PR-4: refuse the transition if this owner was superseded (quiesce).
+	if err := m.checkQuiesced(reg.workflow.Name); err != nil {
 		return err
 	}
 	if _, declared := reg.workflow.Transitions[newPhase]; !declared {
@@ -744,6 +769,10 @@ func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID str
 	}
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
+		return err
+	}
+	// ADR-056 PR-4: refuse the operator patch if this owner was superseded (quiesce).
+	if err := m.checkQuiesced(reg.workflow.Name); err != nil {
 		return err
 	}
 

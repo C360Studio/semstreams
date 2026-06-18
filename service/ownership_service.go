@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/ownership"
@@ -15,8 +16,10 @@ import (
 )
 
 // OwnershipService is the Phase-B service wrapper for the ownership subsystem
-// (ADR-058). It holds the static heartbeater goroutine that keeps the
-// process-local owner presence key alive in OWNER_PRESENCE.
+// (ADR-058). It runs the two process-lifetime ownership goroutines: the static
+// heartbeater (keeps the owner presence key alive in OWNER_PRESENCE) and the
+// WatchRevival quiesce watcher (ADR-056 PR-4 — quiesces this process's owners
+// if a different incarnation takes them over).
 //
 // The ownership Registry (the Phase-A identity) is owned by the composition
 // root and passed in — this Service NEVER constructs it (ADR-058 R2: identity
@@ -30,7 +33,8 @@ type OwnershipService struct {
 	logger   *slog.Logger        // own logger (mirrors HeartbeatService); set by ctor.
 	reg      *ownership.Registry // R2: owned by Phase A, borrowed here.
 	staticHB *ownership.Heartbeater
-	mu       sync.Mutex // serializes Start/Stop so the re-entrancy guard + launch are atomic
+	metrics  *metric.MetricsRegistry // for WatchRevival's owner_revival_quiesce_total counter (ADR-056 PR-4)
+	mu       sync.Mutex              // serializes Start/Stop so the re-entrancy guard + launch are atomic
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 }
@@ -38,7 +42,7 @@ type OwnershipService struct {
 // NewOwnershipService builds the OwnershipService. reg and staticHB may both be
 // nil (the "ownership disabled this boot" path); Start detects nil reg and runs
 // idle with no goroutines.
-func NewOwnershipService(reg *ownership.Registry, staticHB *ownership.Heartbeater, logger *slog.Logger) *OwnershipService {
+func NewOwnershipService(reg *ownership.Registry, staticHB *ownership.Heartbeater, metrics *metric.MetricsRegistry, logger *slog.Logger) *OwnershipService {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -49,6 +53,7 @@ func NewOwnershipService(reg *ownership.Registry, staticHB *ownership.Heartbeate
 		logger:   logger,
 		reg:      reg,
 		staticHB: staticHB,
+		metrics:  metrics,
 	}
 }
 
@@ -79,8 +84,11 @@ func (s *OwnershipService) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go func() { defer s.wg.Done(); s.staticHB.Run(runCtx) }()
+	// ADR-056 PR-4: watch the OWNER_CLAIMS epoch and quiesce any of this process's
+	// owners a different incarnation takes over. Joined via s.wg on Stop.
+	go func() { defer s.wg.Done(); _ = s.reg.WatchRevival(runCtx, s.metrics) }()
 	return nil
 }
 
