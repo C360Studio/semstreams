@@ -16,6 +16,12 @@
       "description": "Enable sibling edges between same-type entities (default true when hierarchy enabled)",
       "category": "advanced"
     },
+    "enforce_owner_lease": {
+      "type": "boolean",
+      "description": "Reject writes whose OwnerToken does not match the live owner lease (ADR-056 PR-5); default false keeps observe-only metering",
+      "default": false,
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",

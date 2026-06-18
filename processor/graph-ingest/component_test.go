@@ -357,6 +357,48 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.NotEmpty(t, config.Ports.Inputs)
 	assert.NotEmpty(t, config.Ports.Outputs)
 	assert.False(t, config.EnableHierarchy)
+	// ADR-056 PR-5: the lease-enforcement toggle defaults to the observe-only
+	// bake posture (off) so existing deploys are unaffected.
+	assert.False(t, config.EnforceOwnerLease, "EnforceOwnerLease must default to false (observe-only)")
+}
+
+// TestConfig_EnforceOwnerLease_JSONRoundTrip locks the operator-reachable
+// enforce_owner_lease toggle against the JSON wire: absent → false (the
+// observe-only default), explicit true survives a marshal/unmarshal round-trip,
+// and the factory honors it. Per the operator-configurable-surface discipline
+// (every operator-reachable field needs a JSON round-trip test).
+func TestConfig_EnforceOwnerLease_JSONRoundTrip(t *testing.T) {
+	// Absent in JSON → false.
+	{
+		var cfg Config
+		require.NoError(t, json.Unmarshal([]byte(`{"ports":{}}`), &cfg))
+		assert.False(t, cfg.EnforceOwnerLease, "absent enforce_owner_lease must decode to false")
+	}
+	// Explicit true round-trips.
+	{
+		in := DefaultConfig()
+		in.EnforceOwnerLease = true
+		raw, err := json.Marshal(in)
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"enforce_owner_lease":true`, "field must marshal under its json tag")
+
+		var out Config
+		require.NoError(t, json.Unmarshal(raw, &out))
+		assert.True(t, out.EnforceOwnerLease, "explicit true must survive the round-trip")
+	}
+	// The factory threads the toggle onto the live component.
+	{
+		cfg := DefaultConfig()
+		cfg.EnforceOwnerLease = true
+		raw, err := json.Marshal(cfg)
+		require.NoError(t, err)
+		natsClient, err := natsclient.NewClient("nats://localhost:4222")
+		require.NoError(t, err)
+		comp, err := CreateGraphIngest(raw, component.Dependencies{NATSClient: natsClient})
+		require.NoError(t, err)
+		assert.True(t, comp.(*Component).config.EnforceOwnerLease,
+			"CreateGraphIngest must honor enforce_owner_lease from config JSON")
+	}
 }
 
 // ====================================================================================

@@ -437,11 +437,17 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	own, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.Entity.Triples)
 	req.Entity.Triples = own
 
-	// ADR-056 PR-3: observe-only owner-lease check. The owned-predicate set is
-	// the own-subject triples after normalizeProjection (the non-foreign portion
-	// committed to the primary). Write ALWAYS commits — never blocks here.
-	c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
-		predicatesOf(own))
+	// ADR-056 owner-lease check. Observe-only by default (PR-3: meter + Warn,
+	// write commits); when enforce_owner_lease is set (PR-5) a confirmed mismatch
+	// on an owned predicate rejects the write BEFORE CreateEntityStrict commits,
+	// with ErrorCodeOwnerLeaseStale. The owned-predicate set is the own-subject
+	// triples after normalizeProjection (the non-foreign portion committed to the
+	// primary).
+	if v := c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
+		predicatesOf(own)); v != nil {
+		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID,
+			graph.ErrorCodeOwnerLeaseStale, v.detail())
+	}
 
 	// ADR-054 channel (b): stamp an explicitly declared indexing profile from
 	// the mutation envelope (highest precedence). Empty/invalid is ignored and
@@ -657,14 +663,21 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	addOwn, foreign := c.normalizeProjection(ctx, req.Entity.ID, req.Entity.MessageType, req.AddTriples)
 	req.AddTriples = addOwn
 
-	// ADR-056 PR-3: observe-only owner-lease check. The owned-predicate set is
-	// the union of own add-triples predicates (the replace-merge set) and
-	// remove-triples predicates (a predicate named only in RemoveTriples is the
-	// owned cell being cleared — the write targets that owned predicate even
-	// though no new triple is added for it). Deduped by checkOwnerLease's loop.
-	// Write ALWAYS commits — never blocks here.
-	c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
-		dedupePredicates(predicatesOf(addOwn), req.RemoveTriples))
+	// ADR-056 owner-lease check (observe-only by default; rejects with
+	// ErrorCodeOwnerLeaseStale when enforce_owner_lease is set — PR-5). This runs
+	// BEFORE the ExpectedRevision CAS dispatch below, so a SINGLE check covers
+	// BOTH the CAS and the UpdateWithRetry sub-paths (the lifecycle-transition CAS
+	// lane included) — reject once, no double-count, and no orphaned foreign edge
+	// (we return before routeForeignEdges). The owned-predicate set is the union
+	// of own add-triples predicates (the replace-merge set) and remove-triples
+	// predicates (a predicate named only in RemoveTriples is the owned cell being
+	// cleared — the write targets that owned predicate even though no new triple
+	// is added for it). Deduped by checkOwnerLease's loop.
+	if v := c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
+		dedupePredicates(predicatesOf(addOwn), req.RemoveTriples)); v != nil {
+		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID,
+			graph.ErrorCodeOwnerLeaseStale, v.detail())
+	}
 
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
 	// the caller requires the entity's current KV revision to match

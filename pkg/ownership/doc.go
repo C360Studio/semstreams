@@ -49,6 +49,25 @@
 //     graph-ingest seam wiring + the foreign_edge_unclaimed_total metric live in
 //     processor/graph-ingest.
 //
+// W0 OwnerToken write-lease landed (Decision 2 write seam — the full PR-1..PR-5 arc):
+//
+//   - PR-1 wire field + incarnation fence; PR-2 ClaimReader.OwnerOf lease reader;
+//     PR-3 observe-only lease check at the graph-ingest create_with_triples /
+//     update_with_triples handlers (meter owner_lease_mismatch_total + Warn,
+//     write commits); PR-3.5 typed opaque OwnerToken; PR-4 post-registration
+//     Watch-revival quiesce (WatchRevival quiesces the lifecycle Manager producer
+//     — quiesce-not-HALT, availability over strict).
+//   - PR-5 (the reject flip) is the closing move: a write whose OwnerToken does
+//     not match the live owner of a contested predicate is REJECTED with
+//     ErrorCodeOwnerLeaseStale — but ONLY when graph-ingest's enforce_owner_lease
+//     config is set. Default false keeps the observe-only bake posture; operators
+//     flip it on per-deploy once owner_lease_mismatch_total reads zero. The reject
+//     protects the rule-pack replace_owned producer that PR-4's Manager quiesce
+//     does not cover (a superseded pack holds a cached token, so its stale
+//     incarnation fails the lease check at the write seam). All fail-open cases
+//     (empty token, no claim reader, legacy/pre-fence owner, reader blip) stay
+//     fail-open even under enforcement.
+//
 // What is deliberately NOT here yet (later W0 increments, each with its own
 // review):
 //
@@ -59,16 +78,6 @@
 //     boot re-drain + the fourth-path (ensureReferencedEntityExists) fold + the
 //     counting crash-recovery flip-gate test (Decision 4 / 4b). EnsureBuckets
 //     does NOT create PENDING_EDGES yet (no consumer).
-//   - The handler lease check returning ErrorCodeOwnerLeaseStale (Decision 2
-//     write seam, the reject flip) is the remaining write-gating step (PR-5).
-//     The OwnerToken wire field (PR-1) + observe-only lease check (PR-3) and the
-//     post-registration Watch-revival quiesce (PR-4: WatchRevival quiesces the
-//     lifecycle Manager producer — quiesce-not-HALT, availability over strict)
-//     have landed. NOTE: PR-4 quiesces the lifecycle Manager only; the rule-pack
-//     replace_owned producer's protection is PR-5's write-seam reject (it holds a
-//     cached token, so a superseded pack's stale incarnation simply fails the
-//     lease check there). Until PR-5, a superseded rule pack's writes are
-//     mismatch-logged (PR-3) but still commit.
 //   - The hard-fail-on-overlap flip + observability metric for the Manager embed
 //     (gated behind explicit enforcement, alongside the write-lease above).
 //   - The projection-contract auto-derivation wiring into graph-ingest boot
