@@ -9,8 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
-	_ "net/http/pprof"
+	_ "net/http/pprof" // Register pprof handlers on DefaultServeMux (served by service.MaybeStartPProf)
 	"os"
 	"os/signal"
 	"runtime"
@@ -76,9 +75,9 @@ func run() error {
 		return err
 	}
 
-	if cliCfg.Debug && cliCfg.DebugPort > 0 {
-		go startPProfServer(cliCfg.DebugPort)
-	}
+	// pprof (debug mode) — ADR-058 step 4 shared helper, NOT a Service. Kept early
+	// (before NATS) so a wedged boot stays profilable. Identical to cmd/semstreams.
+	service.MaybeStartPProf(cliCfg.Debug, cliCfg.DebugPort)
 
 	cfg, err := loadConfig(cliCfg.ConfigPath)
 	if err != nil {
@@ -761,14 +760,6 @@ func registerExampleComponents(registry *component.Registry) error {
 		return fmt.Errorf("register mission-command: %w", err)
 	}
 	return nil
-}
-
-func startPProfServer(port int) {
-	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("Starting pprof server on %s\n", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
-		fmt.Printf("pprof server error: %v\n", err)
-	}
 }
 
 // loopExecutionProjectionContract returns the graph projection contract for
