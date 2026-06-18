@@ -217,27 +217,27 @@ func run() error {
 		return fmt.Errorf("register agent-run workflow: %w", err)
 	}
 
-	// 10d. Start the agent-run milestone subscriber (ADR-053 D6).
-	// Subscribes to agent.complete.* and agent.failed.*, pre-resolves
-	// the run, applies zombie-prevention terminal authority (D3), and
-	// fans out to registered product handlers. No product handlers
-	// registered in the framework binary; the subscriber still enforces
-	// D3 (zombie prevention) for runs minted by run_scope=new rules.
-	milestoneSubscriber := agentrun.NewMilestoneSubscriber(
-		svcDeps.LifecycleManager,
-		agentrun.NewNATSLoopTripleReader(natsClient),
-		agentrun.NewNATSTriplePublisher(natsClient),
-		platform.Org,
-		platform.Platform,
+	// 10d. ADR-058 Phase B — agent-run milestone subscriber (ADR-053 D6) under the
+	// ServiceManager's ordered shutdown. Subscribes to agent.complete.* /
+	// agent.failed.*, pre-resolves the run, applies D3 zombie-prevention terminal
+	// authority, and fans out to registered product handlers (none in the framework
+	// binary; D3 still enforced for run_scope=new rules). Registered AFTER
+	// "ownership" so StopAll stops it first (mirrors the old defer LIFO). Its Start
+	// CAN abort boot on a genuine consumer-start failure (D3 is a hard dependency);
+	// the stream-absent case graceful-skips inside the subscriber (gh#246).
+	manager.RegisterInstance("milestone", service.NewMilestoneService(
+		agentrun.NewMilestoneSubscriber(
+			svcDeps.LifecycleManager,
+			agentrun.NewNATSLoopTripleReader(natsClient),
+			agentrun.NewNATSTriplePublisher(natsClient),
+			platform.Org,
+			platform.Platform,
+			logger,
+		),
+		natsClient,
+		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
 		logger,
-	)
-	stopMilestoneSubscriber, err := milestoneSubscriber.Start(ctx, natsClient, agentrun.StartConfig{
-		StreamName: agentrun.AgentStreamName,
-	})
-	if err != nil {
-		return fmt.Errorf("start agent-run milestone subscriber: %w", err)
-	}
-	defer stopMilestoneSubscriber()
+	))
 
 	// 11. Configure and create services
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {

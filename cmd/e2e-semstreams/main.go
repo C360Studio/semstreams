@@ -184,24 +184,24 @@ func run() error {
 		return fmt.Errorf("register agent-run workflow: %w", err)
 	}
 
-	// Start the agent-run milestone subscriber (ADR-053 D6). Mirrors
-	// cmd/semstreams wiring. No product handlers registered in e2e binary;
-	// D3 zombie-prevention still applies.
-	milestoneSubscriber := agentrun.NewMilestoneSubscriber(
-		svcDeps.LifecycleManager,
-		agentrun.NewNATSLoopTripleReader(natsClient),
-		agentrun.NewNATSTriplePublisher(natsClient),
-		platform.Org,
-		platform.Platform,
+	// ADR-058 Phase B — agent-run milestone subscriber (ADR-053 D6) under the
+	// ServiceManager's ordered shutdown. Mirrors cmd/semstreams wiring (identical
+	// RegisterInstance block — the half-migration guard). Registered AFTER
+	// "ownership" so StopAll stops it first; Start CAN abort boot on a genuine
+	// consumer-start failure (D3 hard dependency); stream-absent graceful-skips.
+	manager.RegisterInstance("milestone", service.NewMilestoneService(
+		agentrun.NewMilestoneSubscriber(
+			svcDeps.LifecycleManager,
+			agentrun.NewNATSLoopTripleReader(natsClient),
+			agentrun.NewNATSTriplePublisher(natsClient),
+			platform.Org,
+			platform.Platform,
+			logger,
+		),
+		natsClient,
+		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
 		logger,
-	)
-	stopMilestoneSubscriber, err := milestoneSubscriber.Start(ctx, natsClient, agentrun.StartConfig{
-		StreamName: agentrun.AgentStreamName,
-	})
-	if err != nil {
-		return fmt.Errorf("start agent-run milestone subscriber: %w", err)
-	}
-	defer stopMilestoneSubscriber()
+	))
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
 		return err
