@@ -73,6 +73,12 @@ type Manager struct {
 	// callers polling at dashboard frequencies don't generate
 	// N×interval log lines per drifted entity.
 	driftSeen sync.Map
+
+	// ownershipWG tracks the heartbeat goroutine spawned by AttachOwnership
+	// so callers can join it via WaitOwnership (gh#279). The goroutine is
+	// started exactly once — in AttachOwnership — and runs until the ctx
+	// passed there is cancelled.
+	ownershipWG sync.WaitGroup
 }
 
 // registration holds the per-workflow-type state Manager needs at
@@ -241,7 +247,23 @@ func (m *Manager) AttachOwnership(ctx context.Context, reg *ownership.Registry) 
 
 	// One heartbeat goroutine ticks every enrolled owner's presence key until
 	// ctx is cancelled. Started here with no owners yet; Register enrolls each.
-	go hb.Run(ctx)
+	// Tracked via ownershipWG so callers can join via WaitOwnership (gh#279).
+	m.ownershipWG.Add(1)
+	go func() {
+		defer m.ownershipWG.Done()
+		hb.Run(ctx)
+	}()
+}
+
+// WaitOwnership blocks until the heartbeat goroutine spawned by AttachOwnership
+// exits. Callers should cancel the ctx passed to AttachOwnership first (to signal
+// the goroutine), then call WaitOwnership to join it. This closes the gh#279 join
+// gap — without this, the goroutine may still be running when the NATS client
+// closes, causing a benign-but-noisy "connection closed" error.
+//
+// No-op when AttachOwnership was never called or was called with a nil registry.
+func (m *Manager) WaitOwnership() {
+	m.ownershipWG.Wait()
 }
 
 // lookupByWorkflow finds the registration for the given workflow type.

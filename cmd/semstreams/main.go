@@ -39,7 +39,6 @@ import (
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
-	"github.com/c360studio/semstreams/vocabulary"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -190,58 +189,23 @@ func run() error {
 	// half-migrated framework binaries silently break workflows.
 	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
 
-	// 10b. ADR-056 Decision 5 — attach the owner registry BEFORE Register so the
-	// agent-run workflow's claim registers through the shared OWNER_CLAIMS epoch
-	// (cross-process overlap surfaced, observe-only for the first consumer).
-	// EnsureBuckets is EAGER and deliberately here, not in graph-ingest:
-	// graph-ingest's initStorage runs only after services start
-	// (configureAndCreateServices below), long after this Register — so creating
-	// the ownership buckets there would make every registration a silent no-op.
-	// A NATS hiccup logs + skips; ownership is best-effort observe-only, never a
-	// boot gate ([[feedback_unconditional_resource_wiring_breaks_resourceless_deploys]]).
+	// 10b. ADR-058 Phase A — wire ownership buckets, Registry, and static
+	// projection contracts. Returns nil, nil on bucket-bootstrap failure
+	// (ownership disabled this boot, best-effort — never a boot gate).
 	//
-	// ownerReg/staticOwnerHB/hbCtx are lifted to run() scope (nil/ctx until the
-	// EnsureBuckets else-branch assigns them) so the rule-pack contract bind
-	// below — which must run AFTER configureAndCreateServices has constructed the
-	// rule processors — can reuse the same registry and heartbeater (ADR-056 #278
-	// inc 2).
-	var ownerReg *ownership.Registry
-	var staticOwnerHB *ownership.Heartbeater
-	hbCtx := ctx
-	if reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver); err != nil {
-		logger.Warn("ownership: bucket bootstrap failed — lifecycle ownership disabled this boot", slog.Any("error", err))
-	} else {
-		ownerReg = reg
-		// The heartbeat goroutine must stop on shutdown. `ctx` here is
-		// context.Background() (the signal-cancelled context is a downstream
-		// CHILD created in runWithSignalHandling, and a child cancelling never
-		// cancels its parent), so derive a cancellable context and cancel it as
-		// run() unwinds. Registered after natsClient.Close's defer, so by LIFO it
-		// fires FIRST — the heartbeat stops before the client closes.
-		var hbCancel context.CancelFunc
-		hbCtx, hbCancel = context.WithCancel(ctx)
-		defer hbCancel()
-		svcDeps.LifecycleManager.AttachOwnership(hbCtx, ownerReg)
+	// The Manager-internal heartbeater (spawned by AttachOwnership inside
+	// WireOwnership) runs on hbCtx; WaitOwnership joins it on shutdown.
+	// hbCtx/hbCancel STAY in run() scope until the lifecycle Manager is
+	// itself a Phase-B Service (ADR-058 rollout step 2).
+	defer svcDeps.LifecycleManager.WaitOwnership() // join (runs second — LIFO)
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel() // signal (runs first — LIFO)
 
-		// ADR-056 4c-pre-1: register the loop-execution entity projection contract.
-		// This declares that "agentic-loop-graph-writer" owns the spawn-identity
-		// origin predicates on every loop-execution entity (*.*.agent.agentic-loop.execution.*)
-		// in replace-owned mode. Best-effort: a registration failure logs a warning
-		// but does not block boot — ownership is observe-only, never a boot gate.
-		//
-		// Static projection owners (not lifecycle.Manager workflows) need their OWN
-		// heartbeater: they derive a real OwnerClaim, so without ongoing heartbeats
-		// their OWNER_PRESENCE key ages out after PresenceTTL and the next registrant
-		// compacts the claim out of the epoch (Codex review of #277). Run on hbCtx so
-		// the ticker stops on shutdown; the one-shot Bind itself uses ctx.
-		staticOwnerHB = ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
-		go staticOwnerHB.Run(hbCtx)
-		if _, err := projection.BindAndHeartbeat(ctx, ownerReg, staticOwnerHB, "agentic-loop-graph-writer",
-			loopExecutionProjectionContract()); err != nil {
-			logger.Warn("ownership: loop-execution projection contract registration failed",
-				slog.Any("error", err))
-		}
-	}
+	ownerReg, staticOwnerHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger,
+		loopExecutionProjectionContract())
+	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
+	// ordered shutdown.
+	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, logger))
 
 	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
 	// the Manager is constructed so lifecycle_* actions that reference

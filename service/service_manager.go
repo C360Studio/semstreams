@@ -186,6 +186,28 @@ func (m *Manager) CreateService(name string, rawConfig json.RawMessage, deps *De
 	return service, nil
 }
 
+// RegisterInstance admits a pre-built Service to the manager (composition-root
+// wiring, as opposed to config-driven CreateService). Same map + order tracking
+// CreateService uses, so StartAll/StopAll treat it identically.
+func (m *Manager) RegisterInstance(name string, svc Service) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.services[name]; exists {
+		// Composition-root duplicate registration is a wiring bug. Overwrite the
+		// instance but do NOT re-track order — a second m.order entry would make
+		// StopAll call Stop twice. Mirrors CreateService's duplicate rejection
+		// without the error return (RegisterInstance is void by design).
+		if m.logger != nil {
+			m.logger.Warn("service instance already registered — overwriting, not re-tracking order",
+				"service", name)
+		}
+		m.services[name] = svc
+		return
+	}
+	m.services[name] = svc
+	m.order = append(m.order, name)
+}
+
 // GetService returns a service instance by name
 func (m *Manager) GetService(name string) (Service, bool) {
 	m.mu.RLock()

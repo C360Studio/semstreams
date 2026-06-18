@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/pkg/ownership"
 )
@@ -167,5 +168,54 @@ func TestOwnershipSentinelsExist(t *testing.T) {
 	t.Parallel()
 	if !errors.Is(&ownership.OverlapError{}, ownership.ErrOwnershipOverlap) {
 		t.Error("OverlapError must match ErrOwnershipOverlap via errors.Is")
+	}
+}
+
+// TestWaitOwnership_JoinsHeartbeatGoroutine verifies the gh#279 join: WaitOwnership
+// must block while a tracked goroutine runs and return promptly after ctx is
+// cancelled. No NATS required — we use the ownershipWG directly since the test
+// is in package lifecycle.
+func TestWaitOwnership_JoinsHeartbeatGoroutine(t *testing.T) {
+	t.Parallel()
+	mgr := newManagerForTest(nil, nil, nil)
+
+	// Simulate what AttachOwnership does: track a long-running goroutine.
+	ready := make(chan struct{})
+	quit := make(chan struct{})
+	mgr.ownershipWG.Add(1)
+	go func() {
+		defer mgr.ownershipWG.Done()
+		close(ready)
+		<-quit
+	}()
+
+	// Wait until the goroutine is running.
+	<-ready
+
+	// WaitOwnership must not return yet (the goroutine is still running).
+	// We verify this by attempting to call it in a goroutine and checking that
+	// it does not complete within a short window.
+	done := make(chan struct{})
+	go func() {
+		mgr.WaitOwnership()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("WaitOwnership returned before goroutine exited")
+	case <-time.After(20 * time.Millisecond):
+		// Good — still waiting.
+	}
+
+	// Signal the goroutine to exit.
+	close(quit)
+
+	// WaitOwnership must now return promptly.
+	select {
+	case <-done:
+		// Correct.
+	case <-time.After(time.Second):
+		t.Fatal("WaitOwnership did not return after goroutine exited")
 	}
 }

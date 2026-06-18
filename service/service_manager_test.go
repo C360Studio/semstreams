@@ -800,3 +800,76 @@ func TestServiceManager_RuntimeConfigurable_Interface(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceManager_RegisterInstance verifies that RegisterInstance places the
+// service into the map AND the order slice so StartAll and StopAll treat it
+// identically to a config-driven CreateService registration.
+func TestServiceManager_RegisterInstance(t *testing.T) {
+	t.Parallel()
+	manager := createTestServiceManager(ManagerConfig{}, nil)
+
+	svc := &MockService{
+		name:    "instance-svc",
+		status:  StatusStopped,
+		healthy: true,
+	}
+
+	manager.RegisterInstance("instance-svc", svc)
+
+	// GetService must find it.
+	got, ok := manager.GetService("instance-svc")
+	if !ok {
+		t.Fatal("RegisterInstance: GetService returned not-found")
+	}
+	if got != svc {
+		t.Error("RegisterInstance: GetService returned wrong instance")
+	}
+
+	// order slice must include it so StopAll visits it in reverse order.
+	manager.mu.RLock()
+	found := false
+	for _, name := range manager.order {
+		if name == "instance-svc" {
+			found = true
+			break
+		}
+	}
+	manager.mu.RUnlock()
+
+	if !found {
+		t.Error("RegisterInstance: service name not found in order slice")
+	}
+}
+
+// TestServiceManager_RegisterInstance_DuplicateNoDoubleTrack verifies the C2 fix:
+// a second RegisterInstance with the same name overwrites the instance but does
+// NOT append a second order entry — otherwise StopAll would call Stop twice.
+func TestServiceManager_RegisterInstance_DuplicateNoDoubleTrack(t *testing.T) {
+	t.Parallel()
+	manager := createTestServiceManager(ManagerConfig{}, nil)
+
+	first := &MockService{name: "dup-svc", status: StatusStopped, healthy: true}
+	second := &MockService{name: "dup-svc", status: StatusStopped, healthy: true}
+
+	manager.RegisterInstance("dup-svc", first)
+	manager.RegisterInstance("dup-svc", second)
+
+	// Latest instance wins.
+	got, ok := manager.GetService("dup-svc")
+	if !ok || got != second {
+		t.Errorf("duplicate RegisterInstance: GetService = %v,%v, want the second instance", got, ok)
+	}
+
+	// order must contain exactly ONE entry for the name (no double-Stop).
+	manager.mu.RLock()
+	count := 0
+	for _, name := range manager.order {
+		if name == "dup-svc" {
+			count++
+		}
+	}
+	manager.mu.RUnlock()
+	if count != 1 {
+		t.Errorf("duplicate RegisterInstance: order has %d entries for dup-svc, want exactly 1 (double entry → double Stop)", count)
+	}
+}
