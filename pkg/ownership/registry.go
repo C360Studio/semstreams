@@ -48,6 +48,36 @@ type Registry struct {
 	// only / test default.
 	inverseResolver    InverseResolver
 	noResolverWarnOnce sync.Once
+
+	// registeredMu guards registered. registered is the set of owner ids THIS
+	// process successfully registered via RegisterOwner — the owners
+	// WatchRevival monitors for eviction-then-supersession (ADR-056 PR-4).
+	// Populated on each successful RegisterOwner; never pruned (an owner this
+	// process claims, it owns for its lifetime — losing the claim is exactly the
+	// revival condition WatchRevival exists to catch).
+	registeredMu sync.Mutex
+	registered   map[string]struct{}
+
+	// quiescedMu guards quiesced. quiesced is the set of owner ids this process
+	// has QUIESCED after WatchRevival detected they were superseded by a
+	// different incarnation (ADR-056 PR-4). Latching and terminal per owner: once
+	// a rival incarnation holds our owner, this process must never resume
+	// authoritative writes for it. Producers consult IsQuiesced before writing.
+	quiescedMu sync.RWMutex
+	quiesced   map[string]struct{}
+
+	// absentWarnedMu guards absentWarned — owners WatchRevival has already
+	// WARNed about being absent from the live epoch (compacted with no
+	// successor). De-dupes the warn to once per owner so a persistently-absent
+	// owner does not re-log on every epoch update (ADR-056 PR-4).
+	absentWarnedMu sync.Mutex
+	absentWarned   map[string]struct{}
+
+	// revivalUpdates, when non-nil, receives a signal after WatchRevival fully
+	// processes each epoch update. Test-only synchronization seam (set via
+	// setRevivalUpdates) so integration tests await detection deterministically
+	// rather than sleeping; nil in production. Non-blocking buffered send.
+	revivalUpdates chan<- struct{}
 }
 
 // NewRegistry constructs a Registry over the two pre-opened KV stores. The
@@ -75,10 +105,13 @@ func NewRegistry(claims, presence *natsclient.KVStore, logger *slog.Logger) *Reg
 		panic(fmt.Sprintf("ownership: generate incarnation nonce: %v", err))
 	}
 	return &Registry{
-		claims:      claims,
-		presence:    presence,
-		logger:      logger,
-		incarnation: hex.EncodeToString(b),
+		claims:       claims,
+		presence:     presence,
+		logger:       logger,
+		incarnation:  hex.EncodeToString(b),
+		registered:   make(map[string]struct{}),
+		quiesced:     make(map[string]struct{}),
+		absentWarned: make(map[string]struct{}),
 	}
 }
 
@@ -315,7 +348,50 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 		reg.rollbackPresence(ctx, r.Owner, preExisted)
 		return fmt.Errorf("ownership: register %q: %w", r.Owner, err)
 	}
+
+	// Record this owner as one of ours so WatchRevival monitors it for
+	// eviction-then-supersession (ADR-056 PR-4). Only on a clean commit — a
+	// rejected/overlapping registration holds no claim to revive against.
+	reg.registeredMu.Lock()
+	reg.registered[r.Owner] = struct{}{}
+	reg.registeredMu.Unlock()
 	return nil
+}
+
+// registeredOwners returns a snapshot copy of the owner ids this process
+// registered — the set WatchRevival iterates each epoch update.
+func (reg *Registry) registeredOwners() map[string]struct{} {
+	reg.registeredMu.Lock()
+	defer reg.registeredMu.Unlock()
+	out := make(map[string]struct{}, len(reg.registered))
+	for o := range reg.registered {
+		out[o] = struct{}{}
+	}
+	return out
+}
+
+// IsQuiesced reports whether this process has quiesced authoritative writes for
+// owner after WatchRevival detected it was superseded by a different incarnation
+// (ADR-056 PR-4). Producers (the lifecycle Manager) consult this before an owned
+// write; a quiesced owner must not write — a live rival owns it now.
+func (reg *Registry) IsQuiesced(owner string) bool {
+	reg.quiescedMu.RLock()
+	defer reg.quiescedMu.RUnlock()
+	_, ok := reg.quiesced[owner]
+	return ok
+}
+
+// markQuiesced latches owner as quiesced. Returns true on the 0→1 transition so
+// the caller emits the CRITICAL log + metric exactly once; false if already
+// quiesced. Latching — an owner never un-quiesces within this process.
+func (reg *Registry) markQuiesced(owner string) bool {
+	reg.quiescedMu.Lock()
+	defer reg.quiescedMu.Unlock()
+	if _, already := reg.quiesced[owner]; already {
+		return false
+	}
+	reg.quiesced[owner] = struct{}{}
+	return true
 }
 
 // checkInverseGate runs the Decision-4 inverse-gate over the registration's

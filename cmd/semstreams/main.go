@@ -205,7 +205,7 @@ func run() error {
 		loopExecutionProjectionContract())
 	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
 	// ordered shutdown.
-	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, logger))
+	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
 
 	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
 	// the Manager is constructed so lifecycle_* actions that reference

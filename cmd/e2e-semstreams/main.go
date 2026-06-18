@@ -172,7 +172,7 @@ func run() error {
 		loopExecutionProjectionContract())
 	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
 	// ordered shutdown.
-	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, logger))
+	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
 
 	// Register workflows (must come after Manager is constructed).
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {

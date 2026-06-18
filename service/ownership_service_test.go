@@ -12,7 +12,7 @@ import (
 // not crashed). Stop must also be clean.
 func TestOwnershipService_NilRegistry_DisabledPath(t *testing.T) {
 	t.Parallel()
-	svc := NewOwnershipService(nil, nil, nil)
+	svc := NewOwnershipService(nil, nil, nil, nil)
 
 	if err := svc.Start(context.Background()); err != nil {
 		t.Fatalf("Start with nil registry must return nil (R1 infallible), got: %v", err)
@@ -32,7 +32,7 @@ func TestOwnershipService_NilRegistry_DisabledPath(t *testing.T) {
 // an R1 soft failure.
 func TestOwnershipService_ReentrancyGuard(t *testing.T) {
 	t.Parallel()
-	svc := NewOwnershipService(nil, nil, nil)
+	svc := NewOwnershipService(nil, nil, nil, nil)
 
 	if err := svc.Start(context.Background()); err != nil {
 		t.Fatalf("first Start must succeed: %v", err)

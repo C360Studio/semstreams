@@ -177,6 +177,25 @@ func (e *epoch) ownerOf(entityID, predicate string) (owner string, ok bool) {
 // result is deterministic — defense-in-depth for a lease lookup that feeds a
 // reject decision, should a malformed epoch ever carry two owning owners for a
 // cell; the overlap check guarantees at most one in a well-formed epoch.
+// incarnationOfOwner returns the incarnation recorded on the FIRST owning
+// OwnerClaim of `owner` in this epoch (ADR-056 PR-4 revival detection).
+// present=false means the owner has no OWNING claim in the live epoch — it was
+// compacted with no successor, or it holds only foreign-edge / append-evidence
+// claims (neither carries a write-fence incarnation). A well-formed epoch stamps
+// the SAME incarnation on every one of an owner's claims (RegisterOwner stamps
+// reg.incarnation across the whole set), so the first owning claim's incarnation
+// is the owner's incarnation. The returned incarnation may be "" for a
+// legacy/pre-fence claim — the caller treats "" as not-superseding (no rival
+// incarnation to compare).
+func (e *epoch) incarnationOfOwner(owner string) (incarnation string, present bool) {
+	for _, c := range e.Owners[owner].Claims {
+		if c.Mode.isOwning() {
+			return c.Incarnation, true
+		}
+	}
+	return "", false
+}
+
 func (e *epoch) ownerWithIncarnationOf(entityID, predicate string) (owner, incarnation string, ok bool) {
 	for _, ownerID := range sortedOwners(e.Owners) {
 		for _, c := range e.Owners[ownerID].Claims {

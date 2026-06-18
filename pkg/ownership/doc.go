@@ -59,12 +59,16 @@
 //     boot re-drain + the fourth-path (ensureReferencedEntityExists) fold + the
 //     counting crash-recovery flip-gate test (Decision 4 / 4b). EnsureBuckets
 //     does NOT create PENDING_EDGES yet (no consumer).
-//   - The OwnerToken wire field on the graph mutation requests + the handler
-//     lease check returning ErrorCodeOwnerLeaseStale (Decision 2 write seam),
-//     and the post-registration Watch-revival fatal-halt. These two are the
-//     write-gating half of the story; until they land, an evicted-then-revived
-//     owner only churns the epoch (no dropped writes), which is why the embed
-//     ships observe-only rather than hard-fail.
+//   - The handler lease check returning ErrorCodeOwnerLeaseStale (Decision 2
+//     write seam, the reject flip) is the remaining write-gating step (PR-5).
+//     The OwnerToken wire field (PR-1) + observe-only lease check (PR-3) and the
+//     post-registration Watch-revival quiesce (PR-4: WatchRevival quiesces the
+//     lifecycle Manager producer — quiesce-not-HALT, availability over strict)
+//     have landed. NOTE: PR-4 quiesces the lifecycle Manager only; the rule-pack
+//     replace_owned producer's protection is PR-5's write-seam reject (it holds a
+//     cached token, so a superseded pack's stale incarnation simply fails the
+//     lease check there). Until PR-5, a superseded rule pack's writes are
+//     mismatch-logged (PR-3) but still commit.
 //   - The hard-fail-on-overlap flip + observability metric for the Manager embed
 //     (gated behind explicit enforcement, alongside the write-lease above).
 //   - The projection-contract auto-derivation wiring into graph-ingest boot

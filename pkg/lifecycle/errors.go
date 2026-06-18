@@ -107,4 +107,13 @@ var (
 	// underlying transport / handler error so callers can branch
 	// on transient-vs-permanent.
 	ErrEmitFailed = errors.New("lifecycle: emit to graph-ingest failed")
+
+	// ErrOwnerQuiesced is returned by Manager.Create / TransitionWith /
+	// UpdateFromOperator when the attached ownership Registry has QUIESCED this
+	// workflow's owner — WatchRevival detected another process re-registered the
+	// same owner id with a different incarnation, so this process is the stale
+	// writer and must not clobber the live owner's authoritative state (ADR-056
+	// PR-4, quiesce-not-HALT). The refusal is loud and surfaces to the caller
+	// (rule action / operator API) rather than silently dropping the write.
+	ErrOwnerQuiesced = errors.New("lifecycle: owner quiesced (superseded by another process; this writer must not clobber the live owner)")
 )
