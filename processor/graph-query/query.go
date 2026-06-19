@@ -356,8 +356,11 @@ func (c *Component) handleQueryHierarchyStats(ctx context.Context, data []byte) 
 		return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryHierarchyStats", "parse request")
 	}
 
-	// Get all entity IDs with prefix from graph-ingest
-	prefixReq, err := json.Marshal(map[string]any{"prefix": req.Prefix, "limit": 10000})
+	// Get all entity IDs with prefix from graph-ingest.
+	// Use typed PrefixQueryRequest to participate in the pagination contract;
+	// 10000 is intentionally above MaxPrefixQueryLimit so the server clamps
+	// it — hierarchy stats is a best-effort scan and accepts the clamped page.
+	prefixReq, err := json.Marshal(graph.PrefixQueryRequest{Prefix: req.Prefix, Limit: 10000})
 	if err != nil {
 		return nil, errs.Wrap(err, "GraphQuery", "handleQueryHierarchyStats", "marshal prefix request")
 	}

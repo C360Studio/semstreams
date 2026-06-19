@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -125,59 +126,182 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 	})
 }
 
-// handleQueryPrefixNATS handles prefix-based entity listing for hierarchy queries
+// maxPrefixResponseBytes is the soft ceiling for the marshalled response body.
+// Conservative count cap (MaxPrefixQueryLimit = 1000) is the primary guard;
+// this byte budget is a secondary safety net for pathologically large entities.
+// NATS has a hard max_payload of ~1 MB; we stop well below it so that the
+// JSON envelope overhead and any per-entity growth cannot push us over.
+//
+// NOTE: The current implementation uses the conservative count cap approach
+// (MaxPrefixQueryLimit) as the primary page-size guard. Incremental byte
+// budgeting within a page is deferred — see gh follow-up for byte-budget
+// refinement when entity sizes grow beyond a few KB each.
+const maxPrefixResponseBytes = 800 * 1024
+
+// handleQueryPrefixNATS handles prefix-based entity listing for hierarchy queries.
+//
+// Wire contract (additive, non-breaking):
+//   - Accepts both old {"prefix":"…","limit":N} and new PrefixQueryRequest
+//     (which adds "cursor") — both unmarshal cleanly into PrefixQueryRequest.
+//   - Returns graph.PrefixQueryResponse {"entities":[…],"next_cursor":"…"}.
+//     Old consumers reading only "entities" are unaffected; "next_cursor" is
+//     omitempty so it doesn't appear on the final page or single-page results.
+//   - Keys are sorted lexicographically before cursor application. This is a
+//     behaviour change from pre-pagination (where order was KV-scan order,
+//     i.e. non-deterministic) but is required for cursor correctness and is
+//     safe because callers have always treated the result as a set.
 func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]byte, error) {
 	// Create context with timeout for KV operation
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Parse request
-	var req struct {
-		Prefix string `json:"prefix"`
-		Limit  int    `json:"limit"`
-	}
+	// Parse request — PrefixQueryRequest is a superset of the old anonymous
+	// struct so old {"prefix","limit"} payloads unmarshal cleanly.
+	var req graph.PrefixQueryRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("invalid request: %w", err))
 	}
 
-	// Build prefix for server-side filtering
+	// Clamp limit.
+	limit := req.Limit
+	if limit <= 0 {
+		limit = graph.DefaultPrefixQueryLimit
+	}
+	if limit > graph.MaxPrefixQueryLimit {
+		limit = graph.MaxPrefixQueryLimit
+	}
+
+	// Build prefix for server-side filtering.
 	prefixDot := req.Prefix
 	if req.Prefix != "" {
 		prefixDot = req.Prefix + "."
 	}
 
-	// Use server-side prefix filtering instead of loading all keys
+	// Use server-side prefix filtering instead of loading all keys.
 	keys, err := c.entityBucket.KeysByPrefix(ctx, prefixDot)
 	if err != nil {
 		return nil, errs.Classified(errs.ErrorTransient, fmt.Errorf("failed to get keys: %w", err))
 	}
 
 	// Also check exact match for full entity ID queries (6-part IDs
-	// where KeysByPrefix("org.plat.dom.sys.type.inst.") finds nothing)
+	// where KeysByPrefix("org.plat.dom.sys.type.inst.") finds nothing).
 	if req.Prefix != "" && len(keys) == 0 {
 		if _, getErr := c.entityBucket.Get(ctx, req.Prefix); getErr == nil {
 			keys = []string{req.Prefix}
 		}
 	}
 
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 1000 // Default limit
+	// MANDATORY: sort before cursor application — cursor is meaningless
+	// without a deterministic key order.
+	sort.Strings(keys)
+
+	// Apply cursor: advance past keys up to and including lastKey.
+	if req.Cursor != "" {
+		lastKey, decodeErr := graph.DecodeCursor(req.Cursor)
+		if decodeErr != nil {
+			return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("invalid cursor: %w", decodeErr))
+		}
+		// SearchStrings finds first index where keys[i] >= lastKey.
+		idx := sort.SearchStrings(keys, lastKey)
+		// Advance past any key equal to lastKey (inclusive skip).
+		for idx < len(keys) && keys[idx] == lastKey {
+			idx++
+		}
+		keys = keys[idx:]
 	}
 
-	// Apply limit
-	matched := keys
-	if len(matched) > limit {
-		matched = matched[:limit]
+	// Slice the page — we'll potentially trim further by byte budget below.
+	pageKeys := keys
+	if len(pageKeys) > limit {
+		pageKeys = pageKeys[:limit]
 	}
 
-	// Fetch full entities with bounded concurrency and cache
-	entities := c.fetchEntitiesConcurrent(ctx, matched, defaultMaxConcurrent)
+	// Fetch full entities with bounded concurrency and cache.
+	entities := c.fetchEntitiesConcurrent(ctx, pageKeys, defaultMaxConcurrent)
 
-	// Return entities wrapped in envelope for consistency with batch query
-	return json.Marshal(map[string]any{
-		"entities": entities,
-	})
+	// fetchEntitiesConcurrent returns cache-hits-then-misses order, NOT sorted.
+	// Re-sort by ID so the page is a deterministic sorted prefix of pageKeys and
+	// the byte-trim cursor below (derived from the last RETURNED entity) is the
+	// true lexicographic max. Without this, a byte-trimmed page would set a
+	// cursor on an arbitrary key and skip entities on the next page.
+	sort.Slice(entities, func(i, j int) bool { return entities[i].ID < entities[j].ID })
+
+	// Byte-budget guard: if the marshalled response would exceed
+	// maxPrefixResponseBytes, trim the entity slice until it fits and set
+	// a cursor so the caller can fetch the remainder.
+	//
+	// This is a secondary safety net; the primary guard is the count cap
+	// above. applyPrefixByteLimit marshals each entity once to sum sizes
+	// (O(N) in the page's entities) — acceptable since the page is already
+	// count-capped at MaxPrefixQueryLimit.
+	byteBudget := maxPrefixResponseBytes
+	if c.maxPrefixResponseBytesOverride > 0 {
+		byteBudget = c.maxPrefixResponseBytesOverride // test-only hook; 0 in production
+	}
+	trimmedEntities, byteLimited := applyPrefixByteLimit(entities, byteBudget)
+
+	// Determine next cursor. A cursor is needed when:
+	//   (a) there are remaining keys beyond this page (len(keys) > len(pageKeys)), OR
+	//   (b) the byte budget trimmed the entity set within the page.
+	var nextCursor string
+	if byteLimited && len(trimmedEntities) > 0 {
+		// Cursor points to the last entity we actually returned.
+		nextCursor = graph.EncodeCursor(trimmedEntities[len(trimmedEntities)-1].ID)
+	} else if len(keys) > len(pageKeys) {
+		// More pages exist beyond this one.
+		if len(pageKeys) > 0 {
+			nextCursor = graph.EncodeCursor(pageKeys[len(pageKeys)-1])
+		}
+	}
+
+	resp := graph.PrefixQueryResponse{
+		Entities:   trimmedEntities,
+		NextCursor: nextCursor,
+	}
+
+	return json.Marshal(resp)
+}
+
+// applyPrefixByteLimit trims an entity slice to fit within byteLimit bytes
+// when marshalled. Returns the (possibly trimmed) slice and a boolean
+// indicating whether trimming occurred.
+//
+// The byte estimate is computed incrementally using json.Marshal on each
+// entity. This is correct but O(N) in entities. At MaxPrefixQueryLimit=1000
+// it runs in well under 1 ms for typical entity sizes.
+func applyPrefixByteLimit(entities []graph.EntityState, byteLimit int) ([]graph.EntityState, bool) {
+	if len(entities) == 0 {
+		return entities, false
+	}
+
+	// Overhead: {"entities":[ ... ],"next_cursor":"..."} — we reserve a
+	// conservative 256 bytes for the envelope so we don't have to track it
+	// precisely.
+	const envelopeOverhead = 256
+	budget := byteLimit - envelopeOverhead
+	accumulated := 0
+
+	for i, e := range entities {
+		b, err := json.Marshal(e)
+		if err != nil {
+			// Marshal failure on an individual entity: skip the rest to be safe.
+			return entities[:i], i > 0
+		}
+		accumulated += len(b) + 1 // +1 for comma separator
+		if accumulated > budget {
+			if i == 0 {
+				// Even the first entity exceeds budget — return it anyway
+				// rather than an empty page. Report byteLimited=true so the
+				// caller sets a cursor on THIS entity's key: the next page
+				// resumes strictly after it (no infinite loop, and no skip of
+				// the rest of the page that a count-boundary cursor would cause).
+				return entities[:1], true
+			}
+			return entities[:i], true
+		}
+	}
+
+	return entities, false
 }
 
 // handleQuerySuffixNATS handles suffix-based entity ID resolution.
