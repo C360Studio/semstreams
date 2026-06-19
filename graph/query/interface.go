@@ -53,6 +53,13 @@ type Client interface {
 	// caveat.
 	QueryPrefix(ctx context.Context, req gtypes.PrefixQueryRequest) (gtypes.PrefixQueryResponse, error)
 
+	// QueryPrefixAll pages through graph.query.prefix following the opaque cursor
+	// and returns all matching entities UP TO maxEntities (which MUST be > 0 —
+	// there is no unbounded mode). The bool result is true when the cap was hit
+	// while more results remained. req.Cursor is ignored (paging starts at the
+	// beginning). See the QueryPrefixAll doc comment for details.
+	QueryPrefixAll(ctx context.Context, req gtypes.PrefixQueryRequest, maxEntities int) ([]gtypes.EntityState, bool, error)
+
 	// Cache and metrics
 	GetCacheStats() CacheStats
 	Clear() error
