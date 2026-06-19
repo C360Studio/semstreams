@@ -43,6 +43,16 @@ type Client interface {
 	GetPredicateStats(ctx context.Context, predicate string, sampleLimit int) (*gtypes.PredicateStatsData, error)
 	QueryCompoundPredicates(ctx context.Context, query gtypes.CompoundPredicateQuery) ([]string, error)
 
+	// Prefix queries
+	// QueryPrefix fetches one page of entities whose IDs share the given prefix.
+	// Pass the NextCursor from the previous PrefixQueryResponse to page forward;
+	// leave Cursor empty for the first page. Calls graph.query.prefix via
+	// RequestClassified, so errors surface as a non-nil error (never a silent
+	// empty result). Note: the public-subject passthrough coerces handler errors
+	// to Invalid class — see QueryPrefix's doc comment for the class-fidelity
+	// caveat.
+	QueryPrefix(ctx context.Context, req gtypes.PrefixQueryRequest) (gtypes.PrefixQueryResponse, error)
+
 	// Cache and metrics
 	GetCacheStats() CacheStats
 	Clear() error

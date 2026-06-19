@@ -65,10 +65,11 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 	// Entity-type aggregation via the prefix-query orchestration the
 	// hierarchyStats handler already uses. Empty prefix scans all
 	// entities up to the limit; downstream is responsible for the
-	// envelope shape.
-	prefixPayload, err := json.Marshal(map[string]any{
-		"prefix": "",
-		"limit":  req.EntitySampleLimit,
+	// envelope shape. Use typed PrefixQueryRequest to participate in
+	// the pagination contract.
+	prefixPayload, err := json.Marshal(graph.PrefixQueryRequest{
+		Prefix: "",
+		Limit:  req.EntitySampleLimit,
 	})
 	if err != nil {
 		return nil, errs.Wrap(err, "GraphQuery", "handleQueryGraphSummary", "marshal prefix request")
