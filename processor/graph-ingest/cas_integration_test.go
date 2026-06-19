@@ -401,6 +401,11 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 	t.Run("correct_revision_routes_foreign", func(t *testing.T) {
 		_, rev, err := c.fetchEntityState(ctx, parentID)
 		require.NoError(t, err)
+
+		// Pre-create the child entity so the foreign edge can land (ADR-055
+		// must-exist: AddTriples rejects absent targets).
+		require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{ID: childID}))
+
 		req := graph.UpdateEntityWithTriplesRequest{
 			Entity:           &graph.EntityState{ID: parentID},
 			AddTriples:       []message.Triple{foreignEdge},
@@ -413,7 +418,7 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 		require.NoError(t, json.Unmarshal(respData, &resp))
 		require.True(t, resp.Success, "current-revision CAS must succeed: %s", resp.Error)
 
-		// On success the foreign edge IS routed onto the child.
+		// On success the foreign edge IS routed onto the (pre-created) child.
 		entry, getErr := c.entityBucket.Get(ctx, childID)
 		require.NoError(t, getErr, "foreign edge must be routed onto the child when the CAS primary write committed")
 		var child graph.EntityState

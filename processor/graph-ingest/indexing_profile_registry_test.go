@@ -84,25 +84,37 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 	}
 }
 
-// TestIndexingProfile_AddTripleAutoVivify_DoesNotStamp locks the ADR-055
-// forward-compat decision: the triple.add auto-vivify path (which ADR-055 will
-// DELETE) is NOT a stamp seam. An entity born via triple.add carries no profile
-// triple — lenient consumers index it, and the floor metric never fires because
-// reconcileIndexingProfile is not on this path. If a future change wires
-// stamping into the auto-vivify branch (rather than removing it per ADR-055),
-// this fails.
-func TestIndexingProfile_AddTripleAutoVivify_DoesNotStamp(t *testing.T) {
+// TestIndexingProfile_AddTriple_DoesNotStamp locks the ADR-055 invariant:
+// triple.add is NOT a stamp seam. An entity updated via triple.add carries no
+// additional profile triple — reconcileIndexingProfile is not on this path.
+// The entity must be pre-created (ADR-055 deleted the auto-vivify path);
+// triple.add to a pre-existing entity must NOT re-stamp indexing metadata.
+func TestIndexingProfile_AddTriple_DoesNotStamp(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
-	const id = "c360.platform.test.sys.widget.autovivify1"
+	const id = "c360.platform.test.sys.widget.addtriple1"
+	// Pre-create the entity via the create seam so it exists in ENTITY_STATES.
+	req := graph.CreateEntityWithTriplesRequest{Entity: &graph.EntityState{ID: id}}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+	_, err = comp.handleEntityCreateWithTriples(ctx, data)
+	require.NoError(t, err)
+
+	// Record the profile triples stamped at create time so we can assert
+	// that triple.add does NOT add more.
+	esBefore := storedEntity(t, comp, id)
+	profilesBefore := profileValues(esBefore)
+
+	// Now add a user triple via the triple.add path.
 	tr := message.Triple{Subject: id, Predicate: "evidence.note", Object: "v", Confidence: 1.0}
 	require.NoError(t, comp.AddTriple(ctx, tr))
 
-	es := storedEntity(t, comp, id)
-	assert.Empty(t, profileValues(es),
-		"triple.add auto-vivify must NOT stamp an indexing profile (ADR-055 deletes that create path)")
-	assert.Equal(t, 1, nonProfileTripleCount(es), "the entity holds exactly the one added triple")
+	esAfter := storedEntity(t, comp, id)
+	assert.Equal(t, profilesBefore, profileValues(esAfter),
+		"triple.add must NOT stamp or change the indexing profile (ADR-055: only create seam stamps)")
+	assert.Equal(t, nonProfileTripleCount(esBefore)+1, nonProfileTripleCount(esAfter),
+		"the entity holds exactly one additional user triple after AddTriple")
 }
 
 // End-to-end through the production create handler: a REGISTERED type floors to

@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/ownership"
 )
 
@@ -108,7 +109,9 @@ func TestForeignEdgeSeam_MetersUnclaimedOnly(t *testing.T) {
 }
 
 // No claim reader wired (resourceless/unmigrated deploy): the seam is a pure
-// no-op — no panic, ingest proceeds, the foreign edge is still routed.
+// no-op — no panic, ingest proceeds, the foreign edge routing is attempted.
+// ADR-055: after the must-exist flip, AddTriples rejects the absent target
+// → entity stays absent, but the primary write is unaffected (warn-not-fails).
 func TestForeignEdgeSeam_GracefulSkipWhenNoReader(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.claimReader = nil
@@ -121,9 +124,11 @@ func TestForeignEdgeSeam_GracefulSkipWhenNoReader(t *testing.T) {
 	}
 	comp.ingestEntity(context.Background(), entity) // must not panic
 
-	// The foreign edge still landed on its subject (routing unchanged).
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, "x.edge"), "graceful-skip must not change routing — the foreign edge is still appended")
+	// ADR-055: routing is attempted (graceful-skip contract preserved) but
+	// AddTriples rejects the absent target — entity must NOT be auto-vivified.
+	_, err := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(err),
+		"ADR-055: graceful-skip must attempt routing but NOT auto-vivify absent target (warn-not-fails)")
 }
 
 // A producer with an invalid/zero MessageType is metered under a bounded
@@ -151,6 +156,8 @@ func TestForeignEdgeSeam_InvalidMessageTypeLabel(t *testing.T) {
 
 // A classifier read error is fail-open: the seam logs and routes anyway (no
 // metric, no panic, ingest not blocked).
+// ADR-055: after the must-exist flip, AddTriples rejects the absent target
+// → entity stays absent, but the primary write is unaffected (warn-not-fails).
 func TestForeignEdgeSeam_ClassifierErrorFailsOpen(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.claimReader = &fakeClassifier{err: assertErr}
@@ -163,8 +170,11 @@ func TestForeignEdgeSeam_ClassifierErrorFailsOpen(t *testing.T) {
 	}
 	comp.ingestEntity(context.Background(), entity) // must not panic
 
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, "x.edge"), "a classifier error must not block routing (fail-open)")
+	// ADR-055: a classifier error causes fail-open routing (routing decision preserved),
+	// but AddTriples rejects the absent target — entity must NOT be auto-vivified.
+	_, err := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(err),
+		"ADR-055: fail-open must NOT auto-vivify absent target; AddTriples fails (warn-not-fails)")
 }
 
 var assertErr = errForTest("classifier read blip")
@@ -211,10 +221,12 @@ func TestSharedSeam_CreateWithTriples_PartitionsClassifiesRoutesForeign(t *testi
 	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "child.isHostedBy")), 0.0001,
 		"the mutation-lane foreign edge must be classified by the shared seam")
 	assert.Equal(t, mt.Key(), fake.gotProducer)
-	// …and routed onto its own subject (the child entity).
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, "child.isHostedBy"),
-		"foreign edge must be routed onto its own subject, not dropped")
+	// …and routing was attempted (edge goes into toAppend, not dropped).
+	// ADR-055: AddTriples now rejects absent targets — the child entity stays
+	// absent (warn-not-fails). The metric alone confirms classification happened.
+	_, childErr := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(childErr),
+		"ADR-055: unclaimed absent child must NOT be auto-vivified; AddTriples fails (warn-not-fails)")
 }
 
 // A single-subject create_with_triples (every current caller) is a pure no-op for

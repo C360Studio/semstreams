@@ -24,6 +24,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -1213,7 +1214,11 @@ func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, mt 
 		case !claimed:
 			// UNCLAIMED + absent: the deprecated-on-arrival hatch. Stay routed so
 			// foreign_edge_unclaimed_total (metered upstream in classifyForeignEdges)
-			// can still reach zero over the flip-gate bake window.
+			// can still reach zero over the flip-gate bake window. Post-ADR-055 the
+			// append no longer auto-vivifies the absent target — AddTriples rejects
+			// it (appendForeignEdges warn-not-fails), so an unclaimed edge to a
+			// not-yet-born target is dropped, not silently birthed. Draining this
+			// counter to zero is the rollout gate for the must-exist flip.
 			toAppend = append(toAppend, edge)
 		case mode == ownership.EdgeNoBirthStub:
 			// Backstop: materialise the envelope-bearing stub then append. Idempotent
@@ -1231,7 +1236,9 @@ func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, mt 
 			// NOT appended.
 		case mode == ownership.EdgeConditional || mode == ownership.EdgeBackfill:
 			// DEFERRED to the PENDING_EDGES increment. No live producer reaches here
-			// today; route-with-warn (keeps auto-vivify) so it is observable, not silent.
+			// today; route-with-warn so it is observable, not silent. Post-ADR-055 the
+			// append no longer auto-vivifies an absent target — AddTriples rejects it
+			// (warn-not-fails), same as the unclaimed hatch above.
 			c.foreignEdgeDropped.WithLabelValues(label, edge.Predicate, dropReasonConditionalDeferred).Inc()
 			c.warnForeignEdgeDropOnce(dropReasonConditionalDeferred, label, edge)
 			toAppend = append(toAppend, edge)
@@ -2190,12 +2197,10 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 				return nil, err // Non-retryable
 			}
 		} else {
-			// Create new entity if doesn't exist
-			entity = graph.EntityState{
-				ID:        triple.Subject,
-				Version:   0,
-				UpdatedAt: time.Now(),
-			}
+			// Must-exist (ADR-055): a triple targeting an absent entity is
+			// rejected, not silently auto-vivified. NonRetryable stops the CAS
+			// loop and surfaces the sentinel for the handler to map.
+			return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
 		}
 
 		// Add triple
@@ -2266,6 +2271,12 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 	sort.Strings(subjects)
 
 	failedSubjects = make(map[string]string)
+	// allAbsences tracks whether EVERY per-subject failure was an ADR-055
+	// entity-not-found rejection. When true the aggregated error wraps
+	// ErrKVKeyNotFound so the handler can set ErrorCodeEntityNotFound on the
+	// response without string-sniffing. Mixed-reason batches (allAbsences=false)
+	// stay un-sentineled → handler leaves ErrorCode empty (unclassified).
+	allAbsences := true
 	for i, subject := range subjects {
 		// Short-circuit on context cancellation: don't burn the retry
 		// budget for every remaining subject when the caller has
@@ -2277,6 +2288,8 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			for _, s := range subjects[i:] {
 				failedSubjects[s] = ctxErr.Error()
 			}
+			// A cancelled batch is NOT a pure entity-not-found batch.
+			allAbsences = false
 			atomic.AddInt64(&c.errors, 1)
 			break
 		}
@@ -2289,11 +2302,10 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 					return nil, err // Non-retryable
 				}
 			} else {
-				entity = graph.EntityState{
-					ID:        subject,
-					Version:   0,
-					UpdatedAt: time.Now(),
-				}
+				// Must-exist (ADR-055): a triple targeting an absent entity is
+				// rejected, not silently auto-vivified. NonRetryable stops the CAS
+				// loop and surfaces the sentinel for the handler to map.
+				return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
 			}
 
 			entity.Triples = append(entity.Triples, group...)
@@ -2306,6 +2318,9 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 		if casErr != nil {
 			atomic.AddInt64(&c.errors, 1)
 			failedSubjects[subject] = casErr.Error()
+			if !errors.Is(casErr, natsclient.ErrKVKeyNotFound) {
+				allAbsences = false
+			}
 			continue
 		}
 		writtenCount += len(group)
@@ -2321,9 +2336,17 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 		failed = append(failed, s)
 	}
 	sort.Strings(failed)
-	return writtenCount, failedSubjects, errs.Wrap(
-		fmt.Errorf("CAS update failed for %d/%d subjects: %v", len(failedSubjects), len(subjects), failed),
-		"Component", "AddTriples", "batch CAS partial failure")
+	var innerErr error
+	if allAbsences {
+		// All failures were entity-not-found: wrap the sentinel so the handler
+		// can set ErrorCodeEntityNotFound without string-sniffing.
+		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v: %w",
+			len(failedSubjects), len(subjects), failed, natsclient.ErrKVKeyNotFound)
+	} else {
+		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v",
+			len(failedSubjects), len(subjects), failed)
+	}
+	return writtenCount, failedSubjects, errs.Wrap(innerErr, "Component", "AddTriples", "batch CAS partial failure")
 }
 
 // RemoveTriple removes a triple from an entity using CAS for concurrency safety

@@ -113,6 +113,9 @@ func TestRouteForeignEdges_PresentTarget_AppendsRegardlessOfMode(t *testing.T) {
 // UNCLAIMED + absent target: the deprecated-on-arrival hatch — the edge stays
 // routed (so the flip-gate hatch counter can still drain to zero) and is NOT
 // metered on the drop counter (it is the unclaimed lane, metered upstream).
+// ADR-055: after the must-exist flip the routing decision is unchanged (edge
+// goes into toAppend), but AddTriples now rejects absent targets → entity
+// remains absent. The primary write is unaffected (warn-not-fails contract).
 func TestRouteForeignEdges_Unclaimed_AbsentTarget_RouteWithWarn(t *testing.T) {
 	comp, _ := routeTestComp(t)
 	comp.claimReader = &fakeClassifier{} // no modes configured → ForeignEdgeMode reports unclaimed
@@ -122,8 +125,11 @@ func TestRouteForeignEdges_Unclaimed_AbsentTarget_RouteWithWarn(t *testing.T) {
 
 	comp.routeForeignEdges(context.Background(), flParentID, routeMT, []message.Triple{routeEdge()})
 
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, routeEdgePred), "an unclaimed foreign edge must stay routed (deprecated-on-arrival hatch)")
+	// ADR-055: the unclaimed routing decision still routes (not dropped), but
+	// AddTriples rejects the absent target — entity must NOT exist post-flip.
+	_, err := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(err),
+		"ADR-055: unclaimed absent target must NOT be auto-vivified; AddTriples fails (warn-not-fails)")
 	assert.InDelta(t, beforeDropped, testutil.ToFloat64(comp.foreignEdgeDropped.WithLabelValues(label, routeEdgePred, dropReasonStrictAbsent)), 0.0001,
 		"the unclaimed hatch must NOT increment the drop counter")
 }
@@ -131,6 +137,9 @@ func TestRouteForeignEdges_Unclaimed_AbsentTarget_RouteWithWarn(t *testing.T) {
 // A mode-lookup read error inside routeForeignEdges fails OPEN: the edge is
 // routed-with-warn (never blocked, never Strict-dropped on a transient read
 // blip) — the route-time mirror of the foreignTargetExists fail-open.
+// ADR-055: after the must-exist flip the fail-open routing decision is unchanged
+// (edge goes into toAppend), but AddTriples rejects the absent target →
+// entity remains absent. The primary write is unaffected (warn-not-fails).
 func TestRouteForeignEdges_ModeLookupError_FailsOpen(t *testing.T) {
 	comp, _ := routeTestComp(t)
 	comp.claimReader = &fakeClassifier{err: assertErr} // ForeignEdgeMode returns an error
@@ -140,8 +149,11 @@ func TestRouteForeignEdges_ModeLookupError_FailsOpen(t *testing.T) {
 
 	comp.routeForeignEdges(context.Background(), flParentID, routeMT, []message.Triple{routeEdge()})
 
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, routeEdgePred), "a mode-lookup read error must fail open — the edge is still routed")
+	// ADR-055: the fail-open routing decision still routes (not dropped), but
+	// AddTriples rejects the absent target — entity must NOT exist post-flip.
+	_, err := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(err),
+		"ADR-055: fail-open absent target must NOT be auto-vivified; AddTriples fails (warn-not-fails)")
 	assert.InDelta(t, beforeDropped, testutil.ToFloat64(comp.foreignEdgeDropped.WithLabelValues(label, routeEdgePred, dropReasonStrictAbsent)), 0.0001,
 		"a fail-open route must NOT increment the drop counter")
 }
@@ -149,6 +161,9 @@ func TestRouteForeignEdges_ModeLookupError_FailsOpen(t *testing.T) {
 // An UNKNOWN/future EdgeMode + absent target takes the forward-compat default:
 // route-with-warn (hatch), NEVER a silent drop. Locks the contract that adding a
 // new EdgeMode cannot silently start dropping edges before the seam handles it.
+// ADR-055: after the must-exist flip the forward-compat routing decision is
+// unchanged (edge goes into toAppend), but AddTriples rejects the absent target
+// → entity remains absent. The primary write is unaffected (warn-not-fails).
 func TestRouteForeignEdges_UnknownMode_AbsentTarget_RouteWithWarn(t *testing.T) {
 	comp, _ := routeTestComp(t)
 	comp.claimReader = &fakeClassifier{modes: map[string]ownership.EdgeMode{routeEdgePred: ownership.EdgeMode("future-unhandled")}}
@@ -158,8 +173,11 @@ func TestRouteForeignEdges_UnknownMode_AbsentTarget_RouteWithWarn(t *testing.T) 
 
 	comp.routeForeignEdges(context.Background(), flParentID, routeMT, []message.Triple{routeEdge()})
 
-	child := storedEntity(t, comp, flChildID)
-	assert.True(t, hasPredicate(child, routeEdgePred), "an unknown EdgeMode must route-with-warn (hatch), never silent-drop")
+	// ADR-055: the unknown-mode routing decision still routes (not dropped), but
+	// AddTriples rejects the absent target — entity must NOT exist post-flip.
+	_, err := comp.entityBucket.Get(context.Background(), flChildID)
+	assert.True(t, natsclient.IsKVNotFoundError(err),
+		"ADR-055: unknown-mode absent target must NOT be auto-vivified; AddTriples fails (warn-not-fails)")
 	assert.InDelta(t, beforeDropped, testutil.ToFloat64(comp.foreignEdgeDropped.WithLabelValues(label, routeEdgePred, dropReasonStrictAbsent)), 0.0001,
 		"an unknown-mode route must NOT increment the drop counter")
 }

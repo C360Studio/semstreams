@@ -60,6 +60,18 @@ func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
 	const entityID = "c360.test.batch.single.loop.001"
 	now := time.Now()
 
+	// ADR-055: pre-create the entity before adding triples (must-exist).
+	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: entityID}))
+
+	// Capture version baseline immediately after pre-create so we can assert
+	// AddTriples applies exactly one CAS increment (not one per triple).
+	preEntry, err := c.entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	var preEntity graph.EntityState
+	require.NoError(t, json.Unmarshal(preEntry.Value, &preEntity))
+	baseVersion := preEntity.Version
+	baseTripleCount := len(preEntity.Triples)
+
 	triples := []message.Triple{
 		{Subject: entityID, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
 		{Subject: entityID, Predicate: "agent.todo.content", Object: "Write code", Timestamp: now, Confidence: 1.0},
@@ -73,26 +85,40 @@ func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
 	require.Empty(t, failed)
 	assert.Equal(t, 5, written)
 
-	// Single CAS → entity version increments by exactly 1, not 5.
+	// Single CAS → version increments by exactly 1 (not 5 — one per triple).
 	entry, err := c.entityBucket.Get(ctx, entityID)
 	require.NoError(t, err)
 
 	var entity graph.EntityState
 	require.NoError(t, json.Unmarshal(entry.Value, &entity))
 
-	assert.Equal(t, 5, len(entity.Triples), "all 5 triples present")
-	assert.Equal(t, uint64(1), entity.Version, "single CAS commit, version=1 (not 5)")
+	assert.Equal(t, baseTripleCount+5, len(entity.Triples), "all 5 triples appended to pre-created entity")
+	assert.Equal(t, baseVersion+1, entity.Version, "single CAS commit: version incremented by exactly 1 (not 5)")
 }
 
 // TestIntegration_AddTriples_MultiSubjectGroupsByEntity verifies multi-subject
 // batches issue one CAS per entity, not one per triple. Two entities × N
-// triples each → 2 CAS round-trips, each entity reaches version=1.
+// triples each → 2 CAS round-trips (1 create + 1 batch add per entity).
 func TestIntegration_AddTriples_MultiSubjectGroupsByEntity(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	const idA = "c360.test.batch.multi.loop.a01"
 	const idB = "c360.test.batch.multi.loop.b02"
 	now := time.Now()
+
+	// ADR-055: pre-create both entities before adding triples (must-exist).
+	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: idA}))
+	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: idB}))
+
+	// Capture baseline versions and triple counts after pre-create.
+	preA, err := c.entityBucket.Get(ctx, idA)
+	require.NoError(t, err)
+	var preEntityA graph.EntityState
+	require.NoError(t, json.Unmarshal(preA.Value, &preEntityA))
+	preB, err := c.entityBucket.Get(ctx, idB)
+	require.NoError(t, err)
+	var preEntityB graph.EntityState
+	require.NoError(t, json.Unmarshal(preB.Value, &preEntityB))
 
 	triples := []message.Triple{
 		{Subject: idA, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
@@ -111,15 +137,16 @@ func TestIntegration_AddTriples_MultiSubjectGroupsByEntity(t *testing.T) {
 	require.NoError(t, err)
 	var entityA graph.EntityState
 	require.NoError(t, json.Unmarshal(entryA.Value, &entityA))
-	assert.Equal(t, 3, len(entityA.Triples))
-	assert.Equal(t, uint64(1), entityA.Version)
+	assert.Equal(t, len(preEntityA.Triples)+3, len(entityA.Triples))
+	// Each entity version incremented by exactly 1 (single batched CAS per entity).
+	assert.Equal(t, preEntityA.Version+1, entityA.Version)
 
 	entryB, err := c.entityBucket.Get(ctx, idB)
 	require.NoError(t, err)
 	var entityB graph.EntityState
 	require.NoError(t, json.Unmarshal(entryB.Value, &entityB))
-	assert.Equal(t, 2, len(entityB.Triples))
-	assert.Equal(t, uint64(1), entityB.Version)
+	assert.Equal(t, len(preEntityB.Triples)+2, len(entityB.Triples))
+	assert.Equal(t, preEntityB.Version+1, entityB.Version)
 }
 
 // TestIntegration_AddTriples_ValidationRejectsWholeBatch ensures a single
@@ -167,6 +194,9 @@ func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
 	const entityID = "c360.test.batch.handler.loop.001"
 	now := time.Now()
 
+	// ADR-055: pre-create the entity before adding triples (must-exist).
+	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: entityID}))
+
 	req := graph.AddTriplesBatchRequest{
 		Triples: []message.Triple{
 			{Subject: entityID, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
@@ -202,6 +232,9 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 	const entityID = "c360.test.batch.order.loop.001"
 	now := time.Now()
 
+	// ADR-055: pre-create the entity before adding triples (must-exist).
+	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: entityID}))
+
 	// Emit a known sequence: A, B, C, D, E across the same subject.
 	// The retrieved Triples slice must come back in this exact order.
 	want := []string{"A", "B", "C", "D", "E"}
@@ -226,16 +259,22 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 
 	var entity graph.EntityState
 	require.NoError(t, json.Unmarshal(entry.Value, &entity))
-	require.Len(t, entity.Triples, len(want))
 
-	got := make([]string, len(entity.Triples))
-	for i, tr := range entity.Triples {
+	// Collect only the test.order.label triples in their stored order.
+	// MergeEntity may have stamped additional framework triples (e.g. indexing
+	// profile); we filter to the predicate we care about to stay robust.
+	got := make([]string, 0, len(want))
+	for _, tr := range entity.Triples {
+		if tr.Predicate != "test.order.label" {
+			continue
+		}
 		s, ok := tr.Object.(string)
 		if !ok {
-			t.Fatalf("triple[%d].Object expected string, got %T", i, tr.Object)
+			t.Fatalf("triple with predicate test.order.label: Object expected string, got %T", tr.Object)
 		}
-		got[i] = s
+		got = append(got, s)
 	}
+	require.Len(t, got, len(want), "exactly %d test.order.label triples must be present", len(want))
 	assert.Equal(t, want, got, "ADR-036 Stage 4 ReconstructTodos parses by stride; input order must be preserved")
 }
 
@@ -252,4 +291,73 @@ func TestIntegration_HandleTripleAddBatch_InvalidJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
 	assert.False(t, resp.Success)
 	assert.Contains(t, resp.Error, "invalid request")
+}
+
+// TestIntegration_HandleTripleAdd_AbsentEntityRejects verifies ADR-055
+// must-exist: a triple targeting a never-created entity is rejected with
+// ErrorCodeEntityNotFound. The entity bucket must remain empty (no
+// auto-vivification).
+func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const subject = "c360.test.absent.single.entity.001"
+	req := graph.AddTripleRequest{
+		Triple: message.Triple{
+			Subject:    subject,
+			Predicate:  "evidence.note",
+			Object:     "should-not-land",
+			Confidence: 1.0,
+		},
+	}
+	reqBytes, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respBytes, handlerErr := c.handleTripleAdd(ctx, reqBytes)
+	require.NoError(t, handlerErr, "handler must not return a Go error; rejections are in the response body")
+
+	var resp graph.AddTripleResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success, "absent entity must produce Success=false")
+	assert.Equal(t, graph.ErrorCodeEntityNotFound, resp.ErrorCode,
+		"absent entity must produce ErrorCode=entity_not_found (not empty/unclassified)")
+	assert.NotEmpty(t, resp.Error, "rejection must carry a human-readable error message")
+
+	// State must be unchanged: entity must still not exist.
+	_, getErr := c.entityBucket.Get(ctx, subject)
+	assert.True(t, natsclient.IsKVNotFoundError(getErr),
+		"entity bucket must remain empty — no auto-vivification (ADR-055)")
+}
+
+// TestIntegration_HandleTripleAddBatch_AbsentEntityRejects verifies ADR-055
+// must-exist for the batch handler: an all-absent batch is rejected with
+// ErrorCodeEntityNotFound, FailedSubjects names the subject, WrittenCount is 0,
+// and the entity bucket remains empty.
+func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const subject = "c360.test.absent.batch.entity.001"
+	req := graph.AddTriplesBatchRequest{
+		Triples: []message.Triple{
+			{Subject: subject, Predicate: "evidence.note", Object: "should-not-land", Confidence: 1.0},
+		},
+	}
+	reqBytes, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	respBytes, handlerErr := c.handleTripleAddBatch(ctx, reqBytes)
+	require.NoError(t, handlerErr, "handler must not return a Go error; rejections are in the response body")
+
+	var resp graph.AddTriplesBatchResponse
+	require.NoError(t, json.Unmarshal(respBytes, &resp))
+	assert.False(t, resp.Success, "absent entity must produce Success=false")
+	assert.Equal(t, graph.ErrorCodeEntityNotFound, resp.ErrorCode,
+		"all-absent batch must produce ErrorCode=entity_not_found")
+	assert.Equal(t, 0, resp.WrittenCount, "no triples must be written for an absent entity")
+	require.Len(t, resp.FailedSubjects, 1, "FailedSubjects must name the one failing subject")
+	assert.Contains(t, resp.FailedSubjects, subject, "FailedSubjects must include the absent subject")
+
+	// State must be unchanged: entity must still not exist.
+	_, getErr := c.entityBucket.Get(ctx, subject)
+	assert.True(t, natsclient.IsKVNotFoundError(getErr),
+		"entity bucket must remain empty — no auto-vivification (ADR-055)")
 }
