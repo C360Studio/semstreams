@@ -2,7 +2,9 @@
 
 ## Status
 
-**Proposed** — 2026-06-11. Not yet implemented or tagged. Derived from a
+**Accepted — must-exist flip implemented 2026-06-19** (BREAKING; see
+[Implementation](#implementation--breaking-consequence-2026-06-19) below).
+Originally proposed 2026-06-11. Derived from a
 two-pass multi-agent audit + design exercise, then a five-lens adversarial
 review (architect / breaker / feasibility / code-accuracy / completeness) whose
 findings are folded in below; every load-bearing fact is verified against code.
@@ -27,6 +29,48 @@ birth envelope-less entities via `triple.add`. Builds on
 [ADR-054](054-semantic-indexing-eligibility.md) (the create envelope carries the
 `IndexingProfile`). Honors [ADR-028](028-orchestration-architecture.md) and the
 KV-twofer.
+
+## Implementation — BREAKING consequence (2026-06-19)
+
+The narrowed flip landed: the bare `triple.add` / `triple.add_batch` lane is now
+**must-exist**. A triple targeting an absent entity is **rejected** with
+`graph.ErrorCodeEntityNotFound` instead of silently auto-vivifying a
+metadata-less entity. Mechanically: the two `len(current)==0` auto-vivify
+else-branches in `Component.AddTriple` and `Component.AddTriples`
+(`processor/graph-ingest/component.go`) now return
+`retry.NonRetryable(natsclient.ErrKVKeyNotFound)`; `handleTripleAdd` /
+`handleTripleAddBatch` (`mutations.go`) map that sentinel to the stable
+`entity_not_found` error code, which `meteredMutation` auto-counts on
+`mutation_rejections_total{reason="entity_not_found"}`. The legitimate
+entity-birth seams (`MergeEntity`, `CreateEntity`, lifecycle `Create`, the
+NoBirthStub referential-integrity stub) are untouched.
+
+**The breaking consequence is wider than the bare-triple lane** — it also closes
+the foreign-edge auto-vivify hatch, because foreign-edge routing
+(`routeForeignEdges` → `appendForeignEdges`) ultimately calls `AddTriples`:
+
+- **Claimed foreign edges** (a registered `ForeignEdgeClaim` in `NoBirthStub`
+  mode — e.g. cs-api's `isHostedBy`) materialize their target stub via
+  `ensureReferencedEntityExists` *before* the append, so the target exists and
+  the edge is **not** rejected. **Safe.**
+- **Unclaimed / fail-open / unknown-mode foreign edges to an absent target** were
+  previously auto-vivified; post-flip the routing *decision* is unchanged (the
+  edge still enters `toAppend`) but `AddTriples` rejects the absent target and
+  `appendForeignEdges` only warns — so the edge is **silently dropped, not
+  birthed**. This is the intended ADR-055 end-state (an unclaimed edge to a
+  non-existent entity is exactly the metadata-less vivification being retired),
+  but it is a **live data-loss event for any producer still emitting unclaimed
+  foreign edges at tag time.**
+
+**Rollout gate.** The data-safe precondition is `foreign_edge_unclaimed_total`
+drained to **zero** across every registered producer (cs-api, semteams, semops) —
+the ADR-056 §4c hatch-drain. As of the tag this is tracked **post-tag** per the
+product owner's call (2026-06-19): all three consumers report prep complete
+(`semconnect#65` / `semteams#222` / `semops#1` held open as post-tag compliance
+trackers). The residual risk — a straggler producer's unclaimed edges dropped in
+the window before its hatch reaches zero — is accepted knowingly. Anyone reading
+this who has NOT confirmed their `foreign_edge_unclaimed_total` is zero should do
+so before relying on unclaimed foreign-edge writes landing.
 
 ## Context
 
@@ -639,9 +683,10 @@ residual. Decide before the flip.
 - Code anchors:
   - `processor/graph-ingest/component.go:857` (`extractEntityFromMessage`), `:946`
     (`MergeEntity`), `:1006` (append), `:1311` (`updateEntityAtRevision`), `:885`
-    (`MessageType` stamp), `:1411-1423` (`AddTriple` auto-vivify — deleted) and
-    `:1511-1521` (`AddTriples`/add_batch auto-vivify — deleted), `:1478-1484`
-    (`AddTriples` bySubject regroup — the T2 model)
+    (`MessageType` stamp), `AddTriple` auto-vivify else-branch (deleted 2026-06-19,
+    now `retry.NonRetryable(ErrKVKeyNotFound)`) and the `AddTriples`/add_batch
+    per-subject auto-vivify else-branch (likewise deleted), the `AddTriples`
+    bySubject regroup (the T2 model)
   - `processor/graph-ingest/mutations.go` (subjects + handlers; `:40/:53/:66` bare CS-API)
   - `processor/rule/actions.go:1390-1467` (deny/approve), `:576` (subject override)
   - `natsclient/client.go:793-799` (`PublishToStream`, the T1 gap)

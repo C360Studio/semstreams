@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
@@ -78,6 +79,16 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoUpdatedAt, Object: now.Format(time.RFC3339Nano), Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
 		)
 	}
+
+	// Born-first (ADR-055): the loop-execution entity must exist before
+	// write_todos appends triples to it. In production graphWriter creates it
+	// via create_with_triples carrying agentic.LoopExecutionMessageType()
+	// (#277) before the agent's first write_todos; post-must-exist-flip a
+	// triple.add_batch to an absent entity is rejected, not auto-vivified.
+	require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
+		ID:          loopEntityID,
+		MessageType: agentic.LoopExecutionMessageType(),
+	}))
 
 	written, failed, err := c.AddTriples(ctx, triples)
 	require.NoError(t, err)

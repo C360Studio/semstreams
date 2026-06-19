@@ -203,13 +203,17 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 	// AddTriple uses triple.Subject as entity ID
 	err := c.AddTriple(ctx, req.Triple)
 	if err != nil {
-		return json.Marshal(graph.AddTripleResponse{
+		resp := graph.AddTripleResponse{
 			MutationResponse: graph.MutationResponse{
 				Success:   false,
 				Error:     err.Error(),
 				Timestamp: time.Now().UnixNano(),
 			},
-		})
+		}
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			resp.ErrorCode = graph.ErrorCodeEntityNotFound
+		}
+		return json.Marshal(resp)
 	}
 
 	// Get revision after successful mutation for feedback loop prevention
@@ -280,6 +284,9 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 	}
 	if err != nil {
 		resp.Error = err.Error()
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			resp.ErrorCode = graph.ErrorCodeEntityNotFound
+		}
 	}
 	return json.Marshal(resp)
 }
