@@ -1,7 +1,9 @@
 # Blast-Radius Audit: The graph-ingest Mutation API as a Producer API
 
-> Status: audit only (blast-radius sizing). Fix design is a separate planning
-> step. Generated 2026-06-11 via a 40-agent fan-out audit (9 producer clusters,
+> Status: audit only (blast-radius sizing) — **RESOLVED by [ADR-055](../adr/055-graph-write-intent-taxonomy.md),
+> must-exist flip shipped `v1.0.0-beta.112` (2026-06-19).** Retained as the
+> point-in-time evidence base. Fix design was a separate planning step
+> (`graphable-fix-plan.md`). Generated 2026-06-11 via a 40-agent fan-out audit (9 producer clusters,
 > 55 call sites classified, every anti-pattern finding adversarially refuted —
 > 0 of 21 overturned). Motivated by ADR-054's note: *"The motivating
 > `agent.agentic-loop.step` entities enter via the mutation API, not the
