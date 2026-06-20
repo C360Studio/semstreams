@@ -132,6 +132,12 @@ func (p *PortDefinition) UnmarshalJSON(data []byte) error {
 			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "file config")
 		}
 		p.Config = f
+	case "http-client":
+		var hc HTTPClientPort
+		if err := json.Unmarshal(aux.Config, &hc); err != nil {
+			return errs.Wrap(err, "PortDefinition", "UnmarshalJSON", "http-client config")
+		}
+		p.Config = hc
 	default:
 		// Unknown port type — preserve pre-fix behaviour by decoding the
 		// raw config into a generic map. Forward-compat for custom port
@@ -290,6 +296,42 @@ func BuildPortFromDefinition(def PortDefinition, direction Direction) Port {
 			Bucket:    bucket,
 			Interface: iface,
 		}
+	case "http-client":
+		// Outbound HTTP-client / polling input dependency.
+		// Precedence: typed Config wins over def.Subject for URLPattern.
+		// def.Subject is the default URL pattern (scalar field); a typed
+		// def.Config.(HTTPClientPort) overrides each non-empty field so
+		// an operator JSON config block takes effect over the scalar.
+		hcPort := HTTPClientPort{
+			URLPattern: def.Subject, // scalar default
+		}
+		// Seed Interface from the flat scalar field (like the timer/kv/nats
+		// cases) so a config-less declaration that only sets `interface:` does
+		// not silently lose its contract; a typed Config.Interface still wins below.
+		if def.Interface != "" {
+			hcPort.Interface = &InterfaceContract{Type: def.Interface, Version: "v1"}
+		}
+		if configPort, ok := def.Config.(HTTPClientPort); ok {
+			if configPort.Method != "" {
+				hcPort.Method = configPort.Method
+			}
+			if configPort.URLPattern != "" {
+				hcPort.URLPattern = configPort.URLPattern // typed Config wins
+			}
+			if configPort.TriggerPort != "" {
+				hcPort.TriggerPort = configPort.TriggerPort
+			}
+			if configPort.AuthRef != "" {
+				hcPort.AuthRef = configPort.AuthRef
+			}
+			if configPort.ContactPolicy != "" {
+				hcPort.ContactPolicy = configPort.ContactPolicy
+			}
+			if configPort.Interface != nil {
+				hcPort.Interface = configPort.Interface
+			}
+		}
+		port.Config = hcPort
 	case "http", "grpc", "websocket-server":
 		// HTTP/gRPC/WebSocket server ports are network boundary ports
 		port.Config = NetworkPort{

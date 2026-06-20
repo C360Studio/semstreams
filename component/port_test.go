@@ -3,6 +3,7 @@ package component
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -288,6 +289,7 @@ func TestPortableInterface(_ *testing.T) {
 	var _ Portable = JetStreamPort{}
 	var _ Portable = KVWatchPort{}
 	var _ Portable = KVWritePort{}
+	var _ Portable = HTTPClientPort{}
 }
 
 func TestPortJSONSerialization(t *testing.T) {
@@ -1529,6 +1531,44 @@ func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 				}
 			},
 		},
+		{
+			// Envelope round-trip for HTTPClientPort catches drift in
+			// Port.UnmarshalJSON's http-client case (same class as
+			// TestPort_UnmarshalJSON_RoundTripsToTypedConfig motivation).
+			name: "HTTPClient",
+			original: Port{
+				Name:        "cap_feed",
+				Direction:   DirectionInput,
+				Required:    false,
+				Description: "CAP alert feed input",
+				Config: HTTPClientPort{
+					Method:        "GET",
+					URLPattern:    "https://api.weather.gov/alerts/active",
+					TriggerPort:   "cap_timer",
+					AuthRef:       "opensky_basic",
+					ContactPolicy: "SemStreams/1.0 (contact@example.com)",
+					Interface:     &InterfaceContract{Type: "alert.CAP", Version: "v1"},
+				},
+			},
+			assert: func(t *testing.T, decoded Port) {
+				hc, ok := decoded.Config.(HTTPClientPort)
+				if !ok {
+					t.Fatalf("Config = %T, want HTTPClientPort (drift in Port.UnmarshalJSON http-client case)", decoded.Config)
+				}
+				if hc.URLPattern != "https://api.weather.gov/alerts/active" {
+					t.Errorf("URLPattern = %q, want https://api.weather.gov/alerts/active", hc.URLPattern)
+				}
+				if hc.TriggerPort != "cap_timer" {
+					t.Errorf("TriggerPort = %q, want cap_timer", hc.TriggerPort)
+				}
+				if hc.AuthRef != "opensky_basic" {
+					t.Errorf("AuthRef = %q, want opensky_basic", hc.AuthRef)
+				}
+				if hc.Method != "GET" {
+					t.Errorf("Method = %q, want GET", hc.Method)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1631,4 +1671,322 @@ func TestPort_UnmarshalJSON_KVDashedAliases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHTTPClientPort exercises ResourceID, IsExclusive, and Type.
+// ResourceID must prefix with "http-client:", default an empty Method to GET,
+// and incorporate the URL pattern. IsExclusive must be false (outbound client
+// relationships are shareable). Type must be "http-client".
+func TestHTTPClientPort(t *testing.T) {
+	tests := []struct {
+		name        string
+		port        HTTPClientPort
+		resourceID  string
+		isExclusive bool
+		portType    string
+	}{
+		{
+			name:        "GET with full URL",
+			port:        HTTPClientPort{Method: "GET", URLPattern: "https://api.weather.gov/alerts/active"},
+			resourceID:  "http-client:GET:https://api.weather.gov/alerts/active",
+			isExclusive: false,
+			portType:    "http-client",
+		},
+		{
+			name:        "empty method defaults to GET",
+			port:        HTTPClientPort{URLPattern: "https://api.opensky-network.org/api/states/all"},
+			resourceID:  "http-client:GET:https://api.opensky-network.org/api/states/all",
+			isExclusive: false,
+			portType:    "http-client",
+		},
+		{
+			name:        "POST variant",
+			port:        HTTPClientPort{Method: "POST", URLPattern: "https://api.example.com/data"},
+			resourceID:  "http-client:POST:https://api.example.com/data",
+			isExclusive: false,
+			portType:    "http-client",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.port.ResourceID() != tt.resourceID {
+				t.Errorf("ResourceID = %q, want %q", tt.port.ResourceID(), tt.resourceID)
+			}
+			if tt.port.IsExclusive() != tt.isExclusive {
+				t.Errorf("IsExclusive = %v, want %v", tt.port.IsExclusive(), tt.isExclusive)
+			}
+			if tt.port.Type() != tt.portType {
+				t.Errorf("Type = %q, want %q", tt.port.Type(), tt.portType)
+			}
+		})
+	}
+}
+
+// TestHTTPClientPortJSONSerialization verifies struct-level marshal → unmarshal
+// round-trip preserving all six fields. Mirrors TestNetworkPortJSONSerialization.
+func TestHTTPClientPortJSONSerialization(t *testing.T) {
+	original := HTTPClientPort{
+		Method:        "GET",
+		URLPattern:    "https://api.weather.gov/alerts/active",
+		TriggerPort:   "cap_timer",
+		AuthRef:       "opensky_basic",
+		ContactPolicy: "SemStreams/1.0 (contact@example.com)",
+		Interface:     &InterfaceContract{Type: "alert.CAP", Version: "v1"},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var restored HTTPClientPort
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if restored.Method != original.Method {
+		t.Errorf("Method = %q, want %q", restored.Method, original.Method)
+	}
+	if restored.URLPattern != original.URLPattern {
+		t.Errorf("URLPattern = %q, want %q", restored.URLPattern, original.URLPattern)
+	}
+	if restored.TriggerPort != original.TriggerPort {
+		t.Errorf("TriggerPort = %q, want %q", restored.TriggerPort, original.TriggerPort)
+	}
+	if restored.AuthRef != original.AuthRef {
+		t.Errorf("AuthRef = %q, want %q", restored.AuthRef, original.AuthRef)
+	}
+	if restored.ContactPolicy != original.ContactPolicy {
+		t.Errorf("ContactPolicy = %q, want %q", restored.ContactPolicy, original.ContactPolicy)
+	}
+	if restored.Interface == nil {
+		t.Fatal("Interface = nil, want non-nil")
+	}
+	if restored.Interface.Type != original.Interface.Type {
+		t.Errorf("Interface.Type = %q, want %q", restored.Interface.Type, original.Interface.Type)
+	}
+	if restored.Interface.Version != original.Interface.Version {
+		t.Errorf("Interface.Version = %q, want %q", restored.Interface.Version, original.Interface.Version)
+	}
+}
+
+// TestHTTPClientPort_SecretsNotInSerializedOutput verifies that:
+//  1. AuthRef (a credential key reference, NOT a value) is present in the
+//     serialized JSON — the reference must survive the round-trip so the
+//     runtime resolver can find it.
+//  2. The set of JSON keys emitted for a fully-populated HTTPClientPort is
+//     exactly {method, url_pattern, trigger_port, auth_ref, contact_policy,
+//     interface} — no extra keys leak into the wire format.
+//  3. A sparse port (only URLPattern set) omits all omitempty optional fields,
+//     confirming they do not pollute the wire format when unused.
+func TestHTTPClientPort_SecretsNotInSerializedOutput(t *testing.T) {
+	t.Run("fully populated — AuthRef survives and key set is exact", func(t *testing.T) {
+		port := HTTPClientPort{
+			Method:        "GET",
+			URLPattern:    "https://api.weather.gov/alerts/active",
+			TriggerPort:   "cap_timer",
+			AuthRef:       "opensky_basic",
+			ContactPolicy: "SemStreams/1.0 (contact@example.com)",
+			Interface:     &InterfaceContract{Type: "alert.CAP", Version: "v1"},
+		}
+
+		data, err := json.Marshal(port)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		// (a) AuthRef reference value must survive in the output.
+		if !strings.Contains(string(data), "opensky_basic") {
+			t.Errorf("AuthRef key reference %q not found in JSON; reference was lost during serialization", "opensky_basic")
+		}
+
+		// (b) Key set must be exactly the declared fields — no extras leak in.
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal to map: %v", err)
+		}
+		expected := map[string]bool{
+			"method":         true,
+			"url_pattern":    true,
+			"trigger_port":   true,
+			"auth_ref":       true,
+			"contact_policy": true,
+			"interface":      true,
+		}
+		for k := range m {
+			if !expected[k] {
+				t.Errorf("unexpected JSON key %q in serialized HTTPClientPort; struct has undeclared field", k)
+			}
+		}
+		// Only url_pattern is non-omitempty, so verify it is present.
+		if _, ok := m["url_pattern"]; !ok {
+			t.Errorf("expected JSON key %q missing from serialized HTTPClientPort", "url_pattern")
+		}
+	})
+
+	t.Run("sparse port — omitempty fields absent when zero", func(t *testing.T) {
+		// Only URLPattern set; all other fields are zero/nil.
+		sparse := HTTPClientPort{
+			URLPattern: "https://api.weather.gov/alerts/active",
+		}
+
+		data, err := json.Marshal(sparse)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal to map: %v", err)
+		}
+
+		// url_pattern must be present (it is not omitempty).
+		if _, ok := m["url_pattern"]; !ok {
+			t.Errorf("url_pattern missing from sparse HTTPClientPort JSON")
+		}
+
+		// All other optional fields must be absent (they are omitempty).
+		omitemptyFields := []string{"method", "trigger_port", "auth_ref", "contact_policy", "interface"}
+		for _, k := range omitemptyFields {
+			if _, ok := m[k]; ok {
+				t.Errorf("omitempty field %q should not appear in sparse HTTPClientPort JSON", k)
+			}
+		}
+	})
+}
+
+// TestPortDefinition_UnmarshalJSON_HTTPClientConfig is the load-bearing
+// regression test for PortDefinition.UnmarshalJSON's http-client case.
+// Mirrors TestPortDefinition_UnmarshalJSON_JetStreamConfig: a JSON-loaded
+// PortDefinition with type "http-client" must place an HTTPClientPort struct
+// into Config (not a map[string]any), otherwise every type assertion in
+// BuildPortFromDefinition silently fails.
+func TestPortDefinition_UnmarshalJSON_HTTPClientConfig(t *testing.T) {
+	raw := []byte(`{
+		"name": "cap_feed",
+		"type": "http-client",
+		"subject": "https://api.weather.gov/alerts/active",
+		"config": {
+			"method": "GET",
+			"auth_ref": "opensky_basic",
+			"trigger_port": "cap_timer"
+		}
+	}`)
+
+	var pd PortDefinition
+	if err := json.Unmarshal(raw, &pd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if pd.Name != "cap_feed" || pd.Type != "http-client" {
+		t.Errorf("top-level fields lost: %+v", pd)
+	}
+
+	hc, ok := pd.Config.(HTTPClientPort)
+	if !ok {
+		t.Fatalf("Config = %T, want HTTPClientPort (http-client case in PortDefinition.UnmarshalJSON missing)", pd.Config)
+	}
+	if hc.Method != "GET" {
+		t.Errorf("Method = %q, want GET", hc.Method)
+	}
+	if hc.AuthRef != "opensky_basic" {
+		t.Errorf("AuthRef = %q, want opensky_basic", hc.AuthRef)
+	}
+	if hc.TriggerPort != "cap_timer" {
+		t.Errorf("TriggerPort = %q, want cap_timer", hc.TriggerPort)
+	}
+}
+
+// TestBuildPortFromDefinition_HTTPClient exercises BuildPortFromDefinition's
+// http-client case:
+//   - def.Subject is used as the default URLPattern when no typed Config is present.
+//   - A typed def.Config.(HTTPClientPort) overrides non-empty fields including
+//     URLPattern (typed Config wins over def.Subject).
+func TestBuildPortFromDefinition_HTTPClient(t *testing.T) {
+	t.Run("subject is default URLPattern", func(t *testing.T) {
+		def := PortDefinition{
+			Name:    "cap_feed",
+			Type:    "http-client",
+			Subject: "https://api.weather.gov/alerts/active",
+		}
+		port := BuildPortFromDefinition(def, DirectionInput)
+		hc, ok := port.Config.(HTTPClientPort)
+		if !ok {
+			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
+		}
+		if hc.URLPattern != "https://api.weather.gov/alerts/active" {
+			t.Errorf("URLPattern = %q, want def.Subject value", hc.URLPattern)
+		}
+	})
+
+	t.Run("typed Config overrides subject for URLPattern", func(t *testing.T) {
+		def := PortDefinition{
+			Name:    "cap_feed",
+			Type:    "http-client",
+			Subject: "https://api.weather.gov/alerts/active", // scalar default
+			Config: HTTPClientPort{
+				URLPattern:  "https://api.weather.gov/alerts/active?area=US", // typed Config wins
+				Method:      "GET",
+				TriggerPort: "cap_timer",
+				AuthRef:     "opensky_basic",
+			},
+		}
+		port := BuildPortFromDefinition(def, DirectionInput)
+		hc, ok := port.Config.(HTTPClientPort)
+		if !ok {
+			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
+		}
+		if hc.URLPattern != "https://api.weather.gov/alerts/active?area=US" {
+			t.Errorf("URLPattern = %q, want typed Config value (Config wins over Subject)", hc.URLPattern)
+		}
+		if hc.Method != "GET" {
+			t.Errorf("Method = %q, want GET", hc.Method)
+		}
+		if hc.TriggerPort != "cap_timer" {
+			t.Errorf("TriggerPort = %q, want cap_timer", hc.TriggerPort)
+		}
+		if hc.AuthRef != "opensky_basic" {
+			t.Errorf("AuthRef = %q, want opensky_basic", hc.AuthRef)
+		}
+	})
+
+	t.Run("flat interface field is honored when no Config block", func(t *testing.T) {
+		// Regression (go-reviewer C3-2): a config-less declaration that sets
+		// only the flat `interface:` scalar must not silently lose its contract.
+		def := PortDefinition{
+			Name:      "cap_feed",
+			Type:      "http-client",
+			Subject:   "https://api.weather.gov/alerts/active",
+			Interface: "alert.CAP",
+		}
+		port := BuildPortFromDefinition(def, DirectionInput)
+		hc, ok := port.Config.(HTTPClientPort)
+		if !ok {
+			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
+		}
+		if hc.Interface == nil {
+			t.Fatal("Interface = nil, want flat def.Interface to seed the contract")
+		}
+		if hc.Interface.Type != "alert.CAP" {
+			t.Errorf("Interface.Type = %q, want alert.CAP", hc.Interface.Type)
+		}
+	})
+
+	t.Run("typed Config.Interface wins over flat interface field", func(t *testing.T) {
+		def := PortDefinition{
+			Name:      "cap_feed",
+			Type:      "http-client",
+			Subject:   "https://api.weather.gov/alerts/active",
+			Interface: "alert.CAP", // flat seed
+			Config: HTTPClientPort{
+				Interface: &InterfaceContract{Type: "alert.CAP.v2", Version: "v2"}, // typed wins
+			},
+		}
+		port := BuildPortFromDefinition(def, DirectionInput)
+		hc := port.Config.(HTTPClientPort)
+		if hc.Interface == nil || hc.Interface.Type != "alert.CAP.v2" {
+			t.Errorf("Interface = %+v, want typed Config.Interface (alert.CAP.v2) to win", hc.Interface)
+		}
+	})
 }

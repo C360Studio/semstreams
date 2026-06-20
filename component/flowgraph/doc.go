@@ -4,7 +4,7 @@
 //
 // The flowgraph package builds a directed graph representation of component port
 // connections, enabling static analysis to detect configuration issues before runtime.
-// It supports four interaction patterns (stream, request, watch, network) and provides:
+// It supports five interaction patterns (stream, request, watch, network, http-client) and provides:
 //
 //   - Pattern-based connection matching (NATS wildcard subject matching)
 //   - Connected component analysis (DFS-based clustering)
@@ -24,6 +24,7 @@
 //	│  - OutputPorts            - To (portref)       - request (req/reply)    │
 //	│  - Component ref          - Pattern            - watch (KV)             │
 //	│                           - ConnectionID       - network (external)     │
+//	│                                                - http-client (outbound) │
 //	└─────────────────────────────────────────────────────────────────────────┘
 //	                                 ↓
 //	┌─────────────────────────────────────────────────────────────────────────┐
@@ -86,10 +87,16 @@
 //   - Multiple writers to same bucket generates warning
 //   - Watchers receive change notifications
 //
-// PatternNetwork (external):
-//   - External boundary ports (HTTP, UDP, etc.)
+// PatternNetwork (external listener):
+//   - External boundary ports (HTTP server, UDP listener, etc.)
 //   - Exclusive binding: multiple binds to same port is an error
 //   - Not connected in graph (external endpoints)
+//
+// PatternHTTPClient (outbound HTTP-client/polling):
+//   - Component initiates connections to an external HTTP resource
+//   - Non-exclusive: multiple components may poll the same URL
+//   - Not connected in graph; treated like PatternNetwork for orphan detection
+//   - Declared via HTTPClientPort; cadence is owned by a sibling TimerPort
 //
 // # Connection Matching
 //
