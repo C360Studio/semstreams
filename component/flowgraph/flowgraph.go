@@ -59,8 +59,14 @@ const (
 	PatternRequest InteractionPattern = "request"
 	// PatternWatch represents KVWatchPort (observation) interactions
 	PatternWatch InteractionPattern = "watch"
-	// PatternNetwork represents NetworkPort (external) interactions
+	// PatternNetwork represents NetworkPort (external listener) interactions
 	PatternNetwork InteractionPattern = "network"
+	// PatternHTTPClient represents HTTPClientPort (outbound HTTP-client/polling) interactions.
+	// Like PatternNetwork, an HTTPClientPort is an external boundary port: the component
+	// initiates the connection outward, so there is no internal publisher to match against.
+	// findOrphanedPorts skips PatternHTTPClient inputs for the same reason it skips
+	// PatternNetwork inputs — a legitimately unconnected external input is not orphaned.
+	PatternHTTPClient InteractionPattern = "http-client"
 )
 
 // Issue type constants for orphaned port classification
@@ -183,6 +189,8 @@ func (g *FlowGraph) extractInterfaceContract(portConfig component.Portable) *com
 	case component.FilePort:
 		// FilePort has no interface contract
 		return nil
+	case component.HTTPClientPort:
+		return config.Interface
 	default:
 		return nil
 	}
@@ -205,6 +213,8 @@ func (g *FlowGraph) classifyInteractionPattern(portConfig component.Portable) In
 		return PatternNetwork
 	case component.FilePort:
 		return PatternNetwork // File I/O is external like network
+	case component.HTTPClientPort:
+		return PatternHTTPClient
 	default:
 		return PatternStream // Safe default
 	}
@@ -259,6 +269,11 @@ func (g *FlowGraph) extractConnectionID(portConfig component.Portable) string {
 			return config.Path
 		}
 		return "file_unknown"
+	case component.HTTPClientPort:
+		if config.URLPattern == "" {
+			return "http_client_missing_url"
+		}
+		return config.URLPattern
 	default:
 		return fmt.Sprintf("unknown_type_%T", config)
 	}
@@ -783,8 +798,11 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 		// Check input ports
 		for _, port := range node.InputPorts {
 			if connectedPorts[componentName] == nil || !connectedPorts[componentName][port.Name] {
-				// Skip network boundary inputs - they ARE the external source
-				if port.Pattern == PatternNetwork {
+				// Skip external boundary inputs — they ARE the external source.
+				// PatternNetwork binds a local listener; PatternHTTPClient initiates
+				// an outbound connection. Both are legitimately unmatched in the
+				// internal graph because their "publisher" is outside the system.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient {
 					continue // Not orphaned, it's an external input
 				}
 
@@ -812,8 +830,10 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 		// Check output ports
 		for _, port := range node.OutputPorts {
 			if connectedPorts[componentName] == nil || !connectedPorts[componentName][port.Name] {
-				// Skip network boundary outputs - they ARE the external sink
-				if port.Pattern == PatternNetwork {
+				// Skip external boundary outputs — they ARE the external sink.
+				// PatternHTTPClient is also skipped: the component owns the
+				// outbound connection so no internal subscriber is expected.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient {
 					continue // Not orphaned, it's an external output
 				}
 

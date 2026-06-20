@@ -298,6 +298,72 @@ func TestFlowGraphAnalysis(t *testing.T) {
 	})
 }
 
+// TestHTTPClientPortFlowGraph verifies the three flowgraph behaviours required
+// by the HTTPClientPort contract:
+//  1. classifyInteractionPattern returns PatternHTTPClient.
+//  2. extractConnectionID returns the URL (or the missing-URL sentinel).
+//  3. findOrphanedPorts does NOT flag an HTTPClientPort input as orphaned —
+//     outbound client connections have no internal publisher by design.
+func TestHTTPClientPortFlowGraph(t *testing.T) {
+	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
+
+	t.Run("classifyInteractionPattern returns PatternHTTPClient", func(t *testing.T) {
+		port := component.HTTPClientPort{
+			Method:     "GET",
+			URLPattern: "https://api.weather.gov/alerts/active",
+		}
+		got := g.classifyInteractionPattern(port)
+		assert.Equal(t, PatternHTTPClient, got, "HTTPClientPort must classify as PatternHTTPClient")
+	})
+
+	t.Run("extractConnectionID returns URL", func(t *testing.T) {
+		port := component.HTTPClientPort{URLPattern: "https://api.weather.gov/alerts/active"}
+		got := g.extractConnectionID(port)
+		assert.Equal(t, "https://api.weather.gov/alerts/active", got)
+	})
+
+	t.Run("extractConnectionID returns sentinel on empty URL", func(t *testing.T) {
+		port := component.HTTPClientPort{}
+		got := g.extractConnectionID(port)
+		assert.Equal(t, "http_client_missing_url", got, "missing URL must return the sentinel (mirrors nats_missing_subject)")
+	})
+
+	t.Run("HTTPClientPort input is NOT reported as orphaned", func(t *testing.T) {
+		// A component with only an HTTPClientPort input and a NATS output is a
+		// valid CAP-poller-style input component. Its HTTPClientPort has no
+		// internal publisher, but that is correct — the external HTTP resource
+		// IS the publisher. findOrphanedPorts must NOT flag it.
+		comp := createMockComponentWithPorts("cap_poller", "input",
+			[]component.Port{{
+				Name:      "cap_feed",
+				Direction: component.DirectionInput,
+				Required:  true,
+				Config: component.HTTPClientPort{
+					Method:     "GET",
+					URLPattern: "https://api.weather.gov/alerts/active",
+				},
+			}},
+			[]component.Port{{
+				Name:      "alerts_out",
+				Direction: component.DirectionOutput,
+				Config:    component.NATSPort{Subject: "alerts.cap.>"},
+			}},
+		)
+		graph := NewFlowGraph()
+		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+
+		orphans := graph.findOrphanedPorts()
+
+		for _, o := range orphans {
+			if o.PortName == "cap_feed" {
+				t.Errorf("HTTPClientPort input %q incorrectly reported as orphaned (issue=%s); "+
+					"outbound HTTP inputs have no internal publisher by design",
+					o.PortName, o.Issue)
+			}
+		}
+	})
+}
+
 // Test helper functions
 func createMockComponent(name, componentType string) component.Discoverable {
 	return createMockComponentWithPorts(name, componentType, nil, nil)

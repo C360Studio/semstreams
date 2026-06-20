@@ -1957,9 +1957,12 @@ func (cm *ComponentManager) isInputComponent(componentName string, node *flowgra
 		}
 	}
 
-	// Check if component has network ports (external input)
+	// Check if component has external input ports (network listener or outbound
+	// HTTP-client). Both patterns indicate the component is the data source for
+	// the internal graph: PatternNetwork binds a local listener, PatternHTTPClient
+	// initiates an outbound poll. Either makes the component an input origin.
 	for _, port := range node.InputPorts {
-		if port.Pattern == flowgraph.PatternNetwork {
+		if port.Pattern == flowgraph.PatternNetwork || port.Pattern == flowgraph.PatternHTTPClient {
 			return true
 		}
 	}

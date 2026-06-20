@@ -163,6 +163,12 @@ func (p *Port) UnmarshalJSON(data []byte) error {
 				return errs.Wrap(err, "Port", "UnmarshalJSON", "kvwrite config unmarshaling")
 			}
 			p.Config = kvConfig
+		case "http-client":
+			var hcConfig HTTPClientPort
+			if err := json.Unmarshal(configWrapper.Data, &hcConfig); err != nil {
+				return errs.Wrap(err, "Port", "UnmarshalJSON", "http-client config unmarshaling")
+			}
+			p.Config = hcConfig
 		default:
 			return errs.WrapInvalid(
 				fmt.Errorf("unknown config type: %s", configWrapper.Type),
