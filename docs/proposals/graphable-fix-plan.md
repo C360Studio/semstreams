@@ -1,6 +1,9 @@
 # Fix Plan: A Write-API Taxonomy for graph-ingest (retiring "mutation API as producer")
 
-> Status: DESIGN + PLAN. No production code here. Companion to
+> Status: DESIGN + PLAN — **EXECUTED**. The closing-move must-exist flip shipped
+> in `v1.0.0-beta.112` (2026-06-19); see [ADR-055](../adr/055-graph-write-intent-taxonomy.md)'s
+> Implementation section for what landed. This doc is retained as the design record.
+> Companion to
 > `docs/proposals/graphable-bypass-audit.md` (the blast-radius audit). Reframed
 > from the audit's first-cut "everything must be Graphable" framing onto the
 > correct axis: **the defect is metadata-less entity *birth*, not "not

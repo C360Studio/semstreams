@@ -110,11 +110,11 @@ func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *promethe
 // getMutationRejectionsMetric returns the process-wide counter for rejected
 // graph-mutation requests, labelled by subject + reason (the MutationResponse
 // ErrorCode — a bounded closed set). It operationalizes ADR-055 §3's "loud
-// fail-fast" observability: when the closing-move must-exist flip lands, a
-// triple.add targeting a non-existent entity surfaces here as
-// reason=entity_not_found instead of silently auto-vivifying. Until the flip it
-// meters existing rejections (validation, CAS conflict, create-or-fail),
-// giving the ADR-054 cost-ledger discipline a pre-flip baseline.
+// fail-fast" observability: since the must-exist flip shipped (v1.0.0-beta.112),
+// a triple.add targeting a non-existent entity surfaces here as
+// reason=entity_not_found instead of silently auto-vivifying. It also meters the
+// other rejection classes (validation, CAS conflict, create-or-fail, owner-lease
+// stale), giving the ADR-054 cost-ledger discipline its operating baseline.
 func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
 	mutationRejectionsOnce.Do(func() {
 		mutationRejectionsVec = prometheus.NewCounterVec(prometheus.CounterOpts{

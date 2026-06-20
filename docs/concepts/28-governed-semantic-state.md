@@ -99,10 +99,14 @@ Keep these edges sharp:
 - **Aliases are read compatibility, not equal write contracts.** Ownership and indexes are exact-predicate driven. A
   read path may understand both a canonical predicate and an alias (e.g. `rdf.type` ↔ `sensorml.process.type`), but
   writers must emit the canonical framework constant — an alias is not an interchangeable write/ownership key.
-- **It is not authorization (yet).** On the current release this is provenance + write-semantics discipline with
-  **observe-only** enforcement: overlaps and unclaimed foreign edges are metered and logged, not rejected. Hard
-  rejection and owner-token write leases are later increments; cryptographic authentication of authorship is reserved
-  (ADR-057).
+- **It is not (yet) full authorization.** Enforcement shipped in stages. **Entity birth is now enforced** — a triple
+  targeting a non-existent entity is rejected (`entity_not_found`); the mutation API no longer auto-vivifies, so every
+  entity carries a semantic envelope (ADR-055 must-exist, shipped `v1.0.0-beta.112`). **Owner-token write leases
+  shipped but default-off** (`enforce_owner_lease`): observe-only by default (a mismatched write is metered on
+  `owner_lease_mismatch_total` and logged, never blocked), rejecting with `owner_lease_stale` only when an operator
+  enables enforcement (ADR-056). Unclaimed foreign edges are still metered (`foreign_edge_unclaimed_total`), and
+  post-flip an unclaimed edge to an *absent* target is dropped-with-warn rather than birthing it. Cryptographic
+  authentication of authorship is still reserved (ADR-057).
 - **Ownership arbitration is not a domain fact — but provenance can be.** Two halves:
   - *Do not* encode ownership arbitration as domain triples. Ownership claims live in the `OWNER_CLAIMS` substrate and
     arbitrate who may write predicate groups; they are never facts on the entity.

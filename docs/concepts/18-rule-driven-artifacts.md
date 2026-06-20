@@ -136,7 +136,7 @@ ship via config, not redeploys.
 |---|---|---|
 | `publish` | Sends a message to any NATS subject. | Default. Routes to any subscribed output component. |
 | `publish_agent` | Spawns an agentic loop with a role + prompt + result subject. | Need rendering, transformation, or any LLM-mediated shape change. |
-| `add_triple` / `update_triple` / `remove_triple` | Mutates the graph. | When the artifact *is* a graph fact (status flag, computed predicate). |
+| `add_triple` / `update_triple` / `remove_triple` | Appends/updates facts on an **existing** entity (evidence-append, must-exist — `add_triple` no longer births an entity; ADR-055). | When the artifact *is* a graph fact (status flag, computed predicate) on an already-born entity. |
 | `update_kv` | Writes to a KV bucket. | When the artifact is a structured snapshot keyed by entity ID. |
 | `lifecycle_*` | Advances a lifecycle-managed entity through declared phases. | Operator-visible lifecycle steps such as render → validate → publish. |
 
