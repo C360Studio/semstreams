@@ -102,15 +102,21 @@ func (e *epoch) compactStale(registrant string, livePresence map[string]struct{}
 		// ~120s after each boot, then gone). An owner holding ANY OwnerClaim is
 		// still reaped: those DO hold contested cells a live owner may need.
 		//
-		// KNOWN FOLLOW-UP (4b/4c): a dead FE-only owner now persists indefinitely
-		// (nothing heartbeats the projection/Bind path — only lifecycle.Manager
-		// enrolls a Heartbeater), so the cross-type check (checkOverlap #2,
-		// overlap.go) could later flag a LIVE owning-claim registrant against this
-		// DEAD FE incumbent — the "stale claim blocks a restart" shape for the
-		// OwnerClaim-vs-dead-FE direction. Not reachable today (no production FE
-		// producer; Bind has no production caller). The fix — skip dead incumbents
-		// in the cross-type check, heartbeat-enroll FE owners, or declare FE claims
-		// permanent-until-resign — is a 4b/4c decision.
+		// KNOWN FOLLOW-UP (4b/4c): a dead FE-only owner persists indefinitely
+		// because FE-only owners bind with a nil heartbeater (see
+		// projection.BindAndHeartbeat) and rely on this exemption — they are never
+		// reaped. (Owning projection owners DO heartbeat via the static Heartbeater
+		// since #280 — the earlier "only lifecycle.Manager enrolls a Heartbeater"
+		// no longer holds — but that enrollment does NOT cover FE-only owners, who
+		// opt out by design.) So the cross-type check (checkOverlap #2, overlap.go)
+		// could later flag a LIVE owning-claim registrant against this DEAD FE
+		// incumbent — the "stale claim blocks a restart" shape for the
+		// OwnerClaim-vs-dead-FE direction. Bind now has production callers (#280),
+		// so reachability is closer than the original note implied; it still
+		// requires a production FE producer whose predicate an owning claim
+		// overlaps. The fix — skip dead incumbents in the cross-type check,
+		// heartbeat-enroll FE owners, or declare FE claims permanent-until-resign —
+		// is a 4b/4c decision.
 		if len(entry.Claims) == 0 && len(entry.ForeignEdges) > 0 {
 			continue
 		}
