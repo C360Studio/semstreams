@@ -198,7 +198,18 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 		// envelope) or a foreign entity into a "born" loop origin, defeating the
 		// typed-origin contract (ADR-056). Read + verify before treating it as born.
 		if resp.ErrorCode == gtypes.ErrorCodeEntityExists {
-			return w.verifyExistingLoopOrigin(ctx, entity.ID, entity.MessageType)
+			// Extract the incoming task_id from the spawn triples so
+			// verifyExistingLoopOrigin can detect divergent-task_id reuse (gh#276).
+			var incomingTaskID string
+			for _, t := range triples {
+				if t.Predicate == agvocab.LoopTask {
+					if s, ok := t.Object.(string); ok {
+						incomingTaskID = s
+					}
+					break
+				}
+			}
+			return w.verifyExistingLoopOrigin(ctx, entity.ID, entity.MessageType, incomingTaskID)
 		}
 		return fmt.Errorf("create_with_triples failed (code=%s): %s", resp.ErrorCode, resp.Error)
 	}
@@ -214,17 +225,20 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 // birth FAILURE the caller halts on — never a silent "born." Reuses the
 // same-package graph.ingest.query.entity read surface (see todos.go).
 //
-// Canonicality note (gh#276): a same-MessageType match treats the
-// FIRST spawn's identity triples as canonical — a divergent re-spawn that reuses
-// the same loop_id under a DIFFERENT task_id is accepted as idempotent and its
-// new identity triples are NOT written (create_with_triples returns before any
-// merge on EntityExists). This is intentional: refusing a same-MessageType match
-// would break genuine retry/redelivery, and the normal redelivery path is already
-// short-circuited upstream by the task_id dedup before birth is reached. The only
-// trigger is a producer contract violation (loop_id reuse), and this is strictly
-// safer than the pre-4c-pre-1 triple.add_batch path, which would have APPENDED
-// conflicting role/parent values onto the existing entity.
-func (w *graphWriter) verifyExistingLoopOrigin(ctx context.Context, entityID string, want message.Type) error {
+// loop_id immutability contract (gh#276): a loop_id is bound to a single task_id
+// at birth. A same-MessageType match is idempotent success — the first spawn's
+// identity triples (role, task, prompt, parent) remain canonical and the new
+// spawn's identity triples are NOT written (create_with_triples returns
+// EntityExists before any merge). When incomingTaskID is non-empty and differs
+// from the existing entity's agent.loop.task triple, this function emits a
+// structured WARNING so operators can detect loop_id reuse across tasks. The
+// identity is NOT rewritten: refusing a same-MessageType match would break
+// genuine retry/redelivery, and a hard reject or identity-rewrite could silently
+// break idempotency-reliant callers. The only safe action is to make the
+// violation observable. This is strictly safer than the pre-4c-pre-1
+// triple.add_batch path, which would have APPENDED conflicting role/parent
+// values onto the existing entity.
+func (w *graphWriter) verifyExistingLoopOrigin(ctx context.Context, entityID string, want message.Type, incomingTaskID string) error {
 	reqData, err := json.Marshal(struct {
 		ID string `json:"id"`
 	}{ID: entityID})
@@ -240,11 +254,45 @@ func (w *graphWriter) verifyExistingLoopOrigin(ctx context.Context, entityID str
 	if err := json.Unmarshal(respData, &existing); err != nil {
 		return fmt.Errorf("create_with_triples entity_exists: unmarshal existing entity %s: %w", entityID, err)
 	}
-	if existing.MessageType == want {
-		return nil // same typed origin — idempotent re-birth, safe to treat as born
+	if existing.MessageType != want {
+		return fmt.Errorf("create_with_triples: %s already exists but is NOT a %s typed origin (existing message_type=%q) — refusing to bless a non-origin shell as born",
+			entityID, want.Key(), existing.MessageType.Key())
 	}
-	return fmt.Errorf("create_with_triples: %s already exists but is NOT a %s typed origin (existing message_type=%q) — refusing to bless a non-origin shell as born",
-		entityID, want.Key(), existing.MessageType.Key())
+
+	// Same typed origin — idempotent re-birth. Now check for divergent task_id
+	// (gh#276): if the caller supplied an incoming task_id and the existing entity
+	// was born under a different task_id, the loop_id is being reused across tasks.
+	// This is a producer contract violation. We keep the first spawn's identity
+	// (loop_id is immutable per task) and emit a WARNING so operators can detect it.
+	if existingTaskID, divergent := divergentTaskID(&existing, incomingTaskID); divergent {
+		w.logger.Warn("graph_writer: loop_id reuse under divergent task_id; keeping original spawn identity (loop_id is immutable per task)",
+			"loop_id", entityID,
+			"existing_task_id", existingTaskID,
+			"incoming_task_id", incomingTaskID,
+		)
+	}
+
+	return nil // same typed origin — idempotent re-birth, safe to treat as born
+}
+
+// divergentTaskID reports whether the existing entity carries a different task_id
+// than incomingTaskID. Returns the existing task_id and true when a divergence is
+// detected — both values are empty / false when incomingTaskID is empty, the existing
+// entity has no agent.loop.task triple, or the two task_ids match.
+// Pure function; no NATS or clock side-effects.
+func divergentTaskID(existing *gtypes.EntityState, incomingTaskID string) (existingTaskID string, divergent bool) {
+	if incomingTaskID == "" {
+		return "", false
+	}
+	triple := existing.GetTriple(agvocab.LoopTask)
+	if triple == nil {
+		return "", false
+	}
+	s, ok := triple.Object.(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	return s, s != incomingTaskID
 }
 
 // WriteSyntheticDecide stamps the synthetic decide triples (#133) onto
