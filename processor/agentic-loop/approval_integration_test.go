@@ -337,6 +337,33 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 	})
 	require.NoError(t, err)
 
+	// Subscribe to tool dispatches so we can synchronise before sending
+	// the tool.result. Without this gate, tool.result arrives on its own
+	// JetStream consumer concurrently with the agent.response consumer;
+	// under CI load the result can be processed before the loop has
+	// registered the tool call (TrackToolCall), causing the component to
+	// log "No loop found for tool call" and drop the result — the loop
+	// never reaches awaiting_approval and the sweeper has nothing to fire.
+	var dispatchedCall bool
+	var dispatchMu sync.Mutex
+	_, err = natsClient.Subscribe(ctx, "tool.execute.>", func(_ context.Context, msg *nats.Msg) {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr != nil {
+			return
+		}
+		call, ok := baseMsg.Payload().(*agentic.ToolCall)
+		if !ok {
+			return
+		}
+		if call.ID != callID {
+			return
+		}
+		dispatchMu.Lock()
+		dispatchedCall = true
+		dispatchMu.Unlock()
+	})
+	require.NoError(t, err)
+
 	// Subscribe to agent.approval_response.* to capture wire publishes.
 	approvalRespCh := make(chan *agentic.ApprovalResponse, 4)
 	_, err = natsClient.Subscribe(ctx, "agent.approval_response.>", func(_ context.Context, msg *nats.Msg) {
@@ -390,6 +417,19 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 		},
 	}
 	publishResponseMessage(t, natsClient, "agent.response."+reqID, resp)
+
+	// Wait for the loop to dispatch the tool call before publishing the
+	// tool result. The loop registers the call-to-loop routing table entry
+	// (TrackToolCall) before emitting tool.execute; without this gate the
+	// tool.result can arrive on a parallel JetStream consumer before
+	// registration completes, yielding "No loop found for tool call" and
+	// a dropped result that prevents the loop from ever entering
+	// awaiting_approval.
+	require.Eventually(t, func() bool {
+		dispatchMu.Lock()
+		defer dispatchMu.Unlock()
+		return dispatchedCall
+	}, 5*time.Second, 50*time.Millisecond, "loop should dispatch tool call to tool.execute before tool.result is sent")
 
 	// Step 3: simulate agentic-tools approval filter rejecting the call.
 	gateResult := &agentic.ToolResult{
