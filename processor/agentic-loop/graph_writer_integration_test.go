@@ -5,6 +5,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -978,4 +979,124 @@ func TestWriteMutationFailure_Integration(t *testing.T) {
 
 	// Should log warnings but not panic.
 	w.WriteModelEndpoints(ctx)
+}
+
+// integrationCaptureHandler is a minimal slog.Handler for capturing log records
+// in integration tests. NOT using slog.SetDefault — safe for t.Parallel().
+type integrationCaptureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *integrationCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *integrationCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *integrationCaptureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *integrationCaptureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *integrationCaptureHandler) warnMessages() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			out = append(out, r.Message)
+		}
+	}
+	return out
+}
+
+// TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration verifies the full
+// wire-level path for gh#276:
+//
+//   - When loop_id is reused under a DIFFERENT task_id (EntityExists + same typed
+//     origin + mismatched agent.loop.task triple), WriteSpawnIdentity returns nil
+//     (keep-first-identity — behavior unchanged) AND emits a structured Warn log.
+//
+//   - When loop_id is reused under the SAME task_id (genuine retry/redelivery),
+//     WriteSpawnIdentity returns nil with NO warning emitted.
+func TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration(t *testing.T) {
+	t.Run("divergent task_id warns and succeeds", func(t *testing.T) {
+		tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+		ctx := context.Background()
+
+		// create_with_triples returns EntityExists — the loop is already born.
+		responder := &createWithTriplesResponder{alreadyExists: true}
+		responder.subscribe(t, ctx, tc.Client)
+
+		// The read-back returns a same-typed-origin entity but with the FIRST
+		// spawn's task_id ("task-first"), not the incoming "task-second".
+		q := &queryEntityResponder{entity: gtypes.EntityState{
+			ID:          "acme.ops.agent.agentic-loop.execution.loop-reuse",
+			MessageType: agentic.LoopExecutionMessageType(),
+			Triples: []message.Triple{
+				{
+					Subject:   "acme.ops.agent.agentic-loop.execution.loop-reuse",
+					Predicate: agvocab.LoopTask,
+					Object:    "task-first",
+				},
+			},
+		}}
+		q.subscribe(t, ctx, tc.Client)
+
+		h := &integrationCaptureHandler{}
+		logger := slog.New(h)
+
+		w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+		w.SetLogger(logger)
+
+		// Second spawn: same loop_id, different task_id.
+		task := &agentic.TaskMessage{TaskID: "task-second", Role: "researcher"}
+		if err := w.WriteSpawnIdentity(ctx, "loop-reuse", task); err != nil {
+			t.Errorf("WriteSpawnIdentity must return nil (keep-first-identity), got error: %v", err)
+		}
+
+		warns := h.warnMessages()
+		if len(warns) == 0 {
+			t.Error("expected a Warn log for divergent task_id reuse, got none")
+		} else if warns[0] != "graph_writer: loop_id reuse under divergent task_id; keeping original spawn identity (loop_id is immutable per task)" {
+			t.Errorf("unexpected Warn message: %q", warns[0])
+		}
+	})
+
+	t.Run("same task_id no warning", func(t *testing.T) {
+		tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+		ctx := context.Background()
+
+		responder := &createWithTriplesResponder{alreadyExists: true}
+		responder.subscribe(t, ctx, tc.Client)
+
+		// Read-back returns the SAME task_id as the incoming spawn.
+		q := &queryEntityResponder{entity: gtypes.EntityState{
+			ID:          "acme.ops.agent.agentic-loop.execution.loop-retry",
+			MessageType: agentic.LoopExecutionMessageType(),
+			Triples: []message.Triple{
+				{
+					Subject:   "acme.ops.agent.agentic-loop.execution.loop-retry",
+					Predicate: agvocab.LoopTask,
+					Object:    "task-same",
+				},
+			},
+		}}
+		q.subscribe(t, ctx, tc.Client)
+
+		h := &integrationCaptureHandler{}
+		logger := slog.New(h)
+
+		w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+		w.SetLogger(logger)
+
+		task := &agentic.TaskMessage{TaskID: "task-same", Role: "researcher"}
+		if err := w.WriteSpawnIdentity(ctx, "loop-retry", task); err != nil {
+			t.Errorf("WriteSpawnIdentity must return nil on same-task retry, got error: %v", err)
+		}
+
+		if warns := h.warnMessages(); len(warns) > 0 {
+			t.Errorf("expected no Warn log for same task_id retry, got: %v", warns)
+		}
+	})
 }

@@ -43,6 +43,12 @@ func (g *GraphWriterForTest) SetContentStore(store *objectstore.Store) {
 	g.w.contentStore = store
 }
 
+// SetLogger replaces the graphWriter's logger for integration tests that need
+// to capture log output (e.g. verifying divergent task_id warnings).
+func (g *GraphWriterForTest) SetLogger(logger *slog.Logger) {
+	g.w.logger = logger
+}
+
 func (g *GraphWriterForTest) WriteModelEndpoints(ctx context.Context) { g.w.WriteModelEndpoints(ctx) }
 func (g *GraphWriterForTest) WriteLoopCompletion(ctx context.Context, e *agentic.LoopCompletedEvent) {
 	g.w.WriteLoopCompletion(ctx, e)
