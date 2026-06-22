@@ -74,6 +74,12 @@ type Component struct {
 
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
+
+	// testPublishHook, if non-nil, is called by publishApprovalResponseToWire
+	// in place of the real NATS publish. Used in unit tests to capture
+	// wire-level approval-response messages without a NATS connection.
+	// Always nil in production.
+	testPublishHook func(subject string, data []byte)
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup

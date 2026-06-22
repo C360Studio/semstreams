@@ -11,6 +11,14 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
+// SetTestPublishHook wires a capturing function onto c.testPublishHook so
+// unit tests can observe wire-level publishes from publishApprovalResponseToWire
+// without a real NATS connection. The hook is only ever set from test code;
+// production components always have a nil hook.
+func (c *Component) SetTestPublishHook(fn func(subject string, data []byte)) {
+	c.testPublishHook = fn
+}
+
 // GraphWriterForTest exposes graphWriter for integration testing.
 // This type wraps the unexported graphWriter so that the _test package
 // can exercise the full NATS round-trip without duplicating construction logic.

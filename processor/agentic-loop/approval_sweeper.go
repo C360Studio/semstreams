@@ -2,11 +2,14 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 )
 
 // approvalSweepInterval is the cadence at which the component scans
@@ -90,10 +93,61 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		}
 		c.publishResults(ctx, result)
 		c.persistLoopState(ctx, cand.LoopID)
+		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
+		// wire observers (sister-repo dashboards, audit consumers) see timeout
+		// auto-rejects the same way they see human responses. The component's
+		// own consumer receives this and drops it as a stale response (the
+		// approval is already resolved by HandleApprovalResponse above), so
+		// there is no double-processing risk.
+		c.publishApprovalResponseToWire(ctx, response)
 		c.logger.Info("approval timed out; auto-rejected",
 			slog.String("loop_id", cand.LoopID),
 			slog.String("call_id", cand.CallID),
 			slog.String("tool_name", cand.ToolName),
 			slog.Duration("timeout", cand.Timeout))
+	}
+}
+
+// publishApprovalResponseToWire publishes an ApprovalResponse to the
+// agent.approval_response.<loopID> JetStream subject so wire observers
+// (dashboards, audit consumers, sister repos) see timeout auto-rejects
+// symmetrically with human approvals.
+//
+// Subject is resolved from the input-port configuration (the same subject
+// external UIs publish to). The component's own consumer safely drops the
+// message as a stale-response idempotent no-op because the approval is
+// already resolved before this publish fires.
+//
+// Guards against nil natsClient (unit tests, Stop race) and logs but does
+// not fail on marshal/publish errors — the in-process state transition via
+// HandleApprovalResponse is already committed.
+func (c *Component) publishApprovalResponseToWire(ctx context.Context, response agentic.ApprovalResponse) {
+	envelope := message.NewBaseMessage(response.Schema(), &response, "agentic-loop")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		c.logger.Error("failed to marshal approval response for wire publish",
+			slog.String("loop_id", response.LoopID),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	var inputs []component.PortDefinition
+	if c.config.Ports != nil {
+		inputs = c.config.Ports.Inputs
+	}
+	subject := component.ResolveSubject(inputs, "agent.approval_response", response.LoopID)
+
+	if c.testPublishHook != nil {
+		c.testPublishHook(subject, data)
+		return
+	}
+	if c.natsClient == nil {
+		return
+	}
+	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
+		c.logger.Error("failed to publish approval response to wire",
+			slog.String("loop_id", response.LoopID),
+			slog.String("subject", subject),
+			slog.String("error", err.Error()))
 	}
 }

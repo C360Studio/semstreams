@@ -249,3 +249,168 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 		t.Errorf("re-dispatch lost original arguments: %v", approved.Arguments)
 	}
 }
+
+// TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse verifies that
+// when a loop's approval timeout elapses the sweeper publishes an
+// ApprovalResponse to agent.approval_response.<loopID> on the wire, so that
+// external observers (dashboards, audit consumers, sister repos) see timeout
+// auto-rejects symmetrically with human approvals.
+//
+// The test drives the loop to LoopStateAwaitingApproval with a very short
+// approval timeout (500 ms), then subscribes to agent.approval_response.*
+// and waits for the sweeper to fire and publish. Explicit channel
+// synchronisation — no time.Sleep blocking on the critical assert path.
+func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	const loopID = "loop_approval_timeout_wire"
+	const callID = "call_approval_timeout_wire"
+
+	// Very short approval timeout so the sweeper fires quickly.
+	const approvalTimeout = "500ms"
+
+	config := agenticloop.Config{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{Name: "agent.task", Type: "jetstream", Subject: "agent.task.*", StreamName: "AGENT", Required: true},
+				{Name: "agent.response", Type: "jetstream", Subject: "agent.response.>", StreamName: "AGENT"},
+				{Name: "tool.result", Type: "jetstream", Subject: "tool.result.>", StreamName: "AGENT"},
+				{Name: "agent.approval_response", Type: "jetstream", Subject: "agent.approval_response.*", StreamName: "AGENT"},
+			},
+			Outputs: []component.PortDefinition{
+				{Name: "agent.request", Type: "jetstream", Subject: "agent.request.*", StreamName: "AGENT"},
+				{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.*", StreamName: "AGENT"},
+				{Name: "agent.approval_pending", Type: "jetstream", Subject: "agent.approval_pending.*", StreamName: "AGENT"},
+				{Name: "agent.complete", Type: "jetstream", Subject: "agent.complete.*", StreamName: "AGENT"},
+				{Name: "agent.failed", Type: "jetstream", Subject: "agent.failed.*", StreamName: "AGENT"},
+			},
+		},
+		MaxIterations:      10,
+		Timeout:            "60s",
+		ApprovalTimeoutStr: approvalTimeout,
+		StreamName:         "AGENT",
+		ConsumerNameSuffix: "approval-timeout-wire-test",
+		LoopsBucket:        "AGENT_LOOPS",
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.Dependencies{
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	}
+
+	comp, err := agenticloop.NewComponent(rawConfig, deps)
+	require.NoError(t, err)
+
+	lc := comp.(component.LifecycleComponent)
+	require.NoError(t, lc.Initialize())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, lc.Start(ctx))
+	defer lc.Stop(5 * time.Second)
+
+	time.Sleep(200 * time.Millisecond)
+
+	dec := payloadbuiltins.NewTestDecoder(t)
+
+	// Subscribe to model requests so we can feed a response.
+	var firstRequestID string
+	var requestMu sync.Mutex
+	_, err = natsClient.Subscribe(ctx, "agent.request.>", func(_ context.Context, msg *nats.Msg) {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr != nil {
+			return
+		}
+		req, ok := baseMsg.Payload().(*agentic.AgentRequest)
+		if !ok {
+			return
+		}
+		requestMu.Lock()
+		if firstRequestID == "" {
+			firstRequestID = req.RequestID
+		}
+		requestMu.Unlock()
+	})
+	require.NoError(t, err)
+
+	// Subscribe to agent.approval_response.* to capture wire publishes.
+	approvalRespCh := make(chan *agentic.ApprovalResponse, 4)
+	_, err = natsClient.Subscribe(ctx, "agent.approval_response.>", func(_ context.Context, msg *nats.Msg) {
+		baseMsg, decErr := dec.Decode(msg.Data)
+		if decErr != nil {
+			return
+		}
+		resp, ok := baseMsg.Payload().(*agentic.ApprovalResponse)
+		if !ok {
+			return
+		}
+		// Filter to only the loop under test.
+		if resp.LoopID != loopID {
+			return
+		}
+		approvalRespCh <- resp
+	})
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Step 1: publish task.
+	task := &agentic.TaskMessage{
+		LoopID: loopID,
+		TaskID: "task-approval-timeout-wire",
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "Delete a rule",
+	}
+	publishTaskMessage(t, natsClient, "agent.task.approval-timeout", task)
+
+	require.Eventually(t, func() bool {
+		requestMu.Lock()
+		defer requestMu.Unlock()
+		return firstRequestID != ""
+	}, 5*time.Second, 50*time.Millisecond, "loop should publish first agent.request")
+
+	requestMu.Lock()
+	reqID := firstRequestID
+	requestMu.Unlock()
+
+	// Step 2: model response with tool_call.
+	resp := &agentic.AgentResponse{
+		RequestID: reqID,
+		Status:    "tool_call",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: callID, Name: "delete_rule", Arguments: map[string]any{"rule_id": "rule-42"}},
+			},
+		},
+	}
+	publishResponseMessage(t, natsClient, "agent.response."+reqID, resp)
+
+	// Step 3: simulate agentic-tools approval filter rejecting the call.
+	gateResult := &agentic.ToolResult{
+		CallID:    callID,
+		Name:      "delete_rule",
+		ErrorKind: agentic.ToolErrorPermission,
+		Error:     agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval",
+	}
+	publishToolResultMessage(t, natsClient, "tool.result."+callID, gateResult)
+
+	// Step 4: the sweeper fires after the approval timeout (~500ms) and publishes
+	// the ApprovalResponse to agent.approval_response.<loopID>. Wait up to 15s
+	// to give the sweeper (5s interval) plus timeout (500ms) plus startup margin.
+	select {
+	case wireResp := <-approvalRespCh:
+		assert.Equal(t, loopID, wireResp.LoopID, "wire response must carry correct loop_id")
+		assert.Equal(t, callID, wireResp.CallID, "wire response must carry correct call_id")
+		assert.Equal(t, agentic.ApprovalDecisionReject, wireResp.Decision, "timeout auto-reject must use reject decision")
+		assert.Contains(t, wireResp.Reason, "timed out", "wire response reason must mention timeout")
+		assert.Equal(t, "system:approval-timeout", wireResp.ApprovedBy, "wire response must carry timeout sentinel in approved_by")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for sweeper to publish agent.approval_response wire message")
+	}
+}
