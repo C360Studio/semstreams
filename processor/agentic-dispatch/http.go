@@ -505,8 +505,16 @@ type ApprovalAcceptResponse struct {
 // for the full field set; fields absent from a given source stay empty.
 // (OpenAPI 3.0 cannot express per-event SSE JSON schema — see the Loop and
 // ActivityEvent component schemas for the documented shapes.)
+//
+// Type values:
+//   - "loop_created"   — new live loop entry (non-COMPLETE_ key, revision 1)
+//   - "loop_updated"   — live loop updated (non-COMPLETE_ key, revision > 1)
+//   - "loop_deleted"   — KV entry deleted
+//   - "loop_completed" — terminal event (COMPLETE_<id> key); LoopID is the bare
+//     loop ID (prefix stripped) so it equals data.loop_id. Terminal-ness is
+//     also derivable from data.state ("complete", "failed", "cancelled").
 type ActivityEvent struct {
-	Type      string    `json:"type"` // loop_created, loop_updated, loop_deleted
+	Type      string    `json:"type"` // loop_created, loop_updated, loop_deleted, loop_completed
 	LoopID    string    `json:"loop_id"`
 	Timestamp time.Time `json:"timestamp"`
 	Data      *Loop     `json:"data,omitempty"`
@@ -963,32 +971,56 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 				continue
 			}
 
-			// Determine event type from KV operation
-			eventType := c.mapKVOperation(entry.Operation(), entry.Revision())
+			// COMPLETE_<loopID> keys carry terminal event payloads; all other
+			// keys carry agentic.LoopEntity live state.
+			//
+			// Derive the bare loop ID and event type before building the
+			// ActivityEvent so the envelope LoopID always matches
+			// data.loop_id. For terminal (COMPLETE_) keys the prefix is
+			// internal KV bookkeeping; callers correlate on bare IDs and
+			// determine terminal-ness via event.Type == "loop_completed"
+			// (or event.Data.State being a terminal value).
+			rawKey := entry.Key()
+			isCompletion := strings.HasPrefix(rawKey, "COMPLETE_")
+
+			// Bare ID: strip the COMPLETE_ prefix for terminal keys so the
+			// envelope loop_id matches data.loop_id.
+			bareLoopID := rawKey
+			if isCompletion {
+				bareLoopID = strings.TrimPrefix(rawKey, "COMPLETE_")
+			}
+
+			// Event type: COMPLETE_ keys always emit "loop_completed",
+			// regardless of KV revision, so terminal-ness is wire-observable
+			// from event.Type without inspecting data.state.
+			var eventType string
+			if isCompletion {
+				eventType = "loop_completed"
+			} else {
+				eventType = c.mapKVOperation(entry.Operation(), entry.Revision())
+			}
 
 			// Build activity event
 			event := ActivityEvent{
 				Type:      eventType,
-				LoopID:    entry.Key(),
+				LoopID:    bareLoopID,
 				Timestamp: entry.Created(),
 			}
 
 			// Project non-delete entries onto the canonical Loop wire type.
-			// COMPLETE_<loopID> keys carry terminal event payloads; all other
-			// keys carry agentic.LoopEntity live state.
 			if entry.Operation() != jetstream.KeyValueDelete {
 				var loop Loop
 				var ok bool
-				if strings.HasPrefix(entry.Key(), "COMPLETE_") {
+				if isCompletion {
 					if loop, ok = loopFromCompletion(entry.Value()); !ok {
 						c.logger.DebugContext(ctx, "activity stream: dropping undecodable completion payload",
-							slog.String("key", entry.Key()))
+							slog.String("key", rawKey))
 					}
 				} else {
 					var e agentic.LoopEntity
 					if err := json.Unmarshal(entry.Value(), &e); err != nil {
 						c.logger.DebugContext(ctx, "activity stream: dropping undecodable loop entity",
-							slog.String("key", entry.Key()),
+							slog.String("key", rawKey),
 							slog.String("error", err.Error()))
 					} else {
 						loop, ok = loopFromEntity(&e, c.deps.Platform.Org, c.deps.Platform.Platform), true
@@ -1004,7 +1036,7 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 			if err != nil {
 				c.logger.ErrorContext(ctx, "failed to marshal activity event",
 					slog.String("client_id", clientID),
-					slog.String("loop_id", entry.Key()),
+					slog.String("loop_id", bareLoopID),
 					slog.String("error", err.Error()))
 				c.metrics.recordSSEError("marshal_event")
 				continue
@@ -1016,7 +1048,7 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 
 			c.logger.DebugContext(ctx, "sent activity event",
 				slog.String("client_id", clientID),
-				slog.String("loop_id", entry.Key()),
+				slog.String("loop_id", bareLoopID),
 				slog.String("event_type", eventType))
 		}
 	}
@@ -1289,7 +1321,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/activity": {
 				GET: &service.OperationSpec{
 					Summary:     "Real-time activity events (SSE)",
-					Description: "Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
+					Description: "Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type==\"loop_completed\" or data.state to detect terminal entries. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
 					Tags:        []string{"AgenticDispatch"},
 					Responses: map[string]service.ResponseSpec{
 						"200": {
