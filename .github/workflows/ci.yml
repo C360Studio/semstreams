@@ -79,6 +79,16 @@ jobs:
         # scripts/lint-test-ports.sh, also invoked by task lint.
         run: bash scripts/lint-test-ports.sh
 
+      - name: natsclient Request+Unmarshal guard (gh#162)
+        # AST lint that catches natsclient.Request / RequestWithRetry calls
+        # whose response bytes flow into json.Unmarshal without a prior
+        # bytes.HasPrefix("error: ") guard or migration to RequestClassified.
+        # This class shipped silently 3x before gh#93 (c626854, 895ec44).
+        # Self-test in the package proves the filter is live; allowlist in
+        # test/natsclient/request_guard_test.go tracks every known-deferred
+        # site with a gh# reference.
+        run: go test -v ./test/natsclient/
+
   test:
     name: Test
     runs-on: ubuntu-latest
