@@ -262,12 +262,14 @@ func (a *MutationRelationshipApplier) ApplyRelationship(
 			"failed to serialize request")
 	}
 
-	// RequestWithRetry handles transient "no responders" errors when
+	// RequestWithRetryClassified handles transient "no responders" errors when
 	// graph-gateway is restarting or its subscription hasn't yet
 	// propagated. Inference-emitted triples are idempotent on the
 	// responder side (same triple twice = same graph state), so
 	// retry is safe and avoids silently dropping inferred edges.
-	resp, err := a.natsClient.RequestWithRetry(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err
+	// rather than silently mis-decoding legacy "error: " body as success JSON.
+	resp, err := a.natsClient.RequestWithRetryClassified(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return errs.WrapTransient(err, "MutationRelationshipApplier", "ApplyRelationship",
 			fmt.Sprintf("mutation request failed: %s -> %s -> %s",

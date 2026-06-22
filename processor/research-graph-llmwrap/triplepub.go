@@ -78,7 +78,8 @@ func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Trip
 	if err != nil {
 		return fmt.Errorf("marshal add-triple request: %w", err)
 	}
-	respData, err := p.client.RequestWithRetry(ctx, graphMutationAddSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := p.client.RequestWithRetryClassified(ctx, graphMutationAddSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", graphMutationAddSubject, err)
 	}
@@ -101,7 +102,8 @@ func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []mes
 	if err != nil {
 		return fmt.Errorf("marshal batch-add request: %w", err)
 	}
-	respData, err := p.client.RequestWithRetry(ctx, graphMutationAddBatchSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := p.client.RequestWithRetryClassified(ctx, graphMutationAddBatchSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", graphMutationAddBatchSubject, err)
 	}

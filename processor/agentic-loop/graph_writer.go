@@ -97,7 +97,7 @@ func (w *graphWriter) writeTriple(ctx context.Context, triple message.Triple) er
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	// RequestWithRetry handles transient "no responders" errors that
+	// RequestWithRetryClassified handles transient "no responders" errors that
 	// happen when graph-gateway is restarting or the subscription
 	// hasn't propagated to the NATS server yet. Without retry, a
 	// single trajectory step on the boundary of a gateway restart
@@ -105,7 +105,8 @@ func (w *graphWriter) writeTriple(ctx context.Context, triple message.Triple) er
 	// TestWriteTrajectorySteps_NoContentStore_StillWritesTriples
 	// when -race + many test containers in flight delay subscription
 	// readiness past the per-request timeout.
-	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := w.natsClient.RequestWithRetryClassified(ctx, graphMutationSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("NATS request failed: %w", err)
 	}
@@ -137,7 +138,8 @@ func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) 
 		return fmt.Errorf("marshal batch request: %w", err)
 	}
 
-	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationBatchSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := w.natsClient.RequestWithRetryClassified(ctx, graphMutationBatchSubject, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("NATS batch request failed: %w", err)
 	}
@@ -180,7 +182,8 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 		return fmt.Errorf("marshal create_with_triples request: %w", err)
 	}
 
-	respData, err := w.natsClient.RequestWithRetry(ctx, graphMutationCreateWithTriplesSubj, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := w.natsClient.RequestWithRetryClassified(ctx, graphMutationCreateWithTriplesSubj, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("NATS create_with_triples request failed: %w", err)
 	}
