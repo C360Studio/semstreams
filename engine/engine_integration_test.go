@@ -247,11 +247,16 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 	s.Require().NoError(err)
 	s.Equal(flowstore.StateDeployedStopped, stopped.RuntimeState, "Flow should be deployed_stopped")
 
-	// Verify components are disabled
-	cfg := s.configMgr.GetConfig()
-	currentConfig := cfg.Get()
-	udpConfig := currentConfig.Components["udp-stop-1"]
-	s.False(udpConfig.Enabled, "Component should be disabled after stop")
+	// Verify components are disabled. engine.Stop() returns once the flow's
+	// RuntimeState is persisted (asserted above), but disabling the component
+	// in the config manager propagates asynchronously — reading GetConfig()
+	// immediately races that propagation and flaked intermittently under CI
+	// load. Poll for the end-state instead; a real "never disabled" bug still
+	// fails (the poll times out) rather than being masked.
+	s.Eventually(func() bool {
+		currentConfig := s.configMgr.GetConfig().Get()
+		return !currentConfig.Components["udp-stop-1"].Enabled
+	}, 5*time.Second, 20*time.Millisecond, "Component should be disabled after stop")
 }
 
 // TestStopNotRunningFlow tests that stopping a non-running flow fails
