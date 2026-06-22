@@ -16,7 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegration_QueryHandlers tests query handlers with real NATS JetStream
+// TestIntegration_QueryHandlers tests query handlers with real NATS JetStream.
+// Only the production-wire (NATS-suffixed) handlers are exercised here;
+// the former msg-style handlers (handleQueryEntity, handleQueryBatch) were
+// deleted as part of gh#164 part 1 dead-code cleanup.
 func TestIntegration_QueryHandlers(t *testing.T) {
 	ctx := context.Background()
 
@@ -84,34 +87,6 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 		require.NoError(t, component.CreateEntity(ctx, entity))
 	}
 
-	t.Run("query single entity with real NATS", func(t *testing.T) {
-		// Subscribe to handle query requests
-		querySubject := "graph.ingest.query.entity"
-		_, err := natsClient.SubscribeForRequests(ctx, querySubject, func(reqCtx context.Context, data []byte) ([]byte, error) {
-			// Create mock message for handler
-			mockMsg := &mockNATSMsg{data: data}
-			component.handleQueryEntity(mockMsg)
-			return mockMsg.response, nil
-		})
-		require.NoError(t, err)
-
-		// Send query request
-		request := map[string]string{"id": "c360.platform.robotics.mav1.drone.001"}
-		requestJSON, err := json.Marshal(request)
-		require.NoError(t, err)
-
-		responseData, err := natsClient.Request(ctx, querySubject, requestJSON, 5*time.Second)
-		require.NoError(t, err)
-
-		// Verify response
-		var responseEntity graph.EntityState
-		err = json.Unmarshal(responseData, &responseEntity)
-		require.NoError(t, err)
-
-		assert.Equal(t, entities[0].ID, responseEntity.ID)
-		assert.Equal(t, len(entities[0].Triples), len(responseEntity.Triples))
-	})
-
 	t.Run("batch query with real NATS", func(t *testing.T) {
 		// Use the component's built-in batch query handler (registered during Start)
 		batchSubject := "graph.ingest.query.batch"
@@ -138,78 +113,4 @@ func TestIntegration_QueryHandlers(t *testing.T) {
 
 		assert.Equal(t, 2, len(response.Entities))
 	})
-
-	t.Run("concurrent query requests", func(t *testing.T) {
-		querySubject := "graph.ingest.query.concurrent"
-		_, err := natsClient.SubscribeForRequests(ctx, querySubject, func(reqCtx context.Context, data []byte) ([]byte, error) {
-			mockMsg := &mockNATSMsg{data: data}
-			component.handleQueryEntity(mockMsg)
-			return mockMsg.response, nil
-		})
-		require.NoError(t, err)
-
-		// Send multiple concurrent requests
-		concurrency := 10
-		results := make(chan error, concurrency)
-
-		for i := 0; i < concurrency; i++ {
-			go func(entityID string) {
-				request := map[string]string{"id": entityID}
-				requestJSON, _ := json.Marshal(request)
-
-				_, err := natsClient.Request(ctx, querySubject, requestJSON, 5*time.Second)
-				results <- err
-			}("c360.platform.robotics.mav1.drone.001")
-		}
-
-		// Collect results
-		for i := 0; i < concurrency; i++ {
-			err := <-results
-			assert.NoError(t, err, "concurrent request should succeed")
-		}
-	})
-
-	t.Run("context timeout behavior", func(t *testing.T) {
-		// This test verifies that the handler respects context timeouts
-		// The handler creates its own context with timeout, so we just verify
-		// it doesn't hang indefinitely
-
-		querySubject := "graph.ingest.query.timeout"
-		_, err := natsClient.SubscribeForRequests(ctx, querySubject, func(reqCtx context.Context, data []byte) ([]byte, error) {
-			mockMsg := &mockNATSMsg{data: data}
-			component.handleQueryEntity(mockMsg)
-			return mockMsg.response, nil
-		})
-		require.NoError(t, err)
-
-		// Send request with short overall timeout
-		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		request := map[string]string{"id": "c360.platform.robotics.mav1.drone.001"}
-		requestJSON, _ := json.Marshal(request)
-
-		responseData, err := natsClient.Request(reqCtx, querySubject, requestJSON, 2*time.Second)
-		require.NoError(t, err)
-
-		var responseEntity graph.EntityState
-		err = json.Unmarshal(responseData, &responseEntity)
-		require.NoError(t, err)
-	})
-}
-
-// mockNATSMsg is reused from the unit tests for integration testing
-// This allows us to test handlers without exposing them as public methods
-type mockNATSMsgIntegration struct {
-	data     []byte
-	response []byte
-}
-
-func (m *mockNATSMsgIntegration) Data() []byte {
-	return m.data
-}
-
-func (m *mockNATSMsgIntegration) Respond(data []byte) error {
-	m.response = data
-	return nil
 }
