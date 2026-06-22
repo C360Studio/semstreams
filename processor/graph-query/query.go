@@ -201,20 +201,29 @@ func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, 
 	return response, nil
 }
 
-// handleQueryPrefix handles prefix query requests (passthrough to graph-ingest)
+// handleQueryPrefix handles prefix query requests (passthrough to graph-ingest).
+//
+// Uses RequestClassified (gh#93) so that a transient handler error from
+// graph-ingest — e.g. "store unavailable" — surfaces to the caller as
+// ErrorTransient rather than being mis-classified as ErrorInvalid by the
+// legacy "error: " body-prefix fallback in ClassifyReply. Correct
+// classification lets the caller decide whether to retry.
 func (c *Component) handleQueryPrefix(ctx context.Context, data []byte) ([]byte, error) {
 	// Forward to graph-ingest
 	subject := c.router.Route("entityPrefix")
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("entityPrefix query routing not available"), "GraphQuery", "handleQueryPrefix", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// RequestClassified: transport AND handler errors both surface via err;
+	// body is guaranteed clean on success. Replaces plain Request + body-
+	// prefix sniff to preserve error class end-to-end (gh#304).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
 		if errors.Is(err, nats.ErrTimeout) {
 			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryPrefix", "request timeout")
 		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryPrefix", "query prefix")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -369,13 +378,16 @@ func (c *Component) handleQueryHierarchyStats(ctx context.Context, data []byte) 
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("entityPrefix query routing not available"), "GraphQuery", "handleQueryHierarchyStats", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, prefixReq, c.config.QueryTimeout)
+	// RequestClassified: handler errors (e.g. store unavailable) surface via
+	// err with the correct class instead of arriving as a "error: <msg>" body
+	// that json.Unmarshal would then mis-classify as WrapInvalid (gh#304).
+	response, err := c.natsClient.RequestClassified(ctx, subject, prefixReq, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
 		if errors.Is(err, nats.ErrTimeout) {
 			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryHierarchyStats", "request timeout")
 		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryHierarchyStats", "query prefix")
+		return nil, err
 	}
 
 	// Parse prefix response (entities envelope from graph-ingest)
