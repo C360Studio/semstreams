@@ -58,7 +58,10 @@ func (p *NATSTriplePublisher) AddTriple(ctx context.Context, _ string, triple me
 	if err != nil {
 		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: marshal: %w", err)
 	}
-	respData, err := p.client.RequestWithRetry(ctx, natsTripleAddSubject, reqData, natsTripleMutationTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: RequestWithRetryClassified surfaces handler errors
+	// (legacy "error: " body prefix) as err rather than silently
+	// mis-decoding them as success JSON. Migration from RequestWithRetry.
+	respData, err := p.client.RequestWithRetryClassified(ctx, natsTripleAddSubject, reqData, natsTripleMutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: NATS request: %w", err)
 	}

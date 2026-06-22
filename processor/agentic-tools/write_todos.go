@@ -417,7 +417,8 @@ func (w *natsTodoWriter) RemoveByPredicate(ctx context.Context, subject, predica
 	if err != nil {
 		return fmt.Errorf("marshal remove-triple request: %w", err)
 	}
-	respData, err := w.client.RequestWithRetry(ctx, writeTodosRemoveSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := w.client.RequestWithRetryClassified(ctx, writeTodosRemoveSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", writeTodosRemoveSubject, err)
 	}
@@ -442,7 +443,8 @@ func (w *natsTodoWriter) AddTriplesBatch(ctx context.Context, triples []message.
 	if err != nil {
 		return fmt.Errorf("marshal batch-add request: %w", err)
 	}
-	respData, err := w.client.RequestWithRetry(ctx, writeTodosBatchSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := w.client.RequestWithRetryClassified(ctx, writeTodosBatchSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", writeTodosBatchSubject, err)
 	}

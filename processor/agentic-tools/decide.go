@@ -688,13 +688,14 @@ func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Trip
 	if err != nil {
 		return fmt.Errorf("marshal add-triple request: %w", err)
 	}
-	// RequestWithRetry handles transient "no responders" errors when
+	// RequestWithRetryClassified handles transient "no responders" errors when
 	// graph-gateway is restarting or its subscription hasn't yet
 	// propagated. The decide tool's terminal action is the triple
 	// downstream rules trigger on — silent failure here breaks the
 	// coordinator pattern's workflow. Idempotent (graph is a set of
 	// triples), so retry is safe.
-	respData, err := p.client.RequestWithRetry(ctx, decideMutationSubject, reqData, decideMutationTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := p.client.RequestWithRetryClassified(ctx, decideMutationSubject, reqData, decideMutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", decideMutationSubject, err)
 	}
@@ -725,7 +726,8 @@ func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []mes
 	if err != nil {
 		return fmt.Errorf("marshal batch-add request: %w", err)
 	}
-	respData, err := p.client.RequestWithRetry(ctx, natsTriplesBatchSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig())
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	respData, err := p.client.RequestWithRetryClassified(ctx, natsTriplesBatchSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
 		return fmt.Errorf("request %s: %w", natsTriplesBatchSubject, err)
 	}
