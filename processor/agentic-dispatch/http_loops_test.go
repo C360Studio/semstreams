@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -352,110 +353,211 @@ func TestActivityEventSerialization(t *testing.T) {
 	assert.Equal(t, "pending", decoded.Data.State)
 }
 
+// TestActivityEventTypeAndID table-tests the activityEventTypeAndID pure
+// function — the single decision point for the isCompletion / bareLoopID /
+// eventType triple that handleActivityStream emits onto the /activity wire.
+// Locking the function prevents handler refactors from silently regressing
+// the correlation without a failing test.
+func TestActivityEventTypeAndID(t *testing.T) {
+	const bare = "loop_abc123"
+
+	cases := []struct {
+		name       string
+		key        string
+		op         jetstream.KeyValueOp
+		revision   uint64
+		wantType   string
+		wantLoopID string
+	}{
+		{
+			name:       "COMPLETE_ key always emits loop_completed with bare id",
+			key:        "COMPLETE_" + bare,
+			op:         jetstream.KeyValuePut,
+			revision:   1,
+			wantType:   "loop_completed",
+			wantLoopID: bare,
+		},
+		{
+			name:       "COMPLETE_ key revision > 1 still emits loop_completed",
+			key:        "COMPLETE_" + bare,
+			op:         jetstream.KeyValuePut,
+			revision:   5,
+			wantType:   "loop_completed",
+			wantLoopID: bare,
+		},
+		{
+			name:       "non-terminal put revision 1 emits loop_created",
+			key:        bare,
+			op:         jetstream.KeyValuePut,
+			revision:   1,
+			wantType:   "loop_created",
+			wantLoopID: bare,
+		},
+		{
+			name:       "non-terminal put revision > 1 emits loop_updated",
+			key:        bare,
+			op:         jetstream.KeyValuePut,
+			revision:   7,
+			wantType:   "loop_updated",
+			wantLoopID: bare,
+		},
+		{
+			name:       "non-terminal delete emits loop_deleted",
+			key:        bare,
+			op:         jetstream.KeyValueDelete,
+			revision:   3,
+			wantType:   "loop_deleted",
+			wantLoopID: bare,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotType, gotLoopID := activityEventTypeAndID(tc.key, tc.op, tc.revision)
+			assert.Equal(t, tc.wantType, gotType, "event type")
+			assert.Equal(t, tc.wantLoopID, gotLoopID, "bare loop ID")
+		})
+	}
+}
+
 // TestActivityEventLoopIDCorrelation verifies that for a COMPLETE_<id>-keyed
 // terminal entry the ActivityEvent envelope loop_id equals data.loop_id (no
-// COMPLETE_ prefix leak), and that terminal-ness is signalled by event.Type
-// rather than requiring callers to inspect the raw KV key or data.state.
+// COMPLETE_ prefix leak), and that terminal-ness is signalled by event.Type.
+// Tests drive the PRODUCTION decoder (loopFromCompletion) against real
+// agentic event types — not synthetic JSON shapes — to lock the wire contract.
 //
 // This is a regression test for gh#226: previously LoopID was set from
 // entry.Key() so terminal events carried "COMPLETE_<id>" in the envelope
 // while data.loop_id held the bare "<id>".
 func TestActivityEventLoopIDCorrelation(t *testing.T) {
 	const bareID = "loop_abc123"
+	const taskID = "task-1"
+	ts := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 
-	// Simulate the COMPLETE_<loopID> payload written by agentic-loop on
-	// terminal outcomes.  loopFromCompletion unmarshals via completionWire
-	// which reads the "loop_id" JSON field — this is the bare ID already.
-	completionPayload := []byte(`{
-		"loop_id":"` + bareID + `",
-		"task_id":"task-1",
-		"role":"researcher",
-		"state":"complete",
-		"outcome":"success",
-		"result":"42",
-		"iterations":3,
-		"tokens_in":100,
-		"tokens_out":200
-	}`)
+	// marshalEvent marshals a real agentic terminal event via its own
+	// MarshalJSON method — this is the payload agentic-loop actually writes
+	// to the COMPLETE_<id> KV key.
+	marshalCompleted := func(t *testing.T) []byte {
+		t.Helper()
+		ev := &agentic.LoopCompletedEvent{
+			LoopID:      bareID,
+			TaskID:      taskID,
+			Role:        "researcher",
+			Outcome:     agentic.OutcomeSuccess,
+			Result:      "42",
+			Iterations:  3,
+			TokensIn:    100,
+			TokensOut:   200,
+			CompletedAt: ts,
+		}
+		b, err := json.Marshal(ev)
+		require.NoError(t, err)
+		return b
+	}
 
-	t.Run("loopFromCompletion returns bare loop_id", func(t *testing.T) {
-		loop, ok := loopFromCompletion(completionPayload)
-		require.True(t, ok, "expected loopFromCompletion to succeed")
-		// data.loop_id must be the bare ID, not COMPLETE_<id>
+	marshalFailed := func(t *testing.T) []byte {
+		t.Helper()
+		ev := &agentic.LoopFailedEvent{
+			LoopID:     bareID,
+			TaskID:     taskID,
+			Role:       "researcher",
+			Outcome:    agentic.OutcomeFailed,
+			Reason:     "tool_error",
+			Error:      "dial timeout",
+			Iterations: 2,
+			FailedAt:   ts,
+		}
+		b, err := json.Marshal(ev)
+		require.NoError(t, err)
+		return b
+	}
+
+	marshalCancelled := func(t *testing.T) []byte {
+		t.Helper()
+		ev := &agentic.LoopCancelledEvent{
+			LoopID:      bareID,
+			TaskID:      taskID,
+			Outcome:     agentic.OutcomeCancelled,
+			CancelledBy: "user",
+			CancelledAt: ts,
+		}
+		b, err := json.Marshal(ev)
+		require.NoError(t, err)
+		return b
+	}
+
+	t.Run("LoopCompletedEvent: loopFromCompletion decodes outcome, no state", func(t *testing.T) {
+		payload := marshalCompleted(t)
+		loop, ok := loopFromCompletion(payload)
+		require.True(t, ok, "loopFromCompletion must succeed on a real LoopCompletedEvent")
 		assert.Equal(t, bareID, loop.LoopID)
-		assert.Equal(t, "complete", loop.State)
-		assert.Equal(t, "success", loop.Outcome)
+		// outcome must carry the verdict
+		assert.Equal(t, agentic.OutcomeSuccess, loop.Outcome)
+		// state is NOT populated by production terminal events — the field is absent
+		// from LoopCompletedEvent/LoopFailedEvent/LoopCancelledEvent.
+		assert.Empty(t, loop.State,
+			"data.state must be empty for production terminal events (no state field on the event type)")
 	})
 
-	t.Run("ActivityEvent envelope loop_id matches data.loop_id for COMPLETE_ key", func(t *testing.T) {
-		// Replicate the exact logic in handleActivityStream so we lock the
-		// fix and catch any future regression without requiring a live NATS
-		// client.
+	t.Run("LoopFailedEvent: loopFromCompletion decodes outcome, no state", func(t *testing.T) {
+		payload := marshalFailed(t)
+		loop, ok := loopFromCompletion(payload)
+		require.True(t, ok)
+		assert.Equal(t, bareID, loop.LoopID)
+		assert.Equal(t, agentic.OutcomeFailed, loop.Outcome)
+		assert.Empty(t, loop.State)
+	})
+
+	t.Run("LoopCancelledEvent: loopFromCompletion decodes outcome, no state", func(t *testing.T) {
+		payload := marshalCancelled(t)
+		loop, ok := loopFromCompletion(payload)
+		require.True(t, ok)
+		assert.Equal(t, bareID, loop.LoopID)
+		assert.Equal(t, agentic.OutcomeCancelled, loop.Outcome)
+		assert.Empty(t, loop.State)
+	})
+
+	t.Run("COMPLETE_ key: envelope loop_id == data.loop_id, type == loop_completed", func(t *testing.T) {
+		payload := marshalCompleted(t)
 		rawKey := "COMPLETE_" + bareID
-		isCompletion := strings.HasPrefix(rawKey, "COMPLETE_")
-		require.True(t, isCompletion)
 
-		bareLoopID := rawKey
-		if isCompletion {
-			bareLoopID = strings.TrimPrefix(rawKey, "COMPLETE_")
-		}
+		// Drive through the production function, not a reimplementation.
+		eventType, bareLoopID := activityEventTypeAndID(rawKey, jetstream.KeyValuePut, 1)
+		assert.Equal(t, "loop_completed", eventType)
+		assert.Equal(t, bareID, bareLoopID)
 
-		var eventType string
-		if isCompletion {
-			eventType = "loop_completed"
-		} else {
-			comp := newTestComponent(t)
-			eventType = comp.mapKVOperation(jetstream.KeyValuePut, 1)
-		}
-
-		loop, ok := loopFromCompletion(completionPayload)
+		loop, ok := loopFromCompletion(payload)
 		require.True(t, ok)
 
 		event := ActivityEvent{
 			Type:      eventType,
 			LoopID:    bareLoopID,
-			Timestamp: time.Now(),
+			Timestamp: ts,
 			Data:      &loop,
 		}
 
-		// Core assertion: envelope loop_id == data.loop_id (no COMPLETE_ prefix).
 		assert.Equal(t, event.Data.LoopID, event.LoopID,
 			"envelope loop_id must equal data.loop_id so consumers can correlate")
 		assert.Equal(t, bareID, event.LoopID,
 			"envelope loop_id must be the bare ID without COMPLETE_ prefix")
-
-		// Terminal-ness is signalled by event.Type, not the raw KV key.
 		assert.Equal(t, "loop_completed", event.Type,
 			"COMPLETE_ key must emit loop_completed so terminal-ness is wire-observable from event.Type")
-
-		// data.state also independently confirms terminal-ness.
-		assert.Equal(t, "complete", event.Data.State,
-			"data.state must reflect the terminal outcome from the completion payload")
+		// data.outcome carries the verdict; data.state is absent on real terminal events.
+		assert.Equal(t, agentic.OutcomeSuccess, event.Data.Outcome,
+			"data.outcome must carry the terminal verdict")
+		assert.Empty(t, event.Data.State,
+			"data.state must be empty — production terminal events have no state field")
 	})
 
-	t.Run("non-terminal key preserves existing type mapping", func(t *testing.T) {
-		rawKey := bareID // no COMPLETE_ prefix
-		isCompletion := strings.HasPrefix(rawKey, "COMPLETE_")
-		require.False(t, isCompletion)
-
-		bareLoopID := rawKey
-		comp := newTestComponent(t)
-
-		assert.Equal(t, bareID, bareLoopID, "bare ID is unchanged for non-terminal keys")
-		assert.Equal(t, "loop_created", comp.mapKVOperation(jetstream.KeyValuePut, 1),
-			"revision 1 maps to loop_created for non-terminal keys")
-		assert.Equal(t, "loop_updated", comp.mapKVOperation(jetstream.KeyValuePut, 5),
-			"revision > 1 maps to loop_updated for non-terminal keys")
-	})
-
-	t.Run("ActivityEvent round-trips through JSON with bare loop_id", func(t *testing.T) {
-		loop, ok := loopFromCompletion(completionPayload)
+	t.Run("ActivityEvent round-trips through JSON with bare loop_id and outcome", func(t *testing.T) {
+		payload := marshalCompleted(t)
+		loop, ok := loopFromCompletion(payload)
 		require.True(t, ok)
 
 		event := ActivityEvent{
 			Type:      "loop_completed",
 			LoopID:    bareID,
-			Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+			Timestamp: ts,
 			Data:      &loop,
 		}
 
@@ -473,6 +575,10 @@ func TestActivityEventLoopIDCorrelation(t *testing.T) {
 			"data.loop_id must survive JSON round-trip as bare ID")
 		assert.Equal(t, decoded.LoopID, decoded.Data.LoopID,
 			"envelope loop_id must equal data.loop_id after JSON round-trip")
+		assert.Equal(t, agentic.OutcomeSuccess, decoded.Data.Outcome,
+			"data.outcome must survive JSON round-trip")
+		assert.Empty(t, decoded.Data.State,
+			"data.state must remain empty after JSON round-trip")
 	})
 }
 

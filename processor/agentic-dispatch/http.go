@@ -511,8 +511,11 @@ type ApprovalAcceptResponse struct {
 //   - "loop_updated"   — live loop updated (non-COMPLETE_ key, revision > 1)
 //   - "loop_deleted"   — KV entry deleted
 //   - "loop_completed" — terminal event (COMPLETE_<id> key); LoopID is the bare
-//     loop ID (prefix stripped) so it equals data.loop_id. Terminal-ness is
-//     also derivable from data.state ("complete", "failed", "cancelled").
+//     loop ID (prefix stripped) so it equals data.loop_id. The primary signal for
+//     terminal-ness is event.type == "loop_completed". When present, data.outcome
+//     carries the verdict: "success", "failed", or "cancelled". Note: data.state
+//     is NOT populated on terminal events — production terminal payloads
+//     (LoopCompletedEvent, LoopFailedEvent, LoopCancelledEvent) have no state field.
 type ActivityEvent struct {
 	Type      string    `json:"type"` // loop_created, loop_updated, loop_deleted, loop_completed
 	LoopID    string    `json:"loop_id"`
@@ -974,31 +977,13 @@ func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request)
 			// COMPLETE_<loopID> keys carry terminal event payloads; all other
 			// keys carry agentic.LoopEntity live state.
 			//
-			// Derive the bare loop ID and event type before building the
-			// ActivityEvent so the envelope LoopID always matches
-			// data.loop_id. For terminal (COMPLETE_) keys the prefix is
-			// internal KV bookkeeping; callers correlate on bare IDs and
-			// determine terminal-ness via event.Type == "loop_completed"
-			// (or event.Data.State being a terminal value).
+			// activityEventTypeAndID is the single decision point for deriving
+			// the wire event type and bare loop ID so the envelope LoopID always
+			// matches data.loop_id. Terminal-ness is wire-observable from
+			// event.Type == "loop_completed" without inspecting data fields.
 			rawKey := entry.Key()
-			isCompletion := strings.HasPrefix(rawKey, "COMPLETE_")
-
-			// Bare ID: strip the COMPLETE_ prefix for terminal keys so the
-			// envelope loop_id matches data.loop_id.
-			bareLoopID := rawKey
-			if isCompletion {
-				bareLoopID = strings.TrimPrefix(rawKey, "COMPLETE_")
-			}
-
-			// Event type: COMPLETE_ keys always emit "loop_completed",
-			// regardless of KV revision, so terminal-ness is wire-observable
-			// from event.Type without inspecting data.state.
-			var eventType string
-			if isCompletion {
-				eventType = "loop_completed"
-			} else {
-				eventType = c.mapKVOperation(entry.Operation(), entry.Revision())
-			}
+			eventType, bareLoopID := activityEventTypeAndID(rawKey, entry.Operation(), entry.Revision())
+			isCompletion := eventType == "loop_completed"
 
 			// Build activity event
 			event := ActivityEvent{
@@ -1066,6 +1051,32 @@ func (c *Component) mapKVOperation(op jetstream.KeyValueOp, revision uint64) str
 		return "loop_deleted"
 	default:
 		return "unknown"
+	}
+}
+
+// activityEventTypeAndID derives the wire event type and bare loop ID from a
+// raw AGENT_LOOPS KV key, operation, and revision. It is the single source of
+// truth for the isCompletion / bareLoopID / eventType decision that
+// handleActivityStream emits onto the /activity SSE wire.
+//
+// For COMPLETE_<id> keys the prefix is stripped so the returned loopID matches
+// data.loop_id; eventType is always "loop_completed" for those keys.
+// For non-terminal keys, eventType is derived from op/revision via the same
+// mapping as mapKVOperation.
+func activityEventTypeAndID(key string, op jetstream.KeyValueOp, revision uint64) (eventType, loopID string) {
+	if strings.HasPrefix(key, "COMPLETE_") {
+		return "loop_completed", strings.TrimPrefix(key, "COMPLETE_")
+	}
+	switch op {
+	case jetstream.KeyValuePut:
+		if revision == 1 {
+			return "loop_created", key
+		}
+		return "loop_updated", key
+	case jetstream.KeyValueDelete:
+		return "loop_deleted", key
+	default:
+		return "unknown", key
 	}
 }
 
@@ -1321,7 +1332,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/activity": {
 				GET: &service.OperationSpec{
 					Summary:     "Real-time activity events (SSE)",
-					Description: "Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type==\"loop_completed\" or data.state to detect terminal entries. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
+					Description: "Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type==\"loop_completed\" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict (\"success\", \"failed\", or \"cancelled\"); data.state is NOT populated on terminal events. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
 					Tags:        []string{"AgenticDispatch"},
 					Responses: map[string]service.ResponseSpec{
 						"200": {
