@@ -945,8 +945,16 @@ func (m *Client) GetStream(ctx context.Context, name string) (jetstream.Stream, 
 
 	stream, err := js.Stream(ctx, name)
 	if err != nil {
-		m.recordFailure()
-		m.jsMetrics.recordError("get_stream")
+		// ErrStreamNotFound is a successful probe result (the stream is absent),
+		// not a transport or availability failure.  Counting it as a failure
+		// would trip the circuit breaker on legitimate existence probes — e.g.
+		// the agentrun MilestoneSubscriber that skips setup when no AGENT stream
+		// exists.  Only genuine failures (timeout, no-responders, etc.) should
+		// move the breaker.
+		if !stderrors.Is(err, jetstream.ErrStreamNotFound) {
+			m.recordFailure()
+			m.jsMetrics.recordError("get_stream")
+		}
 		return nil, err
 	}
 
