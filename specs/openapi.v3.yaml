@@ -16,7 +16,7 @@ paths:
     /activity:
         get:
             summary: Real-time activity events (SSE)
-            description: 'Server-Sent Events stream of loop activity. Events include loop_created, loop_updated, loop_deleted. Each event''s data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.'
+            description: 'Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type=="loop_completed" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict ("success", "failed", or "cancelled"); data.state is NOT populated on terminal events. Each event''s data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.'
             tags:
                 - AgenticDispatch
             responses:
