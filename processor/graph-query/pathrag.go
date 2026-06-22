@@ -210,24 +210,35 @@ func (p *PathSearcher) applyLimits(reqDepth, reqNodes int) (maxDepth, maxNodes i
 // which never fired on the legacy protocol path — so a missing entity
 // silently passed verification. Same fix as ADR-036 Stage 4 H1 in
 // processor/agentic-loop/todos.go.
+//
+// Three-way branch on the classified error class (gh#163):
+//   - Invalid   → definitive negative (entity absent / bad request);
+//     return verbatim so callers can errs.IsInvalid(err) to detect
+//     not-found without treating it as a server failure.
+//   - Transient / Fatal → server/availability failure; we COULD NOT
+//     check; wrap with a server-error qualifier so BFS callers do not
+//     silently prune the path as "entity absent."
+//   - raw transport error → same server-error wrapper (no responders,
+//     timeout, cancelled context).
 func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) error {
 	entityReq := map[string]string{"id": entityID}
 	entityReqData, _ := json.Marshal(entityReq)
 	_, err := p.nats.RequestClassified(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
 	if err != nil {
-		var ce *errs.ClassifiedError
-		if errors.As(err, &ce) {
-			// Handler-side classified error — propagate verbatim.
-			// Producer side has already emitted a self-describing
-			// message (e.g. "not found: <id>", "internal error: ...")
-			// via errs.Classified, so wrapping here would
-			// double-prefix the wire body. Caller-facing GraphQL
-			// surface shows the handler's clean message directly.
+		// IsInvalid: handler answered definitively — entity absent or
+		// bad request. Propagate verbatim; the producer's clean
+		// message (e.g. "not found: <id>") surfaces directly to the
+		// GraphQL layer. BFS callers check errs.IsInvalid(err) to
+		// distinguish this from a server failure.
+		if errs.IsInvalid(err) {
 			return err
 		}
-		// Transport-layer failure (no responders, timeout). We
-		// couldn't ask; the entity may or may not exist.
-		return fmt.Errorf("query entity: %w", err)
+		// IsTransient / IsFatal, or raw transport error (no
+		// responders, timeout): we could NOT determine entity
+		// existence. Wrap with a server-error qualifier so BFS
+		// callers surface an availability error rather than silently
+		// pruning the traversal path as if the entity were absent.
+		return fmt.Errorf("query entity server error: %w", err)
 	}
 	return nil
 }

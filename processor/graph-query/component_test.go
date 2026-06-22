@@ -24,9 +24,15 @@ import (
 
 type mockNATSClient struct {
 	requestFunc func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
-	subscribed  map[string]bool
-	connected   bool
-	status      natsclient.ConnectionStatus
+	// requestClassifiedFunc, when set, overrides the full RequestClassified
+	// implementation. Use this when a test must inject a classified error
+	// (e.g. Transient, Fatal) that the legacy body-prefix path cannot
+	// produce — the legacy path always classifies body-prefix errors as
+	// Invalid (gh#163 test coverage for the 3-way branch).
+	requestClassifiedFunc func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+	subscribed            map[string]bool
+	connected             bool
+	status                natsclient.ConnectionStatus
 	// buckets allows tests to configure which KV buckets exist.
 	// If a bucket name is in this map, GetKeyValueBucket returns it.
 	// If not, GetKeyValueBucket returns error immediately (no retry delay).
@@ -49,11 +55,14 @@ func (m *mockNATSClient) Request(ctx context.Context, subject string, data []byt
 	return nil, errors.New("no mock response configured")
 }
 
-// RequestClassified routes through Request and then ClassifyReply
-// against the response bytes. The mock has no headers, so this
-// exercises the legacy-body-prefix fallback path — matches how a
-// pre-#93 handler would behave today.
+// RequestClassified routes through requestClassifiedFunc when set
+// (for tests injecting classified errors directly, e.g. Transient/Fatal),
+// otherwise falls through to Request + ClassifyReply against the legacy
+// body-prefix path — matches how a pre-#93 handler behaves today.
 func (m *mockNATSClient) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	if m.requestClassifiedFunc != nil {
+		return m.requestClassifiedFunc(ctx, subject, data, timeout)
+	}
 	body, err := m.Request(ctx, subject, data, timeout)
 	if err != nil {
 		return nil, err
