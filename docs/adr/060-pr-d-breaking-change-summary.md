@@ -98,10 +98,13 @@ success-only envelope now (`Data`, `RequestID`, `Timestamp`). `graph.NewQueryErr
 3. **Degraded success:** still a success (`nil` err). Read `resp.Degraded` + `resp.DegradedReason`
    (the read-back reason that used to live in `Error`). Do **not** retry — the write committed.
 
-4. **Partial batch** (`graph.mutation.triple.add_batch`): a partial commit is a **success body**
-   (`nil` err) with `FailedSubjects` populated (`map[string]string`, subject → per-subject error).
-   Switch `if !resp.Success` → `if len(resp.FailedSubjects) > 0`. A **whole-batch** failure (nothing
-   committed) is a typed error on the err channel.
+4. **Batch** (`graph.mutation.triple.add_batch`): `FailedSubjects` (`map[string]string`, subject →
+   per-subject error) is the batch failure signal — switch `if !resp.Success` →
+   `if len(resp.FailedSubjects) > 0`. It is a **success body** (`nil` err) whenever the CAS phase
+   was reached, even if *every* subject rolled back (`WrittenCount == 0`, all subjects in
+   `FailedSubjects`) — those are individually retryable, not a hard failure. A **typed error** on the
+   err channel happens only when **no subject was even attempted**: a pre-CAS whole-batch rejection
+   (malformed envelope, empty subject/predicate → `invalid_request`; or `entity_not_found`).
 
 5. **`ce.Detail` numerics are `float64`.** JSON-decoded numbers in `Detail` (e.g.
    `expected_revision`) are `float64` — `ce.Detail["expected_revision"].(float64)`, never `.(uint64)`.

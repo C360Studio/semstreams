@@ -345,51 +345,45 @@
 //	childCtx := natsclient.ContextWithTrace(ctx, childTC)
 //	err := client.Request(childCtx, "service.action", data, timeout)
 //
-// # Header-Classified Handler Errors (gh#93)
+// # The unified RPC error contract (ADR-060)
 //
-// SubscribeForRequests handlers that return a Go error have that error
-// encoded on the wire in two redundant ways during the dual-encoding
-// window (Phase 1+2+3; Phase 4 retires the legacy body shape):
+// A request/reply is EITHER a success body (nil Go error) OR a single typed
+// error value. A SubscribeForRequests handler that returns a Go error has it
+// sent as a header-classified reply:
 //
 //   - Headers: X-Status: error + X-Error-Class: invalid|transient|fatal
-//   - Body: "error: <handler-error-text>" (the legacy convention)
+//   - X-Error-Code: <stable machine code> (when coded)
+//   - Body: the standard {"message": "...", "detail": {...}} envelope
 //
-// New callers should use RequestClassified which surfaces the
-// classified error via the err return — covers both transport and
-// handler failure modes uniformly:
+// There is no in-band error channel and no legacy "error: <msg>" body — a
+// reply with no X-Status header is success.
+//
+// Callers use RequestClassified / RequestWithRetryClassified, which surface the
+// classified error via the err return (transport AND handler failures,
+// uniformly):
 //
 //	data, err := c.RequestClassified(ctx, "subject", body, 5*time.Second)
 //	if err != nil {
-//	    if errs.IsInvalid(err)   { /* 400 — bad input */ }
+//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* CAS: re-read, retry */ }
+//	    if errs.IsInvalid(err)   { /* 4xx — bad input */ }
 //	    if errs.IsTransient(err) { /* retry */ }
-//	    if errs.IsFatal(err)     { /* abort */ }
+//	    var ce *errs.ClassifiedError
+//	    if errors.As(err, &ce)   { /* ce.Code, ce.Detail */ }
 //	}
+//	json.Unmarshal(data, &resp) // success body; err already handled
 //
-// Legacy Request() callers continue to work — the err return remains
-// transport-only, and the response body still carries "error: <msg>".
-// However, plain Request() + json.Unmarshal is a silent-corruption
-// footgun: a handler error returns successfully with the prefix body,
-// and Unmarshal fails downstream pointing at the wrong layer. The
-// pkg-level audit pattern is at feedback_silent_handler_error_payload_audit
-// memory; the structural fix is to migrate callers to RequestClassified.
+// FOOTGUN: plain Request() / RequestWithHeaders() do NOT inspect the X-Status
+// header — they return the error envelope body with err == nil, which a caller
+// would silently json.Unmarshal as a zero-valued success. New callers MUST use
+// RequestClassified (or run ClassifyReply on the reply when they need to send
+// custom headers). See feedback_silent_handler_error_payload_audit memory.
 //
-// Handler-side, return classified errors so the X-Error-Class header
-// carries truth (not the pkg/errs.Classify fallback default of
-// "transient"). For new code prefer errs.WrapTransient/Fatal/Invalid
-// which add Component/Method/Action attribution; for sites where
-// downstream consumers parse the body text (e.g. gateway-side HTTP
-// status mapping on substring matches), use errs.Classified to set
-// the class without rewriting the message:
+// Handler-side, return a classified error so the headers carry truth:
 //
-//	// Producer side:
-//	return nil, errs.Classified(errs.ErrorInvalid,
-//	    fmt.Errorf("not found: %s", req.ID))
-//
-//	// Consumer side via RequestClassified — err.Error() returns
-//	// "not found: <id>" verbatim; errs.IsInvalid(err) == true.
-//
-// See gh#93 issue body for the full Phase 1+2+3 architecture and the
-// deferred Phase 4 (drop legacy body shape) follow-up.
+//	return nil, errs.ClassifiedCode(errs.ErrorInvalid,
+//	    graph.ErrorCodeEntityNotFound, fmt.Errorf("not found: %s", req.ID))
+//	// Consumer via RequestClassified: errs.IsInvalid(err) == true,
+//	// errors.As → ce.Code == "entity_not_found"; gateways map that to 404.
 //
 // # Architecture Integration
 //

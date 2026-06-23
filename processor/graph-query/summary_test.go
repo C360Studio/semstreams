@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // newSummaryTestComponent builds a Component wired only with what
@@ -26,6 +27,33 @@ func newSummaryTestComponent(req func(ctx context.Context, subject string, data 
 		},
 	}
 	return c
+}
+
+// TestHandleQueryGraphSummary_PrefixHandlerErrorPropagates is the P1a regression
+// lock (ADR-060 PR-D review). The summary's prefix fetch uses RequestClassified:
+// a classified graph-ingest handler error MUST propagate, not be decoded by
+// extractEntityIDsFromPrefixResponse into an empty entity list that returns a
+// bogus TotalEntities=0 summary with nil error (the silent-corruption shape the
+// {message,detail} envelope would otherwise produce on the raw-Request path).
+func TestHandleQueryGraphSummary_PrefixHandlerErrorPropagates(t *testing.T) {
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, "internal", errors.New("graph-ingest store unavailable"))
+	}
+	c := &Component{
+		natsClient: mock,
+		router:     NewStaticRouter(slog.Default()),
+		logger:     slog.Default(),
+		config:     Config{QueryTimeout: 5 * time.Second},
+	}
+
+	respBytes, err := c.handleQueryGraphSummary(context.Background(), []byte(`{}`))
+	if err == nil {
+		t.Fatalf("a classified prefix-handler error must propagate; got nil err, resp=%q", respBytes)
+	}
+	if !errs.IsTransient(err) {
+		t.Errorf("prefix failure's transient class must survive the summary handler; IsTransient=false, err=%v", err)
+	}
 }
 
 // prefixEnvelope marshals the {"entities": [...]} shape graph-ingest

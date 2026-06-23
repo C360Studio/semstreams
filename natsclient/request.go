@@ -207,16 +207,15 @@ func (c *Client) SubscribeForRequests(
 		// Call the handler
 		response, err := handler(msgCtx, msg.Data)
 		if err != nil {
-			// Send a header-classified error reply (gh#93). The
-			// reply body keeps the legacy "error: <msg>" shape for
-			// backward compatibility; X-Status / X-Error-Class
-			// headers carry the new caller signal. RespondError
-			// returns errMissingReplySubject when the inbound
-			// message had no reply subject — that's expected for
-			// fire-and-forget patterns, so swallow. Any other
-			// publish failure is operator-visible (queue full,
-			// connection torn down mid-reply, etc.) and needs to
-			// surface, not silently swallow.
+			// Send a header-classified error reply (ADR-060). The reply carries
+			// X-Status / X-Error-Class / X-Error-Code headers and the
+			// {message, detail} envelope body; a RequestClassified caller
+			// reconstructs the typed error. RespondError returns
+			// errMissingReplySubject when the inbound message had no reply
+			// subject — that's expected for fire-and-forget patterns, so
+			// swallow. Any other publish failure is operator-visible (queue
+			// full, connection torn down mid-reply, etc.) and needs to surface,
+			// not silently swallow.
 			if respErr := RespondError(msg, err); respErr != nil && !errors.Is(respErr, errMissingReplySubject) {
 				c.logger.Error("natsclient: failed to publish handler-error reply",
 					"subject", subject,
