@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -521,7 +522,7 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 		OwnerToken:       ownerTok,
 	}
 	if _, err := m.emitter.update(ctx, updateReq); err != nil {
-		if errors.Is(err, errEmitRevisionMismatch) {
+		if errors.Is(err, errs.ErrRevisionMismatch) {
 			// Concurrent attach from a sibling — surface as
 			// ErrAlreadyExists since the most likely cause is
 			// a parallel lifecycle attach.
@@ -687,7 +688,7 @@ func (m *Manager) TransitionWith(ctx context.Context, workflow, entityID, newPha
 			)
 			return nil
 		}
-		if errors.Is(err, errEmitRevisionMismatch) {
+		if errors.Is(err, errs.ErrRevisionMismatch) {
 			lastErr = err
 			continue
 		}
@@ -810,7 +811,7 @@ func (m *Manager) UpdateFromOperator(ctx context.Context, workflow, entityID str
 		if err == nil {
 			return nil
 		}
-		if errors.Is(err, errEmitRevisionMismatch) {
+		if errors.Is(err, errs.ErrRevisionMismatch) {
 			lastErr = err
 			continue
 		}

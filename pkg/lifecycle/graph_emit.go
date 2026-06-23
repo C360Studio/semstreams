@@ -33,6 +33,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // graphEmitter is the abstraction Manager uses to push entity +
@@ -42,10 +43,10 @@ import (
 // without NATS.
 type graphEmitter interface {
 	// update sends an UpdateEntityWithTriplesRequest to graph-ingest
-	// and waits for the response. Returns errEmitRevisionMismatch
-	// when the handler signals CAS failed (Manager.Transition retry
-	// loop). Returns ErrEntityNotFound when the handler reports the
-	// entity doesn't exist.
+	// and waits for the response. Returns an error matching
+	// errs.ErrRevisionMismatch (errors.Is) when the handler signals CAS
+	// failed (Manager.Transition retry loop). Returns ErrEntityNotFound
+	// when the handler reports the entity doesn't exist.
 	update(ctx context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error)
 
 	// create sends a CreateEntityWithTriplesRequest to graph-ingest.
@@ -78,11 +79,6 @@ const (
 	graphSubjectCreateWithTriples = "graph.mutation.entity.create_with_triples"
 )
 
-// errEmitRevisionMismatch is the package-internal sentinel Manager
-// branches on for CAS retry. Translated from the handler's
-// ErrorCodeRevisionMismatch response.
-var errEmitRevisionMismatch = errors.New("lifecycle: emit revision mismatch (CAS conflict)")
-
 // lifecycleEmitRetryConfig is the retry budget for Manager emit
 // requests. natsclient.DefaultRetryConfig (~700ms total) is tuned for
 // subscription propagation latency, but the lifecycle Manager faces a
@@ -102,14 +98,25 @@ var lifecycleEmitRetryConfig = natsclient.RetryConfig{
 }
 
 // update marshals an UpdateEntityWithTriplesRequest, fires it as a
-// NATS request/reply, and classifies the response by ErrorCode.
+// NATS request/reply, and classifies the response via the ADR-060 typed
+// error contract.
 //
-// Uses RequestWithRetry with lifecycleEmitRetryConfig to survive the
-// graph-ingest cold-start race (gh#170). Retry is safe here:
+// Uses RequestWithRetryClassified with lifecycleEmitRetryConfig to
+// survive the graph-ingest cold-start race (gh#170). Retry is safe here:
 // graph-ingest's update_with_triples handler enforces CAS via
 // ExpectedRevision, so a duplicate-delivery after a lost response
-// surfaces as ErrorCodeRevisionMismatch, which Manager.Transition's
-// outer CAS loop re-reads and re-validates.
+// surfaces as revision_mismatch, which Manager.Transition's outer CAS
+// loop re-reads and re-validates. A handler error-reply is a successful
+// round-trip (not a transport failure), so it is NOT retried — only
+// cold-start "no responders" consumes the retry budget.
+//
+// ADR-060: a hard failure arrives as a non-nil *errs.ClassifiedError
+// reconstructed from the wire headers (X-Error-Class + X-Error-Code), not
+// an in-body Success=false. A revision_mismatch is the control-flow
+// sentinel — propagated so Manager's errors.Is(err, errs.ErrRevisionMismatch)
+// CAS loop fires; entity_not_found becomes ErrEntityNotFound; anything else
+// is ErrEmitFailed. The per-consumer body-unmarshal + ErrorCode switch is
+// gone (it collapses into the framework's ClassifyReply).
 //
 // No outer context.WithTimeout: the retry budget (~13s) controls
 // total duration; each retry attempt is bounded internally by
@@ -121,24 +128,22 @@ func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWi
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	respBody, err := g.client.RequestWithRetry(ctx, graphSubjectUpdateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
+	respBody, err := g.client.RequestWithRetryClassified(ctx, graphSubjectUpdateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
 	if err != nil {
+		// Control-flow sentinel: propagate so Manager's CAS loop re-reads.
+		if errors.Is(err, errs.ErrRevisionMismatch) {
+			return nil, err
+		}
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrEntityNotFound, err.Error())
+		}
 		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectUpdateWithTriples, err)
 	}
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
-	}
-	if !resp.Success {
-		switch resp.ErrorCode {
-		case graph.ErrorCodeRevisionMismatch:
-			return &resp, errEmitRevisionMismatch
-		case graph.ErrorCodeEntityNotFound:
-			return &resp, fmt.Errorf("%w: %s", ErrEntityNotFound, resp.Error)
-		}
-		return &resp, fmt.Errorf("%w: graph-ingest rejected request (code=%q): %s",
-			ErrEmitFailed, resp.ErrorCode, resp.Error)
 	}
 	return &resp, nil
 }
@@ -165,21 +170,20 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	respBody, err := g.client.RequestWithRetry(ctx, graphSubjectCreateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
+	respBody, err := g.client.RequestWithRetryClassified(ctx, graphSubjectCreateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
 	if err != nil {
+		// ADR-060: entity_already_exists arrives as a classified error
+		// (Code on the wire header), not an in-body Success=false.
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityExists {
+			return nil, fmt.Errorf("%w: %s", ErrAlreadyExists, err.Error())
+		}
 		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectCreateWithTriples, err)
 	}
 
 	var resp graph.CreateEntityWithTriplesResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
-	}
-	if !resp.Success {
-		if resp.ErrorCode == graph.ErrorCodeEntityExists {
-			return &resp, fmt.Errorf("%w: %s", ErrAlreadyExists, resp.Error)
-		}
-		return &resp, fmt.Errorf("%w: graph-ingest rejected create (code=%q): %s",
-			ErrEmitFailed, resp.ErrorCode, resp.Error)
 	}
 	return &resp, nil
 }

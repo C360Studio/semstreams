@@ -286,16 +286,10 @@ func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, res
 		return fmt.Errorf("marshal create_with_triples request: %w", err)
 	}
 
-	respData, err := s.natsClient.Request(ctx, createSubject, reqData, 10*time.Second)
-	if err != nil {
+	// ADR-060: RequestClassified surfaces handler failures via err; a hard
+	// failure no longer returns an in-body Success=false.
+	if _, err := s.natsClient.RequestClassified(ctx, createSubject, reqData, 10*time.Second); err != nil {
 		return fmt.Errorf("create_with_triples request failed: %w", err)
-	}
-	var resp graph.CreateEntityWithTriplesResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("parse create_with_triples response (%q): %w", string(respData), err)
-	}
-	if !resp.Success {
-		return fmt.Errorf("create_with_triples failed: %s", resp.Error)
 	}
 
 	// 2. Poll for the referential stub on the dangling target. ensureRelationshipTargetsExist

@@ -164,8 +164,12 @@ func (f *NATSContentFetcher) fetchSingleEntity(
 		return nil, err
 	}
 
-	// NATS request/reply with timeout
-	respData, err := f.natsClient.Request(ctx, f.subject, reqData, f.timeout)
+	// NATS request/reply with timeout. RequestClassified surfaces a
+	// transport/handler failure via err (ADR-060) instead of an "error: <msg>"
+	// body that would mis-decode as a zero objectstore.Response. The Success
+	// field below is the ObjectStore envelope's own contract, distinct from the
+	// graph mutation lane — kept.
+	respData, err := f.natsClient.RequestClassified(ctx, f.subject, reqData, f.timeout)
 	if err != nil {
 		return nil, err
 	}

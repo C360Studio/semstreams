@@ -172,10 +172,8 @@ func (c *NATSValidationClient) Publish(ctx context.Context, subject string, data
 }
 
 // Request sends a NATS request/reply and returns the raw response payload.
-// Used by validation steps that drive a request/reply API directly — notably
-// the graph mutation lane (graph.mutation.entity.create_with_triples), which
-// replies with a structured MutationResponse rather than the natsclient
-// "error: <msg>" payload convention, so callers parse and check Success.
+// Prefer RequestClassified for handlers on the ADR-060 typed-error contract
+// (the graph mutation lane); Request remains for raw-body request/reply.
 func (c *NATSValidationClient) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	c.mu.Lock()
 	if c.closed {
@@ -185,6 +183,21 @@ func (c *NATSValidationClient) Request(ctx context.Context, subject string, data
 	c.mu.Unlock()
 
 	return c.client.Request(ctx, subject, data, timeout)
+}
+
+// RequestClassified sends a NATS request/reply and surfaces handler failures as
+// a classified error (ADR-060) rather than an "error: <msg>" body that a caller
+// would silently mis-decode. Used by the graph mutation lane, whose handlers
+// return (nil, *errs.ClassifiedError) on failure.
+func (c *NATSValidationClient) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("client is closed")
+	}
+	c.mu.Unlock()
+
+	return c.client.RequestClassified(ctx, subject, data, timeout)
 }
 
 // CountEntities counts the number of entities in the ENTITY_STATES bucket
@@ -239,7 +252,9 @@ func (c *NATSValidationClient) GetTrajectory(ctx context.Context, loopID string)
 		return nil, fmt.Errorf("failed to marshal trajectory request: %w", err)
 	}
 
-	resp, err := c.client.Request(ctx, "agentic.query.trajectory", req, 5*time.Second)
+	// ADR-060: RequestClassified surfaces handler errors via err instead of an
+	// "error: <msg>" body that would mis-decode as an empty Trajectory.
+	resp, err := c.client.RequestClassified(ctx, "agentic.query.trajectory", req, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("trajectory query failed for loop %s: %w", loopID, err)
 	}

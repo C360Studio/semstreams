@@ -96,7 +96,10 @@ func (c *Component) resolveViaSuffix(ctx context.Context, suffix string) string 
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	respData, err := c.natsClient.Request(queryCtx, "graph.ingest.query.suffix", reqData, 2*time.Second)
+	// ADR-060: RequestClassified surfaces a handler failure via err instead of
+	// an "error: <msg>" body that would mis-decode as an empty {id} (a silent
+	// "no match"). On any error the resolver returns "" (no match) as before.
+	respData, err := c.natsClient.RequestClassified(queryCtx, "graph.ingest.query.suffix", reqData, 2*time.Second)
 	if err != nil {
 		return ""
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -37,22 +38,13 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 	f.requests = append(f.requests, req)
 	currentRev := f.bucket.revOf(req.Entity.ID)
 	if !f.bucket.exists(req.Entity.ID) {
-		return &graph.UpdateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				ErrorCode: graph.ErrorCodeEntityNotFound,
-				Error:     "entity not found: " + req.Entity.ID,
-			},
-		}, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
+		// ADR-060: production update() returns (nil, <error wrapping ErrEntityNotFound>).
+		return nil, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
 	}
 	if req.ExpectedRevision > 0 && req.ExpectedRevision != currentRev {
-		return &graph.UpdateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				ErrorCode: graph.ErrorCodeRevisionMismatch,
-				Error:     "revision mismatch",
-			},
-		}, errEmitRevisionMismatch
+		// ADR-060: production update() now returns (nil, <classified error>)
+		// matching errs.ErrRevisionMismatch on the CAS-conflict path.
+		return nil, errs.ErrRevisionMismatch
 	}
 	current := f.bucket.get(req.Entity.ID)
 	merged := current.Triples
@@ -92,13 +84,8 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.bucket.exists(req.Entity.ID) {
-		return &graph.CreateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				ErrorCode: graph.ErrorCodeEntityExists,
-				Error:     "entity already exists: " + req.Entity.ID,
-			},
-		}, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
+		// ADR-060: production create() returns (nil, <error wrapping ErrAlreadyExists>).
+		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
 	}
 	state := *req.Entity
 	state.Triples = req.Triples

@@ -77,44 +77,13 @@ import (
 // Entries here are tracked violations, NOT silent exclusions.
 // Dead entries (keys that match no live violation) are rejected by
 // TestRequestGuardAllowlistNoDeadEntries — keep this list exact.
-var requestGuardAllowlist = map[string]string{
-	// gh#326 — graphrag global-search batch: loadEntities passes NATS
-	// respData directly to json.Unmarshal without a bytes.HasPrefix guard.
-	"processor/graph-query/graphrag.go:loadEntities": "deferred to gh#326: migrate to RequestClassified",
-
-	// gh#326 — fetchEntityCommunityFromStorage in graphrag.go: clustering
-	// community lookup uses .Request + json.Unmarshal without a guard.
-	"processor/graph-query/graphrag.go:fetchEntityCommunityFromStorage": "deferred to gh#326: same graphrag batch as loadEntities",
-
-	// gh#334 — entity_resolver.resolveViaSuffix: hits graph.ingest.query.suffix
-	// (NOT a graph.index.query.* subject), so it is out of ADR-060 PR-B's
-	// graph-index seam. Remains a .Request + json.Unmarshal caller until the
-	// graph-ingest seam migrates (PR-C burn-down). resolveViaAlias migrated in PR-B.
-	"processor/graph-query/entity_resolver.go:resolveViaSuffix": "deferred to gh#334: graph.ingest.query.suffix seam (PR-C), not graph-index PR-B",
-
-	// gh#334 — graph/llm/nats_content_fetcher.go: fetchSingleEntity uses .Request
-	// then json.Unmarshal without a guard.
-	"graph/llm/nats_content_fetcher.go:fetchSingleEntity": "deferred to gh#334: migrate to RequestClassified",
-
-	// gh#334 — pkg/lifecycle/graph_emit.go: update() and create() use
-	// RequestWithRetry + json.Unmarshal without a bytes.HasPrefix guard.
-	// Migration to RequestWithRetryClassified tracked under gh#334.
-	"pkg/lifecycle/graph_emit.go:update": "deferred to gh#334: migrate to RequestWithRetryClassified",
-	"pkg/lifecycle/graph_emit.go:create": "deferred to gh#334: migrate to RequestWithRetryClassified",
-
-	// gh#334 — examples/github-pr-workflow: example component uses .Request
-	// + json.Unmarshal without a guard. NOT graphrag (gh#326 is the global-search
-	// batch only); this is a generic caller-to-migrate tracked in the gh#334
-	// burn-down. Example code, low priority — but linted so the example doesn't
-	// teach the footgun.
-	"examples/github-pr-workflow/component.go:writeTriple": "deferred to gh#334: example code, migrate to RequestWithRetryClassified",
-
-	// gh#334 — E2E test infrastructure: these are regular (non-_test.go) Go
-	// files that the walker scans. They predate gh#93 and are low-priority;
-	// migration is tracked under gh#334.
-	"test/e2e/scenarios/tiered_structural.go:executeValidateReferentialStub": "deferred to gh#334: e2e test infrastructure, low priority migration",
-	"test/e2e/client/nats.go:GetTrajectory":                                  "deferred to gh#334: e2e test client, low priority migration",
-}
+// ADR-060 PR-C emptied this allowlist: every remaining Request+Unmarshal
+// caller was migrated to RequestClassified / RequestWithRetryClassified (the
+// gh#334 caller burn-down plus the gh#326 graphrag entries). The lint stays
+// armed to prevent regressions; PR-D deletes the guard once the breaking wire
+// change lands. Keep this EMPTY — a new entry is a tracked regression that must
+// carry a gh# reference, not a quiet exemption.
+var requestGuardAllowlist = map[string]string{}
 
 // requestMethodNames is the set of method names (selector suffixes)
 // that constitute the unclassified legacy call forms. RequestClassified

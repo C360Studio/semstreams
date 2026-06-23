@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // ---------------------------------------------------------------------------
@@ -471,13 +472,15 @@ func TestOwnerLease_CreateWithTriples_EnforceOn_Rejects(t *testing.T) {
 	data, err := json.Marshal(req)
 	require.NoError(t, err)
 
+	// ADR-060: the reject is a typed error (owner_lease_stale / invalid class),
+	// not an in-body Success=false.
 	respData, handlerErr := comp.handleEntityCreateWithTriples(context.Background(), data)
-	require.NoError(t, handlerErr, "handler encodes the reject in the body, never a transport error")
-
-	var resp graph.CreateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	assert.False(t, resp.Success, "enforce on: create with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	require.Error(t, handlerErr, "enforce on: create with a stale token must be rejected")
+	assert.Nil(t, respData, "a hard failure returns no body")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, handlerErr, &ce)
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, ce.Code)
+	assert.True(t, errs.IsInvalid(handlerErr))
 }
 
 // TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects proves the update lane
@@ -504,12 +507,12 @@ func TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects(t *testing.T) {
 	require.NoError(t, err)
 
 	respData, handlerErr := comp.handleEntityUpdateWithTriples(context.Background(), data)
-	require.NoError(t, handlerErr)
-
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	assert.False(t, resp.Success, "enforce on: update with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	require.Error(t, handlerErr, "enforce on: update with a stale token must be rejected")
+	assert.Nil(t, respData, "a hard failure returns no body")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, handlerErr, &ce)
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, ce.Code)
+	assert.True(t, errs.IsInvalid(handlerErr))
 
 	// The prior value must be untouched — the reject returns before UpdateWithRetry.
 	stored, _, readErr := comp.fetchEntityState(context.Background(), eid)
@@ -550,12 +553,12 @@ func TestOwnerLease_UpdateWithTriplesCAS_EnforceOn_Rejects(t *testing.T) {
 	require.NoError(t, err)
 
 	respData, handlerErr := comp.handleEntityUpdateWithTriples(context.Background(), data)
-	require.NoError(t, handlerErr)
-
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	assert.False(t, resp.Success, "enforce on: CAS update with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	require.Error(t, handlerErr, "enforce on: CAS update with a stale token must be rejected")
+	assert.Nil(t, respData, "a hard failure returns no body")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, handlerErr, &ce)
+	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, ce.Code)
+	assert.True(t, errs.IsInvalid(handlerErr))
 }
 
 // TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection proves the reject
@@ -580,7 +583,9 @@ func TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection(t *testing.T) {
 	before := testutil.ToFloat64(comp.mutationRejections.WithLabelValues(SubjectEntityCreateWithTriples, graph.ErrorCodeOwnerLeaseStale))
 	handler := comp.meteredMutation(SubjectEntityCreateWithTriples, comp.handleEntityCreateWithTriples)
 	_, handlerErr := handler(context.Background(), data)
-	require.NoError(t, handlerErr)
+	// ADR-060: the reject now flows through meteredMutation's error path, which
+	// reads the rejection reason from ce.Code (owner_lease_stale).
+	require.Error(t, handlerErr)
 	after := testutil.ToFloat64(comp.mutationRejections.WithLabelValues(SubjectEntityCreateWithTriples, graph.ErrorCodeOwnerLeaseStale))
 
 	assert.InDelta(t, before+1, after, 0.0001,
