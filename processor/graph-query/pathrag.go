@@ -248,13 +248,13 @@ func (p *PathSearcher) getOutgoingRelationships(ctx context.Context, entityID st
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
-	relsResponse, err := p.nats.Request(ctx, "graph.index.query.outgoing", relsReqData, p.timeout)
+	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.outgoing", relsReqData, p.timeout)
 	if err != nil {
 		return nil
 	}
 
 	var envelope graph.OutgoingQueryResponse
-	if err := json.Unmarshal(relsResponse, &envelope); err != nil || envelope.Error != "" {
+	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
 		return nil
 	}
 
@@ -271,13 +271,13 @@ func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID st
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
-	relsResponse, err := p.nats.Request(ctx, "graph.index.query.incoming", relsReqData, p.timeout)
+	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.incoming", relsReqData, p.timeout)
 	if err != nil {
 		return nil
 	}
 
 	var envelope graph.IncomingQueryResponse
-	if err := json.Unmarshal(relsResponse, &envelope); err != nil || envelope.Error != "" {
+	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
 		return nil
 	}
 

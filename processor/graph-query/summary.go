@@ -101,7 +101,7 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 	// failure mode is non-fatal — if graph-index is degraded, return
 	// the entity facet and let the caller note the gap.
 	if req.IncludePredicates {
-		predicateResp, predErr := c.natsClient.Request(ctx, "graph.index.query.predicateList", []byte("{}"), c.config.QueryTimeout)
+		predicateResp, predErr := c.natsClient.RequestClassified(ctx, "graph.index.query.predicateList", []byte("{}"), c.config.QueryTimeout)
 		if predErr != nil {
 			// Log via the metric path; don't propagate. The caller
 			// gets a partial-but-useful response.
@@ -225,19 +225,14 @@ func aggregateEntityTypes(entityIDs []string, examplesPerType int) []graph.Entit
 }
 
 // extractPredicates pulls the predicate list out of the
-// graph.index.query.predicateList response. Returns an empty slice
-// when the response is malformed or carries an error — the summary
-// caller treats predicate facet as best-effort.
+// graph.index.query.predicateList success body. Returns an empty slice
+// when the body is malformed — the summary caller treats the predicate
+// facet as best-effort. Handler errors no longer reach here: the caller
+// uses RequestClassified (ADR-060), so failures arrive as a classified
+// err, not an in-band Error field on a success body.
 func extractPredicates(data []byte) []graph.PredicateSummary {
-	// Response shape per graph.NewQueryResponse[PredicateListData]:
-	// { "data": {"predicates": [...], "total": N}, "error": "" }
-	// Error is non-empty on the failure branch (NewQueryError); we
-	// treat that as "no predicates" rather than failing the summary.
 	var resp graph.QueryResponse[graph.PredicateListData]
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil
-	}
-	if resp.Error != "" {
 		return nil
 	}
 	return resp.Data.Predicates

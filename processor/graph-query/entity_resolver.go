@@ -59,23 +59,24 @@ func (c *Component) resolveViaAlias(ctx context.Context, alias string) string {
 	queryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	respData, err := c.natsClient.Request(queryCtx, subject, reqData, 2*time.Second)
+	respData, err := c.natsClient.RequestClassified(queryCtx, subject, reqData, 2*time.Second)
 	if err != nil {
 		return ""
 	}
 
-	// Parse envelope response
+	// Parse envelope response. Handler errors (invalid/internal) now
+	// arrive via err above (ADR-060 PR-B), so the success body never
+	// carries an error field on this path.
 	var resp struct {
 		Data struct {
 			CanonicalID *string `json:"canonical_id"`
 		} `json:"data"`
-		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return ""
 	}
 
-	if resp.Error != "" || resp.Data.CanonicalID == nil {
+	if resp.Data.CanonicalID == nil {
 		return ""
 	}
 

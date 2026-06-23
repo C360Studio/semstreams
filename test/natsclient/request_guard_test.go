@@ -86,27 +86,11 @@ var requestGuardAllowlist = map[string]string{
 	// community lookup uses .Request + json.Unmarshal without a guard.
 	"processor/graph-query/graphrag.go:fetchEntityCommunityFromStorage": "deferred to gh#326: same graphrag batch as loadEntities",
 
-	// gh#334 — handleQueryRelationships in query.go uses .Request + json.Unmarshal
-	// for the graph-index outgoing/incoming query path. Fires twice in the
-	// same function (incoming + outgoing branches) — one allowlist entry covers both.
-	"processor/graph-query/query.go:handleQueryRelationships": "deferred to gh#334: migrate to RequestClassified",
-
-	// gh#334 — entity_resolver: both resolveViaAlias and resolveViaSuffix
-	// unmarshal respData from .Request without a guard.
-	"processor/graph-query/entity_resolver.go:resolveViaAlias":  "deferred to gh#334: migrate to RequestClassified",
-	"processor/graph-query/entity_resolver.go:resolveViaSuffix": "deferred to gh#334: migrate to RequestClassified",
-
-	// gh#334 — pathrag: getOutgoingRelationships / getIncomingRelationships
-	// unmarshal relsResponse from .Request without a bytes.HasPrefix guard.
-	"processor/graph-query/pathrag.go:getOutgoingRelationships": "deferred to gh#334: migrate to RequestClassified",
-	"processor/graph-query/pathrag.go:getIncomingRelationships": "deferred to gh#334: migrate to RequestClassified",
-
-	// gh#334 — graph/query/client.go: four natsClient methods each call
-	// .Request then json.Unmarshal without a guard.
-	"graph/query/client.go:GetEntitiesByPredicate":  "deferred to gh#334: migrate to RequestClassified",
-	"graph/query/client.go:ListPredicates":          "deferred to gh#334: migrate to RequestClassified",
-	"graph/query/client.go:GetPredicateStats":       "deferred to gh#334: migrate to RequestClassified",
-	"graph/query/client.go:QueryCompoundPredicates": "deferred to gh#334: migrate to RequestClassified",
+	// gh#334 — entity_resolver.resolveViaSuffix: hits graph.ingest.query.suffix
+	// (NOT a graph.index.query.* subject), so it is out of ADR-060 PR-B's
+	// graph-index seam. Remains a .Request + json.Unmarshal caller until the
+	// graph-ingest seam migrates (PR-C burn-down). resolveViaAlias migrated in PR-B.
+	"processor/graph-query/entity_resolver.go:resolveViaSuffix": "deferred to gh#334: graph.ingest.query.suffix seam (PR-C), not graph-index PR-B",
 
 	// gh#334 — graph/llm/nats_content_fetcher.go: fetchSingleEntity uses .Request
 	// then json.Unmarshal without a guard.

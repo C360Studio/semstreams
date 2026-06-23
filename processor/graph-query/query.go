@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -121,15 +122,19 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 	if aliasSubject == "" {
 		return nil, errs.WrapTransient(errors.New("alias query routing not available"), "GraphQuery", "handleQueryEntityByAlias", "route alias query")
 	}
-	aliasResp, err := c.natsClient.Request(ctx, aliasSubject, aliasReqData, c.config.QueryTimeout)
+	// Best-effort alias resolution via the graph-index alias seam.
+	// RequestClassified surfaces handler errors via err (ADR-060), and the
+	// success body no longer carries an in-band Error field. A failed alias
+	// lookup (transient backend or no alias) intentionally falls through to
+	// treating aliasOrID as a direct entity ID — alias resolution must not
+	// fail the whole query.
+	aliasResp, err := c.natsClient.RequestClassified(ctx, aliasSubject, aliasReqData, c.config.QueryTimeout)
 	if err == nil {
-		// Parse alias response from envelope format
 		var aliasResult graph.AliasQueryResponse
-		if json.Unmarshal(aliasResp, &aliasResult) == nil && aliasResult.Error == "" && aliasResult.Data.CanonicalID != nil {
+		if json.Unmarshal(aliasResp, &aliasResult) == nil && aliasResult.Data.CanonicalID != nil {
 			entityID = *aliasResult.Data.CanonicalID
 		}
 	}
-	// If alias lookup failed, we'll try aliasOrID as a direct entity ID
 
 	// Now fetch the entity using the resolved (or original) ID
 	entityReq := map[string]string{"id": entityID}
@@ -258,10 +263,14 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New(queryType+" query routing not available"), "GraphQuery", "handleQueryRelationships", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// RequestClassified surfaces graph-index handler errors via err as a
+	// classified *errs.ClassifiedError (ADR-060 PR-B). Wrap with %w so the
+	// inner class (invalid vs transient) survives for upstream errs.Is*
+	// branching instead of being flattened to transient.
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryRelationships", "query relationships")
+		return nil, fmt.Errorf("GraphQuery.handleQueryRelationships: query relationships failed: %w", err)
 	}
 
 	// Transform envelope response to normalized relationship format
@@ -274,9 +283,6 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 		var envelope graph.IncomingQueryResponse
 		if err := json.Unmarshal(response, &envelope); err != nil {
 			return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryRelationships", "parse incoming entries")
-		}
-		if envelope.Error != "" {
-			return nil, errs.WrapTransient(errors.New(envelope.Error), "GraphQuery", "handleQueryRelationships", "incoming query error")
 		}
 		relationships = make([]map[string]any, len(envelope.Data.Relationships))
 		for i, e := range envelope.Data.Relationships {
@@ -291,9 +297,6 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 		var envelope graph.OutgoingQueryResponse
 		if err := json.Unmarshal(response, &envelope); err != nil {
 			return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryRelationships", "parse outgoing entries")
-		}
-		if envelope.Error != "" {
-			return nil, errs.WrapTransient(errors.New(envelope.Error), "GraphQuery", "handleQueryRelationships", "outgoing query error")
 		}
 		relationships = make([]map[string]any, len(envelope.Data.Relationships))
 		for i, e := range envelope.Data.Relationships {
