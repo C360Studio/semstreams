@@ -1206,7 +1206,9 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("entityBatch query routing not available"), "GraphQuery", "loadEntities", "route query")
 	}
-	respData, err := c.natsClient.Request(ctx, subject, reqData, c.config.QueryTimeout)
+	// ADR-060: RequestClassified surfaces a handler failure via err instead of
+	// an "error: <msg>" body that would mis-decode as an empty entity batch.
+	respData, err := c.natsClient.RequestClassified(ctx, subject, reqData, c.config.QueryTimeout)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "GraphQuery", "loadEntities", "request entities")
 	}
@@ -1676,7 +1678,9 @@ func (c *Component) fetchEntityCommunityFromStorage(ctx context.Context, entityI
 	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	resp, err := c.natsClient.Request(queryCtx, "graph.clustering.query.entity", data, 5*time.Second)
+	// ADR-060: RequestClassified surfaces a handler failure via err instead of
+	// an "error: <msg>" body that would mis-decode as a nil community.
+	resp, err := c.natsClient.RequestClassified(queryCtx, "graph.clustering.query.entity", data, 5*time.Second)
 	cancel()
 
 	if err != nil {

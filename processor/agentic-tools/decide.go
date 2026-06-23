@@ -699,12 +699,10 @@ func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Trip
 	if err != nil {
 		return fmt.Errorf("request %s: %w", decideMutationSubject, err)
 	}
+	// ADR-060: handler failures arrive as the classified err above.
 	var resp graph.AddTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
-	}
-	if !resp.Success {
-		return fmt.Errorf("graph-ingest rejected triple: %s", resp.Error)
 	}
 	return nil
 }
@@ -735,6 +733,9 @@ func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []mes
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal batch response: %w", err)
 	}
+	// ADR-060: a whole-batch failure arrives as the classified err above. A
+	// PARTIAL batch (some subjects committed) still returns a success body with
+	// Success=false + FailedSubjects, handled here.
 	if !resp.Success {
 		return fmt.Errorf("graph-ingest rejected batch (written=%d, failed=%v): %s",
 			resp.WrittenCount, resp.FailedSubjects, resp.Error)

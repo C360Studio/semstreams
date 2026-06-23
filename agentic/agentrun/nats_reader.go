@@ -65,12 +65,11 @@ func (p *NATSTriplePublisher) AddTriple(ctx context.Context, _ string, triple me
 	if err != nil {
 		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: NATS request: %w", err)
 	}
+	// ADR-060: a handler failure arrives as the classified err above; decode the
+	// success body only for the KV revision.
 	var resp graph.AddTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: unmarshal response: %w", err)
-	}
-	if !resp.Success {
-		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: mutation failed: %s", resp.Error)
 	}
 	return resp.KVRevision, nil
 }

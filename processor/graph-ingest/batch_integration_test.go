@@ -285,12 +285,8 @@ func TestIntegration_HandleTripleAddBatch_InvalidJSON(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	respBytes, err := c.handleTripleAddBatch(ctx, []byte("not json"))
-	require.NoError(t, err)
-
-	var resp graph.AddTriplesBatchResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success)
-	assert.Contains(t, resp.Error, "invalid request")
+	// ADR-060: a malformed envelope is a typed invalid_request reject (no body).
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeInvalidRequest, "invalid request")
 }
 
 // TestIntegration_HandleTripleAdd_AbsentEntityRejects verifies ADR-055
@@ -313,14 +309,9 @@ func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
 	require.NoError(t, err)
 
 	respBytes, handlerErr := c.handleTripleAdd(ctx, reqBytes)
-	require.NoError(t, handlerErr, "handler must not return a Go error; rejections are in the response body")
-
-	var resp graph.AddTripleResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "absent entity must produce Success=false")
-	assert.Equal(t, graph.ErrorCodeEntityNotFound, resp.ErrorCode,
-		"absent entity must produce ErrorCode=entity_not_found (not empty/unclassified)")
-	assert.NotEmpty(t, resp.Error, "rejection must carry a human-readable error message")
+	// ADR-060: a single must-exist add on an absent entity is a typed
+	// entity_not_found reject (invalid class), no longer an in-body Success=false.
+	requireClassifiedReject(t, respBytes, handlerErr, graph.ErrorCodeEntityNotFound, "")
 
 	// State must be unchanged: entity must still not exist.
 	_, getErr := c.entityBucket.Get(ctx, subject)

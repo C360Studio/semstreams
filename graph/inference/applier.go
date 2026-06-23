@@ -4,7 +4,6 @@ package inference
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -269,21 +268,13 @@ func (a *MutationRelationshipApplier) ApplyRelationship(
 	// retry is safe and avoids silently dropping inferred edges.
 	// gh#93 Phase 2: Classified variant surfaces handler errors via err
 	// rather than silently mis-decoding legacy "error: " body as success JSON.
-	resp, err := a.natsClient.RequestWithRetryClassified(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig())
-	if err != nil {
+	// ADR-060: a handler failure arrives as the classified err below (no in-body
+	// Success=false), so no response decode is needed — the success body carries
+	// nothing this caller uses.
+	if _, err := a.natsClient.RequestWithRetryClassified(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig()); err != nil {
 		return errs.WrapTransient(err, "MutationRelationshipApplier", "ApplyRelationship",
 			fmt.Sprintf("mutation request failed: %s -> %s -> %s",
 				suggestion.FromEntity, suggestion.Predicate, suggestion.ToEntity))
-	}
-
-	var result graph.AddTripleResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return errs.WrapInvalid(err, "MutationRelationshipApplier", "ApplyRelationship",
-			"failed to parse response")
-	}
-
-	if !result.Success {
-		return errors.New(result.Error)
 	}
 
 	a.logger.Debug("Applied inferred relationship via mutation API",

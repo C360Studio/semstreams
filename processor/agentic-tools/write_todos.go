@@ -422,17 +422,13 @@ func (w *natsTodoWriter) RemoveByPredicate(ctx context.Context, subject, predica
 	if err != nil {
 		return fmt.Errorf("request %s: %w", writeTodosRemoveSubject, err)
 	}
+	// ADR-060: handler failures arrive as the classified err above. Removing
+	// from a missing entity is an idempotent no-op success on the handler side
+	// (RemoveTriple returns nil), so "entity not found" never reaches here as a
+	// failure — the first write_todos call on a fresh loop has nothing to clear.
 	var resp graph.RemoveTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal remove response: %w", err)
-	}
-	if !resp.Success {
-		// "entity not found" is not an error for our use case — first
-		// write_todos call on a fresh loop has nothing to clear. The
-		// graph-ingest handler returns Success=true for missing
-		// entities (RemoveTriple returns nil); other failures
-		// (network, marshal) surface the error string.
-		return fmt.Errorf("graph-ingest rejected remove: %s", resp.Error)
 	}
 	return nil
 }
@@ -452,6 +448,9 @@ func (w *natsTodoWriter) AddTriplesBatch(ctx context.Context, triples []message.
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal batch response: %w", err)
 	}
+	// ADR-060: a whole-batch failure arrives as the classified err above. A
+	// PARTIAL batch (some subjects committed) still returns a success body with
+	// Success=false + FailedSubjects, handled here.
 	if !resp.Success {
 		return fmt.Errorf("graph-ingest rejected batch (written=%d, failed=%v): %s",
 			resp.WrittenCount, resp.FailedSubjects, resp.Error)

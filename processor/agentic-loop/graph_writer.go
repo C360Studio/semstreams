@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -111,13 +113,11 @@ func (w *graphWriter) writeTriple(ctx context.Context, triple message.Triple) er
 		return fmt.Errorf("NATS request failed: %w", err)
 	}
 
+	// ADR-060: a handler failure arrives as the classified err above; the
+	// legacy !resp.Success second check is gone. Decode only to confirm shape.
 	var resp gtypes.AddTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("mutation failed: %s", resp.Error)
 	}
 
 	return nil
@@ -149,8 +149,12 @@ func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) 
 		return fmt.Errorf("unmarshal batch response: %w", err)
 	}
 
+	// ADR-060: a whole-batch failure now arrives as the classified err above.
+	// A PARTIAL batch (some subjects committed) still returns a success body
+	// with Success=false + FailedSubjects — that path is handled here.
 	if !resp.Success {
-		return fmt.Errorf("batch mutation failed: %s", resp.Error)
+		return fmt.Errorf("batch mutation failed (written=%d, failed=%v): %s",
+			resp.WrittenCount, resp.FailedSubjects, resp.Error)
 	}
 
 	return nil
@@ -182,25 +186,18 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 		return fmt.Errorf("marshal create_with_triples request: %w", err)
 	}
 
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := w.natsClient.RequestWithRetryClassified(ctx, graphMutationCreateWithTriplesSubj, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("NATS create_with_triples request failed: %w", err)
-	}
-
-	var resp gtypes.CreateEntityWithTriplesResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal create_with_triples response: %w", err)
-	}
-
-	if !resp.Success {
+	// ADR-060: handler failures arrive as a classified error carrying the
+	// stable Code (no in-body Success=false). The success body has no fields
+	// this caller needs, so no response decode is required.
+	if _, err := w.natsClient.RequestWithRetryClassified(ctx, graphMutationCreateWithTriplesSubj, reqData, graphWriterTimeout, natsclient.DefaultRetryConfig()); err != nil {
 		// EntityExists is idempotent-success ONLY if the existing entity is
 		// already this typed origin (same MessageType) — a genuine retry /
 		// redelivery / re-spawn of OUR origin. Blessing any EntityExists blindly
 		// would launder a pre-existing auto-vivified shell (Version-0 / no
 		// envelope) or a foreign entity into a "born" loop origin, defeating the
 		// typed-origin contract (ADR-056). Read + verify before treating it as born.
-		if resp.ErrorCode == gtypes.ErrorCodeEntityExists {
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) && ce.Code == gtypes.ErrorCodeEntityExists {
 			// Extract the incoming task_id from the spawn triples so
 			// verifyExistingLoopOrigin can detect divergent-task_id reuse (gh#276).
 			var incomingTaskID string
@@ -214,7 +211,7 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 			}
 			return w.verifyExistingLoopOrigin(ctx, entity.ID, entity.MessageType, incomingTaskID)
 		}
-		return fmt.Errorf("create_with_triples failed (code=%s): %s", resp.ErrorCode, resp.Error)
+		return fmt.Errorf("NATS create_with_triples request failed: %w", err)
 	}
 
 	return nil

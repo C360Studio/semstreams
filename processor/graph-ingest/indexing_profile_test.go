@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -177,11 +178,15 @@ func TestIndexingProfile_UpdateOverride_InvalidRejected(t *testing.T) {
 		IndexingProfile: "bogus",
 	}
 	updateData, _ := json.Marshal(updateReq)
+	// ADR-060: an invalid explicit override is rejected as a typed error
+	// (invalid_request), not an in-body Success=false.
 	respData, err := comp.handleEntityUpdateWithTriples(ctx, updateData)
-	require.NoError(t, err)
-	var resp graph.MutationResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	assert.False(t, resp.Success, "an invalid explicit override must be rejected (not silently dropped)")
+	require.Error(t, err, "an invalid explicit override must be rejected (not silently dropped)")
+	assert.Nil(t, respData, "a hard failure returns no body")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, graph.ErrorCodeInvalidRequest, ce.Code)
+	assert.True(t, errs.IsInvalid(err))
 }
 
 // --- Graphable arrival (channel a) via MergeEntity ---

@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -135,24 +136,34 @@ func (c *Component) setupMutationHandlers(ctx context.Context) error {
 type mutationHandler = func(ctx context.Context, data []byte) ([]byte, error)
 
 // meteredMutation wraps a mutation request handler to meter rejections
-// (ADR-055 §3 observability). A mutation handler encodes a rejection as a
-// MutationResponse with success=false (and a bounded ErrorCode); on that, this
-// increments mutation_rejections_total{subject, reason} and logs the reason at
-// Warn. The handler's (response, error) is passed through UNCHANGED — metering
-// never alters the verdict. The success path costs only one substring scan, no
-// unmarshal. A handler that returns a non-nil error (rare; handlers normally
-// encode failure in the body) is metered as reason="internal".
+// (ADR-055 §3 observability). It increments mutation_rejections_total{subject,
+// reason} and logs the reason at Warn. The handler's (response, error) is passed
+// through UNCHANGED — metering never alters the verdict.
+//
+// ADR-060: a hard mutation failure now arrives as a non-nil
+// (*errs.ClassifiedError) carrying the stable Code, NOT an in-body
+// success=false. The reason label is read from ce.Code (pre-ADR-060 this branch
+// hardcoded "internal", which would now collapse EVERY rejection reason to
+// internal). The only remaining (body, nil) success=false shape is a PARTIAL
+// batch (handleTripleAddBatch with FailedSubjects); the cheap substring gate
+// below still meters it for metric continuity. Full + degraded success marshal
+// success=true and skip the unmarshal.
 func (c *Component) meteredMutation(subject string, h mutationHandler) mutationHandler {
 	return func(ctx context.Context, data []byte) ([]byte, error) {
 		resp, err := h(ctx, data)
 		if err != nil {
-			c.recordMutationRejection(subject, graph.ErrorCodeInternal, err.Error())
+			reason := graph.ErrorCodeInternal
+			var ce *errs.ClassifiedError
+			if errors.As(err, &ce) && ce.Code != "" {
+				reason = ce.Code
+			}
+			c.recordMutationRejection(subject, reason, err.Error())
 			return resp, err
 		}
-		// A rejection always marshals `"success":false` (the field has no
-		// omitempty), so this cheap gate skips the unmarshal on the success path.
-		// The explicit !Success check below rejects a false-positive substring
-		// that happened to appear inside entity data.
+		// Only a partial batch still encodes success=false in the body (the
+		// field has no omitempty), so this cheap gate skips the unmarshal on the
+		// success path. The explicit !Success check below rejects a false-positive
+		// substring that happened to appear inside entity data.
 		if bytes.Contains(resp, []byte(`"success":false`)) {
 			var r struct {
 				Success   bool   `json:"success"`
@@ -191,29 +202,18 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.AddTripleRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.AddTripleResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     fmt.Sprintf("invalid request: %v", err),
-				Timestamp: time.Now().UnixNano(),
-			},
-		})
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 
 	// AddTriple uses triple.Subject as entity ID
-	err := c.AddTriple(ctx, req.Triple)
-	if err != nil {
-		resp := graph.AddTripleResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     err.Error(),
-				Timestamp: time.Now().UnixNano(),
-			},
-		}
+	if err := c.AddTriple(ctx, req.Triple); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			resp.ErrorCode = graph.ErrorCodeEntityNotFound
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.Triple.Subject}, err)
 		}
-		return json.Marshal(resp)
+		// A malformed triple is WrapInvalid (do-not-retry); a KV blip is
+		// transient. Classify by the error so the wire class is honest.
+		return nil, rejectFromError(err)
 	}
 
 	// Get revision after successful mutation for feedback loop prevention
@@ -242,13 +242,7 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.AddTriplesBatchRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.AddTriplesBatchResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     fmt.Sprintf("invalid request: %v", err),
-				Timestamp: time.Now().UnixNano(),
-			},
-		})
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 
 	if len(req.Triples) == 0 {
@@ -263,15 +257,17 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 
 	written, failed, err := c.AddTriples(ctx, req.Triples)
 	if err != nil && len(failed) == 0 {
-		// Pre-CAS validation failure (e.g. empty subject/predicate).
-		// Whole batch rejected.
-		return json.Marshal(graph.AddTriplesBatchResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     err.Error(),
-				Timestamp: time.Now().UnixNano(),
-			},
-		})
+		// Whole-batch failure: nothing committed. ADR-060: hard failure →
+		// typed error. Classify by the error's nature — pre-CAS validation
+		// (empty subject/predicate, WrapInvalid) is invalid_request; a context
+		// cancellation/deadline is transient. A PARTIAL batch (some subjects
+		// committed) is handled below as a success-with-FailedSubjects body, NOT
+		// an error. (ErrKVKeyNotFound always lands in failedSubjects → the
+		// partial path, so it cannot reach here; mapped defensively.)
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound, nil, err)
+		}
+		return nil, rejectFromError(err)
 	}
 
 	resp := graph.AddTriplesBatchResponse{
@@ -295,25 +291,14 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 func (c *Component) handleTripleRemove(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.RemoveTripleRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.RemoveTripleResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     fmt.Sprintf("invalid request: %v", err),
-				Timestamp: time.Now().UnixNano(),
-			},
-		})
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 
-	// RemoveTriple takes subject (entity ID) and predicate
-	err := c.RemoveTriple(ctx, req.Subject, req.Predicate)
-	if err != nil {
-		return json.Marshal(graph.RemoveTripleResponse{
-			MutationResponse: graph.MutationResponse{
-				Success:   false,
-				Error:     err.Error(),
-				Timestamp: time.Now().UnixNano(),
-			},
-		})
+	// RemoveTriple takes subject (entity ID) and predicate. Removing from a
+	// missing entity is an idempotent no-op success on the handler side, so a
+	// non-nil error here is a genuine internal failure (transient).
+	if err := c.RemoveTriple(ctx, req.Subject, req.Predicate); err != nil {
+		return nil, rejectInternal(err)
 	}
 
 	// Get revision after successful mutation for feedback loop prevention
@@ -370,19 +355,19 @@ func (c *Component) entityExists(ctx context.Context, entityID string) (bool, er
 func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalCreateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("invalid request: %v", err))
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 	if req.Entity == nil {
-		return marshalCreateEntityError(req.TraceID, req.RequestID, "entity cannot be nil")
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
 	}
 
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
-			return marshalCreateEntityError(req.TraceID, req.RequestID,
-				fmt.Sprintf("entity already exists: %s", req.Entity.ID))
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityExists,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity already exists: %s", req.Entity.ID))
 		}
-		return marshalCreateEntityError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -423,12 +408,10 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
-			fmt.Sprintf("invalid request: %v", err))
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 	if req.Entity == nil {
-		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
-			"entity cannot be nil")
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
 	}
 
 	if len(req.Triples) > 0 {
@@ -452,8 +435,8 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	// primary).
 	if v := c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
 		predicatesOf(own)); v != nil {
-		return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID,
-			graph.ErrorCodeOwnerLeaseStale, v.detail())
+		return nil, rejectInvalidDetail(graph.ErrorCodeOwnerLeaseStale,
+			map[string]any{"entity": req.Entity.ID}, errors.New(v.detail()))
 	}
 
 	// ADR-054 channel (b): stamp an explicitly declared indexing profile from
@@ -463,10 +446,11 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
-			return marshalCreateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityExists,
-				fmt.Sprintf("entity already exists: %s", req.Entity.ID))
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityExists,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity already exists: %s", req.Entity.ID))
 		}
-		return marshalCreateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	// Primary committed — route foreign edges onto their own subjects (after the
@@ -507,29 +491,33 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalUpdateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("invalid request: %v", err))
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 	if req.Entity == nil {
-		return marshalUpdateEntityError(req.TraceID, req.RequestID, "entity cannot be nil")
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
 	}
 
 	_, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return marshalUpdateEntityError(req.TraceID, req.RequestID,
-				fmt.Sprintf("entity not found: %s", req.Entity.ID))
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return marshalUpdateEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("fetch current entity failed: %v", err))
+		return nil, rejectInternal(fmt.Errorf("fetch current entity failed: %w", err))
 	}
 
 	if err := c.updateEntityAtRevision(ctx, req.Entity, currentRev); err != nil {
 		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
-			return marshalUpdateEntityError(req.TraceID, req.RequestID,
-				fmt.Sprintf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
+			// A concurrent delete/modify between read and write on this
+			// must-exist (non-CAS) update surfaces as "entity not found" — the
+			// 404 contract semconnect maps. This is NOT the revision_mismatch
+			// CAS-retry sentinel (that is the ExpectedRevision path below).
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
 		}
-		return marshalUpdateEntityError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -631,12 +619,10 @@ func preserveStoredEntityMetadata(newEntity, stored *graph.EntityState) {
 func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
-			fmt.Sprintf("invalid request: %v", err))
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 	if req.Entity == nil {
-		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
-			"entity cannot be nil")
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
 	}
 
 	// ADR-054 §5: the indexing profile is immutable after creation EXCEPT via
@@ -647,8 +633,8 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	// different writer must NOT change the profile — only this envelope does.
 	if req.IndexingProfile != "" {
 		if !vocabulary.IsValidIndexingProfile(req.IndexingProfile) {
-			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeInvalidRequest,
-				fmt.Sprintf("invalid indexing_profile %q (want content|control|signal|trace)", req.IndexingProfile))
+			return nil, rejectInvalid(graph.ErrorCodeInvalidRequest,
+				fmt.Errorf("invalid indexing_profile %q (want content|control|signal|trace)", req.IndexingProfile))
 		}
 		req.RemoveTriples = append(req.RemoveTriples, vocabulary.EntityIndexingProfile)
 		req.AddTriples = append(req.AddTriples, message.Triple{
@@ -682,8 +668,8 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	// is added for it). Deduped by checkOwnerLease's loop.
 	if v := c.checkOwnerLease(ctx, req.Entity.ID, labelForMessageType(req.Entity.MessageType), req.OwnerToken,
 		dedupePredicates(predicatesOf(addOwn), req.RemoveTriples)); v != nil {
-		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID,
-			graph.ErrorCodeOwnerLeaseStale, v.detail())
+		return nil, rejectInvalidDetail(graph.ErrorCodeOwnerLeaseStale,
+			map[string]any{"entity": req.Entity.ID}, errors.New(v.detail()))
 	}
 
 	// ADR-049: CAS-on-condition path. Non-zero ExpectedRevision means
@@ -696,11 +682,12 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	if req.ExpectedRevision > 0 {
 		resp, err := c.handleEntityUpdateWithTriplesCAS(ctx, &req)
 		// Route foreign edges ONLY when the CAS primary write actually COMMITTED.
-		// A logical CAS failure (revision mismatch) returns (Success=false, nil
-		// err), so gating on err==nil alone would orphan a foreign edge onto a
-		// primary that never landed. Gate on the decoded Success; the unmarshal is
-		// skipped on the no-foreign-edge happy path (every current caller).
-		if err == nil && len(foreign) > 0 && casUpdateCommitted(resp) {
+		// ADR-060: a logical CAS failure (revision mismatch) now returns
+		// (nil, *errs.ClassifiedError), so err != nil captures every non-commit
+		// outcome; an err==nil reply is always a committed (full or degraded)
+		// success. The decoded-Success gate this used to need is gone with the
+		// in-body Success flag.
+		if err == nil && len(foreign) > 0 {
 			c.routeForeignEdges(ctx, req.Entity.ID, req.Entity.MessageType, foreign)
 		}
 		return resp, err
@@ -776,10 +763,11 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	})
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityNotFound,
-				fmt.Sprintf("entity not found: %s", req.Entity.ID))
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	// Primary update committed — route foreign edges onto their own subjects.
@@ -806,17 +794,6 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	})
 }
 
-// casUpdateCommitted reports whether a handleEntityUpdateWithTriplesCAS response
-// represents an actually-committed primary write. The CAS handler returns
-// (Success=false, nil err) on a logical revision mismatch, so the shared-seam
-// foreign-edge routing must gate on this decoded Success — not on err==nil — or a
-// stale-CAS request carrying a foreign edge would orphan it onto a primary that
-// never landed (ADR-056 Decision 4).
-func casUpdateCommitted(resp []byte) bool {
-	var r graph.UpdateEntityWithTriplesResponse
-	return json.Unmarshal(resp, &r) == nil && r.Success
-}
-
 // handleEntityUpdateWithTriplesCAS is the CAS-on-condition branch of
 // handleEntityUpdateWithTriples (ADR-049). Reads the entity's current
 // state + revision, rejects if the revision doesn't match the caller's
@@ -840,17 +817,21 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	current, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeEntityNotFound,
-				fmt.Sprintf("entity not found: %s", req.Entity.ID))
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.Entity.ID},
+				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID,
-			fmt.Sprintf("fetch current entity failed: %v", err))
+		return nil, rejectInternal(fmt.Errorf("fetch current entity failed: %w", err))
 	}
 
 	// CAS-on-condition: caller's expected rev must match what we just read.
+	// ADR-060: a revision mismatch is the ONE control-flow sentinel — it carries
+	// Code revision_mismatch so the caller's errors.Is(err, errs.ErrRevisionMismatch)
+	// CAS-retry loop fires (Manager.Transition). NOT a hard failure.
 	if currentRev != req.ExpectedRevision {
-		return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeRevisionMismatch,
-			fmt.Sprintf("revision mismatch: expected %d, current %d", req.ExpectedRevision, currentRev))
+		return nil, rejectRevisionMismatch(
+			map[string]any{"entity": req.Entity.ID, "expected_revision": req.ExpectedRevision, "current_revision": currentRev},
+			fmt.Errorf("revision mismatch: expected %d, current %d", req.ExpectedRevision, currentRev))
 	}
 
 	// Apply delta against current state. Same merge logic as the
@@ -891,11 +872,12 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	// check passed.
 	if err := c.updateEntityAtRevision(ctx, &newEntity, req.ExpectedRevision); err != nil {
 		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
-			return marshalUpdateEntityWithTriplesErrorCoded(req.TraceID, req.RequestID, graph.ErrorCodeRevisionMismatch,
-				fmt.Sprintf("revision mismatch: concurrent modification of %s (expected revision %d)",
+			return nil, rejectRevisionMismatch(
+				map[string]any{"entity": req.Entity.ID, "expected_revision": req.ExpectedRevision},
+				fmt.Errorf("revision mismatch: concurrent modification of %s (expected revision %d)",
 					req.Entity.ID, req.ExpectedRevision))
 		}
-		return marshalUpdateEntityWithTriplesError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	// Read back for response. Degraded path handles read-back failure
@@ -929,21 +911,19 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.DeleteEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return marshalDeleteEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("invalid request: %v", err))
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 	if req.EntityID == "" {
-		return marshalDeleteEntityError(req.TraceID, req.RequestID, "entity_id cannot be empty")
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity_id cannot be empty"))
 	}
 
 	existed, err := c.entityExists(ctx, req.EntityID)
 	if err != nil {
-		return marshalDeleteEntityError(req.TraceID, req.RequestID,
-			fmt.Sprintf("existence check failed: %v", err))
+		return nil, rejectInternal(fmt.Errorf("existence check failed: %w", err))
 	}
 
 	if err := c.DeleteEntity(ctx, req.EntityID); err != nil {
-		return marshalDeleteEntityError(req.TraceID, req.RequestID, err.Error())
+		return nil, rejectInternal(err)
 	}
 
 	return json.Marshal(graph.DeleteEntityResponse{
@@ -1036,67 +1016,58 @@ func labelForMessageType(mt message.Type) string {
 	return invalidMessageTypeLabel
 }
 
-// Per-response-shape error marshalers. The body-prefix error
-// convention (feedback_natsclient_error_payload_convention) lives in
-// these helpers — they each emit a Success=false response with the
-// caller's TraceID/RequestID preserved.
+// ADR-060 producer helpers — a hard graph-ingest mutation failure travels as
+// (nil, *errs.ClassifiedError), which the SubscribeForRequests wrapper turns
+// into a header-classified reply (X-Error-Class + X-Error-Code) via
+// natsclient.RespondError. This replaces the per-response-shape Success=false
+// body marshalers: a failure carries no success body, so the response-shape
+// specificity (and the TraceID/RequestID echo) no longer applies on the failure
+// path — the reply inbox already correlates the response, and in-tree callers
+// branch on err, not a body field.
+//
+// Code is the stable graph.ErrorCode* discriminator; Detail carries structured
+// context (entity id, revisions). Detail is carried on the error value now and
+// serialized into the standard error body by the PR-D breaking change — until
+// then it does not cross the wire (callers see Code via the header).
 
-func marshalCreateEntityError(traceID, requestID, msg string) ([]byte, error) {
-	return json.Marshal(graph.CreateEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Success:   false,
-			Error:     msg,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
-		},
-	})
+// rejectInvalid builds an invalid-class (400-like) classified failure with the
+// given stable Code. err's text is preserved verbatim as the wire message.
+func rejectInvalid(code string, err error) error {
+	return errs.ClassifiedCode(errs.ErrorInvalid, code, err)
 }
 
-func marshalCreateEntityWithTriplesError(traceID, requestID, msg string) ([]byte, error) {
-	return marshalCreateEntityWithTriplesErrorCoded(traceID, requestID, graph.ErrorCodeInternal, msg)
+// rejectInvalidDetail is rejectInvalid plus structured Detail (entity id, ...).
+func rejectInvalidDetail(code string, detail map[string]any, err error) error {
+	return errs.ClassifiedCodeDetail(errs.ErrorInvalid, code, detail, err)
 }
 
-func marshalCreateEntityWithTriplesErrorCoded(traceID, requestID, code, msg string) ([]byte, error) {
-	return json.Marshal(graph.CreateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{
-			Success:   false,
-			Error:     msg,
-			ErrorCode: code,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
-		},
-	})
+// rejectInternal builds a transient-class (retryable, 5xx-like) internal
+// failure. Matches the query handlers' choice that "internal" is transient.
+func rejectInternal(err error) error {
+	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, err)
 }
 
-func marshalUpdateEntityError(traceID, requestID, msg string) ([]byte, error) {
-	return json.Marshal(graph.UpdateEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Success:   false,
-			Error:     msg,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
-		},
-	})
+// rejectFromError classifies a GENERIC handler-internal error by the error's own
+// nature, for the fallback paths where the failure could be either a do-not-retry
+// validation error or a retryable transient one. An already-invalid error (e.g.
+// AddTriple/AddTriples' WrapInvalid on a malformed triple) becomes
+// invalid_request; everything else (KV blips, context cancel/deadline) becomes
+// internal/transient (retryable). Without this, a fixed per-call-site class would
+// advertise a malformed-triple as retryable, or a context cancellation as a hard
+// 400 — wrong now that the class rides the wire (ADR-060).
+func rejectFromError(err error) error {
+	if errs.IsInvalid(err) {
+		return rejectInvalid(graph.ErrorCodeInvalidRequest, err)
+	}
+	return rejectInternal(err)
 }
 
-func marshalUpdateEntityWithTriplesError(traceID, requestID, msg string) ([]byte, error) {
-	return marshalUpdateEntityWithTriplesErrorCoded(traceID, requestID, graph.ErrorCodeInternal, msg)
-}
-
-func marshalUpdateEntityWithTriplesErrorCoded(traceID, requestID, code, msg string) ([]byte, error) {
-	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{
-			Success:   false,
-			Error:     msg,
-			ErrorCode: code,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
-		},
-	})
+// rejectRevisionMismatch builds the ONE control-flow sentinel — a CAS
+// revision_mismatch. It is invalid-class but carries Code revision_mismatch so a
+// CAS-retry caller resolves errors.Is(err, errs.ErrRevisionMismatch) and loops
+// (Manager.Transition), rather than treating it as a hard 400.
+func rejectRevisionMismatch(detail map[string]any, err error) error {
+	return errs.ClassifiedCodeDetail(errs.ErrorInvalid, graph.ErrorCodeRevisionMismatch, detail, err)
 }
 
 // Per-response-shape "degraded success" marshalers (#120). Emitted
@@ -1162,18 +1133,6 @@ func marshalUpdateEntityWithTriplesDegraded(traceID, requestID, readbackErr stri
 			Success:   true,
 			Degraded:  true,
 			Error:     degradedReadbackErrPrefix + readbackErr,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
-		},
-	})
-}
-
-func marshalDeleteEntityError(traceID, requestID, msg string) ([]byte, error) {
-	return json.Marshal(graph.DeleteEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Success:   false,
-			Error:     msg,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   traceID,
 			RequestID: requestID,

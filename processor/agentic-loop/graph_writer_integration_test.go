@@ -5,6 +5,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/types"
@@ -136,30 +138,24 @@ func (r *createWithTriplesResponder) handler(_ context.Context, data []byte) ([]
 	r.received = append(r.received, req)
 	r.mu.Unlock()
 
-	resp := gtypes.CreateEntityWithTriplesResponse{}
+	// ADR-060: mirror the production handler — a hard failure returns
+	// (nil, *errs.ClassifiedError), which SubscribeForRequests turns into a
+	// header-classified reply (the contract createEntityWithTriples now reads).
 	switch {
 	case r.alreadyExists:
-		resp.MutationResponse = gtypes.MutationResponse{
-			Success:   false,
-			Error:     "entity already exists",
-			ErrorCode: gtypes.ErrorCodeEntityExists,
-			Timestamp: time.Now().UnixNano(),
-		}
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, gtypes.ErrorCodeEntityExists, errors.New("entity already exists"))
 	case r.failWith != "":
-		resp.MutationResponse = gtypes.MutationResponse{
-			Success:   false,
-			Error:     r.failWith,
-			ErrorCode: gtypes.ErrorCodeInternal,
-			Timestamp: time.Now().UnixNano(),
-		}
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeInternal, errors.New(r.failWith))
 	default:
-		resp.MutationResponse = gtypes.MutationResponse{
-			Success:   true,
-			Timestamp: time.Now().UnixNano(),
+		resp := gtypes.CreateEntityWithTriplesResponse{
+			MutationResponse: gtypes.MutationResponse{
+				Success:   true,
+				Timestamp: time.Now().UnixNano(),
+			},
+			TriplesAdded: len(req.Triples),
 		}
-		resp.TriplesAdded = len(req.Triples)
+		return json.Marshal(resp)
 	}
-	return json.Marshal(resp)
 }
 
 func (r *createWithTriplesResponder) subscribe(t *testing.T, ctx context.Context, client *natsclient.Client) {
@@ -954,16 +950,11 @@ func TestWriteMutationFailure_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
-	// Respond with failure to verify graceful handling.
+	// Respond with failure to verify graceful handling. ADR-060: a hard failure
+	// is a classified error, mirroring the production handler.
 	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add",
 		func(_ context.Context, _ []byte) ([]byte, error) {
-			resp := gtypes.AddTripleResponse{
-				MutationResponse: gtypes.MutationResponse{
-					Success: false,
-					Error:   "test error",
-				},
-			}
-			return json.Marshal(resp)
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeInternal, errors.New("test error"))
 		})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)

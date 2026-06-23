@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,14 +93,11 @@ func TestIntegration_HandleEntityCreate_Conflict(t *testing.T) {
 	require.NoError(t, err)
 
 	respBytes, err := c.handleEntityCreate(ctx, reqBytes)
-	require.NoError(t, err)
-
-	var resp graph.CreateEntityResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "duplicate create should not succeed")
-	assert.Contains(t, resp.Error, "already exists",
-		"error body should signal conflict so semconnect can map to HTTP 409")
-	assert.Equal(t, "req-create-conflict", resp.RequestID)
+	// ADR-060: a duplicate create is a typed entity_already_exists reject
+	// (invalid class), no longer an in-body Success=false. RequestID is no
+	// longer echoed on the failure path (failures carry no body).
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeEntityExists, "already exists")
+	assert.True(t, errs.IsInvalid(err), "conflict classifies invalid so semconnect can map to HTTP 409")
 }
 
 func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testing.T) {
@@ -173,13 +171,10 @@ func TestIntegration_HandleEntityUpdate_NotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	respBytes, err := c.handleEntityUpdate(ctx, reqBytes)
-	require.NoError(t, err)
-
-	var resp graph.UpdateEntityResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "update on absent entity should not succeed")
-	assert.Contains(t, resp.Error, "not found",
-		"error body should signal absence so semconnect can map to HTTP 404")
+	// ADR-060: must-exist update on an absent entity is a typed entity_not_found
+	// reject (invalid class), so semconnect can map to HTTP 404.
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeEntityNotFound, "not found")
+	assert.True(t, errs.IsInvalid(err))
 }
 
 func TestIntegration_HandleEntityUpdate_Success(t *testing.T) {
@@ -457,13 +452,10 @@ func TestIntegration_HandleEntityUpdate_DeleteBeforeUpdate(t *testing.T) {
 	require.NoError(t, err)
 
 	respBytes, err := c.handleEntityUpdate(ctx, reqBytes)
-	require.NoError(t, err)
-
-	var resp graph.UpdateEntityResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "update on deleted entity must NOT silently resurrect")
-	assert.Contains(t, resp.Error, "not found",
-		"error body should signal absence so semconnect can map to HTTP 404")
+	// ADR-060: a concurrent delete surfaces as a typed entity_not_found reject
+	// (invalid class) rather than silently resurrecting the entity.
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeEntityNotFound, "not found")
+	assert.True(t, errs.IsInvalid(err))
 
 	exists, err := c.entityExists(ctx, entityID)
 	require.NoError(t, err)
@@ -564,15 +556,8 @@ func TestIntegration_HandleEntity_NilEntity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			respBytes, err := tc.handler(mustJSON(t, tc.payload))
-			require.NoError(t, err)
-
-			var base struct {
-				Success bool   `json:"success"`
-				Error   string `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal(respBytes, &base))
-			assert.False(t, base.Success)
-			assert.Contains(t, base.Error, "entity cannot be nil")
+			// ADR-060: the nil-body guard rejects with a typed invalid_request error.
+			requireClassifiedReject(t, respBytes, err, graph.ErrorCodeInvalidRequest, "entity cannot be nil")
 		})
 	}
 }
@@ -587,12 +572,8 @@ func TestIntegration_HandleEntityDelete_EmptyID(t *testing.T) {
 
 	req := graph.DeleteEntityRequest{EntityID: "", RequestID: "req-delete-empty"}
 	respBytes, err := c.handleEntityDelete(ctx, mustJSON(t, req))
-	require.NoError(t, err)
-
-	var resp graph.DeleteEntityResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success)
-	assert.Contains(t, resp.Error, "entity_id cannot be empty")
+	// ADR-060: the empty-EntityID guard rejects with a typed invalid_request error.
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeInvalidRequest, "entity_id cannot be empty")
 }
 
 // TestIntegration_HandleEntityUpdateWithTriples_UnknownRemovePredicate
@@ -629,6 +610,23 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
+// requireClassifiedReject asserts the ADR-060 typed-error reject contract: a
+// hard mutation failure returns (nil body, *errs.ClassifiedError) carrying the
+// expected stable Code, with the handler's message preserved in err.Error().
+// Replaces the pre-ADR-060 "no Go error, Success=false + ErrorCode in the body"
+// assertions across the graph-ingest mutation integration tests.
+func requireClassifiedReject(t *testing.T, respBytes []byte, err error, wantCode, wantMsgSubstr string) {
+	t.Helper()
+	require.Error(t, err)
+	require.Nil(t, respBytes, "ADR-060: a hard failure returns no body")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, wantCode, ce.Code, "classified error Code")
+	if wantMsgSubstr != "" {
+		assert.Contains(t, err.Error(), wantMsgSubstr)
+	}
+}
+
 func TestIntegration_HandleEntity_InvalidJSON(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
@@ -646,17 +644,9 @@ func TestIntegration_HandleEntity_InvalidJSON(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			respBytes, err := tc.handler([]byte("not json"))
-			require.NoError(t, err, "handler should never return a non-nil err — error lives in the response body per feedback_natsclient_error_payload_convention")
-
-			// Each shape has a MutationResponse embedded; we can unmarshal
-			// to the base type just to read the Success/Error flags.
-			var base struct {
-				Success bool   `json:"success"`
-				Error   string `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal(respBytes, &base))
-			assert.False(t, base.Success)
-			assert.Contains(t, base.Error, "invalid request")
+			// ADR-060: malformed JSON rejects with a typed invalid_request error
+			// (handler returns (nil, *errs.ClassifiedError), not an in-body flag).
+			requireClassifiedReject(t, respBytes, err, graph.ErrorCodeInvalidRequest, "invalid request")
 		})
 	}
 }
@@ -915,13 +905,10 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionMismatchAtRead(t *t
 		RequestID:        "req-update-wt-cas-stale",
 	}
 	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
-	require.NoError(t, err)
-
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "stale ExpectedRevision must fail")
-	assert.Contains(t, resp.Error, "revision mismatch",
-		"error should signal revision mismatch so callers can re-read + re-validate")
+	// ADR-060: a stale CAS is the revision_mismatch control-flow sentinel, so a
+	// caller can errors.Is(err, errs.ErrRevisionMismatch) and re-read + re-validate.
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeRevisionMismatch, "revision mismatch")
+	assert.True(t, errors.Is(err, errs.ErrRevisionMismatch), "stale CAS surfaces the revision-mismatch sentinel")
 
 	// Verify the stale delta did NOT land.
 	_, currentRev, err := c.fetchEntityState(ctx, entityID)
@@ -975,13 +962,10 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionAbsentEntity(t *tes
 		RequestID:        "req-update-wt-cas-absent",
 	}
 	respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
-	require.NoError(t, err)
-
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "CAS-on-condition against absent entity must fail")
-	assert.Contains(t, resp.Error, "entity not found",
-		"absent-entity error message must allow callers to disambiguate from CAS mismatch")
+	// ADR-060: CAS against an absent entity is entity_not_found (not
+	// revision_mismatch), so callers can disambiguate from a CAS conflict.
+	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeEntityNotFound, "entity not found")
+	assert.False(t, errors.Is(err, errs.ErrRevisionMismatch), "absent entity is not the revision-mismatch sentinel")
 }
 
 func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *testing.T) {
@@ -1019,6 +1003,13 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 			}
 			respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
 			if err != nil {
+				// ADR-060: a CAS loser now surfaces as the revision_mismatch
+				// sentinel error (no in-body Success=false).
+				if errors.Is(err, errs.ErrRevisionMismatch) {
+					mu.Lock()
+					mismatchErrs++
+					mu.Unlock()
+				}
 				return
 			}
 			var resp graph.UpdateEntityWithTriplesResponse
@@ -1029,8 +1020,6 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 			defer mu.Unlock()
 			if resp.Success {
 				successCount++
-			} else if errors.Is(errors.New(resp.Error), errors.New("revision mismatch")) || (resp.Error != "" && (containsAny(resp.Error, "revision mismatch", "concurrent modification"))) {
-				mismatchErrs++
 			}
 		}(i)
 	}
@@ -1038,17 +1027,4 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 
 	assert.Equal(t, 1, successCount, "exactly one CAS race winner expected from %d racers", N)
 	assert.Equal(t, N-1, mismatchErrs, "all other racers must observe revision-mismatch errors")
-}
-
-// containsAny is a small test helper — true if s contains any of the
-// substrings. Avoids importing strings just for this assertion.
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-	}
-	return false
 }

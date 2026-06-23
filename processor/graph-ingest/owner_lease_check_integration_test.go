@@ -284,11 +284,8 @@ func TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected(t *testi
 	require.NoError(t, err)
 
 	respData, handlerErr := c.handleEntityCreateWithTriples(ctx, data)
-	require.NoError(t, handlerErr, "reject is encoded in the body, never a transport error")
-	var resp graph.CreateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.False(t, resp.Success, "enforce on: create with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	// ADR-060: a stale lease is a typed owner_lease_stale reject (no body).
+	requireClassifiedReject(t, respData, handlerErr, graph.ErrorCodeOwnerLeaseStale, "")
 
 	// Metric still fires.
 	after := testutil.ToFloat64(c.ownerLeaseMismatch.WithLabelValues(label, intPred))
@@ -320,11 +317,8 @@ func TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected(t *testi
 	require.NoError(t, err)
 
 	respData, handlerErr := c.handleEntityUpdateWithTriples(ctx, data)
-	require.NoError(t, handlerErr)
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.False(t, resp.Success, "enforce on: update with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	// ADR-060: a stale lease is a typed owner_lease_stale reject (no body).
+	requireClassifiedReject(t, respData, handlerErr, graph.ErrorCodeOwnerLeaseStale, "")
 
 	// Prior state unchanged.
 	stored, _, readErr := c.fetchEntityState(ctx, eid)
@@ -364,11 +358,8 @@ func TestIntegration_OwnerLease_Enforce_UpdateWithTriplesCAS_StaleRejected(t *te
 	require.NoError(t, err)
 
 	respData, handlerErr := c.handleEntityUpdateWithTriples(ctx, data)
-	require.NoError(t, handlerErr)
-	var resp graph.UpdateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.False(t, resp.Success, "enforce on: CAS update with a stale token must be rejected")
-	assert.Equal(t, graph.ErrorCodeOwnerLeaseStale, resp.ErrorCode)
+	// ADR-060: a stale lease is a typed owner_lease_stale reject (no body).
+	requireClassifiedReject(t, respData, handlerErr, graph.ErrorCodeOwnerLeaseStale, "")
 
 	// Prior state AND revision unchanged — the CAS write never ran.
 	stored, revAfter, readErr := c.fetchEntityState(ctx, eid)

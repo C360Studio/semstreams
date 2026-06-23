@@ -386,10 +386,8 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 		}
 		data, _ := json.Marshal(req)
 		respData, err := c.handleEntityUpdateWithTriples(ctx, data)
-		require.NoError(t, err)
-		var resp graph.UpdateEntityWithTriplesResponse
-		require.NoError(t, json.Unmarshal(respData, &resp))
-		require.False(t, resp.Success, "stale-revision CAS must fail")
+		// ADR-060: a stale CAS is the revision_mismatch sentinel reject (no body).
+		requireClassifiedReject(t, respData, err, graph.ErrorCodeRevisionMismatch, "revision mismatch")
 
 		// The failed primary write must NOT have routed the foreign edge — the
 		// child was never created.

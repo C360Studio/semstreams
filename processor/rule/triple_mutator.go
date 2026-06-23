@@ -4,12 +4,14 @@ package rule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // NATS subjects for graph mutations (must match processor/graph-ingest/mutations.go)
@@ -75,14 +77,12 @@ func (m *tripleMutator) AddTriple(ctx context.Context, ruleID string, triple mes
 		return 0, fmt.Errorf("NATS request failed: %w", err)
 	}
 
-	// Parse response
+	// Parse the success response for the KV revision. ADR-060: a handler
+	// failure now arrives as the classified err above, so the legacy
+	// !resp.Success second check is gone.
 	var resp gtypes.AddTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return 0, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if !resp.Success {
-		return 0, fmt.Errorf("mutation failed: %s", resp.Error)
 	}
 
 	// Track the revision to prevent this rule from re-triggering on its own write.
@@ -119,14 +119,11 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 		return 0, fmt.Errorf("NATS request failed: %w", err)
 	}
 
-	// Parse response
+	// Parse the success response for the KV revision. ADR-060: handler
+	// failures arrive as the classified err above.
 	var resp gtypes.RemoveTripleResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return 0, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if !resp.Success {
-		return 0, fmt.Errorf("mutation failed: %s", resp.Error)
 	}
 
 	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
@@ -152,10 +149,11 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 // onto the request's OwnerToken field for the lease check (a later increment).
 // Token composition is the caller's responsibility (ActionExecutor.executeReplaceOwned).
 //
-// Unlike AddTriple/RemoveTriple, this checks resp.Success (NOT the body-prefix
-// convention) and surfaces the handler's ErrorCode on failure. On a
-// non-existent entity the handler returns ErrorCodeEntityNotFound; that is
-// returned verbatim as an error (no auto-vivify).
+// ADR-060: handler failures arrive as a classified error (entity_not_found,
+// owner_lease_stale, internal); this surfaces the stable Code in the returned
+// error so callers/operators can distinguish must-exist failures from transport.
+// On a non-existent entity the handler returns entity_not_found — returned as an
+// error (no auto-vivify).
 func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, ownerToken, entityID, predicate string, objects []message.Triple) (uint64, error) {
 	if m.natsClient == nil {
 		return 0, fmt.Errorf("NATS client not available")
@@ -182,22 +180,21 @@ func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, ownerToken, en
 	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
 	respData, err := m.natsClient.RequestWithRetryClassified(ctx, SubjectEntityUpdateWithTriples, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
 	if err != nil {
-		return 0, fmt.Errorf("NATS request failed: %w", err)
+		// ADR-060: handler failures (entity_not_found, owner_lease_stale,
+		// internal) arrive classified here, not as an in-body Success=false.
+		// Surface the stable Code so callers and operators can distinguish
+		// must-exist failures from transport without substring-matching.
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) && ce.Code != "" {
+			return 0, fmt.Errorf("replace_owned mutation failed [%s]: %w", ce.Code, err)
+		}
+		return 0, fmt.Errorf("replace_owned mutation failed: %w", err)
 	}
 
+	// Parse the success response for the KV revision.
 	var resp gtypes.UpdateEntityWithTriplesResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return 0, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if !resp.Success {
-		// Surface the machine-readable error code so callers (and operators)
-		// can distinguish must-exist failures (entity_not_found) from
-		// transport/internal errors without substring-matching.
-		if resp.ErrorCode != "" {
-			return 0, fmt.Errorf("replace_owned mutation failed [%s]: %s", resp.ErrorCode, resp.Error)
-		}
-		return 0, fmt.Errorf("replace_owned mutation failed: %s", resp.Error)
 	}
 
 	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
