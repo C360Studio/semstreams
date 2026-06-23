@@ -114,7 +114,6 @@ func TestQueryOutgoing_Integration(t *testing.T) {
 	var response graph.OutgoingQueryResponse
 	err = json.Unmarshal(msg.Data, &response)
 	require.NoError(t, err)
-	require.Empty(t, response.Error, "should not have error")
 
 	// Verify response
 	assert.Len(t, response.Data.Relationships, 1, "should have one outgoing relationship")
@@ -177,7 +176,6 @@ func TestQueryIncoming_Integration(t *testing.T) {
 	var response graph.IncomingQueryResponse
 	err = json.Unmarshal(msg.Data, &response)
 	require.NoError(t, err)
-	require.Empty(t, response.Error, "should not have error")
 
 	// Verify response
 	assert.Len(t, response.Data.Relationships, 1, "should have one incoming relationship")
@@ -239,7 +237,6 @@ func TestQueryAlias_Integration(t *testing.T) {
 	var response graph.AliasQueryResponse
 	err = json.Unmarshal(msg.Data, &response)
 	require.NoError(t, err)
-	require.Empty(t, response.Error, "should not have error")
 
 	// Verify response
 	require.NotNil(t, response.Data.CanonicalID, "canonical_id should not be nil")
@@ -303,7 +300,6 @@ func TestQueryPredicate_Integration(t *testing.T) {
 	var response graph.PredicateQueryResponse
 	err = json.Unmarshal(msg.Data, &response)
 	require.NoError(t, err)
-	require.Empty(t, response.Error, "should not have error")
 
 	// Verify response
 	assert.Len(t, response.Data.Entities, 2, "should have two entities with predicate")
@@ -344,7 +340,6 @@ func TestContextTimeout_Integration(t *testing.T) {
 	var response graph.OutgoingQueryResponse
 	err = json.Unmarshal(msg.Data, &response)
 	require.NoError(t, err)
-	require.Empty(t, response.Error, "should not have error")
 }
 
 // TestConcurrentQueries_Integration tests concurrent query requests
@@ -378,7 +373,6 @@ func TestConcurrentQueries_Integration(t *testing.T) {
 				var response graph.OutgoingQueryResponse
 				err = json.Unmarshal(msg.Data, &response)
 				assert.NoError(t, err)
-				assert.Empty(t, response.Error, "should not have error")
 			}
 
 			done <- true
@@ -414,7 +408,6 @@ func TestQueryNotFound_Integration(t *testing.T) {
 		var response graph.OutgoingQueryResponse
 		err = json.Unmarshal(msg.Data, &response)
 		require.NoError(t, err)
-		require.Empty(t, response.Error, "should not have error for not found")
 		assert.Empty(t, response.Data.Relationships, "relationships should be empty for not found")
 	})
 
@@ -429,7 +422,6 @@ func TestQueryNotFound_Integration(t *testing.T) {
 		var response graph.IncomingQueryResponse
 		err = json.Unmarshal(msg.Data, &response)
 		require.NoError(t, err)
-		require.Empty(t, response.Error, "should not have error for not found")
 		assert.Empty(t, response.Data.Relationships, "relationships should be empty for not found")
 	})
 
@@ -444,7 +436,6 @@ func TestQueryNotFound_Integration(t *testing.T) {
 		var response graph.AliasQueryResponse
 		err = json.Unmarshal(msg.Data, &response)
 		require.NoError(t, err)
-		require.Empty(t, response.Error, "should not have error for not found")
 		assert.Nil(t, response.Data.CanonicalID, "canonical_id should be nil for not found")
 	})
 
@@ -459,7 +450,6 @@ func TestQueryNotFound_Integration(t *testing.T) {
 		var response graph.PredicateQueryResponse
 		err = json.Unmarshal(msg.Data, &response)
 		require.NoError(t, err)
-		require.Empty(t, response.Error, "should not have error for not found")
 		assert.Empty(t, response.Data.Entities, "entities should be empty for not found")
 	})
 }

@@ -11,18 +11,14 @@ tasks:
       # feedback_substrate_flake_discipline.md.
       - go tool revive -config revive.toml -formatter friendly ./...
       - task: test-ports
-      - task: request-guard
 
-  request-guard:
-    desc: |
-      AST lint: fail if natsclient.Request / RequestWithRetry response bytes
-      flow into json.Unmarshal without a prior bytes.HasPrefix("error: ") guard
-      or migration to RequestClassified. Catches the silent-corruption class
-      that shipped 3x before gh#93. Self-test in the package proves the filter
-      is live; allowlist in test/natsclient/request_guard_test.go tracks every
-      known-deferred site with a gh# reference. gh#162.
-    cmds:
-      - go test -v ./test/natsclient/
+  # ADR-060 PR-D removed the request-guard AST lint (gh#162). Its allowlist was
+  # emptied (PR-C) and its "safe pattern" — a bytes.HasPrefix("error: ") body
+  # check — is obsolete now that the failure body is the {message,detail}
+  # envelope. The contract is uniform: callers use RequestClassified /
+  # RequestWithRetryClassified and branch on the typed error. Plain Request()
+  # remains a footgun (it returns the error body with err==nil); the guidance
+  # now lives in the natsclient package doc, enforced by review rather than lint.
 
   test-ports:
     desc: |

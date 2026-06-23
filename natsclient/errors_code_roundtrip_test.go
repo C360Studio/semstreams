@@ -23,7 +23,7 @@ func TestClassifyReply_CodeHeader_RevisionMismatchSentinel(t *testing.T) {
 			HeaderErrorClass: []string{ErrorClassInvalid},
 			HeaderErrorCode:  []string{"revision_mismatch"},
 		},
-		Data: []byte("error: revision mismatch: expected 5, current 7"),
+		Data: []byte(`{"message":"revision mismatch: expected 5, current 7"}`),
 	}
 	data, err := ClassifyReply(msg)
 	if data != nil {
@@ -49,7 +49,7 @@ func TestClassifyReply_CodeHeader_EntityNotFoundDiscriminator(t *testing.T) {
 			HeaderErrorClass: []string{ErrorClassInvalid},
 			HeaderErrorCode:  []string{"entity_not_found"},
 		},
-		Data: []byte("error: not found: acme.ops.robotics.gcs.drone.001"),
+		Data: []byte(`{"message":"not found: acme.ops.robotics.gcs.drone.001"}`),
 	}
 	_, err := ClassifyReply(msg)
 	if !errs.IsInvalid(err) {
@@ -68,9 +68,9 @@ func TestClassifyReply_CodeHeader_EntityNotFoundDiscriminator(t *testing.T) {
 	}
 }
 
-// No X-Error-Code header → reconstructed error is uncoded, exactly as
-// before ADR-060. This pins the additive guarantee: uncoded handler errors
-// (e.g. the existing graph-ingest query exemplar) are unchanged.
+// No X-Error-Code header → reconstructed error is uncoded. Pins that an
+// uncoded handler error (e.g. a query exemplar that returns errs.Classified
+// without a code) carries an empty ce.Code.
 func TestClassifyReply_NoCodeHeader_UncodedUnchanged(t *testing.T) {
 	t.Parallel()
 	msg := &nats.Msg{
@@ -78,7 +78,7 @@ func TestClassifyReply_NoCodeHeader_UncodedUnchanged(t *testing.T) {
 			HeaderStatus:     []string{HeaderStatusError},
 			HeaderErrorClass: []string{ErrorClassInvalid},
 		},
-		Data: []byte("error: bad input"),
+		Data: []byte(`{"message":"bad input"}`),
 	}
 	_, err := ClassifyReply(msg)
 	if !errs.IsInvalid(err) {
@@ -93,23 +93,6 @@ func TestClassifyReply_NoCodeHeader_UncodedUnchanged(t *testing.T) {
 	}
 	if errors.Is(err, errs.ErrRevisionMismatch) {
 		t.Error("errors.Is(uncoded, ErrRevisionMismatch) = true, want false")
-	}
-}
-
-// The legacy body-prefix path (no headers at all) carries no code.
-func TestClassifyReply_LegacyBody_NoCode(t *testing.T) {
-	t.Parallel()
-	msg := &nats.Msg{
-		Header: nats.Header{},
-		Data:   []byte("error: ancient handler failure"),
-	}
-	_, err := ClassifyReply(msg)
-	var ce *errs.ClassifiedError
-	if !errors.As(err, &ce) {
-		t.Fatalf("err is not *errs.ClassifiedError: %v", err)
-	}
-	if ce.Code != "" {
-		t.Errorf("ce.Code = %q, want empty on the legacy body path", ce.Code)
 	}
 }
 

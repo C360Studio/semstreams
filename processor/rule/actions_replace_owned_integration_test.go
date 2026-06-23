@@ -197,7 +197,7 @@ func TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire(t *testing.T) {
 			}
 		}
 		resp, _ := json.Marshal(gtypes.UpdateEntityWithTriplesResponse{
-			MutationResponse: gtypes.MutationResponse{Success: true, KVRevision: 1},
+			MutationResponse: gtypes.MutationResponse{KVRevision: 1},
 		})
 		_ = msg.Respond(resp)
 	})

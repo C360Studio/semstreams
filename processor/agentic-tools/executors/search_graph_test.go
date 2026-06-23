@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 	graphquery "github.com/c360studio/semstreams/processor/graph-query"
 )
 
@@ -190,10 +191,12 @@ func TestSearchGraphResponsePayload_DecodesFromRealGlobalSearchResponse(t *testi
 
 // TestSearchGraphExecutor_HandlerErrorEnvelope is the H1 regression
 // test (companion to TestSummarizeGraphExecutor_HandlerErrorEnvelope).
-// Same natsclient handler-error-as-body convention; same risk of
-// surfacing the wrong remediation if not caught.
+// ADR-060: a handler error is the X-Status-headered {message} envelope;
+// ClassifyReply reconstructs the classified error and the executor maps it to
+// ToolErrorExternal with the handler's message verbatim.
 func TestSearchGraphExecutor_HandlerErrorEnvelope(t *testing.T) {
-	mock := &recordingNATSQuerier{resp: []byte("error: graph-query classifier offline")}
+	body, hdr := classifiedErrorReply(t, natsclient.ErrorClassInvalid, "graph-query classifier offline")
+	mock := &recordingNATSQuerier{resp: body, respHeader: hdr}
 	e := NewSearchGraphExecutor(mock)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID: "c", Name: "search_graph", Arguments: map[string]any{"query": "x"},

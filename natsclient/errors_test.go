@@ -1,7 +1,6 @@
 package natsclient
 
 import (
-	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -59,6 +58,7 @@ func TestClassifiedFromHeader_RoundTrips(t *testing.T) {
 		class       string
 		code        string
 		msg         string
+		detail      map[string]any
 		isInvalid   bool
 		isTransient bool
 		isFatal     bool
@@ -72,12 +72,14 @@ func TestClassifiedFromHeader_RoundTrips(t *testing.T) {
 		// ADR-060: a coded header sets ce.Code on the reconstructed error.
 		{name: "coded_not_found", class: ErrorClassInvalid, code: "entity_not_found", msg: "not found: x", isInvalid: true, wantCode: "entity_not_found"},
 		{name: "coded_revision_mismatch", class: ErrorClassInvalid, code: "revision_mismatch", msg: "revision mismatch", isInvalid: true, wantCode: "revision_mismatch"},
+		// ADR-060: detail without a code still produces a coded-detail error.
+		{name: "detail_only", class: ErrorClassInvalid, detail: map[string]any{"entity": "x"}, msg: "m", isInvalid: true},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := classifiedFromHeader(tc.class, tc.code, tc.msg)
+			err := classifiedFromHeader(tc.class, tc.code, tc.msg, tc.detail)
 			if err == nil {
 				t.Fatal("expected non-nil error")
 			}
@@ -144,7 +146,7 @@ func TestClassifyReply_HeaderClassifiedError(t *testing.T) {
 					HeaderStatus:     []string{HeaderStatusError},
 					HeaderErrorClass: []string{tc.class},
 				},
-				Data: []byte("error: original handler message"),
+				Data: []byte(`{"message":"original handler message"}`),
 			}
 			data, err := ClassifyReply(msg)
 			if data != nil {
@@ -170,24 +172,22 @@ func TestClassifyReply_HeaderClassifiedError(t *testing.T) {
 	}
 }
 
-func TestClassifyReply_LegacyBodyPrefix_DefaultsInvalid(t *testing.T) {
+// TestClassifyReply_NoHeaderIsSuccess pins the ADR-060 contract: with the
+// legacy "error: " body fallback removed, a reply WITHOUT the X-Status header is
+// success — its body is returned verbatim even if it happens to start with
+// "error: ". A failure is signalled ONLY by the header.
+func TestClassifyReply_NoHeaderIsSuccess(t *testing.T) {
 	t.Parallel()
-	// No X-Status header — caller is a pre-#93 handler. The body
-	// prefix sniff treats it as invalid (the conservative default,
-	// since pre-#93 has no class signal).
 	msg := &nats.Msg{
 		Header: nats.Header{},
-		Data:   []byte("error: not found: foo.bar.baz"),
+		Data:   []byte(`{"data":"ok"}`),
 	}
 	data, err := ClassifyReply(msg)
-	if data != nil {
-		t.Errorf("data should be nil on error reply; got %q", data)
+	if err != nil {
+		t.Fatalf("no X-Status header must be treated as success; got err=%v", err)
 	}
-	if !errs.IsInvalid(err) {
-		t.Errorf("legacy body-prefix should classify invalid; got err=%v IsInvalid=%v", err, errs.IsInvalid(err))
-	}
-	if !strings.Contains(err.Error(), "not found: foo.bar.baz") {
-		t.Errorf("expected body message to survive; got %q", err)
+	if string(data) != `{"data":"ok"}` {
+		t.Fatalf("data = %q, want the body verbatim", data)
 	}
 }
 
@@ -226,13 +226,55 @@ func TestReplyError_EmptyReplyTo_NoOp(t *testing.T) {
 	}
 }
 
-// TestLegacyBodyPrefixStable pins the wire-format byte sequence —
-// any future change here is a wire break and must go through Phase 4.
-func TestLegacyBodyPrefixStable(t *testing.T) {
+// TestRespondError_RoundTrip pins the ADR-060 wire contract end-to-end: the
+// body RespondError marshals is the {message, detail} envelope that
+// ClassifyReply reconstructs into a *errs.ClassifiedError carrying the message,
+// Code, and Detail — with JSON numerics decoding as float64 (the hazard the
+// round-trip MUST lock so no consumer writes .Detail[...].(uint64) and panics).
+func TestRespondError_RoundTrip(t *testing.T) {
 	t.Parallel()
-	want := []byte("error: ")
-	if !bytes.Equal(legacyErrorBodyPrefix, want) {
-		t.Fatalf("legacyErrorBodyPrefix = %q, want %q — wire break!", legacyErrorBodyPrefix, want)
+	orig := errs.ClassifiedCodeDetail(errs.ErrorInvalid, "revision_mismatch",
+		map[string]any{"entity": "acme.x", "expected_revision": uint64(7)},
+		errors.New("revision mismatch: expected 7, current 9"))
+
+	// Reconstruct exactly what RespondError puts on the wire.
+	body := marshalErrorBody(orig)
+	msg := &nats.Msg{
+		Header: nats.Header{
+			HeaderStatus:     []string{HeaderStatusError},
+			HeaderErrorClass: []string{classForHeader(orig)},
+			HeaderErrorCode:  []string{codeForHeader(orig)},
+		},
+		Data: body,
+	}
+
+	data, err := ClassifyReply(msg)
+	if data != nil {
+		t.Errorf("data should be nil on error reply; got %q", data)
+	}
+	var ce *errs.ClassifiedError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected *errs.ClassifiedError; got %T (%v)", err, err)
+	}
+	if ce.Code != "revision_mismatch" {
+		t.Errorf("ce.Code = %q, want revision_mismatch", ce.Code)
+	}
+	if !errors.Is(err, errs.ErrRevisionMismatch) {
+		t.Errorf("errors.Is(err, ErrRevisionMismatch) must round-trip the wire")
+	}
+	if got := ce.Detail["entity"]; got != "acme.x" {
+		t.Errorf(`Detail["entity"] = %v, want "acme.x"`, got)
+	}
+	// The float64 hazard: a uint64 written by the producer decodes as float64.
+	rev, ok := ce.Detail["expected_revision"].(float64)
+	if !ok {
+		t.Fatalf(`Detail["expected_revision"] is %T, want float64 (JSON numerics decode as float64)`, ce.Detail["expected_revision"])
+	}
+	if rev != 7 {
+		t.Errorf(`Detail["expected_revision"] = %v, want 7`, rev)
+	}
+	if !strings.Contains(err.Error(), "revision mismatch: expected 7, current 9") {
+		t.Errorf("message must survive the wire; got %q", err.Error())
 	}
 }
 
@@ -252,7 +294,7 @@ func TestClassifyReply_ReconstructedErrorPreservesInnerMessage(t *testing.T) {
 			HeaderStatus:     []string{HeaderStatusError},
 			HeaderErrorClass: []string{ErrorClassInvalid},
 		},
-		Data: []byte("error: not found: test.entity.001"),
+		Data: []byte(`{"message":"not found: test.entity.001"}`),
 	}
 	_, err := ClassifyReply(msg)
 	if err == nil {

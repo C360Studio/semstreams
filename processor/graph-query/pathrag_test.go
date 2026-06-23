@@ -52,9 +52,15 @@ func TestVerifyEntityExists_ClassificationBranch(t *testing.T) {
 		{
 			name: "entity not found — Invalid class, returned verbatim (definitive negative)",
 			setupMock: func(m *mockNATSClient) {
-				// Legacy body-prefix path: ClassifyReply classifies this as Invalid.
-				m.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
-					return []byte("error: not found: acme.test.foo.bar.baz.001"), nil
+				// Inject a classified not-found error directly via requestClassifiedFunc.
+				// ADR-060 PR-D removed the legacy "error: " body-prefix fallback from
+				// ClassifyReply; handler errors now arrive ONLY via X-Status header.
+				// (nil, classifiedErr) from requestClassifiedFunc is the faithful
+				// equivalent of the production wire after ClassifyReply reconstructs
+				// from headers — errs.IsInvalid(err) true, message contains "not found".
+				m.requestClassifiedFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+					return nil, errs.ClassifiedCode(errs.ErrorInvalid, "entity_not_found",
+						errors.New("not found: acme.test.foo.bar.baz.001"))
 				}
 			},
 			wantErr:     true,

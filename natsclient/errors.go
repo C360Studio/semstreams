@@ -1,88 +1,67 @@
-// Package natsclient — header-classified handler errors (gh#93).
+// Package natsclient — the unified RPC error contract (ADR-060, gh#93).
 //
-// Handler errors from SubscribeForRequests handlers, and from direct
-// msg.Respond callers that opt in, travel as wire headers:
+// A request/reply is EITHER a success body (with no error header) OR a single
+// typed error value. There is no in-band error channel. A handler error from a
+// SubscribeForRequests handler — and from direct msg.Respond callers that opt in
+// via RespondError — travels as wire headers plus a standard JSON error body:
 //
-//	X-Status: error
+//	X-Status:      error
 //	X-Error-Class: transient | invalid | fatal
+//	X-Error-Code:  entity_not_found | revision_mismatch | ...   (when coded)
+//	body:          {"message": "<text>", "detail": {...}}
 //
-// The reply body keeps the legacy "error: <msg>" shape unchanged so
-// existing prefix-sniffing callers (pathrag.go, graphrag.go, etc.) keep
-// working unmodified — dual encoding is the load-bearing
-// backward-compat contract. Phase 4 (deferred post-1.0) drops the
-// legacy body shape; until then headers are the new-callers signal,
-// body is the old-callers signal, and both carry the same information.
+// ClassifyReply reconstructs a *errs.ClassifiedError from these: the class
+// drives errs.IsInvalid / IsTransient / IsFatal, the code is reached via
+// errors.As(err, &ce) → ce.Code, the one control-flow sentinel round-trips via
+// errors.Is(err, errs.ErrRevisionMismatch), and the structured detail via
+// ce.Detail. (The earlier additive window — a legacy "error: <msg>" body kept
+// alongside the headers — was retired with the PR-D breaking change.)
 //
-// Caller migration:
+// Caller pattern:
 //
-//	OLD: data, err := c.Request(ctx, subj, body, timeout)
-//	     if err != nil { /* transport */ }
-//	     if bytes.HasPrefix(data, []byte("error: ")) { /* handler */ }
+//	data, err := c.RequestClassified(ctx, subj, body, timeout)
+//	if err != nil {
+//	    // transport OR classified handler error, uniformly:
+//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* re-read, retry */ }
+//	    if errs.IsInvalid(err) { /* 4xx */ }
+//	    if errs.IsTransient(err) { /* retry */ }
+//	    var ce *errs.ClassifiedError
+//	    if errors.As(err, &ce) { /* ce.Code, ce.Detail */ }
+//	    return err
+//	}
+//	json.Unmarshal(data, &resp) // data is a success body; err already handled
 //
-//	NEW: data, err := c.RequestClassified(ctx, subj, body, timeout)
-//	     if err != nil {
-//	         // err may be transport OR classified handler error
-//	         if errs.IsInvalid(err) { /* 400 */ }
-//	         if errs.IsTransient(err) { /* retry */ }
-//	     }
+// Handler pattern: return (nil, err) — SubscribeForRequests calls RespondError
+// for you. HTTP semantics (404 vs 400) belong at the gateway, which reads
+// ce.Code (e.g. entity_not_found → 404) rather than substring-sniffing.
 //
-// Handler migration:
+// # Footgun — plain Request() / RequestWithHeaders() still don't classify
 //
-//	OLD: msg.Respond([]byte("error: " + err.Error()))
-//	NEW: natsclient.RespondError(msg, err)
-//
-// HTTP semantics (400 vs 404) belong at the gateway layer, not the
-// wire layer — "not found" maps to ErrorClass=invalid at this layer;
-// gateways disambiguate with a small body-substring check or a
-// per-subject convention. See feedback_natsclient_error_payload_convention.md.
-//
-// # Footgun warning — plain Request() is still a silent-corruption surface
-//
-// Phase 1 is ADDITIVE. The plain Request() and RequestWithHeaders()
-// methods are UNCHANGED — they do NOT inspect X-Status / X-Error-Class
-// headers, and they return the legacy "error: <msg>" body verbatim
-// with err == nil when the handler errors. New code that does
+// The plain Request() / RequestWithHeaders() methods return the raw reply body
+// and do NOT inspect the X-Status header. A handler error reply carries the
+// {message, detail} body with err == nil, so
 //
 //	data, err := c.Request(...)
 //	if err != nil { return err }
-//	json.Unmarshal(data, &resp)        // SILENT CORRUPTION on handler error
+//	json.Unmarshal(data, &resp)   // mis-decodes an error body as success
 //
-// will silently mis-decode handler errors as success data. This is
-// the exact bug class that shipped three times in the beta.86 cycle
-// (commit c626854 fixed FindSimilar + searchEntitiesSemantic; commit
-// 895ec44 fixed searchGraph's fallback adapter — different shape,
-// same class). New callers MUST use RequestClassified, OR explicitly
-// check bytes.HasPrefix(data, []byte("error: ")) before unmarshal.
-// See feedback_silent_handler_error_payload_audit.md for the audit
-// pattern.
+// silently mis-decodes failures. New callers MUST use RequestClassified /
+// RequestWithRetryClassified (or run ClassifyReply on the reply themselves when
+// they need to send custom headers). See
+// feedback_silent_handler_error_payload_audit.md.
 //
 // # Sentinel chains do not survive the wire boundary
 //
-// classifiedFromHeader reconstructs a fresh *errs.ClassifiedError
-// from the header value + body message. The original handler's
-// sentinel chain (e.g. an inner jetstream.ErrKeyNotFound, or any
-// custom errors.Is-friendly sentinel) is LOST in transit. Callers
-// that previously branched on errors.Is(err, sentinel) need to
-// substring-match the body message instead, OR move the
-// sentinel-distinction logic to the handler side and surface the
-// distinction through a different mechanism (separate subject,
-// distinct ErrorClass, response-payload field). The ErrorClass
-// taxonomy (invalid / transient / fatal) is the ONLY structured
-// signal that round-trips today.
-//
-// ADR-060 delivers sentinel-Is parity for the one control-flow code
-// that needs it: the X-Error-Code header carries the stable machine
-// Code, classifiedFromHeader sets it on the reconstructed
-// *errs.ClassifiedError, and (*ClassifiedError).Is matches it by Code —
-// so errors.Is(err, errs.ErrRevisionMismatch) round-trips the wire. The
-// general discriminator is ce.Code (via errors.As); only revision_mismatch
-// gets a named sentinel (no other code has a looping consumer). This
-// supersedes the earlier deferred X-Error-Sentinel-header idea.
+// classifiedFromHeader reconstructs a fresh *errs.ClassifiedError from the
+// headers + body. An arbitrary inner sentinel chain (jetstream.ErrKeyNotFound,
+// etc.) is LOST in transit; what round-trips is the {class, code, message,
+// detail} contract — including errs.ErrRevisionMismatch by code. Surface any
+// other distinction a consumer must branch on as a code (ce.Code).
 package natsclient
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -91,9 +70,9 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// Header keys for the header-classified error convention. New callers
-// branch on these; legacy callers fall through to the "error: " body
-// prefix as before.
+// Header keys for the header-classified error convention. A failure reply
+// carries X-Status: error plus the class/code headers; ClassifyReply
+// reconstructs the typed error from them.
 const (
 	// HeaderStatus is set to HeaderStatusError on reply messages that
 	// represent a handler-side failure. Absent on success replies.
@@ -126,18 +105,52 @@ const (
 	ErrorClassFatal     = "fatal"
 )
 
-// legacyErrorBodyPrefix is the body-prefix convention the framework
-// has used since pre-#93. Callers can still sniff this shape for the
-// duration of the dual-encoding window (Phase 4 retires it).
-var legacyErrorBodyPrefix = []byte("error: ")
+// errorBody is the ADR-060 standard error reply body. The class and code ride
+// headers (X-Error-Class / X-Error-Code); this body carries the human-readable
+// message and the structured Detail (entity id, revisions). It replaces the
+// legacy "error: <msg>" text body the framework used through PR-C.
+type errorBody struct {
+	Message string         `json:"message"`
+	Detail  map[string]any `json:"detail,omitempty"`
+}
+
+// marshalErrorBody renders the standard error body for err, best-effort: if the
+// Detail map holds an unmarshalable value (handlers never construct one), it
+// falls back to a message-only body rather than failing the reply.
+func marshalErrorBody(err error) []byte {
+	eb := errorBody{Message: err.Error()}
+	var ce *errs.ClassifiedError
+	if errors.As(err, &ce) {
+		eb.Detail = ce.Detail
+	}
+	b, mErr := json.Marshal(eb)
+	if mErr != nil {
+		b, _ = json.Marshal(errorBody{Message: err.Error()})
+	}
+	return b
+}
+
+// parseErrorBody extracts the message + detail from a standard error body. A
+// body that doesn't parse as the envelope is treated as a raw message
+// (defensive — a handler that set X-Status but emitted a non-envelope body).
+func parseErrorBody(data []byte) (string, map[string]any) {
+	var eb errorBody
+	if err := json.Unmarshal(data, &eb); err == nil && eb.Message != "" {
+		return eb.Message, eb.Detail
+	}
+	if len(data) == 0 {
+		return "handler error", nil
+	}
+	return string(data), nil
+}
 
 // errMissingReplySubject is returned by RespondError when the inbound
 // message had no reply subject — there's no one to respond to.
 var errMissingReplySubject = errors.New("natsclient: message has no reply subject")
 
-// RespondError writes a header-classified error reply to msg. The
-// reply body keeps the legacy "error: <msg>" shape; headers carry
-// the new X-Status / X-Error-Class signal.
+// RespondError writes a header-classified error reply to msg: the X-Status /
+// X-Error-Class / X-Error-Code headers carry the class + code, and the body is
+// the {message, detail} envelope (ADR-060).
 //
 // Used by SubscribeForRequests internally + by direct-msg.Respond
 // handlers that opt in to the convention.
@@ -169,8 +182,7 @@ func RespondError(msg *nats.Msg, err error) error {
 	if code := codeForHeader(err); code != "" {
 		reply.Header.Set(HeaderErrorCode, code)
 	}
-	reply.Data = []byte(legacyErrorBodyPrefix)
-	reply.Data = append(reply.Data, err.Error()...)
+	reply.Data = marshalErrorBody(err)
 
 	return msg.RespondMsg(reply)
 }
@@ -185,7 +197,6 @@ func (c *Client) ReplyError(ctx context.Context, replyTo string, err error) erro
 		return nil
 	}
 
-	body := append([]byte(legacyErrorBodyPrefix), err.Error()...)
 	headers := map[string]string{
 		HeaderStatus:     HeaderStatusError,
 		HeaderErrorClass: classForHeader(err),
@@ -193,7 +204,7 @@ func (c *Client) ReplyError(ctx context.Context, replyTo string, err error) erro
 	if code := codeForHeader(err); code != "" {
 		headers[HeaderErrorCode] = code
 	}
-	return c.ReplyWithHeaders(ctx, replyTo, body, headers)
+	return c.ReplyWithHeaders(ctx, replyTo, marshalErrorBody(err), headers)
 }
 
 // ClassifyReply inspects a reply message and returns either the
@@ -201,47 +212,25 @@ func (c *Client) ReplyError(ctx context.Context, replyTo string, err error) erro
 // error suitable for branching with errs.IsInvalid / IsTransient /
 // IsFatal.
 //
-// Detection order:
-//  1. X-Status: error header → reconstruct from X-Error-Class.
-//  2. Legacy "error: " body prefix → classify as invalid (the
-//     default for old handlers; gateways doing finer-grained mapping
-//     can substring-check the unwrapped message).
-//  3. Otherwise → success: return body, nil.
-//
-// The reconstructed classified error reads
-// "natsclient.ClassifyReply: handler error failed: <original>" so its
-// provenance is obvious in logs while errs.Is* still returns the
-// correct class.
+// ADR-060: a failure is signalled ONLY by the X-Status: error header. The body
+// is the standard {message, detail} envelope; the message + detail + the
+// X-Error-Class / X-Error-Code headers reconstruct a *errs.ClassifiedError so
+// errors.As(err, &ce) reaches ce.Code/ce.Detail and errors.Is(err,
+// errs.ErrRevisionMismatch) round-trips. The legacy "error: " body fallback is
+// gone (every producer header-stamps via RespondError/ReplyError).
 func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 	if msg == nil {
 		return nil, nil
 	}
 
 	if msg.Header.Get(HeaderStatus) == HeaderStatusError {
-		// Header-driven path. Strip the legacy prefix only if
-		// present so the inner message is clean; future Phase 4
-		// handlers may stop emitting the prefix entirely, in which
-		// case this becomes a pure pass-through. Either way the
-		// reconstructed error carries the original handler text.
-		body := msg.Data
-		if bytes.HasPrefix(body, legacyErrorBodyPrefix) {
-			body = bytes.TrimPrefix(body, legacyErrorBodyPrefix)
-		}
+		message, detail := parseErrorBody(msg.Data)
 		return nil, classifiedFromHeader(
 			msg.Header.Get(HeaderErrorClass),
 			msg.Header.Get(HeaderErrorCode),
-			string(body),
+			message,
+			detail,
 		)
-	}
-
-	if bytes.HasPrefix(msg.Data, legacyErrorBodyPrefix) {
-		// Pre-#93 handler — no header signal. Conservative default:
-		// classify as invalid so callers don't loop-retry on an
-		// unknown shape. Gateways doing finer-grained mapping can
-		// substring-check the unwrapped message. No code on the legacy
-		// path (pre-ADR-060 handlers don't carry one).
-		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
-		return nil, classifiedFromHeader(ErrorClassInvalid, "", string(body))
 	}
 
 	return msg.Data, nil
@@ -257,8 +246,8 @@ func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 // — caller's existing retry logic on IsTransient continues to fire.
 //
 // Handler failures arrive as a *errs.ClassifiedError reconstructed
-// from the X-Error-Class header (or the legacy body prefix as
-// fallback). Caller branches on errs.IsInvalid / IsTransient / IsFatal.
+// from the X-Error-Class / X-Error-Code headers + {message, detail} body.
+// Caller branches on errs.IsInvalid / IsTransient / IsFatal.
 //
 // Use this for QUERIES. For MUTATIONS where the responder is
 // idempotent AND emits classified errors, use
@@ -291,7 +280,7 @@ func (c *Client) RequestClassified(ctx context.Context, subject string, data []b
 // the underlying error after the retry budget exhausts (classifies
 // as ErrorTransient via pkg/errs.IsTransient); handler failures
 // arrive as *errs.ClassifiedError reconstructed from the
-// X-Error-Class header (or the legacy body prefix as fallback).
+// X-Error-Class / X-Error-Code headers + {message, detail} body.
 // Caller branches on errs.IsInvalid / IsTransient / IsFatal.
 //
 // For QUERIES use RequestClassified; retrying on a hung query
@@ -340,25 +329,21 @@ func codeForHeader(err error) string {
 }
 
 // classifiedFromHeader reconstructs a *errs.ClassifiedError from the
-// X-Error-Class header value, the X-Error-Code header value (ADR-060),
-// and the unwrapped body message. Uses errs.Classified / ClassifiedCode
-// (the bare constructors) rather than the Wrap* family so the inner
-// message survives verbatim — external surfaces (GraphQL responses, agent
-// tool results) get the handler's clean text via err.Error() instead of a
-// leaky framework-attribution prefix.
+// X-Error-Class header value, the X-Error-Code header value, and the
+// {message, detail} error body (ADR-060). Uses the bare constructors
+// (Classified / ClassifiedCode / ClassifiedCodeDetail) rather than the Wrap*
+// family so the inner message survives verbatim — external surfaces (GraphQL
+// responses, agent tool results) get the handler's clean text via err.Error()
+// instead of a leaky framework-attribution prefix.
 //
 // When code is non-empty the reconstructed error carries it, so
-// errors.Is(err, errs.ErrRevisionMismatch) and ce.Code discrimination
-// work caller-side (the (*ClassifiedError).Is method matches by Code).
-// When code is empty the result is exactly as before ADR-060 — uncoded.
-//
-// The resulting error round-trips through errs.IsInvalid / IsTransient /
-// IsFatal correctly because the bare constructors preserve the class tag.
+// errors.Is(err, errs.ErrRevisionMismatch) and ce.Code discrimination work
+// caller-side; detail (when present) is reachable via errors.As → ce.Detail.
 //
 // Unknown class strings fall back to invalid (the conservative choice — a
 // caller seeing IsInvalid won't retry on a class they don't recognize, vs
 // IsTransient which would loop).
-func classifiedFromHeader(class, code, message string) error {
+func classifiedFromHeader(class, code, message string, detail map[string]any) error {
 	if message == "" {
 		message = "handler error"
 	}
@@ -374,8 +359,8 @@ func classifiedFromHeader(class, code, message string) error {
 	default:
 		ec = errs.ErrorInvalid
 	}
-	if code != "" {
-		return errs.ClassifiedCode(ec, code, inner)
+	if code != "" || len(detail) > 0 {
+		return errs.ClassifiedCodeDetail(ec, code, detail, inner)
 	}
 	return errs.Classified(ec, inner)
 }

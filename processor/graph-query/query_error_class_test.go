@@ -1,18 +1,21 @@
 // Package graphquery — error-class fidelity tests for RequestClassified migration (gh#304).
 //
-// This file verifies that transient graph-ingest errors arriving as the legacy
-// "error: <msg>" body shape surface to the caller as proper errors (not as
-// silently-decoded success data) after the handleQueryPrefix and
-// handleQueryHierarchyStats migration from plain Request() to RequestClassified().
+// This file verifies that graph-ingest handler errors surface to the caller as
+// proper *errs.ClassifiedError values (not silently decoded as success data) after
+// the handleQueryPrefix and handleQueryHierarchyStats migration from plain Request()
+// to RequestClassified().
 //
-// The mock's RequestClassified runs the body through ClassifyReply (legacy body
-// path — no real X-Error-Class header), exercising the same classification
-// behaviour the wire would trigger on pre-#93 handlers.
+// ADR-060 PR-D: the legacy "error: <msg>" body-prefix fallback is gone from
+// ClassifyReply. A handler failure is now signalled ONLY by the X-Status: error
+// header. Tests simulate this by returning (nil, classifiedErr) directly from
+// requestClassifiedFunc — the same shape the production wire produces after
+// ClassifyReply reconstructs from headers.
 package graphquery
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,14 +24,6 @@ import (
 
 	"github.com/c360studio/semstreams/pkg/errs"
 )
-
-// legacyErrorBody returns the wire body that pre-#93 handlers emit on failure.
-// ClassifyReply's body-prefix fallback maps this conservatively to ErrorInvalid.
-// With RequestClassified the error surfaces via err before the body reaches
-// json.Unmarshal — fixing silent corruption and enabling correct class detection.
-func legacyErrorBody(msg string) []byte {
-	return []byte("error: " + msg)
-}
 
 // newComponentForHandlerTest builds a minimal Component with router wired
 // without starting a full NATS connection. The router is the only dependency
@@ -40,31 +35,57 @@ func newComponentForHandlerTest(t *testing.T, mock *mockNATSClient) *Component {
 	return comp
 }
 
+// TestHandleQueryEntity_PassthroughPropagatesClassifiedError is the B1
+// regression lock (go-reviewer, ADR-060 PR-D). handleQueryEntity is a
+// passthrough to graph-ingest's graph.ingest.query.entity handler. A downstream
+// classified error (e.g. entity_not_found) MUST propagate as a *errs.ClassifiedError
+// so graph-query's SubscribeForRequests wrapper re-stamps the wire class+code —
+// it must NOT be re-emitted verbatim as a success body, which a consumer would
+// decode as a zero entity (the silent 404→200 PR-D would otherwise introduce
+// once the legacy error-body fallback was removed). Pre-PR-D this used plain
+// Request() and dropped the classification.
+func TestHandleQueryEntity_PassthroughPropagatesClassifiedError(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, "entity_not_found", errors.New("not found: acme.x"))
+	}
+
+	comp := newComponentForHandlerTest(t, mock)
+
+	resp, err := comp.handleQueryEntity(context.Background(), []byte(`{"id":"acme.x"}`))
+	require.Error(t, err, "a downstream classified error must propagate, not be re-emitted as a success body")
+	require.Nil(t, resp)
+	require.True(t, errs.IsInvalid(err), "the invalid class must survive the passthrough")
+	var ce *errs.ClassifiedError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, "entity_not_found", ce.Code, "the entity_not_found code must survive the passthrough (404 mapping)")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryPrefix — error-class fidelity (gh#304 primary fix)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestHandleQueryPrefix_TransientLegacyBodySurfacesAsError is the primary
+// TestHandleQueryPrefix_TransientHandlerErrorSurfacesAsError is the primary
 // regression lock for gh#304. A graph-ingest handler returning a transient
-// failure via the legacy "error: <msg>" body must reach the caller as a
-// non-nil error — NOT as a byte slice that json.Unmarshal would silently
-// decode as success data.
+// failure must reach the caller as a non-nil error — NOT as a byte slice that
+// json.Unmarshal would silently decode as success data.
 //
 // Before the fix: plain Request() returned the body verbatim with err==nil.
 // Callers that json.Unmarshal'd the body got silent corruption.
-// Callers that sniffed the "error: " prefix got ErrorInvalid (wrong class).
 //
-// After the fix: RequestClassified intercepts the body inside the mock's
-// ClassifyReply path and returns err != nil.
-func TestHandleQueryPrefix_TransientLegacyBodySurfacesAsError(t *testing.T) {
+// After the fix: RequestClassified returns a *errs.ClassifiedError directly;
+// the handler-under-test surfaces it as err != nil.
+func TestHandleQueryPrefix_TransientHandlerErrorSurfacesAsError(t *testing.T) {
 	t.Parallel()
 
 	mock := newMockNATSClient()
-	mock.requestFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
 		assert.Equal(t, "graph.ingest.query.prefix", subject,
 			"must forward to entityPrefix route")
-		// Pre-#93 transient failure emitted as legacy body shape
-		return legacyErrorBody("store unavailable"), nil
+		// Transient handler failure — e.g. store unavailable.
+		return nil, errs.Classified(errs.ErrorTransient, errors.New("store unavailable"))
 	}
 
 	comp := newComponentForHandlerTest(t, mock)
@@ -72,20 +93,25 @@ func TestHandleQueryPrefix_TransientLegacyBodySurfacesAsError(t *testing.T) {
 	resp, err := comp.handleQueryPrefix(context.Background(), []byte(`{"prefix":"acme","limit":100}`))
 
 	require.Error(t, err,
-		"legacy 'error: ' body must surface as err, not be returned as success bytes")
+		"handler error must surface as err, not be returned as success bytes")
 	assert.Nil(t, resp,
 		"response must be nil when the handler reported an error")
 }
 
-// TestHandleQueryPrefix_ErrorBodyNotSilentlyDecoded verifies that the "error: "
-// body cannot be fed to json.Unmarshal as though it were valid JSON — i.e. the
-// caller never receives the raw error string as a response payload.
-func TestHandleQueryPrefix_ErrorBodyNotSilentlyDecoded(t *testing.T) {
+// TestHandleQueryPrefix_HandlerErrorNotSilentlyDecoded verifies that a handler
+// error from graph-ingest cannot be fed to json.Unmarshal as though it were
+// valid JSON — the caller always receives err != nil and nil resp on failure.
+//
+// Regression: before gh#304 a raw "error: " body reached the caller with
+// err==nil; the caller's json.Unmarshal then silently produced a zero-value
+// struct (silent corruption). This test locks that path closed.
+func TestHandleQueryPrefix_HandlerErrorNotSilentlyDecoded(t *testing.T) {
 	t.Parallel()
 
 	mock := newMockNATSClient()
-	mock.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
-		return legacyErrorBody("jetstream timeout"), nil
+	mock.requestClassifiedFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		// Transient handler failure.
+		return nil, errs.Classified(errs.ErrorTransient, errors.New("jetstream timeout"))
 	}
 
 	comp := newComponentForHandlerTest(t, mock)
@@ -93,20 +119,18 @@ func TestHandleQueryPrefix_ErrorBodyNotSilentlyDecoded(t *testing.T) {
 	resp, err := comp.handleQueryPrefix(context.Background(), []byte(`{"prefix":"x","limit":1}`))
 
 	require.Error(t, err)
-	// The returned bytes (if any) must not be valid JSON wrapping an error string.
-	// (Regression: before the fix resp == []byte("error: jetstream timeout"), which
-	// the caller would then json.Unmarshal into a result struct silently.)
+	// resp must be nil on error — no body that could be silently unmarshalled.
 	if resp != nil {
-		// If resp is non-nil it should at least be valid JSON (not the raw error: body)
+		// If resp is non-nil it must be valid JSON (not a raw error string).
 		var probe interface{}
 		unmarshalErr := json.Unmarshal(resp, &probe)
 		assert.NoError(t, unmarshalErr,
-			"if resp is non-nil it must be valid JSON, not a raw 'error: ' string")
+			"if resp is non-nil it must be valid JSON, not a raw error string")
 	}
 }
 
 // TestHandleQueryPrefix_TransportErrorSurfacesAsTransient verifies that a NATS
-// transport error (returned as err from the mock, not as a legacy body) still
+// transport error (returned as err from the mock, not as a handler error) still
 // surfaces correctly after the RequestClassified migration.
 func TestHandleQueryPrefix_TransportErrorSurfacesAsTransient(t *testing.T) {
 	t.Parallel()
@@ -149,24 +173,26 @@ func TestHandleQueryPrefix_SuccessBodyPassesThroughIntact(t *testing.T) {
 // handleQueryHierarchyStats — error-class fidelity (gh#304 sibling fix)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestHandleQueryHierarchyStats_TransientLegacyBodySurfacesAsError is the
+// TestHandleQueryHierarchyStats_TransientHandlerErrorSurfacesAsError is the
 // regression lock for the hierarchyStats sibling fix (gh#304).
 //
-// Before the fix: plain Request() returned "error: <msg>" with err==nil;
-// json.Unmarshal tried to parse the error string as an entities envelope and
-// failed with "invalid character 'e'" — which was then wrapped as WrapInvalid.
-// A transient store failure arrived at the caller mis-classified as Invalid.
+// Before the fix: a transient store failure from graph-ingest arrived as an
+// "error: " body with err==nil; json.Unmarshal failed with "invalid character
+// 'e'" which was then wrapped as WrapInvalid — wrong class, and surfaced via
+// a parse-step error rather than the original handler failure.
 //
-// After the fix: RequestClassified intercepts the body and returns err != nil
-// before json.Unmarshal is called, preserving the error class signal.
-func TestHandleQueryHierarchyStats_TransientLegacyBodySurfacesAsError(t *testing.T) {
+// After the fix: RequestClassified returns (nil, classifiedErr) directly;
+// the handler surfaces it before json.Unmarshal is called, preserving both
+// the error class and the message origin.
+func TestHandleQueryHierarchyStats_TransientHandlerErrorSurfacesAsError(t *testing.T) {
 	t.Parallel()
 
 	mock := newMockNATSClient()
-	mock.requestFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
 		assert.Equal(t, "graph.ingest.query.prefix", subject,
 			"hierarchyStats must fan out to entityPrefix route")
-		return legacyErrorBody("raft store unavailable"), nil
+		// Transient handler failure from graph-ingest.
+		return nil, errs.Classified(errs.ErrorTransient, errors.New("raft store unavailable"))
 	}
 
 	comp := newComponentForHandlerTest(t, mock)
@@ -174,12 +200,12 @@ func TestHandleQueryHierarchyStats_TransientLegacyBodySurfacesAsError(t *testing
 	_, err := comp.handleQueryHierarchyStats(context.Background(), []byte(`{"prefix":"acme.ops"}`))
 
 	require.Error(t, err,
-		"legacy 'error: ' body from graph-ingest must surface via err return")
+		"handler error from graph-ingest must surface via err return")
 
 	// Key regression: before the fix this contained "invalid character 'e'" from
-	// json.Unmarshal trying to parse the "error: " body as an entities envelope.
+	// json.Unmarshal trying to parse an "error: " body as an entities envelope.
 	assert.NotContains(t, err.Error(), "invalid character",
-		"error must not be a JSON parse failure of the error: body (indicates pre-fix behaviour)")
+		"error must not be a JSON parse failure (indicates pre-fix behaviour where handler body reached Unmarshal)")
 	assert.NotContains(t, err.Error(), "parse prefix response",
 		"error must not be attributed to the parse step (pre-fix: unmarshal of error body)")
 }

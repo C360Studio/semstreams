@@ -268,10 +268,11 @@ func TestIntegration_SubscribeForRequests_Error(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Send request - should get error response
-	response, err := client.Request(ctx, subject, []byte("request"), 5*time.Second)
-	require.NoError(t, err)
-	assert.Contains(t, string(response), "error:")
+	// ADR-060: a handler error is the {message} envelope + X-Status header;
+	// RequestClassified surfaces it as a classified error carrying the message.
+	_, err = client.RequestClassified(ctx, subject, []byte("request"), 5*time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), assert.AnError.Error())
 }
 
 // TestIntegration_SubscribeForRequests_NotConnected tests subscription when not connected

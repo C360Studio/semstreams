@@ -209,7 +209,6 @@ func TestSharedSeam_CreateWithTriples_PartitionsClassifiesRoutesForeign(t *testi
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success, "create should succeed: %s", resp.Error)
 
 	// The primary stores ONLY its own triple — the foreign edge is not misfiled.
 	parent := storedEntity(t, comp, flParentID)
@@ -250,7 +249,6 @@ func TestSharedSeam_CreateWithTriples_SingleSubjectUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success)
 
 	parent := storedEntity(t, comp, flParentID)
 	assert.True(t, hasPredicate(parent, "system.label"))

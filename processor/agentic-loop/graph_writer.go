@@ -149,12 +149,12 @@ func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) 
 		return fmt.Errorf("unmarshal batch response: %w", err)
 	}
 
-	// ADR-060: a whole-batch failure now arrives as the classified err above.
-	// A PARTIAL batch (some subjects committed) still returns a success body
-	// with Success=false + FailedSubjects — that path is handled here.
-	if !resp.Success {
-		return fmt.Errorf("batch mutation failed (written=%d, failed=%v): %s",
-			resp.WrittenCount, resp.FailedSubjects, resp.Error)
+	// ADR-060: a whole-batch failure arrives as the classified err above. A
+	// PARTIAL batch (some subjects committed) returns a success body with
+	// FailedSubjects populated (per-subject errors in the map) — surface it.
+	if len(resp.FailedSubjects) > 0 {
+		return fmt.Errorf("batch mutation partial failure (written=%d, failed=%v)",
+			resp.WrittenCount, resp.FailedSubjects)
 	}
 
 	return nil

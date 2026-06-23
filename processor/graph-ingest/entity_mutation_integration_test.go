@@ -74,8 +74,6 @@ func TestIntegration_HandleEntityCreate_Success(t *testing.T) {
 
 	var resp graph.CreateEntityResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "create on fresh ID should succeed; err=%q", resp.Error)
-	assert.Empty(t, resp.Error)
 	assert.Equal(t, "req-create-1", resp.RequestID, "RequestID should round-trip")
 	assert.NotZero(t, resp.KVRevision, "revision should be set after a successful write")
 	require.NotNil(t, resp.Entity, "Entity should be populated in success response")
@@ -140,7 +138,6 @@ func TestIntegration_HandleEntityCreateWithTriples_PreservesProvenance(t *testin
 
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "create_with_triples on fresh ID should succeed; err=%q", resp.Error)
 	// 2 request triples + the ADR-054 entity.indexing.profile stamp applied at
 	// the create seam. TriplesAdded reflects the total stored on the entity.
 	assert.Equal(t, 3, resp.TriplesAdded)
@@ -203,7 +200,6 @@ func TestIntegration_HandleEntityUpdate_Success(t *testing.T) {
 
 	var resp graph.UpdateEntityResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "update on existing entity should succeed; err=%q", resp.Error)
 	assert.Equal(t, int64(2), resp.Version)
 }
 
@@ -238,7 +234,6 @@ func TestIntegration_HandleEntityUpdateWithTriples_AddAndRemove(t *testing.T) {
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "update_with_triples should succeed; err=%q", resp.Error)
 	assert.Equal(t, 1, resp.TriplesAdded)
 	assert.Equal(t, 1, resp.TriplesRemoved)
 
@@ -280,7 +275,6 @@ func applyUpdateWT(t *testing.T, ctx context.Context, c *Component, entityID str
 	require.NoError(t, err)
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "update_with_triples should succeed; err=%q", resp.Error)
 	stored, _, err := c.fetchEntityState(ctx, entityID)
 	require.NoError(t, err, "read back stored entity")
 	return stored.Triples
@@ -398,7 +392,6 @@ func TestIntegration_HandleEntityDelete_Existing(t *testing.T) {
 
 	var resp graph.DeleteEntityResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "delete of existing entity should succeed; err=%q", resp.Error)
 	assert.True(t, resp.Deleted, "Deleted should be true when the entity was present")
 
 	exists, err := c.entityExists(ctx, entityID)
@@ -421,7 +414,6 @@ func TestIntegration_HandleEntityDelete_Idempotent(t *testing.T) {
 
 	var resp graph.DeleteEntityResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.True(t, resp.Success, "delete of absent entity should succeed (idempotent)")
 	assert.False(t, resp.Deleted, "Deleted should be false when entity was already absent")
 }
 
@@ -520,7 +512,6 @@ func TestIntegration_HandleEntityUpdate_KVRevisionIncrements(t *testing.T) {
 	require.NoError(t, err)
 	var resp1 graph.UpdateEntityResponse
 	require.NoError(t, json.Unmarshal(r1, &resp1))
-	require.True(t, resp1.Success, "first update should succeed; err=%q", resp1.Error)
 
 	// Second update: revision must be strictly greater.
 	second := newMutationTestEntity(entityID)
@@ -529,7 +520,6 @@ func TestIntegration_HandleEntityUpdate_KVRevisionIncrements(t *testing.T) {
 	require.NoError(t, err)
 	var resp2 graph.UpdateEntityResponse
 	require.NoError(t, json.Unmarshal(r2, &resp2))
-	require.True(t, resp2.Success, "second update should succeed; err=%q", resp2.Error)
 
 	assert.Greater(t, resp2.KVRevision, resp1.KVRevision,
 		"sequential updates must produce strictly increasing KV revisions")
@@ -598,7 +588,6 @@ func TestIntegration_HandleEntityUpdateWithTriples_UnknownRemovePredicate(t *tes
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "unknown RemoveTriples predicate must not fail; err=%q", resp.Error)
 	assert.Equal(t, 0, resp.TriplesRemoved, "no triples should be removed when the named predicate isn't present")
 }
 
@@ -796,9 +785,7 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 				results[idx] = fmt.Sprintf("unmarshal: %v", err)
 				return
 			}
-			if !resp.Success {
-				results[idx] = resp.Error
-			}
+			_ = resp
 		}(i)
 	}
 	wg.Wait()
@@ -868,7 +855,6 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionSuccess(t *testing.
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "CAS-on-condition with matching rev should succeed; err=%q", resp.Error)
 	assert.Equal(t, 1, resp.TriplesAdded)
 	assert.Greater(t, resp.KVRevision, seedRev, "revision should increment after write")
 }
@@ -894,7 +880,6 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionMismatchAtRead(t *t
 	require.NoError(t, err)
 	var iResp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(intermediateResp, &iResp))
-	require.True(t, iResp.Success)
 
 	// Now caller submits with the STALE rev. CAS should reject at the
 	// read-time check.
@@ -945,7 +930,6 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionZeroKeepsExistingBe
 
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "zero-ExpectedRevision must use the existing UpdateWithRetry path")
 	assert.Equal(t, 1, resp.TriplesAdded)
 }
 
@@ -1012,15 +996,13 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 				}
 				return
 			}
-			var resp graph.UpdateEntityWithTriplesResponse
-			if err := json.Unmarshal(respBytes, &resp); err != nil {
+			var winner graph.UpdateEntityWithTriplesResponse
+			if err := json.Unmarshal(respBytes, &winner); err != nil {
 				return
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if resp.Success {
-				successCount++
-			}
+			successCount++
 		}(i)
 	}
 	wg.Wait()

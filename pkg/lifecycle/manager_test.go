@@ -71,7 +71,7 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 	state.Triples = merged
 	f.bucket.put(req.Entity.ID, &state)
 	return &graph.UpdateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{Success: true, KVRevision: f.bucket.revOf(req.Entity.ID)},
+		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
 		Entity:           &state,
 	}, nil
 }
@@ -91,7 +91,7 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
 	return &graph.CreateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{Success: true, KVRevision: f.bucket.revOf(req.Entity.ID)},
+		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
 		Entity:           &state,
 		TriplesAdded:     len(req.Triples),
 	}, nil

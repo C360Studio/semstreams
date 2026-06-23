@@ -87,9 +87,7 @@ func TestHandleQueryGraphSummary_HappyPath(t *testing.T) {
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Error != "" {
-		t.Fatalf("response error: %q", resp.Error)
-	}
+	// ADR-060: success is the nil err above; QueryResponse no longer carries Error.
 
 	summary := resp.Data
 	if summary.TotalEntities != 6 {

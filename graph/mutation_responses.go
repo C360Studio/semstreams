@@ -3,69 +3,62 @@
 package graph
 
 import (
-	"time"
-
 	"github.com/c360studio/semstreams/message"
 )
 
 // Mutation Response Types
 
-// MutationResponse is the base response for all mutations.
+// MutationResponse is the base SUCCESS body for all mutations.
 //
-// Three response shapes for entity-mutation handlers (#120):
+// ADR-060: a mutation reply is EITHER a success body (this type, with a nil
+// Go error) OR a single typed error value (*errs.ClassifiedError, carrying the
+// wire Class + Code) — never both. The in-body error signalling
+// (Success/Error/ErrorCode) was removed; the failure path no longer returns a
+// body. A caller branches on the `err` from RequestClassified /
+// RequestWithRetryClassified and reaches the machine code via
+// errors.As(err, &ce) → ce.Code (the ErrorCode* values below) and the
+// control-flow sentinel via errors.Is(err, errs.ErrRevisionMismatch).
 //
-//   - Success=true, Degraded=false → write committed, payload fully
-//     populated (Entity, KVRevision, Version, TriplesAdded all
-//     authoritative). Callers can rely on the response as the
-//     post-write source of truth.
+// Two SUCCESS shapes for entity-mutation handlers (#120):
 //
-//   - Success=true, Degraded=true → write committed durably, but the
-//     post-write read-back failed (context cancellation, JetStream
-//     node failover, bucket re-keyed). Entity may be nil and
-//     KVRevision may be 0; Error carries the read-back failure
-//     reason. **Callers MUST NOT retry** — a retry on create returns
-//     409 Conflict (the entity is there), and on update returns CAS
-//     mismatch (the revision moved). Either fetch the entity through
-//     a separate read path to recover the post-write state, or
-//     accept the write-without-echo and continue.
+//   - Degraded=false → write committed, payload fully populated (Entity,
+//     KVRevision, Version, TriplesAdded all authoritative). The response is
+//     the post-write source of truth.
 //
-//     Gateways translating this state to HTTP SHOULD return 200 OK
-//     with the Degraded flag echoed in the response body; do NOT
-//     return 202 Accepted — the write is COMMITTED, not pending.
+//   - Degraded=true → write committed durably, but the post-write read-back
+//     failed (context cancellation, JetStream node failover, bucket re-keyed).
+//     Entity may be nil and KVRevision may be 0; DegradedReason carries the
+//     read-back failure reason. **Callers MUST NOT retry** — a retry on create
+//     returns entity_already_exists (the entity is there), and on update a CAS
+//     mismatch (the revision moved). Either re-read through a separate read
+//     path or accept the write-without-echo and continue. Gateways SHOULD
+//     return 200 OK with the Degraded flag echoed; NOT 202 — the write is
+//     COMMITTED, not pending.
 //
-//   - Success=false → write did NOT commit. Error carries the
-//     pre-write failure reason. Callers MAY retry per the Error
-//     semantics (transient transport errors are safe to retry;
-//     validation errors are not).
+// Partial-batch success is also a success body, not an error: see
+// AddTriplesBatchResponse (FailedSubjects is the partial signal).
 //
-// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch)
-// don't use Degraded today — they have no post-write read-back step.
-// The field stays nil for those paths.
+// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch) don't use
+// Degraded — they have no post-write read-back step.
 type MutationResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	// ErrorCode is a stable, machine-readable identifier for the
-	// failure class. Use the ErrorCode* constants in this package
-	// for the closed set of well-known codes; callers branch on
-	// ErrorCode rather than substring-matching Error. Empty when
-	// Success=true OR for legacy/unclassified errors.
-	ErrorCode string `json:"error_code,omitempty"`
 	// Degraded is true when the write committed but the post-write
-	// read-back failed. See type docstring for the full three-state
-	// contract. Only entity-mutation handlers populate this; nil on
-	// triple-mutation responses. Omitted in JSON when false (the
-	// common case).
-	Degraded   bool   `json:"degraded,omitempty"`
-	TraceID    string `json:"trace_id,omitempty"`
-	RequestID  string `json:"request_id,omitempty"`
-	Timestamp  int64  `json:"timestamp"`             // Unix nano timestamp
-	KVRevision uint64 `json:"kv_revision,omitempty"` // KV bucket revision after write
+	// read-back failed. See type docstring for the full contract. Only
+	// entity-mutation handlers populate this. Omitted in JSON when false.
+	Degraded bool `json:"degraded,omitempty"`
+	// DegradedReason carries the read-back failure reason when Degraded is
+	// true (ADR-060: replaces the retired Error field on the degraded path).
+	DegradedReason string `json:"degraded_reason,omitempty"`
+	TraceID        string `json:"trace_id,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	Timestamp      int64  `json:"timestamp"`             // Unix nano timestamp
+	KVRevision     uint64 `json:"kv_revision,omitempty"` // KV bucket revision after write
 }
 
-// Stable error codes for MutationResponse.ErrorCode. Callers branch on
-// these rather than substring-matching Error. The set is closed —
-// adding a new value requires updating both this declaration and the
-// handler call sites in processor/graph-ingest that emit it.
+// Stable failure codes carried by *errs.ClassifiedError.Code on the mutation
+// error path (ADR-060). Reached caller-side via errors.As(err, &ce) → ce.Code;
+// revision_mismatch additionally matches the errs.ErrRevisionMismatch sentinel
+// via errors.Is. The set is closed — adding a value requires updating both this
+// declaration and the graph-ingest handler that emits it.
 const (
 	// ErrorCodeRevisionMismatch indicates the request specified an
 	// ExpectedRevision that didn't match the entity's current KV
@@ -149,25 +142,20 @@ type AddTripleResponse struct {
 }
 
 // AddTriplesBatchResponse response for batched triple addition.
-// Success is true iff all entities in the batch were updated. On
-// partial failure, FailedSubjects names the entity IDs that did not
-// commit, mapped to their error messages, so the caller can decide
-// whether to retry the failed subset, fall back to per-triple
-// AddTriple, or surface to the user. WrittenCount is the number of
-// triples that successfully committed across all entities.
 //
-// Discriminating rejection phases on Success=false:
+// ADR-060: a WHOLE-batch failure (nothing committed) is a typed error on the
+// err channel, not a body. This body is returned (with a nil Go error) for full
+// success AND for PARTIAL success — FailedSubjects is the partial signal:
 //
-//   - FailedSubjects empty/nil + WrittenCount=0 → pre-CAS validation
-//     rejected the whole batch (e.g. empty Subject/Predicate, malformed
-//     envelope). Nothing committed; safe to retry after fixing the
-//     input.
-//   - FailedSubjects non-empty → CAS phase reached. Per-entity
-//     atomicity means subjects NOT in FailedSubjects DID commit (their
-//     triples are durable); subjects in FailedSubjects rolled back. The
-//     caller can retry just the failed subset.
-//   - Success=true, FailedSubjects empty, WrittenCount>0 → all
-//     entities committed.
+//   - FailedSubjects empty + WrittenCount>0 → all entities committed.
+//   - FailedSubjects non-empty → PARTIAL success: per-entity atomicity means
+//     subjects NOT in FailedSubjects DID commit (durable); subjects in
+//     FailedSubjects rolled back. The caller retries just the failed subset.
+//     This is a success body (nil err), NOT a Go error — turning partial
+//     success into an error would make a committed write look retryable.
+//
+// FailedSubjects maps the failing entity IDs to their per-subject error
+// message. WrittenCount is the number of triples committed across all entities.
 type AddTriplesBatchResponse struct {
 	MutationResponse
 	WrittenCount   int               `json:"written_count"`
@@ -178,20 +166,4 @@ type AddTriplesBatchResponse struct {
 type RemoveTripleResponse struct {
 	MutationResponse
 	Removed bool `json:"removed"`
-}
-
-// Helper functions
-
-// NewMutationResponse creates a base mutation response
-func NewMutationResponse(success bool, err error, traceID, requestID string) MutationResponse {
-	resp := MutationResponse{
-		Success:   success,
-		TraceID:   traceID,
-		RequestID: requestID,
-		Timestamp: time.Now().UnixNano(),
-	}
-	if err != nil {
-		resp.Error = err.Error()
-	}
-	return resp
 }

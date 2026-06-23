@@ -49,7 +49,6 @@ func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, erro
 
 	resp := gtypes.AddTripleResponse{
 		MutationResponse: gtypes.MutationResponse{
-			Success:   true,
 			Timestamp: time.Now().UnixNano(),
 		},
 	}
@@ -70,7 +69,6 @@ func (tc *tripleCollector) batchHandler(_ context.Context, data []byte) ([]byte,
 
 	resp := gtypes.AddTriplesBatchResponse{
 		MutationResponse: gtypes.MutationResponse{
-			Success:   true,
 			Timestamp: time.Now().UnixNano(),
 		},
 		WrittenCount: len(req.Triples),
@@ -149,7 +147,6 @@ func (r *createWithTriplesResponder) handler(_ context.Context, data []byte) ([]
 	default:
 		resp := gtypes.CreateEntityWithTriplesResponse{
 			MutationResponse: gtypes.MutationResponse{
-				Success:   true,
 				Timestamp: time.Now().UnixNano(),
 			},
 			TriplesAdded: len(req.Triples),

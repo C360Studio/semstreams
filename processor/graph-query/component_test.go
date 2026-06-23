@@ -57,8 +57,12 @@ func (m *mockNATSClient) Request(ctx context.Context, subject string, data []byt
 
 // RequestClassified routes through requestClassifiedFunc when set
 // (for tests injecting classified errors directly, e.g. Transient/Fatal),
-// otherwise falls through to Request + ClassifyReply against the legacy
-// body-prefix path — matches how a pre-#93 handler behaves today.
+// otherwise falls through to Request + ClassifyReply using a synthetic
+// success-only message (no X-Status header). ADR-060 PR-D removed the
+// legacy "error: " body-prefix fallback from ClassifyReply; a body
+// returned by requestFunc with nil error is now always treated as success.
+// Tests that simulate handler errors must set requestClassifiedFunc and
+// return (nil, classifiedErr) directly.
 func (m *mockNATSClient) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	if m.requestClassifiedFunc != nil {
 		return m.requestClassifiedFunc(ctx, subject, data, timeout)
@@ -67,9 +71,9 @@ func (m *mockNATSClient) RequestClassified(ctx context.Context, subject string, 
 	if err != nil {
 		return nil, err
 	}
-	// Synthesize a *nats.Msg with no headers and the body bytes so
-	// ClassifyReply runs against the same shape it would see from
-	// the wire. Avoids depending on a real connection.
+	// Synthesize a *nats.Msg with no X-Status header so ClassifyReply
+	// treats the body as a success response (the only shape it accepts
+	// after ADR-060 PR-D). Avoids depending on a real connection.
 	msg := &nats.Msg{Data: body, Header: nats.Header{}}
 	return natsclient.ClassifyReply(msg)
 }

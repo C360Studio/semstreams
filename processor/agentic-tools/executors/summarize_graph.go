@@ -179,24 +179,15 @@ func (e *SummarizeGraphExecutor) Execute(ctx context.Context, call agentic.ToolC
 		}, nil
 	}
 
+	// ADR-060: the handler returns (nil, *errs.ClassifiedError) on failure,
+	// surfaced via err above (classifyRequestError); the success body carries no
+	// error field. Decode for the success data only.
 	var resp graph.QueryResponse[graph.SummaryData]
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("parse summarize_graph response: %v", err),
 			ErrorKind: agentic.ToolErrorInternal,
-		}, nil
-	}
-	// Belt-and-suspenders: the server-side handler today always returns
-	// (nil, err) on failure rather than NewQueryError, so resp.Error
-	// is effectively unreachable. Keeping the check guards against a
-	// future refactor that switches the handler to wrapped error
-	// responses without breaking the agent-facing semantics.
-	if resp.Error != "" {
-		return agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     fmt.Sprintf("summarize_graph server error: %s", resp.Error),
-			ErrorKind: agentic.ToolErrorExternal,
 		}, nil
 	}
 

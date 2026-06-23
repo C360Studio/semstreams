@@ -211,8 +211,6 @@ func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
 
 	var resp graph.AddTriplesBatchResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.True(t, resp.Success)
-	assert.Empty(t, resp.Error)
 	assert.Equal(t, 2, resp.WrittenCount)
 	assert.Empty(t, resp.FailedSubjects)
 }
@@ -340,9 +338,6 @@ func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
 
 	var resp graph.AddTriplesBatchResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Success, "absent entity must produce Success=false")
-	assert.Equal(t, graph.ErrorCodeEntityNotFound, resp.ErrorCode,
-		"all-absent batch must produce ErrorCode=entity_not_found")
 	assert.Equal(t, 0, resp.WrittenCount, "no triples must be written for an absent entity")
 	require.Len(t, resp.FailedSubjects, 1, "FailedSubjects must name the one failing subject")
 	assert.Contains(t, resp.FailedSubjects, subject, "FailedSubjects must include the absent subject")

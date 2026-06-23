@@ -66,33 +66,31 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		// Preserve historic wire body shape "error: invalid request: <inner>"
-		// for downstream consumers (semconnect's classifyEntityQueryError
-		// HasPrefix-matches "invalid request:", todos.go matches
-		// "error: not found", etc.) until Phase 2 retires the sniffers.
-		// errs.Classified carries the X-Error-Class header without the
-		// Wrap formula's attribution prefix.
-		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("invalid request: %w", err))
+		// ADR-060: invalid request → invalid class + Code invalid_request, so a
+		// consumer reads ce.Code instead of sniffing the message.
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
+			fmt.Errorf("invalid request: %w", err))
 	}
 
 	// Validate request
 	if req.ID == "" {
-		return nil, errs.Classified(errs.ErrorInvalid, errors.New("invalid request: empty id"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
+			errors.New("invalid request: empty id"))
 	}
 
 	// Get entity from KV bucket
 	entry, err := c.entityBucket.Get(ctx, req.ID)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
-			// HTTP semantics (400 vs 404) live at the gateway —
-			// "not found" classifies as Invalid at the wire boundary;
-			// the "not found: <id>" body prefix is the contract
-			// downstream consumers HasPrefix-match for 404 routing
-			// (semconnect:cs-api/systems.go:596,
-			// agentic-loop/todos.go:31).
-			return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("not found: %s", req.ID))
+			// HTTP semantics (400 vs 404) live at the gateway. ADR-060: not-found
+			// classifies as Invalid at the wire boundary and carries the stable
+			// Code entity_not_found, so a gateway routes 404 off ce.Code rather
+			// than substring-sniffing the message.
+			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEntityNotFound,
+				fmt.Errorf("not found: %s", req.ID))
 		}
-		return nil, errs.Classified(errs.ErrorTransient, fmt.Errorf("internal error: %w", err))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal,
+			fmt.Errorf("internal error: %w", err))
 	}
 
 	return entry.Value, nil
