@@ -57,22 +57,27 @@ func TestClassifiedFromHeader_RoundTrips(t *testing.T) {
 	cases := []struct {
 		name        string
 		class       string
+		code        string
 		msg         string
 		isInvalid   bool
 		isTransient bool
 		isFatal     bool
+		wantCode    string
 	}{
 		{name: "invalid", class: ErrorClassInvalid, msg: "bad input", isInvalid: true},
 		{name: "fatal", class: ErrorClassFatal, msg: "kv gone", isFatal: true},
 		{name: "transient", class: ErrorClassTransient, msg: "timeout", isTransient: true},
 		{name: "unknown_class_falls_back_invalid", class: "weird", msg: "x", isInvalid: true},
 		{name: "empty_message_synthesized", class: ErrorClassInvalid, msg: "", isInvalid: true},
+		// ADR-060: a coded header sets ce.Code on the reconstructed error.
+		{name: "coded_not_found", class: ErrorClassInvalid, code: "entity_not_found", msg: "not found: x", isInvalid: true, wantCode: "entity_not_found"},
+		{name: "coded_revision_mismatch", class: ErrorClassInvalid, code: "revision_mismatch", msg: "revision mismatch", isInvalid: true, wantCode: "revision_mismatch"},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := classifiedFromHeader(tc.class, tc.msg)
+			err := classifiedFromHeader(tc.class, tc.code, tc.msg)
 			if err == nil {
 				t.Fatal("expected non-nil error")
 			}
@@ -84,6 +89,13 @@ func TestClassifiedFromHeader_RoundTrips(t *testing.T) {
 			}
 			if errs.IsFatal(err) != tc.isFatal {
 				t.Errorf("IsFatal = %v, want %v (err=%v)", errs.IsFatal(err), tc.isFatal, err)
+			}
+			var ce *errs.ClassifiedError
+			if !errors.As(err, &ce) {
+				t.Fatalf("err is not a *errs.ClassifiedError: %v", err)
+			}
+			if ce.Code != tc.wantCode {
+				t.Errorf("ce.Code = %q, want %q", ce.Code, tc.wantCode)
 			}
 		})
 	}
