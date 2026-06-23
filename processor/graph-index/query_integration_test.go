@@ -5,6 +5,7 @@ package graphindex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -462,12 +464,19 @@ func TestQueryNotFound_Integration(t *testing.T) {
 	})
 }
 
-// TestQueryInvalidRequest_Integration tests invalid request handling
+// TestQueryInvalidRequest_Integration tests invalid request handling.
+//
+// ADR-060 PR-B: the *NATS query handlers now return a classified Go
+// error (errs.ClassifiedCode(ErrorInvalid, ErrorCodeInvalidRequest, ...))
+// instead of a QueryResponse[T]{Error} success envelope. Drive the
+// round-trip through the production RequestClassified path and assert the
+// reconstructed *errs.ClassifiedError carries the invalid class + the
+// stable invalid_request code.
 func TestQueryInvalidRequest_Integration(t *testing.T) {
 	_, natsClient, cleanup := setupIntegrationTest(t)
 	defer cleanup()
 
-	nc := natsClient.GetConnection()
+	ctx := context.Background()
 
 	tests := []struct {
 		name    string
@@ -499,23 +508,40 @@ func TestQueryInvalidRequest_Integration(t *testing.T) {
 			subject: "graph.index.query.predicate",
 			request: []byte(`{"predicate": ""}`),
 		},
+		{
+			name:    "predicateStats empty predicate",
+			subject: "graph.index.query.predicateStats",
+			request: []byte(`{"predicate": ""}`),
+		},
+		{
+			name:    "predicateCompound empty predicates",
+			subject: "graph.index.query.predicateCompound",
+			request: []byte(`{"predicates": [], "operator": "AND"}`),
+		},
+		{
+			name:    "predicateCompound bad operator",
+			subject: "graph.index.query.predicateCompound",
+			request: []byte(`{"predicates": ["p"], "operator": "XOR"}`),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Send query request
-			msg, err := nc.Request(tt.subject, tt.request, 2*time.Second)
-			require.NoError(t, err)
+			// Drive the production caller path: RequestClassified runs the
+			// reply through ClassifyReply so a handler Go-error arrives as a
+			// classified error rather than a success envelope.
+			respData, err := natsClient.RequestClassified(ctx, tt.subject, tt.request, 2*time.Second)
+			require.Error(t, err, "invalid request must surface as a classified error")
+			require.Nil(t, respData, "no success body on the failure path")
 
-			// Should get error response in envelope format
-			var response struct {
-				Error *string `json:"error"`
-			}
-			err = json.Unmarshal(msg.Data, &response)
-			require.NoError(t, err)
+			// Coarse class branch (works for every consumer today).
+			assert.True(t, errs.IsInvalid(err), "invalid request should classify as ErrorInvalid")
 
-			require.NotNil(t, response.Error, "should have error field")
-			assert.NotEmpty(t, *response.Error, "error message should not be empty")
+			// Stable machine code reachable via errors.As (ADR-060).
+			var ce *errs.ClassifiedError
+			require.True(t, errors.As(err, &ce), "error must be a *errs.ClassifiedError")
+			assert.Equal(t, graph.ErrorCodeInvalidRequest, ce.Code,
+				"invalid request must carry the invalid_request code")
 		})
 	}
 }

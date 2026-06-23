@@ -828,7 +828,7 @@ func (qc *natsClient) GetEntitiesByPredicate(ctx context.Context, predicate stri
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	respData, err := qc.natsClient.Request(ctx, "graph.index.query.predicate", reqData, 5*time.Second)
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.predicate", reqData, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query predicate: %w", err)
 	}
@@ -838,10 +838,6 @@ func (qc *natsClient) GetEntitiesByPredicate(ctx context.Context, predicate stri
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	if resp.Error != "" {
-		return nil, fmt.Errorf("query error: %s", resp.Error)
-	}
-
 	return resp.Data.Entities, nil
 }
 
@@ -849,7 +845,7 @@ func (qc *natsClient) GetEntitiesByPredicate(ctx context.Context, predicate stri
 func (qc *natsClient) ListPredicates(ctx context.Context) ([]gtypes.PredicateSummary, error) {
 	atomic.AddInt64(&qc.queryCount, 1)
 
-	respData, err := qc.natsClient.Request(ctx, "graph.index.query.predicateList", []byte("{}"), 30*time.Second)
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.predicateList", []byte("{}"), 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query predicates: %w", err)
 	}
@@ -857,10 +853,6 @@ func (qc *natsClient) ListPredicates(ctx context.Context) ([]gtypes.PredicateSum
 	var resp gtypes.PredicateListQueryResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if resp.Error != "" {
-		return nil, fmt.Errorf("query error: %s", resp.Error)
 	}
 
 	return resp.Data.Predicates, nil
@@ -884,7 +876,7 @@ func (qc *natsClient) GetPredicateStats(ctx context.Context, predicate string, s
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	respData, err := qc.natsClient.Request(ctx, "graph.index.query.predicateStats", reqData, 5*time.Second)
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.predicateStats", reqData, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query predicate stats: %w", err)
 	}
@@ -892,10 +884,6 @@ func (qc *natsClient) GetPredicateStats(ctx context.Context, predicate string, s
 	var resp gtypes.PredicateStatsQueryResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if resp.Error != "" {
-		return nil, fmt.Errorf("query error: %s", resp.Error)
 	}
 
 	return &resp.Data, nil
@@ -917,7 +905,7 @@ func (qc *natsClient) QueryCompoundPredicates(ctx context.Context, query gtypes.
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	respData, err := qc.natsClient.Request(ctx, "graph.index.query.predicateCompound", reqData, 5*time.Second)
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.predicateCompound", reqData, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query compound predicates: %w", err)
 	}
@@ -925,10 +913,6 @@ func (qc *natsClient) QueryCompoundPredicates(ctx context.Context, query gtypes.
 	var resp gtypes.CompoundPredicateQueryResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	if resp.Error != "" {
-		return nil, fmt.Errorf("query error: %s", resp.Error)
 	}
 
 	return resp.Data.Entities, nil

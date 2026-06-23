@@ -4,6 +4,7 @@ package graphindex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -88,11 +89,11 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 		EntityID string `json:"entity_id"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.OutgoingRelationshipsData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if req.EntityID == "" {
-		return json.Marshal(graph.NewQueryError[graph.OutgoingRelationshipsData]("invalid request: empty entity_id"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
 	entry, err := c.outgoingBucket.Get(ctx, req.EntityID)
@@ -102,12 +103,12 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 				Relationships: []graph.OutgoingEntry{},
 			}))
 		}
-		return json.Marshal(graph.NewQueryError[graph.OutgoingRelationshipsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	var entries []graph.OutgoingEntry
 	if err := json.Unmarshal(entry.Value, &entries); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.OutgoingRelationshipsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.OutgoingRelationshipsData{
@@ -124,11 +125,11 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		EntityID string `json:"entity_id"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.IncomingRelationshipsData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if req.EntityID == "" {
-		return json.Marshal(graph.NewQueryError[graph.IncomingRelationshipsData]("invalid request: empty entity_id"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
 	entry, err := c.incomingBucket.Get(ctx, req.EntityID)
@@ -138,12 +139,12 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 				Relationships: []graph.IncomingEntry{},
 			}))
 		}
-		return json.Marshal(graph.NewQueryError[graph.IncomingRelationshipsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	var entries []graph.IncomingEntry
 	if err := json.Unmarshal(entry.Value, &entries); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.IncomingRelationshipsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
@@ -160,11 +161,11 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 		Alias string `json:"alias"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.AliasData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if req.Alias == "" {
-		return json.Marshal(graph.NewQueryError[graph.AliasData]("invalid request: empty alias"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty alias"))
 	}
 
 	entry, err := c.aliasBucket.Get(ctx, req.Alias)
@@ -174,7 +175,7 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 				CanonicalID: nil,
 			}))
 		}
-		return json.Marshal(graph.NewQueryError[graph.AliasData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	canonicalID := string(entry.Value)
@@ -194,16 +195,16 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 		Limit     int     `json:"limit,omitempty"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.PredicateData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if req.Predicate == "" {
-		return json.Marshal(graph.NewQueryError[graph.PredicateData]("invalid request: empty predicate"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicate"))
 	}
 
 	entities, err := c.queryPredicateEntities(ctx, req.Predicate, req.Value, req.Limit)
 	if err != nil {
-		return json.Marshal(graph.NewQueryError[graph.PredicateData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.PredicateData{
@@ -314,7 +315,7 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, _ []byte) 
 	// Get all predicate keys from the bucket
 	keys, err := c.predicateBucket.Keys(ctx)
 	if err != nil {
-		return json.Marshal(graph.NewQueryError[graph.PredicateListData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 	if len(keys) == 0 {
 		return json.Marshal(graph.NewQueryResponse(graph.PredicateListData{
@@ -358,11 +359,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 		SampleLimit int    `json:"sample_limit"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.PredicateStatsData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if req.Predicate == "" {
-		return json.Marshal(graph.NewQueryError[graph.PredicateStatsData]("invalid request: empty predicate"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicate"))
 	}
 
 	// Default sample limit
@@ -379,12 +380,12 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 				SampleEntities: []string{},
 			}))
 		}
-		return json.Marshal(graph.NewQueryError[graph.PredicateStatsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	var indexEntry graph.PredicateIndexEntry
 	if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.PredicateStatsData]("internal error"))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	// Get sample entities
@@ -408,16 +409,16 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 
 	var req graph.CompoundPredicateQuery
 	if err := json.Unmarshal(data, &req); err != nil {
-		return json.Marshal(graph.NewQueryError[graph.CompoundPredicateData]("invalid request"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
 	if len(req.Predicates) == 0 {
-		return json.Marshal(graph.NewQueryError[graph.CompoundPredicateData]("invalid request: empty predicates"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicates"))
 	}
 
 	operator := req.Operator
 	if operator != "AND" && operator != "OR" {
-		return json.Marshal(graph.NewQueryError[graph.CompoundPredicateData]("invalid request: operator must be AND or OR"))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: operator must be AND or OR"))
 	}
 
 	// Collect entity sets for each predicate
@@ -430,12 +431,12 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 				entitySets = append(entitySets, make(map[string]struct{}))
 				continue
 			}
-			return json.Marshal(graph.NewQueryError[graph.CompoundPredicateData]("internal error"))
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 		}
 
 		var indexEntry graph.PredicateIndexEntry
 		if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-			return json.Marshal(graph.NewQueryError[graph.CompoundPredicateData]("internal error"))
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 		}
 
 		entitySet := make(map[string]struct{}, len(indexEntry.Entities))
