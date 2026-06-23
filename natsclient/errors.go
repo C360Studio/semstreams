@@ -70,11 +70,14 @@
 // taxonomy (invalid / transient / fatal) is the ONLY structured
 // signal that round-trips today.
 //
-// If a future consumer needs sentinel-Is parity across the wire,
-// the path is adding an X-Error-Sentinel header with a small
-// allowlist of framework-recognized sentinel IDs; classifiedFromHeader
-// would graft the real sentinel back into the wrap chain. Filed as
-// follow-up to gh#93 (out of Phase 1 scope).
+// ADR-060 delivers sentinel-Is parity for the one control-flow code
+// that needs it: the X-Error-Code header carries the stable machine
+// Code, classifiedFromHeader sets it on the reconstructed
+// *errs.ClassifiedError, and (*ClassifiedError).Is matches it by Code —
+// so errors.Is(err, errs.ErrRevisionMismatch) round-trips the wire. The
+// general discriminator is ce.Code (via errors.As); only revision_mismatch
+// gets a named sentinel (no other code has a looping consumer). This
+// supersedes the earlier deferred X-Error-Sentinel-header idea.
 package natsclient
 
 import (
@@ -100,6 +103,18 @@ const (
 	// lowercase string: "transient", "invalid", or "fatal". Set
 	// only when HeaderStatus == HeaderStatusError.
 	HeaderErrorClass = "X-Error-Class"
+
+	// HeaderErrorCode carries the ADR-060 stable machine Code for the
+	// failure (the graph.ErrorCode* values: "entity_not_found",
+	// "revision_mismatch", ...). Additive over the gh#93 header set:
+	// legacy callers ignore it; ClassifyReply reads it into
+	// (*errs.ClassifiedError).Code so errors.Is(err, ErrRevisionMismatch)
+	// and ce.Code discrimination work across the wire. Set ONLY when the
+	// handler error carries a non-empty Code, so existing uncoded handler
+	// errors are byte-for-byte unchanged on the wire (the reply body is
+	// also unchanged — Code rides the header; the standard error body for
+	// Detail lands with the breaking PR).
+	HeaderErrorCode = "X-Error-Code"
 )
 
 // Values used in HeaderStatus / HeaderErrorClass.
@@ -151,6 +166,9 @@ func RespondError(msg *nats.Msg, err error) error {
 	reply.Header = make(nats.Header)
 	reply.Header.Set(HeaderStatus, HeaderStatusError)
 	reply.Header.Set(HeaderErrorClass, classForHeader(err))
+	if code := codeForHeader(err); code != "" {
+		reply.Header.Set(HeaderErrorCode, code)
+	}
 	reply.Data = []byte(legacyErrorBodyPrefix)
 	reply.Data = append(reply.Data, err.Error()...)
 
@@ -171,6 +189,9 @@ func (c *Client) ReplyError(ctx context.Context, replyTo string, err error) erro
 	headers := map[string]string{
 		HeaderStatus:     HeaderStatusError,
 		HeaderErrorClass: classForHeader(err),
+	}
+	if code := codeForHeader(err); code != "" {
+		headers[HeaderErrorCode] = code
 	}
 	return c.ReplyWithHeaders(ctx, replyTo, body, headers)
 }
@@ -206,16 +227,21 @@ func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 		if bytes.HasPrefix(body, legacyErrorBodyPrefix) {
 			body = bytes.TrimPrefix(body, legacyErrorBodyPrefix)
 		}
-		return nil, classifiedFromHeader(msg.Header.Get(HeaderErrorClass), string(body))
+		return nil, classifiedFromHeader(
+			msg.Header.Get(HeaderErrorClass),
+			msg.Header.Get(HeaderErrorCode),
+			string(body),
+		)
 	}
 
 	if bytes.HasPrefix(msg.Data, legacyErrorBodyPrefix) {
 		// Pre-#93 handler — no header signal. Conservative default:
 		// classify as invalid so callers don't loop-retry on an
 		// unknown shape. Gateways doing finer-grained mapping can
-		// substring-check the unwrapped message.
+		// substring-check the unwrapped message. No code on the legacy
+		// path (pre-ADR-060 handlers don't carry one).
 		body := bytes.TrimPrefix(msg.Data, legacyErrorBodyPrefix)
-		return nil, classifiedFromHeader(ErrorClassInvalid, string(body))
+		return nil, classifiedFromHeader(ErrorClassInvalid, "", string(body))
 	}
 
 	return msg.Data, nil
@@ -301,34 +327,55 @@ func classForHeader(err error) string {
 	}
 }
 
+// codeForHeader extracts the ADR-060 stable machine Code from err when
+// it carries (or wraps) a *errs.ClassifiedError with a non-empty Code;
+// "" otherwise. Returning "" means RespondError / ReplyError stamp no
+// X-Error-Code header, so uncoded handler errors are unchanged on the wire.
+func codeForHeader(err error) string {
+	var ce *errs.ClassifiedError
+	if errors.As(err, &ce) {
+		return ce.Code
+	}
+	return ""
+}
+
 // classifiedFromHeader reconstructs a *errs.ClassifiedError from the
-// X-Error-Class header value + the unwrapped body message. Uses
-// errs.Classified (the bare constructor) rather than the Wrap*
-// family so the inner message survives verbatim — external surfaces
-// (GraphQL responses, agent tool results) get the handler's clean
-// text via err.Error() instead of a leaky framework-attribution
-// prefix.
+// X-Error-Class header value, the X-Error-Code header value (ADR-060),
+// and the unwrapped body message. Uses errs.Classified / ClassifiedCode
+// (the bare constructors) rather than the Wrap* family so the inner
+// message survives verbatim — external surfaces (GraphQL responses, agent
+// tool results) get the handler's clean text via err.Error() instead of a
+// leaky framework-attribution prefix.
 //
-// The resulting error round-trips through errs.IsInvalid /
-// IsTransient / IsFatal correctly because errs.Classified preserves
-// the class tag on the ClassifiedError struct.
+// When code is non-empty the reconstructed error carries it, so
+// errors.Is(err, errs.ErrRevisionMismatch) and ce.Code discrimination
+// work caller-side (the (*ClassifiedError).Is method matches by Code).
+// When code is empty the result is exactly as before ADR-060 — uncoded.
 //
-// Unknown class strings fall back to invalid (the conservative
-// choice — a caller seeing IsInvalid won't retry on a class they
-// don't recognize, vs IsTransient which would loop).
-func classifiedFromHeader(class, message string) error {
+// The resulting error round-trips through errs.IsInvalid / IsTransient /
+// IsFatal correctly because the bare constructors preserve the class tag.
+//
+// Unknown class strings fall back to invalid (the conservative choice — a
+// caller seeing IsInvalid won't retry on a class they don't recognize, vs
+// IsTransient which would loop).
+func classifiedFromHeader(class, code, message string) error {
 	if message == "" {
 		message = "handler error"
 	}
 	inner := errors.New(message)
+	var ec errs.ErrorClass
 	switch class {
-	case ErrorClassInvalid:
-		return errs.Classified(errs.ErrorInvalid, inner)
 	case ErrorClassFatal:
-		return errs.Classified(errs.ErrorFatal, inner)
+		ec = errs.ErrorFatal
 	case ErrorClassTransient:
-		return errs.Classified(errs.ErrorTransient, inner)
+		ec = errs.ErrorTransient
+	case ErrorClassInvalid:
+		ec = errs.ErrorInvalid
 	default:
-		return errs.Classified(errs.ErrorInvalid, inner)
+		ec = errs.ErrorInvalid
 	}
+	if code != "" {
+		return errs.ClassifiedCode(ec, code, inner)
+	}
+	return errs.Classified(ec, inner)
 }

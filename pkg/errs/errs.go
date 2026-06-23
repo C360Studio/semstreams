@@ -81,26 +81,74 @@ var (
 	ErrRetryTimeout       = errors.New("retry timeout exceeded")
 )
 
-// ClassifiedError wraps an error with its classification
+// ClassifiedError wraps an error with its classification.
+//
+// Code and Detail (added by ADR-060, the unified RPC error contract)
+// carry the machine-readable failure shape across the natsclient wire:
+// Code is a stable discriminator (the graph.ErrorCode* values —
+// "entity_not_found", "revision_mismatch", ...); Detail carries
+// structured context (entity id, revisions). Both are zero (empty / nil)
+// for errors that predate or don't participate in the contract — every
+// existing construction path leaves them empty, which is exactly what
+// keeps the Is method below collision-free.
 type ClassifiedError struct {
 	Class     ErrorClass
 	Err       error
 	Message   string
 	Component string
 	Operation string
+	Code      string         // ADR-060: stable machine code; "" = uncoded.
+	Detail    map[string]any // ADR-060: structured detail; nil = none.
 }
 
-// Error implements the error interface
+// Error implements the error interface.
+//
+// Nil-safe on Err: control-flow sentinels (ErrRevisionMismatch) carry a
+// Message but no wrapped Err, so Error() must not deref a nil Err.
 func (ce *ClassifiedError) Error() string {
 	if ce.Message != "" {
 		return ce.Message
 	}
-	return ce.Err.Error()
+	if ce.Err != nil {
+		return ce.Err.Error()
+	}
+	if ce.Code != "" {
+		return ce.Code
+	}
+	return "classified error"
 }
 
 // Unwrap returns the underlying error
 func (ce *ClassifiedError) Unwrap() error {
 	return ce.Err
+}
+
+// Is reports whether ce matches target as a sentinel, BY CODE. Added for
+// ADR-060 so control-flow sentinels (ErrRevisionMismatch) round-trip the
+// natsclient wire: ClassifyReply sets Code on the reconstructed error,
+// and errors.Is(err, ErrRevisionMismatch) resolves here.
+//
+// Two guards are LOAD-BEARING and locked by the TestClassifiedError_Is_*
+// tests — do not remove them:
+//
+//  1. target must resolve to a *ClassifiedError (errors.As). Otherwise
+//     errors.Is(err, context.Canceled), sql.ErrNoRows, and any plain
+//     sentinel (e.g. a gateway's local errEntityNotFound) correctly
+//     return false here and fall through to the normal Unwrap walk.
+//  2. the target's Code must be NON-EMPTY. Without this, two uncoded
+//     ClassifiedErrors ("" == "") would false-match — and every
+//     wire-reconstructed error was uncoded before ADR-060, so an
+//     unguarded Is would silently collide across unrelated errors.
+//
+// A sentinel is shaped {Code: non-empty, Err: nil}; matching is Code
+// equality. Real (non-sentinel) errors carry a non-nil Err, so two real
+// same-code errors never match each other as sentinels.
+func (ce *ClassifiedError) Is(target error) bool {
+	var t *ClassifiedError
+	if !errors.As(target, &t) {
+		return false
+	}
+	return t.Code != "" && t.Err == nil && ce.Code == t.Code
 }
 
 // IsTransient checks if an error is transient and should be retried
@@ -267,6 +315,64 @@ func Classified(class ErrorClass, err error) *ClassifiedError {
 		return nil
 	}
 	return newClassified(class, err, "", "", err.Error())
+}
+
+// ClassifiedCode is Classified plus a stable machine Code (ADR-060 — the
+// graph.ErrorCode* values). Like Classified it preserves err's verbatim
+// text (no attribution prefix) so the message survives the wire clean.
+// Returns nil when err is nil.
+func ClassifiedCode(class ErrorClass, code string, err error) *ClassifiedError {
+	if err == nil {
+		return nil
+	}
+	ce := newClassified(class, err, "", "", err.Error())
+	ce.Code = code
+	return ce
+}
+
+// ClassifiedCodeDetail is ClassifiedCode plus structured Detail (entity
+// id, revisions, ...). graph-ingest mutation handlers attach
+// entity/revision context here; the detail rides the wire in the ADR-060
+// standard error body (landed with the breaking PR — until then Detail is
+// carried on the error value but not serialized). Returns nil when err is
+// nil.
+//
+// Detail is stored by reference, not copied — pass a map you do not mutate
+// after construction (handlers build a fresh literal per error).
+func ClassifiedCodeDetail(class ErrorClass, code string, detail map[string]any, err error) *ClassifiedError {
+	if err == nil {
+		return nil
+	}
+	ce := newClassified(class, err, "", "", err.Error())
+	ce.Code = code
+	ce.Detail = detail
+	return ce
+}
+
+// ErrRevisionMismatch is the ADR-060 optimistic-concurrency (CAS)
+// control-flow sentinel — the ONLY sentinel in the unified RPC error
+// contract (every other code is a plain ce.Code discriminator, reached
+// via errors.As).
+//
+// natsclient.ClassifyReply reconstructs a *ClassifiedError carrying
+// Code == "revision_mismatch" from the wire; errors.Is(err,
+// ErrRevisionMismatch) matches it via (*ClassifiedError).Is. CAS-retry
+// consumers write:
+//
+//	if errors.Is(err, errs.ErrRevisionMismatch) { re-read; retry }
+//
+// ORDERING: check this sentinel BEFORE IsInvalid(err). Its class is
+// ErrorInvalid (a revision mismatch is a bad-precondition write), so an
+// IsInvalid-first branch would mis-handle a retry signal as a hard 400.
+//
+// The Code literal is the string "revision_mismatch" rather than
+// graph.ErrorCodeRevisionMismatch because pkg/errs cannot import graph
+// (import cycle: graph imports errs). The graph package locks the two
+// equal with a compile-time assertion test (graph/errcode_sentinel_test.go).
+var ErrRevisionMismatch = &ClassifiedError{
+	Class:   ErrorInvalid,
+	Code:    "revision_mismatch",
+	Message: "revision_mismatch",
 }
 
 // Wrap creates a standardized error with context following the pattern:
