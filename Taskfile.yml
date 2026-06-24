@@ -89,6 +89,19 @@ tasks:
       - task: lint:default
       - task: test:default
 
+  check:push:
+    desc: "Full pre-push gate, mirrors CI (~8min, needs Docker): build, lint, vet integration+live_llm, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
+    cmds:
+      - task: build:default
+      - task: lint:default
+      - go vet -tags=integration ./...
+      - go vet -tags=live_llm ./...
+      - task: schema:generate
+      - task: schema:check-changes
+      - go test ./test/contract/...
+      - go test -race ./...
+      - go test -race -tags=integration ./...
+
   # E2E composite tasks
   e2e:tiers:
     desc: Run all tier E2E tests (structural -> statistical -> semantic)
