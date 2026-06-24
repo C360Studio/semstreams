@@ -181,6 +181,9 @@ func TestNewComponent_InvalidConfigJSON(t *testing.T) {
 
 func TestNewComponent_InvalidExtractionConfig(t *testing.T) {
 	config := agenticmemory.DefaultConfig()
+	// Extraction is dormant-by-default now (gh#317); enable it so the extraction
+	// config validation path runs and catches the invalid interval below.
+	config.Extraction.LLMAssisted.Enabled = true
 	config.Extraction.LLMAssisted.TriggerIterationInterval = -1 // Invalid
 
 	rawConfig, err := json.Marshal(config)

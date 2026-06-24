@@ -366,9 +366,11 @@ func TestConfig_Validate_Checkpoints(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := agenticmemory.DefaultConfig()
 
-	// Verify extraction defaults
-	if !cfg.Extraction.LLMAssisted.Enabled {
-		t.Error("DefaultConfig() extraction.llm_assisted.enabled should be true")
+	// Verify extraction defaults. LLM-assisted extraction is dormant-by-default
+	// (gh#317): there is no client-injection path yet, and NewLLMExtractor rejects
+	// enabled=true without one, so the honest default is disabled (ADR-059 wires it).
+	if cfg.Extraction.LLMAssisted.Enabled {
+		t.Error("DefaultConfig() extraction.llm_assisted.enabled should be false (dormant until wired; gh#317)")
 	}
 	if cfg.Extraction.LLMAssisted.Model != "fast" {
 		t.Errorf("DefaultConfig() extraction.llm_assisted.model = %s, want fast", cfg.Extraction.LLMAssisted.Model)

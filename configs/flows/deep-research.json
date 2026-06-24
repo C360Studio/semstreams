@@ -162,7 +162,7 @@
         "stream_name": "AGENT",
         "extraction": {
           "llm_assisted": {
-            "enabled": true,
+            "enabled": false,
             "model": "fast",
             "trigger_iteration_interval": 5,
             "trigger_context_threshold": 0.8
