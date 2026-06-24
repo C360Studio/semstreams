@@ -969,7 +969,9 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 		return nil, errs.Wrap(err, "GraphQuery", "handleStrategyTemporal", "marshal request")
 	}
 
-	respData, err := c.natsClient.Request(ctx, subject, reqData, c.config.QueryTimeout)
+	// ADR-060 (gh#326): RequestClassified surfaces a handler failure via err instead
+	// of an "error: <msg>" body that parseEntityIDsFromResults would mis-decode as empty.
+	respData, err := c.natsClient.RequestClassified(ctx, subject, reqData, c.config.QueryTimeout)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "GraphQuery", "handleStrategyTemporal", "temporal query")
 	}
@@ -1023,7 +1025,9 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 		return nil, errs.Wrap(err, "GraphQuery", "handleStrategySpatial", "marshal request")
 	}
 
-	respData, err := c.natsClient.Request(ctx, subject, reqData, c.config.QueryTimeout)
+	// ADR-060 (gh#326): RequestClassified surfaces a handler failure via err instead
+	// of an "error: <msg>" body that parseEntityIDsFromResults would mis-decode as empty.
+	respData, err := c.natsClient.RequestClassified(ctx, subject, reqData, c.config.QueryTimeout)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "GraphQuery", "handleStrategySpatial", "spatial query")
 	}
