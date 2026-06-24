@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -268,4 +270,70 @@ func TestHandleQueryHierarchyStats_InvalidRequestSurfacesAsInvalid(t *testing.T)
 	require.Error(t, err)
 	assert.True(t, errs.IsInvalid(err),
 		"malformed incoming request must be classified as Invalid: %v", err)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// handleStrategyTemporal / handleStrategySpatial — error-class fidelity (gh#326)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These strategy paths delegate to graph-temporal / graph-spatial via NATS, then
+// feed the response to parseEntityIDsFromResults. Pre-fix they used plain Request():
+// a handler error arrived as a body that parseEntityIDsFromResults decoded as an
+// EMPTY result set — a silent 0-entity "success". After the ADR-060 migration to
+// RequestClassified, a handler failure surfaces as a non-nil error.
+//
+// The mock returns an empty-array body via raw Request() (the silent-corruption
+// shape) AND a classified error via RequestClassified. Regressed code (raw Request)
+// would parse "[]" into zero entities and return a 0-entity success with err==nil;
+// the fixed code surfaces the classified error before parsing.
+
+func TestHandleStrategyTemporal_HandlerErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockNATSClient()
+	// Silent-corruption shape: regressed raw Request() would decode this as 0 entities.
+	mock.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return []byte("[]"), nil
+	}
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		assert.Equal(t, "graph.temporal.query.range", subject, "must route to the temporal index")
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("temporal index unavailable"))
+	}
+
+	comp := newComponentForHandlerTest(t, mock)
+	cr := &query.ClassificationResult{Options: map[string]any{
+		"time_range": &query.TimeRange{Start: time.Unix(0, 0), End: time.Unix(3600, 0)},
+	}}
+	req := &GlobalSearchRequest{Query: "events in the last hour"}
+
+	resp, err := comp.handleStrategyTemporal(context.Background(), cr, req, time.Unix(0, 0), 0)
+
+	require.Error(t, err, "a graph-temporal handler error must surface, not decode as an empty result set")
+	require.Nil(t, resp)
+	assert.True(t, errs.IsTransient(err), "the transient class must survive: %v", err)
+}
+
+func TestHandleStrategySpatial_HandlerErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockNATSClient()
+	mock.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return []byte("[]"), nil
+	}
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		assert.Equal(t, "graph.spatial.query.bounds", subject, "must route to the spatial index")
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("spatial index unavailable"))
+	}
+
+	comp := newComponentForHandlerTest(t, mock)
+	cr := &query.ClassificationResult{Options: map[string]any{
+		"geo_bounds": &query.SpatialBounds{North: 1, South: 0, East: 1, West: 0},
+	}}
+	req := &GlobalSearchRequest{Query: "sensors near the GCS"}
+
+	resp, err := comp.handleStrategySpatial(context.Background(), cr, req, time.Unix(0, 0), 0)
+
+	require.Error(t, err, "a graph-spatial handler error must surface, not decode as an empty result set")
+	require.Nil(t, resp)
+	assert.True(t, errs.IsTransient(err), "the transient class must survive: %v", err)
 }
