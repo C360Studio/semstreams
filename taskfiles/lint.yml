@@ -11,14 +11,21 @@ tasks:
       # feedback_substrate_flake_discipline.md.
       - go tool revive -config revive.toml -formatter friendly ./...
       - task: test-ports
+      - task: request-guard
 
-  # ADR-060 PR-D removed the request-guard AST lint (gh#162). Its allowlist was
-  # emptied (PR-C) and its "safe pattern" — a bytes.HasPrefix("error: ") body
-  # check — is obsolete now that the failure body is the {message,detail}
-  # envelope. The contract is uniform: callers use RequestClassified /
-  # RequestWithRetryClassified and branch on the typed error. Plain Request()
-  # remains a footgun (it returns the error body with err==nil); the guidance
-  # now lives in the natsclient package doc, enforced by review rather than lint.
+  request-guard:
+    desc: |
+      gh#337 guard: fail if production code calls the raw natsclient.Request /
+      RequestWithRetry methods, which return a handler error as a success-shaped
+      {message,detail} body with err==nil (the silent-success class). Use
+      RequestClassified / RequestWithRetryClassified instead. The guard and its
+      allowlist live in test/natsclient/request_guard_test.go; it flags the raw
+      CALL SITE directly, covering the two blind spots the deleted gh#162 taint
+      lint missed (json.Unmarshal inside an if-condition, and passthrough
+      re-emitters with no in-function Unmarshal at all). Also runs in the CI Test
+      job via `go test ./...`; this task is the fast-feedback path.
+    cmds:
+      - go test ./test/natsclient/
 
   test-ports:
     desc: |

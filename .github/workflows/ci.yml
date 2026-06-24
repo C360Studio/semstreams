@@ -79,12 +79,14 @@ jobs:
         # scripts/lint-test-ports.sh, also invoked by task lint.
         run: bash scripts/lint-test-ports.sh
 
-      # ADR-060 PR-D removed the natsclient Request+Unmarshal AST guard (gh#162).
-      # Its allowlist was emptied (PR-C) and its bytes.HasPrefix("error: ")
-      # "safe pattern" is obsolete now the failure body is the {message,detail}
-      # envelope. The contract is uniform (RequestClassified + typed-error
-      # branch); plain Request() remains a footgun guarded by the natsclient
-      # package doc + review, not a lint.
+      - name: natsclient raw-Request guard (gh#337)
+        # Fails if production code calls the raw natsclient.Request /
+        # RequestWithRetry methods, which return a handler error as a
+        # success-shaped {message,detail} body (the silent-success class).
+        # Use RequestClassified instead. Guard + allowlist live in
+        # test/natsclient/request_guard_test.go; also invoked by `task lint`.
+        # Fast-feedback duplicate of the coverage in the Test job's go test.
+        run: go test ./test/natsclient/
 
   test:
     name: Test
