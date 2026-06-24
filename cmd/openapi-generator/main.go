@@ -96,6 +96,13 @@ func main() {
 		})
 
 		openapi := generateOpenAPISpec(componentSchemas, serviceSpecs, *outDir)
+
+		// gh#228: fail fast on dangling $refs rather than writing a spec that
+		// passes the drift gate but breaks downstream openapi-typescript codegen.
+		if err := validateOpenAPIRefs(openapi); err != nil {
+			log.Fatalf("OpenAPI ref validation failed: %v", err)
+		}
+
 		if err := writeYAMLFile(*openapiOut, openapi); err != nil {
 			log.Fatalf("Failed to write OpenAPI spec: %v", err)
 		}

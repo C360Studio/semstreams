@@ -51,7 +51,11 @@ cmd/e2e/e2e
 cmd/semstreams/semstreams
 /semstreams
 bin/
-openapi-generator
+# Binary only — the bare pattern matched the cmd/openapi-generator/ source dir
+# too, silently ignoring new source files there (gh#228). Anchor it like the
+# siblings above.
+cmd/openapi-generator/openapi-generator
+/openapi-generator
 
 # Test profile output
 test/e2e/results/profiles/
