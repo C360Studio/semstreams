@@ -24,7 +24,7 @@ type ExtractionConfig struct {
 
 // LLMAssistedConfig holds LLM-assisted extraction settings
 type LLMAssistedConfig struct {
-	Enabled                  bool    `json:"enabled" schema:"type:bool,description:Enable LLM-assisted fact extraction,category:basic,default:true"`
+	Enabled                  bool    `json:"enabled" schema:"type:bool,description:Enable LLM-assisted fact extraction (dormant until wired; see ADR-059),category:basic,default:false"`
 	Model                    string  `json:"model" schema:"type:string,description:Model alias for extraction,category:basic,default:fast"`
 	TriggerIterationInterval int     `json:"trigger_iteration_interval" schema:"type:int,description:Trigger extraction every N iterations,category:advanced,default:5"`
 	TriggerContextThreshold  float64 `json:"trigger_context_threshold" schema:"type:float,description:Trigger when context exceeds threshold (0.0-1.0),category:advanced,default:0.8"`
@@ -241,7 +241,9 @@ func DefaultConfig() Config {
 	return Config{
 		Extraction: ExtractionConfig{
 			LLMAssisted: LLMAssistedConfig{
-				Enabled:                  true,
+				// Dormant until extraction is wired (gh#317 / ADR-059); enabling it
+				// without a client is rejected at construction as a silent no-op.
+				Enabled:                  false,
 				Model:                    "fast",
 				TriggerIterationInterval: 5,
 				TriggerContextThreshold:  0.8,

@@ -72,7 +72,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.Wrap(err, "Component", "NewComponent", "create hydrator")
 	}
 
-	// Create LLM extractor (LLM client will be provided later during initialization)
+	// Create LLM extractor. No LLM client is wired yet — agentic-memory passes nil,
+	// and NewLLMExtractor rejects extraction.llm_assisted.enabled=true without one
+	// (gh#317, so a config can't advertise a silent no-op). When extraction is wired
+	// (ADR-059, via the claim surface), inject the client here.
 	extractor, err := NewLLMExtractor(config.Extraction, nil)
 	if err != nil {
 		return nil, errs.Wrap(err, "Component", "NewComponent", "create extractor")

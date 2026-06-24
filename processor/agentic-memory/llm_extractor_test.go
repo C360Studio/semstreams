@@ -115,7 +115,7 @@ func TestLLMExtractor_UsesModelAlias(t *testing.T) {
 			}
 
 			// Create extractor with specific model
-			extractor, err := agenticmemory.NewLLMExtractor(config, nil)
+			extractor, err := agenticmemory.NewLLMExtractor(config, &MockLLMClient{})
 			if err != nil {
 				t.Fatalf("NewLLMExtractor() failed: %v", err)
 			}
@@ -239,7 +239,7 @@ func TestLLMExtractor_RespectsMaxTokens(t *testing.T) {
 				},
 			}
 
-			extractor, err := agenticmemory.NewLLMExtractor(config, nil)
+			extractor, err := agenticmemory.NewLLMExtractor(config, &MockLLMClient{})
 			if err != nil {
 				t.Fatalf("NewLLMExtractor() failed: %v", err)
 			}
@@ -350,10 +350,38 @@ func createTestExtractor(t *testing.T) *agenticmemory.LLMExtractor {
 	}
 
 	// Create extractor with mock LLM client
-	extractor, err := agenticmemory.NewLLMExtractor(config, nil)
+	extractor, err := agenticmemory.NewLLMExtractor(config, &MockLLMClient{})
 	if err != nil {
 		t.Fatalf("NewLLMExtractor() failed: %v", err)
 	}
 
 	return extractor
+}
+
+// TestNewLLMExtractor_FailsLoudOnEnabledWithoutClient is the gh#317 regression
+// lock: enabling LLM-assisted extraction with no client is a silent no-op
+// (zero triples, no error), so construction must reject it rather than ship a
+// config that advertises a dormant feature.
+func TestNewLLMExtractor_FailsLoudOnEnabledWithoutClient(t *testing.T) {
+	t.Parallel()
+
+	enabled := agenticmemory.ExtractionConfig{
+		LLMAssisted: agenticmemory.LLMAssistedConfig{Enabled: true, Model: "fast", MaxTokens: 1000},
+	}
+	if _, err := agenticmemory.NewLLMExtractor(enabled, nil); err == nil {
+		t.Fatal("NewLLMExtractor(enabled=true, nil client) must fail loud — a nil client makes extraction a silent no-op")
+	}
+
+	// Disabled + nil client is fine (the dormant default).
+	disabled := agenticmemory.ExtractionConfig{
+		LLMAssisted: agenticmemory.LLMAssistedConfig{Enabled: false, Model: "fast", MaxTokens: 1000},
+	}
+	if _, err := agenticmemory.NewLLMExtractor(disabled, nil); err != nil {
+		t.Fatalf("NewLLMExtractor(enabled=false, nil client) must succeed (dormant): %v", err)
+	}
+
+	// Enabled + a real client is fine (the wired path).
+	if _, err := agenticmemory.NewLLMExtractor(enabled, &MockLLMClient{}); err != nil {
+		t.Fatalf("NewLLMExtractor(enabled=true, client) must succeed: %v", err)
+	}
 }

@@ -35,7 +35,7 @@ The `agentic-memory` component bridges the agentic loop system with the knowledg
   "config": {
     "extraction": {
       "llm_assisted": {
-        "enabled": true,
+        "enabled": false,
         "model": "fast",
         "trigger_iteration_interval": 5,
         "trigger_context_threshold": 0.8,
@@ -71,7 +71,7 @@ The `agentic-memory` component bridges the agentic loop system with the knowledg
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `llm_assisted.enabled` | bool | true | Enable LLM-assisted fact extraction |
+| `llm_assisted.enabled` | bool | false | Enable LLM-assisted fact extraction. **Dormant until wired (gh#317 / ADR-059)** — no LLM client is injected yet, so setting this `true` fails component construction rather than silently producing zero triples. |
 | `llm_assisted.model` | string | "fast" | Model alias for extraction |
 | `llm_assisted.trigger_iteration_interval` | int | 5 | Extract every N iterations |
 | `llm_assisted.trigger_context_threshold` | float | 0.8 | Extract at N% utilization |
@@ -269,7 +269,9 @@ agentic-memory integrates with agentic-loop through context events:
 
 ### Extraction not triggering
 
-- Verify `extraction.llm_assisted.enabled` is true
+- **LLM-assisted extraction is dormant** (gh#317 / ADR-059): no LLM client is wired
+  yet, so `extraction.llm_assisted.enabled=true` fails component construction rather
+  than producing triples. It will be activated via the claim surface in ADR-059.
 - Check `trigger_iteration_interval` and `trigger_context_threshold`
 - Ensure agentic-model is running with the configured model alias
 
