@@ -8,7 +8,7 @@ Consider a warehouse with sensor telemetry AND documentation (equipment manuals,
 
 **Without embeddings:** Only explicit triples create graph edges. Documents are isolated unless you manually add relationships.
 
-**With embeddings:** The system computes vector representations of document content. Similar documents cluster together automatically via "virtual edges," and semantic search finds relevant content even without exact keyword matches.
+**With embeddings:** The system computes vector representations of document content. Semantic search finds relevant content even without exact keyword matches.
 
 ## What Embeddings Are
 
@@ -120,27 +120,11 @@ Both produce vectors that work with the same similarity search and clustering al
 
 ## How SemStreams Uses Embeddings
 
-### 1. Virtual Edges in Community Detection
-
-The clustering algorithm (LPA) builds a graph from:
-
-- **Explicit edges**: Relationships from your triples (`doc-001` → `equipment-A`)
-- **Virtual edges**: Computed from embedding similarity
-
-```text
-Document A ──explicit──► Equipment X
-     │                        │
-     └──virtual (0.85)────────┘
-          (similar content)
-```
-
-Virtual edges allow semantically related documents to cluster together even without explicit relationships.
-
-### 2. Embedding Index (EMBEDDING_INDEX)
+### 1. Embedding Index (EMBEDDING_INDEX)
 
 Entities with embeddings are indexed for similarity search. Query with natural language to find semantically similar entities—even without exact keyword matches.
 
-### 3. GraphRAG Context
+### 2. GraphRAG Context
 
 When answering questions, embeddings help find relevant entities beyond keyword matching:
 
@@ -152,18 +136,13 @@ When answering questions, embeddings help find relevant entities beyond keyword 
 
 ### Similarity Threshold
 
-The similarity threshold determines which entity pairs get virtual edges:
+The similarity threshold determines the minimum cosine similarity for semantic search results:
 
 | Threshold | Effect |
 |-----------|--------|
-| 0.8+ | Strict: Only very similar entities connect |
-| 0.6 | Balanced: Related concepts connect (default) |
-| 0.4 | Loose: Weakly related entities connect |
-
-**Tuning guidance:**
-- Start with 0.6 (default)
-- Too many large communities? Raise to 0.7-0.8
-- Entities not clustering when they should? Lower to 0.5
+| 0.8+ | Strict: Only very similar entities returned |
+| 0.6 | Balanced: Related concepts returned (default) |
+| 0.4 | Loose: Weakly related entities returned |
 
 See [Configuration](../basics/06-configuration.md) for how to set thresholds.
 
@@ -171,9 +150,9 @@ See [Configuration](../basics/06-configuration.md) for how to set thresholds.
 
 | Tier | Embeddings | Effect |
 |------|------------|--------|
-| Tier 0 (Rules-Only) | None | No virtual edges, explicit relationships only |
-| Tier 1 (Native) | BM25 | Lexical virtual edges (term matching) |
-| Tier 2 (LLM) | Neural | Semantic virtual edges (meaning matching) |
+| Tier 0 (Rules-Only) | None | No similarity search; explicit relationships only |
+| Tier 1 (Native) | BM25 | Lexical similarity search (term matching) |
+| Tier 2 (LLM) | Neural | Semantic similarity search (meaning matching) |
 
 **Graceful degradation:** If the neural embedding service is unavailable, the system falls back to BM25. If embeddings are disabled entirely, communities still form via explicit relationships.
 
@@ -268,21 +247,7 @@ ObjectStore is a separate component that stores text content for embedding gener
 1. Verify entity implements `ContentStorable` (not just `Graphable`)
 2. Check `StorageRef` is set (content stored to ObjectStore)
 3. Verify embedding service is running (`provider: "http"`)
-4. Add explicit relationship triples — semantic (virtual) edges that would cluster
-   borderline-similar entities are **not yet wired**
-   ([gh#238](https://github.com/C360Studio/semstreams/issues/238)); until then
-   clustering uses explicit edges only
-
-### "Too many virtual edges, communities are too large"
-
-> **⚠️ Not yet applicable.** Semantic (virtual) edges are not yet wired
-> ([gh#238](https://github.com/C360Studio/semstreams/issues/238)), so the component
-> does not currently create virtual edges. The `similarity_threshold` guidance
-> below applies once that lands.
-
-1. Raise `similarity_threshold` (try 0.75)
-2. Improve content quality (more specific text)
-3. Use `min_community_size` to ignore small noise clusters
+4. Add explicit relationship triples — community detection clusters on explicit edges only
 
 ### "Telemetry entities aren't getting embeddings"
 
@@ -300,7 +265,7 @@ This is expected. Telemetry entities implement only `Graphable`—they have no t
 - [Real-Time Inference](00-real-time-inference.md) - How tiers affect embeddings
 - [Knowledge Graphs](04-knowledge-graphs.md) - Triple patterns for explicit relationships
 - [Similarity Metrics](06-similarity-metrics.md) - Cosine similarity tuning
-- [Community Detection](07-community-detection.md) - How LPA uses virtual edges
+- [Community Detection](07-community-detection.md) - How LPA groups entities into communities
 - [GraphRAG Pattern](09-graphrag-pattern.md) - Semantic search over communities
 
 **Basics (how to implement):**

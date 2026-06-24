@@ -92,19 +92,6 @@ type Provider interface {
 	GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error)
 }
 
-// SimilarityHit represents an entity similarity match.
-// Used by semantic search and clustering operations.
-type SimilarityHit struct {
-	// EntityID is the unique identifier of the matched entity
-	EntityID string `json:"entity_id"`
-
-	// Similarity is the cosine similarity score (0.0-1.0, higher is more similar)
-	Similarity float64 `json:"similarity"`
-
-	// EntityType is the type of the entity (optional, for type-batched filtering)
-	EntityType string `json:"entity_type,omitempty"`
-}
-
 // Clone returns a deep copy of the EntityState.
 // This is used to avoid race conditions when multiple goroutines
 // process the same entity concurrently.

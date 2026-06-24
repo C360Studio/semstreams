@@ -105,29 +105,9 @@ LPA operates on a graph with two edge types:
 
 Relationships you define in your domain model become graph edges. When an entity declares triples like "located_in" pointing to a zone or "monitors" pointing to equipment, these create edges stored in OUTGOING_INDEX and INCOMING_INDEX.
 
+Community detection clusters on explicit relationship edges.
+
 See [Knowledge Graphs](04-knowledge-graphs.md) for how to define relationships in your domain model.
-
-### Virtual Edges (from embeddings)
-
-Computed similarity between entity content:
-
-```text
-Sensor A: "Temperature sensor warehouse zone A"
-Sensor B: "Humidity monitor warehouse section A"
-
-Cosine similarity: 0.82 > threshold 0.6 → Virtual edge created
-```
-
-Virtual edges connect semantically similar entities even without explicit relationships.
-
-### Edge Weighting
-
-| Edge Type | Weight | Effect on LPA |
-|-----------|--------|---------------|
-| Explicit | 1.0 | Strong connection |
-| Virtual | similarity score | Weighted by semantic closeness |
-
-Entities with both explicit and virtual edges are more likely to cluster.
 
 ## Hierarchical Levels
 
@@ -187,18 +167,6 @@ Community detection is controlled through clustering configuration. Key paramete
 | `levels` | 2 | Number of hierarchical levels to compute |
 | `min_community_size` | 2 | Ignore communities smaller than this |
 
-### Virtual Edge Tuning
-
-> **⚠️ Not yet wired.** Semantic (virtual) edges are implemented but not yet
-> instantiated by the component, so these parameters currently have no effect. See
-> [Semantic Edges](../advanced/01-clustering.md#semantic-edges) and
-> [gh#238](https://github.com/C360Studio/semstreams/issues/238).
-
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `similarity_threshold` | 0.6 | Minimum cosine similarity for virtual edge |
-| `virtual_edge_weight` | 1.0 | Weight multiplier for virtual edges |
-
 See the [Clustering Configuration](../advanced/01-clustering.md) guide for full configuration reference.
 
 ## Community Summaries
@@ -224,15 +192,12 @@ Builds on statistical summary by adding an LLM-generated narrative. The narrativ
 
 ### "Communities are too large"
 
-1. **Raise similarity threshold** (0.6 → 0.75): Fewer virtual edges
-2. **Lower virtual edge weight** (1.0 → 0.5): Virtual edges matter less
-3. **Increase min_community_size**: Filter small bridges
+1. **Review explicit relationships**: Look for hub nodes with unusually high connectivity
+2. **Increase min_community_size**: Filter small bridges
 
 ### "Communities are too small / fragmented"
 
-1. **Lower similarity threshold** (0.6 → 0.4): More virtual edges
-2. **Check explicit relationships**: Are entities actually connected?
-3. **Check content storage**: Are ContentStorable payloads storing text for embeddings?
+1. **Check explicit relationships**: Are entities actually connected?
 
 ### "Detection is too slow"
 
@@ -270,24 +235,20 @@ Labels keep switching between iterations without converging.
 One community absorbs most entities.
 
 **Cause**: Dense hub nodes connecting everything.
-**Mitigation**: Reduce hub over-connection in explicit edges. (Raising
-`similarity_threshold` / reducing virtual edges applies once semantic edges are
-wired — [gh#238](https://github.com/C360Studio/semstreams/issues/238).)
+**Mitigation**: Reduce hub over-connection in explicit edges.
 
 ### Singleton Explosion
 
 Many single-entity communities.
 
-**Cause**: Sparse explicit relationships, no virtual edges.
-**Mitigation**: Add more explicit triples, or accept that entities are genuinely
-disconnected. (Lowering `similarity_threshold` to add virtual edges applies once
-semantic edges are wired — [gh#238](https://github.com/C360Studio/semstreams/issues/238).)
+**Cause**: Sparse explicit relationships.
+**Mitigation**: Add more explicit triples, or accept that entities are genuinely disconnected.
 
 ## Related
 
 **Concepts**
 - [Knowledge Graphs](04-knowledge-graphs.md) - Defining relationships that create explicit edges
-- [Embeddings](05-embeddings.md) - How virtual edges are computed from content similarity
+- [Embeddings](05-embeddings.md) - How embeddings enable semantic similarity search
 - [Anomaly Detection](08-anomaly-detection.md) - K-core decomposition complements community clustering
 - [GraphRAG Pattern](09-graphrag-pattern.md) - How communities enable retrieval-augmented generation
 - [Similarity Metrics](06-similarity-metrics.md) - TF-IDF and threshold tuning

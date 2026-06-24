@@ -74,7 +74,7 @@ Entity arrives → Embedding generated → Stored for similarity search
 
 - BM25 (Tier 1): Pure Go, lexical vectors
 - Neural (Tier 2): External service, semantic vectors
-- Enables virtual edges for clustering
+- Enables semantic similarity search
 
 ### Clustering (Periodic Batch)
 
@@ -85,20 +85,20 @@ Timer fires → LPA clustering → Communities updated → Inferred triples crea
 ```
 
 - Runs periodically or after N entity changes
-- Uses explicit edges (all tiers) + virtual edges (Tier 1+)
+- Uses explicit edges from entity triples
 - Generates hierarchical community levels
 
 ## Progressive Tiers (Embedding Strategy)
 
 Tiers define the embedding **method**—not what data gets embedded. Embeddings require text content.
 
-| Tier | Name | Embedding Method | Virtual Edges | Requires Text |
-|------|------|------------------|---------------|---------------|
-| **0** | Structural | Disabled | Explicit only (from triples) | No |
-| **1** | Statistical | BM25 (pure Go) | + Lexical similarity | Yes |
-| **2** | Semantic | Neural (external) | + Meaning-based similarity | Yes |
+| Tier | Name | Embedding Method | Similarity Search | Requires Text |
+|------|------|------------------|-------------------|---------------|
+| **0** | Structural | Disabled | None | No |
+| **1** | Statistical | BM25 (pure Go) | Lexical (term matching) | Yes |
+| **2** | Semantic | Neural (external) | Semantic (meaning matching) | Yes |
 
-All tiers include rules and clustering. The difference is how virtual edges form for entities **with text content**.
+All tiers include rules and clustering on explicit edges. The difference is whether similarity search is available for entities **with text content**.
 
 > **Important:** Embeddings extract text from fields like `title`, `content`, `description`, `summary`, `text`, `name`. Entities with only numeric triples (telemetry) generate no embeddings regardless of tier—they cluster via explicit relationships.
 
@@ -127,10 +127,10 @@ Evaluates patterns on entity changes. Can create new triples, fire alerts, or up
 
 BM25 embeddings for entities with text content—pure Go, no external services.
 
-- Text entities with similar *words* connect via virtual edges
+- Text entities support lexical similarity search via BM25
 - TF-IDF keyword extraction from text fields
-- Hybrid clustering: explicit edges + virtual edges (for text entities)
-- Telemetry entities still cluster via explicit relationships only
+- Clustering: explicit edges only for all entities
+- Telemetry entities cluster via explicit relationships only
 - **Anomaly detection**: Topology analysis suggests missing relationships (see [Anomaly Detection](08-anomaly-detection.md))
 
 Tier 1 also enables structural analysis after community detection:
@@ -144,7 +144,7 @@ Tier 1 also enables structural analysis after community detection:
 
 Neural embeddings for entities with text content—requires external embedding service.
 
-- Text entities with similar *meaning* connect
+- Text entities support semantic similarity search via neural embeddings
 - "Machine" matches "equipment" and "device"
 - Better search quality for natural language queries
 - Telemetry entities still cluster via explicit relationships only
@@ -156,8 +156,8 @@ Neural embeddings for entities with text content—requires external embedding s
 | Entity Type | Has Text? | Tier 0 | Tier 1 | Tier 2 |
 |-------------|-----------|--------|--------|--------|
 | Sensor reading | No | Explicit edges | Explicit edges | Explicit edges |
-| Equipment record | Maybe (name) | Explicit edges | + BM25 if text | + Neural if text |
-| Document/manual | Yes | Explicit edges | + BM25 virtual | + Neural virtual |
+| Equipment record | Maybe (name) | Explicit edges | + BM25 search if text | + Neural search if text |
+| Document/manual | Yes | Explicit edges | + BM25 search | + Neural search |
 
 **Telemetry-only deployments:** Tier setting doesn't affect clustering—all tiers behave like Tier 0 because there's no text to embed. Choose Tier 0 to skip embedding overhead.
 

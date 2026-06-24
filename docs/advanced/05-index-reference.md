@@ -26,15 +26,12 @@ The Label Propagation Algorithm traverses edges via:
 2. **INCOMING_INDEX**: "What entities reference this entity?"
 3. **PREDICATE_INDEX**: Entity filtering by property
 
-### Used by SemanticGraphProvider (Tier 2)
-
-4. **EMBEDDING_INDEX**: Creates virtual edges between semantically similar entities
-
 ### NOT Used in Clustering
 
-5. **ALIAS_INDEX**: ID resolution only
-6. **SPATIAL_INDEX**: Fully operational for queries; clustering provider planned
-7. **TEMPORAL_INDEX**: Fully operational for queries; clustering provider planned
+4. **ALIAS_INDEX**: ID resolution only
+5. **SPATIAL_INDEX**: Fully operational for queries; clustering provider planned
+6. **TEMPORAL_INDEX**: Fully operational for queries; clustering provider planned
+7. **EMBEDDING_INDEX**: Used for similarity search only
 
 ## Edge Weights
 
@@ -49,21 +46,6 @@ func (p *Provider) GetEdgeWeight(ctx context.Context, fromID, toID string) (floa
 ```
 
 LPA treats all explicit edges the same.
-
-### SemanticGraphProvider: Actual Similarity
-
-```go
-// Virtual edges from embeddings get actual similarity scores
-func (p *SemanticGraphProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
-    // Explicit edge takes precedence
-    weight, _ := p.base.GetEdgeWeight(ctx, fromID, toID)
-    if weight > 0 {
-        return weight, nil
-    }
-    // Virtual edge returns actual similarity (e.g., 0.85)
-    return cachedSimilarity, nil
-}
-```
 
 ## Index Details
 
@@ -196,38 +178,17 @@ query {
 **Value:** Vector embedding
 
 **Created by:** `TextContent()` → embedding service → stored
-**Used for:** Semantic similarity search, virtual edges in Tier 2
+**Used for:** Semantic similarity search
 
 ## Planned: Spatial/Temporal Clustering Providers
 
-The architecture supports spatial/temporal clustering via graph providers. The pattern is proven by `SemanticGraphProvider` — spatial and temporal providers would follow the same approach.
+The architecture supports spatial/temporal clustering via graph providers. Spatial and temporal indexes are fully operational for queries; clustering integration via `SpatialGraphProvider` and `TemporalGraphProvider` is a future enhancement.
 
 **Current state:**
 - Spatial and temporal indexes exist and are populated
 - Queries work (bounding box, time range)
 - No `SpatialGraphProvider` or `TemporalGraphProvider` for clustering integration yet
 - LLM summaries don't include geo/time context yet
-
-**Provider pattern** (proven by SemanticGraphProvider):
-
-```go
-type SpatialGraphProvider struct {
-    base      GraphProvider
-    spatial   SpatialIndex
-    proximity float64  // e.g., 100 meters
-}
-
-func (p *SpatialGraphProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
-    // 1. Get explicit neighbors
-    neighbors, _ := p.base.GetNeighbors(ctx, entityID, direction)
-
-    // 2. Add spatially proximate entities as virtual neighbors
-    nearby, _ := p.spatial.GetNearby(ctx, entityID, p.proximity)
-    neighbors = append(neighbors, nearby...)
-
-    return neighbors, nil
-}
-```
 
 ## Debugging Index Issues
 
@@ -388,7 +349,7 @@ Embedding vectors for similarity search.
 | **Key format** | Entity ID |
 | **Value** | Vector array + metadata (model, dimensions) |
 
-**Use case**: Semantic similarity search, clustering virtual edges.
+**Use case**: Semantic similarity search.
 
 #### EMBEDDING_DEDUP
 

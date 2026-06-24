@@ -609,8 +609,7 @@ type InferredTriple struct {
 }
 
 // computeCommunityTightness computes how tightly connected a community is.
-// Returns a value between 0.0 (loose) and 1.0 (very tight).
-// Uses cached similarity scores when available (from SemanticProvider).
+// Returns a value between 0.0 (loose) and 1.0 (very tight) as explicit-edge density.
 func (d *LPADetector) computeCommunityTightness(ctx context.Context, community *Community) float64 {
 	if len(community.Members) < 2 {
 		return 0.0

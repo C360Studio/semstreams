@@ -221,39 +221,6 @@ Jaccard = 3/5 = 0.6
 0.6 < 0.8 → Generate new summary
 ```
 
-## Semantic Edges
-
-> **⚠️ Not yet wired (as of 2026-06-10).** The `SemanticProvider` implementation
-> exists (`graph/clustering/semantic_provider.go`), but the graph-clustering
-> component does not yet instantiate it, so the `semantic_edges` config block below
-> is **not read** — supplying it has no effect (the keys are silently ignored).
-> This section documents the *intended* configuration; wiring is tracked in
-> [gh#238](https://github.com/C360Studio/semstreams/issues/238). Until it lands,
-> community detection clusters on **explicit relationships only**.
-
-When wired, virtual edges will be created between semantically similar entities
-(requires embeddings):
-
-```json
-{
-  "semantic_edges": {
-    "enabled": true,
-    "similarity_threshold": 0.6,
-    "max_virtual_neighbors": 5
-  }
-}
-```
-
-### How Semantic Edges Will Work
-
-1. Compare embedding vectors using cosine similarity
-2. Create virtual edge if similarity >= threshold
-3. Limit virtual neighbors to prevent explosion
-4. Include virtual edges in LPA neighbor calculation
-
-This will allow semantically related entities to cluster together even without
-explicit relationships.
-
 ## Storage
 
 Communities are stored in the `COMMUNITY_INDEX` KV bucket:
@@ -302,15 +269,6 @@ provider := clustering.NewPredicateGraphProvider(queryManager, "entity.type=dron
 ```
 
 Caches the entity set for efficient repeated queries.
-
-#### SemanticGraphProvider
-
-Wraps another provider to add virtual edges from embedding similarity:
-
-```go
-baseProvider := clustering.NewPredicateGraphProvider(queryManager, "entity.type=sensor")
-semanticProvider := clustering.NewSemanticGraphProvider(baseProvider, embeddingIndex, 0.6)
-```
 
 ## Detection Scheduling
 
@@ -422,7 +380,6 @@ Community detection exposes Prometheus metrics:
 
 - **More levels**: Better hierarchy, more compute
 - **Higher iterations**: Better convergence, longer detection
-- **Semantic edges**: Better clustering, requires embeddings
 
 ### Production Recommendations
 

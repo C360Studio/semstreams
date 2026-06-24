@@ -1364,8 +1364,8 @@ func newKVEntityQuerier(entityBucket jetstream.KeyValue, logger *slog.Logger) *k
 // carries an indexing profile that ADR-054 Phase 3 would exclude from the
 // community/structural substrates (trace). Phase 1 is LENIENT — it never
 // excludes — so this is purely the dry-run signal that informs the Phase 3
-// policy, never an action. Strict enforcement is gated on gh#238 plus the
-// cost-ledger preconditions (gate-silent-exclusion-flips-with-cost-ledger).
+// policy, never an action. Strict enforcement is gated on the cost-ledger
+// preconditions (gate-silent-exclusion-flips-with-cost-ledger).
 func observeIndexingProfileForClustering(logger *slog.Logger, es *graph.EntityState) {
 	if v, ok := es.GetPropertyValue(vocabulary.EntityIndexingProfile); ok {
 		if profile, _ := v.(string); profile == vocabulary.IndexingProfileTrace {
@@ -1403,8 +1403,8 @@ func (q *kvEntityQuerier) GetEntities(ctx context.Context, ids []string) ([]*gra
 
 		// ADR-054 Phase 1 (lenient): observe the entity's indexing profile but
 		// never exclude it from clustering. Community/structural eligibility
-		// enforcement is Phase 3, coupled to gh#238 (semantic edges) and gated
-		// on the cost-ledger preconditions — so this is a provable no-op here.
+		// enforcement is Phase 3, gated on the cost-ledger preconditions — so
+		// this is a provable no-op here.
 		observeIndexingProfileForClustering(q.logger, &entity)
 
 		entities = append(entities, &entity)
