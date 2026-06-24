@@ -104,48 +104,15 @@ func TestIntegration_RequestClassified_RoundTripPreservesClass(t *testing.T) {
 	}
 }
 
-// TestIntegration_LegacyBodyPrefix_StillReadable confirms the
-// backward-compat contract: a pre-#93 caller using plain Request +
-// bytes.HasPrefix("error: ") continues to see the legacy body shape
-// unchanged. This is the wire-compat lock on Phase 1.
-func TestIntegration_LegacyBodyPrefix_StillReadable(t *testing.T) {
-	ctx := context.Background()
+// ADR-060 PR-D removed TestIntegration_LegacyBodyPrefix_StillReadable: the
+// legacy "error: " body shape is gone. A handler failure is now the
+// {message, detail} envelope + X-Status header (covered by the unit-level
+// TestRespondError_RoundTrip and the header-classified tests above).
 
-	natsContainer, natsURL := startNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
-
-	client, err := NewClient(natsURL)
-	require.NoError(t, err)
-	require.NoError(t, client.Connect(ctx))
-	defer client.Close(ctx)
-
-	subject := "test.legacy.body.prefix"
-	handlerErr := errs.WrapInvalid(errors.New("legacy compat case"), "Test", "Handle", "validate")
-	_, err = client.SubscribeForRequests(ctx, subject, func(_ context.Context, _ []byte) ([]byte, error) {
-		return nil, handlerErr
-	})
-	require.NoError(t, err)
-	time.Sleep(50 * time.Millisecond)
-
-	// Plain Request — pre-#93 path. Should see "error: " body
-	// prefix, unchanged from before.
-	data, err := client.Request(ctx, subject, []byte("ping"), 2*time.Second)
-	require.NoError(t, err) // Handler errors don't surface in err return per legacy contract.
-	if !strings.HasPrefix(string(data), "error: ") {
-		t.Fatalf("legacy body prefix missing; got %q", data)
-	}
-	if !strings.Contains(string(data), "legacy compat case") {
-		t.Errorf("body missing original message; got %q", data)
-	}
-}
-
-// TestIntegration_LegacyRequest_SuccessBodyUnchanged is the
-// success-path counterpart to TestIntegration_LegacyBodyPrefix_StillReadable.
-// Pre-#93 callers using plain Request() against a Phase-1 handler
-// must see exactly the bytes the handler returned — Phase 1's
-// SubscribeForRequests change must NOT introduce headers or trace
-// the byte payload on the success path. Locks the byte invariant
-// that Phase 4 (legacy body drop) would otherwise break first here.
+// TestIntegration_LegacyRequest_SuccessBodyUnchanged confirms a plain Request()
+// against a success handler sees exactly the bytes the handler returned —
+// SubscribeForRequests must NOT introduce headers or alter the success-path
+// payload (unchanged by ADR-060: only the FAILURE body moved to the envelope).
 func TestIntegration_LegacyRequest_SuccessBodyUnchanged(t *testing.T) {
 	ctx := context.Background()
 

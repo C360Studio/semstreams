@@ -414,7 +414,6 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 		require.NoError(t, err)
 		var resp graph.UpdateEntityWithTriplesResponse
 		require.NoError(t, json.Unmarshal(respData, &resp))
-		require.True(t, resp.Success, "current-revision CAS must succeed: %s", resp.Error)
 
 		// On success the foreign edge IS routed onto the (pre-created) child.
 		entry, getErr := c.entityBucket.Get(ctx, childID)

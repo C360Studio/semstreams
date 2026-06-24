@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -30,6 +31,7 @@ import (
 // mockNATSRequester simulates NATS request/reply for testing
 type mockNATSRequester struct {
 	requestFunc func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+	respHeader  nats.Header // when set, the simulated reply carries these headers (e.g. X-Status error)
 	connected   bool
 	status      natsclient.ConnectionStatus
 }
@@ -48,15 +50,20 @@ func (m *mockNATSRequester) Request(ctx context.Context, subject string, data []
 	return nil, errors.New("no mock response configured")
 }
 
-// RequestClassified routes through Request and ClassifyReply against
-// the response bytes (no headers — exercises the legacy-body-prefix
-// fallback). Matches how a pre-#93 handler appears on the wire.
+// RequestClassified routes through Request and ClassifyReply against the
+// response bytes + headers. ADR-060: a handler error is signalled by the
+// X-Status header (set respHeader to simulate it); ClassifyReply reconstructs a
+// *errs.ClassifiedError from the {message} envelope body. No headers = success.
 func (m *mockNATSRequester) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	body, err := m.Request(ctx, subject, data, timeout)
 	if err != nil {
 		return nil, err
 	}
-	msg := &nats.Msg{Data: body, Header: nats.Header{}}
+	header := m.respHeader
+	if header == nil {
+		header = nats.Header{}
+	}
+	msg := &nats.Msg{Data: body, Header: header}
 	return natsclient.ClassifyReply(msg)
 }
 
@@ -600,25 +607,26 @@ func TestGateway_QueryErrorHandling_ComponentUnavailable(t *testing.T) {
 	assert.NotNil(t, errors)
 }
 
-// TestGateway_QueryErrorHandling_ClassifiedHandlerError pins the
-// gh#93 Phase 2 contract: when the upstream NATS handler returns
-// a classified error (legacy body "error: <msg>" OR header-stamped
-// X-Status), the gateway maps it to HTTP 200 with a GraphQL errors
-// envelope, and the envelope message is the handler's CLEAN inner
-// text — NOT the natsclient.ClassifyReply attribution wrap.
+// TestGateway_QueryErrorHandling_ClassifiedHandlerError pins the contract:
+// when the upstream NATS handler returns a classified error (ADR-060
+// header-stamped X-Status + {message} envelope), the gateway maps it to HTTP
+// 200 with a GraphQL errors envelope, and the envelope message is the handler's
+// CLEAN inner text — NOT the natsclient.ClassifyReply attribution wrap.
 //
-// The mock RequestClassified shim routes through Request +
-// natsclient.ClassifyReply against a header-less nats.Msg, so this
-// exercises ClassifyReply's legacy-body-prefix fallback path —
-// matches how a pre-#93 handler appears on the wire AND validates
-// the migration handles both shape paths uniformly.
+// The mock stamps the ADR-060 error-reply wire shape (X-Status / X-Error-Class
+// headers + {message} envelope body); ClassifyReply reconstructs the classified
+// error and the gateway maps it into the GraphQL errors envelope.
 func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
 	mock := newMockNATSRequester()
 
-	// Handler returns the legacy body-prefix error shape that
-	// graph-ingest's handleQueryEntityNATS emits on missing entity.
+	// Handler error shape graph-ingest's query handler emits on a missing entity.
+	mock.respHeader = nats.Header{
+		natsclient.HeaderStatus:     []string{natsclient.HeaderStatusError},
+		natsclient.HeaderErrorClass: []string{natsclient.ErrorClassInvalid},
+		natsclient.HeaderErrorCode:  []string{graph.ErrorCodeEntityNotFound},
+	}
 	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
-		return []byte("error: not found: test.entity.001"), nil
+		return []byte(`{"message":"not found: test.entity.001"}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)

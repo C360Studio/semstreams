@@ -140,14 +140,13 @@ type mutationHandler = func(ctx context.Context, data []byte) ([]byte, error)
 // reason} and logs the reason at Warn. The handler's (response, error) is passed
 // through UNCHANGED — metering never alters the verdict.
 //
-// ADR-060: a hard mutation failure now arrives as a non-nil
-// (*errs.ClassifiedError) carrying the stable Code, NOT an in-body
-// success=false. The reason label is read from ce.Code (pre-ADR-060 this branch
-// hardcoded "internal", which would now collapse EVERY rejection reason to
-// internal). The only remaining (body, nil) success=false shape is a PARTIAL
-// batch (handleTripleAddBatch with FailedSubjects); the cheap substring gate
-// below still meters it for metric continuity. Full + degraded success marshal
-// success=true and skip the unmarshal.
+// ADR-060: a hard mutation failure arrives as a non-nil (*errs.ClassifiedError)
+// carrying the stable Code — metered by ce.Code (the bulk of rejections). The
+// only non-success signal left in a (body, nil) reply is a PARTIAL batch
+// (handleTripleAddBatch with FailedSubjects); it is a partial success, metered
+// for continuity under reason="partial_batch" (the per-subject codes live in the
+// response FailedSubjects map). Full + degraded success have no failure signal
+// in the body and skip the unmarshal.
 func (c *Component) meteredMutation(subject string, h mutationHandler) mutationHandler {
 	return func(ctx context.Context, data []byte) ([]byte, error) {
 		resp, err := h(ctx, data)
@@ -160,22 +159,14 @@ func (c *Component) meteredMutation(subject string, h mutationHandler) mutationH
 			c.recordMutationRejection(subject, reason, err.Error())
 			return resp, err
 		}
-		// Only a partial batch still encodes success=false in the body (the
-		// field has no omitempty), so this cheap gate skips the unmarshal on the
-		// success path. The explicit !Success check below rejects a false-positive
-		// substring that happened to appear inside entity data.
-		if bytes.Contains(resp, []byte(`"success":false`)) {
+		// FailedSubjects (omitempty) is present only on a partial batch, so this
+		// cheap substring gate skips the unmarshal on the full-success path.
+		if bytes.Contains(resp, []byte(`"failed_subjects"`)) {
 			var r struct {
-				Success   bool   `json:"success"`
-				ErrorCode string `json:"error_code"`
-				Error     string `json:"error"`
+				FailedSubjects map[string]string `json:"failed_subjects"`
 			}
-			if json.Unmarshal(resp, &r) == nil && !r.Success {
-				reason := r.ErrorCode
-				if reason == "" {
-					reason = "unclassified"
-				}
-				c.recordMutationRejection(subject, reason, r.Error)
+			if json.Unmarshal(resp, &r) == nil && len(r.FailedSubjects) > 0 {
+				c.recordMutationRejection(subject, "partial_batch", fmt.Sprintf("%v", r.FailedSubjects))
 			}
 		}
 		return resp, err
@@ -224,7 +215,6 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 
 	return json.Marshal(graph.AddTripleResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: kvRevision,
 		},
@@ -248,7 +238,6 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 	if len(req.Triples) == 0 {
 		return json.Marshal(graph.AddTriplesBatchResponse{
 			MutationResponse: graph.MutationResponse{
-				Success:   true,
 				Timestamp: time.Now().UnixNano(),
 			},
 			WrittenCount: 0,
@@ -270,21 +259,18 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 		return nil, rejectFromError(err)
 	}
 
-	resp := graph.AddTriplesBatchResponse{
+	// Partial (or full) success: FailedSubjects names any subjects that rolled
+	// back, mapped to their per-subject error; empty FailedSubjects means full
+	// success. ADR-060: this is a success body with a nil Go error — a partial
+	// batch committed the subjects not listed, so it must NOT look like a
+	// retryable failure. (Whole-batch failure returned a typed error above.)
+	return json.Marshal(graph.AddTriplesBatchResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   len(failed) == 0,
 			Timestamp: time.Now().UnixNano(),
 		},
 		WrittenCount:   written,
 		FailedSubjects: failed,
-	}
-	if err != nil {
-		resp.Error = err.Error()
-		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			resp.ErrorCode = graph.ErrorCodeEntityNotFound
-		}
-	}
-	return json.Marshal(resp)
+	})
 }
 
 // handleTripleRemove handles remove triple requests from rule processor and other components
@@ -309,7 +295,6 @@ func (c *Component) handleTripleRemove(ctx context.Context, data []byte) ([]byte
 
 	return json.Marshal(graph.RemoveTripleResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: kvRevision,
 		},
@@ -380,7 +365,6 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 
 	return json.Marshal(graph.CreateEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: rev,
 			TraceID:    req.TraceID,
@@ -465,7 +449,6 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 
 	return json.Marshal(graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: rev,
 			TraceID:    req.TraceID,
@@ -529,7 +512,6 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 
 	return json.Marshal(graph.UpdateEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: rev,
 			TraceID:    req.TraceID,
@@ -781,7 +763,6 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 
 	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: rev,
 			TraceID:    req.TraceID,
@@ -890,7 +871,6 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 
 	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Timestamp:  time.Now().UnixNano(),
 			KVRevision: rev,
 			TraceID:    req.TraceID,
@@ -928,7 +908,6 @@ func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte
 
 	return json.Marshal(graph.DeleteEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   true,
 			Timestamp: time.Now().UnixNano(),
 			TraceID:   req.TraceID,
 			RequestID: req.RequestID,
@@ -1073,14 +1052,13 @@ func rejectRevisionMismatch(detail map[string]any, err error) error {
 // Per-response-shape "degraded success" marshalers (#120). Emitted
 // when the write committed durably but the post-write read-back
 // failed (context cancellation, JetStream node failover, bucket
-// re-keyed). Caller-visible contract: Success=true, Degraded=true,
-// Entity=nil, KVRevision=0, Error carries the read-back failure
-// reason prefixed by degradedReadbackErrPrefix. The triple-rich
-// response shapes also zero out TriplesAdded/TriplesRemoved/Version
-// since those are derived from the same stored entity we couldn't
-// read back.
+// re-keyed). ADR-060 caller-visible contract: a (body, nil) success with
+// Degraded=true, Entity=nil, KVRevision=0, and DegradedReason carrying the
+// read-back failure reason prefixed by degradedReadbackErrPrefix. The
+// triple-rich response shapes also zero out TriplesAdded/TriplesRemoved/Version
+// since those are derived from the same stored entity we couldn't read back.
 
-// degradedReadbackErrPrefix is the canonical prefix on the Error field
+// degradedReadbackErrPrefix is the canonical prefix on the DegradedReason field
 // of any degraded-success mutation response. Extracted as a constant
 // so the four marshalers below and the regression test in
 // mutations_degraded_test.go can both reference the same source of
@@ -1091,12 +1069,11 @@ const degradedReadbackErrPrefix = "post-write read-back failed: "
 func marshalCreateEntityDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.CreateEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   true,
-			Degraded:  true,
-			Error:     degradedReadbackErrPrefix + readbackErr,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
+			Degraded:       true,
+			DegradedReason: degradedReadbackErrPrefix + readbackErr,
+			Timestamp:      time.Now().UnixNano(),
+			TraceID:        traceID,
+			RequestID:      requestID,
 		},
 	})
 }
@@ -1104,12 +1081,11 @@ func marshalCreateEntityDegraded(traceID, requestID, readbackErr string) ([]byte
 func marshalCreateEntityWithTriplesDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   true,
-			Degraded:  true,
-			Error:     degradedReadbackErrPrefix + readbackErr,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
+			Degraded:       true,
+			DegradedReason: degradedReadbackErrPrefix + readbackErr,
+			Timestamp:      time.Now().UnixNano(),
+			TraceID:        traceID,
+			RequestID:      requestID,
 		},
 	})
 }
@@ -1117,12 +1093,11 @@ func marshalCreateEntityWithTriplesDegraded(traceID, requestID, readbackErr stri
 func marshalUpdateEntityDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.UpdateEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   true,
-			Degraded:  true,
-			Error:     degradedReadbackErrPrefix + readbackErr,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
+			Degraded:       true,
+			DegradedReason: degradedReadbackErrPrefix + readbackErr,
+			Timestamp:      time.Now().UnixNano(),
+			TraceID:        traceID,
+			RequestID:      requestID,
 		},
 	})
 }
@@ -1130,12 +1105,11 @@ func marshalUpdateEntityDegraded(traceID, requestID, readbackErr string) ([]byte
 func marshalUpdateEntityWithTriplesDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.UpdateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:   true,
-			Degraded:  true,
-			Error:     degradedReadbackErrPrefix + readbackErr,
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   traceID,
-			RequestID: requestID,
+			Degraded:       true,
+			DegradedReason: degradedReadbackErrPrefix + readbackErr,
+			Timestamp:      time.Now().UnixNano(),
+			TraceID:        traceID,
+			RequestID:      requestID,
 		},
 	})
 }

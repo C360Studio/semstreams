@@ -36,7 +36,6 @@ func bornEntity(t *testing.T, comp *Component, id string) (message.Type, *messag
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.True(t, resp.Success, "create failed: %s", resp.Error)
 	return mt, sref, resp.KVRevision
 }
 
@@ -48,7 +47,6 @@ func applyUpdate(t *testing.T, comp *Component, req graph.UpdateEntityWithTriple
 	require.NoError(t, err)
 	var resp graph.UpdateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	require.Truef(t, resp.Success, "update failed (code=%q): %s", resp.ErrorCode, resp.Error)
 }
 
 func TestUpdateWithTriples_BareEntityPreservesEnvelope_NonCAS(t *testing.T) {

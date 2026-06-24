@@ -734,11 +734,11 @@ func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []mes
 		return fmt.Errorf("unmarshal batch response: %w", err)
 	}
 	// ADR-060: a whole-batch failure arrives as the classified err above. A
-	// PARTIAL batch (some subjects committed) still returns a success body with
-	// Success=false + FailedSubjects, handled here.
-	if !resp.Success {
-		return fmt.Errorf("graph-ingest rejected batch (written=%d, failed=%v): %s",
-			resp.WrittenCount, resp.FailedSubjects, resp.Error)
+	// PARTIAL batch (some subjects committed) returns a success body with
+	// FailedSubjects populated (per-subject errors in the map), handled here.
+	if len(resp.FailedSubjects) > 0 {
+		return fmt.Errorf("graph-ingest partial batch (written=%d, failed=%v)",
+			resp.WrittenCount, resp.FailedSubjects)
 	}
 	return nil
 }

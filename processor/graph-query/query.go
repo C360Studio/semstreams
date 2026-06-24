@@ -82,13 +82,17 @@ func (c *Component) handleQueryEntity(ctx context.Context, data []byte) ([]byte,
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("entity query routing not available"), "GraphQuery", "handleQueryEntity", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: RequestClassified so a downstream classified error (e.g.
+	// entity_not_found/invalid from graph-ingest) propagates UNWRAPPED — returning
+	// it as-is lets graph-query's SubscribeForRequests wrapper re-stamp the wire
+	// class + code. Plain Request + verbatim passthrough would drop the header and
+	// re-emit the error body as success (silent 404→200 at the consumer); wrapping
+	// as transient would clobber the class. A transport timeout still classifies
+	// transient via the wrapper.
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntity", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntity", "query entity")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -144,13 +148,12 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 	if entitySubject == "" {
 		return nil, errs.WrapTransient(errors.New("entity query routing not available"), "GraphQuery", "handleQueryEntityByAlias", "route entity query")
 	}
-	response, err := c.natsClient.Request(ctx, entitySubject, entityReqData, c.config.QueryTimeout)
+	// ADR-060: propagate a downstream classified error (e.g. entity_not_found)
+	// UNWRAPPED so the wrapper re-stamps the wire class + code (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, entitySubject, entityReqData, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntityByAlias", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryEntityByAlias", "query entity")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -193,13 +196,11 @@ func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, 
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("entityBatch query routing not available"), "GraphQuery", "handleQueryBatch", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryBatch", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryBatch", "query batch")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -509,13 +510,11 @@ func (c *Component) handleQuerySpatial(ctx context.Context, data []byte) ([]byte
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("spatial query routing not available"), "GraphQuery", "handleQuerySpatial", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySpatial", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySpatial", "query spatial")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -529,13 +528,11 @@ func (c *Component) handleQueryTemporal(ctx context.Context, data []byte) ([]byt
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("temporal query routing not available"), "GraphQuery", "handleQueryTemporal", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryTemporal", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQueryTemporal", "query temporal")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -549,13 +546,11 @@ func (c *Component) handleQuerySemantic(ctx context.Context, data []byte) ([]byt
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("semantic query routing not available"), "GraphQuery", "handleQuerySemantic", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySemantic", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySemantic", "query semantic")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))
@@ -569,13 +564,11 @@ func (c *Component) handleQuerySimilar(ctx context.Context, data []byte) ([]byte
 	if subject == "" {
 		return nil, errs.WrapTransient(errors.New("similar query routing not available"), "GraphQuery", "handleQuerySimilar", "route query")
 	}
-	response, err := c.natsClient.Request(ctx, subject, data, c.config.QueryTimeout)
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
 	if err != nil {
 		c.recordError(err)
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySimilar", "request timeout")
-		}
-		return nil, errs.WrapTransient(err, "GraphQuery", "handleQuerySimilar", "query similar")
+		return nil, err
 	}
 
 	c.recordSuccess(len(data), len(response))

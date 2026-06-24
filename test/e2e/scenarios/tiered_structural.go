@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // Structural variant validation functions for rules-only testing
@@ -353,6 +355,31 @@ func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, res
 	}
 
 	result.Metrics["referential_stub_valid"] = 1
+
+	// ADR-060 breaking-change negative-path gate: drive a FAILURE over the real
+	// graph-ingest wire and assert the unified error contract. A must-exist
+	// update against a never-created entity must return a typed
+	// *errs.ClassifiedError carrying Code entity_not_found + the invalid class —
+	// NOT a 200-shaped success body with success=false (the pre-ADR-060 shape
+	// this break removed). Green happy-path e2e is necessary but not sufficient
+	// for a wire break, so this tier (which runs graph-ingest) asserts the
+	// failure shape over the wire.
+	missingReq, _ := json.Marshal(graph.UpdateEntityRequest{
+		Entity:    &graph.EntityState{ID: "c360.platform.e2e.referential.never-created.001"},
+		RequestID: "e2e-mutation-error-contract",
+	})
+	_, mutErr := s.natsClient.RequestClassified(ctx, "graph.mutation.entity.update", missingReq, 10*time.Second)
+	if mutErr == nil {
+		return fmt.Errorf("ADR-060: update on a never-created entity must return a classified error, got nil")
+	}
+	var ce *errs.ClassifiedError
+	if !errors.As(mutErr, &ce) || ce.Code != graph.ErrorCodeEntityNotFound {
+		return fmt.Errorf("ADR-060: mutation failure must be a *errs.ClassifiedError with Code=entity_not_found; got %T: %v", mutErr, mutErr)
+	}
+	if !errs.IsInvalid(mutErr) {
+		return fmt.Errorf("ADR-060: entity_not_found must classify invalid (gateway 404); err=%v", mutErr)
+	}
+	result.Metrics["mutation_error_contract_valid"] = 1
 	return nil
 }
 

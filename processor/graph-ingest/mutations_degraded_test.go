@@ -82,9 +82,6 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if !mr.Success {
-				t.Errorf("Success = false, want true (write committed; degraded read-back)")
-			}
 			if !mr.Degraded {
 				t.Errorf("Degraded = false, want true")
 			}
@@ -94,11 +91,11 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 			if mr.KVRevision != 0 {
 				t.Errorf("KVRevision = %d, want 0 (no read-back to source the revision from)", mr.KVRevision)
 			}
-			if !strings.HasPrefix(mr.Error, degradedReadbackErrPrefix) {
-				t.Errorf("Error = %q, want prefix %q", mr.Error, degradedReadbackErrPrefix)
+			if !strings.HasPrefix(mr.DegradedReason, degradedReadbackErrPrefix) {
+				t.Errorf("DegradedReason = %q, want prefix %q", mr.DegradedReason, degradedReadbackErrPrefix)
 			}
-			if !strings.Contains(mr.Error, readbackErr) {
-				t.Errorf("Error = %q, want it to include the underlying read-back reason %q", mr.Error, readbackErr)
+			if !strings.Contains(mr.DegradedReason, readbackErr) {
+				t.Errorf("DegradedReason = %q, want it to include the underlying read-back reason %q", mr.DegradedReason, readbackErr)
 			}
 			if mr.TraceID != traceID {
 				t.Errorf("TraceID = %q, want %q", mr.TraceID, traceID)
@@ -120,7 +117,6 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 func TestMutationResponse_DegradedOmittedWhenFalse(t *testing.T) {
 	resp := graph.CreateEntityResponse{
 		MutationResponse: graph.MutationResponse{
-			Success:    true,
 			Degraded:   false,
 			Timestamp:  1,
 			KVRevision: 42,

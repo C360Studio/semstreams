@@ -5,11 +5,14 @@ package graph
 
 import "time"
 
-// QueryResponse is the standard envelope for all query responses.
-// Uses generics for compile-time type safety.
+// QueryResponse is the standard SUCCESS envelope for all query responses.
+//
+// ADR-060: a query reply is EITHER this success body (nil Go error) OR a typed
+// *errs.ClassifiedError on the err channel — the in-body Error field was
+// removed. A RequestClassified caller branches on the returned err
+// (errs.IsInvalid / IsTransient, errors.As → ce.Code); success unmarshals here.
 type QueryResponse[T any] struct {
 	Data      T         `json:"data"`
-	Error     string    `json:"error,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -18,14 +21,6 @@ type QueryResponse[T any] struct {
 func NewQueryResponse[T any](data T) QueryResponse[T] {
 	return QueryResponse[T]{
 		Data:      data,
-		Timestamp: time.Now(),
-	}
-}
-
-// NewQueryError creates an error response with the given message.
-func NewQueryError[T any](msg string) QueryResponse[T] {
-	return QueryResponse[T]{
-		Error:     msg,
 		Timestamp: time.Now(),
 	}
 }

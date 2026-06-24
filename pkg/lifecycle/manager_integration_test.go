@@ -76,7 +76,7 @@ func TestIntegration_ManagerCreate_SurvivesGraphIngestColdStart(t *testing.T) {
 		var req graph.CreateEntityWithTriplesRequest
 		require.NoError(t, json.Unmarshal(data, &req))
 		resp := graph.CreateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{Success: true, KVRevision: 1},
+			MutationResponse: graph.MutationResponse{KVRevision: 1},
 			Entity:           req.Entity,
 			TriplesAdded:     len(req.Triples),
 		}

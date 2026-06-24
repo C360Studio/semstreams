@@ -6,26 +6,31 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // TestIntegration_QueryEntityNATS_WireContract drives the registered
-// graph.ingest.query.entity handler end-to-end and asserts on BOTH
-// the X-Error-Class header AND the legacy body prefix shape that
-// downstream consumers depend on. Closes the gh#93 Phase 3 reviewer
-// B1/B2 regression class — the previous Phase 3 commit changed the
-// body message text and broke production HasPrefix sniffers in
-// processor/agentic-loop/todos.go and semconnect's
-// classifyEntityQueryError; this test would have caught both because
-// it asserts on the actual wire bytes, not synthetic fakes.
+// graph.ingest.query.entity handler end-to-end and asserts on both
+// the ADR-060 headers AND the JSON body envelope. Closes the gh#93
+// Phase 3 reviewer B1/B2 regression class — this test asserts on
+// actual wire bytes, not synthetic fakes, so body changes are caught
+// immediately.
+//
+// ADR-060 PR-D wire contract (retired "error: " prefix):
+//
+//	X-Status:      error
+//	X-Error-Class: invalid | transient | fatal
+//	X-Error-Code:  entity_not_found | invalid_request | ...
+//	body:          {"message": "<text>"}
 func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	ctx := context.Background()
 
@@ -51,51 +56,50 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	t.Run("not_found_path", func(t *testing.T) {
-		// The wire-shape contracts this case pins:
-		//   - Body has prefix "error: not found:" so downstream
-		//     HasPrefix sniffers (agentic-loop/todos.go,
-		//     semconnect/cs-api/systems.go) keep routing correctly.
-		//   - The entity ID survives in the body tail for HTTP 404
-		//     payload context.
-		//   - X-Error-Class header is "invalid" so Phase 2 callers
-		//     using RequestClassified see errs.IsInvalid(err) == true.
-		req, _ := json.Marshal(map[string]string{"id": "no.such.entity.does.not.exist.xyz"})
+		// ADR-060 wire shape:
+		//   - X-Status: error
+		//   - X-Error-Class: invalid  (so IsInvalid(err) == true at the gateway)
+		//   - X-Error-Code: entity_not_found (stable machine code for 404 routing)
+		//   - body: {"message":"not found: <id>"} — JSON envelope, not plain text
+		const absentID = "no.such.entity.does.not.exist.xyz"
+		req, _ := json.Marshal(map[string]string{"id": absentID})
 
 		msg, err := natsClient.RequestWithHeaders(ctx, "graph.ingest.query.entity", req, nil, 2*time.Second)
 		require.NoError(t, err, "transport must succeed")
 		require.NotNil(t, msg)
 
-		// 1. Header: X-Error-Class must be "invalid".
+		// 1. X-Status must be "error".
+		if msg.Header.Get(natsclient.HeaderStatus) != natsclient.HeaderStatusError {
+			t.Errorf("X-Status = %q, want %q", msg.Header.Get(natsclient.HeaderStatus), natsclient.HeaderStatusError)
+		}
+
+		// 2. X-Error-Class must be "invalid".
 		gotClass := msg.Header.Get(natsclient.HeaderErrorClass)
 		if gotClass != natsclient.ErrorClassInvalid {
-			t.Errorf("X-Error-Class = %q, want %q (Phase 2 callers depend on this)",
+			t.Errorf("X-Error-Class = %q, want %q (gateway depends on this for HTTP 404 routing)",
 				gotClass, natsclient.ErrorClassInvalid)
 		}
 
-		// 2. Body prefix: legacy "error: " present.
-		if !bytes.HasPrefix(msg.Data, []byte("error: ")) {
-			t.Fatalf("body missing legacy 'error: ' prefix; got %q", msg.Data)
+		// 3. X-Error-Code must be "entity_not_found" — stable machine code.
+		gotCode := msg.Header.Get(natsclient.HeaderErrorCode)
+		if gotCode != "entity_not_found" {
+			t.Errorf("X-Error-Code = %q, want %q", gotCode, "entity_not_found")
 		}
 
-		// 3. Body has "not found:" right after the legacy prefix
-		//    — agentic-loop/todos.go:31 HasPrefix-matches
-		//    []byte("error: not found"), and semconnect's
-		//    classifyEntityQueryError HasPrefix-matches "not found:"
-		//    after stripping the "error: " prefix.
-		if !bytes.HasPrefix(msg.Data, []byte("error: not found:")) {
-			t.Errorf("body does not match downstream sniffer contract\n"+
-				"  got:  %q\n"+
-				"  want prefix: %q (agentic-loop/todos.go + semconnect/cs-api/systems.go)",
-				msg.Data, "error: not found:")
+		// 4. Body is the JSON envelope with "not found:" message text.
+		//    The entity ID must survive in the body for 404 payload context.
+		if !bytes.HasPrefix(msg.Data, []byte("{")) {
+			t.Fatalf("ADR-060: body must be JSON envelope; got %q", msg.Data)
 		}
-
-		// 4. Entity ID survives in the body for 404 payload context.
-		if !bytes.Contains(msg.Data, []byte("no.such.entity.does.not.exist.xyz")) {
+		if !bytes.Contains(msg.Data, []byte("not found:")) {
+			t.Errorf("body message must contain %q; got %q", "not found:", msg.Data)
+		}
+		if !bytes.Contains(msg.Data, []byte(absentID)) {
 			t.Errorf("entity ID missing from body; got %q", msg.Data)
 		}
 
-		// 5. RequestClassified round-trip — Phase 2 callers using
-		//    this path must see errs.IsInvalid(err) == true.
+		// 5. RequestClassified round-trip — callers using this path must
+		//    see errs.IsInvalid(err) == true and ce.Code == entity_not_found.
 		_, classifiedErr := natsClient.RequestClassified(ctx, "graph.ingest.query.entity", req, 2*time.Second)
 		if classifiedErr == nil {
 			t.Fatal("RequestClassified must surface classified error")
@@ -104,14 +108,15 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 			t.Errorf("RequestClassified err class wrong: IsInvalid=%v want true; err=%v",
 				errs.IsInvalid(classifiedErr), classifiedErr)
 		}
+		var ce *errs.ClassifiedError
+		if !errors.As(classifiedErr, &ce) || ce.Code != graph.ErrorCodeEntityNotFound {
+			t.Errorf("RequestClassified err must carry Code=entity_not_found; got %+v", classifiedErr)
+		}
 	})
 
 	t.Run("invalid_request_path", func(t *testing.T) {
-		// The wire-shape contract this case pins:
-		//   - Body has prefix "error: invalid request:" so
-		//     semconnect's classifyEntityQueryError HasPrefix-matches
-		//     after stripping the "error: " prefix → HTTP 400.
-		//   - X-Error-Class header is "invalid".
+		// ADR-060: malformed JSON → invalid class, JSON body.
+		// Note: uses errs.Classified (no Code), so X-Error-Code is absent.
 		req := []byte("this is not valid JSON {{{")
 
 		msg, err := natsClient.RequestWithHeaders(ctx, "graph.ingest.query.entity", req, nil, 2*time.Second)
@@ -123,19 +128,17 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 			t.Errorf("X-Error-Class = %q, want %q", gotClass, natsclient.ErrorClassInvalid)
 		}
 
-		if !bytes.HasPrefix(msg.Data, []byte("error: invalid request:")) {
-			t.Errorf("body does not match semconnect's HasPrefix(\"invalid request:\") contract\n"+
-				"  got: %q\n"+
-				"  want prefix: %q",
-				msg.Data, "error: invalid request:")
+		if !bytes.HasPrefix(msg.Data, []byte("{")) {
+			t.Errorf("ADR-060: body must be JSON envelope; got %q", msg.Data)
+		}
+		if !bytes.Contains(msg.Data, []byte("invalid request:")) {
+			t.Errorf("body message must contain %q; got %q", "invalid request:", msg.Data)
 		}
 	})
 
 	t.Run("empty_id_path", func(t *testing.T) {
-		// Validation error before KV lookup. Body must read
-		// "error: invalid request: empty id" — semconnect's
-		// classifyEntityQueryError treats the "invalid request:"
-		// prefix as HTTP 400.
+		// Validation error before KV lookup: empty id → invalid class, JSON body.
+		// Note: uses errs.Classified (no Code), so X-Error-Code is absent.
 		req, _ := json.Marshal(map[string]string{"id": ""})
 
 		msg, err := natsClient.RequestWithHeaders(ctx, "graph.ingest.query.entity", req, nil, 2*time.Second)
@@ -146,9 +149,11 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 			t.Errorf("X-Error-Class = %q, want %q", gotClass, natsclient.ErrorClassInvalid)
 		}
 
-		want := []byte("error: invalid request: empty id")
-		if !bytes.Equal(msg.Data, want) {
-			t.Errorf("body = %q, want %q", msg.Data, want)
+		if !bytes.HasPrefix(msg.Data, []byte("{")) {
+			t.Errorf("ADR-060: body must be JSON envelope; got %q", msg.Data)
+		}
+		if !bytes.Contains(msg.Data, []byte("empty id")) {
+			t.Errorf("body must describe empty-id validation failure; got %q", msg.Data)
 		}
 	})
 
@@ -172,7 +177,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 			t.Errorf("success body must NOT carry legacy error prefix; got %q", msg.Data)
 		}
 		// Body should be the seeded entity JSON.
-		if !strings.Contains(string(msg.Data), entityID) {
+		if !bytes.Contains(msg.Data, []byte(entityID)) {
 			t.Errorf("success body missing entity ID; got %q", msg.Data)
 		}
 	})

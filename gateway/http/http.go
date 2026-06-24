@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/gateway"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -279,11 +281,16 @@ func (g *Gateway) sendNATSRequest(ctx context.Context, subject string, data []by
 	}
 	timeout := time.Until(deadline)
 
-	// Use natsclient.Request which auto-generates and propagates trace
-	resp, err := g.natsClient.Request(ctx, subject, data, timeout)
+	// ADR-060: RequestClassified surfaces a handler failure via err (and
+	// reconstructs its wire class + code). Raw Request would ignore the
+	// X-Status header and return the {message,detail} error body, which the
+	// caller writes as HTTP 200 — a handler failure leaking as success. Return
+	// the classified error UNWRAPPED so mapErrorToHTTPStatus reads its class +
+	// ce.Code (a WrapTransient here would clobber an invalid/not-found code into
+	// a 503). Transport failures (no responders, timeout) classify transient.
+	resp, err := g.natsClient.RequestClassified(ctx, subject, data, timeout)
 	if err != nil {
-		return nil, errs.WrapTransient(err, "Gateway", "sendNATSRequest",
-			fmt.Sprintf("NATS request to %s failed", subject))
+		return nil, err
 	}
 
 	return resp, nil
@@ -318,6 +325,21 @@ func (g *Gateway) applyCORS(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) mapErrorToHTTPStatus(err error) int {
 	if err == nil {
 		return http.StatusInternalServerError
+	}
+
+	// ADR-060: a classified handler error carries a stable Code; map the
+	// well-known ones to precise statuses BEFORE the coarse class check (an
+	// entity_not_found is invalid-class, so without this it would 400 instead
+	// of 404). 404-vs-400 disambiguation living at the gateway via ce.Code is
+	// the ADR's stated contract.
+	var ce *errs.ClassifiedError
+	if errors.As(err, &ce) {
+		switch ce.Code {
+		case graph.ErrorCodeEntityNotFound:
+			return http.StatusNotFound
+		case graph.ErrorCodeEntityExists, graph.ErrorCodeRevisionMismatch, graph.ErrorCodeOwnerLeaseStale:
+			return http.StatusConflict
+		}
 	}
 
 	if errs.IsInvalid(err) {

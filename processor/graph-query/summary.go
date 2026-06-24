@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nats-io/nats.go"
-
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -79,16 +77,15 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 		return nil, errs.WrapTransient(errors.New("entityPrefix query routing not available"), "GraphQuery", "handleQueryGraphSummary", "route prefix query")
 	}
 
-	prefixResp, prefixErr := c.natsClient.Request(ctx, prefixSubject, prefixPayload, c.config.QueryTimeout)
+	// ADR-060: RequestClassified surfaces a handler failure via err. With raw
+	// Request, a handler error body ({"message":...}) would decode to an empty
+	// entity list in extractEntityIDsFromPrefixResponse and return a bogus
+	// TotalEntities=0 summary with nil error. Propagate the classified error
+	// UNWRAPPED so the summary handler's wrapper re-stamps its class + code.
+	prefixResp, prefixErr := c.natsClient.RequestClassified(ctx, prefixSubject, prefixPayload, c.config.QueryTimeout)
 	if prefixErr != nil {
 		c.recordError(prefixErr)
-		if errors.Is(prefixErr, nats.ErrTimeout) {
-			return nil, errs.WrapTransient(prefixErr, "GraphQuery", "handleQueryGraphSummary", "prefix request timeout")
-		}
-		// Non-timeout transport errors from graph-ingest also bubble:
-		// they indicate the data plane is unavailable, not a partial-
-		// data shape worth returning.
-		return nil, errs.WrapTransient(prefixErr, "GraphQuery", "handleQueryGraphSummary", "prefix request")
+		return nil, prefixErr
 	}
 
 	entityIDs := extractEntityIDsFromPrefixResponse(prefixResp)

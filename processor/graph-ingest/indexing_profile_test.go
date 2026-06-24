@@ -85,7 +85,6 @@ func TestIndexingProfile_CreateWithTriples_DefaultsToControlFloor(t *testing.T) 
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success, "create should succeed: %s", resp.Error)
 
 	es := storedEntity(t, comp, testProfileEntityID)
 	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
@@ -106,7 +105,6 @@ func TestIndexingProfile_CreateWithTriples_EnvelopeProfileWins(t *testing.T) {
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success, "create should succeed: %s", resp.Error)
 
 	es := storedEntity(t, comp, testProfileEntityID)
 	assert.Equal(t, []string{vocabulary.IndexingProfileContent}, profileValues(es),
@@ -125,7 +123,6 @@ func TestIndexingProfile_CreateWithTriples_InvalidEnvelopeFallsToFloor(t *testin
 	require.NoError(t, err)
 	var resp graph.CreateEntityWithTriplesResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success, "create should succeed (invalid profile is lenient, not fatal): %s", resp.Error)
 
 	es := storedEntity(t, comp, testProfileEntityID)
 	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
@@ -157,7 +154,6 @@ func TestIndexingProfile_UpdateOverride_ReplacesProfile(t *testing.T) {
 	require.NoError(t, err)
 	var resp graph.MutationResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
-	require.True(t, resp.Success, "update override should succeed: %s", resp.Error)
 
 	es := storedEntity(t, comp, testProfileEntityID)
 	assert.Equal(t, []string{vocabulary.IndexingProfileContent}, profileValues(es),
