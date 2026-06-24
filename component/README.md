@@ -4,9 +4,9 @@ core component infrastructure for SemStreams, providing registration, discovery,
 
 ## Overview
 
-The component package defines the fundamental abstractions for all SemStreams components, enabling dynamic discovery, registration, and management of input, processor, output, and storage components. This package follows explicit registration patterns with dependency injection through structured configuration.
+The component package defines the fundamental abstractions for all SemStreams components, enabling dynamic discovery, registration, and management of input, processor, output, storage, and gateway components. This package follows explicit registration patterns with dependency injection through structured configuration.
 
-Components in SemStreams are self-describing units that can be discovered at runtime, configured through schemas, and managed through their lifecycle. The package supports four types of components: inputs (data sources), processors (data transformers), outputs (data sinks), and storage (persistence).
+Components in SemStreams are self-describing units that can be discovered at runtime, configured through schemas, and managed through their lifecycle. The package supports five types of components: inputs (data sources), processors (data transformers), outputs (data sinks), storage (persistence), and gateways (query surfaces).
 
 The Registry serves as the central component management system, handling both factory registration and instance management with thread-safe operations and proper lifecycle control.
 

@@ -5,10 +5,10 @@
 // # Overview
 //
 // The component package defines fundamental abstractions for all SemStreams components,
-// supporting four component types: inputs (data sources), processors (data transformers),
-// outputs (data sinks), and storage (persistence). Components are self-describing units
-// that can be discovered at runtime, configured through schemas, and managed through
-// their lifecycle.
+// supporting five component types: inputs (data sources), processors (data transformers),
+// outputs (data sinks), storage (persistence), and gateways (query surfaces). Components
+// are self-describing units that can be discovered at runtime, configured through schemas,
+// and managed through their lifecycle.
 //
 // The Registry serves as the central component management system, handling both factory
 // registration and instance management with thread-safe operations and proper lifecycle
