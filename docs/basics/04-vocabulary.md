@@ -172,7 +172,6 @@ Different SemStreams features have different requirements from your vocabulary a
 | Community detection (LPA) | Relationship predicates (edges to traverse) | `Graphable` |
 | Structural indexing | Relationship predicates (graph structure) | `Graphable` |
 | Semantic search (Tier 1+) | Text content for embeddings | `ContentStorable` |
-| Semantic edges (Tier 1+) | Embeddings to compute similarity | `ContentStorable` |
 
 **Key distinction:**
 
@@ -269,9 +268,8 @@ LPA (Label Propagation Algorithm) discovers communities by traversing edges in t
 
 **If your entities have no relationship predicates, LPA will produce only singleton communities** (each entity in its own community). This is expected behavior—there are no edges to traverse.
 
-For domains without natural relationships, consider:
-- Adding explicit relationship predicates (e.g., `zone.contains`, `sensor.monitors`)
-- Enabling semantic edges (Tier 1+) to create virtual edges based on embedding similarity
+For domains without natural relationships, consider adding explicit relationship predicates
+(e.g., `zone.contains`, `sensor.monitors`).
 
 ## Best Practices
 

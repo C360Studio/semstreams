@@ -33,9 +33,7 @@ Two vectors pointing in similar directions have high cosine similarity, regardle
 
 ### SemStreams Usage
 
-**Virtual edges in community detection:** Entities with cosine similarity above a configured threshold receive a virtual edge, allowing them to cluster even without explicit relationships. This bridges semantically related entities that lack direct connections in the graph.
-
-The threshold controls community granularity—higher values produce tighter, more focused communities while lower values allow broader groupings. The optimal threshold depends on your embedding model, as different models produce different similarity distributions.
+**Semantic similarity search:** Entities with cosine similarity above a configured threshold are returned as related results. Higher threshold values return only closely related entities; lower values allow broader matches. The optimal threshold depends on your embedding model, as different models produce different similarity distributions.
 
 ## Jaccard Similarity
 
@@ -137,7 +135,7 @@ Entity Updates
       ▼
 ┌─────────────────────────────────────────┐
 │ Community Detection                      │
-│  └─ Cosine similarity → virtual edges   │
+│  └─ LPA on explicit relationship edges  │
 └─────────────────────────────────────────┘
       │
       ▼

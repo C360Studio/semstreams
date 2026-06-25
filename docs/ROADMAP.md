@@ -252,7 +252,6 @@ Add Prometheus metrics for classification behavior:
 **Priority:** Low | **Complexity:** Medium
 
 Add `SpatialGraphProvider` and `TemporalGraphProvider` for clustering:
-- Pattern proven by existing `SemanticGraphProvider`
 - Indexes exist and are populated, just need provider implementations
 - Would enable geo-proximity and time-correlated community detection
 

@@ -496,7 +496,7 @@ These run independently:
 T+0:      Entity arrives (hotpath ~10ms)
 T+0-5s:   Neural embedding (async ~100ms each)
 T+10s:    Clustering starts (initial_delay)
-T+10-12s: LPA runs with semantic edges
+T+10-12s: LPA runs on explicit relationship edges
 T+12-20s: LLM summarization (async ~1-2s each)
 T+20s:    Enhanced communities available
 ```

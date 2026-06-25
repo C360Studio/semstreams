@@ -14,7 +14,7 @@ import (
 // detection. observeIndexingProfileForClustering only logs — it must handle
 // every profile (and an absent profile) without panicking, and it has no return
 // value, so by construction nothing is filtered. Strict enforcement is Phase 3,
-// coupled to gh#238 and gated on the cost-ledger preconditions.
+// gated on the cost-ledger preconditions.
 func TestObserveIndexingProfileForClustering_LenientNoPanic(t *testing.T) {
 	logger := slog.Default()
 	for _, profile := range []string{
