@@ -121,7 +121,16 @@ type Action struct {
 	// TTL specifies optional expiration time for triples (e.g., "5m", "1h")
 	TTL string `json:"ttl,omitempty"`
 
-	// Properties contains additional metadata for the action
+	// Properties contains additional metadata for the action.
+	//
+	// For `publish`, substituted properties are carried as the emitted
+	// payload's `properties` field. For `publish_agent`, substituted
+	// properties (string values are iter-var aware) are stamped onto the
+	// dispatched TaskMessage.Metadata, which the agentic-loop fills onto
+	// every spawned ToolCall.Metadata — the rule-side authoring surface
+	// for flow-specific domain context the agent's tools key off (e.g.
+	// `deliverable_type`). Framework-reserved `agent.*` keys cannot be set
+	// this way (they are skipped with a Warn). gh#354.
 	Properties map[string]any `json:"properties,omitempty"`
 
 	// Role is the agent role for publish_agent actions (e.g., "general", "architect", "editor")
@@ -1188,6 +1197,64 @@ func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec 
 	task.Metadata[agentic.MetadataKeyRelatedLoops] = resolved
 }
 
+// isReservedTaskMetadataKey reports whether a key on TaskMessage.Metadata
+// is framework-owned and therefore must not be set by author-supplied
+// publish_agent `properties` (gh#354). Every framework key the rule
+// engine and agentic-loop stamp onto task metadata lives under the
+// `agent.` namespace — decide allowlist (agent.decide.action_allowlist),
+// cross-arc loop lineage (agent.related_loops), run association
+// (agent.run_id / agent.run_entity_id). Reserving the whole namespace
+// keeps the guard forward-compatible as new framework keys are added and
+// keeps domain keys (deliverable_type, subtopic, …) — which never use the
+// `agent.` prefix — free to flow through.
+// Load-bearing invariant: every framework-written task.Metadata key
+// lives under `agent.`; a future framework key outside that namespace
+// would have to be added to this reservation explicitly.
+func isReservedTaskMetadataKey(key string) bool {
+	return strings.HasPrefix(key, "agent.")
+}
+
+// stampAuthorMetadata carries author-supplied domain metadata
+// (action.Properties) onto the TaskMessage so it reaches every spawned
+// ToolCall.Metadata. The agentic-loop caches task.Metadata at loop start
+// and fills it onto each approved call with no-clobber semantics
+// (handlers.go), so whatever a dispatcher attaches to the task reaches
+// the agent's tools. This is the rule-side authoring surface for
+// "flow-specific context the dispatcher attached to the task" (gh#354):
+// component-dispatched agents set task.Metadata directly in Go; rule
+// authors set it via `properties`, mirroring executePublish which already
+// carries substituted properties as its emitted payload's metadata.
+//
+// Called BEFORE the framework-reserved writes (decide allowlist,
+// related-loops) so those are authoritative; reserved `agent.*` keys are
+// additionally skipped here (with a Warn) so an author cannot inject them
+// even on an iteration where the framework doesn't write them. String
+// values are substituted iter-var-aware (like stampRelatedLoops) so
+// for_each dispatches can vary metadata per item; non-strings pass
+// through unchanged (shallow-only). Empty/nil leaves task.Metadata
+// untouched — opt-in, so non-using flows see no change.
+func (e *ActionExecutor) stampAuthorMetadata(task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) {
+	for k, v := range action.Properties {
+		if isReservedTaskMetadataKey(k) {
+			if e.logger != nil {
+				e.logger.Warn("publish_agent: ignoring reserved framework metadata key in properties",
+					slog.String("key", k),
+					slog.String("rule_id", ec.RuleID()),
+					slog.String("entity_id", ec.EntityID))
+			}
+			continue
+		}
+		if task.Metadata == nil {
+			task.Metadata = map[string]any{}
+		}
+		if s, ok := v.(string); ok {
+			task.Metadata[k] = ec.SubstituteVariablesWithIterVar(s, iterVarName, iterVarValue)
+		} else {
+			task.Metadata[k] = v
+		}
+	}
+}
+
 // stampPerSpawnLLMKnobs threads the rule.Action's per-spawn LLM
 // constraints (ResponseFormat — ADR-034; ToolChoice — ADR-023) onto
 // the TaskMessage. The agentic-loop caches each on initial build and
@@ -1496,6 +1563,13 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 		}
 		task.Tools = resolved
 	}
+
+	// Author-supplied domain metadata (gh#354). Stamped first so the
+	// framework-reserved writes below (decide allowlist, related-loops)
+	// remain authoritative; reserved `agent.*` keys are skipped inside
+	// the helper. This is the rule-side path to TaskMessage.Metadata that
+	// component-dispatched agents reach directly in Go.
+	e.stampAuthorMetadata(&task, action, ec, iterVarName, iterVarValue)
 
 	// Per-spawn action_allowlist for the decide tool. The agentic-loop
 	// propagates TaskMessage.Metadata onto each ToolCall.Metadata; the

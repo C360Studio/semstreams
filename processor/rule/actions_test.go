@@ -1622,6 +1622,262 @@ func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
 	}
 }
 
+// --- gh#354: publish_agent.properties → TaskMessage.Metadata ---
+//
+// These tests lock the rule-side half of the round-trip: author-supplied
+// `properties` reach the dispatched TaskMessage.Metadata. The consumer
+// half — TaskMessage.Metadata filled onto every spawned ToolCall.Metadata
+// with no-clobber semantics — is locked in the agentic-loop package by
+// TestHandleTask_MetadataCachedAndPropagated (proves arbitrary domain keys
+// like tenant_id/domain reach the published tool.execute payload.metadata,
+// the identical mechanism deliverable_type rides). Together they form the
+// rule property → TaskMessage.Metadata → ToolCall.Metadata chain gh#354
+// asks for. Each test drives its own package's production wire.
+
+// TestAction_PublishAgent_Properties_StampedToMetadata is the headline
+// gh#354 case: a domain key in `properties` reaches TaskMessage.Metadata
+// (after the production BaseMessage round-trip) so a tool keying off
+// ToolCall.Metadata["deliverable_type"] selects its deterministic
+// validator under rule dispatch, at parity with component dispatch.
+func TestAction_PublishAgent_Properties_StampedToMetadata(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.submit",
+		Role:    "requirements-author",
+		Model:   "mock-model",
+		Prompt:  "p",
+		Properties: map[string]any{
+			"deliverable_type": "requirements",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.Metadata, "Metadata should be initialised when properties carry domain keys")
+	assert.Equal(t, "requirements", task.Metadata["deliverable_type"],
+		"author-supplied properties key must reach TaskMessage.Metadata")
+}
+
+// TestAction_PublishAgent_Properties_VariableSubstitution verifies that
+// string property values resolve substitution tokens at execute time, so
+// configs can carry `properties: {origin: "$entity.id"}` and the resolved
+// value flows onto the Metadata.
+func TestAction_PublishAgent_Properties_VariableSubstitution(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.submit",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		Properties: map[string]any{
+			"origin": "$entity.id",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robot.gcs.coordinator.001"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Equal(t, "acme.ops.robot.gcs.coordinator.001", task.Metadata["origin"],
+		"$entity.id should substitute in property values")
+}
+
+// TestAction_PublishAgent_Properties_ForEachIterVar verifies that
+// property substitution is iter-var aware: a for_each dispatch can vary a
+// metadata key per item (e.g. tag each spawned investigator with its
+// subtopic). This is the value-add of stamping after substitution rather
+// than carrying the literal template.
+func TestAction_PublishAgent_Properties_ForEachIterVar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	ec := &ExecutionContext{
+		EntityID: "acme.ops.robot.gcs.coordinator.001",
+		Entity: &gtypes.EntityState{
+			Triples: []message.Triple{
+				{
+					Predicate: "coordinator.decision.subtopics",
+					Object:    `["hydraulics","pneumatics"]`,
+				},
+			},
+		},
+	}
+
+	action := Action{
+		Type:       ActionTypePublishAgent,
+		Subject:    "agent.task.investigator",
+		Role:       "investigator",
+		Model:      "mock-model",
+		Prompt:     "Investigate $subtopic",
+		ForEach:    "$entity.triple.coordinator.decision.subtopics",
+		ForEachVar: "subtopic",
+		Properties: map[string]any{
+			"subtopic": "$subtopic",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, ec))
+	require.Len(t, mock.published, 2)
+
+	decoder := newActionsTestDecoder(t)
+	seen := make([]string, 0, 2)
+	for _, msg := range mock.published {
+		baseMsg, err := decoder.Decode(msg.data)
+		require.NoError(t, err)
+		task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+		require.True(t, ok)
+		got, ok := task.Metadata["subtopic"].(string)
+		require.True(t, ok, "subtopic metadata should be a string")
+		seen = append(seen, got)
+	}
+	assert.ElementsMatch(t, []string{"hydraulics", "pneumatics"}, seen,
+		"each spawn's metadata.subtopic must reflect its iter-var binding")
+}
+
+// TestAction_PublishAgent_Properties_NonStringPassThrough verifies the
+// shallow-only contract: non-string property values are carried unchanged
+// (numbers survive the JSON round-trip as float64; bools as bool). Only
+// top-level strings are substituted.
+func TestAction_PublishAgent_Properties_NonStringPassThrough(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.submit",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		Properties: map[string]any{
+			"priority": 7,
+			"strict":   true,
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Equal(t, float64(7), task.Metadata["priority"], "numbers round-trip as float64")
+	assert.Equal(t, true, task.Metadata["strict"], "bools pass through unchanged")
+}
+
+// TestAction_PublishAgent_Properties_ReservedKeysSkipped verifies that an
+// author cannot overwrite framework-reserved `agent.*` metadata via
+// properties: a property attempting to set the decide allowlist is
+// dropped, while the action's own ActionAllowlist remains authoritative.
+// This is the no-clobber guarantee from the acceptance criteria.
+func TestAction_PublishAgent_Properties_ReservedKeysSkipped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:            ActionTypePublishAgent,
+		Subject:         "agent.task.coordinator",
+		Role:            "coordinator",
+		Model:           "mock-model",
+		Prompt:          "p",
+		ActionAllowlist: []string{"investigate", "synthesize"},
+		Properties: map[string]any{
+			// Hostile author trying to widen the decide gate via properties.
+			// The framework ALSO writes this key (from ActionAllowlist), so
+			// stamp-ordering alone would protect it — this asserts the outcome.
+			agentic.MetadataKeyDecideActionAllowlist: []any{"exfiltrate"},
+			// A reserved key the framework does NOT write to task.Metadata on
+			// this path (run association is a struct field, not metadata). If
+			// the isReservedTaskMetadataKey skip were removed, ordering would
+			// NOT save this — it must be dropped purely by the skip. This makes
+			// the skip load-bearing in the test, independent of write-order.
+			agentic.MetadataKeyRunID: "should-be-dropped",
+			// And a benign domain key alongside it.
+			"deliverable_type": "plan",
+		},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	// The framework allowlist (from action.ActionAllowlist) wins; the
+	// property's attempt to override it is ignored.
+	rawAllowlist, ok := task.Metadata[agentic.MetadataKeyDecideActionAllowlist].([]any)
+	require.True(t, ok, "decide allowlist must remain the framework-set []any")
+	assert.ElementsMatch(t, []any{"investigate", "synthesize"}, rawAllowlist,
+		"author properties must not overwrite the framework decide allowlist")
+	// The reserved run-id key the framework never writes here must be absent —
+	// proves the skip drops reserved keys, not just write-ordering.
+	_, hasRunID := task.Metadata[agentic.MetadataKeyRunID]
+	assert.False(t, hasRunID,
+		"reserved agent.* key must be dropped by the skip even when the framework doesn't write it")
+	// The benign domain key still flows through.
+	assert.Equal(t, "plan", task.Metadata["deliverable_type"],
+		"non-reserved property keys are unaffected by the reserved-key skip")
+}
+
+// TestAction_PublishAgent_EmptyProperties_NoMetadataChange verifies
+// back-compat: a publish_agent action with no properties leaves Metadata
+// exactly as the framework writes it (nil here, since no other
+// metadata-stamping field is set) — opt-in, no surprise keys.
+func TestAction_PublishAgent_EmptyProperties_NoMetadataChange(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// Properties omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Nil(t, task.Metadata, "no properties (and no other metadata field) leaves Metadata unset")
+}
+
 // TestAction_PublishAgent_ParentLoopIDFromLoopEntity asserts that when a
 // publish_agent action fires on a loop-execution-shaped trigger entity, the
 // resulting TaskMessage carries task.ParentLoopID extracted from the
