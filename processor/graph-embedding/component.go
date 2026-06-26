@@ -957,10 +957,26 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		return
 	}
 
-	// ContentStorable path: if StorageRef is present, use it
-	if entityState.StorageRef != nil {
+	// ContentStorable path: prefer the StorageRef → ObjectStore fetch, but ONLY
+	// when a content store is actually wired (a store-read port is configured).
+	//
+	// #264 (ADR-055 Wave 0) began lifting StorageRef onto the EntityState at the
+	// ingest seam. Without a content store, the worker's fetchTextFromStorage
+	// hard-fails ("content store not configured") and markFailed fires — which
+	// silently collapses ALL embedding (and therefore BM25/search) for every
+	// entity whose content was offloaded. Configs without a content store (e.g.
+	// the BM25 statistical tier, which wires no store-read port) have no way to
+	// honour a StorageRef, so degrade gracefully to inline text extraction from
+	// the entity's content triples instead of failing. Configs WITH a content
+	// store keep the offloaded-content fetch path unchanged.
+	if c.shouldFetchViaStorageRef(&entityState) {
 		c.queueEmbeddingWithStorageRef(ctx, entityID, &entityState)
 		return
+	}
+	if entityState.StorageRef != nil {
+		c.logger.Debug("entity has StorageRef but no content store is configured; "+
+			"falling back to inline text extraction",
+			slog.String("entity", entityID))
 	}
 
 	// Legacy path: Extract text from triples
@@ -984,6 +1000,18 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	c.logger.Debug("queued embedding for generation",
 		slog.String("entity", entityID),
 		slog.Int("text_length", len(text)))
+}
+
+// shouldFetchViaStorageRef reports whether an entity's offloaded content should
+// be fetched from ObjectStore via its StorageRef. It requires BOTH a StorageRef
+// on the entity AND a wired content store: without the latter, the embedding
+// worker's fetchTextFromStorage hard-fails ("content store not configured") and
+// markFailed fires, silently collapsing all embedding/search for offloaded
+// entities. When the content store is absent we fall back to inline text
+// extraction instead (see queueEntityForEmbedding for the #264 regression
+// context). Configs WITH a content store are unaffected.
+func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
+	return state.StorageRef != nil && c.contentStore != nil
 }
 
 // queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern
