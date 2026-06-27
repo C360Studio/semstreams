@@ -90,6 +90,16 @@ func (c Config) Schema() component.ConfigSchema {
 				Default:     FailurePolicyContinueOthers,
 				Category:    "advanced",
 			},
+			"fan_out_instance_id": {
+				Type:        "string",
+				Description: "Optional 6-part entity ID of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty = no instance lifecycle owned.",
+				Category:    "advanced",
+			},
+			"stall_subject": {
+				Type:        "string",
+				Description: "Optional subject for an edge-triggered StallEvent on the 0→non-zero stall transition (the gated_dag_stalled_units gauge + WARN log are always emitted).",
+				Category:    "advanced",
+			},
 		},
 		Required: []string{"unit_entity_prefix", "dispatch_subject"},
 	}

@@ -45,6 +45,10 @@ func TestConfig_Validate(t *testing.T) {
 		{"bad failure policy", func(c *Config) { c.FailurePolicy = "panic" }, "failure_policy"},
 		{"predicate collision", func(c *Config) { c.ClaimPredicate = c.CompletedPredicate }, "must be distinct"},
 		{"empty predicate", func(c *Config) { c.DirtiedPredicate = "" }, "must not be empty"},
+		{"instance id with custom workflow", func(c *Config) {
+			c.FanOutInstanceID = "org.plat.gateddag.fanout.instance.x"
+			c.FanOutWorkflow = "custom-wf"
+		}, "requires the default fan_out_workflow"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

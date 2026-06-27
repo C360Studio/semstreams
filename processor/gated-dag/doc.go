@@ -65,4 +65,27 @@
 // subject. The consumer derives the edge set, mints fresh-per-run unit IDs,
 // layers any domain gate, and wires its own handler on the dispatch subject to
 // turn the reference into real work. See ADR-046 "Framework/consumer boundary".
+//
+// # Consumer setup checklist (the create path; ADR-046 Phase 2.1)
+//
+// Before the executor can dispatch, the consumer sets up the fan-out:
+//
+//  1. (Optional) Set FanOutInstanceID so the framework owns the FanOut lifecycle:
+//     the executor then creates the `*.*.gateddag.fanout.instance.*` instance in
+//     `dispatching` on Start and auto-transitions it to `completed` when every
+//     unit is Done. If unset, no instance lifecycle is owned. FanOut *failure* is
+//     always consumer-driven (Manager.Fail) — a stall may be recoverable, so the
+//     framework never auto-fails the instance.
+//  2. Seed each unit as a graph entity under UnitEntityPrefix.
+//  3. Write the depends_on edges (DependsOnPredicate triples; Object = the
+//     prerequisite unit's entity ID) onto the dependents.
+//  4. On work completion/failure, write the CompletedPredicate / FailedPredicate
+//     marker on the unit; to re-run, follow the reset contract above.
+//
+// Marker and edge predicates are FREE-FORM: graph-ingest validates only the
+// indexing-profile predicate (ADR-054), so the gated-DAG markers need no
+// vocabulary registration. Completions drive dispatch immediately (an internal
+// KV watch over UnitEntityPrefix); the BackstopInterval tick is the correctness
+// floor, not the primary path — raise it (longer net) rather than lower it.
+// A configured StallSubject receives an edge-triggered StallEvent on a wedge.
 package gateddagexec

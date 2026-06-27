@@ -311,7 +311,8 @@ manages each fan-out as an ADR-047 Lifecycle `Participant` instance:
    prerequisite genuinely failed) while **independent branches keep
    flowing**; recovery is reset-driven, and the stuck branch is surfaced
    by `Stalled()`, so it is never *silently* stranded. Policy knob:
-   stop-on-first-failure vs continue-others vs retry-with-backoff. *The
+   stop-on-first-failure vs continue-others (retry-with-backoff deferred —
+   see Phase 2.1 §4). *The
    brain logic is verified correct (deep-chain mid-failure → dependents
    read Blocked-held, not idle); the `Stalled()` wiring that delivers the
    "not silently stranded" guarantee is net-new (below).*
@@ -358,12 +359,107 @@ stalls:
   membership — never a separate completion bucket that can lag the truth.
 - **Failure semantics:** default = failed node leaves its dependents
   Blocked while independent branches flow; recovery is reset-driven and
-  the stuck branch is surfaced by `Stalled()`. Knob per the list above.
+  the stuck branch is surfaced by `Stalled()`. Knob = `continue_others`
+  (default) | `stop_on_first_failure` (retry-with-backoff deferred,
+  Phase 2.1 §4). FanOut-instance *failure* is consumer-driven, not
+  auto-derived — Phase 2.1 §2.
 - **Synthetic-decide completion:** a child that completes via
   synthetic-decide counts as complete for dependent dispatch **iff** it
   produced the required deliverable — defer the judgment to the
   deliverable validator; never treat terminal-tool-less output as
   unconditionally complete.
+
+#### Phase 2.1 — consumer-contract completion (amended 2026-06-27, GH #363–#365)
+
+semspec's pickup of `v1.0.0-beta.117` — the first consumer of #357 — surfaced
+three contract gaps. beta.117 is functionally correct (their build + suites
+green); these complete the *consumer contract*. Taken as one deliberate pass,
+not scattered patches.
+
+**1. Event-driven dispatch off unit completions (GH #363).** beta.117's only
+event-driven re-eval trigger was the lifecycle `Watch` over the FanOut
+*instance*; unit completion/failure/reset markers live on the *unit* entities
+under `unit_entity_prefix`, which nothing watched — so a completed prerequisite
+unlocked its dependents only on the next `backstop_interval` tick (up to
+N×interval scheduling latency on a depth-N chain).
+
+Decision: add a second, **raw KV watch over `unit_entity_prefix`**
+(`natsclient.KVStore.Watch` on ENTITY_STATES — NOT a lifecycle `Watch`, since
+unit entities do not carry the FanOut phase predicate) that nudges the existing
+single-flight `trigger` channel on any unit write. The periodic backstop is
+**demoted from the primary completion path to the correctness floor** (the
+missed-watch-event / restart safety net). This decouples dispatch latency from
+steady read-load: completions drive dispatch immediately, and operators can now
+*raise* `backstop_interval` (a longer net) rather than *lower* it (more idle
+whole-set reads). Single-flight, claim-before-dispatch, and authoritative
+re-read each pass are unchanged — the watch only *nudges*; correctness still
+flows from the whole-set read + brain (Load-bearing invariant #3 holds: the
+lifecycle `Watch` bootstrap replay remains the restart-recovery driver; the new
+KV watch is a low-latency nudge, not the recovery path).
+
+*Implementation note — the in-flight hint (latent dedup bug the watch exposed).*
+The durable claim commits in the bounded-dispatch worker, **after** `submit`
+returns and `evalMu` releases. With the backstop's slow cadence the claim was
+always readable before the next pass; the sub-millisecond watch nudges re-evaluate
+*between* submit and claim-commit and would re-select the same unit → double
+dispatch. Closed with an in-memory `inflight` set (touched only under `evalMu`):
+a unit is deduped if it carries the durable claim **or** is in `inflight`; the
+durable claim takes over once committed, and `inflight` entries clear when the
+unit goes terminal, is reset (`dirtied`), vanishes, **or its claim fails** (the
+worker clears the hint under `evalMu` so the unit is re-selected next eval — a
+sustained claim outage increments `gated_dag_claim_errors_total`, never a silent
+wedge). This is the complement single-flight
+needs for *asynchronous* dispatch — invariant #1 (one re-eval pass at a time) is
+necessary but not sufficient when the claim write is async.
+
+**2. Framework-owned FanOut instance lifecycle (GH #364).** beta.117 declared
+and *watched* the FanOut `Participant` (`dispatching → completed | failed`) but
+never **created** an instance or **advanced** it to terminal — the
+operator-visible instance sat at `dispatching` forever, and instance/entity/edge
+creation was an unstated consumer responsibility.
+
+Decision: an **optional `fan_out_instance_id`** config. When set, the executor
+**creates** the FanOut Participant on Start (`dispatching`, idempotent — tolerate
+already-exists) and **auto-transitions it to `completed`** once the whole set is
+terminal-and-done (every unit `Done`, nothing dispatchable, not stalled) — the
+framework-emitted "fan-out finished" event the consumer asked for. When unset,
+beta.117 behavior is preserved (no instance lifecycle owned). Backward-compatible.
+
+Failure stays **consumer-driven, deliberately.** The executor does NOT
+auto-transition to `failed`: a stall is usually *recoverable* (reset a failed
+prerequisite → `dirtied` → re-dispatch), and `Participant` terminal phases have
+no out-edges — auto-failing a recoverable stall would strand the instance with
+no path back to `dispatching`. The brain's `Stalled()` does not distinguish an
+unrecoverable `depends_on` cycle from a recoverable blocked-behind-failure, so
+the framework *surfaces* the stall (point 5) and leaves the `failed` verdict to
+the consumer (`Manager.Fail`), who knows whether they will recover. A future
+provable-cycle auto-fail would need cycle detection in the brain — deferred.
+
+**3. Setup contract + free-form predicates (GH #364.2, #365.2).** `doc.go` gains
+a **consumer setup checklist** — when using `fan_out_instance_id`, create the
+FanOut instance carrying `gateddag.fanout.phase=dispatching`; seed each unit
+entity; write the `depends_on` edges; plus the existing reset contract — and
+states that marker/edge predicates are **free-form**: graph-ingest validates
+only the indexing-profile predicate (ADR-054), so no vocabulary registration is
+required for the gated-DAG markers.
+
+**4. `failure_policy` enum (GH #365.1).** The shipped enum is `continue_others`
+(default) + `stop_on_first_failure`. `retry_with_backoff` (floated in the
+failure-semantics text above) is **deferred** — recovery is reset/`dirtied`-
+driven, so per-node backoff is not needed by the current consumer; additive when
+one is.
+
+**5. Stall surfacing (GH #365.3).** `Stalled()` always surfaces as the
+`gated_dag_stalled_units` gauge + a WARN log. Additionally, when an optional
+`stall_subject` is configured, the executor publishes an **edge-triggered**
+(0 → non-zero) registered `StallEvent` to it — the consumer-wireable event for
+active wedge-detection, symmetric with the dispatch publish, and deliberately
+lighter than the agent-oriented `ops.diagnosis` finding-entity (which would
+re-mint every backstop tick). The gauge stays for scrape-based monitoring. The
+event is **backstop-tick-driven** (not per-write): a transient stall while the
+consumer is still seeding (a dependent written before its prerequisite) must not
+alert, so the event fires on the 0→non-zero transition *as seen at a periodic
+tick* (the settled state). The gauge + WARN log still update every pass.
 
 ## Trade-offs and alternatives considered
 

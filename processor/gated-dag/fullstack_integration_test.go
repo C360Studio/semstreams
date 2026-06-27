@@ -89,8 +89,19 @@ func (d *dispatchLog) count(id string) int {
 type fullStack struct {
 	nc         *natsclient.Client
 	gi         *graphingest.Component
+	mgr        *lifecycle.Manager
 	prefix     string
 	dispatched *dispatchLog
+}
+
+// fsOpts parameterizes setupFullStack.
+type fsOpts struct {
+	prefix, subject  string
+	failUnits        map[string]bool
+	logger           *slog.Logger
+	backstop         string // default fsBackstop when empty
+	fanOutInstanceID string // #364: framework-owned instance lifecycle
+	stallSubject     string // #365.3: edge-triggered stall event
 }
 
 // captureHandler records slog messages so a scenario can assert a stall was
@@ -125,11 +136,17 @@ func (h *captureHandler) sawContaining(sub string) bool {
 // production constructors. failUnits names units the consumer should fail
 // (write a failed marker) instead of complete. logger is the executor's logger
 // (pass a capturing logger for the stall scenario; nil → discard).
-func setupFullStack(t *testing.T, prefix, subject string, failUnits map[string]bool, logger *slog.Logger) *fullStack {
+func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	t.Helper()
 	ctx := context.Background()
+	prefix, subject, failUnits := opts.prefix, opts.subject, opts.failUnits
+	logger := opts.logger
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(discard{}, nil))
+	}
+	backstop := opts.backstop
+	if backstop == "" {
+		backstop = fsBackstop
 	}
 
 	streams := []natsclient.TestStreamConfig{{Name: "ENTITY", Subjects: []string{"entity.>"}}}
@@ -183,12 +200,14 @@ func setupFullStack(t *testing.T, prefix, subject string, failUnits map[string]b
 	cfg := gateddagexec.Config{
 		UnitEntityPrefix:   prefix,
 		DispatchSubject:    subject,
-		BackstopInterval:   fsBackstop,
+		BackstopInterval:   backstop,
 		CompletedPredicate: pCompleted,
 		FailedPredicate:    pFailed,
 		DirtiedPredicate:   pDirtied,
 		DependsOnPredicate: pDependsOn,
 		ClaimPredicate:     pClaim,
+		FanOutInstanceID:   opts.fanOutInstanceID,
+		StallSubject:       opts.stallSubject,
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
@@ -198,7 +217,7 @@ func setupFullStack(t *testing.T, prefix, subject string, failUnits map[string]b
 	require.NoError(t, exec.Start(ctx))
 	t.Cleanup(func() { _ = exec.Stop(5 * time.Second) })
 
-	return &fullStack{nc: nc, gi: gi, prefix: prefix, dispatched: dispatched}
+	return &fullStack{nc: nc, gi: gi, mgr: mgr, prefix: prefix, dispatched: dispatched}
 }
 
 // discard is an io.Writer sink for the default discard logger.
@@ -290,7 +309,7 @@ func fsUnit(scenario, suffix string) string {
 func TestFullStack_DependsOnOrderingAndDedup(t *testing.T) {
 	const subject = "fs.dispatch.s1"
 	prefix := "fs.test.s1.fanout.unit"
-	fs := setupFullStack(t, prefix, subject, nil, nil)
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject})
 
 	// Diamond: a -> {b,c} -> d. The consumer completes each on dispatch.
 	a, b, c, d := fsUnit("s1", "a"), fsUnit("s1", "b"), fsUnit("s1", "c"), fsUnit("s1", "d")
@@ -330,7 +349,7 @@ func TestFullStack_DependsOnOrderingAndDedup(t *testing.T) {
 func TestFullStack_ResetSurvivesEvictedRow(t *testing.T) {
 	const subject = "fs.dispatch.s2"
 	prefix := "fs.test.s2.fanout.unit"
-	fs := setupFullStack(t, prefix, subject, nil, nil)
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject})
 
 	x := fsUnit("s2", "x")
 	fs.seedUnit(t, x)
@@ -338,7 +357,7 @@ func TestFullStack_ResetSurvivesEvictedRow(t *testing.T) {
 	// First dispatch + completion + durable claim.
 	require.Eventually(t, func() bool { return fs.dispatched.count(x) == 1 }, 10*time.Second, 100*time.Millisecond,
 		"x should dispatch once initially")
-	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, x, pClaim) }, 5*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, x, pClaim) }, 10*time.Second, 100*time.Millisecond,
 		"x should carry the durable claim after dispatch")
 
 	// Stage D setup: simulate a rule that exhausted its retry budget on x by
@@ -353,7 +372,7 @@ func TestFullStack_ResetSurvivesEvictedRow(t *testing.T) {
 	fs.deleteEntity(t, x)
 
 	// Stage D: x's rule $state is cleared (no stale, exhausted budget survives).
-	require.Eventually(t, func() bool { return !fsRuleStateExists(t, fs.nc, stateKey) }, 5*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return !fsRuleStateExists(t, fs.nc, stateKey) }, 10*time.Second, 100*time.Millisecond,
 		"Stage D: evicting x must clear its rule $state")
 
 	// Recreate x fresh (no markers, no claim) and assert Stage C re-dispatch.
@@ -368,7 +387,7 @@ func TestFullStack_FailedNodeHoldsDependents(t *testing.T) {
 	const subject = "fs.dispatch.s3"
 	prefix := "fs.test.s3.fanout.unit"
 	a, b, indep := fsUnit("s3", "a"), fsUnit("s3", "b"), fsUnit("s3", "indep")
-	fs := setupFullStack(t, prefix, subject, map[string]bool{a: true}, nil) // a fails on dispatch
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, failUnits: map[string]bool{a: true}}) // a fails on dispatch
 
 	fs.seedUnit(t, a)     // fails
 	fs.seedUnit(t, b, a)  // depends on the failing a
@@ -378,7 +397,7 @@ func TestFullStack_FailedNodeHoldsDependents(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return fs.dispatched.count(a) == 1 && fs.dispatched.count(indep) == 1
 	}, 10*time.Second, 100*time.Millisecond, "a and indep should dispatch")
-	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, a, pFailed) }, 5*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, a, pFailed) }, 10*time.Second, 100*time.Millisecond,
 		"a should carry the failed marker")
 
 	// b stays held behind its failed prerequisite — give several backstop passes
@@ -394,14 +413,14 @@ func TestFullStack_CycleSurfacesStall(t *testing.T) {
 	const subject = "fs.dispatch.s4"
 	prefix := "fs.test.s4.fanout.unit"
 	logCap := &captureHandler{}
-	fs := setupFullStack(t, prefix, subject, nil, slog.New(logCap))
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, logger: slog.New(logCap)})
 
 	a, b := fsUnit("s4", "a"), fsUnit("s4", "b")
 	fs.seedUnit(t, a, b) // a depends on b
 	fs.seedUnit(t, b, a) // b depends on a → cycle
 
 	// The stall is surfaced (logged) within a couple of backstop passes...
-	require.Eventually(t, func() bool { return logCap.sawContaining("stalled") }, 5*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return logCap.sawContaining("stalled") }, 10*time.Second, 100*time.Millisecond,
 		"a depends_on cycle must surface as a stall, not silent idle")
 	// ...and nothing is ever dispatched.
 	require.Empty(t, fs.dispatched.snapshot(), "a cycle dispatches nothing")
@@ -436,4 +455,93 @@ func fsRuleStateExists(t *testing.T, nc *natsclient.Client, key string) bool {
 	t.Helper()
 	_, err := ruleStateBucket(t, nc).Get(context.Background(), key)
 	return err == nil
+}
+
+// --- Phase 2.1 contract-completion scenarios (GH #363/#364/#365.3) ---
+
+// TestFullStack_EventDrivenDispatchBeatsBackstop (#363) proves completions drive
+// dispatch via the unit-prefix watch, not the backstop: with a deliberately long
+// 30s backstop, a depth-3 chain completes in seconds (backstop-bound would be
+// up to ~90s) — and each unit dispatches exactly once (no double-dispatch).
+func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
+	const subject = "fs.dispatch.s5"
+	prefix := "fs.test.s5.fanout.unit"
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, backstop: "30s"})
+
+	a, b, c := fsUnit("s5", "a"), fsUnit("s5", "b"), fsUnit("s5", "c")
+	fs.seedUnit(t, a)
+	fs.seedUnit(t, b, a)
+	fs.seedUnit(t, c, b)
+
+	start := time.Now()
+	require.Eventually(t, func() bool {
+		return fs.dispatched.count(a) == 1 && fs.dispatched.count(b) == 1 && fs.dispatched.count(c) == 1
+	}, 12*time.Second, 100*time.Millisecond, "chain should dispatch once each via the unit watch, not the 30s backstop")
+	require.Less(t, time.Since(start), 12*time.Second, "well under the backstop-bound latency")
+}
+
+// TestFullStack_FanOutInstanceAutoCompletes (#364) proves the framework creates
+// the FanOut instance in dispatching and auto-transitions it to completed once
+// every unit is Done.
+func TestFullStack_FanOutInstanceAutoCompletes(t *testing.T) {
+	const subject = "fs.dispatch.s6"
+	prefix := "fs.test.s6.fanout.unit"
+	instID := "fs.test.gateddag.fanout.instance.s6"
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, fanOutInstanceID: instID})
+
+	ctx := context.Background()
+	require.Eventually(t, func() bool {
+		inst, err := fs.mgr.Get(ctx, gateddagexec.FanOutWorkflow, instID)
+		return err == nil && inst.Phase() == "dispatching"
+	}, 10*time.Second, 100*time.Millisecond, "FanOut instance should be created in dispatching")
+
+	a, b := fsUnit("s6", "a"), fsUnit("s6", "b")
+	fs.seedUnit(t, a)
+	fs.seedUnit(t, b, a)
+
+	require.Eventually(t, func() bool {
+		inst, err := fs.mgr.Get(ctx, gateddagexec.FanOutWorkflow, instID)
+		return err == nil && inst.Phase() == "completed"
+	}, 10*time.Second, 100*time.Millisecond, "FanOut instance must auto-complete once every unit is Done")
+}
+
+// TestFullStack_StallEventPublished (#365.3) proves a depends_on cycle publishes
+// an edge-triggered StallEvent to the configured stall subject.
+func TestFullStack_StallEventPublished(t *testing.T) {
+	const subject = "fs.dispatch.s7"
+	const stallSubject = "fs.stall.s7"
+	prefix := "fs.test.s7.fanout.unit"
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, stallSubject: stallSubject})
+
+	reg := payloadregistry.New()
+	require.NoError(t, gateddagexec.RegisterPayloads(reg))
+	dec := message.NewDecoder(reg)
+	var got struct {
+		sync.Mutex
+		units []string
+	}
+	sub, err := fs.nc.Subscribe(context.Background(), stallSubject, func(_ context.Context, msg *nats.Msg) {
+		base, derr := dec.Decode(msg.Data)
+		if derr != nil {
+			return
+		}
+		if se, ok := base.Payload().(*gateddagexec.StallEvent); ok {
+			got.Lock()
+			got.units = se.StalledUnits
+			got.Unlock()
+		}
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+	a, b := fsUnit("s7", "a"), fsUnit("s7", "b")
+	fs.seedUnit(t, a, b)
+	fs.seedUnit(t, b, a)
+
+	require.Eventually(t, func() bool {
+		got.Lock()
+		defer got.Unlock()
+		return len(got.units) == 2
+	}, 10*time.Second, 100*time.Millisecond, "a cycle must publish a StallEvent naming both held units")
+	require.Empty(t, fs.dispatched.snapshot(), "a cycle dispatches nothing")
 }

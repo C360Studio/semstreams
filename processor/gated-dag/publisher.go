@@ -37,3 +37,32 @@ func (p *natsPublisher) Dispatch(ctx context.Context, unitID string) error {
 	}
 	return nil
 }
+
+// stallPublisher publishes the edge-triggered stall event (#365.3). An interface
+// so the executor can hold nil (no stall_subject) and unit tests can fake it.
+type stallPublisher interface {
+	// PublishStall emits the wedge event for the given held-ready unit IDs.
+	PublishStall(ctx context.Context, stalledUnits []string) error
+}
+
+// natsStallPublisher wraps the StallEvent in a BaseMessage and publishes it.
+type natsStallPublisher struct {
+	nc               *natsclient.Client
+	subject          string
+	fanOutWorkflow   string
+	fanOutInstanceID string
+}
+
+// PublishStall publishes the registry-wrapped StallEvent.
+func (p *natsStallPublisher) PublishStall(ctx context.Context, stalledUnits []string) error {
+	msg := &StallEvent{StalledUnits: stalledUnits, FanOutWorkflow: p.fanOutWorkflow, FanOutInstanceID: p.fanOutInstanceID}
+	base := message.NewBaseMessage(msg.Schema(), msg, "gateddag-executor")
+	data, err := json.Marshal(base)
+	if err != nil {
+		return fmt.Errorf("marshal stall event: %w", err)
+	}
+	if err := p.nc.Publish(ctx, p.subject, data); err != nil {
+		return fmt.Errorf("publish stall event to %s: %w", p.subject, err)
+	}
+	return nil
+}

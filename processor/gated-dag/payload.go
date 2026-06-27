@@ -17,6 +17,8 @@ const (
 	SchemaVersion = "v1"
 	// CategoryDispatch is the dispatch-reference envelope category.
 	CategoryDispatch = "dispatch"
+	// CategoryStall is the stall-event category (GH #365.3).
+	CategoryStall = "stall"
 )
 
 // DispatchMessage is the reference envelope published to Config.DispatchSubject
@@ -61,12 +63,51 @@ func (d *DispatchMessage) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(d))
 }
 
+// StallEvent is the edge-triggered wedge-detection event published to
+// Config.StallSubject on the 0→non-zero stall transition (GH #365.3): the
+// fan-out has held-ready units with no forward progress and nothing in-flight
+// (a depends_on cycle, or every non-terminal unit blocked behind a failure).
+// References only — the consumer reads the units' state from the graph.
+type StallEvent struct {
+	// StalledUnits are the held-ready unit IDs with no forward progress.
+	StalledUnits []string `json:"stalled_units"`
+	// FanOutWorkflow / FanOutInstanceID identify the affected fan-out (provenance).
+	FanOutWorkflow   string `json:"fan_out_workflow,omitempty"`
+	FanOutInstanceID string `json:"fan_out_instance_id,omitempty"`
+}
+
+// Schema returns the type discriminator for registry routing.
+func (s *StallEvent) Schema() message.Type {
+	return message.Type{Domain: Domain, Category: CategoryStall, Version: SchemaVersion}
+}
+
+// Validate checks required fields.
+func (s *StallEvent) Validate() error {
+	if len(s.StalledUnits) == 0 {
+		return errors.New("stall event: stalled_units is required")
+	}
+	return nil
+}
+
+// MarshalJSON marshals the payload fields (alias avoids recursion).
+func (s *StallEvent) MarshalJSON() ([]byte, error) {
+	type Alias StallEvent
+	return json.Marshal((*Alias)(s))
+}
+
+// UnmarshalJSON unmarshals the payload fields (alias avoids recursion).
+func (s *StallEvent) UnmarshalJSON(data []byte) error {
+	type Alias StallEvent
+	return json.Unmarshal(data, (*Alias)(s))
+}
+
 // RegisterPayloads registers the gated-DAG executor payload types with the
 // supplied registry. Wired into payloadbuiltins.Register so every binary that
-// can run the executor can decode its dispatch envelope.
+// can run the executor can decode its dispatch + stall envelopes.
 func RegisterPayloads(reg *payloadregistry.Registry) error {
 	registrations := []*payloadregistry.Registration{
 		{Domain: Domain, Category: CategoryDispatch, Version: SchemaVersion, Description: "Gated-DAG dispatch reference", Factory: func() any { return &DispatchMessage{} }},
+		{Domain: Domain, Category: CategoryStall, Version: SchemaVersion, Description: "Gated-DAG stall (wedge) event", Factory: func() any { return &StallEvent{} }},
 	}
 	var errs []error
 	for _, r := range registrations {
