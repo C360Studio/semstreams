@@ -2,11 +2,14 @@
 
 ## Status
 
-**Proposed.** Phase 1 (`for_each` foundation) targets beta.82. Phase 2
-(gated-DAG dispatch) defers behind operator validation of Phase 1 and a
-dedicated implementation session. Closes ADR-026 milestone 2 (parallel
-flow composition) which has been deferred since ADR-026 shipped Phase 1.
-References GH #134.
+**Phase 1 (`for_each`) Accepted + shipped** (beta.82/83). **Phase 2
+(gated-DAG dispatch) design Accepted — amended 2026-06-27 (GH #357).**
+Phase 2 lands as a generic **component** composing ADR-047/048 substrate +
+a dependency-free selection brain — **not** a rule action or condition
+operator (see Phase 2 below for the pressure-tested rationale across all
+eight correctness wedges). Implementation pending a dedicated session.
+Closes ADR-026 milestone 2 (parallel flow composition), deferred since
+ADR-026 shipped Phase 1. References GH #134, GH #357.
 
 ## Context
 
@@ -137,36 +140,230 @@ Constraints:
   (the coordinator respawns and re-judges on each child completion),
   not the counter pattern; the two are distinct join shapes.
 
-Forward-compat: a future `fan_out_gated` action (Phase 2) is additive.
+Forward-compat: Phase 2's gated-DAG **component** (see below) is additive.
 Rule packs that use Phase 1's `for_each` for no-deps flows don't need
-to migrate; they coexist.
+to migrate; they coexist (semteams research stays on `for_each`).
 
-### Phase 2 — `fan_out_gated` (post-beta.82, separate ADR-046 amendment)
+### Phase 2 — gated-DAG dispatch (amended 2026-06-27, GH #357)
 
-Lift semspec's `scenario-orchestrator` pattern to framework as a new
-action type or workflow primitive:
+**Decision: gated-DAG dispatch lands as a generic _component_, not a
+rule action (`fan_out_gated`) and not a condition operator.** The
+component composes substrate that shipped *after* this ADR was first
+written, each in a **specific** role (an adversarial review of an earlier
+draft of this amendment, 2026-06-27, caught it leaning on the wrong
+pieces — corrected here):
 
-- Accepts a list of work items with `depends_on` edges (an internal DAG).
-- Completion-watcher integration (NATS KV watch on per-flow completion
-  bucket).
-- Stateless re-evaluation on each completion update: reconcile from
-  KV, filter to currently-ready, dispatch under bounded concurrency.
-- Implicit join (no-ready-left = done).
-- Optional `max_concurrent` config knob, semaphore-based.
+- **ADR-047 `pkg/lifecycle`** — authoritative `Manager` reads
+  (`GetWithRevision` is a direct JetStream `Get`) + `Participant`
+  instances, and crucially `Watch`/`WatchAll`, whose bootstrap
+  re-delivery (NATS KV replays all current values on subscribe) is **the
+  re-eval driver and the restart-recovery substrate**.
+- **ADR-048 `pkg/dispatch` BoundedDispatcher** — the bounded-concurrency
+  *dispatch* leg **only**. Its internal completion-watcher is per-`Submit`
+  request/response and **suppresses bootstrap replay**, so it is *not*
+  the whole-set re-eval driver and *not* restart recovery — those are the
+  lifecycle `WatchAll` above. (Reusing the completion-watcher for re-eval
+  was the earlier draft's mistake.)
+- **`replace_owned` owned-marker action** — a **durable in-flight
+  record**, NOT a single-claimant CAS lock (`ExpectedRevision` is always
+  0 — last-write-wins reconciliation). See "Load-bearing invariants"
+  below for what actually provides mutual exclusion.
+- **`graph.query.prefix` contract** (beta.113) — authoritative whole-set
+  enumeration; returns full `EntityState`s (triples/markers included), so
+  the executor reads the unit set + markers in one query.
 
-Implementation references `semspec/processor/scenario-orchestrator/component.go`
-as prior-art canonical implementation. Open questions deferred to
-Phase 2 design:
+The dependency-free **selection brain** is generalized from semspec's
+*pure-but-currently-unwired* `workflow/coordinator` (its live
+`scenario-orchestrator` is a separate, bespoke executor with its own
+stall-blind filter — we lift and generalize the brain, not that
+component). The framework hosts the brain + executor + stall detection;
+the consumer keeps its domain layer and pre-resolves the edge set. This
+shrinks the "~600 LOC executor worth its own session" framing above —
+much of the substrate now exists — but the brain wiring, stall
+detection, and the periodic backstop are genuinely net-new (no
+production reference implements them; see below).
 
-- Where the DAG lives: in the rule (declared inline), in a graph
-  entity, in a flow definition.
-- Completion source-of-truth bucket name and key shape.
-- Failure semantics: stop-on-first-failure vs continue-others vs
-  retry-with-backoff per node.
-- Integration with the cheap-model substrate work (beta.80): if a
-  child loop completes via synthetic-decide on terminal-tool-less
-  output, does the gated dispatcher treat that as "complete" for
-  dependent dispatch?
+#### Why a component — three surfaces pressure-tested (GH #357)
+
+Each candidate was stress-tested against the eight correctness
+requirements below (trying to break each, not confirm it):
+
+- **A DAG-aware `fan_out_gated` rule action** — rejected. It is the most
+  workflow-engine-shaped thing the rule language would carry, against the
+  "no separate workflow engine" identity (ADR-028).
+- **A single `all_complete` condition operator** — rejected as
+  insufficient. The rule engine evaluates conditions against the
+  *changed* entity plus one `ec.Related`
+  (`processor/rule/entity_watcher.go` → `evaluateRulesForEntityState`);
+  it has no read over a *set* of N prerequisites, and — decisively — a
+  gate on a dependent X never re-fires when a prerequisite P completes
+  (the engine evaluates rules against P, not X). The operator silently
+  needs both a set-quantified condition and a cross-entity re-eval
+  trigger the rule model lacks.
+- **Reverse-edge propagation + the existing counter-join** (`for_each
+  P.required_by` stamps a `prereq_done` marker on each dependent; gate via
+  `length_eq`) — rejected for this use case. It passes the
+  no-reset/one-shot wedges (those `synthesize_when_all_gathers_complete`
+  already proves) but **fails the four load-bearing wedges
+  (derived-not-mutated, reset, failure-release, stall)** for one root
+  reason: a rule on the dependent cannot read its N prerequisites'
+  authoritative markers, so it must *project* prereq state onto the
+  dependent — which is exactly the "separately-mutated status field that
+  races the markers" that correctness requirement #1 names as "the root
+  of the whole wedge family."
+
+Shared root cause: gated-DAG dispatch needs a **whole-set, authoritative,
+re-evaluated-on-every-change** view; the rule model is
+**per-entity-change + single-related-read**. A component watching the
+unit set provides the whole-set view natively — which is why semspec's
+prior art is itself a component.
+
+#### Design
+
+**1. Selection brain — a dependency-free pure pkg (framework).**
+Generalize semspec's `coordinator` to opaque unit IDs, stripping all
+`Story`/owner/edge-resolution coupling (it `import`s
+`c360studio/semspec/workflow` and bakes M:N owner-gating into `Evaluate`
+— that stays in semspec). Contract:
+
+- inputs: `unitIDs []string`; `dependsOn map[string][]string` (resolved
+  DAG edges); `MarkerSet{Completed, Failed, Dirtied map[string]bool}`.
+- `DeriveStatus(id, MarkerSet) Status` — pure, precedence Dirtied >
+  Failed > Completed > Ready (a reset/dirtied unit derives Ready over any
+  stale terminal marker).
+- `SelectDispatchable` — a unit is dispatchable iff its status is Ready
+  AND **every** prerequisite derives Done (all-prereqs closure, never
+  "any").
+- `Stalled` — units Ready-but-held with nothing dispatchable and nothing
+  in-flight (a `depends_on` cycle, or all non-terminal units blocked
+  behind a failed prereq); the silent-idle backstop.
+
+No domain types, no I/O. semspec's existing coordinator test suite (the
+cases ARE the requirements) generalizes onto it.
+
+**2. Executor component (framework).** A long-lived component that
+manages each fan-out as an ADR-047 Lifecycle `Participant` instance:
+
+- **Reads the unit set authoritatively** each evaluation via
+  `graph.query.prefix` (full `EntityState`s) — never cache-first, never
+  from in-memory tracking.
+- **Re-evaluates statelessly**, driven by `pkg/lifecycle` `WatchAll` over
+  the unit bucket (bootstrap re-delivery replays all current values on
+  subscribe → restart reconciles from KV; NOT the `pkg/dispatch`
+  completion-watcher, which suppresses replay), on every
+  completion/failure/reset event *and* on a periodic backstop tick (so a
+  missed watch event cannot hide a stall).
+- **Claims-then-dispatches.** The brain returns `Ready` for an in-flight
+  unit (it carries no terminal marker), so the executor records a durable
+  `replace_owned` dispatch marker and skips units that already carry one.
+  **Mutual exclusion comes from single-flight execution, not from the
+  marker write** (`replace_owned` is last-write-wins, not CAS): the
+  invariant is one re-eval pass at a time per instance, one instance per
+  fan-out, and the marker MUST be committed *before* the work is
+  dispatched (else a restart re-derives `Ready` and double-runs). The
+  ADR-056 owner-incarnation lease is a *cross-incarnation* backstop only
+  (catches a post-restart zombie), and it is **default-off** — it does
+  not exclude same-incarnation concurrent claimants. See "Load-bearing
+  invariants."
+- **Dispatches under bounded concurrency** via `pkg/dispatch`
+  BoundedDispatcher (the concurrency leg).
+- **Surfaces `Stalled()`** as an alert (metric / `ops.diagnosis.*`),
+  never as benign idle. `Stalled()` is net-new wiring — no current
+  consumer calls it (semspec's live orchestrator is stall-blind).
+
+**3. Framework/consumer boundary.**
+
+- *Framework:* brain + executor + stall detection + the `$state` reset
+  fix (below). Domain-agnostic — consumes a resolved `depends_on` edge
+  set + completion/failure/reset markers on per-unit entities.
+- *Consumer:* derives the edge set (semspec unions semantic prereqs +
+  ADR-044 file-overlap serialization edges; semteams research is depth-1
+  no-edges → stays on Phase 1 `for_each`), mints fresh-per-run unit
+  identities, and layers any domain gate (semspec's M:N Story
+  owner-gating: release a non-owner on its owner's terminal-OR-reset
+  state). The brain has no `Story`/owner concept.
+
+#### How the eight correctness requirements are met
+
+1. **Derived, never mutated** — the executor re-reads the whole prereq
+   set authoritatively and the brain re-derives status from membership
+   every evaluation. No projected status field to drift (the wedge Path R
+   could not escape).
+2. **Wait for ALL prerequisites** — the brain's all-prereqs closure;
+   stateless re-eval converges on any late-arriving prereq.
+3. **Generic dependency source** — the brain consumes a resolved edge
+   set; the consumer unions whatever sources it needs first.
+4. **Reset / re-dispatch authoritative** — reset clears the unit's
+   terminal + `replace_owned` claim; the next re-eval reads authoritative
+   KV and `Dirtied` precedence re-derives Ready → re-dispatch. No reverse
+   un-stamping (Path R's fragility); evicted-then-recreated entities are
+   read fresh, never idempotent-skipped into idle.
+5. **Fresh-per-run identity** — consumer mints run-nonce IDs; framework
+   side is the `$state` fix. Orthogonal to the dispatch mechanism.
+6. **In-flight dedup** — a durable `replace_owned` dispatch marker, read
+   authoritatively, excludes already-dispatched units (the brain's
+   `Ready` alone would re-select them). The marker is the *durable
+   record*; the *mutual exclusion* is single-flight execution (the marker
+   write is not a CAS lock — see invariants). Committed before dispatch
+   so restart can't double-run.
+7. **Failure releases dependents** — a failed node derives Blocked; its
+   dependents stay gated (correct — you cannot run a dependent whose
+   prerequisite genuinely failed) while **independent branches keep
+   flowing**; recovery is reset-driven, and the stuck branch is surfaced
+   by `Stalled()`, so it is never *silently* stranded. Policy knob:
+   stop-on-first-failure vs continue-others vs retry-with-backoff. *The
+   brain logic is verified correct (deep-chain mid-failure → dependents
+   read Blocked-held, not idle); the `Stalled()` wiring that delivers the
+   "not silently stranded" guarantee is net-new (below).*
+8. **Stall / cycle surfaced** — `Stalled()` over the authoritative
+   whole-set; the transition *into* a stall is always an event
+   (boot / last completion / a failure), and the periodic backstop closes
+   the missed-event hole. *Both `Stalled()` wiring and the backstop are
+   net-new — no production code (incl. semspec's live orchestrator)
+   implements them; they are the load-bearing build, not reuse.*
+
+#### Load-bearing invariants (the implementer MUST hold these)
+
+An earlier draft of this section asserted guarantees the substrate does
+not provide; an adversarial code review corrected them. These are
+non-negotiable, or the dispatcher double-runs / breaks recovery / hides
+stalls:
+
+1. **Single-flight per fan-out, one instance per fan-out.** `replace_owned`
+   is last-write-wins, not CAS, and the owner-lease fence is default-off +
+   cross-incarnation only — so neither provides concurrent mutual
+   exclusion. The dedup holds *only* if the executor runs one re-eval pass
+   at a time per instance and exactly one instance owns a given fan-out.
+   If true cross-writer exclusion is ever needed, switch the dispatch
+   claim to an `ExpectedRevision`-based CAS write.
+2. **Claim before dispatch.** The `replace_owned` marker MUST be committed
+   *before* the work (agent task) is published. A crash between dispatch
+   and claim re-derives the unit as `Ready` on restart → double-run.
+3. **Re-eval + recovery ride lifecycle `WatchAll`, not the dispatch
+   completion-watcher.** The latter suppresses bootstrap replay; wiring
+   re-eval/recovery to it silently breaks whole-set re-eval and restart
+   reconciliation.
+4. **Stall detection + periodic backstop are net-new.** No reference
+   implementation exists; they are the core build of this phase, not
+   composed substrate.
+
+#### Resolved open questions (superseding the Phase-1-era deferrals)
+
+- **Where the DAG lives:** per-unit graph entities carrying `depends_on`
+  triples on `ENTITY_STATES`; the fan-out instance is an ADR-047
+  Lifecycle `Participant` (named instance, restart recovery, operator
+  gateway visibility). No parallel flow-definition store.
+- **Completion source-of-truth:** multi-valued completion/failure markers
+  on the unit entities, read authoritatively; status derived from
+  membership — never a separate completion bucket that can lag the truth.
+- **Failure semantics:** default = failed node leaves its dependents
+  Blocked while independent branches flow; recovery is reset-driven and
+  the stuck branch is surfaced by `Stalled()`. Knob per the list above.
+- **Synthetic-decide completion:** a child that completes via
+  synthetic-decide counts as complete for dependent dispatch **iff** it
+  produced the required deliverable — defer the judgment to the
+  deliverable validator; never treat terminal-tool-less output as
+  unconditionally complete.
 
 ## Trade-offs and alternatives considered
 
@@ -214,22 +411,48 @@ sharp edge.
    action=fan_out and subtopics non-empty
 6. Tests: substitution unit + iteration integration cases
 
-**Phase 2 (post-beta.82, separate PR with design amendment to this ADR):**
-1. Design amendment: completion-bucket layout, DAG storage shape,
-   failure semantics
-2. `fan_out_gated` action implementation
-3. Completion watcher + stateless re-eval scheduler
-4. Bounded concurrency
-5. e2e scenario validating depends_on respected under concurrent
-   completion arrival
+**Phase 2 (component, dedicated session — design amended 2026-06-27 above):**
+1. Selection brain — dependency-free pure pkg (generalize semspec's
+   `coordinator` to opaque unit IDs + `depends_on` + `MarkerSet`,
+   Story/owner-free) + its generalized test suite.
+2. Executor component — re-eval driven by `pkg/lifecycle` `WatchAll`
+   (bootstrap re-delivery = restart recovery), bounded-concurrency
+   dispatch via ADR-048 BoundedDispatcher, authoritative whole-set reads
+   via `graph.query.prefix`; single-flight claim-then-dispatch via a
+   durable `replace_owned` marker committed *before* dispatch (mutual
+   exclusion is single-flight + single-instance, NOT the marker write —
+   see Load-bearing invariants); periodic stall-detection backstop;
+   manages instances as ADR-047 `Participant`s.
+3. Stall/cycle detection surfaced as alert (the one capability nothing
+   currently has).
+4. Wire `StateTracker.DeleteAllForEntity` (`processor/rule/state_tracker.go`
+   — defined but **zero callers** since beta.115) so per-`(rule,entity)`
+   `$state` retry budgets reset on re-dispatch; complements the consumer's
+   fresh-per-run identity. A standalone latent-bug fix, valid independent
+   of this feature.
+5. e2e validating: `depends_on` respected under concurrent completion
+   arrival; reset/re-dispatch survives an evicted terminal row (no idle
+   wedge); a failed node releases its dependents; a `depends_on` cycle
+   surfaces as a stall, not silent idle.
 
 ## References
 
 - GH #134 — original parallel-fan-out issue
+- GH #357 — Phase 2 ask + the 8 correctness requirements; the 2026-06-27
+  amendment resolves it to the component shape (C2)
 - ADR-026 — coordinator agent, references this as milestone 2
-- ADR-028 — orchestration architecture (rule skeleton + coordinator + ops)
+- ADR-028 — orchestration architecture (rule skeleton + coordinator + ops);
+  the "no separate workflow engine" identity that rules out a DAG-aware
+  rule action
+- ADR-044 — file-overlap → `depends_on` serialization edges (semspec's
+  consumer-side edge derivation)
+- ADR-047 — Lifecycle harness substrate; the fan-out instance is a
+  `Participant`
+- ADR-048 — BoundedDispatcher + completion-watcher; the executor's
+  bounded-concurrency + re-eval substrate
 - `semspec/processor/scenario-orchestrator/component.go` — gated-DAG
-  prior art
+  prior art (coupled); `semspec/workflow/coordinator/coordinator.go` —
+  the selection brain to generalize (Story/owner coupling stripped)
 - `configs/rules/deep-research/03-fan-out-subtopics.json` — the
   existing sequential fan-out shape this replaces (the comment in
   that file points here)
