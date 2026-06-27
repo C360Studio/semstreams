@@ -752,7 +752,11 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		return nil, rejectInternal(err)
 	}
 
-	// Primary update committed — route foreign edges onto their own subjects.
+	// Primary update committed — invalidate the entity-query cache so a
+	// read-after-write via graph.ingest.query.* sees the new triples (the
+	// gated-DAG executor's claim-then-reread relies on this), then route any
+	// foreign edges onto their own subjects.
+	c.invalidateEntityCacheEntry(req.Entity.ID)
 	c.routeForeignEdges(ctx, req.Entity.ID, req.Entity.MessageType, foreign)
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -860,6 +864,10 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 		}
 		return nil, rejectInternal(err)
 	}
+	// CAS-path cache invalidation is owned by updateEntityAtRevision (it Deletes
+	// the cache entry after a successful CAS commit), so no invalidate is needed
+	// here — unlike the non-CAS UpdateWithRetry path above, which writes the
+	// bucket directly and must invalidate itself.
 
 	// Read back for response. Degraded path handles read-back failure
 	// (write committed, read-back failed → operator sees Success +

@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "gated-dag.v1.json",
+  "type": "object",
+  "title": "gated-dag Configuration",
+  "description": "Gated-DAG dispatch executor (ADR-046 Phase 2): dispatches DAG units in dependency order with restart recovery, failure isolation, and stall detection.",
+  "properties": {
+    "backstop_interval": {
+      "type": "string",
+      "description": "Period of the unconditional re-eval tick that closes the missed-watch-event hole and surfaces stalls.",
+      "default": "30s",
+      "category": "advanced"
+    },
+    "claim_predicate": {
+      "type": "string",
+      "description": "Triple predicate carrying the durable in-flight claim (the dedup record committed before dispatch).",
+      "default": "gateddag.claim",
+      "category": "advanced"
+    },
+    "completed_predicate": {
+      "type": "string",
+      "description": "Triple predicate marking a unit complete.",
+      "default": "gateddag.completed",
+      "category": "advanced"
+    },
+    "depends_on_predicate": {
+      "type": "string",
+      "description": "Triple predicate carrying a unit's prerequisite unit IDs (multi-valued; one triple per edge).",
+      "default": "gateddag.depends_on",
+      "category": "advanced"
+    },
+    "dirtied_predicate": {
+      "type": "string",
+      "description": "Triple predicate marking a unit reset/dirtied (re-derives Ready over any stale terminal marker).",
+      "default": "gateddag.dirtied",
+      "category": "advanced"
+    },
+    "dispatch_subject": {
+      "type": "string",
+      "description": "Subject published with the unit entity ID reference when a unit is dispatchable. The consumer wires its handler here. Required.",
+      "category": "basic"
+    },
+    "failed_predicate": {
+      "type": "string",
+      "description": "Triple predicate marking a unit failed.",
+      "default": "gateddag.failed",
+      "category": "advanced"
+    },
+    "failure_policy": {
+      "type": "string",
+      "description": "How a failed unit affects new dispatch.",
+      "default": "continue_others",
+      "enum": [
+        "continue_others",
+        "stop_on_first_failure"
+      ],
+      "category": "advanced"
+    },
+    "fan_out_workflow": {
+      "type": "string",
+      "description": "lifecycle.Workflow.Name watched for re-eval triggers. Defaults to the framework FanOut workflow (self-registered).",
+      "default": "gateddag-fanout",
+      "category": "basic"
+    },
+    "max_units": {
+      "type": "integer",
+      "description": "Cap on the authoritative whole-set read; a larger fan-out logs a truncation warning.",
+      "default": 1000,
+      "category": "advanced"
+    },
+    "query_timeout": {
+      "type": "string",
+      "description": "Timeout bounding each authoritative graph.query.prefix read.",
+      "default": "30s",
+      "category": "advanced"
+    },
+    "queue_size": {
+      "type": "integer",
+      "description": "Dispatch submit-queue bound.",
+      "default": 256,
+      "category": "advanced"
+    },
+    "unit_entity_prefix": {
+      "type": "string",
+      "description": "graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out. Required.",
+      "category": "basic"
+    },
+    "workers": {
+      "type": "integer",
+      "description": "Bounded dispatch concurrency.",
+      "default": 4,
+      "category": "advanced"
+    }
+  },
+  "required": [
+    "unit_entity_prefix",
+    "dispatch_subject"
+  ],
+  "x-component-metadata": {
+    "name": "gated-dag",
+    "type": "processor",
+    "protocol": "nats",
+    "domain": "graph",
+    "version": "1.0.0"
+  }
+}
