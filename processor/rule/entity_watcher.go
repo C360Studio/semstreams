@@ -362,6 +362,21 @@ func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.
 				}
 				rp.evaluateRulesForEntityState(ctx, entityKey,
 					entitySnapshot{Action: action, Revision: revision}, bootstrap)
+				// Clean up the deleted entity's rule $state. (Rule evaluation
+				// itself is skipped on delete — the call above short-circuits on
+				// the nil State — so order relative to it is immaterial; we run
+				// after it for symmetry with the update path.) Without this
+				// cleanup, per-(rule,entity) state — most importantly an
+				// exhausted max_iterations retry budget — is orphaned: a later
+				// entity reused or recreated at the same ID inherits the stale
+				// budget and silently never re-fires (gh#358). Best-effort: a
+				// cleanup failure is logged, never blocks delete handling.
+				if rp.stateTracker != nil {
+					if err := rp.stateTracker.DeleteAllForEntity(ctx, entityKey); err != nil {
+						rp.logger.Warn("Failed to clean up rule state for deleted entity",
+							"entity", entityKey, "error", err)
+					}
+				}
 				continue
 			}
 

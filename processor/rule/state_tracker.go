@@ -179,8 +179,22 @@ func (st *StateTracker) Delete(ctx context.Context, ruleID, entityKey string) er
 	return nil
 }
 
-// DeleteAllForEntity removes all rule states associated with an entity.
-// This is called when an entity is deleted to clean up orphaned state.
+// DeleteAllForEntity removes the per-(rule,entity) SINGLE-ENTITY state for the
+// given entity (matched exactly via stateKeyBelongsToEntity). Relationship-rule
+// pair state is intentionally not touched — see stateKeyBelongsToEntity for why
+// the key scheme makes precise pair matching impossible and TTL the right
+// backstop.
+//
+// Called from the entity watcher's delete path (entity_watcher.go) when an
+// entity is deleted, so a later entity recreated or reused at the same ID
+// starts with a fresh match/iteration budget rather than inheriting the deleted
+// entity's exhausted retry budget (gh#358). entityID must be a canonical 6-part
+// entity ID (the watcher always passes one) for the suffix match to be exact.
+//
+// Cost note: this lists every key in the state bucket. Entity deletes are
+// infrequent relative to updates, so the O(state-keys) scan is acceptable; if a
+// high-delete-rate workload ever makes it hot, switch to constructing the exact
+// per-rule keys from the loaded rule set.
 func (st *StateTracker) DeleteAllForEntity(ctx context.Context, entityID string) error {
 	// Handle nil bucket (for tests)
 	if st.bucket == nil {
@@ -194,8 +208,7 @@ func (st *StateTracker) DeleteAllForEntity(ctx context.Context, entityID string)
 	}
 
 	for _, key := range keys {
-		// Check if key contains the entityID (either as single entity or in pair)
-		if containsEntityID(key, entityID) {
+		if stateKeyBelongsToEntity(key, entityID) {
 			if err := st.bucket.Delete(ctx, key); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
 				st.logger.Warn("Failed to delete rule state",
 					"key", key,
@@ -214,11 +227,29 @@ func buildStateKey(ruleID, entityKey string) string {
 	return ruleID + "." + entityKey
 }
 
-// containsEntityID checks if a state key contains the given entity ID.
-// Key format: ruleID.entityKey where entityKey is either "entityID" or "entityID1_entityID2"
-// Since both ruleID and entityKey may contain dots, we just check if the key contains the entityID.
-func containsEntityID(key, entityID string) bool {
-	return strings.Contains(key, entityID)
+// stateKeyBelongsToEntity reports whether a SINGLE-ENTITY state key is owned by
+// entityID. A single-entity key is buildStateKey(ruleID, entityID) =
+// "ruleID.entityID", so the test is an exact suffix match on the ruleID/entity
+// separator: the key ends with "." + entityID.
+//
+// This is EXACT (not a substring/boundary heuristic) and that exactness is
+// load-bearing. "_" is a legal character inside an entity-ID instance segment
+// (message.isEntityIDChar), so a boundary check that treats "_" as a delimiter
+// over-deletes: deleting "org.plat.dom.sys.drone.a" would also match a LIVE
+// sibling "org.plat.dom.sys.drone.a_x" (a different entity whose instance is
+// "a_x"), silently wiping its retry budget. The suffix match avoids this — the
+// key for "a_x" ends with ".a_x", not ".a". Entity IDs are canonical 6-part IDs
+// with no internal dots, so no 6-part ID is a dotted-suffix of another and the
+// match never collides.
+//
+// Relationship-rule PAIR keys (buildStateKey(ruleID, buildPairKey(a,b)) =
+// "ruleID.a_b") are intentionally NOT matched: "_" is both the pair separator
+// and a legal instance char, so a pair key cannot be split into its components
+// unambiguously, and matching one would risk deleting a live entity's state.
+// Orphaned pair state is left to TTL-based invalidation (gh#358 option 3) rather
+// than risked here.
+func stateKeyBelongsToEntity(key, entityID string) bool {
+	return entityID != "" && strings.HasSuffix(key, "."+entityID)
 }
 
 // buildPairKey creates a canonical entity pair key with IDs sorted alphabetically.

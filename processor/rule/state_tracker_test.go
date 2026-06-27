@@ -10,6 +10,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestStateKeyBelongsToEntity covers the EXACT single-entity key match used by
+// DeleteAllForEntity. The load-bearing cases are the over-deletion guards: a
+// 6-part ID must not match a dotted prefix-sibling (drone.1 vs drone.10) NOR an
+// underscore prefix-sibling (drone.a vs the live entity drone.a_x — "_" is legal
+// inside an instance segment). Pair keys are deliberately not matched.
+func TestStateKeyBelongsToEntity(t *testing.T) {
+	t.Parallel()
+
+	const a = "org.plat.dom.sys.drone.1"
+	const a10 = "org.plat.dom.sys.drone.10" // dotted prefix sibling
+	const au = "org.plat.dom.sys.drone.a"
+	const aux = "org.plat.dom.sys.drone.a_x" // underscore prefix sibling (live entity)
+	const b = "org.plat.dom.sys.drone.2"
+
+	tests := []struct {
+		name     string
+		key      string
+		entityID string
+		want     bool
+	}{
+		{"single entity exact", buildStateKey("rule-x", a), a, true},
+		{"single entity, dotted ruleID", buildStateKey("rule.with.dots", a), a, true},
+		{"dotted prefix sibling must NOT match", buildStateKey("rule-x", a10), a, false},
+		{"underscore prefix sibling must NOT match", buildStateKey("rule-x", aux), au, false},
+		{"underscore sibling matches itself", buildStateKey("rule-x", aux), aux, true},
+		{"different entity", buildStateKey("rule-x", b), a, false},
+		// Pair keys are intentionally NOT matched (key scheme can't split them
+		// unambiguously; over-matching would risk a live entity's budget).
+		{"pair key first component not matched", buildStateKey("rule-x", buildPairKey(a, b)), a, false},
+		{"pair key second component not matched", buildStateKey("rule-x", buildPairKey(a, b)), b, false},
+		{"empty entityID", buildStateKey("rule-x", a), "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, stateKeyBelongsToEntity(tt.key, tt.entityID),
+				"key=%q entityID=%q", tt.key, tt.entityID)
+		})
+	}
+}
+
 // T032: Test MatchState struct
 func TestMatchState(t *testing.T) {
 	t.Parallel()
