@@ -2181,6 +2181,20 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 // Triple Operations
 // ============================================================================
 
+// invalidateEntityCacheEntry drops a stale entity-query-cache entry after a
+// direct entityBucket write, preserving read-after-write coherence for callers
+// that query via graph.ingest.query.* (e.g. the gated-DAG executor reading the
+// whole unit set right after committing a claim, or any read-after-mutate via
+// the NATS mutation API). The high-level CreateEntity/UpdateEntity/DeleteEntity/
+// MergeEntity methods already invalidate inline; the triple-add and
+// update_with_triples write paths did not, so a query within the 30s cache TTL
+// returned the pre-write entity. No-op when the cache is disabled.
+func (c *Component) invalidateEntityCacheEntry(id string) {
+	if c.entityCache != nil {
+		c.entityCache.Delete(id) //nolint:errcheck
+	}
+}
+
 // AddTriple adds a triple to an entity using CAS for concurrency safety
 func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error {
 	if triple.Subject == "" {
@@ -2224,6 +2238,9 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 		return errs.Wrap(err, "Component", "AddTriple", "CAS update")
 	}
 
+	// Read-after-write coherence: the entity-query cache must not serve the
+	// pre-add state on the next graph.ingest.query.* read.
+	c.invalidateEntityCacheEntry(triple.Subject)
 	return nil
 }
 
@@ -2331,6 +2348,9 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			}
 			continue
 		}
+		// Read-after-write coherence: invalidate the just-written subject's
+		// cached entity so the next query reflects the appended triples.
+		c.invalidateEntityCacheEntry(subject)
 		writtenCount += len(group)
 	}
 
@@ -2424,6 +2444,9 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 		return errs.Wrap(err, "Component", "RemoveTriple", "CAS update")
 	}
 
+	// Read-after-write coherence: drop the cached entity so a query reflects
+	// the removed predicate (consumers clear markers via remove on reset).
+	c.invalidateEntityCacheEntry(subject)
 	return nil
 }
 
