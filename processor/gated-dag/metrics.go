@@ -13,6 +13,7 @@ const metricsService = "gated-dag"
 type metrics struct {
 	stall       prometheus.Gauge
 	claimed     prometheus.Counter
+	claimErr    prometheus.Counter
 	dispatched  prometheus.Counter
 	dispatchErr prometheus.Counter
 	evals       prometheus.Counter
@@ -28,6 +29,10 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 		claimed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gated_dag_units_claimed_total",
 			Help: "Durable claim markers committed (before dispatch).",
+		}),
+		claimErr: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gated_dag_claim_errors_total",
+			Help: "Claim mutations that failed; the unit is re-selected next eval (the in-flight hint is cleared). A sustained nonzero rate means a unit cannot be claimed (e.g. graph-ingest outage) and its subtree is not advancing.",
 		}),
 		dispatched: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gated_dag_units_dispatched_total",
@@ -47,6 +52,7 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 		// registry and does not abort the executor.
 		_ = reg.RegisterGauge(metricsService, "stalled_units", m.stall)
 		_ = reg.RegisterCounter(metricsService, "units_claimed_total", m.claimed)
+		_ = reg.RegisterCounter(metricsService, "claim_errors_total", m.claimErr)
 		_ = reg.RegisterCounter(metricsService, "units_dispatched_total", m.dispatched)
 		_ = reg.RegisterCounter(metricsService, "dispatch_errors_total", m.dispatchErr)
 		_ = reg.RegisterCounter(metricsService, "evaluations_total", m.evals)

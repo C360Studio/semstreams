@@ -120,6 +120,27 @@ func newEvalExecutor(cfg Config, reader graphReader, sub func(dispatchJob) error
 	return &executor{cfg: cfg, log: discardLogger(), reader: reader, submit: sub}
 }
 
+// fakeStall records edge-triggered stall publishes (#365.3).
+type fakeStall struct {
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (f *fakeStall) PublishStall(_ context.Context, units []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]string, len(units))
+	copy(cp, units)
+	f.calls = append(f.calls, cp)
+	return nil
+}
+
+func (f *fakeStall) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 // --- claimThenDispatch ordering (invariant #2) ---
 
 func TestClaimThenDispatch_ClaimBeforePublish(t *testing.T) {
@@ -146,6 +167,18 @@ func TestClaimThenDispatch_PublishErrorAfterClaimDoesNotRollBack(t *testing.T) {
 	require.Equal(t, []string{"u1"}, cl.calls, "claim stays committed (no rollback — avoids double-run window)")
 }
 
+func TestClaimThenDispatch_ClaimErrorClearsInflight(t *testing.T) {
+	// The in-flight hint is set on submit; a claim failure in the worker must
+	// clear it, or the unit is skipped on every subsequent pass (never terminal,
+	// never dirtied) and wedges its whole subtree silently.
+	cl := &fakeClaimer{err: errors.New("claim boom")}
+	pub := &fakePublisher{}
+	e := &executor{cfg: validCfg(), log: discardLogger(), claimer: cl, pub: pub, inflight: map[string]bool{"u1": true}}
+	require.Error(t, e.claimThenDispatch(context.Background(), "u1"))
+	require.False(t, e.inflight["u1"], "claim failure must clear the in-flight hint so the unit is re-selected")
+	require.Empty(t, pub.calls, "no publish when the claim fails")
+}
+
 // --- reEvaluate selection ---
 
 // presence builds a presence-marker triple (object value is irrelevant for
@@ -163,7 +196,7 @@ func TestReEvaluate_DiamondSelection(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
-	e.reEvaluate(context.Background())
+	e.reEvaluate(context.Background(), true)
 	require.ElementsMatch(t, []string{"b", "c"}, sub.ids())
 }
 
@@ -176,7 +209,7 @@ func TestReEvaluate_InFlightDedup(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
-	e.reEvaluate(context.Background())
+	e.reEvaluate(context.Background(), true)
 	require.Empty(t, sub.ids())
 }
 
@@ -193,7 +226,7 @@ func TestReEvaluate_DirtiedOverridesStaleClaim(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
-	e.reEvaluate(context.Background())
+	e.reEvaluate(context.Background(), true)
 	require.Equal(t, []string{"b"}, sub.ids())
 }
 
@@ -212,9 +245,9 @@ func TestReEvaluate_BackstopPicksUpLateDependent(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{pass1, pass2}}, sub.fn)
-	e.reEvaluate(context.Background()) // pass 1: c claimed (deduped), d held
+	e.reEvaluate(context.Background(), true) // pass 1: c claimed (deduped), d held
 	require.Empty(t, sub.ids())
-	e.reEvaluate(context.Background()) // pass 2 (backstop): d now ready
+	e.reEvaluate(context.Background(), true) // pass 2 (backstop): d now ready
 	require.Equal(t, []string{"d"}, sub.ids())
 }
 
@@ -223,7 +256,7 @@ func TestReEvaluate_ReadErrorIsResilient(t *testing.T) {
 	sub := &recordingSubmit{}
 	r := &fakeReader{err: errors.New("store unavailable")}
 	e := newEvalExecutor(cfg, r, sub.fn)
-	require.NotPanics(t, func() { e.reEvaluate(context.Background()) })
+	require.NotPanics(t, func() { e.reEvaluate(context.Background(), true) })
 	require.Empty(t, sub.ids())
 }
 
@@ -238,14 +271,14 @@ func TestReEvaluate_StopOnFirstFailureHoldsIndependentBranch(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
-	e.reEvaluate(context.Background())
+	e.reEvaluate(context.Background(), true)
 	require.Empty(t, sub.ids(), "stop_on_first_failure holds all new dispatch")
 
 	// continue_others (default) dispatches the independent branch.
 	cfg.FailurePolicy = FailurePolicyContinueOthers
 	sub2 := &recordingSubmit{}
 	e2 := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub2.fn)
-	e2.reEvaluate(context.Background())
+	e2.reEvaluate(context.Background(), true)
 	require.Equal(t, []string{"z"}, sub2.ids())
 }
 
@@ -261,7 +294,7 @@ func TestReEvaluate_SingleFlightSerializes(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); e.reEvaluate(context.Background()) }()
+		go func() { defer wg.Done(); e.reEvaluate(context.Background(), true) }()
 	}
 	// Let both goroutines reach ReadUnitSet; release them.
 	time.Sleep(20 * time.Millisecond)
@@ -281,7 +314,7 @@ func TestReEvaluate_StallSurfacedNothingDispatched(t *testing.T) {
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
-	e.reEvaluate(context.Background())
+	e.reEvaluate(context.Background(), true)
 	require.Empty(t, sub.ids(), "a cycle dispatches nothing")
 }
 
@@ -314,4 +347,72 @@ func TestStallAfterInflight(t *testing.T) {
 		got := stallAfterInflight([]string{"a"}, mk(nil, nil, []string{"c"}, []string{"c"}))
 		require.Equal(t, []string{"a"}, got)
 	})
+}
+
+// --- #364 / #365.3 contract-completion additions ---
+
+func TestAllUnitsDone(t *testing.T) {
+	done := func(ids ...string) []gateddag.Decision {
+		out := make([]gateddag.Decision, len(ids))
+		for i, id := range ids {
+			out[i] = gateddag.Decision{UnitID: id, Status: gateddag.StatusDone}
+		}
+		return out
+	}
+	require.False(t, allUnitsDone(nil), "empty set is NOT complete (vacuous all-done)")
+	require.True(t, allUnitsDone(done("a", "b")))
+
+	mixed := append(done("a"), gateddag.Decision{UnitID: "b", Status: gateddag.StatusReady})
+	require.False(t, allUnitsDone(mixed), "a non-Done unit means not complete")
+
+	blocked := append(done("a"), gateddag.Decision{UnitID: "b", Status: gateddag.StatusBlocked})
+	require.False(t, allUnitsDone(blocked), "a Blocked (failed) unit is not 'done' — consumer-driven failure")
+}
+
+func TestReEvaluate_StallEventEdgeTriggered(t *testing.T) {
+	cfg := validCfg()
+	// Cycle a<->b → persistent stall on every pass.
+	states := []graph.EntityState{
+		unit("a", tri(cfg.DependsOnPredicate, "b")),
+		unit("b", tri(cfg.DependsOnPredicate, "a")),
+	}
+	sub := &recordingSubmit{}
+	fs := &fakeStall{}
+	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
+	e.stall = fs
+
+	// Three passes, all stalled: the event fires once on the 0→non-zero edge.
+	e.reEvaluate(context.Background(), true)
+	e.reEvaluate(context.Background(), true)
+	e.reEvaluate(context.Background(), true)
+	require.Equal(t, 1, fs.count(), "stall event is edge-triggered, not re-emitted every pass")
+	require.Empty(t, sub.ids(), "a cycle dispatches nothing")
+}
+
+// TestReEvaluate_InMemoryInflightDedup proves the submit→claim-commit window is
+// closed: a unit submitted in one pass is NOT re-submitted by a later pass even
+// when its durable claim is not yet visible in the read (the latent double-
+// dispatch the #363 unit watch exposed).
+func TestReEvaluate_InMemoryInflightDedup(t *testing.T) {
+	cfg := validCfg()
+	states := []graph.EntityState{unit("a")} // a: no deps, Ready, never shows a claim
+	sub := &recordingSubmit{}
+	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
+	e.reEvaluate(context.Background(), true) // submits a, marks it in-flight
+	e.reEvaluate(context.Background(), true) // claim still not visible, but in-flight → NOT re-submitted
+	e.reEvaluate(context.Background(), true)
+	require.Equal(t, []string{"a"}, sub.ids(), "in-memory in-flight prevents double-dispatch before the claim is visible")
+}
+
+// TestReEvaluate_DirtiedClearsInflight proves a reset re-dispatches even if the
+// in-memory in-flight hint is stale (dirtied overrides it, same as the claim).
+func TestReEvaluate_DirtiedClearsInflight(t *testing.T) {
+	cfg := validCfg()
+	clean := []graph.EntityState{unit("a")}
+	reset := []graph.EntityState{unit("a", presence(cfg.DirtiedPredicate))}
+	sub := &recordingSubmit{}
+	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{clean, reset}}, sub.fn)
+	e.reEvaluate(context.Background(), true) // submits a (in-flight)
+	e.reEvaluate(context.Background(), true) // a now dirtied → in-flight cleared, re-dispatched
+	require.Equal(t, []string{"a", "a"}, sub.ids(), "a dirtied unit re-dispatches despite a stale in-flight hint")
 }

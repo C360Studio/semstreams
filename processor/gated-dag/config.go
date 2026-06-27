@@ -74,7 +74,20 @@ type Config struct {
 
 	// FailurePolicy selects how a failed unit affects new dispatch. One of
 	// FailurePolicyContinueOthers (default) or FailurePolicyStopOnFirstFailure.
+	// (retry_with_backoff is deferred — ADR-046 Phase 2.1 §4.)
 	FailurePolicy string `json:"failure_policy,omitempty"`
+
+	// FanOutInstanceID is the 6-part entity ID of the FanOut lifecycle instance
+	// this executor owns (GH #364). OPTIONAL: when set, the executor creates the
+	// instance in `dispatching` on Start and auto-transitions it to `completed`
+	// when every unit is Done. When empty, no instance lifecycle is owned
+	// (beta.117 behavior). FanOut *failure* stays consumer-driven either way.
+	FanOutInstanceID string `json:"fan_out_instance_id,omitempty"`
+
+	// StallSubject, when set, receives an edge-triggered StallEvent (on the
+	// 0→non-zero stall transition) for active wedge-detection (GH #365.3).
+	// OPTIONAL: the gated_dag_stalled_units gauge + WARN log are always emitted.
+	StallSubject string `json:"stall_subject,omitempty"`
 }
 
 // DefaultConfig returns the framework defaults. Required fields
@@ -150,6 +163,14 @@ func (c Config) Validate() error {
 	}
 	if c.FanOutWorkflow == "" {
 		return fmt.Errorf("fan_out_workflow must not be empty")
+	}
+	// The framework-owned FanOut instance lifecycle uses the framework FanOut
+	// Participant type, whose Workflow() is the default name. Owning an instance
+	// under a custom workflow would silently no-op (create under the default,
+	// complete under the custom), so reject the combination loudly.
+	if c.FanOutInstanceID != "" && c.FanOutWorkflow != FanOutWorkflow {
+		return fmt.Errorf("fan_out_instance_id requires the default fan_out_workflow %q (the framework owns only its own FanOut type); got fan_out_workflow=%q — register and drive your own instance lifecycle instead",
+			FanOutWorkflow, c.FanOutWorkflow)
 	}
 	if c.Workers <= 0 {
 		return fmt.Errorf("workers must be > 0 (got %d)", c.Workers)

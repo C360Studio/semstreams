@@ -56,6 +56,11 @@
       ],
       "category": "advanced"
     },
+    "fan_out_instance_id": {
+      "type": "string",
+      "description": "Optional 6-part entity ID of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty = no instance lifecycle owned.",
+      "category": "advanced"
+    },
     "fan_out_workflow": {
       "type": "string",
       "description": "lifecycle.Workflow.Name watched for re-eval triggers. Defaults to the framework FanOut workflow (self-registered).",
@@ -78,6 +83,11 @@
       "type": "integer",
       "description": "Dispatch submit-queue bound.",
       "default": 256,
+      "category": "advanced"
+    },
+    "stall_subject": {
+      "type": "string",
+      "description": "Optional subject for an edge-triggered StallEvent on the 0→non-zero stall transition (the gated_dag_stalled_units gauge + WARN log are always emitted).",
       "category": "advanced"
     },
     "unit_entity_prefix": {

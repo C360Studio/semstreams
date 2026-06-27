@@ -107,10 +107,22 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
+	var stall stallPublisher
+	if c.cfg.StallSubject != "" {
+		stall = &natsStallPublisher{
+			nc:               c.natsClient,
+			subject:          c.cfg.StallSubject,
+			fanOutWorkflow:   c.cfg.FanOutWorkflow,
+			fanOutInstanceID: c.cfg.FanOutInstanceID,
+		}
+	}
+
 	exec := &executor{
 		cfg:     c.cfg,
 		log:     c.logger,
 		mgr:     c.mgr,
+		nc:      c.natsClient,
+		stall:   stall,
 		metrics: newMetrics(c.metricsReg),
 		reader: &natsGraphReader{
 			nc:       c.natsClient,
