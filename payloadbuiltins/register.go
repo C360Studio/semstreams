@@ -24,6 +24,7 @@ import (
 	"github.com/c360studio/semstreams/message/oms"
 	"github.com/c360studio/semstreams/payloadregistry"
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
+	gateddagexec "github.com/c360studio/semstreams/processor/gated-dag"
 	"github.com/c360studio/semstreams/storage/objectstore"
 )
 
@@ -49,6 +50,7 @@ func Register(reg *payloadregistry.Registry) error {
 	track(agentic.RegisterPayloads(reg))
 	track(research.RegisterPayloads(reg))
 	track(agenticdispatch.RegisterPayloads(reg))
+	track(gateddagexec.RegisterPayloads(reg))
 	track(githubwebhook.RegisterPayloads(reg))
 	track(objectstore.RegisterPayloads(reg))
 	track(governance.RegisterPayloads(reg))

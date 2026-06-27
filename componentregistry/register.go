@@ -26,6 +26,7 @@ import (
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	gateddagexec "github.com/c360studio/semstreams/processor/gated-dag"
 	graphclustering "github.com/c360studio/semstreams/processor/graph-clustering"
 	graphembedding "github.com/c360studio/semstreams/processor/graph-embedding"
 	graphindex "github.com/c360studio/semstreams/processor/graph-index"
@@ -244,6 +245,12 @@ func registerSemanticLayer(registry *component.Registry) error {
 	// Rule processor
 	if err := rule.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "Rule processor component registration")
+	}
+
+	// Gated-DAG dispatch executor (ADR-046 Phase 2): dispatches DAG units in
+	// dependency order with restart recovery, failure isolation, stall detection.
+	if err := gateddagexec.Register(registry); err != nil {
+		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "gated-dag executor component registration")
 	}
 
 	return nil

@@ -1,0 +1,96 @@
+package gateddagexec
+
+import "github.com/c360studio/semstreams/component"
+
+// Schema returns the component configuration schema (static metadata used by
+// the registry + operator UI). Mirrors the field set in Config.
+func (c Config) Schema() component.ConfigSchema {
+	return component.ConfigSchema{
+		Properties: map[string]component.PropertySchema{
+			"fan_out_workflow": {
+				Type:        "string",
+				Description: "lifecycle.Workflow.Name watched for re-eval triggers. Defaults to the framework FanOut workflow (self-registered).",
+				Default:     FanOutWorkflow,
+				Category:    "basic",
+			},
+			"unit_entity_prefix": {
+				Type:        "string",
+				Description: "graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out. Required.",
+				Category:    "basic",
+			},
+			"dispatch_subject": {
+				Type:        "string",
+				Description: "Subject published with the unit entity ID reference when a unit is dispatchable. The consumer wires its handler here. Required.",
+				Category:    "basic",
+			},
+			"completed_predicate": {
+				Type:        "string",
+				Description: "Triple predicate marking a unit complete.",
+				Default:     defaultCompletedPredicate,
+				Category:    "advanced",
+			},
+			"failed_predicate": {
+				Type:        "string",
+				Description: "Triple predicate marking a unit failed.",
+				Default:     defaultFailedPredicate,
+				Category:    "advanced",
+			},
+			"dirtied_predicate": {
+				Type:        "string",
+				Description: "Triple predicate marking a unit reset/dirtied (re-derives Ready over any stale terminal marker).",
+				Default:     defaultDirtiedPredicate,
+				Category:    "advanced",
+			},
+			"depends_on_predicate": {
+				Type:        "string",
+				Description: "Triple predicate carrying a unit's prerequisite unit IDs (multi-valued; one triple per edge).",
+				Default:     defaultDependsOnPredicate,
+				Category:    "advanced",
+			},
+			"claim_predicate": {
+				Type:        "string",
+				Description: "Triple predicate carrying the durable in-flight claim (the dedup record committed before dispatch).",
+				Default:     defaultClaimPredicate,
+				Category:    "advanced",
+			},
+			"workers": {
+				Type:        "int",
+				Description: "Bounded dispatch concurrency.",
+				Default:     defaultWorkers,
+				Category:    "advanced",
+			},
+			"queue_size": {
+				Type:        "int",
+				Description: "Dispatch submit-queue bound.",
+				Default:     defaultQueueSize,
+				Category:    "advanced",
+			},
+			"backstop_interval": {
+				Type:        "string",
+				Description: "Period of the unconditional re-eval tick that closes the missed-watch-event hole and surfaces stalls.",
+				Default:     defaultBackstopInterval,
+				Category:    "advanced",
+			},
+			"query_timeout": {
+				Type:        "string",
+				Description: "Timeout bounding each authoritative graph.query.prefix read.",
+				Default:     defaultQueryTimeout,
+				Category:    "advanced",
+			},
+			"max_units": {
+				Type:        "int",
+				Description: "Cap on the authoritative whole-set read; a larger fan-out logs a truncation warning.",
+				Default:     defaultMaxUnits,
+				Category:    "advanced",
+			},
+			"failure_policy": {
+				Type:        "enum",
+				Description: "How a failed unit affects new dispatch.",
+				Enum:        []string{FailurePolicyContinueOthers, FailurePolicyStopOnFirstFailure},
+				Default:     FailurePolicyContinueOthers,
+				Category:    "advanced",
+			},
+		},
+		Required: []string{"unit_entity_prefix", "dispatch_subject"},
+	}
+}
