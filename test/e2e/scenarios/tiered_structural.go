@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -1007,6 +1008,149 @@ func (s *TieredScenario) executeTestTemporalQuery(ctx context.Context, result *R
 		result.Warnings = append(result.Warnings, "Temporal query returned 0 entities - check if temporal index is being populated")
 	}
 
+	return nil
+}
+
+// temporalSearchIDs runs a temporalSearch over [startTime, endTime] (RFC3339) via
+// the GraphQL gateway and returns the matched entity IDs. Shared by the temporal
+// query tests.
+func (s *TieredScenario) temporalSearchIDs(ctx context.Context, startTime, endTime string) ([]string, error) {
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	q := map[string]any{
+		"query": `query($startTime: DateTime!, $endTime: DateTime!, $limit: Int) {
+			temporalSearch(startTime: $startTime, endTime: $endTime, limit: $limit) { id type }}`,
+		"variables": map[string]any{"startTime": startTime, "endTime": endTime, "limit": 500},
+	}
+	body, err := json.Marshal(q)
+	if err != nil {
+		return nil, fmt.Errorf("marshal temporal query: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", s.config.GraphQLURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create temporal request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("temporal request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	rb, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read temporal response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("temporal query status %d: %s", resp.StatusCode, string(rb))
+	}
+
+	var tr struct {
+		Data struct {
+			TemporalSearch []struct {
+				ID string `json:"id"`
+			} `json:"temporalSearch"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rb, &tr); err != nil {
+		return nil, fmt.Errorf("parse temporal response: %w", err)
+	}
+	if len(tr.Errors) > 0 {
+		return nil, fmt.Errorf("temporal query GraphQL error: %s", tr.Errors[0].Message)
+	}
+
+	ids := make([]string, 0, len(tr.Data.TemporalSearch))
+	for _, e := range tr.Data.TemporalSearch {
+		ids = append(ids, e.ID)
+	}
+	return ids, nil
+}
+
+// executeTestTemporalObservedTime validates that the temporal index keys on the
+// observation timestamp (time.observation.recorded), not write-time (gh#370/#372).
+// It creates an entity whose observation instant is a fixed historical time, then
+// asserts temporalSearch finds it in the OBSERVED window but NOT in the write-time
+// (now) window — proving event-time, not processing-time, is the bucket key.
+// Structural-only: it creates a dedicated entity (like validate-referential-stub)
+// rather than relying on tier test data, which carries no observation predicate.
+func (s *TieredScenario) executeTestTemporalObservedTime(ctx context.Context, result *Result) error {
+	const (
+		entityID      = "c360.platform.e2e.eventtime.observation.001"
+		observedPred  = "time.observation.recorded"
+		createSubject = "graph.mutation.entity.create_with_triples"
+	)
+	// Fixed historical observation instant, well away from "now" (write-time).
+	observedAt := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
+
+	// 1. Create an entity carrying ONLY a historical observation timestamp.
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          entityID,
+			MessageType: message.Type{Domain: "e2e", Category: "eventtime", Version: "v1"},
+		},
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: observedPred, Object: observedAt.Format(time.RFC3339), Confidence: 1.0},
+		},
+		RequestID: "e2e-temporal-observed-time",
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal create_with_triples request: %w", err)
+	}
+	if _, err := s.natsClient.RequestClassified(ctx, createSubject, reqData, 10*time.Second); err != nil {
+		return fmt.Errorf("create_with_triples request failed: %w", err)
+	}
+
+	// 2. The OBSERVED-time window must return the entity (event-time keying).
+	//    Bounded poll absorbs temporal-index population lag.
+	observedStart := observedAt.Add(-12 * time.Hour).Format(time.RFC3339)
+	observedEnd := observedAt.Add(12 * time.Hour).Format(time.RFC3339)
+	found := false
+	for attempt := 0; attempt < 40 && !found; attempt++ {
+		ids, qerr := s.temporalSearchIDs(ctx, observedStart, observedEnd)
+		if qerr != nil {
+			return qerr
+		}
+		if slices.Contains(ids, entityID) {
+			found = true
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if !found {
+		return fmt.Errorf("event-time temporal: %s not found in observed-time window [%s, %s] — index not keying on time.observation.recorded",
+			entityID, observedStart, observedEnd)
+	}
+
+	// 3. Now that the entity is confirmed indexed, the WRITE-time (now) window must
+	//    NOT return it — proving the bucket key is observed-time, not write-time.
+	now := time.Now().UTC()
+	writeStart := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	writeEnd := now.Add(1 * time.Hour).Format(time.RFC3339)
+	writeIDs, qerr := s.temporalSearchIDs(ctx, writeStart, writeEnd)
+	if qerr != nil {
+		return qerr
+	}
+	if slices.Contains(writeIDs, entityID) {
+		return fmt.Errorf("event-time temporal: %s appeared in the write-time window [%s, %s] — index is keying on write-time, not observation time (gh#370 regression)",
+			entityID, writeStart, writeEnd)
+	}
+
+	result.Metrics["temporal_observed_time_validated"] = 1
+	result.Details["temporal_observed_time_test"] = map[string]any{
+		"entity_id":       entityID,
+		"observed_at":     observedAt.Format(time.RFC3339),
+		"observed_window": map[string]string{"start": observedStart, "end": observedEnd},
+		"write_window":    map[string]string{"start": writeStart, "end": writeEnd},
+		"message":         "entity found in observed-time window and absent from write-time window (event-time keying confirmed)",
+	}
 	return nil
 }
 
