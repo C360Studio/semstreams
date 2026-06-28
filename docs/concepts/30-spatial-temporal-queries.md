@@ -63,6 +63,10 @@ fallback (`core.time.timestamp`, `time.observation.recorded`, etc.) fires only w
 which never happens in production because graph-ingest stamps `UpdatedAt` on every write. **Do not** rely
 on `time.observation.recorded` being indexed — it is not.
 
+> **Proposed change (#370):** make the observation timestamp (`time.observation.recorded`) the *primary*
+> temporal key, with `UpdatedAt` as a fallback. Until that lands, the index keys on `UpdatedAt` as
+> described above; this section will be updated when #370 ships.
+
 For current-state queries ("what is fresh near here now") last-write freshness is the correct key and
 requires no product action. `UpdatedAt` is framework-owned and cannot be pinned by a product.
 
