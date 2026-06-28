@@ -54,6 +54,18 @@ const (
 
 const fsBackstop = "250ms"
 
+// fsEventually bounds the full-stack Eventually waits. These tests drive a real
+// multi-component pipeline (NATS → graph-ingest mutation+query → executor →
+// demo consumer doing mutation-with-retry), so a single DAG level is several
+// serial NATS round-trips; a diamond is three of them. The 250ms fsBackstop
+// guarantees forward progress the moment a marker lands, so this window only
+// needs to absorb upstream pipeline latency under CI contention — it does not
+// mask a logic stall (a genuinely stuck DAG never advances regardless of wait).
+// Sized at ~3x the prior 10s, which flaked under heavy CI load (gh#373). A
+// re-flake at this bound would indicate a real stall, not slowness, and warrants
+// deeper investigation rather than a further bump.
+const fsEventually = 30 * time.Second
+
 // dispatchLog is the thread-safe ordered record of units the executor dispatched
 // (decoded off the dispatch subject by the demo consumer).
 type dispatchLog struct {
@@ -322,7 +334,7 @@ func TestFullStack_DependsOnOrderingAndDedup(t *testing.T) {
 	require.Eventually(t, func() bool {
 		s := fs.dispatched.snapshot()
 		return len(s) == 4
-	}, 10*time.Second, 100*time.Millisecond, "all four units should dispatch; got %v", fs.dispatched.snapshot())
+	}, fsEventually, 100*time.Millisecond, "all four units should dispatch; got %v", fs.dispatched.snapshot())
 
 	for _, id := range []string{a, b, c, d} {
 		require.Equalf(t, 1, fs.dispatched.count(id), "unit %s dispatched exactly once (dedup)", id)
@@ -355,9 +367,9 @@ func TestFullStack_ResetSurvivesEvictedRow(t *testing.T) {
 	fs.seedUnit(t, x)
 
 	// First dispatch + completion + durable claim.
-	require.Eventually(t, func() bool { return fs.dispatched.count(x) == 1 }, 10*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return fs.dispatched.count(x) == 1 }, fsEventually, 100*time.Millisecond,
 		"x should dispatch once initially")
-	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, x, pClaim) }, 10*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, x, pClaim) }, fsEventually, 100*time.Millisecond,
 		"x should carry the durable claim after dispatch")
 
 	// Stage D setup: simulate a rule that exhausted its retry budget on x by
@@ -372,12 +384,12 @@ func TestFullStack_ResetSurvivesEvictedRow(t *testing.T) {
 	fs.deleteEntity(t, x)
 
 	// Stage D: x's rule $state is cleared (no stale, exhausted budget survives).
-	require.Eventually(t, func() bool { return !fsRuleStateExists(t, fs.nc, stateKey) }, 10*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return !fsRuleStateExists(t, fs.nc, stateKey) }, fsEventually, 100*time.Millisecond,
 		"Stage D: evicting x must clear its rule $state")
 
 	// Recreate x fresh (no markers, no claim) and assert Stage C re-dispatch.
 	fs.seedUnit(t, x)
-	require.Eventually(t, func() bool { return fs.dispatched.count(x) >= 2 }, 10*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return fs.dispatched.count(x) >= 2 }, fsEventually, 100*time.Millisecond,
 		"Stage C: recreated x must be re-dispatched (evicted-then-recreated read fresh, not idle-skipped)")
 }
 
@@ -396,8 +408,8 @@ func TestFullStack_FailedNodeHoldsDependents(t *testing.T) {
 	// a and the independent unit both dispatch; a then fails, indep completes.
 	require.Eventually(t, func() bool {
 		return fs.dispatched.count(a) == 1 && fs.dispatched.count(indep) == 1
-	}, 10*time.Second, 100*time.Millisecond, "a and indep should dispatch")
-	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, a, pFailed) }, 10*time.Second, 100*time.Millisecond,
+	}, fsEventually, 100*time.Millisecond, "a and indep should dispatch")
+	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, a, pFailed) }, fsEventually, 100*time.Millisecond,
 		"a should carry the failed marker")
 
 	// b stays held behind its failed prerequisite — give several backstop passes
@@ -420,7 +432,7 @@ func TestFullStack_CycleSurfacesStall(t *testing.T) {
 	fs.seedUnit(t, b, a) // b depends on a → cycle
 
 	// The stall is surfaced (logged) within a couple of backstop passes...
-	require.Eventually(t, func() bool { return logCap.sawContaining("stalled") }, 10*time.Second, 100*time.Millisecond,
+	require.Eventually(t, func() bool { return logCap.sawContaining("stalled") }, fsEventually, 100*time.Millisecond,
 		"a depends_on cycle must surface as a stall, not silent idle")
 	// ...and nothing is ever dispatched.
 	require.Empty(t, fs.dispatched.snapshot(), "a cycle dispatches nothing")
@@ -493,7 +505,7 @@ func TestFullStack_FanOutInstanceAutoCompletes(t *testing.T) {
 	require.Eventually(t, func() bool {
 		inst, err := fs.mgr.Get(ctx, gateddagexec.FanOutWorkflow, instID)
 		return err == nil && inst.Phase() == "dispatching"
-	}, 10*time.Second, 100*time.Millisecond, "FanOut instance should be created in dispatching")
+	}, fsEventually, 100*time.Millisecond, "FanOut instance should be created in dispatching")
 
 	a, b := fsUnit("s6", "a"), fsUnit("s6", "b")
 	fs.seedUnit(t, a)
@@ -502,7 +514,7 @@ func TestFullStack_FanOutInstanceAutoCompletes(t *testing.T) {
 	require.Eventually(t, func() bool {
 		inst, err := fs.mgr.Get(ctx, gateddagexec.FanOutWorkflow, instID)
 		return err == nil && inst.Phase() == "completed"
-	}, 10*time.Second, 100*time.Millisecond, "FanOut instance must auto-complete once every unit is Done")
+	}, fsEventually, 100*time.Millisecond, "FanOut instance must auto-complete once every unit is Done")
 }
 
 // TestFullStack_StallEventPublished (#365.3) proves a depends_on cycle publishes
@@ -542,6 +554,6 @@ func TestFullStack_StallEventPublished(t *testing.T) {
 		got.Lock()
 		defer got.Unlock()
 		return len(got.units) == 2
-	}, 10*time.Second, 100*time.Millisecond, "a cycle must publish a StallEvent naming both held units")
+	}, fsEventually, 100*time.Millisecond, "a cycle must publish a StallEvent naming both held units")
 	require.Empty(t, fs.dispatched.snapshot(), "a cycle dispatches nothing")
 }
