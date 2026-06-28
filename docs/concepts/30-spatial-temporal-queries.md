@@ -57,23 +57,27 @@ that is where you apply the lon-first convention.
 
 ### Time
 
-The temporal index keys on the entity's **`UpdatedAt`** timestamp — last-write time
-(`processor/graph-index-temporal/component.go:653-665`). It is a **freshness** index. The triple-based
-fallback (`core.time.timestamp`, `time.observation.recorded`, etc.) fires only when `UpdatedAt` is zero,
-which never happens in production because graph-ingest stamps `UpdatedAt` on every write. **Do not** rely
-on `time.observation.recorded` being indexed — it is not.
+The temporal index keys on the entity's **observation timestamp**, by explicit precedence
+(`processor/graph-index-temporal/component.go`, `resolveIndexTimestamp`):
 
-> **Proposed change (#370):** make the observation timestamp (`time.observation.recorded`) the *primary*
-> temporal key, with `UpdatedAt` as a fallback. Until that lands, the index keys on `UpdatedAt` as
-> described above; this section will be updated when #370 ships.
+1. `time.observation.recorded` — **event-time** (the latest value when several are present). This is the
+   canonical normalized predicate; emit it to make an entity queryable by *when it was observed*.
+2. `UpdatedAt` — **processing-time** (last write), used only as a fallback when no observation predicate
+   is present.
 
-For current-state queries ("what is fresh near here now") last-write freshness is the correct key and
-requires no product action. `UpdatedAt` is framework-owned and cannot be pinned by a product.
+This is event-time-primary on purpose: every consumer of the temporal index is a "what's *in* this
+window" range search, and write-time is a processing artifact (batched, delayed, replayed). Emitting
+`time.observation.recorded` is the normalization step — the same discipline as the numeric lat/lon pair
+on the spatial side. The `entities_indexed_total{source="observed"|"write_fallback"}` metric exposes how
+many entities still fall back, so the fallback is observable rather than silent and can be retired as
+producers adopt the predicate.
 
-**Out of scope:** historical observed-time windows ("what was *observed* between T1 and T2", independent
-of when the row was last touched). The framework has no observed-time historical index today. That is a
-separate, explicitly out-of-scope concern for this recipe — not something location/time normalization
-solves.
+Re-observation **moves** an entity to its new bucket (the prior bucket is cleaned up), and entity deletion
+removes it — so a range query never returns an entity from a window it has since left.
+
+**Out of scope:** a general historical event store (arbitrary-cardinality "every observation ever"
+replay). The temporal index holds an entity's *current* observed-time, not its full observation history;
+products needing dense historical replay should keep that in their own store.
 
 ## The compose pattern
 
