@@ -278,6 +278,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// Spatial/Temporal index queries (all tiers have indexed geo/time data)
 		{"test-spatial-query", s.executeTestSpatialQuery, nil},
 		{"test-temporal-query", s.executeTestTemporalQuery, nil},
+		// Event-time keying (gh#370/#372): index buckets on time.observation.recorded,
+		// not write-time. Structural-only — creates its own observation-stamped entity.
+		{"test-temporal-observed-time", s.executeTestTemporalObservedTime, []string{"structural"}},
 		{"test-zone-relationships", s.executeTestZoneRelationships, nil},
 		// NL intent routing tests (validates classifier → strategy routing through globalSearch)
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
