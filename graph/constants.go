@@ -14,7 +14,12 @@ const (
 	BucketAliasIndex    = "ALIAS_INDEX"
 	BucketSpatialIndex  = "SPATIAL_INDEX"
 	BucketTemporalIndex = "TEMPORAL_INDEX"
-	BucketContextIndex  = "CONTEXT_INDEX"
+	// BucketTemporalIndexReverse maps entityID -> current temporal bucket key.
+	// It lets graph-index-temporal remove an entity's stale event from its prior
+	// time bucket when the entity is re-indexed (observed-time changed) or deleted,
+	// so a range query never returns an entity from a bucket it has since left.
+	BucketTemporalIndexReverse = "TEMPORAL_INDEX_REVERSE"
+	BucketContextIndex         = "CONTEXT_INDEX"
 
 	// Semantic tier buckets
 	BucketEmbeddingsCache = "EMBEDDINGS_CACHE"

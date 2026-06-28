@@ -165,12 +165,24 @@ query {
 
 ### TEMPORAL_INDEX
 
-**Key pattern:** Timestamp-based
-**Value:** Entities at that time
+**Key pattern:** Time bucket (`YYYY.MM.DD.HH`)
+**Value:** Events for entities observed in that bucket
 
-**Created by:** Triples with timestamp values
+**Created by:** Entities keyed on their **observation timestamp** by precedence —
+`time.observation.recorded` (event-time) when present, else `UpdatedAt` (last-write fallback).
+The `entities_indexed_total{source}` metric reports the observed-vs-fallback split.
 **Used for:** "Find entities in time range"
 **Clustering:** Not yet integrated. Temporal queries (time range) are fully operational.
+
+### TEMPORAL_INDEX_REVERSE
+
+**Key pattern:** Entity ID
+**Value:** The entity's current TEMPORAL_INDEX bucket key
+
+**Created by:** graph-index-temporal, alongside each TEMPORAL_INDEX write.
+**Used for:** Removing an entity's stale event from its prior bucket when it is re-observed (its
+observation timestamp changed) or deleted, so a range query never returns an entity from a window it has
+since left.
 
 ### EMBEDDING_INDEX
 

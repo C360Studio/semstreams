@@ -171,6 +171,13 @@ type Component struct {
 
 	// Domain resources
 	temporalBucket jetstream.KeyValue
+	// reverseBucket maps entityID -> current temporal bucket key so a re-indexed
+	// or deleted entity can be removed from its prior bucket (gh#370 stale-entry
+	// cleanup). Nil-safe: cleanup is skipped when this is unset.
+	reverseBucket jetstream.KeyValue
+
+	// Prometheus metrics (event-time vs write-fallback split, stale removals)
+	metrics *temporalMetrics
 
 	// Lifecycle state
 	mu          sync.RWMutex
@@ -226,6 +233,7 @@ func CreateGraphIndexTemporal(rawConfig json.RawMessage, deps component.Dependen
 		config:     config,
 		natsClient: natsClient,
 		logger:     logger,
+		metrics:    getMetrics(deps.MetricsRegistry),
 	}
 
 	// Initialize last activity
@@ -469,6 +477,21 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 	c.temporalBucket = temporalBucket
 
+	// Create the reverse index bucket (entityID -> current bucket key) used for
+	// stale-entry cleanup on re-index and delete.
+	reverseBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketTemporalIndexReverse,
+		Description: "Temporal index reverse map (entity -> current time bucket) for stale-entry cleanup",
+	})
+	if err != nil {
+		cancel()
+		if ctx.Err() != nil {
+			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during reverse bucket creation")
+		}
+		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketTemporalIndexReverse))
+	}
+	c.reverseBucket = reverseBucket
+
 	// Initialize lifecycle reporter early for dependency waiting visibility
 	c.initLifecycleReporter(ctx)
 
@@ -650,24 +673,24 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 		entityID = state.Triples[0].Subject
 	}
 
-	// Use entity's UpdatedAt timestamp (matching indexmanager/indexes.go pattern)
-	// The UpdatedAt field is always set when the entity is stored, providing
-	// consistent temporal indexing without relying on triple predicates
-	ts := state.UpdatedAt
-	if ts.IsZero() {
-		// Fallback to triple-based extraction if UpdatedAt is not set
-		if extracted := c.extractTimestamp(state.Triples); extracted != nil {
-			ts = *extracted
-		} else {
-			// Skip if no timestamp available
-			return
-		}
+	// Resolve the index timestamp by explicit precedence: the observation
+	// timestamp (event-time) when present, else UpdatedAt (processing-time).
+	ts, source, ok := resolveIndexTimestamp(state)
+	if !ok {
+		// No usable timestamp — entity is not temporally indexable.
+		return
 	}
 
 	// Calculate time bucket based on resolution
 	timeBucket := c.calculateTimeBucket(ts)
 
-	// Update temporal index
+	// Look up the entity's prior bucket before mutating anything.
+	prevBucket, hadPrev := c.getReverseBucket(ctx, entityID)
+
+	// Add/refresh the entity in its (new) bucket FIRST. If this fails we return
+	// before touching the prior bucket, so the entity stays queryable at its old
+	// location rather than disappearing — the safe failure mode for an index
+	// feeding "what's in this window" (upsert by entity within the bucket).
 	if err := c.updateTemporalIndex(ctx, timeBucket, entityID, ts); err != nil {
 		c.logger.Warn("failed to update temporal index",
 			slog.String("entity", entityID),
@@ -677,48 +700,91 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 		return
 	}
 
+	// Then remove the stale entry from the prior bucket if the entity moved. A
+	// failure here degrades to a transient duplicate (range queries dedup by
+	// entity), not a disappearance.
+	if hadPrev && prevBucket != timeBucket {
+		c.removeEntityFromBucket(ctx, prevBucket, entityID)
+	}
+
+	// Record the entity's current bucket for future cleanup, and the source split.
+	c.setReverseBucket(ctx, entityID, timeBucket)
+	c.metrics.recordIndexed(source)
+
 	c.logger.Debug("indexed entity temporal data",
 		slog.String("entity", entityID),
 		slog.String("bucket", timeBucket),
+		slog.String("timestamp_source", source),
 		slog.Time("timestamp", ts))
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
 }
 
-// extractTimestamp extracts a timestamp from entity triples
-func (c *Component) extractTimestamp(triples []message.Triple) *time.Time {
+// predicateObservationRecorded is the canonical event-time (observation) predicate.
+// When present it is the PRIMARY temporal index key; UpdatedAt is the fallback.
+const predicateObservationRecorded = "time.observation.recorded"
+
+// resolveIndexTimestamp picks the timestamp to index an entity under, by explicit
+// precedence (gh#370):
+//
+//  1. time.observation.recorded — event-time (latest value when several present)
+//  2. EntityState.UpdatedAt     — processing-time (last-write) fallback
+//
+// The returned source is indexSourceObserved or indexSourceWriteFallback. ok is
+// false only when neither a parseable observation timestamp nor a non-zero
+// UpdatedAt is available.
+func resolveIndexTimestamp(state graph.EntityState) (ts time.Time, source string, ok bool) {
+	if observed, found := latestObservationTime(state.Triples); found {
+		return observed, indexSourceObserved, true
+	}
+	if !state.UpdatedAt.IsZero() {
+		return state.UpdatedAt, indexSourceWriteFallback, true
+	}
+	return time.Time{}, "", false
+}
+
+// latestObservationTime returns the most recent parseable value of the
+// observation predicate across the triples, if any. Observation timestamps
+// should be authored single-valued (replace-on-update); when more than one is
+// present the latest wins rather than an arbitrary first-match.
+func latestObservationTime(triples []message.Triple) (time.Time, bool) {
+	var latest time.Time
+	found := false
 	for _, triple := range triples {
-		switch triple.Predicate {
-		case "core.time.timestamp", "timestamp", "time.timestamp", "time.observation.recorded", "created_at", "updated_at":
-			// Try to parse the object as various time formats
-			switch v := triple.Object.(type) {
-			case time.Time:
-				return &v
-			case string:
-				// Try RFC3339 first
-				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					return &t
-				}
-				// Try RFC3339Nano
-				if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
-					return &t
-				}
-				// Try common ISO format
-				if t, err := time.Parse("2006-01-02T15:04:05Z", v); err == nil {
-					return &t
-				}
-			case float64:
-				// Unix timestamp
-				t := time.Unix(int64(v), 0)
-				return &t
-			case int64:
-				t := time.Unix(v, 0)
-				return &t
+		if triple.Predicate != predicateObservationRecorded {
+			continue
+		}
+		if t, ok := parseTripleTime(triple.Object); ok {
+			if !found || t.After(latest) {
+				latest = t
+				found = true
 			}
 		}
 	}
-	return nil
+	return latest, found
+}
+
+// parseTripleTime parses a triple object into a time.Time, accepting time.Time,
+// RFC3339 / RFC3339Nano / common-ISO strings, and Unix-seconds numerics.
+func parseTripleTime(obj any) (time.Time, bool) {
+	switch v := obj.(type) {
+	case time.Time:
+		return v, true
+	case string:
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02T15:04:05Z"} {
+			if t, err := time.Parse(layout, v); err == nil {
+				return t, true
+			}
+		}
+	case float64:
+		return time.Unix(int64(v), 0).UTC(), true
+	case int64:
+		return time.Unix(v, 0).UTC(), true
+	case int:
+		return time.Unix(int64(v), 0).UTC(), true
+	}
+	return time.Time{}, false
 }
 
 // calculateTimeBucket calculates the time bucket key based on configured resolution
@@ -761,13 +827,24 @@ func (c *Component) updateTemporalIndex(ctx context.Context, timeBucket, entityI
 	// Get or create events array
 	events, _ := temporalData["events"].([]interface{})
 
-	// Append new event (accumulate all events, matching indexmanager pattern)
+	// Upsert by entity: drop any existing event for this entity in this bucket,
+	// then append the current one. Keeps re-indexing the same entity to the same
+	// bucket idempotent (e.g. restart WatchAll re-delivery) and one-event-per-entity.
+	filtered := make([]interface{}, 0, len(events)+1)
+	for _, evt := range events {
+		if m, ok := evt.(map[string]interface{}); ok {
+			if e, _ := m["entity"].(string); e == entityID {
+				continue
+			}
+		}
+		filtered = append(filtered, evt)
+	}
 	newEvent := map[string]interface{}{
 		"entity":    entityID,
 		"type":      "update",
 		"timestamp": ts.Format(time.RFC3339),
 	}
-	events = append(events, newEvent)
+	events = append(filtered, newEvent)
 	temporalData["events"] = events
 
 	// Track unique entity count
@@ -800,8 +877,120 @@ func (c *Component) updateTemporalIndex(ctx context.Context, timeBucket, entityI
 	return nil
 }
 
-// handleEntityDelete handles entity deletion from the temporal index
-func (c *Component) handleEntityDelete(_ context.Context, entityID string) {
-	c.logger.Debug("entity deleted - temporal cleanup not fully implemented",
-		slog.String("entity", entityID))
+// handleEntityDelete removes a deleted entity from its temporal bucket and its
+// reverse mapping, so range queries no longer return it.
+func (c *Component) handleEntityDelete(ctx context.Context, entityID string) {
+	prevBucket, found := c.getReverseBucket(ctx, entityID)
+	if !found {
+		c.logger.Debug("entity deleted - no temporal reverse entry to clean",
+			slog.String("entity", entityID))
+		return
+	}
+	c.removeEntityFromBucket(ctx, prevBucket, entityID)
+	c.deleteReverseBucket(ctx, entityID)
+	c.logger.Debug("entity deleted - temporal cleanup done",
+		slog.String("entity", entityID),
+		slog.String("bucket", prevBucket))
+}
+
+// removeEntityFromBucket removes all events for entityID from the given time
+// bucket, deleting the bucket key if it becomes empty. Best-effort: missing
+// buckets and transient errors are logged at debug and swallowed.
+func (c *Component) removeEntityFromBucket(ctx context.Context, bucket, entityID string) {
+	entry, err := c.temporalBucket.Get(ctx, bucket)
+	if err != nil {
+		return // bucket already gone — nothing to remove
+	}
+
+	var temporalData map[string]interface{}
+	if err := json.Unmarshal(entry.Value(), &temporalData); err != nil {
+		return
+	}
+
+	events, _ := temporalData["events"].([]interface{})
+	filtered := make([]interface{}, 0, len(events))
+	removed := false
+	for _, evt := range events {
+		if m, ok := evt.(map[string]interface{}); ok {
+			if e, _ := m["entity"].(string); e == entityID {
+				removed = true
+				continue
+			}
+		}
+		filtered = append(filtered, evt)
+	}
+	if !removed {
+		return
+	}
+
+	if len(filtered) == 0 {
+		// No events left — drop the bucket key entirely.
+		if err := c.temporalBucket.Delete(ctx, bucket); err != nil {
+			c.logger.Debug("failed to delete empty temporal bucket",
+				slog.String("bucket", bucket), slog.Any("error", err))
+		}
+		c.metrics.recordStaleRemoval()
+		return
+	}
+
+	// Recompute unique entity count and write back.
+	uniqueEntities := make(map[string]bool)
+	for _, evt := range filtered {
+		if m, ok := evt.(map[string]interface{}); ok {
+			if e, ok := m["entity"].(string); ok {
+				uniqueEntities[e] = true
+			}
+		}
+	}
+	temporalData["events"] = filtered
+	temporalData["entity_count"] = len(uniqueEntities)
+
+	data, err := json.Marshal(temporalData)
+	if err != nil {
+		return
+	}
+	if _, err := c.temporalBucket.Update(ctx, bucket, data, entry.Revision()); err != nil {
+		c.logger.Debug("failed to write temporal bucket after stale removal",
+			slog.String("bucket", bucket), slog.Any("error", err))
+		return
+	}
+	c.metrics.recordStaleRemoval()
+}
+
+// getReverseBucket returns the time bucket the entity is currently indexed in.
+func (c *Component) getReverseBucket(ctx context.Context, entityID string) (string, bool) {
+	if c.reverseBucket == nil {
+		return "", false
+	}
+	entry, err := c.reverseBucket.Get(ctx, entityID)
+	if err != nil {
+		return "", false
+	}
+	return string(entry.Value()), true
+}
+
+// setReverseBucket records the time bucket the entity is currently indexed in.
+func (c *Component) setReverseBucket(ctx context.Context, entityID, bucket string) {
+	if c.reverseBucket == nil {
+		return
+	}
+	if _, err := c.reverseBucket.Put(ctx, entityID, []byte(bucket)); err != nil {
+		// Drift risk: a missing reverse entry means a later delete/re-index can't
+		// clean this entity's bucket. Warn + count so it is observable.
+		c.logger.Warn("failed to write temporal reverse index (forward/reverse may drift)",
+			slog.String("entity", entityID), slog.Any("error", err))
+		c.metrics.recordReverseError()
+	}
+}
+
+// deleteReverseBucket removes the entity's reverse mapping.
+func (c *Component) deleteReverseBucket(ctx context.Context, entityID string) {
+	if c.reverseBucket == nil {
+		return
+	}
+	if err := c.reverseBucket.Delete(ctx, entityID); err != nil {
+		c.logger.Warn("failed to delete temporal reverse index",
+			slog.String("entity", entityID), slog.Any("error", err))
+		c.metrics.recordReverseError()
+	}
 }

@@ -102,14 +102,33 @@ The TEMPORAL_INDEX uses time bucket as key:
 }
 ```
 
-## Timestamp Extraction
+## Timestamp Resolution
 
-The component extracts timestamps from:
+The component keys each entity on a timestamp chosen by explicit precedence:
 
-- Entity `updated_at` field
-- Entity `created_at` field
-- `timestamp` predicate in triples
-- `observation.timestamp` predicate
+1. `time.observation.recorded` triple — **event-time** (the latest value when several are present). This
+   is the canonical predicate; emit it to index an entity by *when it was observed*.
+2. Entity `UpdatedAt` field — **processing-time** (last write), used only as a fallback when no
+   observation predicate is present.
+
+The `entities_indexed_total{source="observed"|"write_fallback"}` metric reports how many entities use
+each path, so the fallback is observable and can be retired as producers adopt the predicate.
+
+Re-observation moves an entity to its new time bucket (the prior bucket entry is cleaned up via the
+`TEMPORAL_INDEX_REVERSE` map), and entity deletion removes it — so range queries never return an entity
+from a window it has since left.
+
+## Upgrading (event-time flip, gh#370)
+
+This index now keys on event-time (`time.observation.recorded`) instead of write-time
+(`UpdatedAt`), and tracks each entity's current bucket in `TEMPORAL_INDEX_REVERSE` for cleanup.
+Entities indexed by an **earlier** version of this component have no reverse-map entry, so the
+stale-entry cleanup cannot locate their old (write-time) bucket — those entries are orphaned.
+
+`TEMPORAL_INDEX` is a derived, rebuildable index. On upgrade, **purge `TEMPORAL_INDEX` and
+`TEMPORAL_INDEX_REVERSE`**; the component re-delivers every entity via `WatchAll` on start and
+rebuilds both cleanly into event-time buckets. Skipping the purge is non-fatal (queries still
+return current entities) but leaves pre-upgrade orphans in old buckets until the purge is done.
 
 ## Temporal Queries
 
@@ -131,9 +150,9 @@ The gateway component uses this index for:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `graph_temporal_indexed_total` | counter | Total entities indexed |
-| `graph_temporal_buckets_active` | gauge | Active time buckets |
-| `graph_temporal_errors_total` | counter | Indexing errors |
+| `semstreams_graph_index_temporal_entities_indexed_total{source}` | counter | Entities indexed, labelled `observed` (event-time) or `write_fallback` (UpdatedAt). A rising `write_fallback` ratio means producers have not adopted `time.observation.recorded`. |
+| `semstreams_graph_index_temporal_stale_bucket_removals_total` | counter | Entity events removed from a prior bucket on re-index/delete. |
+| `semstreams_graph_index_temporal_reverse_index_errors_total` | counter | Reverse-map write/delete failures (forward/reverse drift). |
 
 ## Health
 
