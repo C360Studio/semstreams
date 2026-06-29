@@ -354,6 +354,31 @@ func DiscoverAliasPredicates() map[string]int {
 	return aliasPredicates
 }
 
+// DiscoverLabelPredicates discovers all predicates marked as human-readable
+// labels (AliasTypeLabel) in the registry. Returns predicate name → priority
+// (lower number = higher salience).
+//
+// These are the display-name predicates the alias index deliberately EXCLUDES
+// (labels are ambiguous for ID resolution — CanResolveToEntityID is false for
+// AliasTypeLabel), and are exactly what the name index keys on for
+// name→ranked-IDs lookup. Applications register their own label predicates via
+// Register(pred, WithAlias(AliasTypeLabel, priority)), the same mechanism as
+// aliases. Empty when none are registered.
+func DiscoverLabelPredicates() map[string]int {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	labelPredicates := make(map[string]int)
+
+	for name, meta := range predicateRegistry {
+		if meta.IsAlias && meta.AliasType == AliasTypeLabel {
+			labelPredicates[name] = meta.AliasPriority
+		}
+	}
+
+	return labelPredicates
+}
+
 // GetInversePredicate returns the inverse predicate name, if defined.
 // Returns an empty string if no inverse is defined for the given predicate.
 //

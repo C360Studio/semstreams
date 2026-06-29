@@ -151,8 +151,16 @@ query {
 **Key pattern:** `{alias}`
 **Value:** Canonical entity ID
 
-**Created by:** Triples with `alias.*` predicates
+**Created by:** Triples with `alias.*` predicates (resolvable AliasTypes only — `AliasTypeLabel` is excluded)
 **Used for:** Resolve "drone-alpha" → "acme.robotics.aerial.drone.drone-007"
+
+### NAME_INDEX
+
+**Key pattern:** `sha256(lower(trim(name)))` (names contain non-KV-key-safe chars; case-folded for recall)
+**Value:** `NameIndexEntry{name, items[]}` — every entity carrying that name, with its label predicate + salience
+
+**Created by:** Triples whose predicate is a display-name label (`AliasType==AliasTypeLabel`, e.g. `dc.terms.title`) — exactly the set ALIAS_INDEX excludes. Register product label predicates via `vocabulary.Register(pred, WithAlias(AliasTypeLabel, priority))`.
+**Used for:** Deterministic `graph.query.byName` — name/title → ranked entity IDs (exact-case first, then label salience, then ID). gh#376 ask #5; sharpens deterministic symbol/title resolution that otherwise falls back to semantic search.
 
 ### SPATIAL_INDEX
 

@@ -45,6 +45,8 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 		// searchGraph — wraps globalSearch with a semantic fallback
 		// when GraphRAG strategies return empty.
 		{"graph.query.searchGraph", c.handleSearchGraph},
+		// byName — deterministic name→ranked-IDs (gh#376), passthrough to graph-index.
+		{"graph.query.byName", c.handleQueryByName},
 	}
 
 	subjects := make([]string, 0, len(registrations))
@@ -535,6 +537,23 @@ func (c *Component) handleQueryTemporal(ctx context.Context, data []byte) ([]byt
 		return nil, err
 	}
 
+	c.recordSuccess(len(data), len(response))
+	return response, nil
+}
+
+// handleQueryByName handles deterministic name→ranked-IDs requests (gh#376),
+// a passthrough to graph-index's graph.index.query.byName.
+func (c *Component) handleQueryByName(ctx context.Context, data []byte) ([]byte, error) {
+	subject := c.router.Route("byName")
+	if subject == "" {
+		return nil, errs.WrapTransient(errors.New("byName query routing not available"), "GraphQuery", "handleQueryByName", "route query")
+	}
+	// ADR-060: propagate the downstream classified error UNWRAPPED (see handleQueryEntity).
+	response, err := c.natsClient.RequestClassified(ctx, subject, data, c.config.QueryTimeout)
+	if err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 	c.recordSuccess(len(data), len(response))
 	return response, nil
 }

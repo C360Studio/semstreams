@@ -206,6 +206,7 @@ type Component struct {
 	aliasBucket        *natsclient.KVStore
 	predicateBucket    *natsclient.KVStore
 	contextBucket      *natsclient.KVStore
+	nameBucket         *natsclient.KVStore
 	entityStatesBucket jetstream.KeyValue // raw: read-only watcher, no CAS needed
 
 	// Lifecycle state
@@ -232,6 +233,10 @@ type Component struct {
 
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
+
+	// Label (display-name) predicates from vocabulary, cached at startup. Keys
+	// the NAME_INDEX for graph.query.byName (gh#376); value = salience priority.
+	namePredicates map[string]int
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
@@ -470,6 +475,7 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Cache alias predicates from vocabulary for fast lookup during indexing
 	c.aliasPredicates = vocabulary.DiscoverAliasPredicates()
+	c.namePredicates = vocabulary.DiscoverLabelPredicates()
 	c.logger.Debug("cached alias predicates from vocabulary", slog.Int("count", len(c.aliasPredicates)))
 
 	// Check context before proceeding
@@ -616,6 +622,18 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketContextIndex))
 	}
 	c.contextBucket = c.natsClient.NewKVStore(contextBucket)
+
+	// Create NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
+	// CONTEXT_INDEX — not a declared output port, so existing configs don't need
+	// to add it.
+	nameBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketNameIndex,
+		Description: "Name/title → entities index for deterministic name lookup",
+	})
+	if err != nil {
+		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketNameIndex))
+	}
+	c.nameBucket = c.natsClient.NewKVStore(nameBucket)
 	return nil
 }
 
@@ -868,6 +886,21 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 				if err := c.UpdateAliasIndex(ctx, alias, resolvedID); err != nil {
 					c.logger.Debug("failed to update alias index",
 						slog.String("alias", alias),
+						slog.String("entity", resolvedID),
+						slog.String("predicate", triple.Predicate),
+						slog.Any("error", err))
+				}
+			}
+		}
+
+		// Index display-name (label) predicates into NAME_INDEX for
+		// graph.query.byName (gh#376). These are exactly the predicates the alias
+		// index excludes (AliasTypeLabel).
+		if priority, isName := c.namePredicates[triple.Predicate]; isName {
+			if name, ok := triple.Object.(string); ok && name != "" {
+				if err := c.UpdateNameIndex(ctx, name, resolvedID, triple.Predicate, priority); err != nil {
+					c.logger.Debug("failed to update name index",
+						slog.String("name", name),
 						slog.String("entity", resolvedID),
 						slog.String("predicate", triple.Predicate),
 						slog.Any("error", err))
