@@ -92,6 +92,9 @@ func (b *BodyResolver) ResolveBody(ctx context.Context, ref *message.StorageRefe
 	if ref.StorageInstance == "" {
 		return nil, fmt.Errorf("hydrate: storage reference has no StorageInstance (key=%q)", ref.Key)
 	}
+	if ref.Key == "" {
+		return nil, fmt.Errorf("hydrate: storage reference has no Key (instance=%q)", ref.StorageInstance)
+	}
 	if b.resolver == nil {
 		return nil, fmt.Errorf("hydrate: no store resolver configured; cannot resolve instance %q", ref.StorageInstance)
 	}

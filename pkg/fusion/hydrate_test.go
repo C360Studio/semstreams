@@ -85,6 +85,11 @@ func TestBodyResolver_FaultPaths(t *testing.T) {
 	if _, err := r.ResolveBody(context.Background(), &message.StorageReference{Key: "k"}); err == nil {
 		t.Error("expected error for empty StorageInstance")
 	}
+	// Empty Key on a non-nil handle = producer fault (explicit, not a backend
+	// not-found) — surfaces a clear message the engine can degrade on.
+	if _, err := r.ResolveBody(context.Background(), &message.StorageReference{StorageInstance: "inst"}); err == nil {
+		t.Error("expected error for empty Key")
+	}
 	// Unknown instance = wiring fault.
 	if _, err := r.ResolveBody(context.Background(), &message.StorageReference{StorageInstance: "nope", Key: "k"}); err == nil {
 		t.Error("expected error for unregistered instance")
