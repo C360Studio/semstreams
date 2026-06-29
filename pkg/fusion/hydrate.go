@@ -25,11 +25,20 @@ import (
 // (whose map[string]string fields corrupt non-UTF-8 to U+FFFD). Byte-exact by
 // construction.
 
-// StoreResolver maps a StorageReference.StorageInstance name (e.g.
-// "objectstore-primary", "filestore-media") to the storage.Store that holds its
-// data. Wiring supplies it — typically MapStoreResolver over the deployment's
-// registered stores. Kept as an interface so the engine never assumes one
-// backend and tests can substitute fakes.
+// StoreResolver maps a StorageReference.StorageInstance name to the
+// storage.Store that holds its data. Wiring supplies it — typically
+// MapStoreResolver over the deployment's registered stores. Kept as an interface
+// so the engine never assumes one backend and tests can substitute fakes.
+//
+// Canonical key (gh#376 coordination with semsource): StorageInstance is the
+// storage COMPONENT INSTANCE NAME (e.g. "objectstore", "filestore-media"), per
+// StorageReference's own doc ("identifies which storage component holds the
+// data … enables federation across multiple storage instances") — NOT the bucket
+// name. Producers stamp the component instance name; wiring registers each store
+// under that same name. (semstreams' own auto-stamp is inconsistent today —
+// component.go uses the instance name, store.go uses the bucket — tracked
+// separately; this helper, the first consumer, fixes the convention at
+// instance-name.)
 type StoreResolver interface {
 	// Store returns the store registered under instance, and whether one exists.
 	Store(instance string) (storage.Store, bool)
@@ -61,6 +70,12 @@ func NewBodyResolver(r StoreResolver) *BodyResolver {
 }
 
 // ResolveBody returns the verbatim body bytes for a Hydrate handle.
+//
+// Key granularity (gh#376 coordination): the handle's Key addresses the EXACT
+// verbatim body — one pre-sliced body blob per entity (keyed by entity ID or
+// content hash) — so Get returns the body byte-for-byte with NO engine-side line
+// math. The lens's Locator (path + line range) is for citation/display only; the
+// body comes pre-sliced through the handle, not by trimming a whole file.
 //
 //   - A nil ref means "no verbatim body" — returns (nil, nil), NOT an error.
 //     (Lens.Hydrate returns (nil, nil) for body-less entities; this preserves
