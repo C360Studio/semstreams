@@ -150,11 +150,11 @@ func TestResolveMode_Classification(t *testing.T) {
 }
 
 func TestProvenanceForMode(t *testing.T) {
-	cases := map[fusion.ResolveMode]string{
-		fusion.ResolveModeSymbol: "deterministic",
-		fusion.ResolveModePrefix: "deterministic",
-		fusion.ResolveModeNL:     "embedding",
-		fusion.ResolveMode("?"):  "embedding", // unknown is conservatively non-deterministic
+	cases := map[fusion.ResolveMode]fusion.Provenance{
+		fusion.ResolveModeSymbol: fusion.ProvenanceDeterministic,
+		fusion.ResolveModePrefix: fusion.ProvenanceDeterministic,
+		fusion.ResolveModeNL:     fusion.ProvenanceEmbedding,
+		fusion.ResolveMode("?"):  fusion.ProvenanceEmbedding, // unknown is conservatively non-deterministic
 	}
 	for mode, want := range cases {
 		if got := fusion.ProvenanceForMode(mode); got != want {
