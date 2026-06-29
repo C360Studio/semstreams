@@ -225,6 +225,12 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
 
+	// nameIndexReady is the sticky readiness signal for graph.index.query.status
+	// (gh#397). Set once the NAME_INDEX is known non-empty; an index does not
+	// un-build, so once true it stays true (O(1) steady state). Restart-safe: a
+	// not-yet-true status read does a one-time bucket check (handleQueryStatus).
+	nameIndexReady atomic.Bool
+
 	// Prometheus metrics
 	metrics *indexMetrics
 

@@ -84,11 +84,53 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
+	// gh#397: the NAME_INDEX now has at least this entry — mark ready (sticky).
+	c.nameIndexReady.Store(true)
 	if c.metrics != nil {
 		c.metrics.recordIndexUpdate("name")
 		c.metrics.recordKVOperation("put", "name")
 	}
 	return nil
+}
+
+// nameIndexIsReady reports whether the NAME_INDEX has been populated (gh#397).
+// Sticky-fast once the index is known non-empty; otherwise it does a one-time
+// bucket scan, which handles restart with a pre-populated index (the in-memory
+// sticky flag starts false after a restart). An index does not un-build, so the
+// flag never flips back to false. Any list error — including an empty bucket
+// (ErrNoKeysFound) or a transient backend fault — reports NOT ready, the
+// conservative honest answer (the caller must fall back rather than treat empty
+// as an authoritative not-found).
+func (c *Component) nameIndexIsReady(ctx context.Context) bool {
+	if c.nameIndexReady.Load() {
+		return true
+	}
+	keys, err := c.nameBucket.Keys(ctx)
+	if err != nil || len(keys) == 0 {
+		return false
+	}
+	c.nameIndexReady.Store(true)
+	return true
+}
+
+// handleQueryStatusNATS serves graph.index.query.status (gh#397): the
+// deterministic-fusion honesty-envelope readiness signal. Ready means the
+// NAME_INDEX is populated (see nameIndexIsReady). Takes no request body; the
+// response JSON shape matches pkg/fusion.IndexStatus.
+func (c *Component) handleQueryStatusNATS(ctx context.Context, _ []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ready := c.nameIndexIsReady(ctx)
+	state := graph.IndexStateBuilding
+	if ready {
+		state = graph.IndexStateReady
+	}
+	data, err := json.Marshal(graph.IndexStatusResponse{Ready: ready, State: state})
+	if err != nil {
+		return nil, errs.Wrap(err, "Component", "handleQueryStatusNATS", "marshal status")
+	}
+	return data, nil
 }
 
 // handleQueryByNameNATS resolves a name to ranked entity IDs (gh#376). Request

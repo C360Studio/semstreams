@@ -124,3 +124,43 @@ func TestHandleQueryByName_EmptyNameRejected(t *testing.T) {
 	_, err := comp.handleQueryByNameNATS(context.Background(), req)
 	require.Error(t, err)
 }
+
+// --- gh#397 index-readiness status ---
+
+func queryStatus(t *testing.T, comp *Component) graph.IndexStatusResponse {
+	t.Helper()
+	respData, err := comp.handleQueryStatusNATS(context.Background(), nil)
+	require.NoError(t, err)
+	var st graph.IndexStatusResponse
+	require.NoError(t, json.Unmarshal(respData, &st))
+	return st
+}
+
+func TestQueryStatus_NotReadyUntilNameIndexPopulated(t *testing.T) {
+	comp := newNameTestComponent(t)
+
+	// Empty index → not ready (building): the caller must fall back, NOT treat an
+	// empty byName result as an authoritative not-found.
+	st := queryStatus(t, comp)
+	assert.False(t, st.Ready, "empty NAME_INDEX must report not-ready")
+	assert.Equal(t, graph.IndexStateBuilding, st.State)
+
+	// After an index update → ready.
+	require.NoError(t, comp.UpdateNameIndex(context.Background(), "Foo", "org.p.d.s.t.x", "dc.terms.title", 1))
+	st = queryStatus(t, comp)
+	assert.True(t, st.Ready, "a populated NAME_INDEX must report ready")
+	assert.Equal(t, graph.IndexStateReady, st.State)
+}
+
+// TestQueryStatus_RestartLazyCheck: after a restart the in-memory sticky flag is
+// false, but a pre-populated bucket must still read ready via the one-time lazy
+// Keys() check (else a warm index would falsely report not-ready post-restart).
+func TestQueryStatus_RestartLazyCheck(t *testing.T) {
+	comp := newNameTestComponent(t)
+	require.NoError(t, comp.UpdateNameIndex(context.Background(), "Foo", "org.p.d.s.t.x", "dc.terms.title", 1))
+
+	comp.nameIndexReady.Store(false) // simulate restart: sticky flag reset, bucket retains data
+
+	st := queryStatus(t, comp)
+	assert.True(t, st.Ready, "a pre-populated index must read ready after restart via the lazy bucket check")
+}
