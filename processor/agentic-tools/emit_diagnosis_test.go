@@ -22,20 +22,32 @@ func newEmitDiagnosisExecutor(publisher TriplePublisher) *EmitDiagnosisExecutor 
 	)
 }
 
-// TestEmitDiagnosisExecutor_UsesBatchPath confirms emit_diagnosis
-// emits via AddTriplesBatch (not the legacy per-triple loop).
-// Atomicity is the documented contract — partial emission would
-// leave an incomplete finding whose consumers (ops-agent, rule
-// engine) can't tell apart from a complete one.
-func TestEmitDiagnosisExecutor_UsesBatchPath(t *testing.T) {
+// TestEmitDiagnosisExecutor_BirthsFindingEntity confirms emit_diagnosis BIRTHS
+// the finding entity via create_with_triples (gh#390), NOT via add_batch. Each
+// call mints a NEW ops.diagnosis.finding.{uuid} entity; graph-ingest enforces
+// must-exist on add/add_batch, so a bare batch would be rejected and the finding
+// would silently never land (e2e:ops: 0/3 findings). create_with_triples is
+// atomic, preserving the no-partial-finding contract.
+func TestEmitDiagnosisExecutor_BirthsFindingEntity(t *testing.T) {
 	pub := &recordingPublisher{}
 	e := newEmitDiagnosisExecutor(pub)
 	_, err := e.Execute(context.Background(), validEmitDiagnosisCall())
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if pub.batchCalls != 1 {
-		t.Errorf("AddTriplesBatch call count = %d, want 1 (single atomic batch)", pub.batchCalls)
+	// Exactly one BIRTH, and no append-path call (the entity didn't exist yet).
+	if pub.createCalls != 1 {
+		t.Errorf("CreateEntityWithTriples call count = %d, want 1 (single atomic birth)", pub.createCalls)
+	}
+	if pub.batchCalls != 0 {
+		t.Errorf("AddTriplesBatch call count = %d, want 0 (the finding entity must be created, not appended)", pub.batchCalls)
+	}
+	// Born with the ops_diagnosis typed-origin envelope on the finding entity ID.
+	if got, want := pub.createdMsgType.Key(), agentic.OpsDiagnosisMessageType().Key(); got != want {
+		t.Errorf("birth MessageType = %q, want %q", got, want)
+	}
+	if !message.IsValidEntityID(pub.createdEntityID) {
+		t.Errorf("birth entity ID %q is not a valid 6-part entity ID", pub.createdEntityID)
 	}
 }
 

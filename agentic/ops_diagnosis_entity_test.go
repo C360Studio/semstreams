@@ -89,3 +89,51 @@ func TestOpsDiagnosisEntityID(t *testing.T) {
 		}, "dot in id should panic")
 	})
 }
+
+// --- OpsDiagnosisMessageType (gh#390 typed-origin envelope) ---
+
+func TestOpsDiagnosisMessageType_Valid(t *testing.T) {
+	mt := agentic.OpsDiagnosisMessageType()
+	if mt.Domain == "" {
+		t.Error("MessageType.Domain is empty")
+	}
+	if mt.Category == "" {
+		t.Error("MessageType.Category is empty")
+	}
+	if mt.Version == "" {
+		t.Error("MessageType.Version is empty")
+	}
+	if !mt.IsValid() {
+		t.Errorf("MessageType %v is not valid (IsValid() returned false)", mt)
+	}
+}
+
+func TestOpsDiagnosisMessageType_Distinct(t *testing.T) {
+	// Must not collide with any other agentic category constant — a collision
+	// would let two entity kinds share an origin envelope and silently break
+	// typed-origin ownership arbitration.
+	mt := agentic.OpsDiagnosisMessageType()
+	others := []string{
+		agentic.CategoryLoopExecution,
+		agentic.CategoryModelEndpoint,
+		agentic.CategoryTrajectoryStep,
+		agentic.CategoryLoopCreated,
+		agentic.CategoryLoopCompleted,
+		agentic.CategoryLoopFailed,
+		agentic.CategoryLoopCancelled,
+		agentic.CategoryTask,
+	}
+	for _, cat := range others {
+		if mt.Category == cat {
+			t.Errorf("CategoryOpsDiagnosis collides with existing category %q", cat)
+		}
+	}
+}
+
+func TestOpsDiagnosisMessageType_KeyFormat(t *testing.T) {
+	key := agentic.OpsDiagnosisMessageType().Key()
+	want := "agentic.ops_diagnosis.v1"
+	if key != want {
+		t.Errorf("MessageType.Key() = %q, want %q", key, want)
+	}
+}

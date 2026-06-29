@@ -3,6 +3,7 @@ package agentictools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -106,7 +107,15 @@ const decideToolSource = "coordinator-decide"
 // See project_addtriplebatch_migration_followup memory for the
 // migration history; write_todos has used the batch path since
 // ADR-036 Stage 2 (2026-05-09).
+//
+//   - CreateEntityWithTriples — BIRTH. The correct verb for the FIRST write to
+//     a NEW entity (emit_diagnosis mints a fresh ops.diagnosis.finding.{uuid}
+//     per call). graph-ingest enforces must-exist on triple.add / add_batch, so
+//     a bare batch to a never-created entity is rejected ("kv: key not found")
+//     and the finding silently never lands (gh#390). decide / scratchpad APPEND
+//     onto the already-born loop entity and do NOT use this.
 type TriplePublisher interface {
+	CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error
 	AddTriple(ctx context.Context, triple message.Triple) error
 	AddTriplesBatch(ctx context.Context, triples []message.Triple) error
 }
@@ -739,6 +748,48 @@ func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []mes
 	if len(resp.FailedSubjects) > 0 {
 		return fmt.Errorf("graph-ingest partial batch (written=%d, failed=%v)",
 			resp.WrittenCount, resp.FailedSubjects)
+	}
+	return nil
+}
+
+// natsCreateWithTriplesSubject births an entity with a typed-origin envelope,
+// carrying triples atomically. The correct verb for the FIRST write to a NEW
+// entity (gh#390) — add / add_batch enforce must-exist and reject a
+// never-created entity.
+const natsCreateWithTriplesSubject = "graph.mutation.entity.create_with_triples"
+
+// CreateEntityWithTriples births a graph entity (ENTITY_STATES) with the given
+// typed-origin MessageType envelope, carrying triples atomically via
+// graph.mutation.entity.create_with_triples. The correct verb for the FIRST
+// write to a NEW entity: graph-ingest enforces must-exist on triple.add /
+// add_batch, so a bare batch to a never-created entity is rejected ("kv: key
+// not found") and the write silently never lands (gh#390).
+//
+// EntityExists is treated as idempotent-success: emit_diagnosis mints a fresh
+// uuid per finding, so a collision is reachable only via NATS redelivery of the
+// SAME create carrying the SAME envelope. A caller passing a STABLE/reused
+// entityID must read back to verify the typed origin instead (see
+// graph_writer.go createEntityWithTriples) rather than inherit this blind path.
+func (p *natsTriplePublisher) CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          entityID,
+			MessageType: msgType,
+			Triples:     triples,
+		},
+		Triples: triples,
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal create_with_triples request: %w", err)
+	}
+	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
+	if _, err := p.client.RequestWithRetryClassified(ctx, natsCreateWithTriplesSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig()); err != nil {
+		var ce *errs.ClassifiedError
+		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityExists {
+			return nil
+		}
+		return fmt.Errorf("request %s: %w", natsCreateWithTriplesSubject, err)
 	}
 	return nil
 }

@@ -190,18 +190,23 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 
 	// Build the triple set in deterministic order. All triples share
 	// Subject=diagnosisEntityID (including the agent.action.executed_by
-	// back-link FROM the diagnosis TO the loop), so the atomic batch
-	// applies them as one unit. Pre-2026-05-13 this was a per-triple
-	// loop that could leave an incomplete finding visible to downstream
-	// consumers — the comment cited that explicitly. Migrating to
-	// AddTriplesBatch eliminates the partial-emission window entirely.
+	// back-link FROM the diagnosis TO the loop), so they belong to the one
+	// finding entity being born.
+	//
+	// gh#390: each call mints a NEW ops.diagnosis.finding.{uuid} entity, so this
+	// is a BIRTH — the entity must be CREATED via create_with_triples carrying a
+	// typed-origin envelope, NOT appended via add_batch. graph-ingest enforces
+	// must-exist on triple.add / add_batch, so the pre-fix AddTriplesBatch was
+	// rejected ("kv: key not found") and the finding silently never landed in
+	// the graph (e2e:ops: 0/3 findings). create_with_triples is atomic
+	// (all-or-nothing), preserving the no-partial-finding contract.
 	triples := buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID, args, now)
-	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+	if err := e.publisher.CreateEntityWithTriples(ctx, diagnosisEntityID, agentic.OpsDiagnosisMessageType(), triples); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("publish diagnosis triples: %v", err),
 			ErrorKind: agentic.ToolErrorNetwork,
-		}, errs.WrapTransient(err, "EmitDiagnosisExecutor", "emitDiagnosis", "publish triples batch")
+		}, errs.WrapTransient(err, "EmitDiagnosisExecutor", "emitDiagnosis", "birth diagnosis entity")
 	}
 
 	result := emitDiagnosisResult{
