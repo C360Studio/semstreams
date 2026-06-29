@@ -2,6 +2,7 @@ package fusion
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/c360studio/semstreams/message"
 )
@@ -24,6 +25,48 @@ import (
 type Entity struct {
 	ID      string
 	Triples []message.Triple
+}
+
+// First returns the first object for predicate rendered as a string, or "". A
+// convenience for lenses/ranker so they read triple objects without touching the
+// triple shape.
+func (e *Entity) First(predicate string) string {
+	for i := range e.Triples {
+		if e.Triples[i].Predicate == predicate {
+			return objectString(e.Triples[i].Object)
+		}
+	}
+	return ""
+}
+
+// FirstInt returns the first object for predicate as an int, or 0.
+func (e *Entity) FirstInt(predicate string) int {
+	for i := range e.Triples {
+		if e.Triples[i].Predicate == predicate {
+			switch v := e.Triples[i].Object.(type) {
+			case int:
+				return v
+			case int64:
+				return int(v)
+			case float64:
+				return int(v)
+			}
+		}
+	}
+	return 0
+}
+
+// objectString renders a triple object as a string (objects are string IRIs/
+// literals, or numeric literals).
+func objectString(o any) string {
+	switch v := o.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // ResolveMode picks how the engine turns a raw query string into seed entities.
@@ -123,13 +166,13 @@ type Lens interface {
 // that. CAUTION: this means any NEW deterministic mode added to the enum MUST be
 // added to the deterministic case below, or it silently degrades to embedding
 // (no compile error — open string enum).
-func ProvenanceForMode(mode ResolveMode) string {
+func ProvenanceForMode(mode ResolveMode) Provenance {
 	switch mode {
 	case ResolveModeSymbol, ResolveModePrefix:
-		return "deterministic"
+		return ProvenanceDeterministic
 	case ResolveModeNL:
-		return "embedding"
+		return ProvenanceEmbedding
 	default:
-		return "embedding"
+		return ProvenanceEmbedding
 	}
 }
