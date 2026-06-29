@@ -204,9 +204,13 @@ func TestWriteModelEndpoints_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
-	// Set up triple collector as responder.
-	collector := &tripleCollector{}
-	collector.subscribeMutations(t, ctx, tc.Client)
+	// gh#390: model endpoints are BORN via create_with_triples carrying a
+	// model_endpoint typed-origin envelope — NOT per-triple triple.add. A bare
+	// triple.add to a never-created endpoint entity is must-exist-rejected by
+	// graph-ingest ("kv: key not found"), which increments its error count and
+	// flips it permanently unhealthy. Capture the create requests, not triples.
+	responder := &createWithTriplesResponder{}
+	responder.subscribe(t, ctx, tc.Client)
 
 	// Build a model registry with two endpoints.
 	reg := &model.Registry{
@@ -228,28 +232,82 @@ func TestWriteModelEndpoints_Integration(t *testing.T) {
 		Defaults: model.DefaultsConfig{Model: "claude"},
 	}
 
-	// Create graphWriter directly (it's in same repo, integration test can access internals
-	// through a helper). Since graphWriter is unexported, we use NewComponent approach.
-	// Instead, let's test via a helper that mirrors the graphWriter construction.
 	w := agenticloop.NewGraphWriterForTest(tc.Client, reg, types.PlatformMeta{Org: "acme", Platform: "ops"})
 	w.WriteModelEndpoints(ctx)
 
-	// Each endpoint produces at least 3 required triples (provider, name, supports_tools).
-	// "claude" has optional fields too (max_tokens, input_price, output_price).
-	triples := collector.getTriples()
-
-	// claude: 3 required + 3 optional (max_tokens, input_price, output_price) = 6
-	// local: 3 required = 3
-	// Total: 9
-	if len(triples) < 9 {
-		t.Errorf("expected at least 9 triples, got %d", len(triples))
+	// One create_with_triples request per endpoint.
+	received := responder.getReceived()
+	if len(received) != 2 {
+		t.Fatalf("expected 2 create_with_triples requests (one per endpoint), got %d", len(received))
 	}
 
-	// Verify all triples have valid subjects (6-part entity IDs).
-	for _, tr := range triples {
-		if !message.IsValidEntityID(tr.Subject) {
-			t.Errorf("invalid entity ID: %q", tr.Subject)
+	wantType := agentic.ModelEndpointMessageType()
+	var totalTriples int
+	for _, req := range received {
+		if req.Entity == nil {
+			t.Fatal("create_with_triples request has a nil Entity")
 		}
+		// Typed-origin envelope: the endpoint entity must be born with the
+		// model_endpoint MessageType so graph-ingest creates it (not
+		// envelope-less, not auto-vivified).
+		if req.Entity.MessageType != wantType {
+			t.Errorf("Entity.MessageType = %q, want %q", req.Entity.MessageType.Key(), wantType.Key())
+		}
+		// Subject must be a valid 6-part entity ID.
+		if !message.IsValidEntityID(req.Entity.ID) {
+			t.Errorf("invalid entity ID: %q", req.Entity.ID)
+		}
+		// Every triple in the create body must belong to the entity being born.
+		for _, tr := range req.Triples {
+			if tr.Subject != req.Entity.ID {
+				t.Errorf("triple subject %q != created entity ID %q", tr.Subject, req.Entity.ID)
+			}
+		}
+		totalTriples += len(req.Triples)
+	}
+
+	// claude: 3 required (provider, name, supports_tools) + 3 optional
+	// (max_tokens, input_price, output_price) = 6; local: 3 required = 3.
+	// Total: 9 across both create bodies.
+	if totalTriples < 9 {
+		t.Errorf("expected at least 9 triples across endpoint create bodies, got %d", totalTriples)
+	}
+}
+
+// TestWriteModelEndpoints_IdempotentOnRestart_Integration covers the restart
+// path (gh#390): an endpoint entity already born with the model_endpoint typed
+// origin returns EntityExists, which createEntityWithTriples treats as success
+// after the MessageType read-back. WriteModelEndpoints must not log this as a
+// failure or panic — re-running it on a warm graph is a no-op.
+func TestWriteModelEndpoints_IdempotentOnRestart_Integration(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	// create_with_triples replies EntityExists for every endpoint.
+	responder := &createWithTriplesResponder{alreadyExists: true}
+	responder.subscribe(t, ctx, tc.Client)
+
+	// The read-back must find the SAME model_endpoint typed origin for
+	// EntityExists to count as a safe idempotent re-birth.
+	q := &queryEntityResponder{entity: gtypes.EntityState{
+		ID:          agentic.ModelEndpointEntityID("acme", "ops", "claude"),
+		MessageType: agentic.ModelEndpointMessageType(),
+	}}
+	q.subscribe(t, ctx, tc.Client)
+
+	reg := &model.Registry{
+		Endpoints: map[string]*model.EndpointConfig{
+			"claude": {Provider: "anthropic", Model: "claude-opus-4-5"},
+		},
+	}
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, reg, types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	// Must not panic; EntityExists for our typed origin is idempotent success.
+	w.WriteModelEndpoints(ctx)
+
+	if got := len(responder.getReceived()); got != 1 {
+		t.Errorf("expected 1 create_with_triples attempt, got %d", got)
 	}
 }
 
@@ -664,9 +722,14 @@ func TestWriteTrajectorySteps_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup(), natsclient.WithJetStream())
 	ctx := context.Background()
 
-	// Set up triple collector as responder.
+	// Set up triple collector for the LoopHasStep links (triple.add) and a
+	// create_with_triples responder for the step-entity births (gh#390): step
+	// entities are CREATED with a typed-origin envelope, not appended. The two
+	// responders are on disjoint subjects, so they coexist.
 	collector := &tripleCollector{}
 	collector.subscribeMutations(t, ctx, tc.Client)
+	creates := &createWithTriplesResponder{}
+	creates.subscribe(t, ctx, tc.Client)
 
 	// Create ObjectStore for content storage.
 	store, err := objectstore.NewStoreWithConfig(ctx, tc.Client, objectstore.Config{
@@ -720,46 +783,58 @@ func TestWriteTrajectorySteps_Integration(t *testing.T) {
 
 	w.WriteTrajectorySteps(ctx, "loop-traj", trajectory)
 
-	triples := collector.getTriples()
-
-	// Count step entity triples vs LoopHasStep triples.
+	// LoopHasStep links append onto the loop entity via triple.add (captured by
+	// the collector). 4 steps (including compaction) → 4 LoopHasStep triples.
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.loop-traj"
 	var loopHasStepCount int
-	stepEntityIDs := make(map[string]bool)
-	for _, tr := range triples {
+	for _, tr := range collector.getTriples() {
 		if tr.Subject == loopEntityID && tr.Predicate == agvocab.LoopHasStep {
 			loopHasStepCount++
 		}
-		if tr.Predicate == agvocab.StepType {
-			stepEntityIDs[tr.Subject] = true
-		}
 	}
-
-	// 4 steps (including compaction) → 4 LoopHasStep triples.
 	if loopHasStepCount != 4 {
 		t.Errorf("expected 4 LoopHasStep triples, got %d", loopHasStepCount)
 	}
 
-	// 4 step entities created.
-	if len(stepEntityIDs) != 4 {
-		t.Errorf("expected 4 step entities, got %d", len(stepEntityIDs))
+	// Step entities are BORN via create_with_triples (gh#390) — one create per
+	// step, each carrying the trajectory-step typed-origin envelope and the
+	// step's metadata triples. Collect them from the create responder.
+	received := creates.getReceived()
+	if len(received) != 4 {
+		t.Fatalf("expected 4 create_with_triples requests (one per step entity), got %d", len(received))
 	}
-
-	// Verify all step entity IDs are valid.
-	for id := range stepEntityIDs {
-		if !message.IsValidEntityID(id) {
-			t.Errorf("invalid step entity ID: %q", id)
+	wantType := agentic.TrajectoryStepMessageType()
+	stepEntityIDs := make(map[string]bool)
+	stepPreds := make(map[string]bool)
+	for _, req := range received {
+		if req.Entity == nil {
+			t.Fatal("create_with_triples request has a nil Entity")
+		}
+		if req.Entity.MessageType != wantType {
+			t.Errorf("step Entity.MessageType = %q, want %q", req.Entity.MessageType.Key(), wantType.Key())
+		}
+		if !message.IsValidEntityID(req.Entity.ID) {
+			t.Errorf("invalid step entity ID: %q", req.Entity.ID)
+		}
+		stepEntityIDs[req.Entity.ID] = true
+		for _, tr := range req.Triples {
+			stepPreds[tr.Predicate] = true
+			if tr.Subject != req.Entity.ID {
+				t.Errorf("step triple subject %q != created entity ID %q", tr.Subject, req.Entity.ID)
+			}
 		}
 	}
-
-	// Verify tool_call step has StepToolName predicate.
-	preds := collector.predicateSet()
-	if !preds[agvocab.StepToolName] {
+	if len(stepEntityIDs) != 4 {
+		t.Errorf("expected 4 distinct step entities, got %d", len(stepEntityIDs))
+	}
+	// Every step entity carries its type; tool_call carries tool_name; model_call carries tokens_in.
+	if !stepPreds[agvocab.StepType] {
+		t.Error("expected agent.step.type triple on every step entity")
+	}
+	if !stepPreds[agvocab.StepToolName] {
 		t.Error("expected agent.step.tool_name triple for tool_call step")
 	}
-
-	// Verify model_call steps have token predicates.
-	if !preds[agvocab.StepTokensIn] {
+	if !stepPreds[agvocab.StepTokensIn] {
 		t.Error("expected agent.step.tokens_in triple for model_call step")
 	}
 
@@ -799,8 +874,10 @@ func TestWriteTrajectorySteps_NoContentStore_StillWritesTriples(t *testing.T) {
 
 	collector := &tripleCollector{}
 	collector.subscribeMutations(t, ctx, tc.Client)
+	creates := &createWithTriplesResponder{}
+	creates.subscribe(t, ctx, tc.Client)
 
-	// No content store set — triples should still be written.
+	// No content store set — graph writes should still happen.
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	trajectory := &agentic.Trajectory{
@@ -818,17 +895,26 @@ func TestWriteTrajectorySteps_NoContentStore_StillWritesTriples(t *testing.T) {
 
 	w.WriteTrajectorySteps(ctx, "loop-no-store", trajectory)
 
-	triples := collector.getTriples()
-	if len(triples) == 0 {
-		t.Error("expected triples even without content store")
-	}
-
+	// The LoopHasStep link appends to the loop entity via triple.add.
 	preds := collector.predicateSet()
-	if !preds[agvocab.StepToolName] {
-		t.Error("expected agent.step.tool_name triple")
-	}
 	if !preds[agvocab.LoopHasStep] {
 		t.Error("expected agent.loop.has_step triple")
+	}
+
+	// The step entity is BORN via create_with_triples carrying its metadata
+	// triples (gh#390) — not appended via triple.add.
+	received := creates.getReceived()
+	if len(received) != 1 {
+		t.Fatalf("expected 1 step-entity create_with_triples, got %d", len(received))
+	}
+	var sawToolName bool
+	for _, tr := range received[0].Triples {
+		if tr.Predicate == agvocab.StepToolName {
+			sawToolName = true
+		}
+	}
+	if !sawToolName {
+		t.Error("expected agent.step.tool_name triple in the step-entity create")
 	}
 }
 
@@ -947,15 +1033,12 @@ func TestWriteMutationFailure_Integration(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
-	// Respond with failure to verify graceful handling. ADR-060: a hard failure
-	// is a classified error, mirroring the production handler.
-	_, err := tc.Client.SubscribeForRequests(ctx, "graph.mutation.triple.add",
-		func(_ context.Context, _ []byte) ([]byte, error) {
-			return nil, errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeInternal, errors.New("test error"))
-		})
-	if err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
+	// gh#390: WriteModelEndpoints births endpoints via create_with_triples. A
+	// hard failure (ADR-060 classified error, mirroring the production handler)
+	// must be logged and swallowed per-endpoint — never panic, never abort the
+	// remaining endpoints.
+	responder := &createWithTriplesResponder{failWith: "test error"}
+	responder.subscribe(t, ctx, tc.Client)
 
 	reg := &model.Registry{
 		Endpoints: map[string]*model.EndpointConfig{

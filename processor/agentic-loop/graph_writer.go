@@ -160,17 +160,19 @@ func (w *graphWriter) writeBatch(ctx context.Context, triples []message.Triple) 
 	return nil
 }
 
-// createEntityWithTriples sends a CreateEntityWithTriplesRequest to
-// graph.mutation.entity.create_with_triples via NATS request/reply, using the
-// same transport config (timeout, retry) as writeBatch.
+// createEntityWithTriples is the shared entity-birth primitive: it sends a
+// CreateEntityWithTriplesRequest to graph.mutation.entity.create_with_triples via
+// NATS request/reply, using the same transport config (timeout, retry) as
+// writeBatch. Used to birth any typed-origin entity (loop executions via
+// WriteSpawnIdentity, model endpoints via WriteModelEndpoints).
 //
 // Idempotency contract (ADR-056 typed-origin): a response with ErrorCode ==
 // graph.ErrorCodeEntityExists is treated as success ONLY after a read-back
-// confirms the existing entity is the SAME typed origin (MessageType) the spawn
-// intended — a genuine re-spawn / retry. If the pre-existing entity is an
-// envelope-less auto-vivified shell or a foreign entity colliding on the id,
-// EntityExists is a birth FAILURE, never a silent "born." See
-// verifyExistingLoopOrigin.
+// confirms the existing entity is the SAME typed origin (MessageType) the creator
+// intended — a genuine re-create / retry / re-spawn. If the pre-existing entity
+// is an envelope-less auto-vivified shell or a foreign entity colliding on the
+// id, EntityExists is a birth FAILURE, never a silent "born." See
+// verifyExistingEntityOrigin.
 //
 // Returns a non-nil error only on genuine birth failures (transport error,
 // handler-internal error, an EntityExists that is not our typed origin, any
@@ -198,8 +200,12 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 		// typed-origin contract (ADR-056). Read + verify before treating it as born.
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) && ce.Code == gtypes.ErrorCodeEntityExists {
-			// Extract the incoming task_id from the spawn triples so
-			// verifyExistingLoopOrigin can detect divergent-task_id reuse (gh#276).
+			// Extract the incoming task_id from the create triples so
+			// verifyExistingEntityOrigin can detect divergent-task_id reuse
+			// (gh#276). Loop-execution entities carry agent.loop.task; non-loop
+			// entities (e.g. model endpoints) do not, so incomingTaskID stays
+			// empty and the divergent-task check no-ops — only the generic
+			// typed-origin MessageType readback applies.
 			var incomingTaskID string
 			for _, t := range triples {
 				if t.Predicate == agvocab.LoopTask {
@@ -209,7 +215,7 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 					break
 				}
 			}
-			return w.verifyExistingLoopOrigin(ctx, entity.ID, entity.MessageType, incomingTaskID)
+			return w.verifyExistingEntityOrigin(ctx, entity.ID, entity.MessageType, incomingTaskID)
 		}
 		return fmt.Errorf("NATS create_with_triples request failed: %w", err)
 	}
@@ -217,18 +223,20 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 	return nil
 }
 
-// verifyExistingLoopOrigin guards the EntityExists idempotency path: it reads the
-// already-existing entity and confirms it carries the SAME typed origin
-// MessageType the spawn intended. A match means a safe idempotent re-birth
-// (retry / redelivery / re-spawn). A mismatch (an envelope-less auto-vivified
-// shell, or a foreign entity colliding on the id) or an unreadable entity is a
-// birth FAILURE the caller halts on — never a silent "born." Reuses the
-// same-package graph.ingest.query.entity read surface (see todos.go).
+// verifyExistingEntityOrigin guards the EntityExists idempotency path for ANY
+// typed-origin entity: it reads the already-existing entity and confirms it
+// carries the SAME typed origin MessageType the creator intended. A match means a
+// safe idempotent re-birth (retry / redelivery / re-create / re-spawn). A
+// mismatch (an envelope-less auto-vivified shell, or a foreign entity colliding
+// on the id) or an unreadable entity is a birth FAILURE the caller halts on —
+// never a silent "born." Reuses the same-package graph.ingest.query.entity read
+// surface (see todos.go).
 //
-// loop_id immutability contract (gh#276): a loop_id is bound to a single task_id
-// at birth. A same-MessageType match is idempotent success — the first spawn's
-// identity triples (role, task, prompt, parent) remain canonical and the new
-// spawn's identity triples are NOT written (create_with_triples returns
+// loop_id immutability contract (gh#276) — applies only to loop-execution
+// entities, which pass a non-empty incomingTaskID: a loop_id is bound to a single
+// task_id at birth. A same-MessageType match is idempotent success — the first
+// spawn's identity triples (role, task, prompt, parent) remain canonical and the
+// new spawn's identity triples are NOT written (create_with_triples returns
 // EntityExists before any merge). When incomingTaskID is non-empty and differs
 // from the existing entity's agent.loop.task triple, this function emits a
 // structured WARNING so operators can detect loop_id reuse across tasks. The
@@ -238,7 +246,11 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 // violation observable. This is strictly safer than the pre-4c-pre-1
 // triple.add_batch path, which would have APPENDED conflicting role/parent
 // values onto the existing entity.
-func (w *graphWriter) verifyExistingLoopOrigin(ctx context.Context, entityID string, want message.Type, incomingTaskID string) error {
+//
+// Non-loop callers (e.g. WriteModelEndpoints) pass an empty incomingTaskID, so
+// the divergent-task_id check no-ops and only the generic MessageType readback
+// applies — exactly the typed-origin guard those entities need.
+func (w *graphWriter) verifyExistingEntityOrigin(ctx context.Context, entityID string, want message.Type, incomingTaskID string) error {
 	reqData, err := json.Marshal(struct {
 		ID string `json:"id"`
 	}{ID: entityID})
@@ -368,8 +380,27 @@ func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelTex
 		"hint", "model returned text-only at completion — consider setting tool_choice='required' on the rule (#132) to prevent recurrence; high prevalence of this triple signals model/persona mismatch")
 }
 
-// WriteModelEndpoints emits triples for every endpoint in the model registry.
-// Called on component startup so the graph reflects current endpoint configuration.
+// WriteModelEndpoints births a graph entity for every endpoint in the model
+// registry. Called on component startup so the graph reflects current endpoint
+// configuration.
+//
+// Each endpoint entity is CREATED via create_with_triples carrying a
+// model_endpoint typed-origin envelope (agentic.ModelEndpointMessageType) — NOT
+// bare per-triple triple.add. A model endpoint is a config-derived fact whose
+// entity must be born with a MessageType envelope, never auto-vivified:
+// graph-ingest's triple.add enforces must-exist, so a per-triple write to a
+// never-created endpoint entity is rejected ("kv: key not found"), increments
+// graph-ingest's error count, and flips it permanently unhealthy (gh#390).
+// create_with_triples is the correct write-API verb for entity creation
+// (ADR-056 typed-origin; see WriteSpawnIdentity for the loop-execution analogue
+// and the write-API taxonomy — metadata-less creation via triple.add is the
+// defect class this fixes).
+//
+// Idempotent on restart: an EntityExists response for an endpoint already born
+// with the same model_endpoint MessageType is treated as success by
+// createEntityWithTriples (typed-origin readback). Per-endpoint failures are
+// logged and do not abort the remaining endpoints — startup is best-effort,
+// matching the pre-fix per-triple behaviour and every sibling graph-write method.
 func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 	if w.natsClient == nil {
 		return
@@ -390,11 +421,14 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 		}
 		entityID := agentic.ModelEndpointEntityID(w.platform.Org, w.platform.Platform, name)
 		triples := buildModelEndpointTriples(entityID, *ep)
-		for _, t := range triples {
-			if err := w.writeTriple(ctx, t); err != nil {
-				w.logger.Warn("graph_writer: failed to write model endpoint triple",
-					"endpoint", name, "predicate", t.Predicate, "error", err)
-			}
+		entity := &gtypes.EntityState{
+			ID:          entityID,
+			MessageType: agentic.ModelEndpointMessageType(),
+			Triples:     triples,
+		}
+		if err := w.createEntityWithTriples(ctx, entity, triples); err != nil {
+			w.logger.Warn("graph_writer: failed to create model endpoint entity",
+				"endpoint", name, "entity_id", entityID, "error", err)
 		}
 	}
 }
@@ -499,10 +533,46 @@ func (w *graphWriter) WriteTrajectorySteps(ctx context.Context, loopID string, t
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
 	triples := buildTrajectoryStepTriples(loopEntityID, w.platform.Org, w.platform.Platform, loopID, trajectory)
+
+	// gh#390: the flat triple list mixes two subject kinds per step — the step
+	// ENTITY's metadata triples (Subject = step entity ID, which must be
+	// CREATED) and the LoopHasStep link (Subject = loop entity ID, which
+	// already exists via WriteSpawnIdentity). graph-ingest enforces must-exist
+	// on triple.add, so the step-entity triples must be born via
+	// create_with_triples (a bare add lands "kv: key not found", increments
+	// graph-ingest's error count, and flips it unhealthy). Group by subject and
+	// route: the loop-entity subject is an APPEND (writeTriple); every other
+	// subject is a step entity BIRTH (create_with_triples + typed-origin
+	// envelope). Insertion order is preserved so emission stays deterministic.
+	bySubject := make(map[string][]message.Triple)
+	order := make([]string, 0, len(triples))
 	for _, t := range triples {
-		if err := w.writeTriple(ctx, t); err != nil {
-			w.logger.Warn("graph_writer: failed to write trajectory step triple",
-				"loop_id", loopID, "predicate", t.Predicate, "error", err)
+		if _, seen := bySubject[t.Subject]; !seen {
+			order = append(order, t.Subject)
+		}
+		bySubject[t.Subject] = append(bySubject[t.Subject], t)
+	}
+	for _, subject := range order {
+		group := bySubject[subject]
+		if subject == loopEntityID {
+			// LoopHasStep links — append onto the already-born loop entity.
+			for _, t := range group {
+				if err := w.writeTriple(ctx, t); err != nil {
+					w.logger.Warn("graph_writer: failed to write trajectory link triple",
+						"loop_id", loopID, "predicate", t.Predicate, "error", err)
+				}
+			}
+			continue
+		}
+		// Step entity — birth it with a trajectory-step typed-origin envelope.
+		stepEntity := &gtypes.EntityState{
+			ID:          subject,
+			MessageType: agentic.TrajectoryStepMessageType(),
+			Triples:     group,
+		}
+		if err := w.createEntityWithTriples(ctx, stepEntity, group); err != nil {
+			w.logger.Warn("graph_writer: failed to create trajectory step entity",
+				"loop_id", loopID, "step_entity_id", subject, "error", err)
 		}
 	}
 }
