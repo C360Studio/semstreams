@@ -37,6 +37,8 @@ const (
 
 // ontologyClassPredicate is the stamped BFO/CCO class triple (semsource ADR-0005).
 // Read for Node.Class when present; ID-derived class fallback is increment 5.
+// Keep in sync with semsource's ontology.ClassPredicate — increment 5 (#396),
+// which lifts the ontology helpers framework-side, is where these unify.
 const ontologyClassPredicate = "entity.ontology.class"
 
 // Engine runs the lens-driven deterministic fusion pipeline over a

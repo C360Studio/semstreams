@@ -16,6 +16,7 @@ type fakeGraph struct {
 	seeds      map[string][]string       // query → seed IDs
 	entities   map[string]*fusion.Entity // id → entity
 	out        map[string][]fusion.Edge  // id → outgoing edges
+	in         map[string][]fusion.Edge  // id → incoming edges
 	names      []string                  // did_you_mean suggestions
 	statusErr  error
 	resolveErr error
@@ -47,7 +48,7 @@ func (g *fakeGraph) Neighbors(_ context.Context, id string, _ []string, dir fusi
 	if dir == fusion.Outgoing {
 		return g.out[id], nil
 	}
-	return nil, nil
+	return g.in[id], nil
 }
 func (g *fakeGraph) Names(_ context.Context, _ string, _ int) ([]string, error) {
 	return g.names, nil
@@ -200,13 +201,87 @@ func TestEngine_BudgetTruncation(t *testing.T) {
 	}
 }
 
-// TestEngine_BackendErrorSurfaced: a backend failure fetching seeds is an ERROR,
-// not silently a not-found (that would violate the ready≠not-found contract).
+// TestEngine_BackendErrorSurfaced: a backend failure fetching seeds OR entities
+// is an ERROR, not silently a not-found (that would violate ready≠not-found).
 func TestEngine_BackendErrorSurfaced(t *testing.T) {
-	g := &fakeGraph{status: readyStatus(), resolveErr: errors.New("graph down")}
+	cases := map[string]*fakeGraph{
+		"resolve error":  {status: readyStatus(), resolveErr: errors.New("graph down")},
+		"entities error": {status: readyStatus(), seeds: map[string][]string{"q": {"id"}}, entErr: errors.New("batch down")},
+	}
+	for name, g := range cases {
+		t.Run(name, func(t *testing.T) {
+			eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))
+			if _, err := eng.Fuse(context.Background(), fusion.Request{Query: "q"}, refLens{}); err == nil {
+				t.Error("expected a backend error to surface, not a silent miss")
+			}
+		})
+	}
+}
+
+// TestEngine_HydrateError_DegradesBody: a hydrate/deref failure omits the body
+// and does NOT fail the node or the fuse (degrade-don't-fail). Here the entity
+// points at a store key that doesn't exist, so ResolveBody errors.
+func TestEngine_HydrateError_DegradesBody(t *testing.T) {
+	store := &fakeStore{getErr: errors.New("backend down")}
+	ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "h/on_event.go",
+		message.Triple{Predicate: refStorageInstancePr, Object: "objectstore"},
+		message.Triple{Predicate: refStorageKeyPr, Object: "missing"},
+	)
+	g := &fakeGraph{status: readyStatus(), seeds: map[string][]string{"OnEvent": {ent.ID}}, entities: map[string]*fusion.Entity{ent.ID: ent}}
+	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{"objectstore": store}))
+
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent", Want: []fusion.Want{fusion.WantBody}}, refLens{})
+	if err != nil {
+		t.Fatalf("a hydrate fault must NOT fail the fuse, got %v", err)
+	}
+	if len(resp.Nodes) != 1 {
+		t.Fatalf("expected the node to still ship, got %d nodes", len(resp.Nodes))
+	}
+	if resp.Nodes[0].Body != "" {
+		t.Errorf("expected an empty body on hydrate fault, got %q", resp.Nodes[0].Body)
+	}
+}
+
+// TestEngine_IncomingRelations: reverse edges populate the lens's IncomingRole —
+// the reverse-direction path the port added over the seed walk.
+func TestEngine_IncomingRelations(t *testing.T) {
+	caller := entity("acme.ops.code.repo.symbol.Caller", "Caller", "caller.go")
+	seed := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "on_event.go")
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"OnEvent": {seed.ID}},
+		entities: map[string]*fusion.Entity{seed.ID: seed, caller.ID: caller},
+		in: map[string][]fusion.Edge{
+			seed.ID: {{Predicate: "ref.relationship.references", Target: caller.ID}},
+		},
+	}
 	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))
 
-	if _, err := eng.Fuse(context.Background(), fusion.Request{Query: "q"}, refLens{}); err == nil {
-		t.Error("expected a backend resolve error to surface, not a silent miss")
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent", Want: []fusion.Want{fusion.WantRelations}}, refLens{})
+	if err != nil {
+		t.Fatalf("Fuse: %v", err)
+	}
+	refs := resp.Nodes[0].Relations["referrer"] // refLens's IncomingRole
+	if len(refs) != 1 || refs[0].Name != "Caller" {
+		t.Errorf("expected one 'referrer' ref to Caller, got %+v", resp.Nodes[0].Relations)
+	}
+}
+
+// TestEngine_NilBodyResolver: a nil BodyResolver omits bodies without panicking
+// (the e.body != nil guard) — a deployment with no verbatim-body store still works.
+func TestEngine_NilBodyResolver(t *testing.T) {
+	ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "h/on_event.go",
+		message.Triple{Predicate: refStorageInstancePr, Object: "objectstore"},
+		message.Triple{Predicate: refStorageKeyPr, Object: "k"},
+	)
+	g := &fakeGraph{status: readyStatus(), seeds: map[string][]string{"OnEvent": {ent.ID}}, entities: map[string]*fusion.Entity{ent.ID: ent}}
+	eng := fusion.NewEngine(g, nil) // no body resolver
+
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent", Want: []fusion.Want{fusion.WantBody}}, refLens{})
+	if err != nil {
+		t.Fatalf("Fuse with nil BodyResolver must not error, got %v", err)
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Body != "" {
+		t.Errorf("expected one node with empty body, got %+v", resp.Nodes)
 	}
 }
