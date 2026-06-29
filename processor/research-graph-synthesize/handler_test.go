@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // fakeSynthesizer returns canned content / error per scenario.
@@ -64,7 +65,7 @@ func TestSynthesizeAnswer_HappyPath_QuoteBackKeepsValidRefs(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:  "drone fleet maintenance events",
 		Action: research.ActionWalkSeeds,
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{EntityID: "acme.ops.robotics.gcs.drone.001", Tier: "0", Source: "walk_seeds", Score: 0.9, SnippetText: "Drone 001 maintenance window 14:32Z"},
 			{EntityID: "acme.ops.robotics.gcs.drone.014", Tier: "1", Source: "bm25", Score: 0.7, ObjectStoreRef: "objstore://research/evidence-014.txt"},
 		},
@@ -94,7 +95,7 @@ func TestSynthesizeAnswer_QuoteBack_StripsFabricatedRefs(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:  "x",
 		Action: research.ActionWalkSeeds,
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{EntityID: "real-1", Tier: "0", Source: "x"},
 			{EntityID: "real-2", Tier: "0", Source: "x"},
 		},
@@ -121,7 +122,7 @@ func TestSynthesizeAnswer_QuoteBack_NoValidRefsDegrades(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []research.Evidence{{EntityID: "real-1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "real-1", Tier: "0", Source: "x"}},
 	}
 	s := &fakeSynthesizer{
 		content: `{"synthesis":"answer makes things up","evidence_refs":["fake-only","another-fake"]}`,
@@ -164,7 +165,7 @@ func TestSynthesizeAnswer_DecompTrace_FromRouteWalkSeeds(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []research.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
 	}
 	route := &research.RouteDecision{
 		Action: research.ActionWalkSeeds,
@@ -197,7 +198,7 @@ func TestSynthesizeAnswer_DecompTrace_NilRouteFallsBackToExecAction(t *testing.T
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionSynthesizeDirectly,
-		Evidence: []research.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
 	}
 	s := &fakeSynthesizer{content: `{"synthesis":"x","evidence_refs":["e1"]}`}
 	got, err := synthesizeAnswer(context.Background(), s,
@@ -250,7 +251,7 @@ func TestSynthesizeAnswer_DedupRefs(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:  "x",
 		Action: research.ActionWalkSeeds,
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{EntityID: "e1", Tier: "0", Source: "x"},
 		},
 	}

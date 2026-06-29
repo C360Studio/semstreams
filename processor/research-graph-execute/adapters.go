@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // Graph-query NATS-direct subjects this component requests against.
@@ -24,7 +25,7 @@ const (
 	subjectGraphQuerySearchGraph   = "graph.query.searchGraph"
 )
 
-// graphQueryAdapter wraps natsclient.Client into the GraphQueryClient
+// graphQueryAdapter wraps natsclient.Client into the fusion.GraphQueryClient
 // interface. Production wires this adapter via Start; tests inject a
 // fake GraphQueryClient directly into the Component and skip this
 // path entirely.
@@ -46,13 +47,13 @@ func newGraphQueryAdapter(client *natsclient.Client, timeout time.Duration) *gra
 	return &graphQueryAdapter{client: client, timeout: timeout}
 }
 
-// EntityState implements GraphQueryClient via graph.query.batch
+// EntityState implements fusion.GraphQueryClient via graph.query.batch
 // (passthrough to graph-ingest's handleQueryBatchNATS). Returns one
 // Evidence per requested entity ID that resolves; missing IDs are
 // silently omitted by the upstream handler. Verified shapes:
 // request `{ids: [...]}`, response `{entities: [<EntityState>...]}`
 // where each entity uses the `id` field (graph/types.go EntityState).
-func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArgs, tier, source string, limit int) ([]research.Evidence, error) {
+func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArgs, tier, source string, limit int) ([]fusion.Evidence, error) {
 	if a == nil || a.client == nil {
 		return nil, errors.New("nats client not configured")
 	}
@@ -78,7 +79,7 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, fmt.Errorf("decode entity_state response: %w", err)
 	}
-	out := make([]research.Evidence, 0, len(resp.Entities))
+	out := make([]fusion.Evidence, 0, len(resp.Entities))
 	for i, e := range resp.Entities {
 		if limit > 0 && i >= limit {
 			break
@@ -86,7 +87,7 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 		if strings.TrimSpace(e.ID) == "" {
 			continue
 		}
-		out = append(out, research.Evidence{
+		out = append(out, fusion.Evidence{
 			EntityID: e.ID,
 			Tier:     tier,
 			Source:   source,
@@ -95,7 +96,7 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	return out, nil
 }
 
-// PredicateWalk implements GraphQueryClient via
+// PredicateWalk implements fusion.GraphQueryClient via
 // graph.query.relationships. Per-seed call (relationships handler
 // is single-entity per request); errgroup at the orchestrator
 // parallelises across seeds. Verified shapes: request
@@ -112,14 +113,14 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 // args.Predicates is accepted but the handler doesn't currently
 // filter — kept on the SubQuery type for forward-compat with a
 // Phase 2 handler extension.
-func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWalkArgs, tier, source string, limit int) ([]research.Evidence, error) {
+func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWalkArgs, tier, source string, limit int) ([]fusion.Evidence, error) {
 	if a == nil || a.client == nil {
 		return nil, errors.New("nats client not configured")
 	}
 	if len(args.Seeds) == 0 {
 		return nil, nil
 	}
-	var allEvidence []research.Evidence
+	var allEvidence []fusion.Evidence
 	for _, seed := range args.Seeds {
 		if strings.TrimSpace(seed) == "" {
 			continue
@@ -150,7 +151,7 @@ func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWal
 			if id == "" || id == seed {
 				continue
 			}
-			allEvidence = append(allEvidence, research.Evidence{
+			allEvidence = append(allEvidence, fusion.Evidence{
 				EntityID: id,
 				Tier:     tier,
 				Source:   source,
@@ -160,7 +161,7 @@ func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWal
 	return allEvidence, nil
 }
 
-// TemporalRange implements GraphQueryClient via
+// TemporalRange implements fusion.GraphQueryClient via
 // graph.query.temporal (passthrough to graph-index-temporal's
 // handleQueryRangeNATS). Verified shapes: request
 // `{startTime, endTime, limit}` (RFC3339 strings), response is a
@@ -172,7 +173,7 @@ func (a *graphQueryAdapter) PredicateWalk(ctx context.Context, args PredicateWal
 // Temporal index is optional in operator deployments; an unwired
 // index returns transport error → RequestClassified surfaces it →
 // orchestrator marks degraded.
-func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRangeArgs, tier, source string, limit int) ([]research.Evidence, error) {
+func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRangeArgs, tier, source string, limit int) ([]fusion.Evidence, error) {
 	if a == nil || a.client == nil {
 		return nil, errors.New("nats client not configured")
 	}
@@ -194,7 +195,7 @@ func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRang
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, fmt.Errorf("decode temporal_range response: %w", err)
 	}
-	out := make([]research.Evidence, 0, len(resp))
+	out := make([]fusion.Evidence, 0, len(resp))
 	for i, r := range resp {
 		if limit > 0 && i >= limit {
 			break
@@ -202,7 +203,7 @@ func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRang
 		if strings.TrimSpace(r.ID) == "" {
 			continue
 		}
-		out = append(out, research.Evidence{
+		out = append(out, fusion.Evidence{
 			EntityID: r.ID,
 			Tier:     tier,
 			Source:   source,
@@ -211,12 +212,12 @@ func (a *graphQueryAdapter) TemporalRange(ctx context.Context, args TemporalRang
 	return out, nil
 }
 
-// BM25 implements GraphQueryClient via graph.query.searchGraph —
+// BM25 implements fusion.GraphQueryClient via graph.query.searchGraph —
 // the same surface research-graph-classify uses for initial
 // candidate retrieval. Sharing the surface keeps the evidence
 // schema consistent (Evidence here ≡ subset of GlobalSearchResponse
 // entity digests, same projection as nl_classify's Candidate).
-func (a *graphQueryAdapter) BM25(ctx context.Context, args BM25Args, tier, source string, limit int) ([]research.Evidence, error) {
+func (a *graphQueryAdapter) BM25(ctx context.Context, args BM25Args, tier, source string, limit int) ([]fusion.Evidence, error) {
 	if a == nil || a.client == nil {
 		return nil, errors.New("nats client not configured")
 	}
@@ -247,7 +248,7 @@ func (a *graphQueryAdapter) BM25(ctx context.Context, args BM25Args, tier, sourc
 	// BM25 surface uses a different ID field name (id, not entity_id)
 	// and exposes relevance instead of score. Project to the unified
 	// Evidence shape inline.
-	out := make([]research.Evidence, 0, len(resp.EntityDigests))
+	out := make([]fusion.Evidence, 0, len(resp.EntityDigests))
 	for i, d := range resp.EntityDigests {
 		if i >= limitCap && limitCap > 0 {
 			break
@@ -255,7 +256,7 @@ func (a *graphQueryAdapter) BM25(ctx context.Context, args BM25Args, tier, sourc
 		if strings.TrimSpace(d.ID) == "" {
 			continue
 		}
-		out = append(out, research.Evidence{
+		out = append(out, fusion.Evidence{
 			EntityID: d.ID,
 			Tier:     tier,
 			Source:   source,

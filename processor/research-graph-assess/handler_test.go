@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // fakeAssessor returns canned content / error per scenario. Records
@@ -70,7 +71,7 @@ func TestAssessSufficiency_SufficientPath(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:  "drone-001 maintenance events",
 		Action: research.ActionWalkSeeds,
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{EntityID: "drone-001", Tier: "0", Source: "walk_seeds.entity_state", Score: 0.9, SnippetText: "Drone 001 maintenance window 14:32Z"},
 		},
 	}
@@ -109,7 +110,7 @@ func TestAssessSufficiency_RefinePath(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:    "drone status across the fleet",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []research.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x"}},
 	}
 	got, err := assessSufficiency(context.Background(), a, intent, exec, 1024, 20, 280, quietLogger())
 	if err != nil {

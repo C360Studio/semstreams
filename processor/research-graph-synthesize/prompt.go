@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // buildSystemPrompt returns the static system message that frames the
@@ -138,11 +139,11 @@ func buildUserPrompt(intent *research.Intent, exec *research.ExecutionOutput, ma
 // prompt-time ordering and the SearchResult.Evidence echo ordering
 // stay in lockstep (operator trajectory replay reads the same shape
 // at both ends).
-func orderedEvidence(in []research.Evidence, limit int) []research.Evidence {
+func orderedEvidence(in []fusion.Evidence, limit int) []fusion.Evidence {
 	if limit <= 0 || len(in) == 0 {
 		return nil
 	}
-	out := make([]research.Evidence, len(in))
+	out := make([]fusion.Evidence, len(in))
 	copy(out, in)
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Tier != out[j].Tier {

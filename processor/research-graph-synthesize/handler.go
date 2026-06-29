@@ -8,7 +8,8 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic/research"
-	"github.com/c360studio/semstreams/processor/research-graph-llmwrap"
+	"github.com/c360studio/semstreams/pkg/fusion"
+	llmwrap "github.com/c360studio/semstreams/processor/research-graph-llmwrap"
 )
 
 // Synthesizer is the narrow LLM surface this component consumes.
@@ -193,7 +194,7 @@ func callAndDecodeSynthesis(ctx context.Context, synthesizer Synthesizer, intent
 // checking each against the set of valid refs in the input evidence
 // (every EntityID + every non-empty ObjectStoreRef). Duplicates and
 // whitespace-only refs are silently dropped.
-func quoteBackValidate(emittedRefs []string, evidence []research.Evidence) (kept, dropped []string) {
+func quoteBackValidate(emittedRefs []string, evidence []fusion.Evidence) (kept, dropped []string) {
 	validRefs := make(map[string]struct{}, len(evidence)*2)
 	for _, e := range evidence {
 		if e.EntityID != "" {
@@ -229,7 +230,7 @@ func quoteBackValidate(emittedRefs []string, evidence []research.Evidence) (kept
 // the matching items (preserving input order); otherwise echo the
 // top-by-score items as a fallback (capped at len(in) since smaller
 // fixtures should round-trip cleanly).
-func selectEchoedEvidence(in []research.Evidence, keptRefs []string) []research.Evidence {
+func selectEchoedEvidence(in []fusion.Evidence, keptRefs []string) []fusion.Evidence {
 	if len(in) == 0 {
 		return nil
 	}
@@ -245,7 +246,7 @@ func selectEchoedEvidence(in []research.Evidence, keptRefs []string) []research.
 		if n > fallbackEchoCount {
 			n = fallbackEchoCount
 		}
-		out := make([]research.Evidence, n)
+		out := make([]fusion.Evidence, n)
 		copy(out, in[:n])
 		return out
 	}
@@ -253,7 +254,7 @@ func selectEchoedEvidence(in []research.Evidence, keptRefs []string) []research.
 	for _, r := range keptRefs {
 		want[r] = struct{}{}
 	}
-	out := make([]research.Evidence, 0, len(keptRefs))
+	out := make([]fusion.Evidence, 0, len(keptRefs))
 	for _, e := range in {
 		if _, ok := want[e.EntityID]; ok {
 			out = append(out, e)
