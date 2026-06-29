@@ -29,6 +29,18 @@ type recordingPublisher struct {
 	addErr error
 }
 
+// CreateEntityWithTriples satisfies the widened llmwrap.TriplePublisher
+// interface. The classify component only APPENDS onto the already-born pipeline
+// loop entity (the kickoff births it — gh#390), so this is never exercised here;
+// present for interface conformance.
+func (r *recordingPublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, triples []message.Triple) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dup := append([]message.Triple(nil), triples...)
+	r.batch = append(r.batch, dup)
+	return r.addErr
+}
+
 func (r *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

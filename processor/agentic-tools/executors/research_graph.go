@@ -372,11 +372,19 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 		persistedIntent.MaxIterations,
 		e.now(),
 	)
-	if stampErr := llmwrap.StampOrchestrationTriples(ctx, e.triplePub, e.logger, "research_graph_tool", loopID, kickoffTriples); stampErr != nil {
-		// StampOrchestrationTriples already logged warn; suppress here so
-		// the tool's success path stays clean. Operator-side diagnosis is
-		// "no research.classify.complete ever appeared" → check graph-
-		// ingest logs for the triple-batch publish failure.
+	// BIRTH, not append: this is the FIRST write to the research-pipeline loop
+	// entity in ENTITY_STATES, so it must CREATE the entity with a
+	// LoopExecution typed-origin envelope via create_with_triples. graph-ingest
+	// enforces must-exist on triple.add / add_batch (gh#390), so a bare
+	// kickoff add_batch to a never-created entity is rejected ("kv: key not
+	// found"), lands written=0, and the chain stalls before R0 fires. The
+	// downstream per-stage stamps (classify/route/execute/synthesize) append
+	// via AddTriplesBatch onto the entity born here.
+	if stampErr := llmwrap.BirthLoopEntityWithTriples(ctx, e.triplePub, e.logger, "research_graph_tool", loopID, loopEntityID, agentic.LoopExecutionMessageType(), kickoffTriples); stampErr != nil {
+		// BirthLoopEntityWithTriples already logged warn; suppress here so the
+		// tool's success path stays clean. Operator-side diagnosis is "no
+		// research.classify.complete ever appeared" → check graph-ingest logs
+		// for the create_with_triples publish failure.
 		_ = stampErr
 	}
 
