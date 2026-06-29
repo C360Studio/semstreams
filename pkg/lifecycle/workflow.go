@@ -232,12 +232,20 @@ func (w *Workflow) validate() error {
 // data loss. No valid schema regresses; this fails the malformed schema loudly
 // at Register rather than dangerously at the first Transition.
 func (w *Workflow) validateDisjointness(meta *structMeta) error {
-	// Cardinality-many predicates: child links and references.
+	// Cardinality-many predicates: child links and references. A predicate
+	// declared as BOTH (child-link and reference) is itself a collision —
+	// Manager.Children and Manager.References would both enumerate the same
+	// triples, double-projecting the entity as an owned child AND an unowned
+	// reference. validate()'s dup check only guards child-link-vs-child-link.
 	many := make(map[string]string) // predicate -> kind (for the error message)
 	for _, ch := range w.ChildWorkflows {
 		many[ch.LinkPredicate] = "child-link"
 	}
 	for _, ref := range w.ReferencePredicates {
+		if existing, ok := many[ref.Predicate]; ok {
+			return fmt.Errorf("%w: workflow %q predicate %q is declared both as %s and reference — both are cardinality-many and would double-project the same triples",
+				ErrInvalidWorkflow, w.Name, ref.Predicate, existing)
+		}
 		many[ref.Predicate] = "reference"
 	}
 	if len(many) == 0 {

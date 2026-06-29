@@ -585,6 +585,10 @@ func TestWorkflow_ValidateDisjointness(t *testing.T) {
 		{"distinct child-link is fine", func(w *Workflow) {
 			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.subtask"}}
 		}, false},
+		{"predicate declared as both child-link and reference", func(w *Workflow) {
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.subtask"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.subtask"}}
+		}, true},
 	}
 
 	for _, tt := range tests {
