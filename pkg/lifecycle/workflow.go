@@ -218,6 +218,67 @@ func (w *Workflow) validate() error {
 	return nil
 }
 
+// validateDisjointness asserts that no single-valued predicate (phase, audit,
+// or a scalar projection field) collides with a cardinality-many predicate
+// (a ChildSpec.LinkPredicate or a ReferenceSpec.Predicate). It runs at Register
+// time AFTER the Schema is parsed, because the projection-field predicates live
+// in the parsed structMeta, not on the Workflow struct.
+//
+// Why this matters (gh#234): Manager.Transition replaces rather than appends —
+// it writes RemoveTriples for every predicate in the transition delta (phase +
+// audit). For a VALID schema that is correct (all delta predicates are
+// single-valued). But if a delta predicate ALSO names a child-link or reference
+// predicate, the Transition would delete those many-cardinality triples — silent
+// data loss. No valid schema regresses; this fails the malformed schema loudly
+// at Register rather than dangerously at the first Transition.
+func (w *Workflow) validateDisjointness(meta *structMeta) error {
+	// Cardinality-many predicates: child links and references.
+	many := make(map[string]string) // predicate -> kind (for the error message)
+	for _, ch := range w.ChildWorkflows {
+		many[ch.LinkPredicate] = "child-link"
+	}
+	for _, ref := range w.ReferencePredicates {
+		many[ref.Predicate] = "reference"
+	}
+	if len(many) == 0 {
+		return nil // nothing many-valued to collide with
+	}
+
+	check := func(pred, kind string) error {
+		if pred == "" {
+			return nil
+		}
+		if mk, ok := many[pred]; ok {
+			return fmt.Errorf("%w: workflow %q predicate %q is declared both as %s (single-valued) and %s (cardinality-many) — a Transition would delete the %s triples",
+				ErrInvalidWorkflow, w.Name, pred, kind, mk, mk)
+		}
+		return nil
+	}
+
+	if err := check(w.PhasePredicate, "phase"); err != nil {
+		return err
+	}
+	for _, p := range []string{w.AuditPredicates.Source, w.AuditPredicates.At, w.AuditPredicates.From, w.AuditPredicates.Note} {
+		if err := check(p, "audit"); err != nil {
+			return err
+		}
+	}
+	if meta != nil {
+		for pred, fm := range meta.FieldsByPredicate {
+			// References are themselves cardinality-many (already in `many`);
+			// the phase field is checked above via PhasePredicate. Only scalar
+			// projection fields are single-valued.
+			if fm.IsReference || fm.IsPhase {
+				continue
+			}
+			if err := check(pred, "projection-field"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ChildOptions filters the result of Manager.Children. Empty options
 // returns every child of the parent across all declared ChildWorkflows.
 type ChildOptions struct {

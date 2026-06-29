@@ -550,6 +550,60 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	}
 }
 
+// TestWorkflow_ValidateDisjointness pins gh#234 — a single-valued predicate
+// (phase, audit, or scalar projection field) that collides with a
+// cardinality-many predicate (child-link or reference) is rejected at Register,
+// since Manager.Transition's RemoveTriples would otherwise delete the
+// many-valued triples. The reference-field-matching-its-own-ReferenceSpec case
+// guards against a false positive.
+func TestWorkflow_ValidateDisjointness(t *testing.T) {
+	t.Parallel()
+	base := lifecycle{}.fixtureWorkflow()
+	meta, err := parseSchemaType(base.Schema)
+	if err != nil {
+		t.Fatalf("parseSchemaType: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(w *Workflow)
+		wantErr bool
+	}{
+		{"valid fixture (no many-valued predicates)", func(_ *Workflow) {}, false},
+		{"child-link collides with phase predicate", func(w *Workflow) {
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: w.PhasePredicate}}
+		}, true},
+		{"child-link collides with an audit predicate", func(w *Workflow) {
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: w.AuditPredicates.At}}
+		}, true},
+		{"reference collides with a scalar projection field", func(w *Workflow) {
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.owner_org_id"}}
+		}, true},
+		{"reference field matching its own ReferenceSpec is valid", func(w *Workflow) {
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}}
+		}, false},
+		{"distinct child-link is fine", func(w *Workflow) {
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.subtask"}}
+		}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := base
+			tt.mutate(&w)
+			err := w.validateDisjointness(meta)
+			switch {
+			case tt.wantErr && err == nil:
+				t.Fatal("expected a disjointness error, got nil")
+			case tt.wantErr && !errors.Is(err, ErrInvalidWorkflow):
+				t.Fatalf("expected ErrInvalidWorkflow, got %v", err)
+			case !tt.wantErr && err != nil:
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
 // TestManager_DiffSkipsZeroValueOnMissingPredicate pins B4 — a
 // TransitionWith mutator that touches a zero-value field should not
 // emit a spurious delta against a missing-predicate baseline.
