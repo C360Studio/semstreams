@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -60,12 +61,35 @@ const fsBackstop = "250ms"
 // demo consumer doing mutation-with-retry), so a single DAG level is several
 // serial NATS round-trips; a diamond is three of them. The 250ms fsBackstop
 // guarantees forward progress the moment a marker lands, so this window only
-// needs to absorb upstream pipeline latency under CI contention — it does not
-// mask a logic stall (a genuinely stuck DAG never advances regardless of wait).
-// Sized at ~3x the prior 10s, which flaked under heavy CI load (gh#373). A
-// re-flake at this bound would indicate a real stall, not slowness, and warrants
-// deeper investigation rather than a further bump.
-const fsEventually = 30 * time.Second
+// needs to absorb upstream pipeline latency under contention — it does not mask
+// a logic stall (a genuinely stuck DAG never advances regardless of wait).
+//
+// The window is CI-contention-aware (gh#404). Locally the whole pipeline settles
+// in ~5s, so 30s is ~6x headroom and surfaces a real stall fast in dev. CI runs
+// dozens of testcontainer-booting integration packages under unbounded
+// `go test -tags=integration ./...` parallelism (no -p cap), so the shared
+// Docker host is CPU/IO-starved and every round-trip in this 6-component stack
+// slows down. gh#404 measured this test time out at 30.65s on CI while
+// completing in 5.2s locally — confirmed SLOWNESS, not a stall (the prior
+// "a re-flake here means a real stall" prediction was thereby falsified). So CI
+// gets a generous 90s budget (~18x the local baseline) while local stays tight.
+//
+// Earlier attempts: #374 widened 10s→30s; #386 made marker writes reliable.
+// Giving the contended environment headroom — rather than a blind global bump —
+// is the investigated fix for confirmed host-saturation slowness. The systemic
+// lever (cap integration `-p` so fewer NATS containers run at once) is the
+// broader fix tracked on gh#404.
+var fsEventually = fsEventuallyWindow()
+
+// fsEventuallyWindow returns the Eventually budget: tight locally for fast stall
+// detection, generous on CI to absorb testcontainer-contention slowness (gh#404).
+// GitHub Actions (and most CI) sets CI=true.
+func fsEventuallyWindow() time.Duration {
+	if os.Getenv("CI") != "" {
+		return 90 * time.Second
+	}
+	return 30 * time.Second
+}
 
 // dispatchLog is the thread-safe ordered record of units the executor dispatched
 // (decoded off the dispatch subject by the demo consumer).
@@ -202,7 +226,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// write is synchronous in the callback (dispatch is recorded first, so the
 	// dispatch assertions are unaffected). A retrying write head-of-line-blocks
 	// sibling units on this single-threaded subscription callback, but bounded at
-	// addMarker's 25s — under fsEventually's 30s even in the worst case — and a
+	// addMarker's 25s — under fsEventually even in the worst case — and a
 	// goroutine-per-marker alternative measurably worsened scheduling contention
 	// under constrained CPU, so synchronous is the right trade here.
 	dec := newDispatchDecoder(t)
@@ -321,7 +345,8 @@ func (fs *fullStack) unitHasPredicate(t *testing.T, id, predicate string) bool {
 // transport-retry budget. A lost marker leaves the unit dispatched-but-never-
 // terminal, stalling the dependent assertions for the full Eventually window
 // (gh#373, the real root cause behind the "flake"). 25s sits under fsEventually
-// (30s) so a genuinely-failing mutation still surfaces as the assertion failure.
+// (30s local / 90s CI) so a genuinely-failing mutation still surfaces as the
+// assertion failure rather than being masked by the wait.
 //
 // ctx is the test-scoped marker context, cancelled at teardown so no loop
 // outlives the test or races client.Close. Synchronous in the consumer callback
