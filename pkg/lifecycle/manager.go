@@ -144,6 +144,11 @@ func (m *Manager) Register(workflow Workflow) error {
 	if err != nil {
 		return err
 	}
+	// Disjointness needs the parsed projection predicates, so it runs here
+	// rather than inside validate() (gh#234).
+	if err := workflow.validateDisjointness(meta); err != nil {
+		return err
+	}
 
 	// Snapshot the ownership wiring + check for a duplicate name under the lock,
 	// then RELEASE it before any NATS I/O. RegisterOwner is a CAS loop with
