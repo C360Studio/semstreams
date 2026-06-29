@@ -66,6 +66,13 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
+	// Subscribe to name query (gh#376 — deterministic name→ranked-IDs)
+	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.byName", c.handleQueryByNameNATS)
+	if err != nil {
+		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe byName query")
+	}
+	c.querySubscriptions = append(c.querySubscriptions, sub)
+
 	c.logger.Info("query handlers registered",
 		slog.Any("subjects", []string{
 			"graph.index.query.outgoing",
@@ -75,6 +82,7 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 			"graph.index.query.predicateList",
 			"graph.index.query.predicateStats",
 			"graph.index.query.predicateCompound",
+			"graph.index.query.byName",
 		}))
 
 	return nil

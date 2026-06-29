@@ -11,7 +11,12 @@ const (
 	BucketOutgoingIndex  = "OUTGOING_INDEX"
 
 	// Lookup indexes
-	BucketAliasIndex    = "ALIAS_INDEX"
+	BucketAliasIndex = "ALIAS_INDEX"
+	// BucketNameIndex maps a normalized (case-folded) human-readable name/title
+	// to the entities carrying it, for deterministic name→ranked-IDs lookup
+	// (graph.query.byName, gh#376). Complements ALIAS_INDEX, which excludes
+	// display-name (AliasTypeLabel) predicates.
+	BucketNameIndex     = "NAME_INDEX"
 	BucketSpatialIndex  = "SPATIAL_INDEX"
 	BucketTemporalIndex = "TEMPORAL_INDEX"
 	// BucketTemporalIndexReverse maps entityID -> current temporal bucket key.

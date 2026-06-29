@@ -28,6 +28,7 @@ func NewStaticRouter(logger *slog.Logger) *StaticRouter {
 			"predicateList":     "graph.index.query.predicateList",
 			"predicateStats":    "graph.index.query.predicateStats",
 			"predicateCompound": "graph.index.query.predicateCompound",
+			"byName":            "graph.index.query.byName",
 
 			// Spatial/Temporal -> specialized indexes
 			"spatial":  "graph.spatial.query.bounds",
