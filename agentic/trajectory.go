@@ -31,6 +31,11 @@ type TrajectoryStep struct {
 	ToolStatus    string `json:"tool_status,omitempty"`    // "success" | "failed"
 	ErrorMessage  string `json:"error_message,omitempty"`  // Raw error text; omitted on success
 	ErrorCategory string `json:"error_category,omitempty"` // ToolErrorKind string form; omitted on success
+	// URLsFetched lists external URLs a bash step fetched (curl/wget/httpie),
+	// derived from the command string (gh#146). Lets citation/audit/governance
+	// dashboards filter and count external reach independently of generic shell
+	// activity. Empty/omitted when the step fetched no URL.
+	URLsFetched []string `json:"url_fetched,omitempty"`
 }
 
 // Validate checks if the TrajectoryStep is valid

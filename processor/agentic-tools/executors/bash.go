@@ -123,6 +123,13 @@ func (e *BashExecutor) effectiveTimeout() time.Duration {
 }
 
 // ListTools returns the bash tool definition.
+//
+// Observability note (gh#146): when a bash command performs an external fetch
+// (curl/wget/httpie), the resulting trajectory step carries a first-class
+// url_fetched attribute derived from the command string (see
+// agentic.BashStepURLs / ExtractFetchedURLs), so citation/audit/governance
+// dashboards can filter and count external reach independently of generic shell
+// activity.
 func (e *BashExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{
 		{
