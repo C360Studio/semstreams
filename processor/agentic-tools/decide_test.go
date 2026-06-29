@@ -31,7 +31,25 @@ type recordingPublisher struct {
 	// migrated callers can assert they made the single atomic call
 	// rather than N per-triple calls.
 	batchCalls int
-	err        error
+	// createCalls records the number of CreateEntityWithTriples (birth)
+	// invocations; createdEntityID / createdMsgType capture the last birth's
+	// envelope so emit_diagnosis tests can assert the finding entity is born
+	// with the ops_diagnosis typed origin (gh#390).
+	createCalls     int
+	createdEntityID string
+	createdMsgType  message.Type
+	err             error
+}
+
+func (p *recordingPublisher) CreateEntityWithTriples(_ context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+	p.createCalls++
+	if p.err != nil {
+		return p.err
+	}
+	p.createdEntityID = entityID
+	p.createdMsgType = msgType
+	p.triples = append(p.triples, triples...)
+	return nil
 }
 
 func (p *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {

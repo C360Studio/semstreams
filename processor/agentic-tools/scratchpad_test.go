@@ -193,6 +193,10 @@ type atomicBatchFailurePublisher struct {
 	failWith error
 }
 
+func (p *atomicBatchFailurePublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, _ []message.Triple) error {
+	panic("atomicBatchFailurePublisher: CreateEntityWithTriples should not be called; scratchpad APPENDS onto the existing loop entity via AddTriplesBatch")
+}
+
 func (p *atomicBatchFailurePublisher) AddTriple(_ context.Context, _ message.Triple) error {
 	panic("atomicBatchFailurePublisher: AddTriple should not be called; scratchpad uses AddTriplesBatch")
 }

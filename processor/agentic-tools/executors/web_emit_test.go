@@ -44,6 +44,14 @@ func (p *recordingPublisher) AddTriplesBatch(_ context.Context, _ []message.Trip
 	panic("recordingPublisher: AddTriplesBatch unexpectedly called; web_search/http_request emit per-Subject via AddTriple")
 }
 
+// CreateEntityWithTriples satisfies the widened agentictools.TriplePublisher
+// interface. web_search / http_request only APPEND URL/back-link triples onto
+// existing entities — they never birth an entity — so this is never called;
+// present for interface conformance (gh#390).
+func (p *recordingPublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, _ []message.Triple) error {
+	panic("recordingPublisher: CreateEntityWithTriples unexpectedly called; web_search/http_request only append, never birth entities")
+}
+
 func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
