@@ -1951,11 +1951,13 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 			errCategory = string(agentic.ToolErrorUnknown)
 		}
 	}
+	toolName := h.loopManager.GetToolName(toolResult.CallID)
+	toolArgs := h.loopManager.GetToolArguments(toolResult.CallID)
 	return agentic.TrajectoryStep{
 		Timestamp:     time.Now(),
 		StepType:      "tool_call",
-		ToolName:      h.loopManager.GetToolName(toolResult.CallID),
-		ToolArguments: h.loopManager.GetToolArguments(toolResult.CallID),
+		ToolName:      toolName,
+		ToolArguments: toolArgs,
 		ToolResult:    toolResult.Content,
 		Duration:      h.computeToolDuration(toolResult.CallID),
 		Provider:      h.resolveProvider(entity.Model),
@@ -1963,6 +1965,9 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 		ToolStatus:    toolStatus,
 		ErrorMessage:  toolResult.Error,
 		ErrorCategory: errCategory,
+		// gh#146: surface external URL fetches from bash steps as a first-class
+		// attribute for citation/audit/governance dashboards.
+		URLsFetched: agentic.BashStepURLs(toolName, toolArgs),
 	}
 }
 

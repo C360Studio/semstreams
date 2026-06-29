@@ -2265,6 +2265,10 @@ components:
                                 type: string
                             tool_status:
                                 type: string
+                            url_fetched:
+                                items:
+                                    type: string
+                                type: array
                             utilization:
                                 type: number
                         required:
@@ -2515,6 +2519,10 @@ components:
                     type: string
                 tool_status:
                     type: string
+                url_fetched:
+                    items:
+                        type: string
+                    type: array
                 utilization:
                     type: number
             required:
