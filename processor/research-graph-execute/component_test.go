@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // fakeLoopStore replaces natsLoopStore for handleMessage tests.
@@ -111,11 +112,11 @@ func TestComponent_HandleMessage_WalkSeedsHappyPath(t *testing.T) {
 		},
 	}
 	gq := &fakeGraphQuery{
-		entityStateOut: []research.Evidence{{EntityID: "acme.ops.robotics.gcs.drone.001"}},
-		predicateWalkOut: []research.Evidence{
+		entityStateOut: []fusion.Evidence{{EntityID: "acme.ops.robotics.gcs.drone.001"}},
+		predicateWalkOut: []fusion.Evidence{
 			{EntityID: "acme.ops.robotics.gcs.event.maint-001", Score: 0.7},
 		},
-		bm25Out: []research.Evidence{{EntityID: "acme.ops.robotics.gcs.alert.battery", Score: 0.5}},
+		bm25Out: []fusion.Evidence{{EntityID: "acme.ops.robotics.gcs.alert.battery", Score: 0.5}},
 	}
 	c := newTestComponent(loops, gq)
 	c.handleMessage(context.Background(), "component.execute_subqueries.loop-1", nil)
@@ -150,9 +151,9 @@ func TestComponent_HandleMessage_DecomposeHappyPath(t *testing.T) {
 		},
 	}
 	gq := &fakeGraphQuery{
-		entityStateOut:   []research.Evidence{{EntityID: "sensor-001"}},
-		temporalRangeOut: []research.Evidence{{EntityID: "event-T1"}},
-		bm25Out:          []research.Evidence{{EntityID: "doc-abc", Score: 0.3}},
+		entityStateOut:   []fusion.Evidence{{EntityID: "sensor-001"}},
+		temporalRangeOut: []fusion.Evidence{{EntityID: "event-T1"}},
+		bm25Out:          []fusion.Evidence{{EntityID: "doc-abc", Score: 0.3}},
 	}
 	c := newTestComponent(loops, gq)
 	c.handleMessage(context.Background(), "component.execute_subqueries.loop-2", nil)

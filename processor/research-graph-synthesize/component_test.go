@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // fakeLoopStore replaces natsLoopStore. Records reads + writes so
@@ -110,7 +111,7 @@ func TestComponent_HandleMessage_HappyPath(t *testing.T) {
 		exec: &research.ExecutionOutput{
 			Topic:    "drone-001 maintenance",
 			Action:   research.ActionWalkSeeds,
-			Evidence: []research.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x", Score: 0.9}},
+			Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x", Score: 0.9}},
 		},
 		route: &research.RouteDecision{
 			Action: research.ActionWalkSeeds,
@@ -206,7 +207,7 @@ func TestComponent_HandleMessage_RouteMissingProceeds(t *testing.T) {
 		exec: &research.ExecutionOutput{
 			Topic:    "x",
 			Action:   research.ActionSynthesizeDirectly,
-			Evidence: []research.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+			Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
 		},
 		// route: nil
 	}
@@ -229,7 +230,7 @@ func TestComponent_HandleMessage_SynthesizerFailEmitsDegraded(t *testing.T) {
 		intent: &research.Intent{Topic: "x"},
 		exec: &research.ExecutionOutput{
 			Topic: "x", Action: research.ActionDecompose,
-			Evidence: []research.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+			Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
 		},
 	}
 	s := &fakeSynthesizer{content: `not JSON at all`}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // ExecutionOutput is the execute_subqueries component's emit:
@@ -33,7 +34,7 @@ type ExecutionOutput struct {
 	// may have produced no hits — assess_sufficiency surfaces this
 	// to the LLM as "you have nothing to synthesize from"; the
 	// chain doesn't error on empty).
-	Evidence []Evidence `json:"evidence,omitempty"`
+	Evidence []fusion.Evidence `json:"evidence,omitempty"`
 
 	// SubQueryCount is the number of sub-queries the materializer
 	// produced for this execution. Operator observability: tracks

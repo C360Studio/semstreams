@@ -8,6 +8,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // Production-decoder round-trip tests for the three ADR-045 payload
@@ -68,7 +69,7 @@ func TestResearchIntent_RoundTripThroughDecoder(t *testing.T) {
 
 func TestSearchResult_RoundTripThroughDecoder(t *testing.T) {
 	original := &research.SearchResult{
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{
 				EntityID:    "acme.ops.robotics.gcs.drone.001",
 				Tier:        "0",
@@ -414,7 +415,7 @@ func TestEvidence_ValidateAcceptsPhase2Tier(t *testing.T) {
 	// tighten the enum without realising Phase 2 fixtures depend on it.
 	for _, tier := range []string{"0", "1", "2"} {
 		t.Run("tier_"+tier, func(t *testing.T) {
-			e := &research.Evidence{EntityID: "x", Tier: tier, Source: "s"}
+			e := &fusion.Evidence{EntityID: "x", Tier: tier, Source: "s"}
 			if err := e.Validate(); err != nil {
 				t.Errorf("Validate(tier=%q) = %v, want nil", tier, err)
 			}
@@ -437,7 +438,7 @@ func TestSearchResult_ValidateRejectsInvalidEvidence(t *testing.T) {
 			name: "evidence missing entity_id",
 			result: research.SearchResult{
 				Synthesis: "x",
-				Evidence:  []research.Evidence{{Tier: "0", Source: "classifier"}},
+				Evidence:  []fusion.Evidence{{Tier: "0", Source: "classifier"}},
 			},
 			wantSub: "entity_id required",
 		},
@@ -445,7 +446,7 @@ func TestSearchResult_ValidateRejectsInvalidEvidence(t *testing.T) {
 			name: "evidence bad tier",
 			result: research.SearchResult{
 				Synthesis: "x",
-				Evidence:  []research.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
+				Evidence:  []fusion.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
 			},
 			wantSub: "tier",
 		},
@@ -726,7 +727,7 @@ func TestExecutionOutput_RoundTripThroughDecoder(t *testing.T) {
 	original := &research.ExecutionOutput{
 		Topic:  "drone-001 maintenance events in the last 24 hours",
 		Action: research.ActionWalkSeeds,
-		Evidence: []research.Evidence{
+		Evidence: []fusion.Evidence{
 			{EntityID: "acme.ops.robotics.gcs.drone.001", Tier: "0", Source: "walk_seeds.entity_state", Score: 0.95},
 			{EntityID: "acme.ops.robotics.gcs.event.maint-001", Tier: "0", Source: "walk_seeds.predicate_walk", Score: 0.82, SnippetText: "scheduled maintenance window"},
 			{EntityID: "acme.ops.robotics.gcs.alert.battery", Tier: "1", Source: "walk_seeds.bm25_coverage", Score: 0.55},
@@ -823,7 +824,7 @@ func TestExecutionOutput_ValidateRejectsInvalid(t *testing.T) {
 			output: research.ExecutionOutput{
 				Topic:    "x",
 				Action:   research.ActionWalkSeeds,
-				Evidence: []research.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
+				Evidence: []fusion.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
 			},
 			wantSub: "tier",
 		},

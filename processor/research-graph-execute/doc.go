@@ -9,7 +9,7 @@
 // AGENT_LOOPS, materializes one or more typed sub-queries from
 // the routing intent, executes them in parallel across multiple
 // retrieval tiers, normalises + dedups results, enforces the
-// caller's token budget, and writes a research.Evidence array
+// caller's token budget, and writes a fusion.Evidence array
 // envelope plus an execute.complete.<loop_id> trigger key that R3
 // watches to dispatch the assess_sufficiency stage.
 //
@@ -38,9 +38,10 @@
 //     research-graph-classify uses for initial candidate retrieval).
 //     Tier 2 (neural) is deferred to Phase 2.
 //
-//   - Sub-query types are component-internal — defined here, not in
-//     agentic/research/. Reshapeable without cross-package churn if
-//     Phase 2 learns better primitives.
+//   - Sub-query types live in pkg/fusion (generic leaf package).
+//     Reshapeable without cross-package churn if Phase 2 learns
+//     better primitives. Type aliases in subquery.go keep this
+//     package's call sites unchanged.
 //
 //   - Parallel fan-out via errgroup with a bounded concurrency cap
 //     (config-driven). Per-tier ordering with recency tie-break;

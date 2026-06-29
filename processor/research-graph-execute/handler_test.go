@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
 // fakeGraphQuery records what was called and returns canned
@@ -26,10 +27,10 @@ type fakeGraphQuery struct {
 	temporalRangeCalls int
 	bm25Calls          int
 
-	entityStateOut   []research.Evidence
-	predicateWalkOut []research.Evidence
-	temporalRangeOut []research.Evidence
-	bm25Out          []research.Evidence
+	entityStateOut   []fusion.Evidence
+	predicateWalkOut []fusion.Evidence
+	temporalRangeOut []fusion.Evidence
+	bm25Out          []fusion.Evidence
 
 	entityStateErr   error
 	predicateWalkErr error
@@ -37,7 +38,7 @@ type fakeGraphQuery struct {
 	bm25Err          error
 }
 
-func (f *fakeGraphQuery) EntityState(_ context.Context, _ EntityStateArgs, tier, source string, _ int) ([]research.Evidence, error) {
+func (f *fakeGraphQuery) EntityState(_ context.Context, _ EntityStateArgs, tier, source string, _ int) ([]fusion.Evidence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.entityStateCalls++
@@ -47,7 +48,7 @@ func (f *fakeGraphQuery) EntityState(_ context.Context, _ EntityStateArgs, tier,
 	return stampEvidence(f.entityStateOut, tier, source), nil
 }
 
-func (f *fakeGraphQuery) PredicateWalk(_ context.Context, _ PredicateWalkArgs, tier, source string, _ int) ([]research.Evidence, error) {
+func (f *fakeGraphQuery) PredicateWalk(_ context.Context, _ PredicateWalkArgs, tier, source string, _ int) ([]fusion.Evidence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.predicateWalkCalls++
@@ -57,7 +58,7 @@ func (f *fakeGraphQuery) PredicateWalk(_ context.Context, _ PredicateWalkArgs, t
 	return stampEvidence(f.predicateWalkOut, tier, source), nil
 }
 
-func (f *fakeGraphQuery) TemporalRange(_ context.Context, _ TemporalRangeArgs, tier, source string, _ int) ([]research.Evidence, error) {
+func (f *fakeGraphQuery) TemporalRange(_ context.Context, _ TemporalRangeArgs, tier, source string, _ int) ([]fusion.Evidence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.temporalRangeCalls++
@@ -67,7 +68,7 @@ func (f *fakeGraphQuery) TemporalRange(_ context.Context, _ TemporalRangeArgs, t
 	return stampEvidence(f.temporalRangeOut, tier, source), nil
 }
 
-func (f *fakeGraphQuery) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]research.Evidence, error) {
+func (f *fakeGraphQuery) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]fusion.Evidence, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bm25Calls++
@@ -81,8 +82,8 @@ func (f *fakeGraphQuery) BM25(_ context.Context, _ BM25Args, tier, source string
 // contract requires. Test fixtures supply Evidence with just
 // EntityID + Score (the discriminating fields); the contract-
 // stamping mirrors what production adapters do.
-func stampEvidence(in []research.Evidence, tier, source string) []research.Evidence {
-	out := make([]research.Evidence, len(in))
+func stampEvidence(in []fusion.Evidence, tier, source string) []fusion.Evidence {
+	out := make([]fusion.Evidence, len(in))
 	for i, e := range in {
 		e.Tier = tier
 		e.Source = source
@@ -166,9 +167,9 @@ func TestResolveSeedRefs_AllDropped(t *testing.T) {
 
 func TestExecuteAll_HappyPath(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut:   []research.Evidence{{EntityID: "e1", Score: 0.9}},
-		predicateWalkOut: []research.Evidence{{EntityID: "e2", Score: 0.7}},
-		bm25Out:          []research.Evidence{{EntityID: "e3", Score: 0.5}},
+		entityStateOut:   []fusion.Evidence{{EntityID: "e1", Score: 0.9}},
+		predicateWalkOut: []fusion.Evidence{{EntityID: "e2", Score: 0.7}},
+		bm25Out:          []fusion.Evidence{{EntityID: "e3", Score: 0.5}},
 	}
 	queries := []SubQuery{
 		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
@@ -200,8 +201,8 @@ func TestExecuteAll_HappyPath(t *testing.T) {
 
 func TestExecuteAll_PerSubqueryErrorIsDegrading(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut: []research.Evidence{{EntityID: "e1", Score: 0.9}},
-		bm25Err:        errors.New("BM25 down"),
+		entityStateOut: []fusion.Evidence{{EntityID: "e1", Score: 0.9}},
+		bm25Err:        errBM25Down,
 	}
 	queries := []SubQuery{
 		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
@@ -224,6 +225,8 @@ func TestExecuteAll_PerSubqueryErrorIsDegrading(t *testing.T) {
 	}
 }
 
+var errBM25Down = errors.New("BM25 down")
+
 func TestExecuteAll_EmptyQueriesIsDegraded(t *testing.T) {
 	out, err := executeAll(context.Background(), &fakeGraphQuery{}, nil,
 		&research.Intent{Topic: "x"}, research.ActionWalkSeeds, 4, 10, quietLogger())
@@ -235,111 +238,6 @@ func TestExecuteAll_EmptyQueriesIsDegraded(t *testing.T) {
 	}
 	if !strings.Contains(out.DegradedReason, "zero sub-queries") {
 		t.Errorf("degraded reason should explain empty queries: %q", out.DegradedReason)
-	}
-}
-
-// --- dedup ---
-
-func TestDedupEvidence_TierZeroWinsOverTierOne(t *testing.T) {
-	in := []research.Evidence{
-		{EntityID: "e1", Tier: "1", Source: "bm25", Score: 0.9}, // tier 1, high score
-		{EntityID: "e1", Tier: "0", Source: "es", Score: 0.3},   // tier 0, low score — should win
-		{EntityID: "e2", Tier: "0", Source: "pw", Score: 0.7},
-	}
-	out := dedupEvidence(in)
-	if len(out) != 2 {
-		t.Fatalf("dedup count: got %d, want 2", len(out))
-	}
-	var foundE1 research.Evidence
-	for _, e := range out {
-		if e.EntityID == "e1" {
-			foundE1 = e
-		}
-	}
-	if foundE1.Tier != "0" || foundE1.Source != "es" {
-		t.Errorf("dedup should pick Tier 0 e1, got %+v", foundE1)
-	}
-}
-
-func TestDedupEvidence_HigherScoreWinsWithinTier(t *testing.T) {
-	in := []research.Evidence{
-		{EntityID: "e1", Tier: "0", Source: "a", Score: 0.3},
-		{EntityID: "e1", Tier: "0", Source: "b", Score: 0.9}, // should win
-	}
-	out := dedupEvidence(in)
-	if len(out) != 1 {
-		t.Fatalf("dedup count: got %d, want 1", len(out))
-	}
-	if out[0].Source != "b" || out[0].Score != 0.9 {
-		t.Errorf("dedup should pick higher-score evidence within tier, got %+v", out[0])
-	}
-}
-
-func TestDedupEvidence_SkipsEmptyEntityID(t *testing.T) {
-	in := []research.Evidence{
-		{EntityID: "", Tier: "0", Source: "x"},
-		{EntityID: "e1", Tier: "0", Source: "x"},
-	}
-	out := dedupEvidence(in)
-	if len(out) != 1 {
-		t.Errorf("dedup should skip empty-ID evidence; got %d entries", len(out))
-	}
-}
-
-// --- sort ---
-
-func TestSortEvidence_TierThenScoreThenID(t *testing.T) {
-	ev := []research.Evidence{
-		{EntityID: "z", Tier: "1", Score: 0.9},
-		{EntityID: "a", Tier: "0", Score: 0.3},
-		{EntityID: "b", Tier: "0", Score: 0.9},
-		{EntityID: "c", Tier: "0", Score: 0.9},
-	}
-	sortEvidence(ev)
-	// Want: Tier 0 sorted by score-desc then ID-asc, then Tier 1.
-	wantOrder := []string{"b", "c", "a", "z"}
-	for i, want := range wantOrder {
-		if ev[i].EntityID != want {
-			t.Errorf("sortEvidence[%d]: got %q, want %q (full order: %v)", i, ev[i].EntityID, want, evIDs(ev))
-		}
-	}
-}
-
-func evIDs(ev []research.Evidence) []string {
-	out := make([]string, len(ev))
-	for i, e := range ev {
-		out[i] = e.EntityID
-	}
-	return out
-}
-
-// --- budget enforcement ---
-
-func TestEnforceBudget_DropsLowestRanked(t *testing.T) {
-	// 3 evidence entries, each ~5 tokens (estimateEvidenceTokens
-	// rough). Budget 8 should keep 1.
-	in := []research.Evidence{
-		{EntityID: "first", Tier: "0", Source: "src", SnippetText: "snip"},
-		{EntityID: "secnd", Tier: "0", Source: "src", SnippetText: "snip"},
-		{EntityID: "third", Tier: "0", Source: "src", SnippetText: "snip"},
-	}
-	out, used := enforceBudget(in, 8)
-	if len(out) < 1 || len(out) > 2 {
-		t.Errorf("budget enforcement should keep 1-2 evidence under tight budget; got %d (used=%d)", len(out), used)
-	}
-	if used > 8 {
-		t.Errorf("used %d exceeded budget 8", used)
-	}
-}
-
-func TestEnforceBudget_GenerousBudgetKeepsAll(t *testing.T) {
-	in := []research.Evidence{
-		{EntityID: "e1", Tier: "0", Source: "x"},
-		{EntityID: "e2", Tier: "1", Source: "x"},
-	}
-	out, _ := enforceBudget(in, 1_000_000)
-	if len(out) != 2 {
-		t.Errorf("generous budget should keep all evidence: got %d, want 2", len(out))
 	}
 }
 
@@ -389,17 +287,17 @@ type countingDelayedGQ struct {
 	delay time.Duration
 }
 
-func (g *countingDelayedGQ) EntityState(_ context.Context, _ EntityStateArgs, _, _ string, _ int) ([]research.Evidence, error) {
+func (g *countingDelayedGQ) EntityState(_ context.Context, _ EntityStateArgs, _, _ string, _ int) ([]fusion.Evidence, error) {
 	return nil, nil
 }
-func (g *countingDelayedGQ) PredicateWalk(_ context.Context, _ PredicateWalkArgs, _, _ string, _ int) ([]research.Evidence, error) {
+func (g *countingDelayedGQ) PredicateWalk(_ context.Context, _ PredicateWalkArgs, _, _ string, _ int) ([]fusion.Evidence, error) {
 	return nil, nil
 }
-func (g *countingDelayedGQ) TemporalRange(_ context.Context, _ TemporalRangeArgs, _, _ string, _ int) ([]research.Evidence, error) {
+func (g *countingDelayedGQ) TemporalRange(_ context.Context, _ TemporalRangeArgs, _, _ string, _ int) ([]fusion.Evidence, error) {
 	return nil, nil
 }
-func (g *countingDelayedGQ) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]research.Evidence, error) {
+func (g *countingDelayedGQ) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]fusion.Evidence, error) {
 	atomic.AddInt64(&g.calls, 1)
 	time.Sleep(g.delay)
-	return []research.Evidence{{EntityID: "e", Tier: tier, Source: source, Score: 0.5}}, nil
+	return []fusion.Evidence{{EntityID: "e", Tier: tier, Source: source, Score: 0.5}}, nil
 }
