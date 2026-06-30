@@ -34,8 +34,12 @@ var (
 //   - Pluggable MetadataExtractor (inject custom metadata extraction)
 //   - No hardcoded semantic requirements
 type Store struct {
-	client            *natsclient.Client
-	bucketName        string
+	client     *natsclient.Client
+	bucketName string
+	// instanceName is stamped into StorageReference.StorageInstance (gh#400) —
+	// the canonical handle a resolver maps back to this store. Defaults to
+	// bucketName when the config leaves it empty.
+	instanceName      string
 	store             jetstream.ObjectStore
 	dataCache         cache.Cache[[]byte]
 	keyGenerator      storage.KeyGenerator
@@ -61,6 +65,15 @@ func (s *Store) SetDecoder(d *message.Decoder) {
 	s.decoder = d
 }
 
+// InstanceName returns the value this store stamps into
+// StorageReference.StorageInstance (gh#400) — the canonical handle a resolver
+// maps back to this store. It is the component instance name when the config
+// supplied one, else the bucket name. Exported so a consumer (or a test) can
+// confirm what a ref produced by this store will resolve against.
+func (s *Store) InstanceName() string {
+	return s.instanceName
+}
+
 // NewStoreWithConfig creates a new ObjectStore with cache configuration.
 // Uses NATS ObjectStore (NOT KeyValue) for immutable message storage.
 func NewStoreWithConfig(ctx context.Context, client *natsclient.Client, cfg Config) (*Store, error) {
@@ -78,6 +91,15 @@ func NewStoreWithConfigAndMetrics(
 	bucketName := cfg.BucketName
 	if bucketName == "" {
 		bucketName = "MESSAGES"
+	}
+
+	// gh#400: stamp StorageInstance with the component instance name when the
+	// caller provides one; otherwise fall back to the (already-defaulted) bucket
+	// name so the stamped instance is never empty (preserves prior behavior for
+	// standalone callers).
+	instanceName := cfg.InstanceName
+	if instanceName == "" {
+		instanceName = bucketName
 	}
 
 	js, err := client.JetStream()
@@ -127,6 +149,7 @@ func NewStoreWithConfigAndMetrics(
 	return &Store{
 		client:            client,
 		bucketName:        bucketName,
+		instanceName:      instanceName,
 		store:             store,
 		dataCache:         dataCache,
 		keyGenerator:      keyGen,
@@ -428,9 +451,12 @@ func (s *Store) StoreContent(ctx context.Context, cs message.ContentStorable) (*
 		s.dataCache.Set(key, data)
 	}
 
-	// Return reference
+	// Return reference. gh#400: stamp the canonical instance name (not the
+	// bucket name) so a resolver keyed on the component instance name — and the
+	// component's own StoredMessage emit path, which already stamps
+	// instanceName — agree on one StorageInstance for this store.
 	return &message.StorageReference{
-		StorageInstance: s.bucketName,
+		StorageInstance: s.instanceName,
 		Key:             key,
 		ContentType:     "application/json",
 		Size:            int64(len(data)),
