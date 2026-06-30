@@ -162,6 +162,13 @@ func (c *Component) Start(ctx context.Context) error {
 
 	c.logger.Debug("Creating ObjectStore", "name", c.instanceName, "bucket", c.config.BucketName)
 
+	// gh#400: thread the component instance name into the store so its
+	// StoreContent path stamps the SAME StorageInstance as this component's
+	// StoredMessage emit path (which already uses c.instanceName). Without this
+	// the store would fall back to the bucket name and the two write paths would
+	// disagree, leaving a resolver unable to resolve one of them.
+	c.config.InstanceName = c.instanceName
+
 	// Create the underlying ObjectStore with metrics support
 	store, err := NewStoreWithConfigAndMetrics(ctx, c.natsClient, c.config, c.metricsRegistry)
 	if store != nil {

@@ -888,3 +888,64 @@ func TestIntegration_ExtractTextFields_KeyMapping(t *testing.T) {
 	assert.Equal(t, "title", storedContent.ContentFields[message.ContentRoleTitle],
 		"ContentFields should map title role to title fieldName")
 }
+
+// gh#400: StorageReference.StorageInstance must be stamped with the canonical
+// component instance name, consistently across both write paths. Before the
+// fix, the component's StoredMessage emit path stamped c.instanceName while the
+// Store's StoreContent path stamped the bucket name — a resolver (the fusion
+// hydration deref helper, ADR-062 #399, the first reader) keyed on one could
+// not resolve refs stamped with the other.
+
+// TestIntegration_GH400_StoreContentStampsInstanceName locks the fix: when the
+// component threads its instance name into the store config (InstanceName set,
+// distinct from the bucket), StoreContent stamps the INSTANCE name — the same
+// value the component's emitStoredMessage path uses — not the bucket name.
+func TestIntegration_GH400_StoreContentStampsInstanceName(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	ctx := context.Background()
+
+	const instanceName = "objectstore" // what the component sets as c.instanceName
+	config := objectstore.Config{
+		BucketName:   "TEST_GH400_INSTANCE", // deliberately != instanceName
+		InstanceName: instanceName,
+	}
+	store, err := objectstore.NewStoreWithConfig(ctx, natsClient, config)
+	require.NoError(t, err)
+	defer store.Close()
+
+	doc := &document.Document{
+		ID: "gh400-doc-001", Title: "Canonical Instance", Description: "ref stamping",
+		Body: "verbatim body", Category: "test", OrgID: "org", Platform: "plat",
+	}
+
+	ref, err := store.StoreContent(ctx, doc)
+	require.NoError(t, err)
+	assert.Equal(t, instanceName, ref.StorageInstance,
+		"StoreContent must stamp the component instance name (gh#400), matching the StoredMessage emit path")
+	assert.NotEqual(t, config.BucketName, ref.StorageInstance,
+		"StoreContent must NOT stamp the bucket name (the gh#400 bug)")
+}
+
+// TestIntegration_GH400_StoreContentDefaultsToBucketName locks the standalone
+// fallback: a Store constructed without an InstanceName (direct callers like
+// agentic-loop / graph-embedding that have no component instance name) stamps
+// the bucket name, preserving prior behavior so the instance is never empty.
+func TestIntegration_GH400_StoreContentDefaultsToBucketName(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	ctx := context.Background()
+
+	config := objectstore.Config{BucketName: "TEST_GH400_DEFAULT"} // no InstanceName
+	store, err := objectstore.NewStoreWithConfig(ctx, natsClient, config)
+	require.NoError(t, err)
+	defer store.Close()
+
+	doc := &document.Document{
+		ID: "gh400-doc-002", Title: "Default Bucket", Description: "fallback",
+		Body: "verbatim body", Category: "test", OrgID: "org", Platform: "plat",
+	}
+
+	ref, err := store.StoreContent(ctx, doc)
+	require.NoError(t, err)
+	assert.Equal(t, config.BucketName, ref.StorageInstance,
+		"with no InstanceName, StoreContent defaults StorageInstance to the bucket name")
+}

@@ -24,6 +24,15 @@ type Config struct {
 	// BucketName is the NATS JetStream ObjectStore bucket name
 	BucketName string `json:"bucket_name" schema:"type:string,description:NATS ObjectStore bucket name,default:MESSAGES,category:basic"`
 
+	// InstanceName is the storage COMPONENT instance name stamped into every
+	// StorageReference.StorageInstance this store produces (gh#400). It is the
+	// canonical handle a resolver (e.g. the fusion hydration deref helper,
+	// ADR-062 #399) maps back to this store. Set by the objectstore Component
+	// from its instance name; when empty (standalone Store callers) it defaults
+	// to BucketName so the stamped instance is never empty. Internal wiring, not
+	// operator-configured — hence schema-excluded like the pluggable generators.
+	InstanceName string `json:"-" schema:"-"`
+
 	// DataCache configures the in-memory cache for retrieved objects
 	DataCache cache.Config `json:"data_cache" schema:"type:object,description:Cache configuration for stored objects,category:performance"`
 
