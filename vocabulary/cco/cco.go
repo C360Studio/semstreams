@@ -99,7 +99,9 @@ const (
 // Agent Classes
 //
 // Entities capable of bearing roles and performing intentional acts.
-// All agents extend BFO:Object.
+// All agents extend BFO:MaterialEntity (CCO v1.4: cco:Agent ⊑ BFO_0000040;
+// a group of agents is an ObjectAggregate, so the branch does not subsume
+// under Object). See vocabulary/cco/hierarchy.go for the encoded is-a tree.
 const (
 	// Agent is an entity capable of performing intentional acts.
 	// Root class for all agent types.
