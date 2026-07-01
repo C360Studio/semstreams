@@ -326,3 +326,45 @@ func TestRegisterWithRuleOpaque(t *testing.T) {
 	// at registration time per ADR-036)
 	assert.False(t, IsRuleOpaque("test.unknown.field"))
 }
+
+// TestRegisterWithRoleAndWeight verifies the predicate-salience ranking signal
+// (ADR-062 increment 5, gh#396 / semsource ask #2) round-trips through the
+// registry: WithRole/WithWeight surface on PredicateMetadata, and undeclared
+// predicates default to RoleUnspecified / weight 0.
+func TestRegisterWithRoleAndWeight(t *testing.T) {
+	originalRegistry := make(map[string]PredicateMetadata)
+	registryMu.RLock()
+	for k, v := range predicateRegistry {
+		originalRegistry[k] = v
+	}
+	registryMu.RUnlock()
+	defer func() {
+		registryMu.Lock()
+		predicateRegistry = originalRegistry
+		registryMu.Unlock()
+	}()
+
+	ClearRegistry()
+
+	Register("test.identity.serial",
+		WithDescription("Serial number"),
+		WithRole(RoleIdentity),
+		WithWeight(1.0))
+
+	// A predicate registered without the salience options keeps the zero values.
+	Register("test.meta.updated",
+		WithDescription("Last update timestamp"))
+
+	meta := GetPredicateMetadata("test.identity.serial")
+	require.NotNil(t, meta)
+	assert.Equal(t, RoleIdentity, meta.Role)
+	assert.Equal(t, 1.0, meta.Weight)
+
+	neutral := GetPredicateMetadata("test.meta.updated")
+	require.NotNil(t, neutral)
+	assert.Equal(t, RoleUnspecified, neutral.Role, "undeclared role defaults to unspecified")
+	assert.Equal(t, 0.0, neutral.Weight, "undeclared weight defaults to 0 (neutral)")
+
+	// Unregistered predicates return nil metadata (no role/weight).
+	assert.Nil(t, GetPredicateMetadata("test.unknown.field"))
+}

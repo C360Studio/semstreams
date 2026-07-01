@@ -285,3 +285,86 @@ func TestEngine_NilBodyResolver(t *testing.T) {
 		t.Errorf("expected one node with empty body, got %+v", resp.Nodes)
 	}
 }
+
+// fakeSignals is an in-memory RankSignals for ranking tests.
+type fakeSignals struct {
+	depth    map[string]float64 // class IRI → specificity
+	salience map[string]float64 // predicate → weight
+}
+
+func (f fakeSignals) ClassSpecificity(iri string) float64 { return f.depth[iri] }
+func (f fakeSignals) PredicateSalience(p string) float64  { return f.salience[p] }
+
+// rankingPair sets up two entities A,B resolved in that order under a query with
+// NO lexical match, so ranking is pure resolve-order (A ahead of B by
+// resolveScale) unless a signal overcomes the gap.
+func rankingPair(aClass, bClass string, bExtra ...message.Triple) *fakeGraph {
+	a := entity("acme.ops.code.repo.symbol.Apple", "Apple", "a.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: aClass})
+	bTriples := append([]message.Triple{{Predicate: "entity.ontology.class", Object: bClass}}, bExtra...)
+	b := entity("acme.ops.code.repo.symbol.Banana", "Banana", "b.go", bTriples...)
+	return &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"zzz": {a.ID, b.ID}},
+		entities: map[string]*fusion.Entity{a.ID: a, b.ID: b},
+	}
+}
+
+func topName(t *testing.T, eng *fusion.Engine) string {
+	t.Helper()
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "zzz"}, refLens{})
+	if err != nil {
+		t.Fatalf("Fuse: %v", err)
+	}
+	if len(resp.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(resp.Nodes))
+	}
+	return resp.Nodes[0].Name
+}
+
+// TestEngine_NilSignals_ResolveOrderUnchanged: with no RankSignals, ranking is
+// exactly resolve-order — the increments 1–4 behavior (A resolved first wins).
+func TestEngine_NilSignals_ResolveOrderUnchanged(t *testing.T) {
+	g := rankingPair("http://x/Vague", "http://x/Specific")
+	eng := fusion.NewEngine(g, nil) // no signals
+	if got := topName(t, eng); got != "Apple" {
+		t.Errorf("top = %q, want Apple (resolve order, no signals)", got)
+	}
+}
+
+// TestEngine_Signals_OntologySpecificityReorders: B's deeper ontology class
+// overcomes the one-position resolve gap, so B reorders ahead of A.
+func TestEngine_Signals_OntologySpecificityReorders(t *testing.T) {
+	g := rankingPair("http://x/Vague", "http://x/Specific")
+	// resolve gap = resolveScale (4.0). ontologyScale*depth for B = 1.5*4 = 6 > 4.
+	sig := fakeSignals{depth: map[string]float64{"http://x/Vague": 0, "http://x/Specific": 4}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	if got := topName(t, eng); got != "Banana" {
+		t.Errorf("top = %q, want Banana (deeper ontology class reorders ahead)", got)
+	}
+}
+
+// TestEngine_Signals_PredicateSalienceReorders: B carries a high-salience
+// predicate that overcomes the resolve gap.
+func TestEngine_Signals_PredicateSalienceReorders(t *testing.T) {
+	g := rankingPair("http://x/Same", "http://x/Same",
+		message.Triple{Predicate: "acme.identity.serial", Object: "SN-1"})
+	// resolve gap = 4.0. salienceScale*weight for B = 3.0*2.0 = 6 > 4.
+	sig := fakeSignals{salience: map[string]float64{"acme.identity.serial": 2.0}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	if got := topName(t, eng); got != "Banana" {
+		t.Errorf("top = %q, want Banana (salient predicate reorders ahead)", got)
+	}
+}
+
+// TestEngine_Signals_TooSmallToReorder: a signal smaller than the resolve gap
+// does NOT flip order — signals are secondary reorderings, not overrides.
+func TestEngine_Signals_TooSmallToReorder(t *testing.T) {
+	g := rankingPair("http://x/Vague", "http://x/Specific")
+	// ontologyScale*1 = 1.5 < resolve gap 4.0 → A (resolved first) stays on top.
+	sig := fakeSignals{depth: map[string]float64{"http://x/Vague": 0, "http://x/Specific": 1}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	if got := topName(t, eng); got != "Apple" {
+		t.Errorf("top = %q, want Apple (sub-gap signal must not override resolve order)", got)
+	}
+}

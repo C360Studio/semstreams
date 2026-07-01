@@ -26,13 +26,18 @@ const (
 )
 
 // Ranking weights. Resolve order (the graph's own index/semantic ranking) is the
-// base signal; lexical name match reorders locally. Ontology-coherence reordering
-// is gh#376 increment 5.
+// base signal; lexical name match reorders locally. Ontology specificity and
+// predicate salience (gh#376 increment 5) are SECONDARY reorderings folded in
+// only when RankSignals is attached — deliberately small next to resolveScale
+// (up to resolveScale×N) and lexExact so they break ties / nudge within a
+// resolve-lexical tier rather than dominating the graph's own ranking.
 const (
-	lexExact     = 40.0
-	lexPrefix    = 20.0
-	lexContains  = 8.0
-	resolveScale = 4.0 // base score per resolve-rank position
+	lexExact      = 40.0
+	lexPrefix     = 20.0
+	lexContains   = 8.0
+	resolveScale  = 4.0 // base score per resolve-rank position
+	ontologyScale = 1.5 // per ontology-depth level (class specificity)
+	salienceScale = 3.0 // per unit of an entity's max predicate salience
 )
 
 // ontologyClassPredicate is the stamped BFO/CCO class triple (semsource ADR-0005).
@@ -44,14 +49,24 @@ const ontologyClassPredicate = "entity.ontology.class"
 // Engine runs the lens-driven deterministic fusion pipeline over a
 // RetrievalClient, hydrating verbatim bodies through a BodyResolver.
 type Engine struct {
-	graph RetrievalClient
-	body  *BodyResolver
+	graph   RetrievalClient
+	body    *BodyResolver
+	signals RankSignals // optional; nil → resolve-order + lexical ranking only
 }
 
 // NewEngine builds a lens-driven engine. body may be nil — node bodies are then
 // omitted (the response degrades gracefully rather than panicking).
 func NewEngine(graph RetrievalClient, body *BodyResolver) *Engine {
 	return &Engine{graph: graph, body: body}
+}
+
+// WithSignals attaches the framework ranking signals — ontology specificity +
+// predicate salience (ADR-062 increment 5, gh#396) — folded into ranking on top
+// of resolve-order + lexical. Returns the engine for chaining. Passing nil (the
+// default) keeps ranking at resolve-order + lexical.
+func (e *Engine) WithSignals(s RankSignals) *Engine {
+	e.signals = s
+	return e
 }
 
 // Fuse resolves req against the graph through lens and returns the fused
@@ -86,7 +101,7 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	for i, ent := range entities {
 		names[i] = lens.Label(ent)
 	}
-	ranked := rankEntities(entities, names, req.Query)
+	ranked := e.rankEntities(entities, names, req.Query)
 
 	wants := wantSet(req.Want)
 	resp := Response{Index: status, Provenance: ProvenanceForMode(mode), ContractVersion: ContractVersion}
@@ -224,10 +239,11 @@ func lineRange(l [2]int) []int {
 }
 
 // rankEntities orders entities (given in resolve order) by resolve-rank base +
-// lexical name match. names[i] is entity[i]'s display name. Ontology-coherence
-// reordering is gh#376 increment 5; until then resolve order + lexical is the
-// deterministic signal.
-func rankEntities(entities []*Entity, names []string, query string) []*Entity {
+// lexical name match, plus — when RankSignals is attached (increment 5) —
+// ontology specificity and predicate salience as secondary reorderings.
+// names[i] is entity[i]'s display name. With no signals the result is exactly
+// resolve order + lexical (increments 1–4).
+func (e *Engine) rankEntities(entities []*Entity, names []string, query string) []*Entity {
 	q := strings.ToLower(strings.TrimSpace(query))
 	type scored struct {
 		e   *Entity
@@ -238,6 +254,10 @@ func rankEntities(entities []*Entity, names []string, query string) []*Entity {
 	for i, ent := range entities {
 		s := resolveScale * float64(len(entities)-i)
 		s += lexicalScore(q, strings.ToLower(names[i]))
+		if e.signals != nil {
+			s += ontologyScale * e.signals.ClassSpecificity(classOf(ent))
+			s += salienceScale * entitySalience(ent, e.signals)
+		}
 		arr[i] = scored{ent, s, i}
 	}
 	sort.SliceStable(arr, func(a, b int) bool {
@@ -251,6 +271,20 @@ func rankEntities(entities []*Entity, names []string, query string) []*Entity {
 		out[i] = arr[i].e
 	}
 	return out
+}
+
+// entitySalience is an entity's ranking salience: the maximum stored weight over
+// its predicates (the single most salient fact it carries). Max, not sum, so a
+// densely-annotated entity does not outrank a sharply-identified one purely on
+// fact count.
+func entitySalience(ent *Entity, sig RankSignals) float64 {
+	var best float64
+	for i := range ent.Triples {
+		if w := sig.PredicateSalience(ent.Triples[i].Predicate); w > best {
+			best = w
+		}
+	}
+	return best
 }
 
 // lexicalScore scores a name against a lowercased query.

@@ -414,7 +414,43 @@ type PredicateMetadata struct {
 	// avoids LLM-on-LLM checklist Goodhart by keeping content out of
 	// the rule-engine's branching surface.
 	RuleOpaque bool
+
+	// Role is the predicate's semantic role — a first-class, stored ranking
+	// signal (ADR-062 increment 5, gh#396 / semsource ask #2). Consumers (e.g.
+	// the deterministic fusion ranker) read it instead of pattern-matching
+	// predicate names. Empty (RoleUnspecified) when not declared. This is a
+	// semstreams ranking annotation, not an ontology assertion.
+	Role PredicateRole
+
+	// Weight is the predicate's salience weight for ranking (higher = more
+	// salient). 0 means unweighted (neutral). Lets a ranker prefer entities
+	// carrying more salient facts without hard-coding a per-product table.
+	Weight float64
 }
+
+// PredicateRole classifies a predicate's semantic role so a ranker can weigh
+// facts without pattern-matching predicate names (ADR-062 increment 5, semsource
+// ask #2). It is a semstreams ranking annotation, deliberately coarse — not an
+// ontology relation type.
+type PredicateRole string
+
+// The predicate roles. RoleUnspecified is the zero value (not declared).
+const (
+	// RoleUnspecified is the default — no declared role.
+	RoleUnspecified PredicateRole = ""
+	// RoleIdentity uniquely identifies the entity (ids, serials, keys).
+	RoleIdentity PredicateRole = "identity"
+	// RoleLabel is a human-facing display name or title.
+	RoleLabel PredicateRole = "label"
+	// RoleRelationship links the entity to another entity.
+	RoleRelationship PredicateRole = "relationship"
+	// RoleMetric is a measured or quantitative value.
+	RoleMetric PredicateRole = "metric"
+	// RoleDescriptive is free-form descriptive text about the entity.
+	RoleDescriptive PredicateRole = "descriptive"
+	// RoleMetadata is provenance / housekeeping (timestamps, versions, sources).
+	RoleMetadata PredicateRole = "metadata"
+)
 
 // IsValidPredicate checks if a predicate follows the three-level dotted notation
 // and matches the expected format: domain.category.property
