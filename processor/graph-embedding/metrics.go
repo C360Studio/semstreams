@@ -16,6 +16,12 @@ type embeddingMetrics struct {
 	embeddingDedupHits  prometheus.Counter
 	embeddingPending    prometheus.Gauge
 	kvOperations        *prometheus.CounterVec
+	// contentUnresolved counts entities whose offloaded BODY (a StorageRef)
+	// could not be fetched because no content store is wired, so that body was
+	// excluded from the embedding (gh#414). The entity may still be embedded from
+	// any inline text triples it carries; a rising value means offloaded body
+	// text is being dropped from embeddings — wire a store-read port.
+	contentUnresolved prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -69,6 +75,13 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Name:      "pending",
 				Help:      "Current number of pending embeddings",
 			}),
+
+			contentUnresolved: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "content_unresolved_total",
+				Help:      "Entities whose offloaded body (StorageRef) was excluded from embedding because no content store is wired; inline text, if any, is still embedded (gh#414)",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -79,6 +92,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterCounterVec("graph-embedding", "kv_operations_total", metrics.kvOperations)
 			_ = registry.RegisterCounter("graph-embedding", "dedup_hits_total", metrics.embeddingDedupHits)
 			_ = registry.RegisterGauge("graph-embedding", "pending", metrics.embeddingPending)
+			_ = registry.RegisterCounter("graph-embedding", "content_unresolved_total", metrics.contentUnresolved)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.embedderType)
@@ -87,6 +101,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.kvOperations)
 			_ = prometheus.DefaultRegisterer.Register(metrics.embeddingDedupHits)
 			_ = prometheus.DefaultRegisterer.Register(metrics.embeddingPending)
+			_ = prometheus.DefaultRegisterer.Register(metrics.contentUnresolved)
 		}
 	})
 	return metrics
@@ -125,6 +140,12 @@ func (m *embeddingMetrics) recordKVOperation(operation, bucket string) {
 // recordDedupHit increments the deduplication hits counter.
 func (m *embeddingMetrics) recordDedupHit() {
 	m.embeddingDedupHits.Inc()
+}
+
+// recordContentUnresolved increments the counter for offloaded content that was
+// excluded from embedding because no content store is wired (gh#414).
+func (m *embeddingMetrics) recordContentUnresolved() {
+	m.contentUnresolved.Inc()
 }
 
 // setPending sets the pending embeddings gauge.

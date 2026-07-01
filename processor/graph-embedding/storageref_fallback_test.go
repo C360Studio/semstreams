@@ -1,8 +1,12 @@
 package graphembedding
 
 import (
+	"context"
+	"log/slog"
+	"sync/atomic"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/c360studio/semstreams/graph"
@@ -88,4 +92,40 @@ func TestExtractTextForEmbedding_RecoversInlineContentForStorageRefEntity(t *tes
 	assert.NotEmpty(t, got, "inline content triples must still be extractable so the no-content-store fallback can embed")
 	assert.Contains(t, got, "Hydraulic pump service")
 	assert.Contains(t, got, "Replaced seals")
+}
+
+// warnCounter is a slog handler that counts Warn+ records.
+type warnCounter struct{ n atomic.Int64 }
+
+func (h *warnCounter) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *warnCounter) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn {
+		h.n.Add(1)
+	}
+	return nil
+}
+func (h *warnCounter) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *warnCounter) WithGroup(string) slog.Handler      { return h }
+
+// TestReportOffloadedContentExcluded_LoudNotSilent locks the gh#414 fix: an
+// entity with offloaded content but no content store must be OBSERVABLE — the
+// content_unresolved_total metric increments per entity, and the actionable
+// warning fires once (not per entity, to avoid a flood).
+func TestReportOffloadedContentExcluded_LoudNotSilent(t *testing.T) {
+	wc := &warnCounter{}
+	c := &Component{
+		metrics: getMetrics(nil), // default prometheus registry
+		logger:  slog.New(wc),
+		// contentStore nil, noContentStoreWarn zero-value Once
+	}
+
+	before := testutil.ToFloat64(c.metrics.contentUnresolved)
+
+	// Two offloaded entities can't be embedded (no content store).
+	c.reportOffloadedContentExcluded("c360.platform.test.sys.doc.001", "objstore")
+	c.reportOffloadedContentExcluded("c360.platform.test.sys.doc.002", "objstore")
+
+	after := testutil.ToFloat64(c.metrics.contentUnresolved)
+	assert.Equal(t, float64(2), after-before, "metric must count every excluded entity")
+	assert.Equal(t, int64(1), wc.n.Load(), "warning must fire once, not per entity (no log flood)")
 }
