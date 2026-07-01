@@ -254,6 +254,83 @@ func TestRegisterOverwrite(t *testing.T) {
 	assert.Equal(t, "test.rel.includes", meta.InverseOf)
 }
 
+// TestRegisterAmend_OmittedFieldsRetained is the gh#410 regression: a re-Register
+// that adds Description/IRI but OMITS the alias role must NOT strip that role.
+// The exact failure semsource hit converging pkg/fusion: re-registering
+// dc.terms.title with a description clobbered its label alias, so the NAME_INDEX
+// (and thus graph.query.byName + graph.index.query.status readiness) went empty.
+func TestRegisterAmend_OmittedFieldsRetained(t *testing.T) {
+	defer SnapshotRegistry()()
+	ClearRegistry()
+
+	// Framework registers a label predicate.
+	Register("dc.terms.title",
+		WithDescription("A name given to the resource"),
+		WithAlias(AliasTypeLabel, 1))
+
+	// A product re-registers to attach its own description/IRI — WITHOUT
+	// re-declaring the alias role (the footgun).
+	Register("dc.terms.title",
+		WithDescription("Product-specific title"),
+		WithIRI("http://purl.org/dc/terms/title"))
+
+	meta := GetPredicateMetadata("dc.terms.title")
+	require.NotNil(t, meta)
+	// New fields overrode.
+	assert.Equal(t, "Product-specific title", meta.Description)
+	assert.Equal(t, "http://purl.org/dc/terms/title", meta.StandardIRI)
+	// Omitted alias role RETAINED (the fix).
+	assert.True(t, meta.IsAlias, "label alias role must survive a role-less re-Register")
+	assert.Equal(t, AliasTypeLabel, meta.AliasType)
+	assert.Equal(t, 1, meta.AliasPriority)
+
+	// Downstream: DiscoverLabelPredicates (what graph-index keys the NAME_INDEX
+	// on) must still return the predicate — the actual signal the bug broke.
+	labels := DiscoverLabelPredicates()
+	priority, ok := labels["dc.terms.title"]
+	assert.True(t, ok, "DiscoverLabelPredicates must still return the re-registered label predicate")
+	assert.Equal(t, 1, priority)
+}
+
+// TestRegisterAmend_RoleAndWeightRetained guards the same clobber class for the
+// increment-5b ranking signals (#408): a re-Register omitting WithRole/WithWeight
+// must not strip a previously-declared salience.
+func TestRegisterAmend_RoleAndWeightRetained(t *testing.T) {
+	defer SnapshotRegistry()()
+	ClearRegistry()
+
+	Register("test.identity.serial",
+		WithRole(RoleIdentity),
+		WithWeight(1.5))
+
+	// Re-register with only a description.
+	Register("test.identity.serial",
+		WithDescription("Serial number"))
+
+	meta := GetPredicateMetadata("test.identity.serial")
+	require.NotNil(t, meta)
+	assert.Equal(t, "Serial number", meta.Description)
+	assert.Equal(t, RoleIdentity, meta.Role, "role must survive a role-less re-Register")
+	assert.Equal(t, 1.5, meta.Weight, "weight must survive a weight-less re-Register")
+}
+
+// TestRegisterAmend_OptionsStillOverride confirms amend does not prevent a
+// re-Register from CHANGING a field (options win over the retained value).
+func TestRegisterAmend_OptionsStillOverride(t *testing.T) {
+	defer SnapshotRegistry()()
+	ClearRegistry()
+
+	Register("test.rel.parent", WithAlias(AliasTypeLabel, 1), WithRuleOpaque(true))
+	// Re-register changing the alias priority and role-opacity is respected.
+	Register("test.rel.parent", WithAlias(AliasTypeIdentity, 5))
+
+	meta := GetPredicateMetadata("test.rel.parent")
+	require.NotNil(t, meta)
+	assert.Equal(t, AliasTypeIdentity, meta.AliasType, "changed alias type must override")
+	assert.Equal(t, 5, meta.AliasPriority, "changed priority must override")
+	assert.True(t, meta.RuleOpaque, "omitted RuleOpaque retained from prior registration")
+}
+
 func TestSymmetricWithIRI(t *testing.T) {
 	originalRegistry := make(map[string]PredicateMetadata)
 	registryMu.RLock()
