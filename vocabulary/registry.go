@@ -221,6 +221,30 @@ func WithSymmetric(symmetric bool) Option {
 	}
 }
 
+// WithRole declares the predicate's semantic role — a stored, first-class
+// ranking signal (ADR-062 increment 5, gh#396 / semsource ask #2). Consumers
+// read PredicateMetadata.Role instead of pattern-matching predicate names.
+//
+// Example:
+//
+//	Register("robotics.identity.serial",
+//	    WithRole(RoleIdentity),
+//	    WithWeight(1.0))
+func WithRole(role PredicateRole) Option {
+	return func(m *PredicateMetadata) {
+		m.Role = role
+	}
+}
+
+// WithWeight declares the predicate's salience weight (higher = more salient;
+// 0 = neutral). Lets a ranker prefer entities carrying more salient facts
+// without a per-product weight table (ADR-062 increment 5, semsource ask #2).
+func WithWeight(weight float64) Option {
+	return func(m *PredicateMetadata) {
+		m.Weight = weight
+	}
+}
+
 // Register registers a predicate with its metadata in the global registry.
 // This should be called during package initialization (init functions) by domain vocabularies.
 //
