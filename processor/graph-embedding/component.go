@@ -200,10 +200,14 @@ type Component struct {
 	modelRegistry model.RegistryReader
 
 	// Domain resources
-	embedder           embedding.Embedder
-	storage            *embedding.Storage
-	worker             *embedding.Worker
-	contentStore       *objectstore.Store // ContentStorable access (owned lifecycle)
+	embedder     embedding.Embedder
+	storage      *embedding.Storage
+	worker       *embedding.Worker
+	contentStore *objectstore.Store // ContentStorable access (owned lifecycle)
+	// noContentStoreWarn fires the "offloaded content excluded, no content store
+	// wired" warning exactly once (gh#414) — the per-entity metric carries the
+	// count; the log stays a single actionable line rather than a flood.
+	noContentStoreWarn sync.Once
 	embeddingBucket    jetstream.KeyValue
 	entityCoalescer    *cache.CoalescingSet
 	entityStatesBucket jetstream.KeyValue
@@ -974,9 +978,7 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		return
 	}
 	if entityState.StorageRef != nil {
-		c.logger.Debug("entity has StorageRef but no content store is configured; "+
-			"falling back to inline text extraction",
-			slog.String("entity", entityID))
+		c.reportOffloadedContentExcluded(entityID, entityState.StorageRef.StorageInstance)
 	}
 
 	// Legacy path: Extract text from triples
@@ -1012,6 +1014,30 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 // context). Configs WITH a content store are unaffected.
 func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 	return state.StorageRef != nil && c.contentStore != nil
+}
+
+// reportOffloadedContentExcluded makes the silent-loss case observable (gh#414):
+// an entity carries a StorageRef (its BODY is offloaded to a store, NOT inline)
+// but no content store is wired, so the inline fallback cannot see that body and
+// it is EXCLUDED from the embedding (and thus BM25/search). The entity may still
+// be embedded from any inline text triples it carries — only the offloaded body
+// is lost. A per-entity metric carries the count; the warning fires once so the
+// log is a single actionable line, not a flood. Fix on the operator side: wire a
+// store-read port for the StorageInstance that produced the content.
+func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance string) {
+	if c.metrics != nil {
+		c.metrics.recordContentUnresolved()
+	}
+	c.noContentStoreWarn.Do(func() {
+		c.logger.Warn("offloaded body EXCLUDED from embeddings: entity carries a "+
+			"StorageRef but no content store is wired — wire a store-read port for its "+
+			"StorageInstance to embed offloaded bodies (inline text, if any, is still "+
+			"embedded) (gh#414)",
+			slog.String("entity", entityID),
+			slog.String("storage_instance", storageInstance))
+	})
+	c.logger.Debug("entity has StorageRef but no content store; inline fallback",
+		slog.String("entity", entityID))
 }
 
 // queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern
