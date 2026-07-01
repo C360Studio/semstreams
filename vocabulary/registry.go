@@ -245,12 +245,25 @@ func WithWeight(weight float64) Option {
 	}
 }
 
-// Register registers a predicate with its metadata in the global registry.
+// Register registers (or amends) a predicate's metadata in the global registry.
 // This should be called during package initialization (init functions) by domain vocabularies.
 //
 // The predicate name must follow three-level dotted notation: domain.category.property
 //
-// If a predicate is already registered, it will be overwritten (enables domain-specific overrides).
+// AMEND semantics (gh#410): a re-Register of an already-registered predicate
+// starts from the EXISTING metadata, then applies the given options. Options
+// override every field they set; fields the re-Register OMITS are RETAINED, not
+// cleared. This lets a product attach its own Description/IRI to a
+// framework-registered predicate WITHOUT silently stripping the framework's
+// declared roles (e.g. a WithAlias(AliasTypeLabel, …) on dc.terms.title, which
+// the NAME_INDEX / graph.query.byName / fusion-readiness path depends on). A
+// first registration starts from a zero struct, so single-registration behavior
+// is unchanged.
+//
+// Amend cannot CLEAR a field by omitting its option; pass the explicit zero
+// (WithRuleOpaque(false), WithWeight(0), WithDescription(""), …) to clear one.
+// The alias flag has no un-alias option; to fully REPLACE a registration
+// (including removing an alias role), use RegisterPredicate, which overwrites.
 //
 // Example:
 //
@@ -264,21 +277,21 @@ func Register(name string, opts ...Option) {
 	// Parse domain and category from name
 	domain, category := parseDomainCategory(name)
 
-	// Create base metadata
-	meta := PredicateMetadata{
-		Name:     name,
-		Domain:   domain,
-		Category: category,
-	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
 
-	// Apply functional options
+	// Seed from the existing registration when present (zero value if absent), so
+	// options amend rather than replace — a re-Register that omits a field keeps
+	// the previously-declared value instead of silently dropping it (gh#410).
+	meta := predicateRegistry[name]
+	meta.Name = name
+	meta.Domain = domain
+	meta.Category = category
+
+	// Apply functional options (each overrides the field it sets).
 	for _, opt := range opts {
 		opt(&meta)
 	}
-
-	// Store in registry (allows overriding framework defaults)
-	registryMu.Lock()
-	defer registryMu.Unlock()
 
 	predicateRegistry[name] = meta
 }
