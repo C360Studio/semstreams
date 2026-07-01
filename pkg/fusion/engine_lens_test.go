@@ -12,15 +12,16 @@ import (
 // fakeGraph is an in-memory RetrievalClient for lens-driven engine tests — no
 // NATS, deterministic inputs. Error fields inject backend failures.
 type fakeGraph struct {
-	status     fusion.IndexStatus
-	seeds      map[string][]string       // query → seed IDs
-	entities   map[string]*fusion.Entity // id → entity
-	out        map[string][]fusion.Edge  // id → outgoing edges
-	in         map[string][]fusion.Edge  // id → incoming edges
-	names      []string                  // did_you_mean suggestions
-	statusErr  error
-	resolveErr error
-	entErr     error
+	status       fusion.IndexStatus
+	seeds        map[string][]string       // query → seed IDs
+	entities     map[string]*fusion.Entity // id → entity
+	out          map[string][]fusion.Edge  // id → outgoing edges
+	in           map[string][]fusion.Edge  // id → incoming edges
+	names        []string                  // did_you_mean suggestions
+	statusErr    error
+	resolveErr   error
+	entErr       error
+	neighborsErr error
 }
 
 func (g *fakeGraph) Status(context.Context) (fusion.IndexStatus, error) {
@@ -45,6 +46,9 @@ func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity,
 	return out, nil
 }
 func (g *fakeGraph) Neighbors(_ context.Context, id string, _ []string, dir fusion.Direction) ([]fusion.Edge, error) {
+	if g.neighborsErr != nil {
+		return nil, g.neighborsErr
+	}
 	if dir == fusion.Outgoing {
 		return g.out[id], nil
 	}

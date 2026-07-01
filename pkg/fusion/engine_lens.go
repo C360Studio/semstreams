@@ -109,6 +109,14 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	if len(resp.Nodes) == 0 {
 		resp.Misses = []Miss{{Query: req.Query}}
 	}
+	// Optional facets, computed from the ranked seeds (not the display-budgeted
+	// nodes) so they describe the query's structure, not the page.
+	if wants[WantImpact] {
+		resp.Impact = e.computeImpact(ctx, ranked, lens)
+	}
+	if wants[WantPaths] {
+		resp.Paths = e.computePaths(ctx, ranked, lens)
+	}
 	return resp, nil
 }
 

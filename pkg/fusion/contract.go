@@ -17,13 +17,12 @@ const ContractVersion = "1"
 // body plus immediate relations.
 type Want string
 
-// The requestable facets. (WantPaths/WantImpact are reserved for the facets
-// follow-on; the engine ignores them today.)
+// The requestable facets.
 const (
 	WantBody      Want = "body"      // verbatim source/passage
 	WantRelations Want = "relations" // callers/callees, links/sections
-	WantPaths     Want = "paths"     // bounded relation paths from the seed (deferred)
-	WantImpact    Want = "impact"    // transitive reverse-relation closure (deferred)
+	WantPaths     Want = "paths"     // bounded outgoing relation paths from the seeds
+	WantImpact    Want = "impact"    // transitive reverse-relation closure of the seeds
 )
 
 // Budget bounds a response. Zero fields take engine defaults.
@@ -105,11 +104,14 @@ type Miss struct {
 }
 
 // Response is the fused answer. Nodes is the payload; Index and Provenance are
-// the honesty envelope. (Paths/Impact facets are a deferred follow-on.)
+// the honesty envelope. Paths and Impact are optional facets, present only when
+// the request Wants them (WantPaths / WantImpact).
 type Response struct {
 	Index           IndexStatus `json:"index"`
 	Provenance      Provenance  `json:"provenance"`
 	Nodes           []Node      `json:"nodes,omitempty"`
+	Paths           []Path      `json:"paths,omitempty"`
+	Impact          *Impact     `json:"impact,omitempty"`
 	Misses          []Miss      `json:"misses,omitempty"`
 	Truncated       bool        `json:"truncated"`
 	ContractVersion string      `json:"contract_version"`
