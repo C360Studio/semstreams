@@ -374,13 +374,16 @@ discipline — the tier covers the seam and will surface embedding/search output
    it to `NewBodyResolver`. The **live** fusion cmd/ consumer (gateway/tool building
    `Engine` + `BodyResolver`) stays semsource convergence #6 (gh#411) — mirrors the B2
    adapter-without-live-consumer pattern (`feedback_dont_ground_on_no_producer_in_framework_binaries`).
-5. **`store-read` federation flavor** — a flowgraph-CLASSIFICATION change (M3), not free
-   visibility: add `StoreProvidePort` / `StoreReadPort` cases to `classifyInteractionPattern`
-   AND `extractConnectionID` (`flowgraph/flowgraph.go`), keying provider `store-provide:X`
-   and consumer `store-read:X` to the SAME connection id so the edge actually forms (today
-   store-read falls through to `default: PatternStream` with a junk id and forms none).
-   Federation-capability flavor for embedding/fusion; specific-instance flavor keeps the
-   static edge. Deferred to Phase 2.
+5. **`store-read` federation flavor (Phase 2 — DONE, advisory).** A new `PatternStore`
+   interaction pattern: `classifyInteractionPattern` + `extractConnectionID` classify
+   `StoreProvidePort` (connID `store:<instance>`) and `StoreReadPort` (connID
+   `store-federation`); a `connectStorePorts` pass renders the federation as fan-in edges
+   (every store-provide → every store-read — advisory "can read from", since the exact
+   instance is producer-chosen per-fetch); `findOrphanedPorts` skips `PatternStore` (a store
+   with no reader, or a federation store-read, is not an orphan — closes the L1 cosmetic
+   wart). graph-embedding declares a `store-federation` store-read for visibility. Purely
+   flowgraph/visibility — **no runtime effect** (the worker resolves via the injected
+   registry regardless). Fusion's live cmd/ consumer remains semsource convergence #6.
 
 ## Open questions
 
@@ -392,9 +395,13 @@ discipline — the tier covers the seam and will surface embedding/search output
   `ProvidedStores() map[string]storage.StreamableStore` on the storage component, read by
   ComponentManager after Start (leaning this, both register and deregister manager-owned for
   reconfig symmetry), kept as a small unit-testable `syncStoreRegistry` helper.
-- **Does `store-read` need to be *enforced*** (a consumer may only resolve instances it
-  declared) or purely advisory for visibility? Enforcement would re-introduce static
-  wireability at the cost of federation flexibility.
+- ~~**Does `store-read` need to be *enforced***~~ — **RESOLVED (advisory), 2026-07-02.**
+  `store-read` is a federation-capability declaration for flowgraph visibility only; a
+  consumer resolves whatever instance a ref names at runtime (no allowlist). Enforcement was
+  rejected: a federated consumer's read-set is producer-chosen and not statically knowable, so
+  an allowlist would force a "read-any" wildcard (advisory with ceremony) and add a runtime
+  check for no isolation need (semstreams isn't store-layer multi-tenant). Implemented in
+  Phase 2 (increment 5).
 - **Multi-instance objectstore naming** — thread the map-key into the factory (retire the
   hardcoded `"objectstore"`), or leave single-instance-only for now?
 - **Remote store impl** — does semstreams ship a `StreamableStore`-over-NATS reference impl,

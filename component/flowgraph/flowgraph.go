@@ -67,6 +67,13 @@ const (
 	// findOrphanedPorts skips PatternHTTPClient inputs for the same reason it skips
 	// PatternNetwork inputs — a legitimately unconnected external input is not orphaned.
 	PatternHTTPClient InteractionPattern = "http-client"
+	// PatternStore represents the ADR-063 store federation: StoreProvidePort (a
+	// storage component owning a StorageInstance) and StoreReadPort (a content-fetch
+	// consumer). Advisory/visibility only — the exact instance a consumer resolves
+	// is producer-chosen at runtime, so a store-provide with no consumer, or a
+	// store-read federation port, is not "orphaned"; findOrphanedPorts skips
+	// PatternStore for the same reason it skips PatternHTTPClient.
+	PatternStore InteractionPattern = "store"
 )
 
 // Issue type constants for orphaned port classification
@@ -215,6 +222,10 @@ func (g *FlowGraph) classifyInteractionPattern(portConfig component.Portable) In
 		return PatternNetwork // File I/O is external like network
 	case component.HTTPClientPort:
 		return PatternHTTPClient
+	case component.StoreProvidePort:
+		return PatternStore
+	case component.StoreReadPort:
+		return PatternStore
 	default:
 		return PatternStream // Safe default
 	}
@@ -274,6 +285,16 @@ func (g *FlowGraph) extractConnectionID(portConfig component.Portable) string {
 			return "http_client_missing_url"
 		}
 		return config.URLPattern
+	case component.StoreProvidePort:
+		// A provider is identified by the StorageInstance it owns.
+		if config.Instance == "" {
+			return "store_missing_instance"
+		}
+		return "store:" + config.Instance
+	case component.StoreReadPort:
+		// Advisory federation consumer: reads whatever instance a ref names at
+		// runtime, so it declares the federation, not a specific instance.
+		return "store-federation"
 	default:
 		return fmt.Sprintf("unknown_type_%T", config)
 	}
@@ -294,6 +315,7 @@ func (g *FlowGraph) ConnectComponentsByPatterns() error {
 	g.connectStreamPorts(publishers[PatternStream], subscribers[PatternStream])
 	g.connectRequestPorts(publishers[PatternRequest], subscribers[PatternRequest])
 	g.connectWatchPorts(publishers[PatternWatch], subscribers[PatternWatch], &warnings)
+	g.connectStorePorts(publishers[PatternStore], subscribers[PatternStore])
 
 	// Validate network ports for conflicts
 	conflicts := g.validateNetworkPorts(publishers[PatternNetwork], subscribers[PatternNetwork])
@@ -507,6 +529,42 @@ func (g *FlowGraph) connectStreamPorts(publishers, subscribers map[string][]Comp
 							Metadata:     EdgeMetadata{},
 						})
 					}
+				}
+			}
+		}
+	}
+}
+
+// connectStorePorts renders the ADR-063 store federation: every store-provide
+// (a storage component owning a StorageInstance) connects to every store-read (a
+// content-fetch consumer). Advisory/visibility only — a consumer resolves a
+// producer-chosen instance per-fetch at runtime and MAY read any registered
+// instance, so "can read from" is the honest edge; the exact pairing is dynamic
+// and deliberately not asserted here. The edge connID is the provider's
+// store:<instance>.
+func (g *FlowGraph) connectStorePorts(publishers, subscribers map[string][]ComponentPortRef) {
+	type edgeKey struct{ from, to ComponentPortRef }
+	seen := make(map[edgeKey]bool)
+
+	for pubConnID, pubs := range publishers {
+		for _, subs := range subscribers {
+			for _, pub := range pubs {
+				for _, sub := range subs {
+					if pub.ComponentName == sub.ComponentName {
+						continue
+					}
+					k := edgeKey{pub, sub}
+					if seen[k] {
+						continue
+					}
+					seen[k] = true
+					g.edges = append(g.edges, FlowEdge{
+						From:         pub,
+						To:           sub,
+						Pattern:      PatternStore,
+						ConnectionID: pubConnID,
+						Metadata:     EdgeMetadata{},
+					})
 				}
 			}
 		}
@@ -802,8 +860,11 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 				// PatternNetwork binds a local listener; PatternHTTPClient initiates
 				// an outbound connection. Both are legitimately unmatched in the
 				// internal graph because their "publisher" is outside the system.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient {
-					continue // Not orphaned, it's an external input
+				// PatternStore (ADR-063) is a federation-capability declaration whose
+				// pairing is producer-chosen at runtime — an unmatched store-read is
+				// not orphaned.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore {
+					continue // Not orphaned, it's an external/federation input
 				}
 
 				// Determine issue type based on pattern
@@ -833,8 +894,10 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 				// Skip external boundary outputs — they ARE the external sink.
 				// PatternHTTPClient is also skipped: the component owns the
 				// outbound connection so no internal subscriber is expected.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient {
-					continue // Not orphaned, it's an external output
+				// PatternStore (ADR-063): a store-provide with no consumer is a
+				// legitimately-unread store, not an orphan.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore {
+					continue // Not orphaned, it's an external/federation output
 				}
 
 				// Determine issue type based on pattern
