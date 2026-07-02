@@ -320,12 +320,30 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
+	ports := make([]component.Port, 0)
+	hasStoreRead := false
+	if c.config.Ports != nil {
+		for _, portDef := range c.config.Ports.Inputs {
+			p := component.BuildPortFromDefinition(portDef, component.DirectionInput)
+			if _, ok := p.Config.(component.StoreReadPort); ok {
+				hasStoreRead = true
+			}
+			ports = append(ports, p)
+		}
 	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
+
+	// ADR-063: graph-embedding always consumes the shared store registry
+	// (deps.StoreRegistry), resolving offloaded bodies from ANY registered
+	// storage instance. Declare a federation store-read port for flowgraph
+	// visibility when the config doesn't already wire one — advisory only, no
+	// runtime effect (the worker resolves via the injected registry regardless).
+	if !hasStoreRead {
+		ports = append(ports, component.Port{
+			Name:        "store-federation",
+			Direction:   component.DirectionInput,
+			Description: "Reads offloaded entity content from the store federation (ADR-063)",
+			Config:      component.StoreReadPort{},
+		})
 	}
 	return ports
 }

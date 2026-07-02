@@ -98,6 +98,14 @@
 //   - Not connected in graph; treated like PatternNetwork for orphan detection
 //   - Declared via HTTPClientPort; cadence is owned by a sibling TimerPort
 //
+// PatternStore (ADR-063 store federation):
+//   - StoreProvidePort (a storage component owning a StorageInstance) and
+//     StoreReadPort (a content-fetch consumer)
+//   - Rendered as fan-in edges: every provider → every consumer (advisory
+//     "can read from"; the exact instance is producer-chosen per-fetch)
+//   - Non-exclusive; skipped by orphan detection like PatternNetwork (a store
+//     with no reader, or a federation store-read, is not an orphan)
+//
 // # Connection Matching
 //
 // NATS subject matching follows standard semantics:
