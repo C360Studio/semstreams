@@ -4,6 +4,7 @@ package natsclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -11,6 +12,124 @@ import (
 
 // DefaultRequestTimeout is the default timeout for request/reply operations.
 const DefaultRequestTimeout = 5 * time.Second
+
+// Readiness-gated read defaults (ADR-060 sibling doctrine, third bucket — see
+// docs/operations/07-nats-request-retry.md). A readiness-gated read tolerates a
+// not-yet-subscribed responder at cold start / after reconnect: it retries with
+// a SHORT per-attempt timeout up to a bounded TOTAL budget, returning the first
+// reply. Because the per-attempt timeout is short and the total is bounded, a
+// genuinely hung responder fails within the budget rather than a full-timeout×N
+// storm — so it does NOT mask a hung responder the way retrying a full-timeout
+// query would. Distinct from Request (steady-state query: timeout = real signal,
+// no retry) and RequestWithRetry (mutation: retry-any at full timeout).
+const (
+	// DefaultReadinessProbeTimeout bounds each attempt. Short so a
+	// not-yet-subscribed responder fails fast and retries instead of consuming a
+	// full query timeout per attempt.
+	DefaultReadinessProbeTimeout = 2 * time.Second
+	// DefaultReadinessBudget bounds the TOTAL wall-clock spent waiting for the
+	// responder to come up before the error surfaces.
+	DefaultReadinessBudget = 30 * time.Second
+
+	readinessInitialBackoff = 100 * time.Millisecond
+	readinessMaxBackoff     = 1 * time.Second
+)
+
+// RequestReady performs a readiness-gated read: a QUERY that tolerates a
+// not-yet-subscribed responder at cold start / after reconnect. It retries with
+// probeTimeout per attempt up to a total budget, returning the first reply's
+// data. Zero probeTimeout/budget use the Default* values above.
+//
+// Use for the FIRST read on boot / initial reconcile / after a reconnect, where
+// "no responder" means "not ready yet." For steady-state reads use Request
+// (timeout = real signal). See docs/operations/07-nats-request-retry.md.
+func (c *Client) RequestReady(
+	ctx context.Context, subject string, data []byte, probeTimeout, budget time.Duration,
+) ([]byte, error) {
+	msg, err := c.requestMsgReady(ctx, subject, data, probeTimeout, budget)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
+
+// requestMsgReady is the shared readiness-retry loop. Returns the raw *nats.Msg
+// so callers extract .Data (RequestReady) or run ClassifyReply
+// (RequestReadyClassified in errors.go) — kept in lockstep with the other
+// request families so a future tweak doesn't drift between them.
+//
+// It retries only on TRANSPORT failure (no reply received: no-responders or
+// probe timeout). Any received reply — including a handler-error reply — stops
+// the loop, because a reply means the responder is UP; the readiness contract is
+// satisfied and the (possibly-error) reply is returned for classification. Only
+// a truly-silent (never-replies) responder is retried, and only until the budget
+// is spent.
+func (c *Client) requestMsgReady(
+	ctx context.Context, subject string, data []byte, probeTimeout, budget time.Duration,
+) (*nats.Msg, error) {
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+
+	if conn == nil || !conn.IsConnected() {
+		return nil, ErrNotConnected
+	}
+	if c.Status() == StatusCircuitOpen {
+		return nil, ErrCircuitOpen
+	}
+
+	if probeTimeout <= 0 {
+		probeTimeout = DefaultReadinessProbeTimeout
+	}
+	if budget <= 0 {
+		budget = DefaultReadinessBudget
+	}
+
+	// Auto-generate trace once for all attempts.
+	if _, ok := TraceContextFromContext(ctx); !ok {
+		ctx = ContextWithTrace(ctx, NewTraceContext())
+	}
+
+	overallCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	backoff := readinessInitialBackoff
+	var lastErr error
+	for {
+		attemptCtx, attemptCancel := context.WithTimeout(overallCtx, probeTimeout)
+		msg := nats.NewMsg(subject)
+		msg.Data = data
+		InjectTrace(ctx, msg)
+		reply, err := conn.RequestMsgWithContext(attemptCtx, msg)
+		attemptCancel()
+
+		if err == nil {
+			c.resetCircuit()
+			return reply, nil
+		}
+		lastErr = err
+		// Deliberately do NOT recordFailure() here. A readiness miss (no-responder
+		// / probe timeout) is the EXPECTED condition this primitive tolerates — the
+		// responder isn't up yet, not a connection fault. Counting it would let a
+		// single boot-time RequestReady burst (against briefly-absent responders)
+		// trip the shared per-client circuit breaker and fast-fail UNRELATED calls
+		// with ErrCircuitOpen. Genuine connection loss still surfaces via the
+		// up-front IsConnected check and per-attempt errors, and stays bounded by
+		// the budget.
+
+		// Wait before the next probe, bounded by the overall readiness budget.
+		select {
+		case <-overallCtx.Done():
+			// %w preserves errors.Is(…, nats.ErrNoResponders) for callers that
+			// want to distinguish a never-appeared responder from a hung one.
+			return nil, fmt.Errorf("readiness budget %s exhausted: %w", budget, lastErr)
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > readinessMaxBackoff {
+			backoff = readinessMaxBackoff
+		}
+	}
+}
 
 // Request performs a synchronous request/reply operation.
 // It publishes a message to the subject and waits for a response.

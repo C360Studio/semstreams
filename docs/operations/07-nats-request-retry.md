@@ -7,9 +7,15 @@ If the call writes state (mutation):
   → use RequestWithRetry with DefaultRetryConfig
   → MUST be idempotent on the responder side
 
-If the call reads state (query):
-  → use bare Request
+If the call reads state (query) in STEADY STATE (responder already up):
+  → use bare Request / RequestClassified
   → timeout = real signal; surface to the caller
+
+If the call reads state at COLD START / initial reconcile / post-reconnect
+(the responder may not be subscribed yet):
+  → use RequestReady / RequestReadyClassified
+  → short probe timeout + bounded budget
+  → "not ready yet" is retried; a hung responder still fails within the budget
 ```
 
 This rule is permanent. Don't make ad-hoc choices per call site.
@@ -33,8 +39,67 @@ For a **query**, retry-on-any-error is wrong. A genuinely hung
 responder turns a 5s timeout into ~12.7s of wallclock retry storm.
 That masks "responder is broken" as latency, breaks alerting, and
 delays user-visible error surfacing. The right behavior for a
-query is: timeout → return the error → caller decides whether to
-retry, fall back, or surface to the user.
+**steady-state** query is: timeout → return the error → caller
+decides whether to retry, fall back, or surface to the user.
+
+## The third bucket: cold-start / readiness-gated reads (gh#420)
+
+The steady-state query rule assumes the responder **exists** — so a
+timeout means "hung." That assumption breaks for a read issued at
+**cold start**, on a component's **initial reconcile**, or right
+after a **NATS reconnect**, where the responder may simply not be
+subscribed yet. There, a timeout means "not ready yet," and bare
+`Request` degrades badly: whether an absent responder surfaces as a
+fast `nats.ErrNoResponders` or a full-timeout hang is **server-config
+dependent** (see `request_integration_test.go`), so the read can burn
+the entire query timeout before failing — then the caller skips a
+pass and waits for a backstop. gh#420 (gated-dag's boot read hanging
+the full 30s `query_timeout`) is the canonical case.
+
+`RequestReady` / `RequestReadyClassified` handle this without
+reintroducing the query anti-pattern:
+
+- **Short per-attempt probe timeout** + **bounded total budget**. A
+  not-yet-subscribed responder fails a probe fast and is retried;
+  the moment the responder comes up, the next probe succeeds.
+- **A received reply — including a handler-error reply — STOPS the
+  loop.** A reply means the responder is up; only a *silent* responder
+  (never replies) is retried, and only until the budget is spent. So a
+  genuinely hung responder is **bounded by the total budget** (via the
+  short per-attempt probe) rather than hanging on one long timeout — the
+  short probe is what saves you, not the retry, so keep the probe short.
+- Use `IsNoResponders(err)` to distinguish a never-appeared responder
+  from a hung one *when the server fast-fails*. But the loop must
+  retry on a plain probe **timeout** too — fast-fail is server-config
+  dependent (see `request_integration_test.go`), so a no-fast-fail
+  server surfaces an absent responder as a timeout, not `ErrNoResponders`.
+  Never "optimize" the loop to retry only `IsNoResponders`.
+
+**Only the OUTERMOST lifecycle-triggered reader uses `RequestReady*`.**
+A steady-state handler that *forwards* to a downstream responder (e.g.
+a `graph-query` handler serving an inbound query by calling
+`graph.ingest.query.*`) stays `Request*` — even though the very first
+request at cold system boot can race the downstream's readiness.
+Readiness tolerance belongs to the outermost lifecycle-triggered read
+(the component reading on its own `Start()`/reconcile), **not** the
+intermediate request-driven hop. Converting a passthrough hop reintroduces
+the hung-responder mask for *all* steady-state traffic through it, and
+double-counts the budget inside the caller's own timeout. When in doubt:
+*is this read triggered by the component's own lifecycle, or by an
+inbound request?* Only the former converts.
+
+**Signal a never-appeared responder — don't let it go silent.** A
+misconfigured subject (typo, responder never deployed) now burns the
+whole budget on every boot/reconcile and then classifies transient — a
+lifecycle loop will log-and-skip forever, laundering a config error into
+a permanent slow-loop. Callers of `RequestReady*` MUST, on budget
+exhaustion, check `IsNoResponders(err)` and emit a **distinct, actionable
+signal** (a one-shot Warn naming the subject + a metric where the
+component has one) so "responder never appeared" is loud, not silence.
+
+This is a **cold-start / first-read** tool. Once readiness is
+established, subsequent reads are steady-state — keep using `Request`
+so a later hung responder surfaces immediately.
 
 ## Idempotency rule (mutation responders)
 
@@ -61,13 +126,28 @@ respData, err := natsClient.RequestWithRetry(
 ```
 
 ```go
-// QUERY: no retry, surface timeout
+// STEADY-STATE QUERY: no retry, surface timeout
 respData, err := natsClient.Request(
     ctx, querySubject, reqData, queryTimeout,
 )
 ```
 
-## Current call-site survey (2026-04-28, beta.20)
+```go
+// COLD-START / RECONCILE READ: short probe + bounded budget
+respData, err := natsClient.RequestReadyClassified(
+    ctx, querySubject, reqData,
+    natsclient.DefaultReadinessProbeTimeout, // per-attempt (2s)
+    natsclient.DefaultReadinessBudget,       // total (30s)
+)
+```
+
+## Current call-site survey (2026-04-28, beta.20 — pre-gh#420)
+
+> This snapshot predates the readiness bucket. It lists "Queries" as
+> bare `Request`, but most now use `RequestClassified` (ADR-060). The
+> gh#420 sweep re-classifies the lifecycle-triggered reads within it
+> into the readiness bucket; treat the categories below as the
+> mutation/steady-state split, not the final inventory.
 
 ### Mutations (using RequestWithRetry)
 
@@ -90,9 +170,17 @@ respData, err := natsClient.Request(
   gateway query proxies
 - `graph/llm/nats_content_fetcher.go` — content fetch
 
-If you find a new call site that doesn't fit either bucket, the
-default is to surface it: open a ticket with the call site path,
-the subject, and what state (if any) it writes.
+If you find a new call site that doesn't fit a bucket, the default
+is to surface it: open a ticket with the call site path, the
+subject, and what state (if any) it writes.
+
+**Cold-start reads (gh#420) are a distinct third category.** A query
+issued during a component's own `Start()` / initial reconcile /
+post-reconnect resubscribe belongs in the readiness bucket
+(`RequestReady*`), not the steady-state query bucket — the responder
+may not be up yet. The distinguishing test: *is this read triggered by
+an incoming request/event (steady state) or by the component's own
+lifecycle (cold start)?* The latter uses `RequestReady*`.
 
 ## History
 

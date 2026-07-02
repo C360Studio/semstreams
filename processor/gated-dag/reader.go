@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/gateddag"
 )
 
@@ -20,16 +19,41 @@ type graphReader interface {
 	ReadUnitSet(ctx context.Context) ([]graph.EntityState, error)
 }
 
+// requester is the minimal request surface natsGraphReader needs: the
+// readiness-gated cold-start read and the steady-state read (both classified).
+// *natsclient.Client satisfies it; a unit test injects a fake to assert the
+// cold-start → steady-state switch and the never-ready signal.
+type requester interface {
+	RequestReadyClassified(ctx context.Context, subject string, data []byte, probeTimeout, budget time.Duration) ([]byte, error)
+	RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
+}
+
 // natsGraphReader reads the unit set via the graph.query.prefix contract
 // (returns full EntityStates incl. markers). Bounded by maxUnits: it follows the
 // opaque cursor up to the cap and logs a truncation warning rather than
 // silently dropping units past it.
 type natsGraphReader struct {
-	nc       *natsclient.Client
+	nc       requester
 	prefix   string
 	maxUnits int
 	timeout  time.Duration
 	onTrunc  func(returned, capN int)
+
+	// Readiness-gated cold start (gh#420). The executor fires its FIRST
+	// authoritative read on boot, racing graph-ingest's query-handler
+	// registration — a bare request there degrades to a full-timeout hang. Until
+	// this reader has seen graph-ingest answer once (warmed), it reads via
+	// RequestReadyClassified: short probes up to readyBudget, succeeding the moment
+	// the responder is up. After the first success reads are steady-state
+	// (RequestClassified, timeout = real signal) so a LATER hung responder is not
+	// masked. See docs/operations/07-nats-request-retry.md.
+	readyProbe  time.Duration
+	readyBudget time.Duration
+	warmed      bool
+	// onNeverReady fires when the cold-start read exhausts its readiness budget
+	// (graph-ingest never answered) — a distinct, actionable signal so a missing
+	// responder is loud, not a silent skipped pass.
+	onNeverReady func(err error)
 }
 
 // prefixQuerySubject is the authoritative whole-set enumeration contract. The
@@ -61,10 +85,20 @@ func (r *natsGraphReader) ReadUnitSet(ctx context.Context) ([]graph.EntityState,
 		if err != nil {
 			return nil, fmt.Errorf("marshal prefix request: %w", err)
 		}
-		respData, err := r.nc.RequestClassified(ctx, prefixQuerySubject, reqData, r.timeout)
+		var respData []byte
+		if r.warmed {
+			respData, err = r.nc.RequestClassified(ctx, prefixQuerySubject, reqData, r.timeout)
+		} else {
+			respData, err = r.nc.RequestReadyClassified(ctx, prefixQuerySubject, reqData, r.readyProbe, r.readyBudget)
+		}
 		if err != nil {
+			if !r.warmed && r.onNeverReady != nil {
+				r.onNeverReady(err)
+			}
 			return nil, fmt.Errorf("%s: %w", prefixQuerySubject, err)
 		}
+		// graph-ingest answered — subsequent reads are steady-state.
+		r.warmed = true
 		var resp graph.PrefixQueryResponse
 		if err := json.Unmarshal(respData, &resp); err != nil {
 			return nil, fmt.Errorf("unmarshal prefix response: %w", err)
