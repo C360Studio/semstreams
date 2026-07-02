@@ -11,12 +11,13 @@ const metricsService = "gated-dag"
 // constructed (they operate standalone); they are only registered with the
 // shared registry when one is provided, so increments are always nil-safe.
 type metrics struct {
-	stall       prometheus.Gauge
-	claimed     prometheus.Counter
-	claimErr    prometheus.Counter
-	dispatched  prometheus.Counter
-	dispatchErr prometheus.Counter
-	evals       prometheus.Counter
+	stall         prometheus.Gauge
+	claimed       prometheus.Counter
+	claimErr      prometheus.Counter
+	dispatched    prometheus.Counter
+	dispatchErr   prometheus.Counter
+	evals         prometheus.Counter
+	coldStartWait prometheus.Counter
 }
 
 // newMetrics builds the collectors and registers them with reg when non-nil.
@@ -46,6 +47,10 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 			Name: "gated_dag_evaluations_total",
 			Help: "Re-evaluation passes (watch-triggered + backstop ticks).",
 		}),
+		coldStartWait: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gated_dag_cold_start_read_unready_total",
+			Help: "Cold-start authoritative reads that exhausted their readiness budget because graph-ingest never answered (gh#420). A sustained nonzero rate means the graph-ingest prefix responder is not deployed/subscribed — the executor cannot reconcile its unit set.",
+		}),
 	}
 	if reg != nil {
 		// Best-effort registration: a duplicate (e.g. two flows) is logged by the
@@ -56,6 +61,7 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 		_ = reg.RegisterCounter(metricsService, "units_dispatched_total", m.dispatched)
 		_ = reg.RegisterCounter(metricsService, "dispatch_errors_total", m.dispatchErr)
 		_ = reg.RegisterCounter(metricsService, "evaluations_total", m.evals)
+		_ = reg.RegisterCounter(metricsService, "cold_start_read_unready_total", m.coldStartWait)
 	}
 	return m
 }

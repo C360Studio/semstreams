@@ -117,21 +117,42 @@ func (c *Component) Start(ctx context.Context) error {
 		}
 	}
 
+	execMetrics := newMetrics(c.metricsReg)
 	exec := &executor{
 		cfg:     c.cfg,
 		log:     c.logger,
 		mgr:     c.mgr,
 		nc:      c.natsClient,
 		stall:   stall,
-		metrics: newMetrics(c.metricsReg),
+		metrics: execMetrics,
 		reader: &natsGraphReader{
 			nc:       c.natsClient,
 			prefix:   c.cfg.UnitEntityPrefix,
 			maxUnits: c.cfg.MaxUnits,
 			timeout:  qTimeout,
+			// Cold-start read (gh#420): short probes up to the existing query
+			// timeout as the readiness budget — succeeds the moment graph-ingest is
+			// up, instead of hanging the full timeout on the boot race.
+			readyProbe:  natsclient.DefaultReadinessProbeTimeout,
+			readyBudget: qTimeout,
 			onTrunc: func(returned, capN int) {
 				c.logger.Warn("gated-dag: unit set exceeded max_units; reading a truncated set",
 					slog.Int("returned", returned), slog.Int("max_units", capN))
+			},
+			onNeverReady: func(err error) {
+				execMetrics.coldStartWait.Inc()
+				if natsclient.IsNoResponders(err) {
+					c.logger.Warn("gated-dag: graph-ingest prefix responder never appeared within the "+
+						"readiness budget — is graph-ingest deployed/subscribed? (gh#420)",
+						slog.String("subject", prefixQuerySubject), slog.Any("error", err))
+				} else {
+					// Covers both cold-start failure modes: readiness budget exhausted
+					// (responder slow/absent) OR a handler-error reply (responder up but
+					// errored) — the latter stops the readiness loop and returns verbatim.
+					c.logger.Warn("gated-dag: cold-start authoritative read failed before graph-ingest "+
+						"was confirmed ready (budget exhausted, or the responder replied with an error) (gh#420)",
+						slog.String("subject", prefixQuerySubject), slog.Any("error", err))
+				}
 			},
 		},
 		claimer: &natsClaimer{nc: c.natsClient, predicate: c.cfg.ClaimPredicate},
