@@ -22,6 +22,17 @@ type embeddingMetrics struct {
 	// any inline text triples it carries; a rising value means offloaded body
 	// text is being dropped from embeddings — wire a store-read port.
 	contentUnresolved prometheus.Counter
+	// contentResolveError counts body fetches that FAILED after a store was
+	// resolved (ADR-063 M1): the StorageInstance resolved to a live store, but the
+	// Open/read errored (network fault, deleted bucket, closed handle). Distinct
+	// from contentUnresolved (no store at all) so operators can tell a wiring gap
+	// from a failing backend.
+	contentResolveError prometheus.Counter
+	// contentResolved counts offloaded bodies successfully fetched from a resolved
+	// store — the POSITIVE observable for the ADR-063 H2 behavior change (configs
+	// without a store-read port now embed bodies they previously excluded). Rising
+	// value = the inclusion happening, not merely content_unresolved falling.
+	contentResolved prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -82,6 +93,20 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Name:      "content_unresolved_total",
 				Help:      "Entities whose offloaded body (StorageRef) was excluded from embedding because no content store is wired; inline text, if any, is still embedded (gh#414)",
 			}),
+
+			contentResolveError: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "content_resolve_error_total",
+				Help:      "Offloaded body fetches that failed after a store was resolved (infra fault: read error, deleted bucket); distinct from content_unresolved which is a missing wiring (ADR-063)",
+			}),
+
+			contentResolved: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "content_resolved_total",
+				Help:      "Offloaded bodies successfully fetched from a resolved store — the positive signal that ADR-063 federated resolution is including bodies previously excluded",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -93,6 +118,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterCounter("graph-embedding", "dedup_hits_total", metrics.embeddingDedupHits)
 			_ = registry.RegisterGauge("graph-embedding", "pending", metrics.embeddingPending)
 			_ = registry.RegisterCounter("graph-embedding", "content_unresolved_total", metrics.contentUnresolved)
+			_ = registry.RegisterCounter("graph-embedding", "content_resolve_error_total", metrics.contentResolveError)
+			_ = registry.RegisterCounter("graph-embedding", "content_resolved_total", metrics.contentResolved)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.embedderType)
@@ -102,6 +129,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.embeddingDedupHits)
 			_ = prometheus.DefaultRegisterer.Register(metrics.embeddingPending)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contentUnresolved)
+			_ = prometheus.DefaultRegisterer.Register(metrics.contentResolveError)
+			_ = prometheus.DefaultRegisterer.Register(metrics.contentResolved)
 		}
 	})
 	return metrics
@@ -148,6 +177,18 @@ func (m *embeddingMetrics) recordContentUnresolved() {
 	m.contentUnresolved.Inc()
 }
 
+// recordContentResolveError increments the counter for offloaded content that
+// resolved to a store but failed to fetch (ADR-063 M1).
+func (m *embeddingMetrics) recordContentResolveError() {
+	m.contentResolveError.Inc()
+}
+
+// recordContentResolved increments the counter for offloaded content
+// successfully fetched from a resolved store (ADR-063 H2 positive observable).
+func (m *embeddingMetrics) recordContentResolved() {
+	m.contentResolved.Inc()
+}
+
 // setPending sets the pending embeddings gauge.
 func (m *embeddingMetrics) setPending(count float64) {
 	m.embeddingPending.Set(count)
@@ -177,6 +218,20 @@ func (a *workerMetricsAdapter) IncFailed() {
 func (a *workerMetricsAdapter) SetPending(count float64) {
 	if a.metrics != nil {
 		a.metrics.setPending(count)
+	}
+}
+
+// IncContentResolveError implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncContentResolveError() {
+	if a.metrics != nil {
+		a.metrics.recordContentResolveError()
+	}
+}
+
+// IncContentResolved implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncContentResolved() {
+	if a.metrics != nil {
+		a.metrics.recordContentResolved()
 	}
 }
 

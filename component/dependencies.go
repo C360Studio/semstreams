@@ -11,6 +11,8 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/security"
+	"github.com/c360studio/semstreams/storage"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -22,6 +24,19 @@ type PlatformMeta = types.PlatformMeta
 // Lazy lookup avoids stale pointers when ComponentManager restarts components.
 type Lookup interface {
 	Component(name string) Discoverable
+}
+
+// StoreProvider is implemented by storage components that own one or more stores
+// addressable by StorageInstance name (ADR-063). The ComponentManager reads this
+// AFTER the component Starts to populate the shared StoreRegistry, and clears
+// those entries when the component Stops — so a reconfig swaps the live handle.
+//
+// The map is keyed by the StorageInstance name each store STAMPS into refs
+// (store.InstanceName()), so the registry key, the store-provide port token, and
+// the ref's StorageInstance are the same value by construction. Returns nil/empty
+// before Start (no store yet) or for a component that provides no store.
+type StoreProvider interface {
+	ProvidedStores() map[string]storage.StreamableStore
 }
 
 // ToolRegistryReader is the dependency-side surface of the agentic-
@@ -80,6 +95,18 @@ type Dependencies struct {
 	// pay zero cost, and the consumers that DO read this field
 	// loud-fail with a wiring error rather than silently no-op'ing.
 	LifecycleManager *lifecycle.Manager
+
+	// StoreRegistry is the shared {StorageInstance → storage.StreamableStore}
+	// resolver (ADR-063). The ComponentManager populates it from storage
+	// components' store-provide ports at Start and clears entries at Stop;
+	// content-fetch consumers (graph-embedding, fusion) resolve a StorageRef's
+	// StorageInstance through it, lazily per-fetch. Concrete framework-leaf type
+	// per the PayloadRegistry / LifecycleManager precedent.
+	//
+	// Can be nil — deployments with no offloaded-content fetch pay zero cost;
+	// consumers degrade (embedding falls back to its local store-read store or
+	// reports content-unresolved) rather than panicking.
+	StoreRegistry *storeregistry.Registry
 }
 
 // GetLogger returns the configured logger or a default logger if none is provided
