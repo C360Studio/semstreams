@@ -301,6 +301,39 @@ func (c *Client) RequestWithRetryClassified(
 	return ClassifyReply(msg)
 }
 
+// RequestReadyClassified is the classified sibling of RequestReady (the
+// readiness-gated read — the third bucket of the request doctrine). It runs the
+// short-timeout, budget-bounded readiness loop, then runs the final reply
+// through ClassifyReply so transport failures (no-responders / probe timeout,
+// retried until the budget) and handler failures (X-Error-Class/Code headers)
+// arrive uniformly.
+//
+// Use for the FIRST read on boot / initial reconcile / after a reconnect, where
+// a not-yet-subscribed responder must not degrade to a full-query-timeout hang.
+// For steady-state reads use RequestClassified (timeout = real signal). See
+// docs/operations/07-nats-request-retry.md.
+func (c *Client) RequestReadyClassified(
+	ctx context.Context, subject string, data []byte, probeTimeout, budget time.Duration,
+) ([]byte, error) {
+	msg, err := c.requestMsgReady(ctx, subject, data, probeTimeout, budget)
+	if err != nil {
+		return nil, err
+	}
+	return ClassifyReply(msg)
+}
+
+// IsNoResponders reports whether err is (or wraps) the NATS "no responders"
+// transport error — the responder is not subscribed. This is TRANSIENT at
+// startup / after a reconnect (retry via a readiness-gated read), and distinct
+// from a timeout of an EXISTING responder (which signals it is hung — surface,
+// don't retry). Note (per request_integration_test.go): whether an absent
+// responder surfaces as ErrNoResponders vs a plain timeout is server-config
+// dependent, so a false here does NOT prove a responder exists — it only
+// confirms the fast-fail no-responders signal when the server sends it.
+func IsNoResponders(err error) bool {
+	return errors.Is(err, nats.ErrNoResponders)
+}
+
 // classForHeader returns the lowercase ErrorClass string that should
 // be stamped in the X-Error-Class header for the given error.
 func classForHeader(err error) string {
