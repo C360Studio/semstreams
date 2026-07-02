@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -203,7 +204,12 @@ type Component struct {
 	embedder     embedding.Embedder
 	storage      *embedding.Storage
 	worker       *embedding.Worker
-	contentStore *objectstore.Store // ContentStorable access (owned lifecycle)
+	contentStore *objectstore.Store // ContentStorable access (owned lifecycle; fallback only)
+	// storeRegistry is the shared {StorageInstance → store} resolver (ADR-063).
+	// Primary content-fetch path: resolves a StorageRef against ANY registered
+	// storage instance. Nil when the deployment wires no registry; the worker then
+	// falls back to contentStore (single store-read bucket).
+	storeRegistry *storeregistry.Registry
 	// noContentStoreWarn fires the "offloaded content excluded, no content store
 	// wired" warning exactly once (gh#414) — the per-entity metric carries the
 	// count; the log stays a single actionable line rather than a flood.
@@ -271,6 +277,7 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 		logger:        logger,
 		modelRegistry: deps.ModelRegistry,
 		metrics:       getMetrics(deps.MetricsRegistry),
+		storeRegistry: deps.StoreRegistry, // ADR-063 shared resolver (may be nil)
 	}
 
 	// Initialize last activity
@@ -740,9 +747,17 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 			c.logger.Debug("embedding generated", "entity_id", entityID)
 		})
 
-	// Wire content store for ContentStorable support (body text retrieval).
-	// Reads bucket name from store-read port config, creates ObjectStore handle.
-	// Store is owned by Component and closed in Stop().
+	// Wire the shared store resolver (ADR-063) as the PRIMARY content-fetch path:
+	// resolves a StorageRef against any registered storage instance. Guard the nil
+	// case explicitly — passing a nil *storeregistry.Registry through the interface
+	// would be a non-nil interface over a nil pointer and panic on use.
+	if c.storeRegistry != nil {
+		c.worker = c.worker.WithStoreResolver(c.storeRegistry)
+	}
+
+	// Wire the OWNED fallback content store (single store-read bucket) for
+	// deployments without a registry entry for the ref's instance. Reads bucket
+	// name from the store-read port config; owned by Component, closed in Stop().
 	c.contentStore = c.createContentStore(ctx)
 	if c.contentStore != nil {
 		c.worker = c.worker.WithContentStore(c.contentStore)
@@ -1005,15 +1020,25 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 }
 
 // shouldFetchViaStorageRef reports whether an entity's offloaded content should
-// be fetched from ObjectStore via its StorageRef. It requires BOTH a StorageRef
-// on the entity AND a wired content store: without the latter, the embedding
-// worker's fetchTextFromStorage hard-fails ("content store not configured") and
-// markFailed fires, silently collapsing all embedding/search for offloaded
-// entities. When the content store is absent we fall back to inline text
-// extraction instead (see queueEntityForEmbedding for the #264 regression
-// context). Configs WITH a content store are unaffected.
+// be fetched via its StorageRef. It requires a StorageRef AND a store that can
+// serve it — either (ADR-063) the shared registry can resolve the ref's owning
+// StorageInstance (federated: ANY registered instance), or the legacy single
+// wired content store is present as a fallback. Without either, the worker's
+// fetchTextFromStorage hard-fails ("content store not configured") and markFailed
+// fires, silently collapsing all embedding/search for offloaded entities; so we
+// fall back to inline text extraction instead and report the exclusion loudly
+// (gh#414, see queueEntityForEmbedding). Configs that can serve the ref are
+// unaffected.
 func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
-	return state.StorageRef != nil && c.contentStore != nil
+	if state.StorageRef == nil {
+		return false
+	}
+	if c.storeRegistry != nil {
+		if _, ok := c.storeRegistry.Streamable(state.StorageRef.StorageInstance); ok {
+			return true
+		}
+	}
+	return c.contentStore != nil
 }
 
 // reportOffloadedContentExcluded makes the silent-loss case observable (gh#414):

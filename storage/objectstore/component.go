@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/storage"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -93,6 +94,21 @@ type Event struct {
 // Ensure Component implements required interfaces
 var _ component.Discoverable = (*Component)(nil)
 var _ component.LifecycleComponent = (*Component)(nil)
+var _ component.StoreProvider = (*Component)(nil)
+
+// ProvidedStores exposes this component's live store to the ComponentManager for
+// registration in the shared StoreRegistry (ADR-063). Keyed by the store's
+// stamped StorageInstance (store.InstanceName()) — the same value it writes into
+// every StorageReference, so consumers resolving a ref land on this store.
+// Returns nil before Start (no store yet).
+func (c *Component) ProvidedStores() map[string]storage.StreamableStore {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.store == nil {
+		return nil
+	}
+	return map[string]storage.StreamableStore{c.store.InstanceName(): c.store}
+}
 
 // Initialize sets up the component (no I/O operations)
 func (c *Component) Initialize() error {
@@ -874,16 +890,26 @@ func (c *Component) InputPorts() []component.Port {
 
 // OutputPorts returns the output ports for this component
 func (c *Component) OutputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
+	ports := make([]component.Port, 0)
+	if c.config.Ports != nil {
+		for _, portDef := range c.config.Ports.Outputs {
+			// Use BuildPortFromDefinition to properly handle different port types (nats, jetstream, etc.)
+			port := component.BuildPortFromDefinition(portDef, component.DirectionOutput)
+			ports = append(ports, port)
+		}
 	}
 
-	ports := make([]component.Port, 0)
-	for _, portDef := range c.config.Ports.Outputs {
-		// Use BuildPortFromDefinition to properly handle different port types (nats, jetstream, etc.)
-		port := component.BuildPortFromDefinition(portDef, component.DirectionOutput)
-		ports = append(ports, port)
-	}
+	// Declare store ownership (ADR-063): this component owns the store instance
+	// it stamps into every StorageReference (c.instanceName). Non-exclusive; the
+	// ComponentManager reads ProvidedStores() to populate the shared
+	// StoreRegistry that content-fetch consumers resolve against.
+	ports = append(ports, component.Port{
+		Name:        "store-provide",
+		Direction:   component.DirectionOutput,
+		Description: "Owns the store instance addressable as StorageInstance=" + c.instanceName,
+		Config:      component.StoreProvidePort{Instance: c.instanceName},
+	})
+
 	return ports
 }
 

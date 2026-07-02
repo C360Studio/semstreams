@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/pkg/security"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -47,6 +48,17 @@ type ComponentManager struct {
 	components       map[string]*component.ManagedComponent // Track managed components
 	startOrder       []string                               // Track start order for reverse stop
 	resources        map[string][]string                    // resourceID → component names
+
+	// storeRegistry is the shared {StorageInstance → store} resolver (ADR-063),
+	// populated from storage components' store-provide ports at Start and cleared
+	// at Stop. Plumbed to every managed component via deps.StoreRegistry so
+	// content-fetch consumers resolve refs against the same live handles the
+	// storage components own. storeProvided tracks which instances each component
+	// registered, so a stopping component is deregistered without re-reading its
+	// (possibly already-closed) store; storeMu guards it.
+	storeRegistry *storeregistry.Registry
+	storeProvided map[string][]string
+	storeMu       sync.Mutex
 
 	// Config management
 	natsClient           *natsclient.Client
@@ -171,6 +183,8 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		components:           make(map[string]*component.ManagedComponent),
 		startOrder:           make([]string, 0),
 		resources:            make(map[string][]string),
+		storeRegistry:        storeregistry.New(),
+		storeProvided:        make(map[string][]string),
 		configManager:        configManager,
 		configUpdates:        configUpdates,
 		modelRegistryUpdates: modelRegistryUpdates,
@@ -384,6 +398,7 @@ func (cm *ComponentManager) startComponentAsync(name string, mc *component.Manag
 	}
 
 	cm.updateComponentState(name, component.StateStarted, nil)
+	cm.registerProvidedStores(name, mc.Component)
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
 	if cm.onComponentStart != nil {
 		cm.onComponentStart(mc.Context, name, mc.Component)
@@ -548,6 +563,10 @@ func (cm *ComponentManager) stopLifecycleComponent(
 		}
 	}
 
+	// Clear this component's stores from the shared registry before Stop closes
+	// them (ADR-063), so no consumer resolves a closing handle.
+	cm.deregisterProvidedStores(name)
+
 	// Call Stop with timeout - interface now supports it properly
 	if err := lifecycle.Stop(timeout); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
@@ -706,6 +725,9 @@ func (cm *ComponentManager) RemoveComponent(instanceName string) error {
 		mc.Cancel = nil
 		mc.Context = nil
 	}
+
+	// Clear this component's stores from the shared registry before Stop (ADR-063).
+	cm.deregisterProvidedStores(instanceName)
 
 	// Stop it if it supports stopping
 	if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
@@ -1261,6 +1283,11 @@ func (cm *ComponentManager) restartComponentWithNewConfig(
 		return fmt.Errorf("cannot restart component %s: component not found", name)
 	}
 
+	// Deregister the OLD instance's stores before Stop closes them, so the
+	// new instance can re-register the same StorageInstance without colliding
+	// (ADR-063: this is what makes reconfig swap the live handle).
+	cm.deregisterProvidedStores(name)
+
 	// Step 1: Gracefully stop the existing component
 	if lifecycle, ok := component.AsLifecycleComponent(existingComp.Component); ok {
 		if err := lifecycle.Stop(30 * time.Second); err != nil {
@@ -1351,6 +1378,9 @@ func (cm *ComponentManager) stopAndRemoveComponent(
 	if existingComp == nil {
 		return fmt.Errorf("cannot stop component %s: component not found", name)
 	}
+
+	// Clear this component's stores from the shared registry before Stop (ADR-063).
+	cm.deregisterProvidedStores(name)
 
 	// Step 1: Gracefully stop the component
 	if lifecycle, ok := component.AsLifecycleComponent(existingComp.Component); ok {
@@ -1463,6 +1493,7 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 
 		// Update component state
 		cm.updateComponentState(name, component.StateStarted, nil)
+		cm.registerProvidedStores(name, mc.Component)
 
 		// Call start hook if registered
 		if cm.onComponentStart != nil {
@@ -1542,9 +1573,84 @@ func (cm *ComponentManager) buildComponentDependencies() component.Dependencies 
 		PayloadRegistry:   cm.payloadRegistry,
 		ComponentRegistry: cm.registry,
 		LifecycleManager:  cm.lifecycleManager,
+		StoreRegistry:     cm.storeRegistry,
 	}
 
 	return deps
+}
+
+// registerProvidedStores registers a just-started component's provided stores
+// into the shared StoreRegistry (ADR-063). Called after a component reaches
+// StateStarted. A duplicate-ownership collision (two live components claiming the
+// same StorageInstance) is logged loudly and skipped rather than clobbering the
+// incumbent. The component call happens OUTSIDE any manager lock; only the
+// storeProvided tracking map is guarded (storeMu).
+func (cm *ComponentManager) registerProvidedStores(name string, comp component.Discoverable) {
+	if cm.storeRegistry == nil {
+		return
+	}
+	provider, ok := comp.(component.StoreProvider)
+	if !ok {
+		return
+	}
+	// Liveness guard: skip if a concurrent stop/reconfig already removed or
+	// halted this component between Start and here. Without it, a reconfig that
+	// deregistered the old instance could be shadowed by this late register,
+	// leaving the registry pointing at a store the teardown is closing (ADR-063
+	// late-register window). Read under cm.mu (register otherwise holds no cm
+	// lock, so cm.mu stays outermost — no ordering inversion). A vanishingly
+	// small TOCTOU remains after this check; it is self-healing (the stale
+	// handle's next fetch errors loudly via content_resolve_error and per-fetch
+	// resolution retries) and is bounded per the lazy no-cache contract.
+	cm.mu.RLock()
+	mc, tracked := cm.components[name]
+	live := tracked && mc.State == component.StateStarted
+	cm.mu.RUnlock()
+	if !live {
+		return
+	}
+	provided := provider.ProvidedStores()
+	if len(provided) == 0 {
+		return
+	}
+	registered := make([]string, 0, len(provided))
+	for instance, store := range provided {
+		if store == nil || instance == "" {
+			continue
+		}
+		if err := cm.storeRegistry.Register(instance, store); err != nil {
+			cm.logger.Error("store registry: refusing duplicate store ownership",
+				"component", name, "instance", instance, "error", err)
+			continue
+		}
+		registered = append(registered, instance)
+		cm.logger.Debug("store registry: registered store", "component", name, "instance", instance)
+	}
+	if len(registered) > 0 {
+		cm.storeMu.Lock()
+		cm.storeProvided[name] = append(cm.storeProvided[name], registered...)
+		cm.storeMu.Unlock()
+	}
+}
+
+// deregisterProvidedStores clears a stopping/removed component's stores from the
+// shared StoreRegistry (ADR-063). Idempotent and keyed by the tracked instance
+// names, so it never re-reads a component whose store may already be closed. Call
+// BEFORE the component's Stop() closes the underlying store, so the registry does
+// not briefly point at a closing handle. A no-op when the component provided no
+// store.
+func (cm *ComponentManager) deregisterProvidedStores(name string) {
+	if cm.storeRegistry == nil {
+		return
+	}
+	cm.storeMu.Lock()
+	instances := cm.storeProvided[name]
+	delete(cm.storeProvided, name)
+	cm.storeMu.Unlock()
+	for _, instance := range instances {
+		cm.storeRegistry.Deregister(instance)
+		cm.logger.Debug("store registry: deregistered store", "component", name, "instance", instance)
+	}
 }
 
 // GetComponentHealth returns current health status for all managed components
