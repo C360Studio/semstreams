@@ -49,6 +49,18 @@ of magnitude inside the handler's 10s timeout, confirming the "2 round
 trips regardless of corpus size" design property empirically, not just by
 code inspection. See `processor/graph-index/predicate_index_load_test.go`.
 
+Both `task e2e:structural` and `task e2e:semantic` — the breaking-change
+gate this ADR requires (see Breaking-change scope) — ran green:
+`validation_errors:0` on both, all predicate-related scenario steps
+(`test-predicate-list`, `test-predicate-stats`, `test-predicate-compound`)
+passing with sub-10ms latencies against the real Docker stack. The
+semantic tier's `validate-virtual-edges` step — the one exercising the
+rewritten `CountVirtualEdges` end to end — completed in under 2ms via the
+correct "legitimate zero, not an error" path (`total=0,
+auto_applied_anomalies=0`, non-fatal per this test corpus's semantic gaps
+not meeting the 0.85 auto-apply threshold); the hard-fail path this PR
+added was not triggered, as expected, since nothing here should fail.
+
 ## Decision
 
 Replace `PREDICATE_INDEX`'s one-key-per-predicate monolithic JSON blob
