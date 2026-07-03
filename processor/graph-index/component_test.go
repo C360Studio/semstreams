@@ -124,17 +124,25 @@ func (m *mockKVBucket) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt)
 	return nil, errors.New("not implemented")
 }
 
-// ListKeysFiltered gives a prefix-matching approximation of NATS subject
-// filtering: KVStore.KeysByPrefix always calls this with a single filter of
-// the form "<literal prefix>>", so stripping the trailing ">" and doing a
-// literal HasPrefix match is faithful to every call this package makes,
-// without implementing full NATS wildcard-token semantics.
+// ListKeysFiltered replicates real NATS KV prefix-filter semantics closely
+// enough to catch the class of bug this package cares about: KVStore's
+// KeysByPrefix always calls this with a filter of the form "<prefix>>",
+// where NATS wildcard ">" only means "one or more trailing tokens" when it
+// occupies its own token — i.e. prefix must end in ".". A prefix missing
+// that trailing dot is NOT a looser match; empirically (against real NATS)
+// it matches NOTHING. A plain strings.HasPrefix approximation would get
+// this backwards on both axes: it would over-match "agent.run" against
+// "agent.runner.other" (false positive — different tokens, same string
+// prefix) AND under-detect the missing-trailing-dot footgun (it would
+// still match instead of correctly matching nothing). Token-boundary
+// matching here is what makes a future regression of that bug fail a
+// test instead of passing one.
 func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
 	m.mu.Lock()
 	var matched []string
 	for k := range m.data {
 		for _, filter := range filters {
-			if strings.HasPrefix(k, strings.TrimSuffix(filter, ">")) {
+			if natsPrefixTokenMatch(k, filter) {
 				matched = append(matched, k)
 				break
 			}
@@ -142,6 +150,29 @@ func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) 
 	}
 	m.mu.Unlock()
 	return newMockKeyLister(matched), nil
+}
+
+// natsPrefixTokenMatch reports whether key matches the NATS KeysByPrefix
+// filter "<prefix>>". ">" is only a wildcard when it occupies its own
+// token, i.e. filter must end in ".>" — anything else (a prefix without a
+// trailing dot) is treated as a literal, non-wildcard subject, which in
+// practice never matches a real key.
+func natsPrefixTokenMatch(key, filter string) bool {
+	if !strings.HasSuffix(filter, ".>") {
+		return key == filter // malformed/literal filter: exact match only, never a real key
+	}
+	prefixTokens := strings.Split(strings.TrimSuffix(filter, ">"), ".")
+	prefixTokens = prefixTokens[:len(prefixTokens)-1] // drop the trailing empty token from the "." split
+	keyTokens := strings.Split(key, ".")
+	if len(keyTokens) <= len(prefixTokens) {
+		return false // ">" requires at least one token beyond the literal prefix
+	}
+	for i, pt := range prefixTokens {
+		if keyTokens[i] != pt {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *mockKVBucket) History(ctx context.Context, key string, opts ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {

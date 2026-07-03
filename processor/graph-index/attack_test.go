@@ -447,7 +447,7 @@ func TestAttack_MultipleEntitiesSamePredicate(t *testing.T) {
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	respData, err := nc.Request(ctx, "graph.index.query.predicate", requestJSON, 2*time.Second)
+	respData, err := nc.RequestClassified(ctx, "graph.index.query.predicate", requestJSON, 2*time.Second)
 	require.NoError(t, err, "predicate query should succeed")
 
 	var response graph.PredicateQueryResponse

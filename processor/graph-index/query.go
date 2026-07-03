@@ -377,11 +377,19 @@ func (c *Component) listAllPredicates(ctx context.Context) ([]graph.PredicateSum
 	if err != nil {
 		return nil, err
 	}
+	// A pre-cutover blob-format key (bare predicate string, e.g.
+	// "code.artifact.type") almost always contains a "." too, so it does
+	// NOT reliably fail the Cut below — most real predicates are
+	// multi-token. What actually keeps it inert is the join step: its
+	// first token (e.g. "code") is never a genuine 64-hex-char hash, so
+	// countsByHash[that token] is written but never read by the
+	// predicateHashHex(name) lookup below — it's a dead map entry, not a
+	// skipped one.
 	countsByHash := make(map[string]int, len(names))
 	for _, key := range memberKeys {
 		hash, _, ok := strings.Cut(key, ".")
 		if !ok {
-			continue // pre-cutover blob-format key (bare predicate string, no ".") — inert, skip
+			continue // single-token key with no "." at all — can't be any predicate's composite key
 		}
 		countsByHash[hash]++
 	}
@@ -402,6 +410,16 @@ func (c *Component) listAllPredicates(ctx context.Context) ([]graph.PredicateSum
 // per-predicate KeysByPrefix fan-out against the membership bucket here
 // is fine — the namespace filter, not this loop, is what keeps it cheap.
 func (c *Component) listPredicatesByNamespace(ctx context.Context, prefix string) ([]graph.PredicateSummary, error) {
+	// KeysByPrefix appends NATS wildcard ">" directly onto prefix; ">" is
+	// only meaningful as its own token after a ".", so a prefix missing
+	// its trailing dot silently matches nothing instead of erroring —
+	// exactly the class of prefix-matching footgun this ADR exists to
+	// eliminate elsewhere. Normalize here rather than push the "must end
+	// in a dot" contract onto every future caller of predicateList.
+	if !strings.HasSuffix(prefix, ".") {
+		prefix += "."
+	}
+
 	names, err := c.predicateCatalogBucket.KeysByPrefix(ctx, prefix)
 	if err != nil {
 		return nil, err

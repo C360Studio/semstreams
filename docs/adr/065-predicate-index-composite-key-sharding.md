@@ -16,6 +16,39 @@ GH #433 (entity-delete never cleans up
 PREDICATE_INDEX/NAME_INDEX/ALIAS_INDEX/CONTEXT_INDEX) — explicitly out of
 scope here.
 
+**Implemented and verified** (2026-07-03). A fourth review round — go-reviewer
+and semstreams-reviewer independently reading the actual diff, not the
+design doc — found one real bug the three design-stage rounds couldn't
+have caught because it only exists at the code level: `listPredicatesByNamespace`
+passed a caller-supplied `Prefix` straight into `KeysByPrefix` with no
+trailing-dot normalization. Both reviewers independently spun up a real
+NATS/JetStream container to confirm empirically, not just reason about it:
+`KeysByPrefix(ctx, "agent.run")` (no trailing dot) returns zero matches
+even when `agent.run.phase` exists, taking the full client-side timeout to
+do so, while `KeysByPrefix(ctx, "agent.run.")` correctly matches — the
+exact silent-prefix-matching footgun this whole ADR exists to eliminate,
+reintroduced on the one new externally-facing prefix field. Fixed by
+normalizing in `listPredicatesByNamespace` before the call. Also fixed:
+`attack_test.go`'s new predicate query used raw `Request` against a
+classified handler (inconsistent with the sibling `RequestClassified`
+migration in the same PR); catalog-write failures were logged at Debug
+with no error counter (bumped to Warn + `c.errors`, since a transient
+failure there silently drops a predicate from `predicateList` until
+another entity's write retries the same catalog key). Added unit test
+coverage for `listAllPredicates`/`listPredicatesByNamespace` (including a
+regression test for the trailing-dot bug and the `agent.run`/`agent.run.phase`
+non-contamination case) and the two rewritten stats/compound handlers,
+none of which had coverage in the initial implementation pass.
+
+The load test this ADR's Read-path changes section mandates before merge
+ran against real NATS: 5,020 composite keys across 21 predicates (one hot
+predicate holding 5,000 — the shape that triggers GH #430) seeded in
+123ms via the unconditional-Put write path, and the unfiltered
+`predicateList` grouped-scan read them all back in **12ms** — three orders
+of magnitude inside the handler's 10s timeout, confirming the "2 round
+trips regardless of corpus size" design property empirically, not just by
+code inspection. See `processor/graph-index/predicate_index_load_test.go`.
+
 ## Decision
 
 Replace `PREDICATE_INDEX`'s one-key-per-predicate monolithic JSON blob

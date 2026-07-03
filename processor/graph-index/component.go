@@ -1327,8 +1327,17 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "KV store")
 	}
 
+	// Membership write above is the source of truth and already succeeded;
+	// a catalog-write failure here doesn't corrupt membership, but it does
+	// silently drop this predicate from predicateList's output (both
+	// unfiltered and namespace-filtered — both enumerate via the catalog,
+	// not the membership bucket) until some other entity's write retries
+	// the same catalog Put. That's a real, if narrow, visibility gap —
+	// Warn + count it rather than the Debug-and-forget treatment a merely
+	// cosmetic failure would get.
 	if err := c.updatePredicateCatalog(ctx, predicate); err != nil {
-		c.logger.Debug("failed to update predicate catalog",
+		atomic.AddInt64(&c.errors, 1)
+		c.logger.Warn("failed to update predicate catalog",
 			slog.String("predicate", predicate),
 			slog.Any("error", err))
 	}
