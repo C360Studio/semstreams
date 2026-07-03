@@ -236,9 +236,19 @@ func WithRole(role PredicateRole) Option {
 	}
 }
 
-// WithWeight declares the predicate's salience weight (higher = more salient;
-// 0 = neutral). Lets a ranker prefer entities carrying more salient facts
-// without a per-product weight table (ADR-062 increment 5, semsource ask #2).
+// WithWeight declares the predicate's salience weight, SIGNED: positive = more
+// salient (boost), 0 = neutral, NEGATIVE = down-rank (demote). Lets a ranker
+// prefer entities carrying salient facts — or push down structurally-
+// identifiable noise (tests, generated code, mocks) that carries the same
+// boosted predicates as the real thing — without a per-product weight table
+// (ADR-062 increment 5, semsource ask #2; negative weights gh#441). The fusion
+// ranker folds an entity's strongest boost and strongest demotion together, so
+// a negative weight is a bounded reordering, never an exclusion.
+//
+// Example (demote tests below their impl, both carrying the same doc-comment
+// salience):
+//
+//	Register("code.artifact.test", WithWeight(-1.5))
 func WithWeight(weight float64) Option {
 	return func(m *PredicateMetadata) {
 		m.Weight = weight

@@ -41,7 +41,8 @@ func (Signals) ClassSpecificity(classIRI string) float64 {
 }
 
 // PredicateSalience returns a predicate's stored salience weight from the
-// vocabulary registry (0 when unregistered or unweighted).
+// vocabulary registry (0 when unregistered or unweighted). Signed: a negative
+// weight down-ranks (gh#441) — a faithful pass-through of PredicateMetadata.Weight.
 func (Signals) PredicateSalience(predicate string) float64 {
 	if meta := vocabulary.GetPredicateMetadata(predicate); meta != nil {
 		return meta.Weight

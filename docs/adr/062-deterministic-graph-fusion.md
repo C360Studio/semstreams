@@ -165,6 +165,16 @@ Carried on every response (from semsource's validated shape):
    helper) and #2 (predicate salience: `WithRole`/`WithWeight` on `vocabulary.Register`).
 6. **Convergence** — semsource ports `source/fusion` onto `pkg/fusion`; contributes the code + docs
    lenses (rule-of-three inputs) + ontology ranking.
+7. **Signed salience (down-rank)** — gh#441. `WithWeight` accepts NEGATIVE weights; the ranker folds an
+   entity's strongest boost (max positive) and strongest demotion (min negative) predicate weights
+   together (`entitySalience`), so a consumer can push structurally-identifiable noise — tests
+   (`*_test.go`), generated code (`*.pb.go`), mocks — BELOW the real thing even when it carries the
+   SAME salient predicates (a test's doc-comment has the same salience as its impl's). Presence-predicate
+   based (emit e.g. `code.artifact.test` and weight it negative); no new SPI surface (the existing signed
+   `PredicateSalience` starts meaning what its sign says). Demotion is `max`+`min` over predicates, NOT a
+   sum — fact count still cannot inflate rank — and stays a bounded secondary reordering, never an
+   exclusion. All-positive configs (every config before this) are unchanged (min-negative stays 0 → old
+   `max`).
 
 ## Division of labor
 
@@ -207,3 +217,4 @@ Carried on every response (from semsource's validated shape):
 - ADR-055/056 (ContentStorable / authoritative state), gh#264 (StorageRef lift at ingest).
 - #380 (`graph.query.byName`, increment 1); #381 (index value-growth follow-up).
 - gh#376 sub-asks: #1 (BFO/CCO subclass helper), #2 (predicate salience), #5 (name→ranked-IDs, shipped).
+- gh#441 (signed salience — down-rank tests/generated/mocks; semsource ask #14), increment 7.
