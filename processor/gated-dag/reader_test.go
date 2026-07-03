@@ -5,6 +5,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/gateddag"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,5 +66,46 @@ func TestExtractGraph(t *testing.T) {
 	t.Run("empty input", func(t *testing.T) {
 		v := extractGraph(nil, cfg)
 		require.Empty(t, v.unitIDs)
+	})
+
+	t.Run("referential stubs excluded by envelope; real + upgraded units kept (gh#429)", func(t *testing.T) {
+		stub := graph.EntityState{
+			ID:          "stub-x",
+			MessageType: graph.StubMessageType,
+			Triples:     []message.Triple{{Predicate: graph.PredStubMarker, Object: true}},
+		}
+		realUnit := unit("real-y", tri(cfg.CompletedPredicate, "real-y"))
+		// Post-birth the stub TRIPLE persists but the ENVELOPE flips to a real
+		// type; such a unit MUST be kept — the filter is envelope-based, not
+		// triple-based, so a persisted stub marker does not exclude a real unit.
+		upgraded := graph.EntityState{
+			ID:          "up-z",
+			MessageType: message.Type{Domain: "workflow", Category: "task-unit", Version: "v1"},
+			Triples: []message.Triple{
+				{Predicate: graph.PredStubMarker, Object: true}, // persisted stub triple
+				tri(cfg.CompletedPredicate, "up-z"),
+			},
+		}
+		v := extractGraph([]graph.EntityState{stub, realUnit, upgraded}, cfg)
+		require.ElementsMatch(t, []string{"real-y", "up-z"}, v.unitIDs)
+		require.Equal(t, 1, v.stubsSkipped)
+		require.True(t, v.markers.Completed["up-z"], "upgraded unit's markers still read despite the persisted stub triple")
+	})
+
+	t.Run("dependent on a stubbed prerequisite is held, not dispatched (gh#429)", func(t *testing.T) {
+		stub := graph.EntityState{
+			ID:          "prereq",
+			MessageType: graph.StubMessageType,
+			Triples:     []message.Triple{{Predicate: graph.PredStubMarker, Object: true}},
+		}
+		dependent := unit("dependent", tri(cfg.DependsOnPredicate, "prereq"))
+		v := extractGraph([]graph.EntityState{stub, dependent}, cfg)
+		require.Equal(t, []string{"dependent"}, v.unitIDs, "the stub prerequisite is filtered out of the unit set")
+		require.Equal(t, 1, v.stubsSkipped)
+		// Dependency-closure correctness: DeriveStatus keys on marker membership,
+		// so a dependent whose prerequisite is a filtered stub is still correctly
+		// held (the prerequisite is not Done) — NOT wrongly dispatched.
+		require.Empty(t, gateddag.SelectDispatchable(v.unitIDs, v.dependsOn, v.markers),
+			"dependent must be held while its prerequisite is an unborn stub")
 	})
 }

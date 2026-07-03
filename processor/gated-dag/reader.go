@@ -118,6 +118,12 @@ type graphView struct {
 	dependsOn map[string][]string
 	markers   gateddag.MarkerSet
 	claimed   map[string]bool
+	// stubsSkipped counts entities under the unit prefix that were referential
+	// stubs (graph.StubMessageType) and therefore excluded from the unit set
+	// this read (gh#429). A sustained nonzero value means a referenced unit's
+	// real content never landed on a re-stamping lane — an observable stuck-stub
+	// signal rather than a silent never-dispatch.
+	stubsSkipped int
 }
 
 // extractGraph derives the brain inputs (unit IDs, depends_on edges, marker
@@ -128,6 +134,15 @@ type graphView struct {
 // at least one triple with the configured predicate (the Object value is
 // irrelevant for completed/failed/dirtied/claim). depends_on is the exception —
 // its Object is the prerequisite unit ID, collected as a directed edge.
+//
+// Referential stubs are EXCLUDED (gh#429): graph-ingest materializes an
+// entity_id-referenced-but-not-yet-born entity as a graph.StubMessageType stub
+// under this same unit prefix. A stub has no depends_on edges, so the brain
+// would derive it as a dependency-free, immediately-dispatchable unit and
+// dispatch it before its real content lands — bypassing dependency ordering.
+// Skipping stubs is safe for the dependency closure: DeriveStatus keys on
+// marker membership, so a dependent whose prerequisite is a skipped stub is
+// still correctly held (the prerequisite is simply not Done).
 func extractGraph(states []graph.EntityState, cfg Config) graphView {
 	view := graphView{
 		unitIDs:   make([]string, 0, len(states)),
@@ -138,6 +153,12 @@ func extractGraph(states []graph.EntityState, cfg Config) graphView {
 
 	for i := range states {
 		s := &states[i]
+		if s.IsStub() {
+			// Not-yet-born placeholder; the real producer re-stamps the envelope
+			// at birth and the next read picks the unit up with its real edges.
+			view.stubsSkipped++
+			continue
+		}
 		view.unitIDs = append(view.unitIDs, s.ID)
 		for j := range s.Triples {
 			t := &s.Triples[j]
