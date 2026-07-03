@@ -374,6 +374,52 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 	})
 }
 
+// restampStubOnCreate resolves a create_with_triples ID collision (gh#435). If
+// the existing entity is a bare referential-integrity stub (graph.StubMessageType)
+// and the incoming entity carries a real, VALID, non-stub envelope, it merges the
+// incoming entity over the stub — the stub's true birth — via the same
+// update-lane MergeEntity the downstream would otherwise fall back to, returning
+// restamped=true with a Debug (no reject WARN) and a distinct stub_restamps_total
+// counter tick. A non-stub collision (a real entity), or an incoming stub / zero /
+// invalid envelope, is NOT a stub birth: restamped=false, and the caller rejects
+// as before — which PRESERVES the stub. (A zero/invalid envelope must not reach
+// MergeEntity: that path overwrites MessageType unconditionally, so it would
+// demote the stub to a typeless non-stub entity — re-creating the gh#429
+// dispatchable-non-real class — and would violate graph.StubMessageType's
+// preserve-when-zero contract.) A transient read/merge failure returns a
+// classified error.
+//
+// Under a genuine double-birth race (two real create_with_triples on the same
+// stub) both callers may read the stub and both MergeEntity: convergent
+// (CAS-merged, last-writer-wins on MessageType), ticking the counter twice for one
+// entity — accepted over reject-one, and ill-defined for a well-formed graph.
+func (c *Component) restampStubOnCreate(ctx context.Context, entity *graph.EntityState) (bool, error) {
+	existing, _, err := c.fetchEntityState(ctx, entity.ID)
+	if err != nil {
+		return false, rejectInternal(fmt.Errorf("stub-restamp read-back for %s: %w", entity.ID, err))
+	}
+	// Restamp ONLY for a real, valid, non-stub incoming envelope. !IsValid() rejects
+	// a zero/partial type (MergeEntity would overwrite the stub envelope to typeless
+	// — the gh#429 class); Equal(StubMessageType) rejects a validly-typed-as-stub
+	// incoming. Either falls through to the caller's reject, leaving the stub intact.
+	if existing == nil || !existing.IsStub() ||
+		!entity.MessageType.IsValid() || entity.MessageType.Equal(graph.StubMessageType) {
+		return false, nil
+	}
+	if merr := c.MergeEntity(ctx, entity); merr != nil {
+		return false, rejectInternal(merr)
+	}
+	if c.stubRestamps != nil {
+		c.stubRestamps.Inc()
+	}
+	if c.logger != nil {
+		c.logger.Debug("referential stub re-stamped as real birth on create_with_triples (gh#435)",
+			slog.String("entity_id", entity.ID),
+			slog.String("subject", SubjectEntityCreateWithTriples))
+	}
+	return true, nil
+}
+
 // handleEntityCreateWithTriples is handleEntityCreate that also accepts
 // a Triples slice in the request envelope. When Triples is non-empty
 // it REPLACES Entity.Triples before the write (the canonical set is
@@ -429,12 +475,26 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	stampExplicitIndexingProfile(req.Entity, req.IndexingProfile)
 
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
-		if errors.Is(err, natsclient.ErrKVKeyExists) {
+		if !errors.Is(err, natsclient.ErrKVKeyExists) {
+			return nil, rejectInternal(err)
+		}
+		// gh#435: the ID may exist only as a referential-integrity stub — a
+		// placeholder minted when something referenced it before its real birth.
+		// A create_with_triples carrying a real (non-stub) envelope IS that birth,
+		// so re-stamp the stub via merge instead of rejecting: a healthy stub→real
+		// path must not surface as a graph-write reject to paid-run monitors. A
+		// non-stub collision is a genuine conflict and still rejects.
+		restamped, rerr := c.restampStubOnCreate(ctx, req.Entity)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !restamped {
 			return nil, rejectInvalidDetail(graph.ErrorCodeEntityExists,
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity already exists: %s", req.Entity.ID))
 		}
-		return nil, rejectInternal(err)
+		// Re-stamped: the stub is now born. Fall through to the shared success
+		// path (foreign-edge routing + read-back + response), same as a fresh create.
 	}
 
 	// Primary committed — route foreign edges onto their own subjects (after the

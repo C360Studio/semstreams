@@ -42,6 +42,15 @@ func isExpectedShutdownError(err error) bool {
 // The callback receives the entity ID and the generated embedding vector.
 type GeneratedCallback func(entityID string, embedding []float32)
 
+// TerminalCallback is called when a pending embedding reaches ANY terminal outcome
+// — generated, failed, or deliberately skipped (no text) — carrying the entity ID
+// and the ENTITY_STATES SourceRevision that produced the record. It exists so the
+// hop-1 readiness watermark can be completed at the true end of the two-hop pipeline
+// (ADR-066 §3). sourceRevision==0 means "unknown" (a legacy record) and the
+// completion is a no-op; ^uint64(0) is the max-rev drain used for an unreadable
+// (corrupt) record whose revision cannot be recovered.
+type TerminalCallback func(entityID string, sourceRevision uint64)
+
 // WorkerMetrics provides metrics callbacks for embedding worker operations.
 // This allows the worker to report metrics without direct dependency on prometheus.
 type WorkerMetrics interface {
@@ -96,6 +105,7 @@ type Worker struct {
 
 	// Callbacks
 	onGenerated GeneratedCallback // Called when embedding is generated
+	onTerminal  TerminalCallback  // Called at ANY terminal outcome (ADR-066 §3)
 
 	// Metrics
 	metrics WorkerMetrics // Optional metrics reporter
@@ -171,6 +181,14 @@ func (w *Worker) WithMaxSourceTextLen(n int) *Worker {
 // Use this to populate caches or trigger downstream processing.
 func (w *Worker) WithOnGenerated(cb GeneratedCallback) *Worker {
 	w.onGenerated = cb
+	return w
+}
+
+// WithOnTerminal sets a callback invoked when a pending embedding reaches any
+// terminal outcome (generated, failed, or no-text skip). Used to complete the
+// hop-1 readiness watermark (ADR-066 §3).
+func (w *Worker) WithOnTerminal(cb TerminalCallback) *Worker {
+	w.onTerminal = cb
 	return w
 }
 
@@ -287,16 +305,39 @@ func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
 	// Parse the record to check status
 	var record Record
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
-		w.logger.Warn("Failed to unmarshal embedding record", "key", entry.Key(), "error", err)
+		// A corrupt record cannot yield its SourceRevision, so its hop-1 pending
+		// entry can never be completed with an exact revision — and unlike a
+		// deleted entity, no re-observation is guaranteed. Max-rev-drain the key so
+		// one poison record cannot wedge the whole embedding.ready signal into
+		// permanent degraded (ADR-066 §3 D3); loud, because it is not expected.
+		w.logger.Warn("Failed to unmarshal embedding record; draining readiness watermark for key",
+			"key", entry.Key(), "error", err)
+		if w.onTerminal != nil {
+			w.onTerminal(entry.Key(), ^uint64(0))
+		}
 		return
 	}
 
-	// Only process pending records
+	// Only process pending records. A re-delivered generated/failed record (from our
+	// own hop-2 writes) lands here and must NOT fire the terminal callback — it was
+	// already completed when it first transitioned. So the defer below is registered
+	// AFTER this skip, never before it (ADR-066 §3).
 	if record.Status != StatusPending {
 		return
 	}
 
 	entityID := entry.Key()
+
+	// Every path past this point is genuinely terminal — the pipeline never retries;
+	// every error is a hard SaveFailed, no-text is a delete, success is SaveGenerated.
+	// One deferred completion covers them all uniformly, closing the "missed a
+	// terminal site" risk. sourceRevision==0 (legacy record) makes it a no-op.
+	defer func() {
+		if w.onTerminal != nil {
+			w.onTerminal(entityID, record.SourceRevision)
+		}
+	}()
+
 	w.logger.Debug("Processing pending embedding", "worker_id", workerID, "entity_id", entityID)
 
 	// Get source text - either from record or from ObjectStore via StorageRef

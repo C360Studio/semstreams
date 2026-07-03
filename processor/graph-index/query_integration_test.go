@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -534,4 +535,74 @@ func TestQueryInvalidRequest_Integration(t *testing.T) {
 				"invalid request must carry the invalid_request code")
 		})
 	}
+}
+
+// TestQueryStatus_RevisionLag_Integration drives the full production wire (real
+// WatchAll delivery, real entry.Revision(), real BucketLastSeq against the KV
+// backing stream) to prove the ADR-066 caught-up contract end to end: an empty
+// bucket is not-ready with a zero target, and after the writes settle the status
+// catches up to Lag==0 with the numeric revision fields populated (not the old
+// sticky NAME_INDEX-non-empty false-ready).
+func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
+	_, natsClient, cleanup := setupIntegrationTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	nc := natsClient.GetConnection()
+
+	statusNow := func(t *testing.T) graph.IndexStatusResponse {
+		t.Helper()
+		msg, err := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
+		require.NoError(t, err)
+		var st graph.IndexStatusResponse
+		require.NoError(t, json.Unmarshal(msg.Data, &st))
+		return st
+	}
+
+	// Empty ENTITY_STATES: LastSeq==0 → not ready, building. The old sticky signal
+	// would also say building here, but for the wrong reason (NAME_INDEX empty);
+	// this asserts the honest target-based path.
+	st := statusNow(t)
+	assert.False(t, st.Ready, "empty bucket must not read ready")
+	assert.Equal(t, graph.IndexStateBuilding, st.State)
+	assert.Zero(t, st.TargetRevision, "empty bucket target should be 0")
+
+	// Write several entities — each Put advances ENTITY_STATES LastSeq (the target).
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.KeyValue(ctx, graph.BucketEntityStates)
+	require.NoError(t, err)
+
+	const n = 8
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("c360.platform.robotics.mav1.drone.%03d", i)
+		state := graph.EntityState{
+			ID:      id,
+			Triples: []message.Triple{{Subject: id, Predicate: "dc.terms.title", Object: fmt.Sprintf("Drone %d", i)}},
+		}
+		stateJSON, err := json.Marshal(state)
+		require.NoError(t, err)
+		_, err = entityBucket.Put(ctx, id, stateJSON)
+		require.NoError(t, err)
+	}
+
+	// Poll until caught up: Ready flips only when IndexedRevision >= TargetRevision.
+	// (statusNow runs in THIS goroutine — require.Eventually would run it in another,
+	// where testify's FailNow is illegal.)
+	var final graph.IndexStatusResponse
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		final = statusNow(t)
+		if final.Ready {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	require.True(t, final.Ready, "index must catch up to the writes within timeout")
+	assert.Equal(t, graph.IndexStateReady, final.State)
+	assert.Zero(t, final.Lag, "caught up means zero lag")
+	assert.GreaterOrEqual(t, final.IndexedRevision, uint64(n), "indexed revision reflects the writes")
+	assert.Equal(t, final.TargetRevision, final.IndexedRevision, "indexed == target when caught up")
+	assert.NotEmpty(t, final.Revision, "the string Revision field is now populated")
 }

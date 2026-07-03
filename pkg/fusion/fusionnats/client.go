@@ -66,16 +66,16 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 	if err != nil {
 		return fusion.IndexStatus{}, err
 	}
-	var resp graph.IndexStatusResponse
+	// Decode straight into the target: graph.IndexStatusResponse and
+	// fusion.IndexStatus are field-identical by contract (ADR-066 §5), so a direct
+	// unmarshal keeps them changing together — a hand-copied remap silently drops
+	// any field added to the wire (as it did for IndexedRevision/Lag before the
+	// round-trip test below), which reads as a false-caught-up (Lag==0) downstream.
+	var resp fusion.IndexStatus
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w", err)
 	}
-	return fusion.IndexStatus{
-		Ready:      resp.Ready,
-		State:      fusion.IndexState(resp.State),
-		Revision:   resp.Revision,
-		LastSynced: resp.LastSynced,
-	}, nil
+	return resp, nil
 }
 
 // Resolve maps a query to seed entity IDs by mode, most relevant first. The mode

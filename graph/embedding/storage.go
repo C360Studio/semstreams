@@ -45,6 +45,15 @@ type Record struct {
 	Status      Status    `json:"status"`
 	ErrorMsg    string    `json:"error_msg,omitempty"` // If status=failed
 
+	// SourceRevision is the ENTITY_STATES stream revision that produced this pending
+	// record. It is threaded from the hop-1 watcher so hop-2 can complete the
+	// embedding readiness watermark at the terminal transition (ADR-066 §3). Only
+	// meaningful on pending records; SaveGenerated/SaveFailed rebuild the record and
+	// drop it (those records only ever hit hop-2's not-pending skip). 0 means
+	// "unknown" (a legacy record written before this field existed) — the watermark
+	// completion treats 0 as a no-op.
+	SourceRevision uint64 `json:"source_revision,omitempty"`
+
 	// ContentStorable support (Feature 008)
 	// When StorageRef is set, Worker fetches content from ObjectStore
 	// and uses ContentFields to extract text for embedding.
@@ -100,16 +109,19 @@ func NewStorage(indexBucket, dedupBucket jetstream.KeyValue) *Storage {
 }
 
 // SavePending saves a pending embedding request with source text (legacy mode).
-func (s *Storage) SavePending(ctx context.Context, entityID, contentHash, sourceText string) error {
+// sourceRevision is the ENTITY_STATES revision that produced this record (ADR-066
+// §3 readiness watermark); pass 0 when unknown.
+func (s *Storage) SavePending(ctx context.Context, entityID, contentHash, sourceText string, sourceRevision uint64) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SavePending", "entity_id is empty")
 	}
 
 	record := &Record{
-		EntityID:    entityID,
-		ContentHash: contentHash,
-		SourceText:  sourceText,
-		Status:      StatusPending,
+		EntityID:       entityID,
+		ContentHash:    contentHash,
+		SourceText:     sourceText,
+		Status:         StatusPending,
+		SourceRevision: sourceRevision,
 	}
 
 	data, err := json.Marshal(record)
@@ -132,6 +144,7 @@ func (s *Storage) SavePendingWithStorageRef(
 	entityID, contentHash string,
 	storageRef *StorageRef,
 	contentFields map[string]string,
+	sourceRevision uint64,
 ) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SavePendingWithStorageRef", "entity_id is empty")
@@ -141,11 +154,12 @@ func (s *Storage) SavePendingWithStorageRef(
 	}
 
 	record := &Record{
-		EntityID:      entityID,
-		ContentHash:   contentHash,
-		StorageRef:    storageRef,
-		ContentFields: contentFields,
-		Status:        StatusPending,
+		EntityID:       entityID,
+		ContentHash:    contentHash,
+		StorageRef:     storageRef,
+		ContentFields:  contentFields,
+		Status:         StatusPending,
+		SourceRevision: sourceRevision,
 	}
 
 	data, err := json.Marshal(record)

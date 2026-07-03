@@ -47,6 +47,9 @@ var (
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
 
+	stubRestampsOnce    sync.Once
+	stubRestampsCounter prometheus.Counter
+
 	foreignEdgeUnclaimedOnce sync.Once
 	foreignEdgeUnclaimedVec  *prometheus.CounterVec
 
@@ -130,6 +133,27 @@ func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.C
 		}
 	})
 	return mutationRejectionsVec
+}
+
+// getStubRestampsMetric returns the process-wide stub-restamp counter (gh#435):
+// referential stubs re-stamped as a real birth on create_with_triples instead of
+// rejected as entity_already_exists. A DISTINCT, positive signal so a paid-run
+// monitor can tell a healthy stub→real path from a true graph-write reject.
+func getStubRestampsMetric(registry *metric.MetricsRegistry) prometheus.Counter {
+	stubRestampsOnce.Do(func() {
+		stubRestampsCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "stub_restamps_total",
+			Help:      "Referential-integrity stubs re-stamped as a real birth on create_with_triples (gh#435) — a healthy stub→real path, NOT a rejection.",
+		})
+		if registry != nil {
+			_ = registry.RegisterCounter("graph-ingest", "stub_restamps_total", stubRestampsCounter)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(stubRestampsCounter)
+		}
+	})
+	return stubRestampsCounter
 }
 
 // getForeignEdgeUnclaimedMetric returns the process-wide counter for the
@@ -396,6 +420,7 @@ type Component struct {
 	entitiesUpdated        prometheus.Counter
 	indexingProfileDefault *prometheus.CounterVec
 	mutationRejections     *prometheus.CounterVec
+	stubRestamps           prometheus.Counter
 	foreignEdgeUnclaimed   *prometheus.CounterVec
 	foreignEdgeDropped     *prometheus.CounterVec
 	ownerLeaseMismatch     *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
@@ -445,6 +470,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		entitiesUpdated:        getEntitiesUpdatedMetric(deps.MetricsRegistry),
 		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
 		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
+		stubRestamps:           getStubRestampsMetric(deps.MetricsRegistry),
 		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
 		foreignEdgeDropped:     getForeignEdgeDroppedMetric(deps.MetricsRegistry),
 		ownerLeaseMismatch:     getOwnerLeaseMismatchMetric(deps.MetricsRegistry),

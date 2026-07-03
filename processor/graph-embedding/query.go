@@ -28,8 +28,16 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
+	// Subscribe to the honest embedding-readiness signal (ADR-066 §3). No consumer
+	// gates on embedding.ready until it is proven; this exposes it for observability.
+	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.embedding.query.status", c.handleEmbeddingStatusNATS)
+	if err != nil {
+		return errs.WrapTransient(err, "Component", "setupQueryHandlers", "subscribe status query")
+	}
+	c.querySubscriptions = append(c.querySubscriptions, sub)
+
 	c.logger.Info("query handlers registered",
-		"subjects", []string{"graph.embedding.query.similar", "graph.embedding.query.search"})
+		"subjects", []string{"graph.embedding.query.similar", "graph.embedding.query.search", "graph.embedding.query.status"})
 
 	return nil
 }

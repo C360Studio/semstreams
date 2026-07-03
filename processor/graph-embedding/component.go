@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
+	"github.com/c360studio/semstreams/pkg/revlag"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -240,6 +241,22 @@ type Component struct {
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
+
+	// watermark is the ADR-066 §3 low-water-of-pending "caught up" tracker for the
+	// two-hop embedding pipeline. hop-1 (this component's ENTITY_STATES watcher)
+	// Observes every delivered revision; the terminal is Completed from hop-1
+	// immediate skips (delete / no-text / ineligible / SavePending failure) AND the
+	// hop-2 worker's onTerminal callback. Non-nil once Start wires the watcher.
+	watermark            *revlag.Watermark
+	embeddingCompletions atomic.Uint64 // total terminal completions (stuck-detector)
+
+	// Readiness stuck-detector state (ADR-066 §3), guarded by statusMu. Keyed off
+	// COMPLETIONS, not IndexedRevision: a slow single external-LLM call can pin
+	// Indexed for minutes while other workers complete higher revisions, which is
+	// healthy, not stuck. Only a window with zero terminal completions is degraded.
+	statusMu            sync.Mutex
+	lastCompletionsSeen uint64
+	lastProgressAt      time.Time
 }
 
 // CreateGraphEmbedding is the factory function for creating graph-embedding components
@@ -525,6 +542,10 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize lifecycle reporter
 	c.initLifecycleReporter(ctx)
 
+	// Readiness watermark (ADR-066 §3): must exist before the worker (whose
+	// onTerminal completes it) and the watcher (which observes into it).
+	c.watermark = revlag.New()
+
 	// Create storage and worker
 	if err := c.initStorageAndWorker(ctx, embeddingIndexBucket, embeddingDedupBucket); err != nil {
 		cancel()
@@ -763,6 +784,11 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 				c.metrics.recordEmbeddingGenerated()
 			}
 			c.logger.Debug("embedding generated", "entity_id", entityID)
+		}).
+		WithOnTerminal(func(entityID string, sourceRevision uint64) {
+			// hop-2 reached a terminal (generated / failed / no-text skip). Complete
+			// the hop-1 readiness watermark for this entity (ADR-066 §3).
+			c.completeEmbedding(entityID, sourceRevision)
 		})
 
 	// Wire the shared store resolver (ADR-063) as the PRIMARY content-fetch path:
@@ -908,17 +934,28 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				continue
 			}
 
+			// Record every delivered revision (update AND delete) as in-flight for
+			// the readiness watermark before dispatch (ADR-066 §3). observedHigh
+			// advances here; completion fires at the terminal (hop-1 skip or hop-2).
+			if c.watermark != nil {
+				c.watermark.Observe(entry.Revision(), entry.Key())
+			}
+
 			if entry.Operation() == jetstream.KeyValueDelete {
 				if c.entityCoalescer != nil {
 					c.entityCoalescer.Remove(entry.Key())
 				}
+				// A delete is terminal for embedding — nothing to generate. Its
+				// key-scoped completion also drains an earlier still-pending update
+				// the delete supersedes (ADR-066 §3).
+				c.completeEmbedding(entry.Key(), entry.Revision())
 				continue
 			}
 
 			if c.entityCoalescer != nil {
 				c.entityCoalescer.Add(entry.Key())
 			} else {
-				c.queueEntityForEmbedding(ctx, entry.Key(), entry.Value())
+				c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
 			}
 		}
 	}
@@ -939,10 +976,15 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 			c.logger.Debug("entity not found during batch processing",
 				slog.String("entity", entityID),
 				slog.Any("error", err))
+			// The coalescer discarded the source revision(s), so there is no exact
+			// revision to complete. Max-rev-drain the key rather than strand it:
+			// a transient Get failure would otherwise pin the watermark forever
+			// (ADR-066 §3). Fails toward caught-up; the next update re-observes it.
+			c.completeEmbedding(entityID, ^uint64(0))
 			continue
 		}
 
-		c.queueEntityForEmbedding(ctx, entry.Key(), entry.Value())
+		c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
 	}
 }
 
@@ -971,7 +1013,13 @@ func (c *Component) indexingEligible(es *graph.EntityState) bool {
 	return true
 }
 
-func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string, data []byte) {
+// queueEntityForEmbedding is hop 1 of the two-hop embedding pipeline: parse the
+// entity, decide eligibility, and either terminate immediately (no text to embed) or
+// SavePending a record for hop 2. sourceRevision is the ENTITY_STATES revision that
+// produced this entry (ADR-066 §3); every IMMEDIATE terminal here completes the
+// readiness watermark, and SavePending threads the revision so hop 2 completes it at
+// the true terminal.
+func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string, sourceRevision uint64, data []byte) {
 	// Report embedding stage (throttled to avoid KV spam)
 	if err := c.lifecycleReporter.ReportStage(ctx, "embedding"); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "embedding"), slog.Any("error", err))
@@ -983,6 +1031,7 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		c.completeEmbedding(entityID, sourceRevision) // terminal: nothing to embed
 		return
 	}
 
@@ -991,6 +1040,7 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// preconditions. indexingEligible always returns true here, so this is a
 	// provable no-op (zero behavior change); it is the seam Phase 3 turns live.
 	if !c.indexingEligible(&entityState) {
+		c.completeEmbedding(entityID, sourceRevision) // terminal: deliberately skipped
 		return
 	}
 
@@ -1007,9 +1057,12 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// the entity's content triples instead of failing. Configs WITH a content
 	// store keep the offloaded-content fetch path unchanged.
 	if c.shouldFetchViaStorageRef(&entityState) {
-		c.queueEmbeddingWithStorageRef(ctx, entityID, &entityState)
+		c.queueEmbeddingWithStorageRef(ctx, entityID, sourceRevision, &entityState)
 		return
 	}
+	// NOT a terminal: reporting the excluded offload falls THROUGH to the inline-text
+	// path below, whose no-text return / SavePending owns the true terminal. Completing
+	// here would drain the watermark before hop 2 finishes (false-ready — ADR-066 §3 D2).
 	if entityState.StorageRef != nil {
 		c.reportOffloadedContentExcluded(entityID, entityState.StorageRef.StorageInstance)
 	}
@@ -1018,17 +1071,26 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	text := c.extractTextForEmbedding(&entityState)
 	if text == "" {
 		c.logger.Debug("no text content found, skipping embedding", slog.String("entity", entityID))
+		// Terminal: telemetry-only / no-text entities never reach hop 2. Completing
+		// here is what makes Target=LastSeq reachable (else embedding.ready deadlocks
+		// on every text-less entity — ADR-066 §3).
+		c.completeEmbedding(entityID, sourceRevision)
 		return
 	}
 
 	// Calculate content hash for deduplication
 	contentHash := embedding.ContentHash(text)
 
-	// Queue for embedding generation
-	if err := c.storage.SavePending(ctx, entityID, contentHash, text); err != nil {
+	// Queue for embedding generation. On failure this is a network KV Put that can
+	// fail transiently WHILE the component runs — complete the watermark or the
+	// revision strands forever (permanent not-ready on the bulk-ingest path this ADR
+	// targets — ADR-066 §3 D1). Fails toward covered; the entity re-embeds on its
+	// next write.
+	if err := c.storage.SavePending(ctx, entityID, contentHash, text, sourceRevision); err != nil {
 		c.logger.Error("failed to queue embedding",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		c.completeEmbedding(entityID, sourceRevision)
 		return
 	}
 
@@ -1083,8 +1145,9 @@ func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance str
 		slog.String("entity", entityID))
 }
 
-// queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern
-func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID string, state *graph.EntityState) {
+// queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern.
+// sourceRevision threads through to hop 2 for the readiness watermark (ADR-066 §3).
+func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID string, sourceRevision uint64, state *graph.EntityState) {
 	// Create StorageRef for embedding record
 	storageRef := &embedding.StorageRef{
 		StorageInstance: state.StorageRef.StorageInstance,
@@ -1094,11 +1157,14 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 	// Calculate content hash from storage key (for deduplication)
 	contentHash := embedding.ContentHash(state.StorageRef.Key)
 
-	// Queue for embedding generation with storage reference
-	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, storageRef, nil); err != nil {
+	// Queue for embedding generation with storage reference. On failure, complete the
+	// watermark (network Put can fail transiently mid-run — same D1 strand as the
+	// legacy path; ADR-066 §3).
+	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, storageRef, nil, sourceRevision); err != nil {
 		c.logger.Error("failed to queue embedding with storage ref",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		c.completeEmbedding(entityID, sourceRevision)
 		return
 	}
 

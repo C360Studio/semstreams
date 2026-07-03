@@ -113,22 +113,22 @@ func (c *Component) nameIndexIsReady(ctx context.Context) bool {
 	return true
 }
 
-// handleQueryStatusNATS serves graph.index.query.status (gh#397): the
-// deterministic-fusion honesty-envelope readiness signal. Ready means the
-// NAME_INDEX is populated (see nameIndexIsReady). Takes no request body; the
-// response JSON shape matches pkg/fusion.IndexStatus.
+// handleQueryStatusNATS serves graph.index.query.status (gh#397, enriched by
+// ADR-066): the deterministic-fusion honesty-envelope readiness signal. Ready now
+// means the index is CAUGHT UP (revision-lag: IndexedRevision >= query-time
+// TargetRevision), not merely "indexing started" (the old sticky NAME_INDEX signal
+// that fired minutes early, gh#431). Takes no request body; the response JSON shape
+// matches pkg/fusion.IndexStatus.
 func (c *Component) handleQueryStatusNATS(ctx context.Context, _ []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	ready := c.nameIndexIsReady(ctx)
-	state := graph.IndexStateBuilding
-	if ready {
-		state = graph.IndexStateReady
-	}
-	data, err := json.Marshal(graph.IndexStatusResponse{Ready: ready, State: state})
+	data, err := json.Marshal(c.computeIndexStatus(ctx))
 	if err != nil {
-		return nil, errs.Wrap(err, "Component", "handleQueryStatusNATS", "marshal status")
+		// Unreachable (an all-scalar struct never fails to marshal), but classify it
+		// like every sibling handler so a caller decoding the reply cannot mistake an
+		// error body for a zero-value success status.
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 	return data, nil
 }

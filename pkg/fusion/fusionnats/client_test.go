@@ -42,8 +42,14 @@ func mustJSON(t *testing.T, v any) []byte {
 }
 
 func TestStatus_MapsResponse(t *testing.T) {
+	// Round-trip guard (ADR-066 §5): every field of graph.IndexStatusResponse must
+	// survive the client decode into fusion.IndexStatus. The revision-lag fields
+	// (IndexedRevision/TargetRevision/Lag/Phase) were silently dropped by an earlier
+	// hand-copied remap — Lag==0 downstream reads as false-caught-up mid-build.
 	fake := &fakeRequester{resp: mustJSON(t, graph.IndexStatusResponse{
-		Ready: true, State: graph.IndexStateReady, Revision: "42", LastSynced: "now",
+		Ready: true, State: graph.IndexStateReady,
+		IndexedRevision: 100, TargetRevision: 100, Lag: 0, Phase: "ready",
+		Revision: "100", LastSynced: "now",
 	})}
 	c := New(fake, time.Second)
 
@@ -54,9 +60,36 @@ func TestStatus_MapsResponse(t *testing.T) {
 	if fake.lastSubject != subjectStatus {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectStatus)
 	}
-	want := fusion.IndexStatus{Ready: true, State: fusion.StateReady, Revision: "42", LastSynced: "now"}
+	want := fusion.IndexStatus{
+		Ready: true, State: fusion.StateReady,
+		IndexedRevision: 100, TargetRevision: 100, Lag: 0, Phase: "ready",
+		Revision: "100", LastSynced: "now",
+	}
 	if got != want {
 		t.Errorf("status = %+v, want %+v", got, want)
+	}
+}
+
+// TestStatus_RevisionLagFieldsSurvive is the explicit guard that a mid-build
+// envelope (not caught up) round-trips its numeric fields — a consumer gating on
+// Lag must see the real lag, not a dropped-to-zero false-ready.
+func TestStatus_RevisionLagFieldsSurvive(t *testing.T) {
+	fake := &fakeRequester{resp: mustJSON(t, graph.IndexStatusResponse{
+		Ready: false, State: graph.IndexStateBuilding,
+		IndexedRevision: 40, TargetRevision: 100, Lag: 60, Revision: "40",
+	})}
+	c := New(fake, time.Second)
+
+	got, err := c.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got.Lag != 60 || got.IndexedRevision != 40 || got.TargetRevision != 100 {
+		t.Errorf("revision-lag fields dropped: got Lag=%d Indexed=%d Target=%d, want 60/40/100",
+			got.Lag, got.IndexedRevision, got.TargetRevision)
+	}
+	if got.Ready {
+		t.Error("mid-build must not read ready")
 	}
 }
 

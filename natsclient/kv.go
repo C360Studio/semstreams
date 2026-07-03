@@ -91,6 +91,35 @@ func (kv *KVStore) Get(ctx context.Context, key string) (*KVEntry, error) {
 	}, nil
 }
 
+// BucketLastSeq returns the backing stream's LastSeq for a KV bucket — the highest
+// sequence ever assigned to the bucket, read fresh from the server on every call.
+//
+// It is the query-time "target" for revision-lag readiness (ADR-066): every
+// committed write to the bucket has a Revision() <= LastSeq, and LastSeq is
+// monotonic even under History=1 — a purge raises FirstSeq but never lowers
+// LastSeq. LastSeq shares the same sequence space as KeyValueEntry.Revision()
+// (both are stream sequence numbers), so a caller can compare an indexed-revision
+// watermark directly against it. Prefer this over the last watch entry's
+// Delta()==0: that cache is stale exactly in the committed-but-not-yet-delivered
+// window this target must see through.
+func BucketLastSeq(ctx context.Context, bucket jetstream.KeyValue) (uint64, error) {
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("kv status: %w", err)
+	}
+	// The concrete JetStream-backed status exposes the backing stream info; the
+	// KeyValueStatus interface itself does not surface LastSeq.
+	bucketStatus, ok := status.(*jetstream.KeyValueBucketStatus)
+	if !ok {
+		return 0, fmt.Errorf("kv status: unexpected type %T, want *jetstream.KeyValueBucketStatus", status)
+	}
+	info := bucketStatus.StreamInfo()
+	if info == nil {
+		return 0, fmt.Errorf("kv status: nil backing stream info")
+	}
+	return info.State.LastSeq, nil
+}
+
 // Put creates or updates a key without revision check (last writer wins)
 func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, error) {
 	ctx, cancel := kv.applyTimeout(ctx)
