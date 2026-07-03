@@ -149,6 +149,18 @@ guarded by a real `Completed` marker rather than an out-of-band skip check.
   entity and edges — **not** the rejected dispatch hook. Do not add the
   convenience preemptively (framework-vs-product boundary).
 
+- **Depends on the referential-stub fix (GH #429).** This pattern threads
+  `entity_id` references between units (`depends_on` edges, and any forward
+  reference such as a `prepare_target`). A reference to a **not-yet-born** unit
+  makes graph-ingest materialize a referential stub (`core.identity.stub`) at
+  that ID; a stub carries no `depends_on` edges, so gated-dag's brain derives it
+  as a **dependency-free, immediately dispatchable** unit and would dispatch it
+  before its real content lands — defeating the ordering this pattern exists to
+  provide. gated-dag ignoring referential stubs by default (GH #429, the
+  stub-envelope filter) is the safety net that makes this pattern race-free.
+  Consumers should also seed units before writing cross-references where they
+  can, but must not rely on that ordering alone.
+
 ## Open questions
 
 - **Workspace lifetime on reset.** When `X` is reset and re-run, should the
@@ -176,3 +188,6 @@ guarded by a real `Completed` marker rather than an out-of-band skip check.
   rejected hook would have modified).
 - `pkg/gateddag/gateddag.go:206` — `Stalled()` (returns nil when any unit is
   dispatchable; the mechanism the rejected hook would have blinded).
+- GH #429 — gated-dag must ignore referential stubs; the safety net this pattern
+  relies on (a not-yet-born referenced unit is stubbed dependency-free and must
+  not dispatch before its real content lands).
