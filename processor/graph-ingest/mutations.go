@@ -374,38 +374,36 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 	})
 }
 
-// handleEntityCreateWithTriples is handleEntityCreate that also accepts
-// a Triples slice in the request envelope. When Triples is non-empty
-// it REPLACES Entity.Triples before the write (the canonical set is
-// the request's Triples; Entity carries provenance metadata). When
-// Triples is nil/empty, Entity.Triples is written as-is.
-//
-// Atomicity matches handleEntityCreate: CreateEntityStrict is used
-// for atomic create-or-fail (returns ErrKVKeyExists on duplicate ID).
-//
-// TriplesAdded in the response is the count on the *stored* entity
-// after the write, which may exceed len(req.Triples) when the
-// framework injects hierarchy / referential-integrity triples per
-// component.go:createEntity. Callers reasoning about provenance
-// should compare req.Triples against stored.Triples explicitly rather
-// than treating TriplesAdded as authoritative.
 // restampStubOnCreate resolves a create_with_triples ID collision (gh#435). If
 // the existing entity is a bare referential-integrity stub (graph.StubMessageType)
-// and the incoming entity carries a real, non-stub envelope, it merges the
+// and the incoming entity carries a real, VALID, non-stub envelope, it merges the
 // incoming entity over the stub — the stub's true birth — via the same
 // update-lane MergeEntity the downstream would otherwise fall back to, returning
 // restamped=true with a Debug (no reject WARN) and a distinct stub_restamps_total
-// counter tick. A non-stub collision (a real entity), or an incoming stub
-// envelope, is a genuine conflict: restamped=false, and the caller rejects as
-// before. A transient read/merge failure returns a classified error.
+// counter tick. A non-stub collision (a real entity), or an incoming stub / zero /
+// invalid envelope, is NOT a stub birth: restamped=false, and the caller rejects
+// as before — which PRESERVES the stub. (A zero/invalid envelope must not reach
+// MergeEntity: that path overwrites MessageType unconditionally, so it would
+// demote the stub to a typeless non-stub entity — re-creating the gh#429
+// dispatchable-non-real class — and would violate graph.StubMessageType's
+// preserve-when-zero contract.) A transient read/merge failure returns a
+// classified error.
+//
+// Under a genuine double-birth race (two real create_with_triples on the same
+// stub) both callers may read the stub and both MergeEntity: convergent
+// (CAS-merged, last-writer-wins on MessageType), ticking the counter twice for one
+// entity — accepted over reject-one, and ill-defined for a well-formed graph.
 func (c *Component) restampStubOnCreate(ctx context.Context, entity *graph.EntityState) (bool, error) {
 	existing, _, err := c.fetchEntityState(ctx, entity.ID)
 	if err != nil {
 		return false, rejectInternal(fmt.Errorf("stub-restamp read-back for %s: %w", entity.ID, err))
 	}
-	if existing == nil || !existing.IsStub() || entity.MessageType.Equal(graph.StubMessageType) {
-		// A real entity already occupies the ID, or the incoming write is itself a
-		// stub — a true conflict, not a stub birth.
+	// Restamp ONLY for a real, valid, non-stub incoming envelope. !IsValid() rejects
+	// a zero/partial type (MergeEntity would overwrite the stub envelope to typeless
+	// — the gh#429 class); Equal(StubMessageType) rejects a validly-typed-as-stub
+	// incoming. Either falls through to the caller's reject, leaving the stub intact.
+	if existing == nil || !existing.IsStub() ||
+		!entity.MessageType.IsValid() || entity.MessageType.Equal(graph.StubMessageType) {
 		return false, nil
 	}
 	if merr := c.MergeEntity(ctx, entity); merr != nil {
@@ -422,6 +420,21 @@ func (c *Component) restampStubOnCreate(ctx context.Context, entity *graph.Entit
 	return true, nil
 }
 
+// handleEntityCreateWithTriples is handleEntityCreate that also accepts
+// a Triples slice in the request envelope. When Triples is non-empty
+// it REPLACES Entity.Triples before the write (the canonical set is
+// the request's Triples; Entity carries provenance metadata). When
+// Triples is nil/empty, Entity.Triples is written as-is.
+//
+// Atomicity matches handleEntityCreate: CreateEntityStrict is used
+// for atomic create-or-fail (returns ErrKVKeyExists on duplicate ID).
+//
+// TriplesAdded in the response is the count on the *stored* entity
+// after the write, which may exceed len(req.Triples) when the
+// framework injects hierarchy / referential-integrity triples per
+// component.go:createEntity. Callers reasoning about provenance
+// should compare req.Triples against stored.Triples explicitly rather
+// than treating TriplesAdded as authoritative.
 func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.CreateEntityWithTriplesRequest
 	if err := json.Unmarshal(data, &req); err != nil {

@@ -56,6 +56,40 @@ func TestCreateWithTriples_ReStampsStub(t *testing.T) {
 		"a re-stamp ticks the distinct stub_restamps_total counter — a positive signal, not a rejection")
 }
 
+// gh#435 guard: a create_with_triples carrying a ZERO/invalid MessageType must
+// NOT re-stamp a stub — MergeEntity overwrites MessageType unconditionally, so a
+// zero-typed merge would demote the stub to a typeless non-stub entity (the gh#429
+// dispatchable-non-real class). It must reject and leave the stub intact.
+func TestCreateWithTriples_ZeroTypedDoesNotRestampStub(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+	const target = "c360.platform.test.sys.unit.003"
+
+	require.NoError(t, comp.ensureReferencedEntityExists(ctx, target, "c360.platform.test.sys.parent.001",
+		message.Type{Domain: "test", Category: "fixture", Version: "v1"}))
+	require.True(t, storedEntity(t, comp, target).IsStub(), "precondition: target is a stub")
+
+	before := testutil.ToFloat64(comp.stubRestamps)
+
+	// create_with_triples with a ZERO MessageType (no real envelope).
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity:  &graph.EntityState{ID: target}, // zero MessageType
+		Triples: []message.Triple{{Subject: target, Predicate: "real.label", Object: "x", Timestamp: time.Now(), Confidence: 1.0}},
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	_, err = comp.handleEntityCreateWithTriples(ctx, data)
+	require.Error(t, err, "a zero-typed create on a stub must reject, not demote the stub")
+	var ce *errs.ClassifiedError
+	require.True(t, errors.As(err, &ce), "reject must be classified")
+	assert.Equal(t, graph.ErrorCodeEntityExists, ce.Code)
+
+	still := storedEntity(t, comp, target)
+	assert.True(t, still.IsStub(), "the stub envelope must be PRESERVED (not overwritten to typeless)")
+	assert.Equal(t, before, testutil.ToFloat64(comp.stubRestamps), "a rejected zero-typed create must NOT tick the restamp counter")
+}
+
 // A create_with_triples collision with a REAL (non-stub) entity is a genuine
 // conflict and must still reject with entity_already_exists (the restamp counter
 // must NOT move).
