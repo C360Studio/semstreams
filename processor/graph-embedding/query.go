@@ -176,8 +176,9 @@ func (c *Component) handleQuerySearchNATS(_ context.Context, data []byte) ([]byt
 		return nil, errs.WrapFatal(errs.ErrInvalidConfig, "handleQuerySearchNATS", "handler", "embedder not initialized")
 	}
 
-	// Generate embedding for query text
-	vectors, err := c.embedder.Generate(ctx, []string{req.Query})
+	// Generate embedding for query text via the QUERY-side path so asymmetric models
+	// get their query instruction prefix (gh#438); symmetric embedders (BM25) no-op it.
+	vectors, err := c.embedder.GenerateQuery(ctx, []string{req.Query})
 	if err != nil {
 		return nil, errs.Wrap(err, "handleQuerySearchNATS", "handler", "generate query embedding")
 	}

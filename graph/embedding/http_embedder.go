@@ -21,11 +21,12 @@ import (
 // Uses the standard OpenAI SDK for consistency and compatibility.
 // See Dockerfile.tei and docker-compose.services.yml for ready-to-use TEI setup.
 type HTTPEmbedder struct {
-	client     *openai.Client
-	model      string
-	dimensions int
-	cache      Cache
-	logger     *slog.Logger
+	client      *openai.Client
+	model       string
+	dimensions  int
+	cache       Cache
+	logger      *slog.Logger
+	queryPrefix string // prepended to query-side text only (gh#438)
 }
 
 // HTTPConfig configures the HTTP embedder.
@@ -48,6 +49,12 @@ type HTTPConfig struct {
 	// APIKey for authentication (optional for local services).
 	// Required for OpenAI, optional for TEI/LocalAI.
 	APIKey string
+
+	// QueryPrefix is prepended to query-side text only (GenerateQuery), never to
+	// documents. Set it to the model's query instruction for asymmetric retrieval
+	// models — e.g. "Represent this sentence for searching relevant passages: " for
+	// Snowflake arctic-embed / E5 (gh#438). Empty disables the prefix (symmetric use).
+	QueryPrefix string
 
 	// Timeout for HTTP requests (default: 30s).
 	Timeout time.Duration
@@ -110,19 +117,40 @@ func NewHTTPEmbedder(cfg HTTPConfig) (*HTTPEmbedder, error) {
 	}
 
 	return &HTTPEmbedder{
-		client:     client,
-		model:      cfg.Model,
-		dimensions: 384, // Will be detected on first call
-		cache:      cfg.Cache,
-		logger:     logger,
+		client:      client,
+		model:       cfg.Model,
+		dimensions:  384, // Will be detected on first call
+		cache:       cfg.Cache,
+		logger:      logger,
+		queryPrefix: cfg.QueryPrefix,
 	}, nil
 }
 
-// Generate creates embeddings by calling the external HTTP service.
+// Generate creates DOCUMENT-side embeddings by calling the external HTTP service.
 //
 // This method checks the cache first (if configured), then calls the
 // embedding API for any cache misses.
 func (h *HTTPEmbedder) Generate(ctx context.Context, texts []string) ([][]float32, error) {
+	return h.embed(ctx, texts)
+}
+
+// GenerateQuery creates QUERY-side embeddings, prepending the configured query
+// instruction prefix to each text (asymmetric retrieval models, gh#438). With no
+// prefix configured it is identical to Generate. The cache keys on the prefixed
+// text, so query and document embeddings of the same string never collide.
+func (h *HTTPEmbedder) GenerateQuery(ctx context.Context, texts []string) ([][]float32, error) {
+	if h.queryPrefix == "" {
+		return h.embed(ctx, texts)
+	}
+	prefixed := make([]string, len(texts))
+	for i, t := range texts {
+		prefixed[i] = h.queryPrefix + t
+	}
+	return h.embed(ctx, prefixed)
+}
+
+// embed is the shared cache-then-API path used by both Generate and GenerateQuery.
+func (h *HTTPEmbedder) embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}

@@ -57,6 +57,31 @@ func TestBM25Embedder_Generate(t *testing.T) {
 	}
 }
 
+// TestBM25Embedder_GenerateQuerySymmetric: BM25 has no query/document asymmetry, so
+// GenerateQuery must produce the same vector as Generate for the same text (gh#438).
+func TestBM25Embedder_GenerateQuerySymmetric(t *testing.T) {
+	embedder := NewBM25Embedder(BM25Config{Dimensions: 384})
+	ctx := context.Background()
+	texts := []string{"retry with backoff on transient failure"}
+
+	doc, err := embedder.Generate(ctx, texts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	qry, err := embedder.GenerateQuery(ctx, texts)
+	if err != nil {
+		t.Fatalf("GenerateQuery: %v", err)
+	}
+	if len(doc) != 1 || len(qry) != 1 || len(doc[0]) != len(qry[0]) {
+		t.Fatalf("shape mismatch: doc=%d qry=%d", len(doc), len(qry))
+	}
+	for i := range doc[0] {
+		if doc[0][i] != qry[0][i] {
+			t.Fatalf("BM25 GenerateQuery diverged from Generate at dim %d: %v vs %v", i, doc[0][i], qry[0][i])
+		}
+	}
+}
+
 func TestBM25Embedder_Dimensions(t *testing.T) {
 	tests := []struct {
 		name       string

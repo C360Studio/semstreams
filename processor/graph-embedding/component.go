@@ -693,6 +693,7 @@ func (c *Component) createEmbedder() error {
 			httpCfg.IdleConnTimeout = epCfg.IdleConnTimeout
 			httpCfg.ResponseHeaderTimeout = epCfg.ResponseHeaderTimeout
 			httpCfg.DisableKeepAlives = epCfg.DisableKeepAlives
+			httpCfg.QueryPrefix = epCfg.QueryPrefix // asymmetric query embedding (gh#438)
 		}
 		httpEmbedder, err := embedding.NewHTTPEmbedder(httpCfg)
 		if err != nil {

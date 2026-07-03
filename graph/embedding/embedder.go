@@ -12,12 +12,21 @@ import "context"
 // maintaining a consistent interface. All providers support batch operations
 // natively, following OpenAI API patterns.
 type Embedder interface {
-	// Generate creates embeddings for the given texts.
+	// Generate creates embeddings for the given texts (the DOCUMENT side — what is
+	// embedded at ingest).
 	//
 	// This is the primary method - batch operations are natural for all providers.
 	// For single text, pass a slice with one element.
 	// Returns a slice of float32 slices, where each inner slice is an embedding vector.
 	Generate(ctx context.Context, texts []string) ([][]float32, error)
+
+	// GenerateQuery creates embeddings for QUERY-side text (semantic search),
+	// as opposed to Generate which embeds documents at ingest. Asymmetric retrieval
+	// models (Snowflake arctic-embed, BGE, E5) are trained to embed a query with an
+	// instruction prefix while documents are embedded raw; omitting the query prefix
+	// is a measured retrieval-quality cliff, not a rounding error (gh#438). Symmetric
+	// embedders (BM25) implement this identically to Generate.
+	GenerateQuery(ctx context.Context, texts []string) ([][]float32, error)
 
 	// Dimensions returns the dimensionality of embeddings produced by this embedder.
 	//
