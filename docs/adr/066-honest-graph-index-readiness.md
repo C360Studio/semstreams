@@ -207,23 +207,57 @@ status is polled (not hot), so one stream-info round-trip per call is acceptable
 
 ### 3. graph-embedding: a DISTINCT terminal-outcome watermark (not the same block)
 
-Reusing graph-index's Target for embeddings is a **permanent deadlock**: only
-text-bearing entities reach `SaveGenerated`; telemetry-only entities never enter
-the pipeline, empty-text records are deleted without generating, failures go to
-`SaveFailed`. So a Target = "latest ENTITY_STATES revision" leaves permanent gaps
-and `Lag` never reaches 0. Instead:
+**Implemented** (reuses `pkg/revlag.Watermark` + `graph.ComputeIndexStatus`; new
+`graph.embedding.query.status`). Reusing graph-index's semantics naively is a
+**permanent deadlock**: only text-bearing entities reach `SaveGenerated`;
+telemetry-only entities carry no text, so a Target = "latest ENTITY_STATES revision"
+would leave their revisions permanently un-terminal and `Lag` never reaches 0. The
+resolution — verified by a code-grounded adversarial review against the **real
+two-hop / two-bucket** pipeline (the ADR's first draft cited a `worker.go` layout
+that does not exist):
 
-- `IndexedRevision` (embedding) advances on **every TERMINAL outcome of an eligible
-  entity** — `generated` OR deliberately-skipped-no-text OR `failed` — contiguously,
-  not only on `generated`. "Processed to a terminal state," not "embedded."
-- Thread the **ENTITY_STATES revision** through both hops: capture `entry.Revision()`
-  at ingest → store on the pending `Record` (which has no revision field today,
-  `storage.go:37-53`) → read it back at the terminal transition. `SaveGenerated`
-  today takes no revision (`storage.go:164`) — this plumbing is required, not
-  optional.
-- Target is the same query-time `LastSeq`, but `Ready` means "every eligible
-  revision ≤ Indexed reached a terminal state." Until this is implemented and
-  tested, **no consumer (mcp-gateway, fusion) gates on `embedding.ready`**.
+- The pipeline is **hop 1** (`processor/graph-embedding/component.go` watches
+  ENTITY_STATES → `queueEntityForEmbedding`) and **hop 2** (`graph/embedding/worker.go`
+  watches the *EMBEDDING_INDEX* bucket for pending `Record`s → generate).
+- `IndexedRevision` advances on **every TERMINAL outcome** — `generated` OR
+  deliberately-skipped-no-text OR `ineligible-skip` OR `failed` OR `delete` — not only
+  `generated`. Because every observed ENTITY_STATES revision reaches exactly one
+  terminal across the two hops, `Ready = Indexed >= Target(LastSeq)` **is** reachable
+  even though only text-bearing entities embed. That is the deadlock-avoidance.
+- Thread the **ENTITY_STATES revision** through both hops: `entry.Revision()` at hop-1
+  → new `Record.SourceRevision` field → `SavePending(…, sourceRevision)` → hop-2 reads
+  it and fires a single `WithOnTerminal(entityID, sourceRevision)` callback (a `defer`
+  placed **after** the not-pending skip, so a re-delivered generated/failed record does
+  not double-complete) → `watermark.Complete`. `SaveGenerated` rebuilds the record and
+  drops `SourceRevision` — fine, those records only ever hit the not-pending skip.
+- **Completion-wiring hazards the review caught (all fixed):** (D1) a `SavePending`
+  **network Put** failure must `Complete(key, rev)` — unlike graph-index's shutdown-only
+  `SubmitBlocking`, this fails transiently mid-run and would strand the bulk-ingest path
+  permanently; (D2) `offloaded-excluded` is **NOT** a terminal — it falls through to the
+  inline-text path, so completing there is a false-ready; (D3) a corrupt hop-2 record
+  (`worker.go` unmarshal-fail) cannot yield its revision → **max-rev drain** (`^uint64(0)`)
+  + loud Warn, so one poison record cannot wedge the whole signal.
+- **`SourceRevision==0` (a legacy pending record) → no-op** (`Complete(key,0)` is a
+  natural no-op; KV seqs start at 1). NOT a max-rev drain: hop-1's own bootstrap
+  re-observe re-queues the entity with the real revision, so the genuine completion is
+  guaranteed — a max-rev drain would instead cause a transient false-ready mid-replay.
+- **Stuck detector is COMPLETIONS-based**, not IndexedRevision-based, with a longer
+  threshold (embeddings add a slow external-LLM hop): a single slow call that pins
+  `Indexed` while other workers finish out of order is healthy, not degraded; only a
+  window with zero terminal completions (while lagging) is degraded.
+- **Scope boundary:** like graph-index, `Ready` means terminal *coverage*, not embedding
+  *success* — a backend outage that mass-`SaveFailed`s reads as caught-up (every
+  revision terminal). Counter/failure-ratio degraded signal is a companion follow-up.
+  Also: under **same-key churn + an ordered-consumer reset** (K written twice, the older
+  pending superseded by a `generated` record that drops `SourceRevision`, and the newer
+  pending's delivery lost to a reset), that revision can strand — read as `building`, not
+  `degraded`, since other entities keep the completions detector healthy. It does NOT
+  affect the gh#431 bulk-ingest path (distinct entities, one write each) and **self-heals
+  on the key's next write** (`Complete(K, newRev)` drains it as `≤`); noted so it is not
+  mistaken for a regression.
+- Target is the same query-time `LastSeq`. **No consumer (mcp-gateway, fusion) gates on
+  `embedding.ready`** until this is proven in the field; the handler is surfaced for
+  observability only.
 
 ### 4. Degraded overrides (was punted; the review made it load-bearing)
 
@@ -323,19 +357,21 @@ type IndexStatusResponse struct {
 
 ## Migration path
 
-1. `natsclient`: a `LastSeq` (stream/KV) helper.
-2. graph-index: low-water-of-pending watermark (`observedHigh` + per-key `pending`)
-   with the single key-scoped `complete(key, rev)` on pool return + inline delete;
-   query-time Target; honest `Ready`/`Lag`/`State` on `IndexStatusResponse` (fill
-   `Revision`/`LastSynced`); degraded stuck-detector. Unit-test with a **sparse**
-   ascending revision stream: cold-start / mid-build / caught-up / out-of-order
-   completion / coalescer-collapse / delete-supersedes-pending / trailing-delete /
-   stuck-watermark.
-3. Mirror on `pkg/fusion.IndexStatus`.
-4. graph-embedding: revision-threading (both hops + `Record` field) + new
-   `graph.embedding.query.status` with the terminal-outcome watermark.
-5. semsource: mcp-gateway third fan-out (surfaced, not gated) + retire the workaround
-   note; decide source-manifest gating (their ADR).
+1. ✅ `natsclient.BucketLastSeq` (query-time Target).
+2. ✅ graph-index: low-water-of-pending watermark (`pkg/revlag.Watermark`) with the
+   single key-scoped `Complete(key, rev)` on pool return + inline delete; query-time
+   Target; honest `Ready`/`Lag`/`State`; degraded stuck-detector. Sparse-stream unit
+   tests + a wired integration test. (commit `2ccffba3`)
+3. ✅ Mirror on `pkg/fusion.IndexStatus` + fix the fusionnats client to decode all
+   fields (was dropping the revision-lag fields).
+4. ✅ graph-embedding: `Record.SourceRevision` threaded through both hops; terminal
+   completion on every outcome (generated / failed / no-text / ineligible / delete);
+   `WithOnTerminal` callback; new `graph.embedding.query.status`; completions-based
+   stuck detector. Deadlock-avoidance integration test (text + telemetry-only both
+   catch up). Watermark mechanism extracted to `pkg/revlag`, projection to
+   `graph.ComputeIndexStatus`.
+5. semsource (cross-repo, NOT in this repo): mcp-gateway third fan-out (surfaced, not
+   gated) + retire the workaround note; decide source-manifest gating (their ADR).
 6. Tag beta.128 (bundled with GH #435); coordinate the semsource pin.
 
 ## Open questions
@@ -344,8 +380,9 @@ type IndexStatusResponse struct {
   the numbers first.
 - **source-manifest gating** — semstreams exposes the honest signal; whether
   semsource's `phase=ready` composes it is semsource's decision.
-- **Embedding-ready consumer gating** — deferred until §3 is proven; the third
-  fan-out is surfaced-only meanwhile.
+- **Embedding-ready consumer gating** — `graph.embedding.query.status` now ships
+  (§3 implemented), but **no consumer gates on it** until it is proven in the field;
+  the mcp-gateway third fan-out is surfaced-only meanwhile.
 
 ## Related decisions
 
@@ -365,6 +402,11 @@ type IndexStatusResponse struct {
 - **Silent per-index write failures** — `processEntityUpdateFromData` swallows
   sub-index write errors at Debug; readiness trusts worker-return. Elevate to
   Warn + counter so `Ready` cannot over-report on persistent write failure. To file.
+- **Embedding mass-failure reads as caught-up** — a backend outage that
+  mass-`SaveFailed`s advances the watermark (every revision terminal) → `embedding.ready`
+  true with embeddings missing. Add a failed-terminal counter / failure-ratio degraded
+  signal. Sharper than the graph-index analog because it silently degrades search
+  relevance. To file.
 
 ## References
 
@@ -385,10 +427,13 @@ type IndexStatusResponse struct {
   `DeliverLastPerSubject` `1273-1275`; `*KeyValueBucketStatus.StreamInfo().State.LastSeq`
   `820`); ascending last-per-subject delivery guaranteed at the nats-server storage
   layer (skip-list sorted; ordered-consumer reset re-delivers `> lastGood`).
-- `processor/graph-embedding/component.go` (embedding second hop, `SaveGenerated` /
-  `SaveFailed` / no-text-skip, `WatchAll` at `874` — all in this one file, **not** a
-  `worker.go`); `graph/embedding/storage.go` (`SaveGenerated` no revision `164`;
-  `Record` no revision field `37-53`; terminal states `generated`/`failed`).
+- graph-embedding is **two hops over two buckets**: hop-1
+  `processor/graph-embedding/component.go` (`watchEntityStates`, `queueEntityForEmbedding`
+  terminal-skips, `processEntityBatch` coalescer re-Get, `readiness.go` projection +
+  completions-based stuck detector); hop-2 `graph/embedding/worker.go` (`handleKVEntry`
+  watches EMBEDDING_INDEX, `SaveGenerated`/`markFailed`/no-text `DeleteEmbedding`,
+  `WithOnTerminal` callback). `graph/embedding/storage.go` (`Record.SourceRevision`;
+  `SavePending`/`SavePendingWithStorageRef` take the source revision).
 - `configs/hello-world.json`, `e2e-structural.json`, `statistical.json` (`workers` 2/4;
   none set `coalesce_ms` → coalescer dormant in shipped configs).
 - `semsource/processor/source-manifest/status.go`; `semsource/processor/mcp-gateway/tools.go`.

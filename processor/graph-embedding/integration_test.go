@@ -5,6 +5,7 @@ package graphembedding
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -140,6 +141,105 @@ func TestIntegration_EmbeddingFlow(t *testing.T) {
 
 	t.Logf("Generated embedding for %s: model=%s, dimensions=%d, content_hash=%s",
 		entityID, record.Model, record.Dimensions, record.ContentHash)
+}
+
+// TestIntegration_EmbeddingReadiness_DeadlockAvoidance proves the ADR-066 §3
+// terminal-outcome watermark end to end: a MIX of text-bearing entities (which reach
+// the hop-2 SaveGenerated terminal) and telemetry-only entities (which terminate at
+// the hop-1 no-text skip) BOTH advance the readiness watermark, so
+// graph.embedding.query.status catches up to Ready. The deadlock the ADR warns about
+// — only text-bearing entities embed, so Target=LastSeq is never reached — does NOT
+// occur precisely because the no-text terminal completes the watermark too.
+func TestIntegration_EmbeddingReadiness_DeadlockAvoidance(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+
+	config := DefaultConfig()
+	configJSON, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := CreateGraphEmbedding(configJSON, component.Dependencies{NATSClient: nc})
+	require.NoError(t, err)
+	embeddingComp := comp.(*Component)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, embeddingComp.Initialize())
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketEntityStates, Description: "Test entity states",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, embeddingComp.Start(ctx))
+	defer embeddingComp.Stop(5 * time.Second)
+
+	conn := nc.GetConnection()
+	// Raw Request is fine here — the status handler's only error path is an
+	// unreachable scalar-marshal failure. A production consumer that gates on this
+	// signal must use RequestClassified (ADR-066 §3) to distinguish a classified
+	// error body from a zero-value success status.
+	statusNow := func() graph.IndexStatusResponse {
+		msg, reqErr := conn.Request("graph.embedding.query.status", []byte(`{}`), 2*time.Second)
+		require.NoError(t, reqErr)
+		var st graph.IndexStatusResponse
+		require.NoError(t, json.Unmarshal(msg.Data, &st))
+		return st
+	}
+
+	// Empty ENTITY_STATES → not ready, zero target.
+	st := statusNow()
+	assert.False(t, st.Ready, "empty bucket must not read ready")
+	assert.Zero(t, st.TargetRevision)
+
+	now := time.Now().UTC()
+	writeEntity := func(id string, triples []message.Triple) {
+		state := graph.EntityState{
+			ID: id, Triples: triples,
+			MessageType: message.Type{Domain: "test", Category: "entity", Version: "v1"},
+			Version:     1, UpdatedAt: now,
+		}
+		data, mErr := json.Marshal(state)
+		require.NoError(t, mErr)
+		_, pErr := entityBucket.Put(ctx, id, data)
+		require.NoError(t, pErr)
+	}
+
+	// Text-bearing entities → hop-2 SaveGenerated terminal.
+	const textN = 4
+	for i := 0; i < textN; i++ {
+		id := fmt.Sprintf("c360.p.d.s.drone.%03d", i)
+		writeEntity(id, []message.Triple{
+			{Subject: id, Predicate: "dc.terms.title", Object: fmt.Sprintf("Drone %d", i), Source: "test", Timestamp: now},
+		})
+	}
+	// Telemetry-only entities (no text predicate) → hop-1 no-text terminal. If these
+	// did NOT complete the watermark, Ready would deadlock forever (the ADR's warning).
+	const teleN = 3
+	for i := 0; i < teleN; i++ {
+		id := fmt.Sprintf("c360.p.d.s.sensor.%03d", i)
+		writeEntity(id, []message.Triple{
+			{Subject: id, Predicate: "robotics.status.armed", Object: true, Source: "test", Timestamp: now},
+		})
+	}
+
+	// Poll until caught up. If any telemetry-only revision stranded, this never fires.
+	var final graph.IndexStatusResponse
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		final = statusNow()
+		if final.Ready {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.True(t, final.Ready, "embedding readiness must catch up — text AND telemetry-only both terminal")
+	assert.Equal(t, graph.IndexStateReady, final.State)
+	assert.Zero(t, final.Lag, "caught up means zero lag")
+	assert.GreaterOrEqual(t, final.IndexedRevision, uint64(textN+teleN), "indexed reflects every write")
+	assert.Equal(t, final.TargetRevision, final.IndexedRevision, "indexed == target when caught up")
 }
 
 // TestIntegration_EmbeddingDeduplication verifies deduplication works

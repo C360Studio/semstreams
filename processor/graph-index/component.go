@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
+	"github.com/c360studio/semstreams/pkg/revlag"
 	"github.com/c360studio/semstreams/pkg/worker"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
@@ -238,7 +239,7 @@ type Component struct {
 
 	// watermark is the ADR-066 low-water-of-pending "caught up" tracker feeding the
 	// honest graph.index.query.status. Non-nil once Start wires the watcher.
-	watermark *revisionWatermark
+	watermark *revlag.Watermark
 
 	// Readiness stuck-detector state (ADR-066 §4), guarded by statusMu; touched only
 	// by the polled status handler. lastProgressAt is the wall-clock of the last
@@ -515,7 +516,7 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Readiness watermark (ADR-066): must exist before the pool or the watcher so
 	// the first completion/observation has somewhere to land.
-	c.watermark = newRevisionWatermark()
+	c.watermark = revlag.New()
 
 	// Create and start the entity index worker pool
 	if err := c.startIndexPool(ctx); err != nil {
@@ -761,7 +762,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 			// the readiness watermark before dispatch (ADR-066 §1). observedHigh
 			// advances here; complete() drains on processing return / after delete.
 			if c.watermark != nil {
-				c.watermark.observe(entry.Revision(), entry.Key())
+				c.watermark.Observe(entry.Revision(), entry.Key())
 			}
 
 			if entry.Operation() == jetstream.KeyValueDelete {
@@ -773,7 +774,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				// itself AND any earlier still-pending update for this key that the
 				// delete supersedes (ADR-066 §1).
 				if c.watermark != nil {
-					c.watermark.complete(entry.Key(), entry.Revision())
+					c.watermark.Complete(entry.Key(), entry.Revision())
 				}
 				continue
 			}
@@ -868,7 +869,7 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 	// means revision coverage, not per-index write success). Key-scoped <=rev drains
 	// coalescer-collapsed lower revisions of this key that no worker sees alone.
 	if c.watermark != nil {
-		c.watermark.complete(entry.Key(), entry.Revision())
+		c.watermark.Complete(entry.Key(), entry.Revision())
 	}
 }
 
@@ -1045,7 +1046,7 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 			// forever (ADR-066 §1). Draining fails toward caught-up (within the
 			// Scope boundary) — the next update to this key re-observes it.
 			if c.watermark != nil {
-				c.watermark.complete(entityID, ^uint64(0))
+				c.watermark.Complete(entityID, ^uint64(0))
 			}
 			continue
 		}

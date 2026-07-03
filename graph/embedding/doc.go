@@ -122,6 +122,7 @@
 //	        message.ContentRoleAbstract: "abstract",
 //	        message.ContentRoleTitle:    "title",
 //	    },
+//	    sourceRevision, // ENTITY_STATES revision for the readiness watermark (0 if unknown)
 //	)
 //
 // # Vector Operations

@@ -1,5 +1,7 @@
 package graph
 
+import "strconv"
+
 // IndexStatusResponse is the wire shape of graph.index.query.status (gh#397,
 // enriched by ADR-066): the deterministic-fusion honesty envelope's readiness
 // signal.
@@ -42,3 +44,40 @@ const (
 	IndexStateReady    = "ready"
 	IndexStateDegraded = "degraded"
 )
+
+// ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066)
+// from an indexed watermark, the query-time target (a stream LastSeq), a stuck flag
+// (the caller's stuck-watermark detector), and a last-synced timestamp. It is the
+// shared PROJECTION over pkg/revlag.Watermark used by every revision-lag consumer
+// (graph-index, graph-embedding); the watermark mechanism and the per-consumer
+// stuck-detector live elsewhere.
+//
+//   - Ready = target > 0 && indexed >= target (no max(0,…) clamp — indexed <= target
+//     is structural in the watermark, so Lag cannot underflow).
+//   - State = ready ? "ready" : (stuck ? "degraded" : "building"); ready wins.
+func ComputeIndexStatus(indexed, target uint64, stuck bool, lastSynced string) IndexStatusResponse {
+	ready := target > 0 && indexed >= target
+	var lag uint64
+	if target > indexed {
+		lag = target - indexed
+	}
+	state := IndexStateBuilding
+	switch {
+	case ready:
+		state = IndexStateReady
+	case stuck:
+		state = IndexStateDegraded
+	}
+	resp := IndexStatusResponse{
+		Ready:           ready,
+		State:           state,
+		IndexedRevision: indexed,
+		TargetRevision:  target,
+		Lag:             lag,
+		LastSynced:      lastSynced,
+	}
+	if indexed > 0 {
+		resp.Revision = strconv.FormatUint(indexed, 10)
+	}
+	return resp
+}
