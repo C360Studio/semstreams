@@ -2,12 +2,15 @@
 
 ## Status
 
-**Accepted** (2026-07-03, GH #430). Reached after two review rounds: a
+**Accepted** (2026-07-03, GH #430). Reached after three review rounds: a
 3-way adversarial review (architect, go-reviewer, semstreams-reviewer) that
-found and fixed the raw-predicate-prefix collision bug, then a final
-architect gate-check on this document that returned GO with the
-refinements folded into this revision (single-scan `predicateList`, new
-bucket name for the cutover, catalog key-identity clarification). Adjacent
+found and fixed the raw-predicate-prefix collision bug; a final architect
+gate-check on this document that returned GO with refinements (single-scan
+`predicateList`, catalog key-identity clarification); and a
+during-implementation correction (bucket-name decision reversed back to
+in-place cutover after discovering ~9 operator-facing configs hardcode the
+bucket name, plus explicit sem*-team migration guidance and a wired-up
+namespace-query capability, both prompted directly by Coby). Adjacent
 correctness gap found during this investigation filed separately as
 GH #433 (entity-delete never cleans up
 PREDICATE_INDEX/NAME_INDEX/ALIAS_INDEX/CONTEXT_INDEX) — explicitly out of
@@ -34,14 +37,20 @@ JetStream KV's server-side prefix-filtered key listing.
 A second, small **PREDICATE_CATALOG** bucket — its own bucket, not a
 shared keyspace with membership keys — maps `predicate name → exists`,
 updated via the same cheap idempotent `Put` whenever a predicate is first
-seen. Its sole job is being the cheap hash→name recovery source for
-`graph.index.query.predicateList`: **key = the raw predicate name**
-(never hashed), read only via exact `Get` or a full `Keys()` enumeration,
-**never** `KeysByPrefix` on this bucket — the exact-string-only discipline
-of ADR-056 applies to the catalog too, not just membership keys. Note the
-catalog does not, by itself, avoid a full-corpus scan for `predicateList`'s
-per-predicate counts — see the single-scan design in the read-path table
-below for how that's actually avoided.
+seen. Its keys are **the raw, unhashed predicate name** — deliberately,
+for two reasons: (1) it's the hash→name recovery source for
+`graph.index.query.predicateList`'s unfiltered listing, and (2) unlike the
+membership bucket, `KeysByPrefix` on *this* bucket is safe — it can only
+return a superset of predicate names sharing a dotted namespace, never
+corrupt entity-membership correctness, because it carries no membership
+data. `graph.index.query.predicateList` gains an optional `prefix`
+request field that uses exactly this: a genuine, deliberate,
+namespace-style predicate query (NATS-KV-wildcard "SQL-`LIKE`-prefix"
+semantics, intentionally preserved here rather than given up wholesale —
+see Wildcard-semantics tradeoff below). Note the catalog does not, by
+itself, avoid a full-corpus scan for the *unfiltered* `predicateList`
+call's per-predicate counts — see the single-scan design in the read-path
+table below for how that's actually avoided.
 
 The NATS wire contract (`graph.PredicateData`, `graph.PredicateListData`,
 `graph.PredicateStatsData`, `graph.CompoundPredicateData`) does not change.
@@ -241,12 +250,14 @@ opaque hash there.
   prefix design unsafe was call-site *intent* — every existing membership
   read wants an exact single-predicate match, not a namespace scan — not
   something inherent to prefix-matching on dotted predicate strings in
-  general. This ADR does not implement catalog prefix-querying (no current
-  caller needs it: `CountVirtualEdges` and `predicateList` both filter a
-  small, already-fetched name list client-side, and predicate cardinality
-  is bounded taxonomy-sized, not entity-cardinality-sized) — flagged here
-  as a real, available extension point rather than a foreclosed one, and
-  left for whoever has the first real need.
+  general. **This ADR wires up catalog prefix-querying** (not deferred —
+  see the `prefix` field on `graph.index.query.predicateList` in the
+  Read-path changes table below), specifically because `CountVirtualEdges`'s
+  migration is a concrete, immediate, real caller: it wants exactly "every
+  `inferred.semantic.*` predicate," which is a namespace query, not N
+  exact lookups. This preserves a genuine, useful slice of the dotted-key
+  pattern's SQL-`LIKE`-prefix value rather than only preserving it in
+  the abstract.
 
 ## Read-path changes
 
@@ -255,7 +266,7 @@ All four NATS handlers in `processor/graph-index/query.go`:
 | Handler | Today | Proposed |
 |---|---|---|
 | `queryPredicateEntities` (→`handleQueryPredicateNATS`) | `predicateBucket.Get(predicate)` → unmarshal `.Entities` | `predicateBucket.KeysByPrefix(sha256Hex(predicate)+".")` → strip prefix per key |
-| `handleQueryPredicateListNATS` | `Keys()` (all predicate keys) then `Get` each | **One** `KeysByPrefix("")` (or `Keys()`) over the whole membership bucket, group by first token (the hash) to get counts; `Keys()` on `PREDICATE_CATALOG` + forward-hash each name to join hash→name. **Not** a per-predicate `KeysByPrefix` fan-out — see below. |
+| `handleQueryPredicateListNATS` | `Keys()` (all predicate keys) then `Get` each | Request gains an optional `prefix` field (new — wires up the namespace-query door left open in the Wildcard-semantics tradeoff section, requested explicitly rather than left theoretical). Unfiltered (no `prefix`): **one** `Keys()` over the whole membership bucket, group by first token (the hash) to get counts; `Keys()` on `PREDICATE_CATALOG` + forward-hash each name to join hash→name — **not** a per-predicate fan-out, see below. Filtered (`prefix` set): `PREDICATE_CATALOG.KeysByPrefix(prefix)` for the (now namespace-bounded, small) matching names, then a per-name `KeysByPrefix` against the membership bucket for each — a fan-out is fine here because the namespace filter already bounds the result set, unlike the unfiltered case. |
 | `handleQueryPredicateStatsNATS` | `Get(predicate)` → count + slice sample | `KeysByPrefix` → `len(keys)` for count, sorted-first-N for sample |
 | `handleQueryPredicateCompoundNATS` | `Get` per predicate → build set from `.Entities` | `KeysByPrefix` per predicate → build set from stripped keys |
 
@@ -381,6 +392,39 @@ Per this project's hard rule on breaking changes, this qualifies:
 `task e2e:structural` and `task e2e:semantic` must be green **before**
 this change merges, with the e2e-client migration in scope for this PR,
 not deferred.
+
+### Migration guidance for sem* teams
+
+Project status note (Coby, 2026-07-03): semstreams is pre-1.0/greenfield
+with no external production users, and C360 controls every sem* consumer
+repo directly — breaking changes in beta are acceptable when well
+justified, with direct migration guidance to the sem* teams rather than a
+compatibility shim. This is that guidance for this specific change:
+
+- **No code changes required for any sem* consumer.** Every documented
+  consumer (semsource, semconnect, semteams) reaches `PREDICATE_INDEX`
+  exclusively through the NATS query API
+  (`graph.index.query.predicate*`), which does not change shape. This was
+  explicitly checked during review (semstreams-reviewer's pass) —
+  no evidence of a sister repo reading the raw bucket, only this repo's
+  own e2e test harness did that, and it's fixed in this same PR.
+- **No deployment-config changes required.** The bucket name is unchanged
+  (`PREDICATE_INDEX`); the ~9 configs in this repo that declare it as an
+  output port subject need no edits, and neither does any sem* team's own
+  copy/derivative of a graph-index component config, if one exists.
+- **What silently changes**: any *ad hoc* tooling outside this repo that
+  reads the `PREDICATE_INDEX` bucket directly (NATS CLI inspection
+  scripts, a debugging notebook, etc.) rather than through the query API
+  will see opaque hashed keys instead of readable predicate-named keys
+  after this deploys. If any sem* team has such tooling, it needs to move
+  to `graph.index.query.predicate*` (which now also supports namespace
+  queries via the new `prefix` field on `predicateList` — see Decision).
+- **Operationally**: after this version deploys, `PREDICATE_INDEX` rebuilds
+  from `ENTITY_STATES` via the existing KV-watch replay on next boot (same
+  mechanism as any restart) — no manual migration step. Old blob-format
+  keys are inert and can be left in place; operators who want a clean
+  bucket for storage hygiene may optionally delete-and-let-rebuild, but
+  this is not required for correctness.
 
 ## Consequences
 
