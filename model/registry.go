@@ -209,6 +209,12 @@ type EndpointConfig struct {
 	URL string `json:"url,omitempty"`
 	// Model is the model identifier sent to the provider.
 	Model string `json:"model"`
+	// QueryPrefix is used ONLY by the embedding capability (gh#438): the query
+	// instruction prepended to query-side text for asymmetric retrieval models
+	// (arctic-embed, BGE, E5) — e.g. "Represent this sentence for searching relevant
+	// passages: ". Documents are embedded raw. Ignored by non-embedding capabilities
+	// and by symmetric embedders. Empty = no prefix.
+	QueryPrefix string `json:"query_prefix,omitempty"`
 	// MaxTokens is the context window size in tokens.
 	//
 	// For provider="ollama", this value is NOT forwarded to the server —

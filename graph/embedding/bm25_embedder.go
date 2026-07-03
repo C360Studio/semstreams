@@ -103,6 +103,15 @@ func NewBM25Embedder(cfg BM25Config) *BM25Embedder {
 	}
 }
 
+// GenerateQuery embeds query-side text. BM25 is a symmetric bag-of-words model —
+// there is no query/document asymmetry, so it is identical to Generate (gh#438).
+// Like Generate, it folds the text's terms into the corpus IDF statistics (the
+// pre-gh#438 query path already did this via the direct Generate call, so behavior
+// is unchanged); a read-only query vectorization would be a separate follow-up.
+func (b *BM25Embedder) GenerateQuery(ctx context.Context, texts []string) ([][]float32, error) {
+	return b.Generate(ctx, texts)
+}
+
 // Generate creates BM25-based embeddings for the given texts.
 //
 // This updates internal document statistics incrementally, so the embedder

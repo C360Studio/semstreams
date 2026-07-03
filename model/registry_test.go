@@ -1059,6 +1059,7 @@ func TestResolveEndpointWithConfig_KeepalivePlumbing(t *testing.T) {
 				DisableKeepAlives:     true,
 				IdleConnTimeout:       "10s",
 				ResponseHeaderTimeout: "30s",
+				QueryPrefix:           "Represent this sentence for searching relevant passages: ",
 				MaxTokens:             32000,
 			},
 		},
@@ -1093,6 +1094,11 @@ func TestResolveEndpointWithConfig_KeepalivePlumbing(t *testing.T) {
 	}
 	if ep.ResponseHeaderTimeout != "30s" {
 		t.Errorf("ResponseHeaderTimeout = %q, want 30s", ep.ResponseHeaderTimeout)
+	}
+	// query_prefix rides the identical resolve seam (gh#438); guard it against the
+	// same silent-strip regression class the keepalive fields hit (smoke-#10).
+	if ep.QueryPrefix != "Represent this sentence for searching relevant passages: " {
+		t.Errorf("QueryPrefix = %q, want the arctic query prefix (gh#438 plumbing)", ep.QueryPrefix)
 	}
 }
 
