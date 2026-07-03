@@ -372,3 +372,108 @@ func TestEngine_Signals_TooSmallToReorder(t *testing.T) {
 		t.Errorf("top = %q, want Apple (sub-gap signal must not override resolve order)", got)
 	}
 }
+
+// TestEngine_Signals_NegativeSalienceDemotes: A (resolved first) carries a
+// negatively-weighted predicate — the tests/generated/mocks case (gh#441). The
+// demotion overcomes A's resolve-order lead, so B reorders ahead. Additive-only
+// salience could never do this: a max over non-negative weights can only boost.
+func TestEngine_Signals_NegativeSalienceDemotes(t *testing.T) {
+	// A carries the demotion predicate; B is clean. Both same class (no ontology
+	// signal). A leads by resolveScale (4.0); demotion on A = salienceScale*1.5 =
+	// 4.5 > 4.0, so B wins.
+	a := entity("acme.ops.code.repo.symbol.Apple", "Apple", "a_test.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"},
+		message.Triple{Predicate: "code.artifact.test", Object: "true"})
+	b := entity("acme.ops.code.repo.symbol.Banana", "Banana", "b.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"})
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"zzz": {a.ID, b.ID}},
+		entities: map[string]*fusion.Entity{a.ID: a, b.ID: b},
+	}
+	sig := fakeSignals{salience: map[string]float64{"code.artifact.test": -1.5}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	if got := topName(t, eng); got != "Banana" {
+		t.Errorf("top = %q, want Banana (negatively-weighted predicate demotes A below B)", got)
+	}
+}
+
+// TestEngine_Signals_BoostAndDemotionCompose: the issue's core case (gh#441) —
+// impl and test carry the SAME salient (doc-comment) predicate, so additive
+// salience alone cannot separate them; the test ALSO carries a demotion
+// predicate, and boost+demotion compose so the impl sorts ahead of its test.
+func TestEngine_Signals_BoostAndDemotionCompose(t *testing.T) {
+	// Impl (A) resolves first; both carry the same +1.0 doc-comment salience.
+	// Test (B) additionally carries a -1.5 demotion. Net: A salience = +1.0,
+	// B salience = 1.0 - 1.5 = -0.5. Salience gap = salienceScale*(1.0-(-0.5)) =
+	// 3.0*1.5 = 4.5 > resolve gap 4.0, so the impl stays ahead of the test even
+	// though the test resolved... second here, so also assert order explicitly.
+	impl := entity("acme.ops.code.repo.symbol.retry", "retry", "retry.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"},
+		message.Triple{Predicate: "code.symbol.doc", Object: "retries the op"})
+	test := entity("acme.ops.code.repo.symbol.retryTest", "retry", "retry_test.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"},
+		message.Triple{Predicate: "code.symbol.doc", Object: "tests retry"},
+		message.Triple{Predicate: "code.artifact.test", Object: "true"})
+	// Resolve the TEST first (adversarial: it has the resolve-order lead), so the
+	// demotion must overcome resolve order to put the impl on top.
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"zzz": {test.ID, impl.ID}},
+		entities: map[string]*fusion.Entity{test.ID: test, impl.ID: impl},
+	}
+	sig := fakeSignals{salience: map[string]float64{
+		"code.symbol.doc":    1.0,
+		"code.artifact.test": -1.5,
+	}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "zzz"}, refLens{})
+	if err != nil {
+		t.Fatalf("Fuse: %v", err)
+	}
+	if len(resp.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(resp.Nodes))
+	}
+	if resp.Nodes[0].Path != "retry.go" || resp.Nodes[1].Path != "retry_test.go" {
+		t.Errorf("order = [%s, %s], want [retry.go, retry_test.go] (impl ahead of its test)",
+			resp.Nodes[0].Path, resp.Nodes[1].Path)
+	}
+}
+
+// TestEngine_Signals_MaxNotSum_NoFactCountInflation: the anti-inflation
+// property the signed aggregation must preserve — a densely-annotated entity
+// must NOT outrank a sharply-identified one purely on fact count (the reason
+// entitySalience takes the positive EXTREME, not a sum). This is also the
+// backward-compat guard for every all-positive config from before gh#441.
+func TestEngine_Signals_MaxNotSum_NoFactCountInflation(t *testing.T) {
+	// A (resolved first, sharp): one +2.0 predicate → salience 2.0 either way.
+	// B (resolved second, dense): four +1.0 predicates → max 1.0, sum 4.0.
+	// Under the correct max/extreme aggregation, A's resolve lead (4.0) holds and
+	// A stays on top. Under a (wrong) sum aggregation, B's salience 4.0 vs A's 2.0
+	// gives salienceScale*(4-2)=6 > 4 and B would flip ahead. Assert A wins.
+	a := entity("acme.ops.code.repo.symbol.Apple", "Apple", "a.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"},
+		message.Triple{Predicate: "acme.identity.serial", Object: "SN-1"})
+	b := entity("acme.ops.code.repo.symbol.Banana", "Banana", "b.go",
+		message.Triple{Predicate: "entity.ontology.class", Object: "http://x/Same"},
+		message.Triple{Predicate: "acme.label.one", Object: "1"},
+		message.Triple{Predicate: "acme.label.two", Object: "2"},
+		message.Triple{Predicate: "acme.label.three", Object: "3"},
+		message.Triple{Predicate: "acme.label.four", Object: "4"})
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"zzz": {a.ID, b.ID}},
+		entities: map[string]*fusion.Entity{a.ID: a, b.ID: b},
+	}
+	sig := fakeSignals{salience: map[string]float64{
+		"acme.identity.serial": 2.0,
+		"acme.label.one":       1.0,
+		"acme.label.two":       1.0,
+		"acme.label.three":     1.0,
+		"acme.label.four":      1.0,
+	}}
+	eng := fusion.NewEngine(g, nil).WithSignals(sig)
+	if got := topName(t, eng); got != "Apple" {
+		t.Errorf("top = %q, want Apple (sharp entity holds; dense fact count must not inflate via sum)", got)
+	}
+}

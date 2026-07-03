@@ -37,7 +37,7 @@ const (
 	lexContains   = 8.0
 	resolveScale  = 4.0 // base score per resolve-rank position
 	ontologyScale = 1.5 // per ontology-depth level (class specificity)
-	salienceScale = 3.0 // per unit of an entity's max predicate salience
+	salienceScale = 3.0 // per unit of an entity's net predicate salience (signed: boost − demotion, gh#441)
 )
 
 // ontologyClassPredicate is the stamped BFO/CCO class triple (semsource ADR-0005).
@@ -281,18 +281,35 @@ func (e *Engine) rankEntities(entities []*Entity, names []string, query string) 
 	return out
 }
 
-// entitySalience is an entity's ranking salience: the maximum stored weight over
-// its predicates (the single most salient fact it carries). Max, not sum, so a
-// densely-annotated entity does not outrank a sharply-identified one purely on
-// fact count.
+// entitySalience is an entity's ranking salience: the entity's single most
+// salient (max positive) weight PLUS its single strongest demotion (min
+// negative) weight over its predicates — one presence-based boost and one
+// presence-based penalty, summed (gh#441). Extremes, not a sum over all
+// predicates, so a densely-annotated entity does not outrank a sharply-
+// identified one purely on fact count; and the two extremes come from different
+// predicates (a predicate's weight is one sign), so a boost and a demotion
+// compose without either masking the other.
+//
+// Signed weights are what let a ranker DEMOTE, not just boost: structurally-
+// identifiable noise (tests, generated code, mocks) that carries the SAME
+// salient predicates as the real thing — a *_test.go with the same doc-comment
+// salience as its impl — also carries a negatively-weighted presence predicate
+// (e.g. code.artifact.test → WithWeight(-1.5)), so it sinks below the impl the
+// additive-only ranker could never separate it from. With no negative weights
+// (every config before gh#441) min-negative stays 0 and this is exactly the old
+// max — backward-compatible.
 func entitySalience(ent *Entity, sig RankSignals) float64 {
-	var best float64
+	var maxPos, minNeg float64 // strongest boost (≥0), strongest demotion (≤0)
 	for i := range ent.Triples {
-		if w := sig.PredicateSalience(ent.Triples[i].Predicate); w > best {
-			best = w
+		w := sig.PredicateSalience(ent.Triples[i].Predicate)
+		if w > maxPos {
+			maxPos = w
+		}
+		if w < minNeg {
+			minNeg = w
 		}
 	}
-	return best
+	return maxPos + minNeg
 }
 
 // lexicalScore scores a name against a lowercased query.

@@ -6,7 +6,10 @@ package fusion
 // interface so pkg/fusion stays a leaf (no vocabulary / bfo / cco imports);
 // production wires the vocabulary registry + BFO/CCO subclass helper (see
 // pkg/fusion/fusionvocab). A nil RankSignals leaves ranking at resolve-order +
-// lexical — the increments 1–4 behavior — so the signals are strictly additive.
+// lexical — the increments 1–4 behavior — so attaching signals is purely
+// additive to the pipeline (nil → unchanged). The salience signal itself is
+// DIRECTIONAL: a predicate's weight is signed, so it can down-rank as well as
+// boost (gh#441).
 type RankSignals interface {
 	// ClassSpecificity scores how specific an ontology class IRI is: more
 	// specific (deeper in the BFO/CCO subclass tree) = higher; 0 for an
@@ -15,8 +18,14 @@ type RankSignals interface {
 	// vaguely-typed peer.
 	ClassSpecificity(classIRI string) float64
 
-	// PredicateSalience returns a predicate's stored salience weight (0 =
-	// neutral). Production reads vocabulary PredicateMetadata.Weight so an
-	// entity carrying more salient facts reorders ahead of a sparse peer.
+	// PredicateSalience returns a predicate's stored salience weight, SIGNED:
+	// positive boosts (an entity carrying the fact reorders ahead), negative
+	// demotes (it reorders behind), 0 is neutral. Production reads vocabulary
+	// PredicateMetadata.Weight. A negative weight is how a consumer down-ranks
+	// structurally-identifiable noise (tests, generated code, mocks) that carries
+	// the same boosted predicates as the real thing — additive boosting alone
+	// cannot separate them (gh#441). The engine folds an entity's strongest boost
+	// and strongest demotion together (see entitySalience), so a demotion is a
+	// bounded secondary reordering, never an exclusion.
 	PredicateSalience(predicate string) float64
 }

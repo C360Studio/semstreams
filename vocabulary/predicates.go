@@ -422,9 +422,12 @@ type PredicateMetadata struct {
 	// semstreams ranking annotation, not an ontology assertion.
 	Role PredicateRole
 
-	// Weight is the predicate's salience weight for ranking (higher = more
-	// salient). 0 means unweighted (neutral). Lets a ranker prefer entities
-	// carrying more salient facts without hard-coding a per-product table.
+	// Weight is the predicate's salience weight for ranking, SIGNED: positive =
+	// more salient (boost), 0 = unweighted (neutral), negative = down-rank
+	// (demote, gh#441). Lets a ranker prefer entities carrying salient facts, or
+	// push down structurally-identifiable noise (tests, generated code, mocks)
+	// that carries the same boosted predicates as the real thing, without
+	// hard-coding a per-product table.
 	Weight float64
 }
 
