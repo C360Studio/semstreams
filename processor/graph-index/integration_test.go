@@ -136,21 +136,16 @@ func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
 	assert.NotNil(t, aliasEntry)
 	assert.Equal(t, entityID, string(aliasEntry.Value))
 
-	// Verify predicate indexes were created (format: {entities: [...], predicate, entity_id})
+	// Verify predicate indexes were created: one composite key per
+	// (predicate, entity) pair, hash(predicate)+"."+entityID (ADR-065) —
+	// not a blob keyed on the raw predicate string.
 	predicates := []string{"robotics.assigned.mission", "robotics.status.armed", "core.identity.alias"}
 	for _, predicate := range predicates {
-		predicateEntry, err := graphIndex.predicateBucket.Get(ctx, predicate)
-		require.NoError(t, err, "predicate index should exist for %s", predicate)
+		_, err := graphIndex.predicateBucket.Get(ctx, predicateIndexKey(predicate, entityID))
+		require.NoError(t, err, "predicate index should have a composite-key entry for %s", predicate)
 
-		var predicateData map[string]interface{}
-		err = json.Unmarshal(predicateEntry.Value, &predicateData)
-		require.NoError(t, err)
-
-		// Check entities array contains our entity
-		entities, ok := predicateData["entities"].([]interface{})
-		require.True(t, ok, "predicate index should have entities array")
-		require.Contains(t, entities, entityID, "entities should contain the entity ID")
-		assert.Equal(t, predicate, predicateData["predicate"])
+		_, err = graphIndex.predicateCatalogBucket.Get(ctx, predicate)
+		require.NoError(t, err, "predicate catalog should record %s", predicate)
 	}
 }
 

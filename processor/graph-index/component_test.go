@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,8 +124,24 @@ func (m *mockKVBucket) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt)
 	return nil, errors.New("not implemented")
 }
 
+// ListKeysFiltered gives a prefix-matching approximation of NATS subject
+// filtering: KVStore.KeysByPrefix always calls this with a single filter of
+// the form "<literal prefix>>", so stripping the trailing ">" and doing a
+// literal HasPrefix match is faithful to every call this package makes,
+// without implementing full NATS wildcard-token semantics.
 func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
-	return nil, errors.New("not implemented")
+	m.mu.Lock()
+	var matched []string
+	for k := range m.data {
+		for _, filter := range filters {
+			if strings.HasPrefix(k, strings.TrimSuffix(filter, ">")) {
+				matched = append(matched, k)
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+	return newMockKeyLister(matched), nil
 }
 
 func (m *mockKVBucket) History(ctx context.Context, key string, opts ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
@@ -138,6 +155,24 @@ func (m *mockKVBucket) PurgeDeletes(ctx context.Context, opts ...jetstream.KVPur
 func (m *mockKVBucket) Status(ctx context.Context) (jetstream.KeyValueStatus, error) {
 	return nil, errors.New("not implemented")
 }
+
+// mockKeyLister is a minimal jetstream.KeyLister backed by a pre-computed
+// key slice, sufficient for ListKeysFiltered's synchronous mock use.
+type mockKeyLister struct {
+	ch chan string
+}
+
+func newMockKeyLister(keys []string) *mockKeyLister {
+	ch := make(chan string, len(keys))
+	for _, k := range keys {
+		ch <- k
+	}
+	close(ch)
+	return &mockKeyLister{ch: ch}
+}
+
+func (l *mockKeyLister) Keys() <-chan string { return l.ch }
+func (l *mockKeyLister) Stop() error         { return nil }
 
 // Mock KV entry for testing
 type mockKVEntry struct {
@@ -841,15 +876,28 @@ func TestComponent_DeleteFromPredicateIndex_ValidData(t *testing.T) {
 	ctx := context.Background()
 
 	entityID := "c360.platform.robotics.mav1.drone.001"
+	otherEntityID := "c360.platform.robotics.mav1.drone.002"
 	predicate := "robotics.status.armed"
 
-	// Add entry first
+	// Two entities share the predicate.
 	require.NoError(t, comp.UpdatePredicateIndex(ctx, entityID, predicate))
+	require.NoError(t, comp.UpdatePredicateIndex(ctx, otherEntityID, predicate))
 
-	// Delete
+	// Deleting one entity's membership must not touch the other's — the
+	// old blob-CAS design deleted the WHOLE predicate key regardless of
+	// entityID (component.go's old DeleteFromPredicateIndex bug, fixed by
+	// the composite-key redesign, ADR-065).
 	err := comp.DeleteFromPredicateIndex(ctx, entityID, predicate)
+	require.NoError(t, err)
 
-	assert.NoError(t, err)
+	bucket := predicateMock(comp)
+	bucket.mu.Lock()
+	_, deletedExists := bucket.data[predicateIndexKey(predicate, entityID)]
+	_, otherExists := bucket.data[predicateIndexKey(predicate, otherEntityID)]
+	bucket.mu.Unlock()
+
+	assert.False(t, deletedExists, "deleted entity's membership should be gone")
+	assert.True(t, otherExists, "other entity's membership must survive the delete")
 }
 
 func TestComponent_DeleteFromAliasIndex_ValidData(t *testing.T) {
@@ -1109,10 +1157,11 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 
 	// Create mock buckets and wrap them in KVStore so the component field types match.
 	mocks := &mockRefs{
-		outgoing:  newMockKVBucket(),
-		incoming:  newMockKVBucket(),
-		alias:     newMockKVBucket(),
-		predicate: newMockKVBucket(),
+		outgoing:         newMockKVBucket(),
+		incoming:         newMockKVBucket(),
+		alias:            newMockKVBucket(),
+		predicate:        newMockKVBucket(),
+		predicateCatalog: newMockKVBucket(),
 	}
 
 	graphIndexComp := comp.(*Component)
@@ -1120,6 +1169,7 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	graphIndexComp.incomingBucket = nc.NewKVStore(mocks.incoming)
 	graphIndexComp.aliasBucket = nc.NewKVStore(mocks.alias)
 	graphIndexComp.predicateBucket = nc.NewKVStore(mocks.predicate)
+	graphIndexComp.predicateCatalogBucket = nc.NewKVStore(mocks.predicateCatalog)
 	// Initialize lifecycle reporter (normally done in Start())
 	graphIndexComp.lifecycleReporter = component.NewNoOpLifecycleReporter()
 

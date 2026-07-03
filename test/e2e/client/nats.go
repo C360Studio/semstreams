@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -844,8 +845,19 @@ type VirtualEdgeCounts struct {
 	AutoApplied int            // Edges that were auto-applied
 }
 
-// CountVirtualEdges counts virtual edges (inferred relationships) by querying the PREDICATE_INDEX.
-// Virtual edges use predicates starting with "inferred." prefix.
+// CountVirtualEdges counts virtual edges (inferred relationships) via the
+// production query API (graph.index.query.predicateList), scoped to the
+// "inferred." namespace. Virtual edges use predicates starting with that
+// prefix.
+//
+// Routed through the query API rather than reading PREDICATE_INDEX
+// directly (ADR-065): the bucket's internal key format is hashed and
+// opaque, so a raw-bucket reader can no longer recover predicate names or
+// counts on its own. A genuine query failure or unparseable response is a
+// real error here — not swallowed to zero counts — so a caller can
+// distinguish "no virtual edges exist" from "couldn't find out." An empty
+// but successfully-parsed predicate list is a legitimate zero (e.g. no
+// semantic gaps met the auto-apply threshold), not an error.
 func (c *NATSValidationClient) CountVirtualEdges(ctx context.Context) (*VirtualEdgeCounts, error) {
 	c.mu.Lock()
 	if c.closed {
@@ -854,59 +866,32 @@ func (c *NATSValidationClient) CountVirtualEdges(ctx context.Context) (*VirtualE
 	}
 	c.mu.Unlock()
 
-	js, err := c.client.JetStream()
+	reqJSON, err := json.Marshal(graph.PredicateListQuery{Prefix: "inferred.semantic."})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
+		return nil, fmt.Errorf("failed to marshal predicateList request: %w", err)
 	}
 
-	bucket, err := js.KeyValue(ctx, "PREDICATE_INDEX")
+	respData, err := c.client.RequestClassified(ctx, "graph.index.query.predicateList", reqJSON, 5*time.Second)
 	if err != nil {
-		// Bucket doesn't exist - return zero counts
-		return &VirtualEdgeCounts{
-			ByBand: make(map[string]int),
-		}, nil
+		return nil, fmt.Errorf("predicateList query failed: %w", err)
 	}
 
-	keys, err := bucket.Keys(ctx)
-	if err != nil {
-		// No keys - return zero counts
-		return &VirtualEdgeCounts{
-			ByBand: make(map[string]int),
-		}, nil
+	var resp graph.PredicateListQueryResponse
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal predicateList response: %w", err)
 	}
 
 	counts := &VirtualEdgeCounts{
 		ByBand: make(map[string]int),
 	}
-
-	// Count actual edges (entities) under each inferred.* predicate key
-	for _, key := range keys {
-		if !strings.HasPrefix(key, "inferred.") {
-			continue
-		}
-
-		// Get the predicate entry to count entities
-		entry, err := bucket.Get(ctx, key)
-		if err != nil {
-			continue
-		}
-
-		// Parse the predicate index entry
-		var predEntry struct {
-			Entities []string `json:"entities"`
-		}
-		if err := json.Unmarshal(entry.Value(), &predEntry); err != nil {
-			continue
-		}
-
-		edgeCount := len(predEntry.Entities)
-		counts.Total += edgeCount
+	for _, p := range resp.Data.Predicates {
+		counts.Total += p.EntityCount
 
 		// Parse the band from the predicate (e.g., "inferred.semantic.high" -> "high")
-		parts := strings.Split(key, ".")
+		parts := strings.Split(p.Predicate, ".")
 		if len(parts) >= 3 && parts[1] == "semantic" {
 			band := parts[2]
-			counts.ByBand[band] += edgeCount
+			counts.ByBand[band] += p.EntityCount
 		}
 	}
 
