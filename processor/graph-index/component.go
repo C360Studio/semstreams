@@ -201,13 +201,14 @@ type Component struct {
 	metricsRegistry *metric.MetricsRegistry
 
 	// Domain resources - KV buckets for index storage (wrapped for CAS + retry)
-	outgoingBucket     *natsclient.KVStore
-	incomingBucket     *natsclient.KVStore
-	aliasBucket        *natsclient.KVStore
-	predicateBucket    *natsclient.KVStore
-	contextBucket      *natsclient.KVStore
-	nameBucket         *natsclient.KVStore
-	entityStatesBucket jetstream.KeyValue // raw: read-only watcher, no CAS needed
+	outgoingBucket         *natsclient.KVStore
+	incomingBucket         *natsclient.KVStore
+	aliasBucket            *natsclient.KVStore
+	predicateBucket        *natsclient.KVStore
+	predicateCatalogBucket *natsclient.KVStore
+	contextBucket          *natsclient.KVStore
+	nameBucket             *natsclient.KVStore
+	entityStatesBucket     jetstream.KeyValue // raw: read-only watcher, no CAS needed
 
 	// Lifecycle state
 	mu              sync.RWMutex
@@ -640,6 +641,18 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketNameIndex))
 	}
 	c.nameBucket = c.natsClient.NewKVStore(nameBucket)
+
+	// Create PREDICATE_CATALOG bucket for predicate hash→name recovery
+	// (ADR-065, gh#430). Internal like CONTEXT_INDEX/NAME_INDEX — not a
+	// declared output port, so existing configs don't need to add it.
+	predicateCatalogBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketPredicateCatalog,
+		Description: "Predicate hash → name catalog for PREDICATE_INDEX",
+	})
+	if err != nil {
+		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketPredicateCatalog))
+	}
+	c.predicateCatalogBucket = c.natsClient.NewKVStore(predicateCatalogBucket)
 	return nil
 }
 
@@ -1301,43 +1314,32 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "context cancelled")
 	}
 
-	// CAS update: read-modify-write with automatic retry on conflict
-	err := c.predicateBucket.UpdateWithRetry(ctx, predicate, func(current []byte) ([]byte, error) {
-		var entry graph.PredicateIndexEntry
-		if len(current) > 0 {
-			if unmarshalErr := json.Unmarshal(current, &entry); unmarshalErr != nil {
-				// If unmarshal fails, start fresh (backward compatibility with old format)
-				entry.Entities = []string{}
-				entry.Predicate = predicate
-			}
-		} else {
-			// New entry
-			entry.Entities = []string{}
-			entry.Predicate = predicate
-		}
-
-		// Check if this entity already exists (avoid duplicates)
-		for _, e := range entry.Entities {
-			if e == entityID {
-				// Already exists, return unchanged
-				if len(entry.Entities) > 0 {
-					entry.EntityID = entry.Entities[len(entry.Entities)-1]
-				}
-				return json.Marshal(entry)
-			}
-		}
-
-		// Append new entity
-		entry.Entities = append(entry.Entities, entityID)
-
-		// Set backward compatibility field (last entity)
-		entry.EntityID = entry.Entities[len(entry.Entities)-1]
-
-		return json.Marshal(entry)
-	})
-	if err != nil {
+	// Unconditional Put, no CAS (ADR-065). The key already encodes full
+	// membership identity (hash(predicate) + entityID), so no two entities
+	// ever write the same key — there is nothing a concurrent writer could
+	// clobber. If this bucket's writes ever need CAS again, that means the
+	// key-uniqueness invariant above no longer holds; don't "fix" this back
+	// to UpdateWithRetry without re-establishing it (e.g. gh#433's
+	// entity-delete GC will introduce a Delete against this same key from a
+	// different code path, which needs its own ordering analysis).
+	if _, err := c.predicateBucket.Put(ctx, predicateIndexKey(predicate, entityID), predicateIndexMarker); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "CAS update")
+		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "KV store")
+	}
+
+	// Membership write above is the source of truth and already succeeded;
+	// a catalog-write failure here doesn't corrupt membership, but it does
+	// silently drop this predicate from predicateList's output (both
+	// unfiltered and namespace-filtered — both enumerate via the catalog,
+	// not the membership bucket) until some other entity's write retries
+	// the same catalog Put. That's a real, if narrow, visibility gap —
+	// Warn + count it rather than the Debug-and-forget treatment a merely
+	// cosmetic failure would get.
+	if err := c.updatePredicateCatalog(ctx, predicate); err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		c.logger.Warn("failed to update predicate catalog",
+			slog.String("predicate", predicate),
+			slog.Any("error", err))
 	}
 
 	// Update metrics
@@ -1396,7 +1398,12 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	return nil
 }
 
-// DeleteFromPredicateIndex deletes an entity from the predicate index
+// DeleteFromPredicateIndex removes one entity's membership in one
+// predicate. Not currently called from the production entity-delete path
+// (DeleteFromIndexes) — see gh#433: a KV-watch delete event carries only
+// the deleted key, not the entity's former triples, so the caller doesn't
+// yet know which predicates to clean up. Exists for callers that already
+// know the predicate (tests today, gh#433's eventual fix).
 func (c *Component) DeleteFromPredicateIndex(ctx context.Context, entityID, predicate string) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromPredicateIndex", "entity ID cannot be empty")
@@ -1413,8 +1420,9 @@ func (c *Component) DeleteFromPredicateIndex(ctx context.Context, entityID, pred
 		return errs.Wrap(err, "Component", "DeleteFromPredicateIndex", "context cancelled")
 	}
 
-	// Delete from predicate index
-	if err := c.predicateBucket.Delete(ctx, predicate); err != nil && !natsclient.IsKVNotFoundError(err) {
+	// Delete only this entity's membership in this predicate — a single
+	// composite-key delete (ADR-065), not the whole predicate's membership.
+	if err := c.predicateBucket.Delete(ctx, predicateIndexKey(predicate, entityID)); err != nil && !natsclient.IsKVNotFoundError(err) {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "DeleteFromPredicateIndex", "KV delete")
 	}

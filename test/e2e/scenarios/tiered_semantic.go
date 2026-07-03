@@ -539,12 +539,16 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 
 	fmt.Println("[VIRTUAL EDGES] Validating virtual edge creation from semantic gaps...")
 
-	// Get virtual edge counts from PREDICATE_INDEX
+	// Get virtual edge counts via the query API (ADR-065). A query/parse
+	// failure here is a hard failure, not a warning: CountVirtualEdges
+	// itself now distinguishes "legitimately zero" (nil error, zero count —
+	// handled below) from "couldn't determine the count" (non-nil error).
+	// Silently warning on the latter is exactly the failure class this
+	// stage used to have (a raw-bucket reader whose unmarshal errors were
+	// swallowed, quietly validating nothing while reporting green).
 	edgeCounts, err := s.natsClient.CountVirtualEdges(ctx)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to count virtual edges: %v", err))
-		result.Metrics["virtual_edges_total"] = 0
-		return nil
+		return fmt.Errorf("failed to count virtual edges: %w", err)
 	}
 
 	// Get auto-applied anomaly count from ANOMALY_INDEX

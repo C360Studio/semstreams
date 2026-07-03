@@ -110,22 +110,22 @@ func TestUpdatePredicateIndex_SerializationFormat(t *testing.T) {
 	err := comp.UpdatePredicateIndex(ctx, entityID, predicate)
 	require.NoError(t, err)
 
-	// Verify data was written
+	// Membership is a composite key, hash(predicate) + "." + entityID —
+	// not a per-predicate JSON blob (ADR-065). The value is a content-free
+	// marker; membership identity lives entirely in the key.
 	bucket := predicateMock(comp)
 	bucket.mu.Lock()
-	data, exists := bucket.data[predicate]
+	_, exists := bucket.data[predicateIndexKey(predicate, entityID)]
 	bucket.mu.Unlock()
+	assert.True(t, exists, "predicate index should have a composite-key entry for this (predicate, entity) pair")
 
-	assert.True(t, exists, "predicate index should have entry")
-	assert.NotEmpty(t, data, "predicate index data should not be empty")
-
-	// Verify serialization format
-	var entry map[string]interface{}
-	err = json.Unmarshal(data, &entry)
-	require.NoError(t, err, "predicate index should serialize as JSON")
-
-	assert.Equal(t, entityID, entry["entity_id"], "should have entity_id field")
-	assert.Equal(t, predicate, entry["predicate"], "should have predicate field")
+	// The predicate's human-readable name is recoverable via the catalog,
+	// keyed on the raw (unhashed) name.
+	catalog := predicateCatalogMock(comp)
+	catalog.mu.Lock()
+	_, catalogExists := catalog.data[predicate]
+	catalog.mu.Unlock()
+	assert.True(t, catalogExists, "predicate catalog should record the predicate's name")
 }
 
 // ====================================================================================

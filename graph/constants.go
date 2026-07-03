@@ -16,9 +16,16 @@ const (
 	// to the entities carrying it, for deterministic name→ranked-IDs lookup
 	// (graph.query.byName, gh#376). Complements ALIAS_INDEX, which excludes
 	// display-name (AliasTypeLabel) predicates.
-	BucketNameIndex     = "NAME_INDEX"
-	BucketSpatialIndex  = "SPATIAL_INDEX"
-	BucketTemporalIndex = "TEMPORAL_INDEX"
+	BucketNameIndex = "NAME_INDEX"
+	// BucketPredicateCatalog maps a predicate's raw, unhashed name to a
+	// presence marker. Its sole job is hash→name recovery for
+	// PREDICATE_INDEX's hashed composite keys (ADR-065) — deliberately
+	// unhashed itself, so KeysByPrefix on it is a safe, server-side
+	// namespace query over predicate names (unlike PREDICATE_INDEX
+	// membership keys, it carries no membership data to corrupt).
+	BucketPredicateCatalog = "PREDICATE_CATALOG"
+	BucketSpatialIndex     = "SPATIAL_INDEX"
+	BucketTemporalIndex    = "TEMPORAL_INDEX"
 	// BucketTemporalIndexReverse maps entityID -> current temporal bucket key.
 	// It lets graph-index-temporal remove an entity's stale event from its prior
 	// time bucket when the entity is re-indexed (observed-time changed) or deleted,

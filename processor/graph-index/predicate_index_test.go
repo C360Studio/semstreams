@@ -1,0 +1,214 @@
+package graphindex
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// seedPredicates writes composite-key memberships (and catalog entries)
+// for a map of predicate -> entity IDs, using the production write path
+// so these tests exercise the real key encoding, not a hand-rolled one.
+func seedPredicates(t *testing.T, comp *Component, byPredicate map[string][]string) {
+	t.Helper()
+	ctx := context.Background()
+	for predicate, entities := range byPredicate {
+		for _, entityID := range entities {
+			require.NoError(t, comp.UpdatePredicateIndex(ctx, entityID, predicate))
+		}
+	}
+}
+
+// TestListAllPredicates_NoCrossContamination is the regression test for
+// the bug this ADR exists to fix: a raw dot-prefix design would let
+// "agent.run" silently absorb "agent.run.phase"'s members. The
+// hash-keyed design must keep them fully separate.
+func TestListAllPredicates_NoCrossContamination(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"agent.run":       {"c360.a.b.c.d.e1", "c360.a.b.c.d.e2"},
+		"agent.run.phase": {"c360.a.b.c.d.e3"},
+	})
+
+	predicates, err := comp.listAllPredicates(context.Background())
+	require.NoError(t, err)
+
+	byName := make(map[string]int)
+	for _, p := range predicates {
+		byName[p.Predicate] = p.EntityCount
+	}
+
+	assert.Equal(t, 2, byName["agent.run"], "agent.run must report exactly its own 2 entities, not agent.run.phase's too")
+	assert.Equal(t, 1, byName["agent.run.phase"], "agent.run.phase must report exactly its own 1 entity")
+}
+
+func TestListAllPredicates_EmptyCatalog(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+
+	predicates, err := comp.listAllPredicates(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, predicates)
+}
+
+// TestListPredicatesByNamespace_TrailingDotNormalization is the
+// regression test for the blocking bug both reviewers found: a caller
+// that omits the trailing dot on Prefix must still get correct namespace
+// matches, not a silent empty result.
+func TestListPredicatesByNamespace_TrailingDotNormalization(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"inferred.semantic.high":   {"c360.a.b.c.d.e1", "c360.a.b.c.d.e2"},
+		"inferred.semantic.medium": {"c360.a.b.c.d.e3"},
+		"inferred.structural.core": {"c360.a.b.c.d.e4"}, // different namespace, must not match
+	})
+
+	for _, prefix := range []string{"inferred.semantic.", "inferred.semantic"} {
+		t.Run("prefix="+prefix, func(t *testing.T) {
+			predicates, err := comp.listPredicatesByNamespace(context.Background(), prefix)
+			require.NoError(t, err)
+
+			byName := make(map[string]int)
+			for _, p := range predicates {
+				byName[p.Predicate] = p.EntityCount
+			}
+
+			assert.Len(t, predicates, 2, "should match exactly the two inferred.semantic.* predicates")
+			assert.Equal(t, 2, byName["inferred.semantic.high"])
+			assert.Equal(t, 1, byName["inferred.semantic.medium"])
+			assert.NotContains(t, byName, "inferred.structural.core", "different namespace must not match")
+		})
+	}
+}
+
+func TestListPredicatesByNamespace_NoMatches(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"agent.run": {"c360.a.b.c.d.e1"},
+	})
+
+	predicates, err := comp.listPredicatesByNamespace(context.Background(), "inferred.semantic.")
+	require.NoError(t, err)
+	assert.Empty(t, predicates)
+}
+
+// TestHandleQueryPredicateListNATS_PrefixField exercises the full NATS
+// handler (request parsing + prefix routing), not just the internal
+// helpers, so a regression in the request-parsing glue would also be
+// caught here.
+func TestHandleQueryPredicateListNATS_PrefixField(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"inferred.semantic.high": {"c360.a.b.c.d.e1"},
+		"agent.run":              {"c360.a.b.c.d.e2"},
+	})
+
+	reqJSON, err := json.Marshal(graph.PredicateListQuery{Prefix: "inferred.semantic"})
+	require.NoError(t, err)
+
+	respData, err := comp.handleQueryPredicateListNATS(context.Background(), reqJSON)
+	require.NoError(t, err)
+
+	var resp graph.PredicateListQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+
+	require.Len(t, resp.Data.Predicates, 1)
+	assert.Equal(t, "inferred.semantic.high", resp.Data.Predicates[0].Predicate)
+}
+
+func TestHandleQueryPredicateListNATS_EmptyBody_ListsAll(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"agent.run":              {"c360.a.b.c.d.e1"},
+		"inferred.semantic.high": {"c360.a.b.c.d.e2"},
+	})
+
+	// Existing callers send an empty/absent body — must keep listing
+	// everything, not error or silently scope to nothing.
+	respData, err := comp.handleQueryPredicateListNATS(context.Background(), []byte("{}"))
+	require.NoError(t, err)
+
+	var resp graph.PredicateListQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	assert.Len(t, resp.Data.Predicates, 2)
+}
+
+func TestHandleQueryPredicateStatsNATS_CompositeKeys(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"robotics.status.armed": {
+			"c360.a.b.c.d.e1",
+			"c360.a.b.c.d.e2",
+			"c360.a.b.c.d.e3",
+		},
+	})
+
+	reqJSON, err := json.Marshal(map[string]any{"predicate": "robotics.status.armed", "sample_limit": 2})
+	require.NoError(t, err)
+
+	respData, err := comp.handleQueryPredicateStatsNATS(context.Background(), reqJSON)
+	require.NoError(t, err)
+
+	var resp graph.PredicateStatsQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+
+	assert.Equal(t, 3, resp.Data.EntityCount, "count must reflect all members, not just the sample")
+	assert.Len(t, resp.Data.SampleEntities, 2, "sample must be capped at sample_limit")
+}
+
+func TestHandleQueryPredicateCompoundNATS_AndOr(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"robotics.status.armed":    {"c360.a.b.c.d.e1", "c360.a.b.c.d.e2"},
+		"robotics.status.airborne": {"c360.a.b.c.d.e2", "c360.a.b.c.d.e3"},
+	})
+
+	andReq, err := json.Marshal(graph.CompoundPredicateQuery{
+		Predicates: []string{"robotics.status.armed", "robotics.status.airborne"},
+		Operator:   "AND",
+	})
+	require.NoError(t, err)
+	respData, err := comp.handleQueryPredicateCompoundNATS(context.Background(), andReq)
+	require.NoError(t, err)
+	var andResp graph.CompoundPredicateQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &andResp))
+	assert.ElementsMatch(t, []string{"c360.a.b.c.d.e2"}, andResp.Data.Entities, "AND must return only the shared entity")
+
+	orReq, err := json.Marshal(graph.CompoundPredicateQuery{
+		Predicates: []string{"robotics.status.armed", "robotics.status.airborne"},
+		Operator:   "OR",
+	})
+	require.NoError(t, err)
+	respData, err = comp.handleQueryPredicateCompoundNATS(context.Background(), orReq)
+	require.NoError(t, err)
+	var orResp graph.CompoundPredicateQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &orResp))
+	assert.ElementsMatch(t, []string{"c360.a.b.c.d.e1", "c360.a.b.c.d.e2", "c360.a.b.c.d.e3"}, orResp.Data.Entities, "OR must return the union")
+}
+
+// TestNatsPrefixTokenMatch locks down the mock's own matching semantics
+// against the real NATS behavior both reviewers empirically verified
+// (KeysByPrefix hardcodes prefix+">" server-side) — if this test and the
+// production trailing-dot fix ever drift apart, this is what catches it.
+func TestNatsPrefixTokenMatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		key    string
+		filter string
+		want   bool
+	}{
+		{"well-formed prefix matches child", "agent.run.phase", "agent.run.>", true},
+		{"well-formed prefix does not match self", "agent.run", "agent.run.>", false},
+		{"well-formed prefix does not false-positive on longer token", "agent.runner.other", "agent.run.>", false},
+		{"missing trailing dot matches nothing", "agent.run.phase", "agent.run>", false},
+		{"unrelated namespace does not match", "inferred.structural.core", "inferred.semantic.>", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, natsPrefixTokenMatch(tt.key, tt.filter))
+		})
+	}
+}

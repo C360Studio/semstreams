@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -233,20 +235,15 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 // handlers. It looks up the predicate index, optionally filters by value, and applies
 // the limit in a single place so both call sites stay consistent.
 func (c *Component) queryPredicateEntities(ctx context.Context, predicate string, value *string, limit int) ([]string, error) {
-	entry, err := c.predicateBucket.Get(ctx, predicate)
+	keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(predicate))
 	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return []string{}, nil
-		}
 		return nil, err
 	}
 
-	var indexEntry graph.PredicateIndexEntry
-	if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-		return nil, err
+	entities := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entities = append(entities, entityIDFromPredicateKey(key, predicate))
 	}
-
-	entities := indexEntry.Entities
 
 	if value != nil && c.entityStatesBucket != nil {
 		// filterEntitiesByPredicateValue handles limit internally so we avoid
@@ -324,45 +321,121 @@ func normalizeToString(v any) string {
 }
 
 // handleQueryPredicateListNATS handles predicate list query requests via NATS request/reply.
-// Returns all predicates with their entity counts.
-func (c *Component) handleQueryPredicateListNATS(ctx context.Context, _ []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// Returns predicates with their entity counts — every predicate, or, when
+// the request carries a Prefix, only those sharing that dotted namespace
+// (ADR-065: a deliberate, safe namespace query against PREDICATE_CATALOG's
+// unhashed keys — unlike a prefix query against PREDICATE_INDEX's hashed
+// membership keys, this can't corrupt which entities carry which
+// predicate, since the catalog carries no membership data).
+func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Get all predicate keys from the bucket
-	keys, err := c.predicateBucket.Keys(ctx)
+	var req graph.PredicateListQuery
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
+		}
+	}
+
+	var predicates []graph.PredicateSummary
+	var err error
+	if req.Prefix != "" {
+		predicates, err = c.listPredicatesByNamespace(ctx, req.Prefix)
+	} else {
+		predicates, err = c.listAllPredicates(ctx)
+	}
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
-	}
-	if len(keys) == 0 {
-		return json.Marshal(graph.NewQueryResponse(graph.PredicateListData{
-			Predicates: []graph.PredicateSummary{},
-			Total:      0,
-		}))
-	}
-
-	predicates := make([]graph.PredicateSummary, 0, len(keys))
-	for _, predicate := range keys {
-		entry, err := c.predicateBucket.Get(ctx, predicate)
-		if err != nil {
-			continue // Skip predicates we can't read
-		}
-
-		var indexEntry graph.PredicateIndexEntry
-		if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-			continue // Skip malformed entries
-		}
-
-		predicates = append(predicates, graph.PredicateSummary{
-			Predicate:   predicate,
-			EntityCount: len(indexEntry.Entities),
-		})
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.PredicateListData{
 		Predicates: predicates,
 		Total:      len(predicates),
 	}))
+}
+
+// listAllPredicates enumerates every predicate with its entity count via
+// ONE grouped scan of the membership bucket (not a per-predicate
+// KeysByPrefix fan-out, which would cost one bound ephemeral-consumer
+// round trip per catalog entry — see ADR-065). Membership keys are
+// hash(predicate).entityID; grouping on the first token before the first
+// "." buckets every key by its predicate hash without needing to know the
+// predicate strings up front. Catalog names are then forward-hashed to
+// join into that count map — catalog entries whose hash has no members
+// simply report a zero count.
+func (c *Component) listAllPredicates(ctx context.Context) ([]graph.PredicateSummary, error) {
+	names, err := c.predicateCatalogBucket.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return []graph.PredicateSummary{}, nil
+	}
+
+	memberKeys, err := c.predicateBucket.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// A pre-cutover blob-format key (bare predicate string, e.g.
+	// "code.artifact.type") almost always contains a "." too, so it does
+	// NOT reliably fail the Cut below — most real predicates are
+	// multi-token. What actually keeps it inert is the join step: its
+	// first token (e.g. "code") is never a genuine 64-hex-char hash, so
+	// countsByHash[that token] is written but never read by the
+	// predicateHashHex(name) lookup below — it's a dead map entry, not a
+	// skipped one.
+	countsByHash := make(map[string]int, len(names))
+	for _, key := range memberKeys {
+		hash, _, ok := strings.Cut(key, ".")
+		if !ok {
+			continue // single-token key with no "." at all — can't be any predicate's composite key
+		}
+		countsByHash[hash]++
+	}
+
+	predicates := make([]graph.PredicateSummary, 0, len(names))
+	for _, name := range names {
+		predicates = append(predicates, graph.PredicateSummary{
+			Predicate:   name,
+			EntityCount: countsByHash[predicateHashHex(name)],
+		})
+	}
+	return predicates, nil
+}
+
+// listPredicatesByNamespace answers a namespace-scoped predicateList
+// request: PREDICATE_CATALOG.KeysByPrefix(prefix) bounds the candidate
+// predicate set server-side before any membership lookup, so a
+// per-predicate KeysByPrefix fan-out against the membership bucket here
+// is fine — the namespace filter, not this loop, is what keeps it cheap.
+func (c *Component) listPredicatesByNamespace(ctx context.Context, prefix string) ([]graph.PredicateSummary, error) {
+	// KeysByPrefix appends NATS wildcard ">" directly onto prefix; ">" is
+	// only meaningful as its own token after a ".", so a prefix missing
+	// its trailing dot silently matches nothing instead of erroring —
+	// exactly the class of prefix-matching footgun this ADR exists to
+	// eliminate elsewhere. Normalize here rather than push the "must end
+	// in a dot" contract onto every future caller of predicateList.
+	if !strings.HasSuffix(prefix, ".") {
+		prefix += "."
+	}
+
+	names, err := c.predicateCatalogBucket.KeysByPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	predicates := make([]graph.PredicateSummary, 0, len(names))
+	for _, name := range names {
+		keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(name))
+		if err != nil {
+			return nil, err
+		}
+		predicates = append(predicates, graph.PredicateSummary{
+			Predicate:   name,
+			EntityCount: len(keys),
+		})
+	}
+	return predicates, nil
 }
 
 // handleQueryPredicateStatsNATS handles predicate stats query requests via NATS request/reply.
@@ -388,32 +461,25 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 		req.SampleLimit = 10
 	}
 
-	entry, err := c.predicateBucket.Get(ctx, req.Predicate)
+	keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(req.Predicate))
 	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return json.Marshal(graph.NewQueryResponse(graph.PredicateStatsData{
-				Predicate:      req.Predicate,
-				EntityCount:    0,
-				SampleEntities: []string{},
-			}))
-		}
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
-	var indexEntry graph.PredicateIndexEntry
-	if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+	entities := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entities = append(entities, entityIDFromPredicateKey(key, req.Predicate))
 	}
+	sort.Strings(entities) // deterministic sample order
 
-	// Get sample entities
-	sampleEntities := indexEntry.Entities
+	sampleEntities := entities
 	if len(sampleEntities) > req.SampleLimit {
 		sampleEntities = sampleEntities[:req.SampleLimit]
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.PredicateStatsData{
 		Predicate:      req.Predicate,
-		EntityCount:    len(indexEntry.Entities),
+		EntityCount:    len(entities),
 		SampleEntities: sampleEntities,
 	}))
 }
@@ -441,24 +507,14 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 	// Collect entity sets for each predicate
 	entitySets := make([]map[string]struct{}, 0, len(req.Predicates))
 	for _, predicate := range req.Predicates {
-		entry, err := c.predicateBucket.Get(ctx, predicate)
+		keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(predicate))
 		if err != nil {
-			if natsclient.IsKVNotFoundError(err) {
-				// Predicate not found - empty set
-				entitySets = append(entitySets, make(map[string]struct{}))
-				continue
-			}
 			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 		}
 
-		var indexEntry graph.PredicateIndexEntry
-		if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
-		}
-
-		entitySet := make(map[string]struct{}, len(indexEntry.Entities))
-		for _, e := range indexEntry.Entities {
-			entitySet[e] = struct{}{}
+		entitySet := make(map[string]struct{}, len(keys))
+		for _, key := range keys {
+			entitySet[entityIDFromPredicateKey(key, predicate)] = struct{}{}
 		}
 		entitySets = append(entitySets, entitySet)
 	}

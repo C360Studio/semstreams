@@ -21,13 +21,6 @@ type ContextEntry struct {
 	Predicate string `json:"predicate"`
 }
 
-// PredicateIndexEntry represents entities that have a specific predicate.
-type PredicateIndexEntry struct {
-	Entities  []string `json:"entities"`
-	Predicate string   `json:"predicate"`
-	EntityID  string   `json:"entity_id,omitempty"` // backward compat
-}
-
 // --- Index Query Response Payloads ---
 
 // OutgoingRelationshipsData contains outgoing relationships for an entity.

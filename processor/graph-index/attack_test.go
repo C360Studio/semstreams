@@ -439,28 +439,22 @@ func TestAttack_MultipleEntitiesSamePredicate(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Query predicate index - expect it to contain info about all 3 entities
-	// BUT current implementation only stores last entity
-	predicateEntry, err := graphIndex.predicateBucket.Get(ctx, predicate)
-	require.NoError(t, err, "predicate index should exist")
-
-	var predicateData map[string]interface{}
-	err = json.Unmarshal(predicateEntry.Value, &predicateData)
+	// Query predicate index via the production wire (NATS query API, not
+	// the raw bucket — see ADR-065). Composite per-(predicate,entity) keys
+	// mean there is no longer a "last writer wins" collision: every entity
+	// gets its own key, so all 3 must be present, not just one.
+	request := map[string]string{"predicate": predicate}
+	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	// ATTACK TEST: This demonstrates the bug
-	// Only the last entity is indexed, previous ones are lost
-	storedEntityID := predicateData["entity_id"].(string)
+	respData, err := nc.RequestClassified(ctx, "graph.index.query.predicate", requestJSON, 2*time.Second)
+	require.NoError(t, err, "predicate query should succeed")
 
-	// This will fail until the bug is fixed
-	// The predicate index should support multiple entities per predicate
-	// Current implementation: last writer wins
-	_ = storedEntityID
+	var response graph.PredicateQueryResponse
+	require.NoError(t, json.Unmarshal(respData, &response))
 
-	// For now, we just verify that SOME entity is stored
-	// A proper fix would require a different data structure
-	assert.Contains(t, entities, storedEntityID,
-		"predicate index should contain one of the entities (but note: it should contain ALL of them)")
+	assert.ElementsMatch(t, entities, response.Data.Entities,
+		"predicate index must contain ALL entities sharing the predicate, not just the last writer")
 }
 
 func TestAttack_MultipleSourcesSameTarget(t *testing.T) {
