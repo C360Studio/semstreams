@@ -230,7 +230,23 @@ type Component struct {
 	// (gh#397). Set once the NAME_INDEX is known non-empty; an index does not
 	// un-build, so once true it stays true (O(1) steady state). Restart-safe: a
 	// not-yet-true status read does a one-time bucket check (handleQueryStatus).
+	//
+	// DEPRECATED by ADR-066: readiness is now the revision-lag watermark below,
+	// which means "caught up," not "indexing started." Retained only for the
+	// nameIndexIsReady fallback used by the byName query path.
 	nameIndexReady atomic.Bool
+
+	// watermark is the ADR-066 low-water-of-pending "caught up" tracker feeding the
+	// honest graph.index.query.status. Non-nil once Start wires the watcher.
+	watermark *revisionWatermark
+
+	// Readiness stuck-detector state (ADR-066 §4), guarded by statusMu; touched only
+	// by the polled status handler. lastProgressAt is the wall-clock of the last
+	// observed IndexedRevision advance; a stall past degradedStuckAfter while not
+	// caught-up flips State to degraded.
+	statusMu        sync.Mutex
+	lastIndexedSeen uint64
+	lastProgressAt  time.Time
 
 	// Prometheus metrics
 	metrics *indexMetrics
@@ -497,6 +513,10 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Readiness watermark (ADR-066): must exist before the pool or the watcher so
+	// the first completion/observation has somewhere to land.
+	c.watermark = newRevisionWatermark()
+
 	// Create and start the entity index worker pool
 	if err := c.startIndexPool(ctx); err != nil {
 		cancel()
@@ -737,11 +757,24 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				continue
 			}
 
+			// Record every delivered revision (update AND delete) as in-flight for
+			// the readiness watermark before dispatch (ADR-066 §1). observedHigh
+			// advances here; complete() drains on processing return / after delete.
+			if c.watermark != nil {
+				c.watermark.observe(entry.Revision(), entry.Key())
+			}
+
 			if entry.Operation() == jetstream.KeyValueDelete {
 				if c.entityCoalescer != nil {
 					c.entityCoalescer.Remove(entry.Key())
 				}
 				c.handleEntityDelete(ctx, entry.Key())
+				// Key-scoped completion: the tombstone's revision drains the delete
+				// itself AND any earlier still-pending update for this key that the
+				// delete supersedes (ADR-066 §1).
+				if c.watermark != nil {
+					c.watermark.complete(entry.Key(), entry.Revision())
+				}
 				continue
 			}
 
@@ -823,9 +856,20 @@ func (c *Component) processEntityUpdateWorker(ctx context.Context, entry jetstre
 }
 
 // processEntityUpdate indexes an entity's relationships from its triples.
-// It is a thin wrapper around processEntityUpdateFromData for use with KV watcher entries.
+// It is a thin wrapper around processEntityUpdateFromData for use with KV watcher
+// entries. It is the single funnel for every update-completion path — the pool
+// worker, the direct branch, and the coalescer batch all route through here — so it
+// is the one place the readiness watermark's completion fires (ADR-066 §1).
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
 	c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value())
+	// Completion fires on RETURN, not on indexing success: a malformed entry that
+	// early-returns inside processEntityUpdateFromData must still complete or its
+	// revision strands the watermark forever (ADR-066 §1 Scope boundary — Ready
+	// means revision coverage, not per-index write success). Key-scoped <=rev drains
+	// coalescer-collapsed lower revisions of this key that no worker sees alone.
+	if c.watermark != nil {
+		c.watermark.complete(entry.Key(), entry.Revision())
+	}
 }
 
 // processEntityUpdateFromData indexes an entity's relationships from its triples using raw data.
@@ -994,6 +1038,15 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 			c.logger.Debug("entity not found during batch processing",
 				slog.String("entity", entityID),
 				slog.Any("error", err))
+			// The coalescer discarded the source revision(s), so there is no exact
+			// revision to complete here. Drain the key's pending (complete at max
+			// revision) rather than strand it: a transient Get failure would
+			// otherwise pin the watermark and flip the whole index to degraded
+			// forever (ADR-066 §1). Draining fails toward caught-up (within the
+			// Scope boundary) — the next update to this key re-observes it.
+			if c.watermark != nil {
+				c.watermark.complete(entityID, ^uint64(0))
+			}
 			continue
 		}
 

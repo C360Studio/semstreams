@@ -61,11 +61,21 @@ const (
 
 // IndexStatus is attached to every response. Ready is load-bearing: when false
 // the caller must fall back (e.g. to grep) rather than treat empty as not-found.
+// Ready now means the index is CAUGHT UP (revision-lag), not merely started
+// (ADR-066). Field-identical to graph.IndexStatusResponse — the RetrievalClient
+// decodes graph.index.query.status directly into this; the two change together.
 type IndexStatus struct {
-	Ready      bool       `json:"ready"`
-	State      IndexState `json:"state"`
-	Revision   string     `json:"revision,omitempty"`
-	LastSynced string     `json:"last_synced,omitempty"`
+	Ready bool       `json:"ready"`
+	State IndexState `json:"state"`
+	// IndexedRevision / TargetRevision / Lag expose the exact revision-lag so a
+	// caller that knows its own target revision can gate on IndexedRevision >=
+	// myRev rather than the coarse global Ready bool (ADR-066).
+	IndexedRevision uint64 `json:"indexed_revision,omitempty"`
+	TargetRevision  uint64 `json:"target_revision,omitempty"`
+	Lag             uint64 `json:"lag,omitempty"`
+	Phase           string `json:"phase,omitempty"`
+	Revision        string `json:"revision,omitempty"`
+	LastSynced      string `json:"last_synced,omitempty"`
 }
 
 // Ref points to a node by what a human reads — never the entity ID.

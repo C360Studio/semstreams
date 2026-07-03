@@ -2,29 +2,39 @@
 
 ## Status
 
-**Proposed** (2026-07-03, GH #431). Design-first; cross-repo (semstreams owns the
-index/embedding signals, semsource owns the `graph.query.status` aggregate). No
-code lands with this document. Part of the beta.128 "honest graph signals" QoL set
-(with GH #435).
+**Accepted** (2026-07-03, GH #431). Cross-repo (semstreams owns the
+index/embedding signals, semsource owns the `graph.query.status` aggregate).
+Implementation follows the Migration path below on
+`fix/gh431-honest-index-readiness`. Part of the beta.128 "honest graph signals"
+QoL set (with GH #435).
 
-**Adversarially reviewed (2026-07-03).** The review confirmed **revision-lag is the
-right signal** but caught that the first-draft concrete invariants recreated the
-exact false-ready bug (and a worse never-ready deadlock) under the configs
-semstreams actually ships. This revision folds in the three required corrections:
-a **contiguous** high-water mark (not a monotonic max), a **query-time `LastSeq`**
-Target (not idle-gated), and a **distinct embedding definition** over eligible
-entities. Those corrections — not a redesign — are the substance below.
+**Adversarially reviewed (2026-07-03), twice.** The first (design) review confirmed
+**revision-lag is the right signal** but caught that the first-draft concrete
+invariants recreated the exact false-ready bug (and a worse never-ready deadlock)
+under the configs semstreams actually ships: it folded in a **query-time `LastSeq`**
+Target (not idle-gated) and a **distinct embedding definition** over eligible
+entities. A second **code-grounded** review (against `nats.go` v1.48.0 and the
+nats-server storage layer) then corrected the watermark *algorithm* itself: the
+"contiguous, advance-from `IndexedRevision+1`" formulation **stalls permanently**
+because ENTITY_STATES runs at **History=1** and `WatchAll` delivers a **sparse**
+latest-per-key revision set (§1). The corrected watermark is **low-water-of-pending**
+with a **single key-scoped completion rule**, sound precisely because `OrderedConsumer`
+guarantees monotonic-ascending delivery. That review also fixed the completion wiring
+(coalescer-collapse + delete-orphan) and pinned two honest-scope boundaries (§1
+*Scope boundary*). Those corrections — not a redesign — are the substance below.
 
 ## Decision
 
 Replace the sticky "indexing started = ready" signal with a **revision-lag /
 caught-up** signal on `graph.index.query.status`:
 
-- **`IndexedRevision`** — the **contiguous high-water mark**: the highest
-  ENTITY_STATES revision `R` such that *every* revision `≤ R` has been fully
-  applied to the indexes, advanced across **both** processing paths (the worker
-  pool AND the inline delete handler). NOT "the highest revision a worker
-  finished" — that is wrong under multi-worker pools and deletes.
+- **`IndexedRevision`** — the **low-water-of-pending watermark**: the highest
+  revision `R` such that every *delivered* ENTITY_STATES revision `≤ R` has been
+  applied and nothing `≤ R` is still in flight, advanced across **both** processing
+  paths (the worker pool AND the inline delete handler). Concretely
+  `pending.empty() ? observedHigh : (minPending − 1)` — NOT "the highest revision a
+  worker finished" (wrong under multi-worker pools / deletes) and NOT absolute
+  revision contiguity (which stalls forever under History=1 sparse delivery — see §1).
 - **`TargetRevision`** — the stream's current `LastSeq`, read **at query time,
   always** (not derived from the last `Delta()==0` watch entry, which is stale
   exactly when writes are committed-but-not-yet-delivered).
@@ -99,25 +109,89 @@ lag), and caught-up — the exact confusion #431 is about. Refuted:
 
 ## Design
 
-### 1. graph-index: contiguous high-water mark (the corrected invariant)
+### 1. graph-index: low-water-of-pending watermark (the corrected invariant)
 
-`IndexedRevision` is a **commit-offset / contiguous watermark**, not a max. The
-pool completes revisions out of order (N>1) and deletes commit inline, so the
-signal must answer "all revisions ≤ R applied," which requires tracking gaps:
+`IndexedRevision` answers "every committed ENTITY_STATES revision ≤ R has been
+dispatched through and returned from the indexer." The naive "advance from
+`IndexedRevision+1` past every now-contiguous completed revision" **is wrong here
+and stalls forever**: ENTITY_STATES is created with **no `History`** override →
+NATS KV default **History=1** (`graph-ingest/component.go:804`), and `WatchAll`
+binds an **`OrderedConsumer` + `DeliverLastPerSubject`** (`nats.go` `jetstream/kv.go:1273`).
+Bootstrap therefore delivers only the *latest surviving revision per key* — a
+**sparse** revision set (superseded revisions are purged, never delivered). Waiting
+for revision `1, 2, …` that will never arrive pins the watermark at 0 permanently —
+a false-*not*-ready worse than the false-ready this ADR fixes.
 
-- Maintain `{pending set of in-flight revisions}` and `IndexedRevision`. On the
-  watch delivery of revision `r`, add `r` to pending. On **completion** of `r` —
-  whether by a **pool worker** finishing `processEntityUpdateFromData` OR by the
-  **inline delete handler** finishing a delete — remove `r` from pending and, if
-  `r == IndexedRevision + 1`, advance `IndexedRevision` past every now-contiguous
-  completed revision. This advances the watermark only past the *lowest incomplete*
-  revision, so a fast late worker cannot report a gap as done, and a delete's
-  sequence participates rather than leaving a permanent hole.
-- The coalescer (which re-`Get`s the latest per key) must still register each
-  ENTITY_STATES revision it collapses as completed, or contiguity stalls even at
-  `workers:1`.
-- Complexity is bounded: pending is small (≤ in-flight window), advance is
-  amortized O(1). This is the standard out-of-order-ack commit-offset problem.
+The correct watermark tracks quantities defined **entirely over delivered
+revisions**, so purged gaps are never in play:
+
+- **`observedHigh`** — the highest revision ever *delivered to the watcher*.
+  Monotonic; updated on **every** watch entry, update AND delete.
+- **`pending`** — per key, the set of delivered-but-not-yet-completed revisions.
+- **`IndexedRevision = pending.empty() ? observedHigh : (minPending − 1)`**, where
+  `minPending` is the smallest still-pending revision across all keys.
+
+**One completion rule, every path — key-scoped, not exact-revision.**
+`complete(key, rev)` removes from `pending[key]` **every** revision ≤ `rev`. Called
+from (a) a **pool worker** on return, with the entry it processed
+(`complete(entry.Key(), entry.Revision())`), and (b) the **inline delete handler**,
+with the delete entry's own revision. Key-scoped-≤ (not exact) is load-bearing:
+
+- The **coalescer** collapses several observed revisions of a key into one re-`Get`
+  at the latest surviving revision `rg`; `complete(key, rg)` drains the collapsed
+  lower revisions no worker will ever see individually. (Exact-revision completion
+  strands them → permanent not-ready. This is why the first draft was wrong even
+  ignoring History=1.)
+- A **delete** of a key with an earlier still-pending update drains that update —
+  its sequence is superseded by the tombstone — closing the delete-orphan hole.
+- On the direct path it is a no-op beyond the exact revision unless two updates to
+  the *same key* are in-flight, where the later-completing higher revision
+  optimistically drains the lower — honest, because ENTITY_STATES stores full-state
+  snapshots (the newer write already subsumes the older). See the *Scope boundary*.
+
+**Why it is correct.** It rests on one property, which `OrderedConsumer` guarantees
+at the nats-server storage layer for **both** the `DeliverLastPerSubject` bootstrap
+replay and live updates: **delivery is monotonic ascending in `Revision()`** (the
+skip-list of last-per-subject seqs is sorted server-side; the ordered-consumer reset
+path only ever re-delivers `> lastGood`). Because delivery is ascending, every
+revision ≤ `observedHigh` that will *ever* be delivered already has been; any
+un-observed revision below `observedHigh` is purged and correctly skipped. This
+yields three structural guarantees:
+
+- `IndexedRevision ≤ TargetRevision` **always** (pending empty → `observedHigh ≤
+  LastSeq`; else → `minPending−1 < observedHigh ≤ LastSeq`), so `Lag ≥ 0`
+  structurally — the no-`max(0,…)` clamp is *safe*, not stylistic.
+- `IndexedRevision` is monotonic non-decreasing (a newly observed revision exceeds
+  `observedHigh`, so `minPending` never drops below a value already reported ready).
+- `Ready` (`Indexed ≥ Target`) is reachable only when `pending` is empty AND
+  `observedHigh` has climbed to `Target` — exactly "caught up."
+
+`observedHigh`/`pending` are guarded by one mutex (touched by the watch goroutine,
+N pool workers, the coalescer callback, and the query handler); `observe`
+happens-before `complete` on every path (channel send precedes worker receive;
+delete is single-goroutine), so there is no `complete`-before-`observe` underflow.
+Complexity is bounded: `pending` ≤ the in-flight window; a per-key sorted structure
++ maintained minimum keeps observe/complete O(log n) and the query-time read O(1).
+
+**Scope boundary — what `Ready` does and does NOT promise.** `Ready` means
+**revision coverage**, not last-writer-wins **freshness** or per-index write
+**success**. Two pre-existing pipeline adjacencies are out of this ADR's scope and
+must not be silently inherited as stronger promises:
+
+- *Multi-worker stale overwrite* (live under the shipped `workers: 2–4`): the pool
+  has no completion ordering (`pkg/worker/pool.go`), so two rapid updates to the
+  *same key* can land the older revision's index writes last, leaving stale data
+  while the watermark honestly reports the revision *covered*. It does **not** fire
+  on the one-shot bulk ingest #431 is about (distinct entities, one write each); it
+  needs same-key churn. A per-key last-applied-revision guard that drops superseded
+  entries is a **companion follow-up**, not bundled here.
+- *Swallowed per-index write failures*: `processEntityUpdateFromData` logs sub-index
+  write failures at Debug and returns (after CAS-retry); completion fires on worker
+  **return**, so a persistently-failing sub-write still counts as covered. Making
+  those loud (Warn + counter) is a **companion follow-up**.
+
+A consumer that needs freshness (not just coverage) gates on the companions; this
+ADR does not claim more than coverage.
 
 ### 2. graph-index: Target = query-time `LastSeq` (always)
 
@@ -208,9 +282,10 @@ type IndexStatusResponse struct {
 
 ### Negative / cost
 
-- The contiguous watermark is **more than "one atomic"**: a small pending-set +
-  advance logic, wired into two completion paths (pool + inline delete) per
-  component. This is the bulk of the implementation.
+- The low-water-of-pending watermark is **more than "one atomic"**: a per-key
+  pending structure + `observedHigh`, wired into the single key-scoped completion
+  rule on both paths (pool return + inline delete) per component. This is the bulk
+  of the implementation.
 - A query-time `LastSeq` read per status call (new natsclient helper).
 - Embedding revision-threading through both hops + the pending `Record` gains a
   revision field.
@@ -224,25 +299,38 @@ type IndexStatusResponse struct {
 
 ### Risks
 
-- **Contiguity across two paths** — the delete handler and the pool must both
-  register completions into the same watermark, or a delete/late-worker leaves a
-  gap (false-not-ready) or is skipped (false-ready). Unit-test out-of-order
-  completion AND a trailing-delete-only tail.
+- **Completion wiring across paths** — the delete handler and the pool workers must
+  both call the *same* key-scoped `complete(key, rev)`, or a coalescer-collapsed
+  lower revision / a delete-superseded pending update strands forever (permanent
+  not-ready, which the §4 stuck-detector then reports as `degraded`). Unit-test:
+  out-of-order pool completion, a coalescer collapse (several revisions of one key →
+  one re-Get), a delete that supersedes a still-pending update, and a
+  trailing-delete-only tail.
+- **Sparse-delivery stall** — the reason the naive contiguous-from-`IndexedRevision+1`
+  algorithm is rejected (§1): History=1 + `DeliverLastPerSubject` means most
+  revisions ≤ `LastSeq` are purged and never delivered. Any watermark that waits on
+  absolute revision contiguity deadlocks. The unit tests must feed a **sparse**
+  ascending revision stream (e.g. `{50, 72, 100}`), not a dense `1..N`.
 - **Embedding never-ready** — if Target isn't scoped to eligible-terminal outcomes,
   `embedding.ready` deadlocks. Gate consumers off it until §3 is proven.
-- **Bootstrap replay** — WatchAll replays keys in ascending revision to the nil
-  marker; the contiguous watermark rebuilds from 0 correctly (transient high lag /
-  not-ready during replay is *correct*). Query-time Target avoids the Target=0
-  false-ready the idle-gated draft had.
+- **Bootstrap replay** — `WatchAll` replays last-per-key in ascending revision to the
+  nil marker; `observedHigh` climbs and `pending` drains as replay proceeds, so the
+  watermark rebuilds correctly from a cold start (transient high lag / not-ready
+  during replay is *correct*). Query-time Target avoids the Target=0 false-ready the
+  idle-gated draft had. An **empty** ENTITY_STATES (`LastSeq==0`) reports not-ready
+  until the first write — deliberate (`Target>0` guard), but a genuinely-empty
+  deployment gating on `Ready` waits indefinitely.
 
 ## Migration path
 
 1. `natsclient`: a `LastSeq` (stream/KV) helper.
-2. graph-index: contiguous watermark across pool completion + inline delete +
-   coalescer; query-time Target; honest `Ready`/`Lag`/`State` on
-   `IndexStatusResponse` (fill `Revision`/`LastSynced`); degraded stuck-detector.
-   Unit-test cold-start / mid-build / caught-up / out-of-order completion /
-   trailing-delete / stuck-watermark.
+2. graph-index: low-water-of-pending watermark (`observedHigh` + per-key `pending`)
+   with the single key-scoped `complete(key, rev)` on pool return + inline delete;
+   query-time Target; honest `Ready`/`Lag`/`State` on `IndexStatusResponse` (fill
+   `Revision`/`LastSynced`); degraded stuck-detector. Unit-test with a **sparse**
+   ascending revision stream: cold-start / mid-build / caught-up / out-of-order
+   completion / coalescer-collapse / delete-supersedes-pending / trailing-delete /
+   stuck-watermark.
 3. Mirror on `pkg/fusion.IndexStatus`.
 4. graph-embedding: revision-threading (both hops + `Record` field) + new
    `graph.embedding.query.status` with the terminal-outcome watermark.
@@ -268,17 +356,39 @@ type IndexStatusResponse struct {
 - **GH #435** — the QoL-bundle sibling (a healthy path no longer over-reports as a
   reject).
 
+### Companion follow-ups (surfaced by the code-grounded review, NOT bundled here)
+
+- **Multi-worker stale overwrite** — the pool has no completion ordering, so under
+  same-key churn an older revision's index writes can land last. `Ready` stays honest
+  about *coverage*; a per-key last-applied-revision drop-guard would make it honest
+  about *freshness*. To file. Does not affect the #431 bulk-ingest path.
+- **Silent per-index write failures** — `processEntityUpdateFromData` swallows
+  sub-index write errors at Debug; readiness trusts worker-return. Elevate to
+  Warn + counter so `Ready` cannot over-report on persistent write failure. To file.
+
 ## References
 
 - `processor/graph-index/name_index.go` (sticky bug, handler); `component.go`
-  (watch/pool `700-812`; inline delete `740-746`; coalescer re-Get `984-1010`;
-  worker completion `833-980`).
-- `pkg/worker/pool.go` (single-channel N-worker pool, no ordering).
-- `graph/index_status.go` + `pkg/fusion/contract.go` (wire shapes); `engine_lens.go:82-85`
-  (single-shot Ready gate).
-- `processor/graph-embedding/component.go` (revision dropped at watch `921`; no-text
-  skip `1019-1022`; 5-worker default); `graph/embedding/storage.go` (`SaveGenerated`
-  no revision `164`; `Record` no revision field `37-53`); `worker.go` (second hop,
-  no-text delete `310-317`, `markFailed` `496`).
-- `configs/hello-world.json`, `e2e-structural.json`, `statistical.json` (`workers` 2/4).
+  (watch/pool dispatch `722-761`; inline delete `740-746`; coalescer create
+  `522-527` + re-Get `984-1010`; worker completion `820-980`; `Workers` floors to 1
+  at `96`).
+- `pkg/worker/pool.go` (single-channel N-worker pool, no completion ordering
+  `301-338`).
+- `pkg/cache/coalescing_set.go` (batches by KEY only, drops revisions; `Remove` on
+  delete `60-64`).
+- `graph/index_status.go` + `pkg/fusion/contract.go` (wire shapes); `engine_lens.go:83-85`
+  (single-shot Ready gate); `pkg/fusion/retrieval.go:20` (`Status` decode site).
+- `processor/graph-ingest/component.go:804` (ENTITY_STATES created with no `History`
+  → default 1); `natsclient/client.go:970` (`CreateKeyValueBucket`, no history
+  injection).
+- `nats.go` v1.48.0 `jetstream/kv.go` (`WatchAll` = `OrderedConsumer` +
+  `DeliverLastPerSubject` `1273-1275`; `*KeyValueBucketStatus.StreamInfo().State.LastSeq`
+  `820`); ascending last-per-subject delivery guaranteed at the nats-server storage
+  layer (skip-list sorted; ordered-consumer reset re-delivers `> lastGood`).
+- `processor/graph-embedding/component.go` (embedding second hop, `SaveGenerated` /
+  `SaveFailed` / no-text-skip, `WatchAll` at `874` — all in this one file, **not** a
+  `worker.go`); `graph/embedding/storage.go` (`SaveGenerated` no revision `164`;
+  `Record` no revision field `37-53`; terminal states `generated`/`failed`).
+- `configs/hello-world.json`, `e2e-structural.json`, `statistical.json` (`workers` 2/4;
+  none set `coalesce_ms` → coalescer dormant in shipped configs).
 - `semsource/processor/source-manifest/status.go`; `semsource/processor/mcp-gateway/tools.go`.
