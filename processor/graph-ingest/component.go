@@ -1976,12 +1976,16 @@ func (c *Component) ensureRelationshipTargetsExist(ctx context.Context, entity *
 // PROFILE-LESS so MergeEntity still detects the real producer's later merge as
 // the entity's true birth (reconcileIndexingProfile keys on profile-absence,
 // component.go:1414-1419).
-var stubMessageType = message.Type{Domain: "core", Category: "identity.stub", Version: "v1"}
+// Stub identity now lives in the graph package (graph.StubMessageType +
+// graph.PredStub*) so the producer here and enumerating consumers — notably the
+// gated-DAG executor, which must not dispatch a stub (gh#429) — share one
+// definition. These locals alias the shared contract.
+var stubMessageType = graph.StubMessageType
 
 const (
-	predStubMarker        = "core.identity.stub"
-	predStubReferencedBy  = "core.identity.referenced_by"
-	predStubOwner         = "core.identity.stub_owner"
+	predStubMarker        = graph.PredStubMarker
+	predStubReferencedBy  = graph.PredStubReferencedBy
+	predStubOwner         = graph.PredStubOwner
 	stubReferentialSource = "graph-ingest-referential-integrity"
 )
 
@@ -2029,7 +2033,17 @@ func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, 
 		return fmt.Errorf("marshal stub entity: %w", err)
 	}
 
-	if _, err := c.entityBucket.Put(ctx, entityID, data); err != nil {
+	// Atomic create-if-absent (gh#429). The Get above is only a fast-path: a real
+	// producer can birth this entity between that Get (saw absent) and this write.
+	// A Put would clobber the real entity back to a stub envelope — which, once
+	// gated-DAG filters stubs, silently makes a real unit un-dispatchable. Create
+	// returns ErrKVKeyExists on a concurrent create, which we map to a no-op
+	// success — so we stub ONLY if the ID is genuinely still absent and never
+	// overwrite a real (or sibling-stub) entity.
+	if _, err := c.entityBucket.Create(ctx, entityID, data); err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyExists) {
+			return nil // raced with a real (or sibling stub) create — do not clobber
+		}
 		return fmt.Errorf("store stub entity: %w", err)
 	}
 
