@@ -191,6 +191,63 @@ variable-length predicate prefix has no legal NATS pattern).
   doctrine (see above) — rejected on architectural grounds independent of
   performance.
 
+## Wildcard-semantics tradeoff (does hashing give up the dotted-key pattern's value?)
+
+Worth stating explicitly, since it's easy to read this ADR as "give up on
+NATS KV's dotted-subject wildcard querying" more broadly than it actually
+does. This codebase leans hard on that pattern elsewhere — entity-ID
+prefix queries (`graph-ingest`'s `handleQueryPrefixNATS`), community
+levels, structural pivot points, anomaly types/status — and it is
+genuinely valuable there: server-side hierarchical filtering with
+SQL-`LIKE`-prefix-style semantics, "for free" from NATS subject matching.
+Hashing the predicate trades that away for `PREDICATE_INDEX` membership
+keys specifically. What's actually given up, and what isn't:
+
+**Given up**: server-side wildcard/prefix filtering on the *predicate*
+axis of `PREDICATE_INDEX` membership keys. You cannot ask NATS KV
+"give me every membership key under the `inferred.semantic.*` namespace"
+directly against the membership bucket anymore — the predicate is now an
+opaque hash there.
+
+**Not given up**:
+- The *entity-ID* axis of every key in this codebase, including this one,
+  is untouched — entity IDs stay raw, dotted, 6-part, and every other
+  index that wildcards on entity ID (not predicate) is completely
+  unaffected by this change. This is a scoped exception to one axis of
+  one index, not a retreat from the dotted-key pattern generally.
+- This codebase's own doctrine already forbids relying on predicate-axis
+  prefix/namespace semantics for anything correctness-sensitive:
+  `docs/adr/056-authoritative-semantic-state.md:905-913`, "Predicate sets
+  are EXACT-STRING enumeration only... no prefix/namespace/glob on
+  predicates." Nothing sanctioned is lost — what's removed is an
+  *accidental*, previously-untested capability (the raw-prefix draft of
+  this design) that turned out to be actively dangerous the moment two
+  predicates happened to nest (§ "Rejected alternative" above). There was
+  no working namespace-query capability on `PREDICATE_INDEX` before this
+  ADR to preserve — today's code requires an *exact* predicate string via
+  `Get`, full stop.
+- A safe, deliberate path to namespace-style predicate queries still
+  exists if a real use case wants one: **`PREDICATE_CATALOG` keys are the
+  raw, unhashed predicate name** (see Decision above) specifically so this
+  door stays open. Prefix-matching there cannot corrupt entity-membership
+  correctness the way it could on the membership bucket, because the
+  catalog carries no membership data — a `KeysByPrefix` there can only
+  return a superset of predicate *names* that share a dotted namespace,
+  which is exactly the intended semantics of a deliberate namespace query
+  (a caller who wants "all predicates under `inferred.semantic.`" and
+  gets `inferred.semantic.high` *and* a hypothetical
+  `inferred.semantic.high.confidence` is seeing correct namespace
+  inclusion, not corruption). The distinction that made the membership-key
+  prefix design unsafe was call-site *intent* — every existing membership
+  read wants an exact single-predicate match, not a namespace scan — not
+  something inherent to prefix-matching on dotted predicate strings in
+  general. This ADR does not implement catalog prefix-querying (no current
+  caller needs it: `CountVirtualEdges` and `predicateList` both filter a
+  small, already-fetched name list client-side, and predicate cardinality
+  is bounded taxonomy-sized, not entity-cardinality-sized) — flagged here
+  as a real, available extension point rather than a foreclosed one, and
+  left for whoever has the first real need.
+
 ## Read-path changes
 
 All four NATS handlers in `processor/graph-index/query.go`:
@@ -239,31 +296,58 @@ documented restart semantics), and index writes are idempotent for
 additions (append-with-dedup; not idempotent for *removals*, which is the
 pre-existing gap GH #433 tracks, unrelated to this change).
 
-This makes the storage-format change a **bucket cutover, not a data
-migration**: ship under the new bucket name **`PREDICATE_INDEX_V2`**
-(decided; see rationale below) and let the watcher naturally repopulate it
-from `ENTITY_STATES` on next boot, then retire the old `PREDICATE_INDEX`
-bucket. No custom migration code, no dual-read transitional logic, no
-in-place format detection. This is internal derived state with no
-external mutation compatibility concern (pre-1.0, semstreams owns every
-writer of this bucket).
+This makes the storage-format change a **bucket cutover**: the code that
+reads/writes `PREDICATE_INDEX` switches from the blob format to the
+hashed composite-key format, and the watcher naturally repopulates
+correctly-formatted entries from `ENTITY_STATES` on next boot. No custom
+migration code, no dual-read transitional logic.
 
-**Decided: new bucket name, not wipe-in-place.** The old format is never
-read again once `CountVirtualEdges` and the two raw-blob unit tests move
-onto the query API/hashed format in this same PR, so a new bucket name has
-essentially zero transitional cost — point the code at
-`PREDICATE_INDEX_V2`, abandon the old bucket, watcher repopulates clean.
-Wipe-in-place needs a reliable purge step; a partial/failed purge leaves
-orphaned old-format keys mixed into the same bucket as new-format keys.
-Those orphans would be mostly harmless on their own (a raw key like
-`code.artifact.type` can never match `KeysByPrefix(64-hex + ".")`), but
-there's no reason to accept even that residual mess when a new bucket name
-costs nothing extra. `PREDICATE_CATALOG` is provisioned the same way, at
-the same site — see `createOutputBuckets`/`assignBucket`
-(`processor/graph-index/component.go:606-660`), where `PREDICATE_INDEX` is
-currently created; both new buckets must be created eagerly there,
-alongside (not instead of, until the old bucket is fully retired) the
-existing bucket wiring.
+**Corrected: same bucket name (`PREDICATE_INDEX`), not a rename —
+reversing this ADR's earlier "new bucket name" decision.** That earlier
+decision assumed the bucket name was purely internal Go plumbing
+(referenced only symbolically via `graph.BucketPredicateIndex`) with "zero
+external mutation compatibility concern." That assumption was wrong: a
+repo-wide grep for the literal string `PREDICATE_INDEX` (not just Go
+source) turned up **~9 operator-facing deployment/reference configs**
+that hardcode `"subject": "PREDICATE_INDEX"` as an output port
+independently of the Go constant —
+`configs/hello-world.json:162`, `configs/semantic.json:532`,
+`configs/graph-backend.json:65`, `configs/structural.json`,
+`configs/statistical.json`, `configs/e2e-structural.json`,
+`configs/semantic-basic.json`, and two files under
+`configs/examples/`. Renaming the bucket via the constant would make
+`Config.Validate()`'s `requiredBuckets` check
+(`processor/graph-index/component.go:59-64`) fail for every one of these
+configs unless each is updated in lockstep — turning an "internal
+storage swap" into an operator-facing config migration across most of
+this repo's reference deployments, which is a materially larger and
+different kind of breaking change than the rest of this ADR scopes for.
+
+Reusing the same bucket name avoids that entirely: `Ports.Outputs`
+subject, `requiredBuckets`, and `assignBucket`'s switch
+(`processor/graph-index/component.go:648-660`) all stay keyed on the
+unchanged string `"PREDICATE_INDEX"`; none of the ~9 configs need to
+change.
+
+**No explicit purge of old-format keys is required for correctness.**
+Old blob-format keys (e.g. a literal key `code.artifact.type` holding the
+old JSON blob) are **structurally inert** under the new read paths: every
+new read either does `KeysByPrefix(sha256Hex(predicate) + ".")` — a
+64-hex-char literal prefix an old plain-predicate key can never match —
+or, in `handleQueryPredicateListNATS`'s grouped scan, splits each key on
+its first `.` and only credits counts to hashes that a `PREDICATE_CATALOG`
+name forward-hashes to; an old key's first token (e.g. `"code"`) is never
+a valid 64-hex-char hash and so is silently dropped from the join, exactly
+like today's code already silently drops unparseable entries. Old-format
+keys become inert storage residue, not a correctness hazard — cosmetic
+cleanup (an optional explicit wipe-then-rebuild, or a TTL) is a reasonable
+follow-up but not required to ship this fix.
+
+`PREDICATE_CATALOG` is a genuinely new bucket (no existing config
+declares it, so no lockstep-update problem) and is provisioned inline in
+`createOutputBuckets`, the same way `NAME_INDEX`/`CONTEXT_INDEX` are today
+— not a declared output port, created eagerly before the entity watcher
+starts (`processor/graph-index/component.go:606-660`).
 
 ## Breaking-change scope (this is NOT purely internal)
 
@@ -361,10 +445,25 @@ not deferred.
 
 ## Open questions
 
-Resolved during the final architect gate-check (folded into this
-revision): bucket naming (`PREDICATE_INDEX_V2`, new bucket — see
-Migration), and `handleQueryPredicateListNATS`'s implementation shape
-(single grouped scan, not per-predicate fan-out — see Read-path changes).
+Resolved during the final architect gate-check
+(`handleQueryPredicateListNATS`'s implementation shape: single grouped
+scan, not per-predicate fan-out — see Read-path changes). Bucket naming
+was also resolved, but the opposite direction the gate-check recommended:
+in-place format cutover on the existing `PREDICATE_INDEX` name, not a
+rename to a new bucket — see the correction in Migration above (found
+during implementation: ~9 operator-facing configs hardcode the bucket
+name as a literal port subject, so a rename is not the zero-cost move it
+appeared to be from Go source alone).
+
+Also resolved during implementation, prompted by a direct question about
+whether this design gives up NATS KV's dotted-subject wildcard/prefix
+query semantics: see the new **Wildcard-semantics tradeoff** section
+below — the answer is that this design gives that capability up only on
+the predicate axis of `PREDICATE_INDEX` specifically, where it was never
+safely available to begin with (ADR-056 already forbids relying on it),
+and preserves it everywhere else, including a deliberate, safe path to
+namespace-style predicate queries via `PREDICATE_CATALOG` if a real use
+case wants it later.
 
 Still open, safe to resolve during implementation:
 
