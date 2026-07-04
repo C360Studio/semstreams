@@ -8,6 +8,15 @@ gated-DAG dispatch consumers (semspec, semdragon — both ours) receive dispatch
 Mechanics live in the `gated-dag-dispatch` spec
 (`openspec/changes/gated-dag-durable-dispatch/`); this ADR records the decision.
 
+A pre-Accept adversarial review confirmed the core decision (transport is the
+root cause; the natsclient substrate exists; the lease rejection is defensible)
+and sharpened four points folded in below: (B1) the durable ack lets us roll the
+claim back on a *failed* publish — an auto-recovery core-NATS could not offer;
+(B2) the retained stall detector is a soft alert-only threshold, not the
+zero-tuning it was first framed as, and the stream — not the detector — now
+covers consumer-down; (B3) `heartbeat_interval < ack_wait` must be *enforced*;
+(B4) idempotency = terminal-marker short-circuit.
+
 ## Context
 
 The gated-DAG executor dispatches a unit by publishing a reference envelope via
@@ -45,8 +54,20 @@ Two observations make the fix clear:
    (ack-confirmed persisted) to a stream provisioned with `EnsureStream`,
    replacing core-NATS `nc.Publish`. A dispatch is durably queued and delivered
    whenever the consumer (re)subscribes; consumer crash mid-work is covered by
-   `AckWait` redelivery + the `InProgress` heartbeat. This is deterministic — no
-   claim lease / re-dispatch timer to tune.
+   `AckWait` redelivery + the `InProgress` heartbeat.
+
+   **Roll the claim back on a failed publish-ack (B1).** The claim is committed
+   before the publish (ADR-046 invariant #2). Under core-NATS, publish could not
+   fail-visibly, so the claim was left in place on error ("unit stranded until
+   reset", `executor.go:420`) — rolling back risked a double-run because you
+   could not know whether a consumer had already received it. With
+   `PublishToStreamWithAck`, a **failed** ack is proof the message was **not
+   persisted** and will **not** be delivered — so the executor MUST clear the
+   claim on publish error (mirroring the existing claim-failure rollback,
+   `executor.go:403-405`). This converts "publish failed → stranded until manual
+   reset" into "publish failed → auto-retried next eval." The durable ack is
+   exactly the information the fire-and-forget path lacked; using it is a
+   first-class part of this decision, not an afterthought.
 
 2. **The at-least-once consumer pattern is a framework primitive, not per-consumer
    glue.** natsclient gains a typed durable-consume wrapper —
@@ -56,17 +77,32 @@ Two observations make the fix clear:
    `jetstream.Msg`. The framework owns the ack/heartbeat/redelivery semantics
    once; both gated-DAG consumers use it.
 
-3. **The consumer contract is: ack after the terminal marker lands.** A dispatch
-   is complete only when the unit's terminal marker is durably written; the
-   consumer acks then. Crash before ack → JetStream redelivers. Consumers MUST be
-   idempotent for the (rare) redelivery of an in-flight unit — the heartbeat keeps
-   this rare (a genuinely-running unit is not redelivered).
+3. **The consumer contract is: ack after the terminal marker lands, and
+   short-circuit on redelivery (B4).** A dispatch is complete only when the unit's
+   terminal marker is durably written; the consumer acks then. Crash after
+   marker-write but before ack → JetStream redelivers an *already-terminal* unit.
+   Idempotency here is a **terminal-marker short-circuit**: on any delivery the
+   consumer FIRST checks whether the unit's terminal marker is already present and,
+   if so, **acks without re-running** — it does NOT re-run and rely on
+   replace-by-predicate (re-running an expensive agent unit for nothing is the cost
+   we are avoiding). The marker write uses the retrying mutation client
+   (`RequestWithRetryClassified`) so a dropped marker is rare.
 
-4. **A dropped terminal-marker write AFTER ack is a residual the stream cannot
-   fix** — the consumer must write the marker reliably (the mutation API is
-   already `RequestWithRetryClassified`), and a **stranded-unit stall detector**
-   (fix the `stallAfterInflight` blind spot) surfaces the residual + the
-   consumer-down case for operators. This is observability, not auto-re-dispatch.
+4. **After durable dispatch, the only residual strand is a marker dropped AFTER
+   ack** — consumer-down is now handled by the stream (the message waits until the
+   consumer returns), and publish-failure by Decision 1's rollback. A
+   **stranded-unit detector** (fix the `stallAfterInflight` blind spot, which today
+   reads any claimed non-terminal unit as healthy in-flight) surfaces that residual
+   plus any unknown wedge — as an **alert only**, never auto-re-dispatch. Honest
+   caveat (B2/B6): from KV state alone a *stranded* unit (claimed, no marker) is
+   indistinguishable from a *healthy long-running* one (claimed, no marker yet,
+   held alive by the consumer's `InProgress` heartbeat), so a wall-clock "claimed
+   too long" threshold is a **soft tuning knob** (set above max unit runtime) — not
+   the zero-tuning the lease-rejection first implied. The difference from the lease
+   is that a false positive is a spurious alert, not a double-run. A precise,
+   tuning-free alternative — cross-checking the JetStream consumer's per-unit
+   in-flight/pending state instead of a wall clock — is left to the spec/design
+   phase to evaluate.
 
 5. **Rejected: a claim lease / timer-based re-dispatch.** It is a band-aid over
    the lossy transport; the stream makes it unnecessary, it re-runs work
@@ -85,9 +121,18 @@ pass); its role narrows, no lease semantics. The `CAS-UPGRADE POINT`
 - Lost-dispatch strand is eliminated at the transport, deterministically.
 - gated-DAG dispatch becomes consistent with the framework's own durable-dispatch
   pattern (agentic-loop / `for_each`) rather than the lone core-NATS deviation.
-- The `ConsumeDurable` wrapper is reusable substrate for any durable at-least-once
-  consumer; both gated-DAG consumers drop their hand-rolled glue.
-- No lease-TTL tuning; long-running units held by the consumer's heartbeat.
+- Publish-failure and consumer-down become auto-recovering (Decision 1 rollback +
+  the stream holding the message), not reset-driven.
+- The `ConsumeDurable` wrapper owns the **ack/heartbeat/redelivery** pattern once
+  for any durable at-least-once consumer. It does NOT own **envelope decode**
+  (B5): natsclient deliberately does not import the payload registry (a layering
+  inversion), so the handler is `func(ctx, []byte) error` and the
+  `BaseMessage → DispatchMessage` unwrap stays above natsclient. To avoid each
+  consumer reinventing that unwrap, provide a small shared decode helper in the
+  gated-dag payload package that both consumers import.
+- No auto-re-dispatch timer (the lease). The stall detector's alert threshold is a
+  softer, alert-only knob (B2), not zero tuning; long-running units are held by
+  the consumer's `InProgress` heartbeat, not a guessed window.
 
 ### Negative / cost
 
@@ -100,10 +145,20 @@ pass); its role narrows, no lease semantics. The `CAS-UPGRADE POINT`
 
 ### Risks
 
-- **AckWait vs. long units** — mitigated by `ConsumeWithHeartbeat` (`InProgress`
-  extends the window while work runs); set `AckWait` above the heartbeat interval.
-- **Residual dropped-marker-after-ack** — surfaced by the stall detector, not
-  silently wedged; consumers use the retrying mutation client for marker writes.
+- **Misconfigured heartbeat vs. AckWait → double-dispatch of a live unit (B3).**
+  If `heartbeat_interval ≥ ack_wait`, the first `InProgress` lands *after* AckWait
+  has already expired, so JetStream redelivers a genuinely-running unit → duplicate
+  (expensive) work. The agentic-loop precedent DOCUMENTS this invariant
+  (`agentic-loop/config.go:169`) but its `Validate()` does NOT enforce it (checks
+  the two bounds independently). The gated-dag config MUST **cross-validate
+  `heartbeat_interval < ack_wait`** (with margin) at load time, not merely document
+  it. (File the same enforcement gap against agentic-loop's config as a sibling.)
+- **Residual dropped-marker-after-ack** — surfaced by the stranded-unit detector
+  (alert), not silently wedged; consumers use the retrying mutation client for
+  marker writes and the terminal-marker short-circuit on redelivery.
+- **Stall detector false-positive on a healthy long-running unit** — see Decision
+  4: alert-only, so the cost is a spurious alert; threshold set above max unit
+  runtime, or replaced by stream-state introspection in the design phase.
 
 ## Migration
 

@@ -29,9 +29,18 @@ The substrate already exists in `natsclient`: `PublishToStreamWithAck`,
   `natsclient.PublishToStreamWithAck` (ack-confirmed persisted) to a
   JetStream stream provisioned with `EnsureStream`, replacing core-NATS
   `nc.Publish`. A dispatch is now durably queued and delivered whenever the
-  consumer (re)subscribes — fixing lost-dispatch deterministically, no lease TTL
-  to tune. Consumer crash mid-work is covered by `AckWait` redelivery +
-  `ConsumeWithHeartbeat`'s `InProgress` heartbeat.
+  consumer (re)subscribes — fixing lost-dispatch deterministically. Consumer crash
+  mid-work is covered by `AckWait` redelivery + `ConsumeWithHeartbeat`'s
+  `InProgress` heartbeat.
+- **Roll the claim back on a failed publish-ack (B1).** A failed
+  `PublishToStreamWithAck` proves the message was not persisted, so the executor
+  clears the claim (mirroring the existing claim-failure rollback) → auto-retry
+  next eval, instead of stranded-until-reset. The durable ack is the information
+  core-NATS lacked.
+- **Enforce `heartbeat_interval < ack_wait` at config-load (B3).** Not merely
+  documented (the agentic-loop precedent documents but doesn't validate it, so a
+  misconfig silently redelivers a live unit → duplicate paid work). File the same
+  gap against agentic-loop's config as a sibling.
 - **New natsclient primitive — a typed durable-consume wrapper.**
   `ConsumeDurable(ctx, cfg, heartbeat, handler func(ctx, []byte) error)` composes
   `ConsumeStreamWithConfig` + `ConsumeWithHeartbeat` + ack/nak so a consumer's
@@ -39,8 +48,13 @@ The substrate already exists in `natsclient`: `PublishToStreamWithAck`,
   framework owns the at-least-once pattern once; both gated-DAG consumers use it.
 - **BREAKING — consumer contract.** semspec and semdragon migrate from a
   core-NATS subject subscription to the durable consumer (`ConsumeDurable`),
-  **acking after the terminal marker lands**. We control both consumers, so the
-  break is coordinated and one-time.
+  **acking after the terminal marker lands**, and on redelivery
+  **short-circuiting** if the terminal marker is already present (ack without
+  re-running — B4). `ConsumeDurable` hands a `func(ctx, []byte) error`; the
+  `BaseMessage → DispatchMessage` unwrap stays above natsclient (layering), so a
+  **shared decode helper** in the gated-dag payload package (imported by both
+  consumers) owns it once rather than each repo reinventing it (B5). We control
+  both consumers, so the break is coordinated and one-time.
 - **Stall detector (the residual).** Fix the `stallAfterInflight` blind spot so a
   claimed-too-long non-terminal unit surfaces as a stall/alert — covering the one
   failure the stream cannot: a terminal-marker write dropped *after* the consumer
