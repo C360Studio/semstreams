@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -116,4 +117,46 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// dispatchDecoder is the shared BaseMessage decoder for the dispatch envelope,
+// built once (RegisterPayloads is idempotent per registry but the registry+decoder
+// need only be constructed one time).
+var (
+	dispatchDecoderOnce sync.Once
+	dispatchDecoder     *message.Decoder
+	dispatchDecoderErr  error
+)
+
+func dispatchDecoderInstance() (*message.Decoder, error) {
+	dispatchDecoderOnce.Do(func() {
+		reg := payloadregistry.New()
+		if err := RegisterPayloads(reg); err != nil {
+			dispatchDecoderErr = fmt.Errorf("register gateddag payloads: %w", err)
+			return
+		}
+		dispatchDecoder = message.NewDecoder(reg)
+	})
+	return dispatchDecoder, dispatchDecoderErr
+}
+
+// DecodeDispatch decodes a raw dispatch message — a registry-wrapped BaseMessage
+// carrying a DispatchMessage, as delivered by the durable dispatch stream — into
+// the typed payload. Consumers of the stream import this so the BaseMessage →
+// DispatchMessage unwrap is owned once here (above natsclient, which hands the
+// raw []byte) rather than reinvented per consumer repo (ADR-070 B5).
+func DecodeDispatch(data []byte) (*DispatchMessage, error) {
+	dec, err := dispatchDecoderInstance()
+	if err != nil {
+		return nil, err
+	}
+	base, err := dec.Decode(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode dispatch base message: %w", err)
+	}
+	msg, ok := base.Payload().(*DispatchMessage)
+	if !ok {
+		return nil, fmt.Errorf("decoded dispatch payload is %T, want *DispatchMessage", base.Payload())
+	}
+	return msg, nil
 }

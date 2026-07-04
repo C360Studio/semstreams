@@ -2,11 +2,11 @@
 
 ## 1. natsclient `ConsumeDurable` + heartbeat/ackwait enforcement
 
-- [ ] 1.1 `Client.ConsumeDurable(ctx, cfg, heartbeat, handler func(ctx, []byte) error)`
+- [x] 1.1 `Client.ConsumeDurable(ctx, cfg, heartbeat, handler func(ctx, []byte) error)`
       composing `ConsumeStreamWithConfig` + `ConsumeWithHeartbeat` + ack/nak
-- [ ] 1.2 Enforce `heartbeat < AckWait` (with margin) at config-validate /
+- [x] 1.2 Enforce `heartbeat < AckWait` (with margin) at config-validate /
       ConsumeDurable time; reject with an error naming both + unit test
-- [ ] 1.3 Test the wrapper acks on nil / naks on error (integration against a real
+- [x] 1.3 Test the wrapper acks on nil / naks on error (integration against a real
       server, tag integration)
 - [ ] 1.4 File the sibling enforcement gap against `agentic-loop/config.go`
 
@@ -34,7 +34,7 @@
 
 ## 5. Shared decode helper
 
-- [ ] 5.1 `gateddagexec.DecodeDispatch(data []byte) (*DispatchMessage, error)` +
+- [x] 5.1 `gateddagexec.DecodeDispatch(data []byte) (*DispatchMessage, error)` +
       test (framework-side; consumers import it)
 
 ## 6. Spec + close
