@@ -95,9 +95,16 @@ func HasProperty(entity *EntityState, predicate string) bool {
 	return found
 }
 
-// MergeTriples merges triples from two slices, with newer triples taking precedence.
-// For properties with the same predicate, newer values override older ones.
-// For relationships, all unique relationships are preserved.
+// MergeTriples merges two triple slices by REPLACING per (subject, predicate):
+// every existing triple whose (subject, predicate) also appears in newer is
+// dropped, and all of newer is kept. So for a single-valued property the newer
+// value overrides the older one, and for a MULTI-valued predicate (a relationship
+// such as flock.neighbor, where one subject holds several triples with the same
+// predicate) the entire prior set is replaced by newer's set — this is
+// full-set-replace, NOT preserve-all-unique-relationships. A predicate absent
+// from newer is preserved untouched. Callers that want to accumulate values over
+// time must publish the complete set per write (or use a different mechanism); a
+// partial write drops the omitted objects for that predicate. (gh#466)
 func MergeTriples(existing, newer []message.Triple) []message.Triple {
 	if len(existing) == 0 {
 		return newer

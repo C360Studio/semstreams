@@ -64,10 +64,13 @@ func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
 }
 
 // TestIntegration_MergeEntity_SecondWriteMergesTriples pins the load-
-// bearing fix: when an entity already exists, MergeEntity APPENDS the
-// new triples to the existing slice. Pre-fix code at component.go:838
-// used Put (full-replace) and would have wiped the first set of
-// triples.
+// bearing fix: when an entity already exists, MergeEntity MERGES the new
+// triples predicate-level (gh#466 — replace per (subject,predicate),
+// preserving non-conflicting existing triples). Pre-fix code used Put
+// (full-replace) and would have wiped the first set of triples. This test
+// uses DISTINCT predicates across the two arrivals, so both survive under
+// the merge; see TestIntegration_MergeEntity_SamePredicateReplaces for the
+// same-predicate de-duplication.
 func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
@@ -105,6 +108,71 @@ func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 	assert.Equal(t, "mission", stored.MessageType.Domain)
 	assert.Equal(t, "command", stored.MessageType.Category)
 	assert.Equal(t, uint64(2), stored.Version, "Version should bump monotonically")
+}
+
+// TestIntegration_MergeEntity_SamePredicateReplaces is the gh#466 regression:
+// republishing the same (subject, predicate) must REPLACE, not accumulate. A
+// boid publishing position snapshots would otherwise grow flock.position.x
+// without bound.
+func TestIntegration_MergeEntity_SamePredicateReplaces(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.merge.samepred.entity.001"
+	now := time.Now()
+
+	for _, v := range []string{"1", "2", "3"} {
+		require.NoError(t, c.MergeEntity(ctx, newSeedEntity(entityID,
+			message.Triple{Subject: entityID, Predicate: "flock.position.x", Object: v, Timestamp: now, Confidence: 1.0})))
+	}
+
+	stored, _, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+
+	count := 0
+	for _, tr := range stored.Triples {
+		if tr.Predicate == "flock.position.x" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "gh#466: same-predicate re-arrivals must not accumulate duplicate triples")
+
+	// Reader sees the newest value (MergeTriples puts newer first; GetPropertyValue
+	// returns first-match — pre-fix append served the STALE first-written value).
+	v, ok := graph.GetPropertyValue(stored, "flock.position.x")
+	require.True(t, ok)
+	assert.Equal(t, "3", v, "newest value wins after merge")
+}
+
+// TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace pins the
+// full-set-replace contract for a multi-valued relationship predicate: a new
+// flock.neighbor set replaces the prior set (not a union). Producers own
+// publishing the complete set per arrival (gh#466 design).
+func TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	const entityID = "c360.test.merge.multivalue.entity.001"
+	now := time.Now()
+
+	// First arrival: neighbor set {b, c}.
+	require.NoError(t, c.MergeEntity(ctx, newSeedEntity(entityID,
+		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "b", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "c", Timestamp: now, Confidence: 1.0})))
+	// Second arrival: neighbor set {c, d} — must fully replace the prior set.
+	require.NoError(t, c.MergeEntity(ctx, newSeedEntity(entityID,
+		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "c", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "d", Timestamp: now, Confidence: 1.0})))
+
+	stored, _, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+
+	neighbors := map[any]bool{}
+	for _, tr := range stored.Triples {
+		if tr.Predicate == "flock.neighbor" {
+			neighbors[tr.Object] = true
+		}
+	}
+	assert.Equal(t, map[any]bool{"c": true, "d": true}, neighbors,
+		"full-set replace: the new {c,d} set replaces prior {b,c}; the prior-only member b is gone")
 }
 
 // TestIntegration_HandleMessage_DoesNotClobber is the gh#177
@@ -220,9 +288,10 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	}
 	require.Greater(t, hierarchyTripleCount, 0, "hierarchy edges must be stamped on first merge")
 
-	// Second merge — same entity ID, one new caller-supplied triple.
-	// Pre-fix the hierarchy block ran again, doubling the hierarchy
-	// triple count (same edges appended verbatim).
+	// Second merge — same entity ID, one new caller-supplied triple
+	// (distinct predicate). Pre-fix the hierarchy block ran again, doubling
+	// the hierarchy triple count; the fix skips re-applying hierarchy and
+	// merges predicate-level, so the count holds.
 	second := newSeedEntity(entityID,
 		message.Triple{Subject: entityID, Predicate: "robotics.command", Object: "land", Timestamp: now, Confidence: 1.0},
 	)

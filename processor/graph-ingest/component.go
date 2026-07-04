@@ -1586,6 +1586,31 @@ func distinctSubjects(triples []message.Triple) []string {
 	return out
 }
 
+// hasIndexingProfileTriple reports whether the entity already carries a
+// create-time indexing profile. That profile is immutable (ADR-054), so a
+// later Graphable arrival must not override it through the newer-wins merge.
+func hasIndexingProfileTriple(entity *graph.EntityState) bool {
+	for _, t := range entity.Triples {
+		if t.Predicate == vocabulary.EntityIndexingProfile {
+			return true
+		}
+	}
+	return false
+}
+
+// triplesWithoutPredicate returns triples with every triple carrying predicate
+// removed. Non-mutating; used to drop an incoming immutable predicate before a
+// newer-wins merge.
+func triplesWithoutPredicate(triples []message.Triple, predicate string) []message.Triple {
+	out := make([]message.Triple, 0, len(triples))
+	for _, t := range triples {
+		if t.Predicate != predicate {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // removeIndexingProfileTriples drops every entity.indexing.profile triple from
 // the entity (the single-valued predicate is replace-on-write, never appended).
 func removeIndexingProfileTriples(entity *graph.EntityState) {
@@ -1721,10 +1746,11 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 // by extractEntityFromMessage from a Graphable arriving on the
 // JetStream input) WITHOUT clobbering pre-existing triples on the
 // entity. First write behaves like CreateEntity (the entity didn't
-// exist; its fields land verbatim); subsequent writes append the
-// incoming triples to the existing slice and refresh latest-wins
-// metadata (MessageType, StorageRef, UpdatedAt) while monotonically
-// bumping Version.
+// exist; its fields land verbatim); subsequent writes MERGE the incoming
+// triples predicate-level (replace per (subject,predicate) via
+// graph.MergeTriples, gh#466 — the create-time indexing profile is
+// preserved) and refresh latest-wins metadata (MessageType, StorageRef,
+// UpdatedAt) while monotonically bumping Version.
 //
 // Closes gh#177: the prior code called CreateEntity (Put = full-
 // replace) from handleMessage, which erased any triples written via
@@ -1799,7 +1825,24 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		if err := json.Unmarshal(current, &existing); err != nil {
 			return nil, err // non-retryable
 		}
-		existing.Triples = append(existing.Triples, entity.Triples...)
+		// gh#466: predicate-level merge (replace per (subject,predicate)), NOT raw
+		// append — otherwise a producer republishing the same entity accumulates
+		// duplicate triples forever. MergeTriples lets the incoming arrival win on
+		// a (subject,predicate) conflict while preserving non-conflicting existing
+		// triples (e.g. lifecycle-managed predicates the arrival doesn't carry —
+		// gh#177). Same helper the mutation lane (AddTriples) already uses.
+		//
+		// The indexing profile is the exception: it is create-time-immutable
+		// (ADR-054), but MergeTriples is newer-wins, so a re-arrival declaring a
+		// different profile would override the create-time one. Drop the incoming
+		// profile before merging WHEN the existing entity already carries one; a
+		// profile-less stub keeps the incoming declaration as its true birth
+		// (reconcileIndexingProfile stamps it below).
+		newer := entity.Triples
+		if hasIndexingProfileTriple(&existing) {
+			newer = triplesWithoutPredicate(newer, vocabulary.EntityIndexingProfile)
+		}
+		existing.Triples = graph.MergeTriples(existing.Triples, newer)
 		existing.MessageType = entity.MessageType
 		if entity.StorageRef != nil {
 			existing.StorageRef = entity.StorageRef
