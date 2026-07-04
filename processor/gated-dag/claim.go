@@ -26,6 +26,11 @@ type claimer interface {
 	// Claim writes the claim marker on unitID. Returns an error if the write
 	// fails (the caller then does NOT publish — the unit is retried next eval).
 	Claim(ctx context.Context, unitID string) error
+	// Unclaim removes the claim marker on unitID. Called to roll a claim back
+	// when the dispatch publish fails after the claim committed (ADR-070 B1): a
+	// failed ack proves the dispatch was not persisted, so clearing the claim
+	// re-selects the unit next eval instead of stranding it until manual reset.
+	Unclaim(ctx context.Context, unitID string) error
 }
 
 // natsClaimer writes the claim via the atomic replace-by-predicate mutation
@@ -76,6 +81,25 @@ func (c *natsClaimer) Claim(ctx context.Context, unitID string) error {
 	var resp graph.UpdateEntityWithTriplesResponse
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal claim response for %s: %w", unitID, err)
+	}
+	return nil
+}
+
+// Unclaim removes the claim marker via the same atomic replace-by-predicate
+// mutation (RemoveTriples drops the claim, no AddTriples). Idempotent: removing
+// an already-absent predicate converges. Used only to roll back a claim after a
+// failed dispatch publish (ADR-070 B1).
+func (c *natsClaimer) Unclaim(ctx context.Context, unitID string) error {
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity:        &graph.EntityState{ID: unitID},
+		RemoveTriples: []string{c.predicate},
+	}
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal unclaim request: %w", err)
+	}
+	if _, err := c.nc.RequestWithRetryClassified(ctx, subjectUpdateWithTriples, reqData, claimMutationTimeout, natsclient.DefaultRetryConfig()); err != nil {
+		return fmt.Errorf("unclaim mutation failed for %s: %w", unitID, err)
 	}
 	return nil
 }

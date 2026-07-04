@@ -35,6 +35,24 @@
       "default": "gateddag.dirtied",
       "category": "advanced"
     },
+    "dispatch_dedupe_window": {
+      "type": "string",
+      "description": "Server-side duplicate-detection window (Nats-Msg-Id=unitID). Must be \u003e= backstop_interval; makes the claim-rollback safe against an ack-timeout-after-persist (ADR-070 B1).",
+      "default": "2m",
+      "category": "advanced"
+    },
+    "dispatch_stream": {
+      "type": "string",
+      "description": "JetStream stream the executor ensures at Start and publishes dispatches into (ADR-070). Use a distinct name per distinct dispatch_subject.",
+      "default": "GATEDDAG_DISPATCH",
+      "category": "advanced"
+    },
+    "dispatch_stream_max_age": {
+      "type": "string",
+      "description": "Retention window for the dispatch stream; an unconsumed dispatch older than this is dropped.",
+      "default": "24h",
+      "category": "advanced"
+    },
     "dispatch_subject": {
       "type": "string",
       "description": "Subject published with the unit entity ID reference when a unit is dispatchable. The consumer wires its handler here. Required.",
@@ -88,6 +106,12 @@
     "stall_subject": {
       "type": "string",
       "description": "Optional subject for an edge-triggered StallEvent on the 0→non-zero stall transition (the gated_dag_stalled_units gauge + WARN log are always emitted).",
+      "category": "advanced"
+    },
+    "stranded_after": {
+      "type": "string",
+      "description": "Age past which a claimed non-terminal unit surfaces as a stall alert instead of counting as in-flight (ADR-070). Set above max unit runtime; '0' disables. Alert-only.",
+      "default": "0",
       "category": "advanced"
     },
     "unit_entity_prefix": {

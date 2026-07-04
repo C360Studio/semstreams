@@ -24,7 +24,16 @@ type natsPublisher struct {
 	fanOutWorkflow string
 }
 
-// Dispatch publishes the registry-wrapped DispatchMessage reference.
+// Dispatch publishes the registry-wrapped DispatchMessage reference to the
+// dispatch stream via an idempotent, ack-confirmed JetStream publish (ADR-070).
+// The Nats-Msg-Id is the unitID, so within the stream's Duplicates window the
+// server collapses re-publishes of the same unit to a single stored message.
+// This makes the B1 claim-rollback provably safe against the ack-timeout hole: a
+// PublishToStreamWithAck can error AFTER the server persisted (ack-read timeout),
+// and without dedup the rollback + re-dispatch would store a SECOND message
+// (double delivery); msg-id dedup collapses that to one. (Reset-driven
+// re-dispatch of the same unit within the window is delayed by ≤ the window and
+// self-heals via the dirtied re-selection — an acceptable bound, see ADR-070.)
 func (p *natsPublisher) Dispatch(ctx context.Context, unitID string) error {
 	msg := &DispatchMessage{UnitEntityID: unitID, FanOutWorkflow: p.fanOutWorkflow}
 	base := message.NewBaseMessage(msg.Schema(), msg, "gateddag-executor")
@@ -32,7 +41,7 @@ func (p *natsPublisher) Dispatch(ctx context.Context, unitID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal dispatch message for %s: %w", unitID, err)
 	}
-	if err := p.nc.Publish(ctx, p.subject, data); err != nil {
+	if err := p.nc.PublishToStreamWithMsgID(ctx, p.subject, data, unitID); err != nil {
 		return fmt.Errorf("publish dispatch for %s to %s: %w", unitID, p.subject, err)
 	}
 	return nil

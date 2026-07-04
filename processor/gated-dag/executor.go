@@ -36,6 +36,9 @@ type executor struct {
 	metrics *metrics
 
 	backstop time.Duration
+	// strandedAfter is the parsed StrandedAfter: a claimed non-terminal unit older
+	// than this stops suppressing the stall (ADR-070). 0 disables the age-gate.
+	strandedAfter time.Duration
 
 	// lastStalled edge-triggers the stall event (#365.3): emit only on the
 	// 0→non-zero transition. Touched only inside reEvaluate (under evalMu).
@@ -81,6 +84,11 @@ func (e *executor) start(ctx context.Context) error {
 		return err
 	}
 	e.backstop = backstop
+	strandedAfter, err := e.cfg.strandedAfter()
+	if err != nil {
+		return err
+	}
+	e.strandedAfter = strandedAfter
 	e.trigger = make(chan struct{}, 1)
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -252,7 +260,7 @@ func (e *executor) reEvaluate(ctx context.Context, fromBackstop bool) {
 	// Stall surfacing (#8): pure observability, computed BEFORE dispatch so a
 	// stalled plan alerts even when nothing dispatches. Subtract in-flight
 	// (claimed, non-terminal) units so running work is not mistaken for a stall.
-	stalled := stallAfterInflight(gateddag.Stalled(view.unitIDs, view.dependsOn, view.markers), view)
+	stalled := stallAfterInflight(gateddag.Stalled(view.unitIDs, view.dependsOn, view.markers), view, e.strandedAfter, time.Now())
 	if e.metrics != nil {
 		e.metrics.stall.Set(float64(len(stalled)))
 	}
@@ -417,7 +425,22 @@ func (e *executor) claimThenDispatch(ctx context.Context, unitID string) error {
 		if e.metrics != nil {
 			e.metrics.dispatchErr.Inc()
 		}
-		e.log.Error("gated-dag: dispatch publish failed AFTER claim committed; unit may be stranded until reset",
+		// ADR-070 B1: an ack-confirmed publish that returns an error proves the
+		// dispatch was NOT persisted and will not be delivered, so roll the claim
+		// back — durable (Unclaim) and in-memory (inflight hint) — and the unit
+		// re-selects next eval instead of stranding until a manual reset. This was
+		// impossible under fire-and-forget core-NATS (no ack ⇒ you could not know
+		// it wasn't delivered, so rolling back risked a double-run). The Unclaim
+		// round-trip runs OUTSIDE evalMu (mirrors the claim-error path); if it
+		// fails the stranded-unit detector still surfaces the wedge.
+		if uerr := e.claimer.Unclaim(ctx, unitID); uerr != nil {
+			e.log.Warn("gated-dag: claim rollback after dispatch failure also failed; unit may be stranded until the stranded-unit detector alerts or a reset",
+				slog.String("unit", unitID), slog.String("error", uerr.Error()))
+		}
+		e.evalMu.Lock()
+		delete(e.inflight, unitID)
+		e.evalMu.Unlock()
+		e.log.Warn("gated-dag: dispatch publish failed after claim; claim rolled back, unit re-selected next eval (gh#385)",
 			slog.String("unit", unitID), slog.String("error", err.Error()))
 		return err
 	}
@@ -431,8 +454,15 @@ func (e *executor) claimThenDispatch(ctx context.Context, unitID string) error {
 // stallAfterInflight suppresses a stall alert while genuine work is in flight: a
 // unit that is claimed but not yet terminal (and not dirtied) is running, so the
 // plan is progressing even if the brain reports held-ready units (S1). Returns
-// the original stalled set only when nothing is in flight.
-func stallAfterInflight(stalled []string, view graphView) []string {
+// the original stalled set only when nothing genuine is in flight.
+//
+// Age-gate (ADR-070): a claimed non-terminal unit older than strandedAfter is
+// STRANDED (its dispatch was lost or its marker dropped after ack), not healthy
+// in-flight, so it no longer suppresses the stall — the wedge surfaces as an
+// alert. strandedAfter == 0 disables the age-gate (every claimed non-terminal
+// unit counts as in-flight — prior behavior, back-compat). Pure so it stays
+// table-testable: the caller passes the threshold and the clock.
+func stallAfterInflight(stalled []string, view graphView, strandedAfter time.Duration, now time.Time) []string {
 	if len(stalled) == 0 {
 		return nil
 	}
@@ -440,9 +470,16 @@ func stallAfterInflight(stalled []string, view graphView) []string {
 		if view.markers.Dirtied[id] {
 			continue // reset in progress, not in-flight
 		}
-		if !view.markers.Completed[id] && !view.markers.Failed[id] {
-			return nil // a claimed, non-terminal unit is running ⇒ not stalled
+		if view.markers.Completed[id] || view.markers.Failed[id] {
+			continue // terminal, not in-flight
 		}
+		// Claimed, non-terminal, non-dirtied: genuine in-flight OR stranded. A
+		// claim older than strandedAfter is treated as stranded and does NOT
+		// suppress the stall.
+		if strandedAfter > 0 && now.Sub(view.claimedAt[id]) >= strandedAfter {
+			continue
+		}
+		return nil // a FRESH claimed non-terminal unit is genuinely running ⇒ not stalled
 	}
 	return stalled
 }

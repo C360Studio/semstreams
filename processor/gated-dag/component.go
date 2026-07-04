@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -107,6 +109,41 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Provision the durable dispatch stream (ADR-070): it captures DispatchSubject,
+	// so a dispatch published via PublishToStreamWithAck is persisted and delivered
+	// whenever a consumer (re)subscribes — a lost dispatch can no longer strand a
+	// claimed unit. Idempotent (get-or-create). A bounded MaxAge keeps an
+	// unconsumed backlog from growing forever (a work stream, not the graph —
+	// ADR-068's no-TTL rule is about ENTITY_STATES).
+	streamMaxAge, err := c.cfg.dispatchStreamMaxAge()
+	if err != nil {
+		return err
+	}
+	dedupeWindow, err := c.cfg.dispatchDedupeWindow()
+	if err != nil {
+		return err
+	}
+	stream, err := c.natsClient.EnsureStream(ctx, jetstream.StreamConfig{
+		Name:       c.cfg.DispatchStream,
+		Subjects:   []string{c.cfg.DispatchSubject},
+		MaxAge:     streamMaxAge,
+		Duplicates: dedupeWindow, // server-side dedup on Nats-Msg-Id=unitID (ADR-070 B1)
+	})
+	if err != nil {
+		return fmt.Errorf("gated-dag: ensure dispatch stream %q for subject %q: %w",
+			c.cfg.DispatchStream, c.cfg.DispatchSubject, err)
+	}
+	// EnsureStream is get-or-create, NOT reconcile: a pre-existing stream of the
+	// same name (e.g. another gated-dag executor sharing the default
+	// DispatchStream while using a different DispatchSubject) is returned
+	// UNCHANGED. Fail loud at Start if it does not capture our subject — otherwise
+	// every publish hits "no stream matches subject" and loops claim/rollback
+	// (HIGH footgun). Give each distinct DispatchSubject a distinct DispatchStream.
+	if info := stream.CachedInfo(); info != nil && !subjectCovered(c.cfg.DispatchSubject, info.Config.Subjects) {
+		return fmt.Errorf("gated-dag: dispatch stream %q exists but does not capture subject %q (stream subjects: %v) — EnsureStream does not reconcile a pre-existing stream; set a distinct dispatch_stream per dispatch_subject",
+			c.cfg.DispatchStream, c.cfg.DispatchSubject, info.Config.Subjects)
+	}
+
 	var stall stallPublisher
 	if c.cfg.StallSubject != "" {
 		stall = &natsStallPublisher{
@@ -172,6 +209,19 @@ func (c *Component) Start(ctx context.Context) error {
 		slog.Int("workers", c.cfg.Workers),
 		slog.String("backstop", c.cfg.BackstopInterval))
 	return nil
+}
+
+// subjectCovered reports whether want is captured by the stream's configured
+// subjects. gated-dag uses concrete (non-wildcard) dispatch subjects, so an exact
+// membership check suffices — a stream this executor created lists want exactly;
+// a name-collision with another executor's subject fails the check.
+func subjectCovered(want string, subjects []string) bool {
+	for _, s := range subjects {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop gracefully stops the executor.

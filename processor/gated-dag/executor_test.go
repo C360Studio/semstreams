@@ -62,9 +62,10 @@ func (f *fakeReader) ReadUnitSet(_ context.Context) ([]graph.EntityState, error)
 }
 
 type fakeClaimer struct {
-	mu    sync.Mutex
-	calls []string
-	err   error
+	mu       sync.Mutex
+	calls    []string
+	unclaims []string
+	err      error
 }
 
 func (f *fakeClaimer) Claim(_ context.Context, unitID string) error {
@@ -75,6 +76,19 @@ func (f *fakeClaimer) Claim(_ context.Context, unitID string) error {
 	}
 	f.calls = append(f.calls, unitID)
 	return nil
+}
+
+func (f *fakeClaimer) Unclaim(_ context.Context, unitID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unclaims = append(f.unclaims, unitID)
+	return nil
+}
+
+func (f *fakeClaimer) unclaimCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.unclaims...)
 }
 
 type fakePublisher struct {
@@ -159,12 +173,18 @@ func TestClaimThenDispatch_ClaimErrorSkipsPublish(t *testing.T) {
 	require.Empty(t, pub.calls, "publish must not run when claim fails")
 }
 
-func TestClaimThenDispatch_PublishErrorAfterClaimDoesNotRollBack(t *testing.T) {
+func TestClaimThenDispatch_PublishErrorRollsBackClaim(t *testing.T) {
+	// ADR-070 B1: an ack-confirmed publish that errors proves the dispatch was NOT
+	// persisted and will not be delivered, so the claim is rolled back (Unclaim)
+	// and the in-flight hint cleared — the unit re-selects next eval instead of
+	// stranding until a manual reset (the old, fire-and-forget behavior).
 	cl := &fakeClaimer{}
-	pub := &fakePublisher{err: errors.New("net down")}
-	e := &executor{cfg: validCfg(), log: discardLogger(), claimer: cl, pub: pub}
+	pub := &fakePublisher{err: errors.New("no ack")}
+	e := &executor{cfg: validCfg(), log: discardLogger(), claimer: cl, pub: pub, inflight: map[string]bool{"u1": true}}
 	require.Error(t, e.claimThenDispatch(context.Background(), "u1"))
-	require.Equal(t, []string{"u1"}, cl.calls, "claim stays committed (no rollback — avoids double-run window)")
+	require.Equal(t, []string{"u1"}, cl.calls, "claim was committed before publish")
+	require.Equal(t, []string{"u1"}, cl.unclaimCalls(), "publish failure rolls the claim back (B1)")
+	require.False(t, e.inflight["u1"], "in-flight hint cleared so the unit re-selects next eval")
 }
 
 func TestClaimThenDispatch_ClaimErrorClearsInflight(t *testing.T) {
@@ -319,33 +339,52 @@ func TestReEvaluate_StallSurfacedNothingDispatched(t *testing.T) {
 }
 
 func TestStallAfterInflight(t *testing.T) {
+	now := time.Now()
+	// mk builds a view; claimed units get a FRESH claim timestamp (now) unless
+	// overridden via claimAge.
 	mk := func(completed, failed, dirtied, claimed []string) graphView {
-		v := graphView{claimed: map[string]bool{}}
+		v := graphView{claimed: map[string]bool{}, claimedAt: map[string]time.Time{}}
 		for _, id := range claimed {
 			v.claimed[id] = true
+			v.claimedAt[id] = now
 		}
 		v.markers = gateddag.NewMarkerSet(completed, failed, dirtied)
 		return v
 	}
+	const off = time.Duration(0) // age-gate disabled (prior behavior)
 
 	t.Run("no stalled units → nil", func(t *testing.T) {
-		require.Nil(t, stallAfterInflight(nil, mk(nil, nil, nil, nil)))
+		require.Nil(t, stallAfterInflight(nil, mk(nil, nil, nil, nil), off, now))
 	})
 	t.Run("stalled and nothing in-flight → reported", func(t *testing.T) {
-		got := stallAfterInflight([]string{"a", "b"}, mk(nil, nil, nil, nil))
+		got := stallAfterInflight([]string{"a", "b"}, mk(nil, nil, nil, nil), off, now)
 		require.Equal(t, []string{"a", "b"}, got)
 	})
 	t.Run("stalled but a claimed non-terminal unit is in-flight → suppressed", func(t *testing.T) {
-		got := stallAfterInflight([]string{"a"}, mk(nil, nil, nil, []string{"c"}))
+		got := stallAfterInflight([]string{"a"}, mk(nil, nil, nil, []string{"c"}), off, now)
 		require.Nil(t, got, "running work is not a stall")
 	})
 	t.Run("claimed unit is terminal → not in-flight, stall reported", func(t *testing.T) {
-		got := stallAfterInflight([]string{"a"}, mk([]string{"c"}, nil, nil, []string{"c"}))
+		got := stallAfterInflight([]string{"a"}, mk([]string{"c"}, nil, nil, []string{"c"}), off, now)
 		require.Equal(t, []string{"a"}, got)
 	})
 	t.Run("claimed unit is dirtied → reset, not in-flight, stall reported", func(t *testing.T) {
-		got := stallAfterInflight([]string{"a"}, mk(nil, nil, []string{"c"}, []string{"c"}))
+		got := stallAfterInflight([]string{"a"}, mk(nil, nil, []string{"c"}, []string{"c"}), off, now)
 		require.Equal(t, []string{"a"}, got)
+	})
+
+	// Age-gate (ADR-070 / gh#385).
+	t.Run("STRANDED claim (older than threshold) → no longer suppresses, stall reported", func(t *testing.T) {
+		v := mk(nil, nil, nil, []string{"c"})
+		v.claimedAt["c"] = now.Add(-10 * time.Minute) // claimed 10m ago
+		got := stallAfterInflight([]string{"a"}, v, 5*time.Minute, now)
+		require.Equal(t, []string{"a"}, got, "a stranded claim must not hide its dependents' stall")
+	})
+	t.Run("FRESH claim with threshold set → still in-flight, not falsely alerted", func(t *testing.T) {
+		v := mk(nil, nil, nil, []string{"c"})
+		v.claimedAt["c"] = now.Add(-1 * time.Minute) // claimed 1m ago, threshold 5m
+		got := stallAfterInflight([]string{"a"}, v, 5*time.Minute, now)
+		require.Nil(t, got, "a healthy long-running unit under the threshold must not be alerted")
 	})
 }
 
