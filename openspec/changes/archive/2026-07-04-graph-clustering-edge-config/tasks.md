@@ -53,11 +53,12 @@
 
 ## 5. Spec + close
 
-- [ ] 5.1 `openspec validate --strict`; gates green (`go test -race`,
-      `-tags=integration` for `processor/graph-clustering`, `task lint`, schema
-      committed); semstreams-reviewer; archive → promote `graph-clustering` into
-      `openspec/specs/`.
-- [ ] 5.2 Confirm the diagnosis + fix back to semboids on gh#461; note the config
-      example (`{"entity_id_edges": {"include_siblings": false, "include_system_peers": false}}`).
-- [ ] 5.3 File the adaptive-synthesis follow-up (skip virtual edges when explicit
-      degree ≥ k) referencing this change.
+- [x] 5.1 `openspec validate --strict`; gates green (`go test -race`,
+      `-tags=integration` for `processor/graph-clustering` (30s), `task lint`,
+      schema committed); semstreams-reviewer (HIGH addressed); archive → promote
+      `graph-clustering` into `openspec/specs/`.
+- [x] 5.2 Confirm the diagnosis + fix back to semboids on gh#461 (posted on merge)
+      with the config example
+      (`{"entity_id_edges": {"include_siblings": false, "include_system_peers": false}}`).
+- [x] 5.3 File the adaptive-synthesis follow-up (skip virtual edges when explicit
+      degree ≥ k) referencing this change (filed on merge).
