@@ -41,10 +41,12 @@ discipline; this change closes the framework gap so that interim can be removed.
   contract becomes live-reconfigurable with **zero changes to the component**.
   Rule-processor is the first beneficiary.
 - **Make the PUT response honest.** The handler MUST report whether the config was
-  applied live or only stored. Add `applied: bool` and `restart_required: bool`
-  to the response (additive — `status`/`message` stay for compatibility). A
-  component with **no** reconfig hook returns `applied:false, restart_required:true`
-  instead of an unconditional `success` that implies a live apply.
+  applied live via an additive `applied: bool` (`status`/`message` stay for
+  compatibility). A component with **no** reconfig hook returns `applied:false`
+  (+ an honest message) instead of an unconditional `success` that implies a live
+  apply. It does **not** emit a `restart_required` field: this endpoint updates
+  only the in-memory view and does not durably persist (gh#388), so promising a
+  restart-time apply would be a fresh false promise (review HIGH).
 - **Validate-before-store ordering is preserved.** A `ValidateConfigUpdate`
   failure returns the structured 400 already used for schema errors; the in-memory
   config is only updated once a hot-apply path (either contract) has accepted it,
@@ -64,7 +66,7 @@ discipline; this change closes the framework gap so that interim can be removed.
 - `component-runtime-config` — the contract for applying a runtime configuration
   change to a running component over the ComponentManager HTTP API: which
   reconfig interfaces are honored, the validate-before-apply ordering, and the
-  honest applied / restart-required response.
+  honest `applied` response (no false restart-durability promise).
 
 ### Modified Capabilities
 - None (no existing spec covers the ComponentManager config API yet).
@@ -75,8 +77,8 @@ discipline; this change closes the framework gap so that interim can be removed.
   `RuntimeConfigurable` bridge and the honest response fields. A small shared
   reconfig-dispatch helper may factor the "try each reconfig contract, report
   which applied" logic so the component and service managers don't diverge.
-- **Response shape:** additive (`applied`, `restart_required`); existing
-  `status`/`message` unchanged → non-breaking for current clients.
+- **Response shape:** additive (`applied`); existing `status`/`message` unchanged
+  → non-breaking for current clients.
 - No component changes required; `processor/rule` is reached as-is.
 - The two-contract convergence is deferred and recorded, not implemented.
 
@@ -95,6 +97,6 @@ discipline; this change closes the framework gap so that interim can be removed.
 ## Consumers
 
 `service` (framework — the ComponentManager HTTP API); semboids (reported
-consumer, live rule toggles). Any component implementing `RuntimeConfigurable`
+consumer, live rule toggles). Any component implementing the reconfig method pair
 (today `processor/rule`) becomes HTTP-reconfigurable; any operator UI performing
-`PUT config/<component>` gets an honest applied/restart-required signal.
+`PUT config/<component>` gets an honest `applied` signal.
