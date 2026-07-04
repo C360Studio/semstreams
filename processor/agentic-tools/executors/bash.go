@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -178,6 +179,18 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 	// from the per-call verify_clean argument (which the model sets and which is
 	// pre-only) — this rides Metadata and is pre+post.
 	roPolicy, scratch := agentic.FilesystemPolicyFromMetadata(call.Metadata)
+	// Fail CLOSED on an unrecognized policy value: a product typo (e.g.
+	// "readonly") must not silently degrade to permissive execution — for a
+	// security control that is a fail-open, the exact class this guard exists to
+	// prevent. Loud (Warn + typed refusal naming the bad value) so the misconfig
+	// surfaces instead of a role silently running unsandboxed. Known-but-permissive
+	// values (workspace_write, host_write) fall through to normal execution.
+	if !agentic.IsKnownFilesystemPolicy(roPolicy) {
+		slog.Warn("bash: unrecognized filesystem_policy — refusing (fail-closed)", "policy", roPolicy)
+		return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf(
+			"filesystem_policy %q is not recognized — refusing (fail-closed). Expected %q or %q.",
+			roPolicy, agentic.FilesystemPolicyReadOnly, agentic.FilesystemPolicyWorkspaceWrite)}, nil
+	}
 	readOnly := agentic.IsReadOnlyPolicy(roPolicy)
 	taskID := bashTaskID(call)
 
@@ -388,6 +401,11 @@ func (e *BashExecutor) execReadOnly(callID string, capture func() (worktreeSnaps
 			"read_only: protected worktree is not clean before the command (modulo scratch) — refusing. Dirty paths: %s",
 			strings.Join(pre.dirtyPaths, ", "))}, nil
 	}
+	// run must never return a non-nil error AFTER a possibly-mutating command:
+	// execLocal/execRemote encode command failure in ToolResult.Error and always
+	// return a nil error, so the post-check below always runs (even on a non-zero
+	// exit that mutated). A future run closure that could return a non-nil error
+	// after a partial mutation would skip the proof — keep that invariant.
 	res, err := run()
 	if err != nil {
 		return res, err

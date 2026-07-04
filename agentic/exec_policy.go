@@ -44,7 +44,22 @@ const MetadataKeyScratchPaths = "agent.exec.scratch_paths"
 const (
 	FilesystemPolicyReadOnly       = "read_only"
 	FilesystemPolicyWorkspaceWrite = "workspace_write"
+	FilesystemPolicyHostWrite      = "host_write" // valid enum; permissive, no v1 enforcement meaning (substrate concern)
 )
+
+// IsKnownFilesystemPolicy reports whether policy is a recognized filesystem
+// enum value. An UNRECOGNIZED non-empty value (a product typo like "readonly")
+// must NOT silently degrade to permissive — for a security control that is a
+// fail-open. Callers fail closed (refuse) + log on an unknown value; the empty
+// string is the back-compat default (workspace_write) and IS known.
+func IsKnownFilesystemPolicy(policy string) bool {
+	switch policy {
+	case "", FilesystemPolicyReadOnly, FilesystemPolicyWorkspaceWrite, FilesystemPolicyHostWrite:
+		return true
+	default:
+		return false
+	}
+}
 
 // DispatchEnforcedMetadataKeys is the set of task-scoped enforcement keys that
 // dispatchToolCall stamps AUTHORITATIVELY (overwrite) from the loop's cached

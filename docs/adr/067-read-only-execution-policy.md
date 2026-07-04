@@ -162,9 +162,11 @@ Under `filesystem_policy = read_only`, the protected worktree must be **clean
 modulo scratch, and on the same HEAD, before AND after** each command:
 
 1. **Pre-capture:** `git status -z --porcelain --untracked-files=all` (dirty set)
-   + `git rev-parse HEAD` (and `@{u}` upstream if present). If any dirty path is
-   **not** under a scratch exemption, **refuse** (an inspect role starts clean; a
-   dirty protected tree at entry is itself an anomaly).
+   + `git rev-parse HEAD`. If any dirty path is **not** under a scratch exemption,
+   **refuse** (an inspect role starts clean; a dirty protected tree at entry is
+   itself an anomaly). (The proof pins the worktree and HEAD only; remote-tracking
+   refs like `@{u}` are out of scope — moving one via `git fetch` is a documented
+   no-remote-mutation non-goal below.)
 2. Run the command.
 3. **Post-capture:** same. **Violation** if HEAD moved OR any dirty path is not
    under a scratch exemption — the command created, modified, formatted,
@@ -240,11 +242,12 @@ From the issue's Non-Ask, plus the holes the review made explicit:
 - **git-state laundering is only partially covered.** HEAD pinning catches
   commit / reset-to-different-ref / checkout-to-different-ref. It does NOT catch:
   `git clean -fdx` deleting untracked files (incl. scratch), a reset/checkout
-  that lands back on the *same* HEAD with a clean tree, or a mid-command write
-  the command itself deletes before returning. These leave HEAD and the dirty
-  set unchanged; only OS-level observation (the substrate) sees them. An LLM
-  inspect role is unlikely to launder deliberately, but the guarantee is stated
-  honestly, not overstated.
+  that lands back on the *same* HEAD with a clean tree, a mid-command write the
+  command itself deletes before returning, or a **backgrounded/detached** write
+  (`(sleep 1; echo x > f) &`) that lands after the post-capture. These leave HEAD
+  and the dirty set unchanged at capture time; only OS-level observation (the
+  substrate) sees them. An LLM inspect role is unlikely to launder deliberately,
+  but the guarantee is stated honestly, not overstated.
 - **No host-filesystem proof.** A command writing *outside* the worktree on the
   local host is not caught (the remote runner's container bounds this; the
   substrate bounds it generally).

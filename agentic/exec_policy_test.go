@@ -120,3 +120,18 @@ func TestDispatchEnforcedMetadataKeys_Membership(t *testing.T) {
 		}
 	}
 }
+
+// TestIsKnownFilesystemPolicy locks the recognized enum set — an unknown value
+// must be reported so callers can fail closed instead of silently degrading.
+func TestIsKnownFilesystemPolicy(t *testing.T) {
+	for _, p := range []string{"", FilesystemPolicyReadOnly, FilesystemPolicyWorkspaceWrite, FilesystemPolicyHostWrite} {
+		if !IsKnownFilesystemPolicy(p) {
+			t.Errorf("IsKnownFilesystemPolicy(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"readonly", "read-only", "ro", "workspace", "nonsense"} {
+		if IsKnownFilesystemPolicy(p) {
+			t.Errorf("IsKnownFilesystemPolicy(%q) = true, want false (unrecognized must fail closed)", p)
+		}
+	}
+}

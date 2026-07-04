@@ -776,3 +776,40 @@ func TestBashExecutor_ReadOnly_RemoteWriteViolation(t *testing.T) {
 	assert.Contains(t, res.Error, "mutated protected worktree paths")
 	assert.Contains(t, res.Error, "out.txt")
 }
+
+// TestBashExecutor_ReadOnly_UnrecognizedPolicyFailsClosed: an unrecognized
+// filesystem_policy value (a product typo) must REFUSE, not silently run
+// unsandboxed — fail-closed on a security control (semstreams-reviewer MEDIUM).
+func TestBashExecutor_ReadOnly_UnrecognizedPolicyFailsClosed(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+	sentinel := filepath.Join(dir, "ran")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-typo", Name: "bash",
+		Arguments: map[string]any{"command": "touch " + sentinel},
+		Metadata:  map[string]any{agentic.MetadataKeyFilesystemPolicy: "readonly"}, // typo
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "not recognized")
+	assert.Contains(t, res.Error, "readonly")
+	if _, statErr := os.Stat(sentinel); !os.IsNotExist(statErr) {
+		t.Errorf("command must NOT run under an unrecognized policy; sentinel exists: %v", statErr)
+	}
+}
+
+// TestBashExecutor_HostWritePolicyRuns: host_write is a KNOWN (permissive) enum
+// value — it must not be refused as unrecognized, and does not guard writes.
+func TestBashExecutor_HostWritePolicyRuns(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "hw", Name: "bash",
+		Arguments: map[string]any{"command": "echo x > wrote.go && echo done"},
+		Metadata:  map[string]any{agentic.MetadataKeyFilesystemPolicy: agentic.FilesystemPolicyHostWrite},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error, "host_write is permissive; must not refuse or guard")
+	assert.Contains(t, res.Content, "done")
+}
