@@ -2,6 +2,7 @@
 package graphclustering
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,8 +70,81 @@ type Config struct {
 	StartupAttempts int `json:"startup_attempts,omitempty" schema:"type:int,description:Max attempts to wait for dependencies at startup,category:advanced"`
 	StartupInterval int `json:"startup_interval_ms,omitempty" schema:"type:int,description:Interval between startup attempts in milliseconds,category:advanced"`
 
+	// EntityID virtual-edge synthesis (gh#461). Omit to keep the built-in
+	// defaults (sibling + system-peer edges ON); set include_* false to run
+	// community detection on explicit topology alone.
+	EntityIDEdges *EntityIDEdgesConfig `json:"entity_id_edges,omitempty" schema:"type:object,description:EntityID virtual-edge synthesis for community detection; omit to keep defaults (siblings + system-peers on),category:advanced"`
+
 	// Parsed duration (set by ApplyDefaults)
 	detectionInterval time.Duration
+	// Resolved EntityID virtual-edge config (set by ApplyDefaults from
+	// EntityIDEdges over a DefaultEntityIDProviderConfig baseline).
+	entityIDEdges clustering.EntityIDProviderConfig
+}
+
+// EntityIDEdgesConfig is the operator-facing shape for community detection's
+// EntityID virtual-edge synthesis (gh#461). The two toggles are pointers so the
+// config is tri-state: nil (unset) resolves to the built-in default, and only an
+// explicit true/false overrides it — omitting the block therefore preserves the
+// current behavior (both ON) rather than silently disabling synthesis. Numeric
+// fields default when zero (mirrors clustering.NewEntityIDProvider).
+type EntityIDEdgesConfig struct {
+	IncludeSiblings    *bool   `json:"include_siblings,omitempty" schema:"type:bool,description:Synthesize sibling edges between entities sharing the 5-part type prefix (default true); set false to run detection on explicit topology alone"`
+	IncludeSystemPeers *bool   `json:"include_system_peers,omitempty" schema:"type:bool,description:Synthesize system-peer edges between entities sharing the same system (default true)"`
+	SiblingWeight      float64 `json:"sibling_weight,omitempty" schema:"type:number,description:Edge weight for synthesized sibling edges (default 0.7)"`
+	MaxSiblings        int     `json:"max_siblings,omitempty" schema:"type:int,description:Max sibling neighbors synthesized per entity (default 10)"`
+	SystemPeerWeight   float64 `json:"system_peer_weight,omitempty" schema:"type:number,description:Edge weight for synthesized system-peer edges (default 0.3)"`
+	MaxSystemPeers     int     `json:"max_system_peers,omitempty" schema:"type:int,description:Max system-peer neighbors synthesized per entity (default 15)"`
+}
+
+// rejectUnknownEntityIDEdgeKeys strict-decodes the entity_id_edges block and
+// rejects any key that does not bind, so an operator's toggle typo (e.g.
+// "include_sibling" or "disable_siblings") fails loudly at load instead of being
+// silently dropped by encoding/json — which would leave synthesis at its default
+// (ON) and the gh#461 collapse in place with no error. Mirrors
+// inference.RejectUnknownKeys for anomaly_config (ADR-054, no-silent-drop).
+func rejectUnknownEntityIDEdgeKeys(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var probe EntityIDEdgesConfig
+	if err := dec.Decode(&probe); err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "graphclustering", "rejectUnknownEntityIDEdgeKeys",
+			fmt.Sprintf("entity_id_edges has a key that does not bind and would be silently ignored at runtime (gh#461/ADR-054): %v", err))
+	}
+	return nil
+}
+
+// resolve maps the operator config onto a clustering.EntityIDProviderConfig,
+// starting from the built-in defaults (synthesis ON) so that an unset toggle or
+// zero numeric keeps the default. A nil receiver resolves to the defaults
+// verbatim — the load-bearing "omitted config == current behavior" invariant.
+func (e *EntityIDEdgesConfig) resolve() clustering.EntityIDProviderConfig {
+	cfg := clustering.DefaultEntityIDProviderConfig()
+	if e == nil {
+		return cfg
+	}
+	if e.IncludeSiblings != nil {
+		cfg.IncludeSiblings = *e.IncludeSiblings
+	}
+	if e.IncludeSystemPeers != nil {
+		cfg.IncludeSystemPeers = *e.IncludeSystemPeers
+	}
+	if e.SiblingWeight > 0 {
+		cfg.SiblingWeight = e.SiblingWeight
+	}
+	if e.MaxSiblings > 0 {
+		cfg.MaxSiblings = e.MaxSiblings
+	}
+	if e.SystemPeerWeight > 0 {
+		cfg.SystemPeerWeight = e.SystemPeerWeight
+	}
+	if e.MaxSystemPeers > 0 {
+		cfg.MaxSystemPeers = e.MaxSystemPeers
+	}
+	return cfg
 }
 
 // Validate implements component.Validatable interface
@@ -178,6 +252,11 @@ func (c *Config) ApplyDefaults() {
 	if c.StartupInterval == 0 {
 		c.StartupInterval = 500 // milliseconds
 	}
+
+	// Resolve EntityID virtual-edge synthesis (gh#461). Nil EntityIDEdges
+	// resolves to the built-in defaults (synthesis ON) — omitting the block
+	// preserves current behavior.
+	c.entityIDEdges = c.EntityIDEdges.resolve()
 
 	// Add optional output ports based on enabled features
 	if c.Ports != nil {
@@ -363,6 +442,16 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		if err := json.Unmarshal(rawConfig, &rawAnomaly); err == nil {
 			if err := inference.RejectUnknownKeys(rawAnomaly.AnomalyConfig); err != nil {
 				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "anomaly_config")
+			}
+		}
+		// Same no-silent-drop guard for entity_id_edges (gh#461): a toggle typo
+		// must fail loudly, not leave synthesis silently at its default.
+		var rawEdges struct {
+			EntityIDEdges json.RawMessage `json:"entity_id_edges"`
+		}
+		if err := json.Unmarshal(rawConfig, &rawEdges); err == nil {
+			if err := rejectUnknownEntityIDEdgeKeys(rawEdges.EntityIDEdges); err != nil {
+				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "entity_id_edges")
 			}
 		}
 	} else {
@@ -824,9 +913,12 @@ func (c *Component) waitForBucket(ctx context.Context, js jetstream.JetStream, b
 func (c *Component) initProviderAndDetector() {
 	provider := newKVProvider(c.entityBucket, c.outgoingBucket, c.incomingBucket, c.logger)
 
+	// gh#461: use the operator-resolved config (defaults ON, but overridable)
+	// instead of the hardcoded defaults, so a homogeneous entity family can run
+	// community detection on explicit topology alone.
 	entityIDProvider := clustering.NewEntityIDProvider(
 		provider,
-		clustering.DefaultEntityIDProviderConfig(),
+		c.config.entityIDEdges,
 		c.logger,
 	)
 

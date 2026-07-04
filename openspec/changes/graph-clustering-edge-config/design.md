@@ -67,6 +67,19 @@ tri-state). Define a component-owned, JSON-tagged config type (e.g.
 `EntityIDEdgesConfig`) and map it to the library struct in `ApplyDefaults` — no
 shadow struct that silently drops fields (house rule).
 
+## No-silent-drop guard (review HIGH)
+
+The whole point of this knob is to let an operator turn synthesis OFF. If they
+misspell a toggle (`include_sibling`, `disable_siblings`), `encoding/json` drops
+the key, the `*bool` stays nil, `resolve()` keeps the default (ON), and the gh#461
+collapse persists **with no error** — the operator's fix silently binds to
+nothing. So the factory MUST strict-decode `entity_id_edges` with
+`DisallowUnknownFields` and fail loudly, mirroring the existing `anomaly_config`
+`RejectUnknownKeys` guard (ADR-054). `inference.RejectUnknownKeys` is
+`inference.Config`-specific, so this needs its own `EntityIDEdgesConfig` probe
+(`rejectUnknownEntityIDEdgeKeys`). Tested through the production factory wire, not
+the helper alone.
+
 ## Tests
 
 - JSON round-trip for every operator-reachable field, asserting the tri-state:

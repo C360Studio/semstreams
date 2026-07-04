@@ -4,40 +4,52 @@
 
 ## 1. Component config shape
 
-- [ ] 1.1 Add a component-owned, JSON-tagged nested config type (e.g.
-      `EntityIDEdgesConfig`) with tri-state toggles `include_siblings *bool` /
-      `include_system_peers *bool` and value-typed numerics `sibling_weight`,
-      `max_siblings`, `system_peer_weight`, `max_system_peers`. Add the field to
-      `graph-clustering` `Config` with a `schema:"type:object,...,category:advanced"`
-      tag. Do NOT marshal the bare `clustering.EntityIDProviderConfig`.
-- [ ] 1.2 Confirm the final toggle shape with the reviewer (pointer bools vs
-      inverted booleans — design.md Option 1 vs 2).
+- [x] 1.1 Added component-owned, JSON-tagged `EntityIDEdgesConfig` (tri-state
+      toggles `include_siblings *bool` / `include_system_peers *bool` + value-typed
+      numerics). Field `EntityIDEdges *EntityIDEdgesConfig` on `Config` with
+      `schema:"type:object,...,category:advanced"`. Does NOT marshal the bare
+      `clustering.EntityIDProviderConfig` (no JSON tags on it).
+- [x] 1.2 Final shape = pointer bools (design.md Option 1). For reviewer confirm.
 
 ## 2. Defaulting + wiring (the load-bearing invariant)
 
-- [ ] 2.1 In `Config.ApplyDefaults()` (`component.go:136`), resolve the operator
-      config into a concrete `clustering.EntityIDProviderConfig`: unset toggles →
-      `true`; unset numerics → library defaults. An omitted block MUST resolve to
-      exactly `DefaultEntityIDProviderConfig()`.
-- [ ] 2.2 `initProviderAndDetector` (`component.go:825`) consumes the resolved
-      config instead of calling `clustering.DefaultEntityIDProviderConfig()`.
+- [x] 2.1 `Config.ApplyDefaults()` calls `EntityIDEdges.resolve()` → concrete
+      `clustering.EntityIDProviderConfig` over a `DefaultEntityIDProviderConfig()`
+      baseline (nil receiver / unset toggle / zero numeric → default). Stored on
+      private `Config.entityIDEdges`.
+- [x] 2.2 `initProviderAndDetector` consumes `c.config.entityIDEdges` instead of
+      `clustering.DefaultEntityIDProviderConfig()`. Verified ordering:
+      `ApplyDefaults` (factory :431) precedes `initProviderAndDetector` (Start
+      :676); no reconfig path re-inits the provider.
 
 ## 3. Schema
 
-- [ ] 3.1 `task schema:generate`; commit the expected component-schema drift.
+- [x] 3.1 `task schema:generate` → `schemas/graph-clustering.v1.json` gains
+      `entity_id_edges`; drift committed.
 
 ## 4. Tests
 
-- [ ] 4.1 JSON round-trip per operator-reachable field with tri-state assertions:
-      absent block → defaults-on; `{"include_siblings": false}` → siblings off,
-      system-peers on; explicit numerics honored. (No shadow struct; assert
-      `reflect`-level shape where a wider destination type applies.)
-- [ ] 4.2 Default-preservation: omitted block → provider constructed with the same
-      values as `DefaultEntityIDProviderConfig()` (guards the regression the shape
-      could introduce).
-- [ ] 4.3 Behavioral regression (gh#461): two disjoint same-type cliques through
-      the component with siblings+system-peers OFF yield 2 level-0 communities, not
-      1. Deterministic; reuse the `NewLPADetector` proof + the component path.
+- [x] 4.1 JSON round-trip: pointer toggles + numerics survive; absent block → nil
+      → resolves to defaults. (`TestConfig_JSONRoundTrip_EntityIDEdges`)
+- [x] 4.2 Default-preservation: nil / omitted → resolves to exactly
+      `DefaultEntityIDProviderConfig()`, incl. through `ApplyDefaults`.
+      (`TestEntityIDEdgesConfig_Resolve_NilKeepsDefaults`,
+      `TestApplyDefaults_ResolvesEntityIDEdges`)
+- [x] 4.3 Behavioral (gh#461) at the GetNeighbors altitude (the exact mechanism;
+      LPA correctness + `DisabledSiblings` already covered in the library): two
+      disjoint same-type cliques → default config synthesizes cross-clique sibling
+      edges (bug), disabled config yields explicit intra-clique edges only (fix).
+      (`TestEntityIDEdges_ResolvedConfigControlsVirtualEdges`)
+- [x] 4.4 (review HIGH) No-silent-drop guard: strict-decode `entity_id_edges`
+      with `DisallowUnknownFields` in the factory (`rejectUnknownEntityIDEdgeKeys`,
+      mirrors the `anomaly_config` ADR-054 guard) so a toggle typo fails loudly
+      instead of silently leaving synthesis ON. Factory-wire test
+      (`TestCreateGraphClustering_RejectsUnknownEntityIDEdgeKey`) + schema
+      descriptions on the nested fields (review nit).
+- [ ] 4.5 (review LOW, deferred) A component-level assertion that
+      `initProviderAndDetector` passes `c.config.entityIDEdges` to the provider
+      needs the integration harness (live KV buckets). resolve→field is covered by
+      4.2; field→provider is a single verified-by-inspection read. Conscious gap.
 
 ## 5. Spec + close
 
