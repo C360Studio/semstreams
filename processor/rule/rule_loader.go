@@ -177,17 +177,10 @@ func (rp *Processor) loadRules() error {
 
 		// ADR-047: propagate the Lifecycle harness Manager onto rule
 		// instances that opt into condition.Field resolution for
-		// `$entity.lifecycle.*` paths. Same setter pattern as
-		// ActionExecutor.SetLifecycleManager — type-assert so the
-		// rule.Rule interface stays narrow and only ExpressionRule (the
-		// implementation that owns the field) opts in.
-		if rp.lifecycleManager != nil {
-			if setter, ok := rule.(interface {
-				SetLifecycleManager(LifecycleManager)
-			}); ok {
-				setter.SetLifecycleManager(rp.lifecycleManager)
-			}
-		}
+		// `$entity.lifecycle.*` paths. Shared with the hot-reload reconcile
+		// path via attachLifecycleManager so no rule-construction path can
+		// silently drop it (gh#451).
+		rp.attachLifecycleManager(rule)
 
 		rp.rules[def.ID] = rule
 		rp.ruleDefinitions[def.ID] = def // Store definition for stateful evaluation
