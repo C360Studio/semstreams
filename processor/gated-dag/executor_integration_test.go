@@ -54,6 +54,9 @@ func startStack(t *testing.T, backstop string) (*graphingest.Component, *natscli
 		UnitEntityPrefix: itestPrefix,
 		DispatchSubject:  itestDispatchSubject,
 		BackstopInterval: backstop,
+		// dispatch_dedupe_window must be >= backstop (ADR-070 B1); these tests use
+		// artificial backstops (incl. a 10m sentinel), so match the window to it.
+		DispatchDedupeWindow: backstop,
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
