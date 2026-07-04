@@ -544,7 +544,14 @@ func fsRuleStateExists(t *testing.T, nc *natsclient.Client, key string) bool {
 func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
 	const subject = "fs.dispatch.s5"
 	prefix := "fs.test.s5.fanout.unit"
-	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, backstop: "30s"})
+	// A 10m backstop provably cannot fire within the assertion window, so any
+	// dispatch inside it proves the event-driven unit-watch path — not the
+	// backstop — advanced the chain. The window is CI-contention-aware
+	// (fsEventually: 30s local / 90s CI, gh#404); this test previously hardcoded
+	// 12s and was the one full-stack test the gh#404 sweep missed, so it flaked
+	// under testcontainer contention when the 3-unit chain's serial NATS
+	// round-trips legitimately exceeded 12s.
+	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, backstop: "10m"})
 
 	a, b, c := fsUnit("s5", "a"), fsUnit("s5", "b"), fsUnit("s5", "c")
 	fs.seedUnit(t, a)
@@ -554,8 +561,8 @@ func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
 	start := time.Now()
 	require.Eventually(t, func() bool {
 		return fs.dispatched.count(a) == 1 && fs.dispatched.count(b) == 1 && fs.dispatched.count(c) == 1
-	}, 12*time.Second, 100*time.Millisecond, "chain should dispatch once each via the unit watch, not the 30s backstop")
-	require.Less(t, time.Since(start), 12*time.Second, "well under the backstop-bound latency")
+	}, fsEventually, 100*time.Millisecond, "chain should dispatch once each via the unit watch, not the 10m backstop")
+	require.Less(t, time.Since(start), fsEventually, "dispatch completes within the window, well under the 10m backstop")
 }
 
 // TestFullStack_FanOutInstanceAutoCompletes (#364) proves the framework creates
