@@ -36,16 +36,18 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, config.EntityCache.TTL)
 	assert.Equal(t, 1*time.Minute, config.EntityCache.CleanupInterval)
 
-	// Test bucket configurations
-	assert.Equal(t, 24*time.Hour, config.EntityStates.TTL)
+	// Test bucket configurations. TTL is 0 on every live graph bucket — a TTL
+	// here can win the get-or-create race and silently expire ENTITY_STATES
+	// (ADR-068 D1). See TestDefaultConfig_NoLifecycleRetentionOnGraphBuckets.
+	assert.Equal(t, time.Duration(0), config.EntityStates.TTL)
 	assert.Equal(t, uint8(3), config.EntityStates.History)
 	assert.Equal(t, 1, config.EntityStates.Replicas)
 
-	assert.Equal(t, 1*time.Hour, config.SpatialIndex.TTL)
+	assert.Equal(t, time.Duration(0), config.SpatialIndex.TTL)
 	assert.Equal(t, uint8(1), config.SpatialIndex.History)
 	assert.Equal(t, 1, config.SpatialIndex.Replicas)
 
-	assert.Equal(t, 24*time.Hour, config.IncomingIndex.TTL)
+	assert.Equal(t, time.Duration(0), config.IncomingIndex.TTL)
 	assert.Equal(t, uint8(1), config.IncomingIndex.History)
 	assert.Equal(t, 1, config.IncomingIndex.Replicas)
 }
