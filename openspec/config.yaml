@@ -1,0 +1,31 @@
+schema: spec-driven
+
+# Project context shown to AI when creating artifacts. Full context lives in
+# openspec/project.md (Purpose + Product Boundary + Conventions) and CLAUDE.md.
+context: |
+  SemStreams is the governed graph substrate/framework for the C360 sem* family
+  (Go 1.25+, NATS JetStream KV/ObjectStore, Prometheus, slog; Task runner).
+  It owns primitives, not product domain semantics — see openspec/project.md
+  "Product Boundary" before scoping a change.
+
+  Role split (see docs/adr/README.md):
+  - openspec/specs/<capability>/spec.md = CURRENT TRUTH (Requirement +
+    GIVEN/WHEN/THEN). Seed lazily when a change first touches a capability;
+    distill from code + existing docs. Do NOT backfill.
+  - openspec/changes/<id>/ = proposal + tasks + spec deltas; archive on completion.
+  - docs/adr/ = genuine decisions only (irreversible choices, cross-repo
+    contracts). History. Mechanics live in the spec, not the ADR.
+
+  Non-negotiables to reflect in specs/tasks: graph-ingest is the sole writer to
+  ENTITY_STATES (mutations via graph.mutation.* API); every graph write carries a
+  semantic envelope (ADR-055); the live graph never uses NATS TTL/MaxBytes for
+  lifecycle (ADR-068); CI must be green (revive warnings = fail, -race, schema
+  gen no-drift) before push.
+
+# Per-artifact rules shown to AI when creating that artifact.
+rules:
+  proposal:
+    - Always include a "## Non-goals" section (boundary discipline).
+    - Name which sem* products consume the capability, if any.
+  spec:
+    - Specs describe CURRENT behavior verified against code, not aspirations.

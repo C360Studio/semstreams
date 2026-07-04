@@ -21,6 +21,36 @@ Flow-based component architecture:
 - **Storage**: ObjectStore — persist to NATS JetStream
 - **Gateway**: HTTP, GraphQL, MCP — expose query APIs
 
+## Spec-driven development (OpenSpec)
+
+SemStreams uses **OpenSpec** (adopted beta.132+; the CLI and `.claude/` skills
+are installed — `/opsx:new`, `/opsx:continue`, `/opsx:apply`, `/opsx:archive`;
+`openspec list`, `openspec validate`). Three homes, three jobs — put a thing in
+the right one:
+
+| Home | Holds | Drifts? |
+|------|-------|---------|
+| `openspec/specs/<capability>/spec.md` | **Current truth** — what a capability does *today* (`Requirement` + `GIVEN/WHEN/THEN`) | No — every change edits it via a delta |
+| `openspec/changes/<id>/` | **Proposed target state** — `proposal.md` + `tasks.md` + spec deltas; archived on completion | Resolves on archive |
+| `docs/adr/` | **Genuine decisions only** — irreversible choices + cross-repo contracts (the *why*) | No — history |
+| `docs/0X-*.md` | Tutorial / operations / runbooks (retire "how it works" into specs as touched) | Being retired |
+
+Rules of the road:
+
+- **Non-trivial or cross-cutting work starts with a change** (`/opsx:new`):
+  proposal + tasks + spec deltas *before* code. Small mechanical fixes don't need
+  one.
+- **Specs are seeded lazily** — write a capability's spec when a change first
+  touches it, distilled from code + existing docs and **verified against code**.
+  Do NOT backfill; an unverified spec is just another drifting doc.
+- **ADRs are pure decision records now.** Record a decision (irreversible /
+  cross-repo contract) as a one-page ADR; the *mechanics* it implies live in the
+  capability's spec. Don't write "how it works" as an ADR. Existing ADRs 001–068
+  stay as history. See `docs/adr/README.md`.
+- **Read `openspec/project.md` first** when scoping anything — it carries the
+  Purpose and the **Product Boundary** (SemStreams owns substrate/primitives, not
+  product domain semantics).
+
 ## Key Packages
 
 | Package | Purpose |
