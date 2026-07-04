@@ -57,8 +57,9 @@ func (c *Client) ConsumeDurable(
 
 // validateHeartbeatBelowAckWait enforces the ADR-070 B3 invariant: the heartbeat
 // must be able to fire (with margin) before AckWait expires, or a live unit gets
-// redelivered. A zero AckWait resolves to the 30s server default. Exported-shaped
-// as a package helper so config Validate() paths can reuse it.
+// redelivered. A zero AckWait resolves to the 30s server default. Called by
+// ConsumeDurable so the check fails fast at consumer Start; kept unexported —
+// callers enforce it via ConsumeDurable, not by reaching in.
 func validateHeartbeatBelowAckWait(heartbeat, ackWait time.Duration) error {
 	if heartbeat <= 0 {
 		return fmt.Errorf("heartbeat interval must be positive, got %s", heartbeat)

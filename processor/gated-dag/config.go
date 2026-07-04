@@ -21,7 +21,8 @@ const (
 	defaultMaxUnits             = 1000
 	defaultDispatchStream       = "GATEDDAG_DISPATCH"
 	defaultDispatchStreamMaxAge = "24h"
-	defaultStrandedAfter        = "0" // disabled by default (opt-in, back-compat)
+	defaultDispatchDedupeWindow = "2m" // >= default backstop (30s); bounds ack-timeout dedup + reset delay
+	defaultStrandedAfter        = "0"  // disabled by default (opt-in, back-compat)
 
 	// FailurePolicyContinueOthers keeps independent branches flowing when a unit
 	// fails (its dependents stay Blocked; everything else proceeds). Default.
@@ -67,6 +68,14 @@ type Config struct {
 	// not the graph — ADR-068's no-TTL rule is about ENTITY_STATES). An unconsumed
 	// dispatch older than this is dropped. Duration string; must be > 0.
 	DispatchStreamMaxAge string `json:"dispatch_stream_max_age,omitempty"`
+	// DispatchDedupeWindow is the stream's server-side duplicate-detection window
+	// (Nats-Msg-Id = unitID). It makes the B1 claim-rollback safe against an
+	// ack-timeout-after-persist: a re-dispatch of the same unit within the window
+	// is deduped to one stored message. MUST be >= BackstopInterval (the worst-case
+	// re-dispatch latency) or an ack-timeout retry could fall outside the window
+	// and double-deliver. A reset-driven re-dispatch within the window is delayed
+	// by <= the window. Duration string; must be > 0.
+	DispatchDedupeWindow string `json:"dispatch_dedupe_window,omitempty"`
 	// StrandedAfter is the age past which a claimed, non-terminal, non-dirtied unit
 	// stops being treated as healthy in-flight and instead surfaces as a stall
 	// alert (ADR-070; the stranded-unit detector). Duration string; "0" disables
@@ -128,6 +137,7 @@ func DefaultConfig() Config {
 		FailurePolicy:        FailurePolicyContinueOthers,
 		DispatchStream:       defaultDispatchStream,
 		DispatchStreamMaxAge: defaultDispatchStreamMaxAge,
+		DispatchDedupeWindow: defaultDispatchDedupeWindow,
 		StrandedAfter:        defaultStrandedAfter,
 	}
 }
@@ -177,6 +187,9 @@ func (c Config) withDefaults() Config {
 	if c.DispatchStreamMaxAge == "" {
 		c.DispatchStreamMaxAge = d.DispatchStreamMaxAge
 	}
+	if c.DispatchDedupeWindow == "" {
+		c.DispatchDedupeWindow = d.DispatchDedupeWindow
+	}
 	if c.StrandedAfter == "" {
 		c.StrandedAfter = d.StrandedAfter
 	}
@@ -223,6 +236,16 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.dispatchStreamMaxAge(); err != nil {
 		return fmt.Errorf("dispatch_stream_max_age: %w", err)
+	}
+	dedupe, err := c.dispatchDedupeWindow()
+	if err != nil {
+		return fmt.Errorf("dispatch_dedupe_window: %w", err)
+	}
+	// The dedupe window must cover the worst-case re-dispatch latency (a
+	// backstop-driven re-eval) or an ack-timeout retry falls outside it and
+	// double-delivers (ADR-070 B1). backstop is already validated above.
+	if backstop, berr := c.backstopInterval(); berr == nil && dedupe < backstop {
+		return fmt.Errorf("dispatch_dedupe_window (%s) must be >= backstop_interval (%s): a shorter window lets an ack-timeout re-dispatch escape server dedup and double-deliver", dedupe, backstop)
 	}
 	if _, err := c.strandedAfter(); err != nil {
 		return fmt.Errorf("stranded_after: %w", err)
@@ -284,6 +307,18 @@ func (c Config) dispatchStreamMaxAge() (time.Duration, error) {
 	d, err := time.ParseDuration(c.DispatchStreamMaxAge)
 	if err != nil {
 		return 0, fmt.Errorf("invalid duration %q: %w", c.DispatchStreamMaxAge, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be > 0 (got %s)", d)
+	}
+	return d, nil
+}
+
+// dispatchDedupeWindow parses DispatchDedupeWindow; must be > 0.
+func (c Config) dispatchDedupeWindow() (time.Duration, error) {
+	d, err := time.ParseDuration(c.DispatchDedupeWindow)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", c.DispatchDedupeWindow, err)
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("must be > 0 (got %s)", d)

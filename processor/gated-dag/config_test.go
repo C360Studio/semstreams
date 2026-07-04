@@ -48,6 +48,8 @@ func TestConfig_Validate(t *testing.T) {
 		{"missing dispatch stream", func(c *Config) { c.DispatchStream = "" }, "dispatch_stream is required"},
 		{"bad dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "nope" }, "dispatch_stream_max_age"},
 		{"nonpositive dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "0s" }, "dispatch_stream_max_age"},
+		{"bad dedupe window", func(c *Config) { c.DispatchDedupeWindow = "nope" }, "dispatch_dedupe_window"},
+		{"dedupe window below backstop", func(c *Config) { c.DispatchDedupeWindow = "5s"; c.BackstopInterval = "30s" }, "must be >= backstop_interval"},
 		{"bad stranded after", func(c *Config) { c.StrandedAfter = "nope" }, "stranded_after"},
 		{"negative stranded after", func(c *Config) { c.StrandedAfter = "-1s" }, "stranded_after"},
 		{"instance id with custom workflow", func(c *Config) {
@@ -95,6 +97,7 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 		FailurePolicy:        FailurePolicyStopOnFirstFailure,
 		DispatchStream:       "CUSTOM_DISPATCH",
 		DispatchStreamMaxAge: "48h",
+		DispatchDedupeWindow: "3m",
 		StrandedAfter:        "15m",
 	}
 	data, err := json.Marshal(in)

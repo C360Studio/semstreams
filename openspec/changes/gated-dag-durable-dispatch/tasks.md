@@ -39,6 +39,6 @@
 
 ## 6. Spec + close
 
-- [ ] 6.1 `openspec validate`; gates green (`go test -race`, `task lint`, schema
+- [x] 6.1 `openspec validate`; gates green (`go test -race`, `task lint`, schema
       no-drift); semstreams-reviewer; then archive → promote `gated-dag-dispatch`
       into `openspec/specs/`

@@ -100,6 +100,30 @@ func (c Config) Schema() component.ConfigSchema {
 				Description: "Optional subject for an edge-triggered StallEvent on the 0→non-zero stall transition (the gated_dag_stalled_units gauge + WARN log are always emitted).",
 				Category:    "advanced",
 			},
+			"dispatch_stream": {
+				Type:        "string",
+				Description: "JetStream stream the executor ensures at Start and publishes dispatches into (ADR-070). Use a distinct name per distinct dispatch_subject.",
+				Default:     defaultDispatchStream,
+				Category:    "advanced",
+			},
+			"dispatch_stream_max_age": {
+				Type:        "string",
+				Description: "Retention window for the dispatch stream; an unconsumed dispatch older than this is dropped.",
+				Default:     defaultDispatchStreamMaxAge,
+				Category:    "advanced",
+			},
+			"dispatch_dedupe_window": {
+				Type:        "string",
+				Description: "Server-side duplicate-detection window (Nats-Msg-Id=unitID). Must be >= backstop_interval; makes the claim-rollback safe against an ack-timeout-after-persist (ADR-070 B1).",
+				Default:     defaultDispatchDedupeWindow,
+				Category:    "advanced",
+			},
+			"stranded_after": {
+				Type:        "string",
+				Description: "Age past which a claimed non-terminal unit surfaces as a stall alert instead of counting as in-flight (ADR-070). Set above max unit runtime; '0' disables. Alert-only.",
+				Default:     defaultStrandedAfter,
+				Category:    "advanced",
+			},
 		},
 		Required: []string{"unit_entity_prefix", "dispatch_subject"},
 	}

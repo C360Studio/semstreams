@@ -58,18 +58,30 @@ Two observations make the fix clear:
    whenever the consumer (re)subscribes; consumer crash mid-work is covered by
    `AckWait` redelivery + the `InProgress` heartbeat.
 
-   **Roll the claim back on a failed publish-ack (B1).** The claim is committed
-   before the publish (ADR-046 invariant #2). Under core-NATS, publish could not
-   fail-visibly, so the claim was left in place on error ("unit stranded until
-   reset", `executor.go:420`) — rolling back risked a double-run because you
-   could not know whether a consumer had already received it. With
-   `PublishToStreamWithAck`, a **failed** ack is proof the message was **not
-   persisted** and will **not** be delivered — so the executor MUST clear the
-   claim on publish error (mirroring the existing claim-failure rollback,
-   `executor.go:403-405`). This converts "publish failed → stranded until manual
-   reset" into "publish failed → auto-retried next eval." The durable ack is
-   exactly the information the fire-and-forget path lacked; using it is a
-   first-class part of this decision, not an afterthought.
+   **Publish idempotently (Nats-Msg-Id) so the claim rollback is dedup-safe (B1).**
+   The claim is committed before the publish (ADR-046 invariant #2). Under
+   core-NATS, publish could not fail-visibly, so the claim was left in place on
+   error ("unit stranded until reset"). We now dispatch via
+   `PublishToStreamWithMsgID` with **`Nats-Msg-Id = unitID`** and a stream
+   **`Duplicates` window ≥ `BackstopInterval`**, and roll the claim back (Unclaim
+   + clear the in-memory hint) on a publish error so the unit auto-retries next
+   eval instead of stranding until reset.
+
+   The msg-id is load-bearing, NOT the bare ack: a `PublishToStreamWithAck` can
+   return an error *after* the server already persisted the message (an ack-read
+   timeout), so "failed ack ⇒ not persisted" is **false** in that case — a bare
+   rollback + re-dispatch would store a **second** message (double delivery). With
+   msg-id dedup, the re-dispatch of the same unit within the window is collapsed to
+   a single stored message, so the rollback cannot double-deliver. (Config
+   `Validate` enforces `dispatch_dedupe_window ≥ backstop_interval` — a shorter
+   window would let a backstop-latency retry escape dedup.)
+
+   Honest edge: a *reset-driven* re-dispatch of the same unit within the dedup
+   window is deduped too, so it is delayed by ≤ the window; the dirtied unit is
+   re-selected every eval and the publish goes through once the window expires
+   (self-healing, bounded delay). Resets are operator-latency events far exceeding
+   the window in practice. Consumer idempotency (Decision 3) remains the
+   belt-and-suspenders for any residual duplicate.
 
 2. **The at-least-once consumer pattern is a framework primitive, not per-consumer
    glue.** natsclient gains a typed durable-consume wrapper —

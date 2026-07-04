@@ -247,16 +247,20 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 
 	// Executor.
 	cfg := gateddagexec.Config{
-		UnitEntityPrefix:   prefix,
-		DispatchSubject:    subject,
-		BackstopInterval:   backstop,
-		CompletedPredicate: pCompleted,
-		FailedPredicate:    pFailed,
-		DirtiedPredicate:   pDirtied,
-		DependsOnPredicate: pDependsOn,
-		ClaimPredicate:     pClaim,
-		FanOutInstanceID:   opts.fanOutInstanceID,
-		StallSubject:       opts.stallSubject,
+		UnitEntityPrefix: prefix,
+		DispatchSubject:  subject,
+		BackstopInterval: backstop,
+		// dispatch_dedupe_window must be >= backstop (ADR-070 B1). These are
+		// artificial test backstops (incl. a 10m sentinel), so match the window to
+		// the backstop to keep the config valid.
+		DispatchDedupeWindow: backstop,
+		CompletedPredicate:   pCompleted,
+		FailedPredicate:      pFailed,
+		DirtiedPredicate:     pDirtied,
+		DependsOnPredicate:   pDependsOn,
+		ClaimPredicate:       pClaim,
+		FanOutInstanceID:     opts.fanOutInstanceID,
+		StallSubject:         opts.stallSubject,
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)

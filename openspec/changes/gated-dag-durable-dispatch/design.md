@@ -43,13 +43,18 @@ first fires after AckWait already expired redelivers a live unit. Enforce
   subject, with a bounded retention (`MaxAge`/`MaxMsgs`) so an unconsumed backlog
   can't grow forever (a work stream, not the graph — ADR-068's no-TTL rule is
   about ENTITY_STATES, not request streams).
-- **`natsPublisher.Dispatch`** switches `nc.Publish` → `PublishToStreamWithAck`,
-  returning the error on a non-ack.
-- **`claimThenDispatch` (executor.go:394-429)**: on a `Dispatch` error, **roll the
-  claim back** — the same path the claim-error branch already takes
-  (`executor.go:403-405`) — because a failed ack proves non-persistence, so the
-  unit is safe to re-select next eval. Remove the "stranded until reset" comment;
-  add a rollback + a `dispatch_publish_failures_total` metric tick.
+- **`natsPublisher.Dispatch`** switches to `PublishToStreamWithMsgID` with
+  `Nats-Msg-Id = unitID`, and the stream is provisioned with a `Duplicates` window
+  ≥ backstop (config `dispatch_dedupe_window`). This is what makes the rollback
+  safe (B1): a `PublishToStreamWithAck` can error after the server persisted (ack
+  timeout), so "failed ack ⇒ not persisted" is false; msg-id dedup collapses the
+  re-dispatch to one stored message.
+- **`claimThenDispatch`**: on a `Dispatch` error, **roll the claim back** (Unclaim
+  + clear the in-memory hint) — the unit re-selects next eval. Safe because of the
+  msg-id dedup above (a duplicate stored message cannot result). Unclaim runs
+  OUTSIDE evalMu, then the inflight delete under evalMu (the hint holds across
+  Unclaim so a concurrent reEvaluate does not re-select until the deliberate
+  delete).
 
 ## gated-dag executor — stall detector (residual observability)
 
