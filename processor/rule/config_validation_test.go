@@ -326,7 +326,7 @@ func TestValidateActionLists_RunScopeOnlyCheckedForPublishAgent(t *testing.T) {
 // filesystem_policy values pass ValidateDefinition (ADR-067 / gh#445).
 func TestValidateActionLists_FilesystemPolicyValid(t *testing.T) {
 	t.Parallel()
-	for _, policy := range []string{"read_only", "workspace_write", ""} {
+	for _, policy := range []string{"read_only", "workspace_write", "host_write", ""} {
 		policy := policy
 		t.Run("policy_"+policy, func(t *testing.T) {
 			t.Parallel()

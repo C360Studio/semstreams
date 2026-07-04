@@ -234,11 +234,13 @@ type Action struct {
 	// framework-owned path as action_allowlist / related_loops, NOT product
 	// domain metadata (which `properties` skips for reserved agent.* keys).
 	//
-	// Valid values: "read_only" (enforce) | "workspace_write" (default,
-	// permissive). Validated at config-load time (validateActionLists); an
-	// unrecognized value fails load. Empty leaves the loop at workspace_write
-	// (back-compat). Per-task, NOT inherited by spawned sub-loops — re-declare on
-	// each spawned inspect child.
+	// Valid values (the framework filesystem enum, agentic.IsKnownFilesystemPolicy):
+	// "read_only" (enforce) | "workspace_write" (default, permissive) | "host_write"
+	// (also permissive here — an environment-level concern the sandbox substrate
+	// owns; no v1 enforcement effect at the rule layer). Validated at config-load
+	// time (validateActionLists); an unrecognized value fails load. Empty leaves
+	// the loop at workspace_write (back-compat). Per-task, NOT inherited by
+	// spawned sub-loops — re-declare on each spawned inspect child.
 	FilesystemPolicy string `json:"filesystem_policy,omitempty"`
 
 	// ScratchPaths are IN-WORKTREE paths exempt from the read_only proof (e.g.

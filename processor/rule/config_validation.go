@@ -319,7 +319,7 @@ func validateActionLists(def Definition) error {
 			// the field.
 			if a.Type == ActionTypePublishAgent && !agentic.IsKnownFilesystemPolicy(a.FilesystemPolicy) {
 				return errs.WrapInvalid(
-					fmt.Errorf("rule %s %s[%d] filesystem_policy %q is invalid; valid values: read_only, workspace_write (or omit for workspace_write default)",
+					fmt.Errorf("rule %s %s[%d] filesystem_policy %q is invalid; valid values: read_only, workspace_write, host_write (or omit for workspace_write default)",
 						def.ID, label, i, a.FilesystemPolicy),
 					"RuleProcessor", "ValidateDefinition", "validate action filesystem_policy")
 			}
