@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -310,6 +311,17 @@ func validateActionLists(def Definition) error {
 					fmt.Errorf("rule %s %s[%d] run_scope %q is invalid; valid values: new, inherit, none (or omit for inherit default)",
 						def.ID, label, i, a.RunScope),
 					"RuleProcessor", "ValidateDefinition", "validate action run_scope")
+			}
+			// Validate filesystem_policy for publish_agent actions (ADR-067,
+			// gh#445). Fail load on an unrecognized enum so a typo surfaces at
+			// config time, not as a silent (fail-closed) refusal at dispatch.
+			// Empty is valid (default workspace_write); other action types ignore
+			// the field.
+			if a.Type == ActionTypePublishAgent && !agentic.IsKnownFilesystemPolicy(a.FilesystemPolicy) {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] filesystem_policy %q is invalid; valid values: read_only, workspace_write, host_write (or omit for workspace_write default)",
+						def.ID, label, i, a.FilesystemPolicy),
+					"RuleProcessor", "ValidateDefinition", "validate action filesystem_policy")
 			}
 		}
 		return nil

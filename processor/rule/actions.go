@@ -224,6 +224,34 @@ type Action struct {
 	// flows that don't opt in see no Metadata change).
 	RelatedLoops map[string]string `json:"related_loops,omitempty"`
 
+	// FilesystemPolicy is the spawned loop's task-scoped read-only execution
+	// policy (ADR-067, gh#443/gh#445). When non-empty, executePublishAgent
+	// stamps it onto TaskMessage.Metadata under MetadataKeyFilesystemPolicy;
+	// dispatch propagates it authoritatively onto every ToolCall.Metadata, and
+	// the bash executor enforces a pre+post git worktree-and-HEAD non-mutation
+	// proof (returning a typed violation) when the value is "read_only". This is
+	// the rule-authoring surface for the framework enforcement fact — the same
+	// framework-owned path as action_allowlist / related_loops, NOT product
+	// domain metadata (which `properties` skips for reserved agent.* keys).
+	//
+	// Valid values (the framework filesystem enum, agentic.IsKnownFilesystemPolicy):
+	// "read_only" (enforce) | "workspace_write" (default, permissive) | "host_write"
+	// (also permissive here — an environment-level concern the sandbox substrate
+	// owns; no v1 enforcement effect at the rule layer). Validated at config-load
+	// time (validateActionLists); an unrecognized value fails load. Empty leaves
+	// the loop at workspace_write (back-compat). Per-task, NOT inherited by
+	// spawned sub-loops — re-declare on each spawned inspect child.
+	FilesystemPolicy string `json:"filesystem_policy,omitempty"`
+
+	// ScratchPaths are IN-WORKTREE paths exempt from the read_only proof (e.g.
+	// ".probe/"). Out-of-worktree paths (/tmp) are exempt automatically. When
+	// non-empty, executePublishAgent stamps them onto TaskMessage.Metadata under
+	// MetadataKeyScratchPaths (as []any for JSON-wire shape, like
+	// action_allowlist). Only meaningful with FilesystemPolicy "read_only".
+	// Static config paths — no variable substitution. Empty means only
+	// out-of-worktree paths are writable.
+	ScratchPaths []string `json:"scratch_paths,omitempty"`
+
 	// RunScope controls agent-run lifecycle management for publish_agent actions (ADR-053 D4).
 	// Three values:
 	//   - "new"     — mint a new AgentRun rooted at the FIRING loop. The spawned task carries
@@ -1255,6 +1283,33 @@ func (e *ActionExecutor) stampAuthorMetadata(task *agentic.TaskMessage, action A
 	}
 }
 
+// stampFilesystemPolicy threads the rule.Action's read-only execution policy
+// (ADR-067) onto the TaskMessage.Metadata under MetadataKeyFilesystemPolicy /
+// MetadataKeyScratchPaths. Mirrors the ActionAllowlist stamping pattern:
+// scratch paths are stored as []any so the JSON round-trip through
+// TaskMessage→agent.task→ToolCall.Metadata preserves shape (the bash executor's
+// FilesystemPolicyFromMetadata coerces back). Empty policy AND empty scratch is
+// a no-op (back-compat). The enum is validated at config-load time
+// (validateActionLists), so a bad value never reaches here.
+func stampFilesystemPolicy(task *agentic.TaskMessage, action Action) {
+	if action.FilesystemPolicy == "" && len(action.ScratchPaths) == 0 {
+		return
+	}
+	if task.Metadata == nil {
+		task.Metadata = map[string]any{}
+	}
+	if action.FilesystemPolicy != "" {
+		task.Metadata[agentic.MetadataKeyFilesystemPolicy] = action.FilesystemPolicy
+	}
+	if len(action.ScratchPaths) > 0 {
+		scratch := make([]any, 0, len(action.ScratchPaths))
+		for _, p := range action.ScratchPaths {
+			scratch = append(scratch, p)
+		}
+		task.Metadata[agentic.MetadataKeyScratchPaths] = scratch
+	}
+}
+
 // stampPerSpawnLLMKnobs threads the rule.Action's per-spawn LLM
 // constraints (ResponseFormat — ADR-034; ToolChoice — ADR-023) onto
 // the TaskMessage. The agentic-loop caches each on initial build and
@@ -1597,6 +1652,10 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
 	// Metadata stamping pattern. See stampRelatedLoops for the why.
 	stampRelatedLoops(&task, action.RelatedLoops, ec, iterVarName, iterVarValue)
+
+	// Per-spawn read-only execution policy (ADR-067, gh#445). Same
+	// framework-owned Metadata path; dispatch propagates it authoritatively.
+	stampFilesystemPolicy(&task, action)
 
 	if e.logger != nil {
 		e.logger.Debug("Triggering agent task",
