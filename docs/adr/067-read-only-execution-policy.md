@@ -300,6 +300,24 @@ From the issue's Non-Ask, plus the holes the review made explicit:
    tools hit GitHub/graph/KV, not the worktree). A future worktree-write tool
    reads the same policy key.
 
+## Rule-authoring surface (gh#445, beta.132)
+
+Rule packs stamp the policy via first-class `publish_agent` fields, NOT product
+`properties` (which skips reserved `agent.*` keys):
+
+```json
+{ "type": "publish_agent", "role": "planner",
+  "filesystem_policy": "read_only", "scratch_paths": [".probe/"] }
+```
+
+`rule.Action.{FilesystemPolicy,ScratchPaths}` stamp `MetadataKeyFilesystemPolicy`
+/ `MetadataKeyScratchPaths` through the same framework-owned path as
+`action_allowlist` / `related_loops` (`stampFilesystemPolicy`). The enum is
+validated at config-load time (`validateActionLists` → `IsKnownFilesystemPolicy`),
+so a typo fails load rather than deferring to the executor's dispatch-time
+fail-closed refusal. This is the rule-layer complement of Open Question #1 (it's
+the *authoring* surface, distinct from the `TaskMessage` transport question).
+
 ## Related decisions
 
 - ADR-052 (sandbox substrate, pre-ADR) — the OS-level backing this seam defers to.

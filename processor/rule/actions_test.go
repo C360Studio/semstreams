@@ -3504,3 +3504,78 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 	_, created := mgr.entities["agent-run"][runEntityID]
 	assert.True(t, created, "Manager.Create must mint the AgentRun entity in 'dispatched' phase")
 }
+
+// TestAction_PublishAgent_FilesystemPolicy verifies that a publish_agent rule's
+// filesystem_policy + scratch_paths thread onto TaskMessage.Metadata under the
+// ADR-067 keys, in the JSON-wire shape the bash executor reads (gh#445). Drives
+// the production path (Execute → BaseMessage → decode) and round-trips through
+// agentic.FilesystemPolicyFromMetadata — the exact accessor the executor uses —
+// so the test proves the rule surface is actually consumable, not just present.
+func TestAction_PublishAgent_FilesystemPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:             ActionTypePublishAgent,
+		Subject:          "agent.task.planner",
+		Role:             "planner",
+		Model:            "mock-model",
+		Prompt:           "inspect the repo",
+		FilesystemPolicy: "read_only",
+		ScratchPaths:     []string{".probe/", "build"},
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.Metadata, "Metadata must be initialised when filesystem_policy is set")
+	assert.Equal(t, "read_only", task.Metadata[agentic.MetadataKeyFilesystemPolicy])
+	// scratch_paths survive the JSON round-trip as []any (each element a string).
+	rawScratch, ok := task.Metadata[agentic.MetadataKeyScratchPaths].([]any)
+	require.True(t, ok, "expected []any after JSON round-trip; got %T", task.Metadata[agentic.MetadataKeyScratchPaths])
+	assert.Equal(t, []any{".probe/", "build"}, rawScratch)
+
+	// The load-bearing assertion: the executor's own accessor reads it back.
+	policy, scratch := agentic.FilesystemPolicyFromMetadata(task.Metadata)
+	assert.True(t, agentic.IsReadOnlyPolicy(policy), "policy must resolve to read_only through the executor accessor")
+	assert.Equal(t, []string{".probe/", "build"}, scratch)
+}
+
+// TestAction_PublishAgent_NoFilesystemPolicy confirms back-compat: a
+// publish_agent with no policy stamps neither ADR-067 key.
+func TestAction_PublishAgent_NoFilesystemPolicy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.worker",
+		Role:    "worker",
+		Model:   "mock-model",
+		Prompt:  "do work",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	if task.Metadata != nil {
+		_, hasPolicy := task.Metadata[agentic.MetadataKeyFilesystemPolicy]
+		_, hasScratch := task.Metadata[agentic.MetadataKeyScratchPaths]
+		assert.False(t, hasPolicy, "no filesystem_policy must be stamped when unset")
+		assert.False(t, hasScratch, "no scratch_paths must be stamped when unset")
+	}
+}

@@ -321,3 +321,60 @@ func TestValidateActionLists_RunScopeOnlyCheckedForPublishAgent(t *testing.T) {
 		t.Errorf("run_scope on non-publish_agent action must not be validated, got: %v", err)
 	}
 }
+
+// TestValidateActionLists_FilesystemPolicyValid verifies that valid
+// filesystem_policy values pass ValidateDefinition (ADR-067 / gh#445).
+func TestValidateActionLists_FilesystemPolicyValid(t *testing.T) {
+	t.Parallel()
+	for _, policy := range []string{"read_only", "workspace_write", ""} {
+		policy := policy
+		t.Run("policy_"+policy, func(t *testing.T) {
+			t.Parallel()
+			def := Definition{
+				ID:   "fs-policy-valid",
+				Type: "expression",
+				Actions: []Action{
+					{
+						Type:             ActionTypePublishAgent,
+						Subject:          "agent.task.test",
+						FilesystemPolicy: policy,
+					},
+				},
+			}
+			if err := ValidateDefinition(def); err != nil {
+				t.Errorf("filesystem_policy=%q must be accepted, got: %v", policy, err)
+			}
+		})
+	}
+}
+
+// TestValidateActionLists_FilesystemPolicyInvalidRejects verifies an
+// unrecognized filesystem_policy (a typo) fails config load, so the misconfig
+// surfaces at load time rather than as a silent fail-closed refusal at dispatch.
+func TestValidateActionLists_FilesystemPolicyInvalidRejects(t *testing.T) {
+	t.Parallel()
+	for _, policy := range []string{"readonly", "read-only", "ro", "foo"} {
+		policy := policy
+		t.Run("policy_"+policy, func(t *testing.T) {
+			t.Parallel()
+			def := Definition{
+				ID:   "fs-policy-invalid",
+				Type: "expression",
+				Actions: []Action{
+					{
+						Type:             ActionTypePublishAgent,
+						Subject:          "agent.task.test",
+						FilesystemPolicy: policy,
+					},
+				},
+			}
+			err := ValidateDefinition(def)
+			if err == nil {
+				t.Fatalf("filesystem_policy=%q must be rejected, got nil", policy)
+			}
+			if !strings.Contains(err.Error(), "filesystem_policy") {
+				t.Errorf("error for %q must mention 'filesystem_policy', got: %v", policy, err)
+			}
+		})
+	}
+}

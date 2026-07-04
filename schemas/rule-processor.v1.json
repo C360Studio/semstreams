@@ -65,6 +65,10 @@
                   "type": "string",
                   "description": "bucket"
                 },
+                "filesystem_policy": {
+                  "type": "string",
+                  "description": "filesystem_policy"
+                },
                 "for_each": {
                   "type": "string",
                   "description": "for_each"
@@ -154,6 +158,13 @@
                 "run_scope": {
                   "type": "string",
                   "description": "run_scope"
+                },
+                "scratch_paths": {
+                  "type": "array",
+                  "description": "scratch_paths",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "set": {
                   "type": "object",
@@ -335,6 +346,10 @@
                   "type": "string",
                   "description": "bucket"
                 },
+                "filesystem_policy": {
+                  "type": "string",
+                  "description": "filesystem_policy"
+                },
                 "for_each": {
                   "type": "string",
                   "description": "for_each"
@@ -424,6 +439,13 @@
                 "run_scope": {
                   "type": "string",
                   "description": "run_scope"
+                },
+                "scratch_paths": {
+                  "type": "array",
+                  "description": "scratch_paths",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "set": {
                   "type": "object",
@@ -523,6 +545,10 @@
                   "type": "string",
                   "description": "bucket"
                 },
+                "filesystem_policy": {
+                  "type": "string",
+                  "description": "filesystem_policy"
+                },
                 "for_each": {
                   "type": "string",
                   "description": "for_each"
@@ -612,6 +638,13 @@
                 "run_scope": {
                   "type": "string",
                   "description": "run_scope"
+                },
+                "scratch_paths": {
+                  "type": "array",
+                  "description": "scratch_paths",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "set": {
                   "type": "object",
@@ -711,6 +744,10 @@
                   "type": "string",
                   "description": "bucket"
                 },
+                "filesystem_policy": {
+                  "type": "string",
+                  "description": "filesystem_policy"
+                },
                 "for_each": {
                   "type": "string",
                   "description": "for_each"
@@ -800,6 +837,13 @@
                 "run_scope": {
                   "type": "string",
                   "description": "run_scope"
+                },
+                "scratch_paths": {
+                  "type": "array",
+                  "description": "scratch_paths",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "set": {
                   "type": "object",
@@ -918,6 +962,10 @@
                   "type": "string",
                   "description": "bucket"
                 },
+                "filesystem_policy": {
+                  "type": "string",
+                  "description": "filesystem_policy"
+                },
                 "for_each": {
                   "type": "string",
                   "description": "for_each"
@@ -1007,6 +1055,13 @@
                 "run_scope": {
                   "type": "string",
                   "description": "run_scope"
+                },
+                "scratch_paths": {
+                  "type": "array",
+                  "description": "scratch_paths",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "set": {
                   "type": "object",
