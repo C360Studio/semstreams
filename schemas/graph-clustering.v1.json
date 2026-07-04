@@ -271,6 +271,29 @@
       "description": "Number of parallel workers for LLM enhancement (default 5)",
       "category": "advanced"
     },
+    "entity_id_edges": {
+      "type": "object",
+      "description": "EntityID virtual-edge synthesis for community detection; omit to keep defaults (siblings + system-peers on)",
+      "category": "advanced",
+      "properties": {
+        "include_siblings": {
+          "type": "boolean",
+          "description": "Synthesize sibling edges between entities sharing the 5-part type prefix (default true); set false to run detection on explicit topology alone"
+        },
+        "include_system_peers": {
+          "type": "boolean",
+          "description": "Synthesize system-peer edges between entities sharing the same system (default true)"
+        },
+        "max_siblings": {
+          "type": "integer",
+          "description": "Max sibling neighbors synthesized per entity (default 10)"
+        },
+        "max_system_peers": {
+          "type": "integer",
+          "description": "Max system-peer neighbors synthesized per entity (default 15)"
+        }
+      }
+    },
     "max_hop_distance": {
       "type": "integer",
       "description": "Maximum BFS traversal depth (default 10)",
