@@ -2,8 +2,10 @@
 
 ## Status
 
-**Proposed — 2026-07-04.** Amends ADR-046 (parallel fan-out & gated-DAG
-dispatch). Scopes gh#385. Cross-repo contract decision: changes how the two
+**Accepted — 2026-07-04.** Amends ADR-046 (parallel fan-out & gated-DAG
+dispatch). Framework side implemented first (durable publish + `ConsumeDurable` +
+stall detector); the coordinated consumer migration (semspec, semdragon) follows
+on a framework tag. Scopes gh#385. Cross-repo contract decision: changes how the two
 gated-DAG dispatch consumers (semspec, semdragon — both ours) receive dispatches.
 Mechanics live in the `gated-dag-dispatch` spec
 (`openspec/changes/gated-dag-durable-dispatch/`); this ADR records the decision.
