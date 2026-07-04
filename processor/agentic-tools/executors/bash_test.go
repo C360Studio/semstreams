@@ -583,3 +583,196 @@ func TestBashExecutor_VerifyClean_SandboxAllowsClean(t *testing.T) {
 	assert.Contains(t, (*calls)[0].command, "git status")
 	assert.Equal(t, "echo ran", (*calls)[1].command)
 }
+
+// --- ADR-067 read-only execution policy (gh#443) -------------------------------
+
+// readOnlyMeta builds the task-scoped metadata that dispatch stamps for a
+// read_only inspect role: the policy plus optional in-worktree scratch
+// exemptions. The model never sets these — they ride Metadata, not Arguments.
+func readOnlyMeta(scratch ...string) map[string]any {
+	m := map[string]any{agentic.MetadataKeyFilesystemPolicy: agentic.FilesystemPolicyReadOnly}
+	if len(scratch) > 0 {
+		m[agentic.MetadataKeyScratchPaths] = scratch
+	}
+	return m
+}
+
+// TestBashExecutor_ReadOnly_CleanCommandPasses: an inspection command that
+// leaves the worktree and HEAD unchanged runs normally under read_only.
+func TestBashExecutor_ReadOnly_CleanCommandPasses(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-clean", Name: "bash",
+		Arguments: map[string]any{"command": "cat seed.txt && echo inspected"},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error, "read-only inspection must pass")
+	assert.Contains(t, res.Content, "inspected")
+}
+
+// TestBashExecutor_ReadOnly_WorktreeWriteViolation: creating a product-worktree
+// file is a typed violation naming the path — the core gh#443 guarantee the
+// pre-only verify_clean could not provide.
+func TestBashExecutor_ReadOnly_WorktreeWriteViolation(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-write", Name: "bash",
+		Arguments: map[string]any{"command": "echo generated > product.go"},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "mutated protected worktree paths")
+	assert.Contains(t, res.Error, "product.go")
+}
+
+// TestBashExecutor_ReadOnly_DeleteTrackedViolation: deleting a tracked file is
+// caught (git reports ` D path`).
+func TestBashExecutor_ReadOnly_DeleteTrackedViolation(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-del", Name: "bash",
+		Arguments: map[string]any{"command": "rm seed.txt"},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "mutated protected worktree paths")
+	assert.Contains(t, res.Error, "seed.txt")
+}
+
+// TestBashExecutor_ReadOnly_ScratchWriteAllowed: a write UNDER a declared
+// in-worktree scratch path is exempt; the command passes.
+func TestBashExecutor_ReadOnly_ScratchWriteAllowed(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-scratch", Name: "bash",
+		Arguments: map[string]any{"command": "mkdir -p .probe && echo x > .probe/out.txt && echo done"},
+		Metadata:  readOnlyMeta(".probe"),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error, "write under declared scratch must be allowed; got %q", res.Error)
+	assert.Contains(t, res.Content, "done")
+}
+
+// TestBashExecutor_ReadOnly_TmpProbeAllowed: a write to /tmp (out-of-worktree)
+// is invisible to the worktree proof — probes there are always allowed, with no
+// scratch declaration needed.
+func TestBashExecutor_ReadOnly_TmpProbeAllowed(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+	probe := filepath.Join(t.TempDir(), "probe.txt") // outside the worktree
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-tmp", Name: "bash",
+		Arguments: map[string]any{"command": "echo probing > " + probe + " && echo probed"},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error, "out-of-worktree probe must be allowed; got %q", res.Error)
+	assert.Contains(t, res.Content, "probed")
+}
+
+// TestBashExecutor_ReadOnly_HeadMoveViolation: a git-state mutation that leaves
+// the worktree clean (a commit) is caught by HEAD pinning — the hole a
+// status-only proof would miss.
+func TestBashExecutor_ReadOnly_HeadMoveViolation(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-head", Name: "bash",
+		Arguments: map[string]any{
+			"command": "git -c user.name=t -c user.email=t@e commit -q --allow-empty -m sneak",
+		},
+		Metadata: readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "moved git HEAD")
+}
+
+// TestBashExecutor_ReadOnly_PreDirtyRefuses: an already-dirty protected tree is
+// refused before the command runs (an inspect role must start clean).
+func TestBashExecutor_ReadOnly_PreDirtyRefuses(t *testing.T) {
+	dir := initTempGitRepo(t, "already/dirty.go")
+	e := NewBashExecutor(dir, "")
+	sentinel := filepath.Join(dir, "command-ran")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-predirty", Name: "bash",
+		Arguments: map[string]any{"command": "touch " + sentinel},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "not clean before")
+	assert.Contains(t, res.Error, "already/dirty.go")
+	if _, statErr := os.Stat(sentinel); !os.IsNotExist(statErr) {
+		t.Errorf("command must NOT run on a pre-dirty tree; sentinel exists or stat errored: %v", statErr)
+	}
+}
+
+// TestBashExecutor_ReadOnly_DefaultPolicyUnchanged: with no policy (or
+// workspace_write), a worktree write is NOT a violation — back-compat for every
+// non-inspect role.
+func TestBashExecutor_ReadOnly_DefaultPolicyUnchanged(t *testing.T) {
+	dir := initTempGitRepo(t)
+	e := NewBashExecutor(dir, "")
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "rw-write", Name: "bash",
+		Arguments: map[string]any{"command": "echo ok > wrote.go && echo done"},
+		// No filesystem_policy metadata → default workspace_write.
+	})
+	require.NoError(t, err)
+	assert.Empty(t, res.Error, "default policy must not guard worktree writes")
+	assert.Contains(t, res.Content, "done")
+}
+
+// scriptedRunner routes each Exec to a command→result function, letting a test
+// drive the remote read_only path (pre/post captures + the command) without a
+// server. The mutated flag flips the post-command git status to dirty.
+type scriptedRunner struct {
+	fn func(command string) *runner.ExecResult
+}
+
+func (r scriptedRunner) Exec(_ context.Context, _ string, command string, _ int) (*runner.ExecResult, error) {
+	return r.fn(command), nil
+}
+
+// TestBashExecutor_ReadOnly_RemoteWriteViolation: the remote (runner) path
+// enforces read_only too — a post-command dirty status yields the typed
+// violation.
+func TestBashExecutor_ReadOnly_RemoteWriteViolation(t *testing.T) {
+	mutated := false
+	run := scriptedRunner{fn: func(cmd string) *runner.ExecResult {
+		switch {
+		case strings.Contains(cmd, "git status"):
+			if mutated {
+				return &runner.ExecResult{Stdout: "?? out.txt\x00"} // post: dirty
+			}
+			return &runner.ExecResult{Stdout: ""} // pre: clean
+		case strings.Contains(cmd, "git rev-parse"):
+			return &runner.ExecResult{Stdout: "abc123\n"} // HEAD stable
+		default:
+			mutated = true
+			return &runner.ExecResult{Stdout: "did work"}
+		}
+	}}
+	e := NewBashExecutor("", "", WithRunner(run))
+
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID: "ro-remote", Name: "bash",
+		Arguments: map[string]any{"command": "echo x > out.txt"},
+		Metadata:  readOnlyMeta(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Error, "mutated protected worktree paths")
+	assert.Contains(t, res.Error, "out.txt")
+}

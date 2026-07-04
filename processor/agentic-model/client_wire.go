@@ -492,7 +492,10 @@ func isRateLimitedAny(err error) bool {
 // readC360ThoughtSignature reads the framework-internal carrier key
 // from a wire.ToolCall.Extras. Returns "" if absent or non-string.
 // Called by convertWireResponse to lift the signature into
-// agentic.ToolCall.Metadata for cross-turn propagation.
+// Message.ReasoningRecords (ADR-051) for cross-turn propagation — NOT
+// ToolCall.Metadata. The model must never reach ToolCall.Metadata; it
+// carries framework enforcement facts (e.g. the read-only exec policy,
+// ADR-067) that dispatch stamps authoritatively.
 func readC360ThoughtSignature(tc wire.ToolCall) string {
 	raw, ok := tc.Extras[wireKeyC360ThoughtSignature]
 	if !ok {
@@ -523,10 +526,10 @@ func stripC360KeysFromRequest(req *wire.ChatCompletionRequest) {
 
 // stripC360KeysFromResponse removes the framework-internal carrier key
 // from a wire response after convertWireResponse has lifted its values
-// into agentic.Metadata. Keeps the response object clean for downstream
-// trace exports / debug logs — the canonical representation of a
-// processed Gemini response is "no extra_content, no carrier; signature
-// lives only in agentic.ToolCall.Metadata."
+// into Message.ReasoningRecords (ADR-051). Keeps the response object clean
+// for downstream trace exports / debug logs — the canonical representation
+// of a processed Gemini response is "no extra_content, no carrier; signature
+// lives only in Message.ReasoningRecords."
 func stripC360KeysFromResponse(resp *wire.ChatCompletionResponse) {
 	if resp == nil {
 		return

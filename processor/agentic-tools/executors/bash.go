@@ -171,21 +171,28 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 	readOnlyPaths := stringSliceArg(call.Arguments["read_only_paths"])
 	verifyClean, _ := call.Arguments["verify_clean"].(bool)
 
+	// ADR-067 read-only execution policy: a task-scoped, model-uncontrollable
+	// filesystem write-scope stamped onto call.Metadata by dispatch. Under
+	// read_only the command must leave the worktree AND git HEAD unchanged
+	// (modulo declared scratch paths); a mutation is a typed violation. Distinct
+	// from the per-call verify_clean argument (which the model sets and which is
+	// pre-only) — this rides Metadata and is pre+post.
+	roPolicy, scratch := agentic.FilesystemPolicyFromMetadata(call.Metadata)
+	readOnly := agentic.IsReadOnlyPolicy(roPolicy)
+	taskID := bashTaskID(call)
+
 	if e.runner != nil {
-		taskID := "default"
-		if m := call.Metadata; m != nil {
-			if tid, ok := m["task_id"].(string); ok && tid != "" {
-				taskID = tid
-			} else if lid, ok := m["loop_id"].(string); ok && lid != "" {
-				taskID = lid
-			}
-		}
 		if verifyClean {
 			if violation, err := e.verifyCleanRemote(ctx, taskID, readOnlyPaths); err != nil {
 				return agentic.ToolResult{CallID: call.ID, Error: fmt.Sprintf("verify_clean precondition failed: %v", err)}, nil
 			} else if violation != "" {
 				return agentic.ToolResult{CallID: call.ID, Error: violation}, nil
 			}
+		}
+		if readOnly {
+			return e.execReadOnly(call.ID,
+				func() (worktreeSnapshot, error) { return e.captureRemote(ctx, taskID, scratch) },
+				func() (agentic.ToolResult, error) { return e.execRemote(ctx, call.ID, command, taskID) })
 		}
 		return e.execRemote(ctx, call.ID, command, taskID)
 	}
@@ -197,7 +204,26 @@ func (e *BashExecutor) Execute(ctx context.Context, call agentic.ToolCall) (agen
 			return agentic.ToolResult{CallID: call.ID, Error: violation}, nil
 		}
 	}
+	if readOnly {
+		return e.execReadOnly(call.ID,
+			func() (worktreeSnapshot, error) { return e.captureLocal(ctx, scratch) },
+			func() (agentic.ToolResult, error) { return e.execLocal(ctx, call.ID, command) })
+	}
 	return e.execLocal(ctx, call.ID, command)
+}
+
+// bashTaskID resolves the sandbox worktree key from a call's metadata:
+// task_id, then loop_id, else "default". Stamped by dispatch, not the model.
+func bashTaskID(call agentic.ToolCall) string {
+	taskID := "default"
+	if m := call.Metadata; m != nil {
+		if tid, ok := m["task_id"].(string); ok && tid != "" {
+			taskID = tid
+		} else if lid, ok := m["loop_id"].(string); ok && lid != "" {
+			taskID = lid
+		}
+	}
+	return taskID
 }
 
 // stringSliceArg coerces a tool-call argument into []string. Tool arguments
@@ -284,28 +310,7 @@ func (e *BashExecutor) verifyCleanLocal(ctx context.Context, readOnlyPaths []str
 // source record by tracking pending.
 func formatVerifyCleanViolation(porcelainZ string, readOnlyPaths []string) string {
 	var dirty []string
-	skipNext := false
-	for record := range strings.SplitSeq(porcelainZ, "\x00") {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-		// `XY <path>` — minimum 4 chars (status + space + at least one
-		// path char). Empty trailing record from the final NUL is dropped
-		// by the length check.
-		if len(record) < 4 {
-			continue
-		}
-		path := record[3:]
-		if path == "" {
-			continue
-		}
-		// R/C in either stage byte means a source-record follows. Skip
-		// it; we only score the destination (the path the next command
-		// would touch).
-		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
-			skipNext = true
-		}
+	for _, path := range parsePorcelainZ(porcelainZ) {
 		if pathMatchesAny(path, readOnlyPaths) {
 			dirty = append(dirty, path)
 		}
@@ -319,6 +324,187 @@ func formatVerifyCleanViolation(porcelainZ string, readOnlyPaths []string) strin
 	}
 	return fmt.Sprintf("verify_clean: tree has uncommitted changes in %s — refusing to run command. Dirty paths: %s",
 		scope, strings.Join(dirty, ", "))
+}
+
+// parsePorcelainZ extracts the destination paths from `git status -z --porcelain
+// --untracked-files=all` output — the paths the next command would touch.
+//
+// `-z` format is NUL-terminated `XY <path>\x00` records with NO quoting
+// regardless of git's core.quotePath setting, so paths with spaces, quotes,
+// backslashes, or non-ASCII survive intact (default porcelain-v1 would QUOTE
+// them, and a naive parser would then mis-match the quote-included string). Using
+// `-z` is the cleanest defence; we never have to know which quoting is in effect.
+//
+// Rename/copy rows (`R`/`C` in either stage byte) emit TWO records: destination
+// first, then source. We take the destination (what the command touched) and skip
+// the trailing source via the pending flag.
+func parsePorcelainZ(porcelainZ string) []string {
+	var paths []string
+	skipNext := false
+	for record := range strings.SplitSeq(porcelainZ, "\x00") {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		// `XY <path>` — minimum 4 chars (status + space + ≥1 path char). The
+		// empty trailing record from the final NUL is dropped by this check.
+		if len(record) < 4 {
+			continue
+		}
+		path := record[3:]
+		if path == "" {
+			continue
+		}
+		if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
+			skipNext = true
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// worktreeSnapshot is the read_only proof state (ADR-067): the current git HEAD
+// sha plus the dirty paths NOT under a scratch exemption. Two snapshots taken
+// before and after a command, both with an empty dirtyPaths and an equal head,
+// prove net worktree-and-HEAD non-mutation.
+type worktreeSnapshot struct {
+	head       string   // `git rev-parse HEAD`
+	dirtyPaths []string // dirty destination paths not exempted by scratch
+}
+
+// execReadOnly runs a command under the read_only policy: capture pre-state,
+// refuse if the protected tree is already dirty, run, capture post-state, and
+// return a typed violation if HEAD moved or any protected path was mutated.
+// capture is the local- or remote-specific state reader; run executes the
+// command. Fail-closed: a capture error (can't prove non-mutation) is an error
+// result, not a pass.
+func (e *BashExecutor) execReadOnly(callID string, capture func() (worktreeSnapshot, error), run func() (agentic.ToolResult, error)) (agentic.ToolResult, error) {
+	pre, err := capture()
+	if err != nil {
+		return agentic.ToolResult{CallID: callID, Error: fmt.Sprintf("read_only precondition check failed: %v", err)}, nil
+	}
+	if len(pre.dirtyPaths) > 0 {
+		return agentic.ToolResult{CallID: callID, Error: fmt.Sprintf(
+			"read_only: protected worktree is not clean before the command (modulo scratch) — refusing. Dirty paths: %s",
+			strings.Join(pre.dirtyPaths, ", "))}, nil
+	}
+	res, err := run()
+	if err != nil {
+		return res, err
+	}
+	post, perr := capture()
+	if perr != nil {
+		return agentic.ToolResult{CallID: callID, Error: fmt.Sprintf("read_only post-condition check failed: %v", perr)}, nil
+	}
+	if violation := readOnlyViolation(pre, post); violation != "" {
+		return agentic.ToolResult{CallID: callID, Error: violation}, nil
+	}
+	return res, nil
+}
+
+// readOnlyViolation compares pre/post snapshots and returns a typed violation
+// message (or "" when the command left the worktree and HEAD unchanged). HEAD
+// pinning catches git-state mutations (commit / reset / checkout to a different
+// ref) that leave the worktree clean; the dirty-path check catches direct
+// create/modify/delete of protected files.
+func readOnlyViolation(pre, post worktreeSnapshot) string {
+	if pre.head != post.head {
+		return fmt.Sprintf("read_only: command moved git HEAD (%s → %s) — worktree state mutated via git", pre.head, post.head)
+	}
+	if len(post.dirtyPaths) > 0 {
+		return fmt.Sprintf("read_only: command mutated protected worktree paths: %s", strings.Join(post.dirtyPaths, ", "))
+	}
+	return ""
+}
+
+// dirtyNonScratch returns the dirty destination paths NOT exempted by scratch.
+// Unlike verify_clean's pathMatchesAny (empty list ⇒ matches everything), an
+// empty scratch list here exempts NOTHING, so every dirty path is a violation —
+// scratch is an opt-in write allowance, not a default-open one.
+func dirtyNonScratch(porcelainZ string, scratch []string) []string {
+	var dirty []string
+	for _, path := range parsePorcelainZ(porcelainZ) {
+		if !pathUnderScratch(path, scratch) {
+			dirty = append(dirty, path)
+		}
+	}
+	return dirty
+}
+
+// pathUnderScratch reports whether path is equal to or under one of the scratch
+// patterns (trailing-slash tolerant). Empty scratch matches nothing.
+func pathUnderScratch(path string, scratch []string) bool {
+	for _, pat := range scratch {
+		pat = strings.TrimRight(pat, "/")
+		if pat == "" {
+			continue
+		}
+		if path == pat || strings.HasPrefix(path, pat+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// captureLocal reads the read_only proof state from the local workdir.
+func (e *BashExecutor) captureLocal(ctx context.Context, scratch []string) (worktreeSnapshot, error) {
+	status, err := e.gitLocal(ctx, "status", "-z", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return worktreeSnapshot{}, err
+	}
+	head, err := e.gitLocal(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return worktreeSnapshot{}, err
+	}
+	return worktreeSnapshot{head: strings.TrimSpace(head), dirtyPaths: dirtyNonScratch(status, scratch)}, nil
+}
+
+// gitLocal runs a git subcommand in the workdir with sensitive env stripped and
+// returns stdout. A non-zero exit is surfaced with git's stderr.
+func (e *BashExecutor) gitLocal(ctx context.Context, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.effectiveTimeout())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = e.workDir
+	cmd.Env = filterEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("git %s exited %d: %s", strings.Join(args, " "), exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return string(out), nil
+}
+
+// captureRemote reads the read_only proof state from the runner's container.
+func (e *BashExecutor) captureRemote(ctx context.Context, taskID string, scratch []string) (worktreeSnapshot, error) {
+	status, err := e.gitRemote(ctx, taskID, "git status -z --porcelain --untracked-files=all")
+	if err != nil {
+		return worktreeSnapshot{}, err
+	}
+	head, err := e.gitRemote(ctx, taskID, "git rev-parse HEAD")
+	if err != nil {
+		return worktreeSnapshot{}, err
+	}
+	return worktreeSnapshot{head: strings.TrimSpace(head), dirtyPaths: dirtyNonScratch(status, scratch)}, nil
+}
+
+// gitRemote runs a git command inside the runner's taskID worktree and returns
+// stdout, surfacing timeout and non-zero exit as errors (fail-closed).
+func (e *BashExecutor) gitRemote(ctx context.Context, taskID, command string) (string, error) {
+	res, err := e.runner.Exec(ctx, taskID, command, int(e.effectiveTimeout().Milliseconds()))
+	if err != nil {
+		return "", err
+	}
+	if res.TimedOut {
+		return "", fmt.Errorf("%s timed out", command)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("%s exited %d: %s", command, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return res.Stdout, nil
 }
 
 // pathMatchesAny returns true when path equals one of patterns or sits
