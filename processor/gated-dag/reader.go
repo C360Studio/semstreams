@@ -118,6 +118,10 @@ type graphView struct {
 	dependsOn map[string][]string
 	markers   gateddag.MarkerSet
 	claimed   map[string]bool
+	// claimedAt records each claimed unit's claim-triple timestamp so the
+	// stranded-unit detector can age-gate a claim (ADR-070): a claimed unit older
+	// than StrandedAfter stops counting as healthy in-flight.
+	claimedAt map[string]time.Time
 	// stubsSkipped counts entities under the unit prefix that were referential
 	// stubs (graph.StubMessageType) and therefore excluded from the unit set
 	// this read (gh#429). A sustained nonzero value means a referenced unit's
@@ -148,6 +152,7 @@ func extractGraph(states []graph.EntityState, cfg Config) graphView {
 		unitIDs:   make([]string, 0, len(states)),
 		dependsOn: make(map[string][]string),
 		claimed:   make(map[string]bool),
+		claimedAt: make(map[string]time.Time),
 	}
 	var completed, failed, dirtied []string
 
@@ -171,6 +176,7 @@ func extractGraph(states []graph.EntityState, cfg Config) graphView {
 				dirtied = append(dirtied, s.ID)
 			case cfg.ClaimPredicate:
 				view.claimed[s.ID] = true
+				view.claimedAt[s.ID] = t.Timestamp
 			case cfg.DependsOnPredicate:
 				if dep, ok := objectAsEntityID(t.Object); ok {
 					view.dependsOn[s.ID] = append(view.dependsOn[s.ID], dep)

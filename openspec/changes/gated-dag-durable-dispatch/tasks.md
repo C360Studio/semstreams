@@ -8,27 +8,27 @@
       ConsumeDurable time; reject with an error naming both + unit test
 - [x] 1.3 Test the wrapper acks on nil / naks on error (integration against a real
       server, tag integration)
-- [ ] 1.4 File the sibling enforcement gap against `agentic-loop/config.go`
+- [x] 1.4 File the sibling enforcement gap against `agentic-loop/config.go` (gh#453)
 
 ## 2. gated-dag config knobs
 
-- [ ] 2.1 `config.go`: `DispatchStream`, `DispatchDurable`, `AckWait`,
+- [x] 2.1 `config.go`: `DispatchStream`, `DispatchDurable`, `AckWait`,
       `MaxAckPending`, `HeartbeatInterval`, `StrandedAfter`, stream retention
-- [ ] 2.2 `Validate()`: `HeartbeatInterval < AckWait`, non-negative durations + test
+- [x] 2.2 `Validate()`: `HeartbeatInterval < AckWait`, non-negative durations + test
 
 ## 3. Durable publish + claim rollback
 
-- [ ] 3.1 Provision the dispatch stream (`EnsureStream`, bounded `MaxAge`/`MaxMsgs`)
+- [x] 3.1 Provision the dispatch stream (`EnsureStream`, bounded `MaxAge`/`MaxMsgs`)
       at Start
-- [ ] 3.2 `natsPublisher.Dispatch` → `PublishToStreamWithAck` (return error on
+- [x] 3.2 `natsPublisher.Dispatch` → `PublishToStreamWithAck` (return error on
       non-ack)
-- [ ] 3.3 `claimThenDispatch`: roll the claim back on a `Dispatch` error (mirror
+- [x] 3.3 `claimThenDispatch`: roll the claim back on a `Dispatch` error (mirror
       the claim-error rollback); `dispatch_publish_failures_total` metric; drop the
       "stranded until reset" comment + test (publish-fail re-arms the unit)
 
 ## 4. Stranded-unit stall detector
 
-- [ ] 4.1 `stallAfterInflight`: a claimed unit older than `StrandedAfter` (claim
+- [x] 4.1 `stallAfterInflight`: a claimed unit older than `StrandedAfter` (claim
       timestamp) no longer suppresses the stall; fresh claimed units still read as
       in-flight; `StrandedAfter==0` disables + test (stranded alerts, fresh does not)
 

@@ -24,7 +24,10 @@ type natsPublisher struct {
 	fanOutWorkflow string
 }
 
-// Dispatch publishes the registry-wrapped DispatchMessage reference.
+// Dispatch publishes the registry-wrapped DispatchMessage reference to the
+// dispatch stream via an ack-confirmed JetStream publish (ADR-070). A returned
+// error means the ack did NOT come back — the message was not persisted and will
+// not be delivered — so the caller can safely roll the claim back (B1).
 func (p *natsPublisher) Dispatch(ctx context.Context, unitID string) error {
 	msg := &DispatchMessage{UnitEntityID: unitID, FanOutWorkflow: p.fanOutWorkflow}
 	base := message.NewBaseMessage(msg.Schema(), msg, "gateddag-executor")
@@ -32,7 +35,7 @@ func (p *natsPublisher) Dispatch(ctx context.Context, unitID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal dispatch message for %s: %w", unitID, err)
 	}
-	if err := p.nc.Publish(ctx, p.subject, data); err != nil {
+	if _, err := p.nc.PublishToStreamWithAck(ctx, p.subject, data); err != nil {
 		return fmt.Errorf("publish dispatch for %s to %s: %w", unitID, p.subject, err)
 	}
 	return nil

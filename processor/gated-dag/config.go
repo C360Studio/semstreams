@@ -14,11 +14,14 @@ const (
 	defaultDependsOnPredicate = "gateddag.depends_on"
 	defaultClaimPredicate     = "gateddag.claim"
 
-	defaultWorkers          = 4
-	defaultQueueSize        = 256
-	defaultBackstopInterval = "30s"
-	defaultQueryTimeout     = "30s"
-	defaultMaxUnits         = 1000
+	defaultWorkers              = 4
+	defaultQueueSize            = 256
+	defaultBackstopInterval     = "30s"
+	defaultQueryTimeout         = "30s"
+	defaultMaxUnits             = 1000
+	defaultDispatchStream       = "GATEDDAG_DISPATCH"
+	defaultDispatchStreamMaxAge = "24h"
+	defaultStrandedAfter        = "0" // disabled by default (opt-in, back-compat)
 
 	// FailurePolicyContinueOthers keeps independent branches flowing when a unit
 	// fails (its dependents stay Blocked; everything else proceeds). Default.
@@ -55,6 +58,22 @@ type Config struct {
 	DirtiedPredicate   string `json:"dirtied_predicate,omitempty"`
 	DependsOnPredicate string `json:"depends_on_predicate,omitempty"`
 	ClaimPredicate     string `json:"claim_predicate,omitempty"`
+
+	// DispatchStream is the JetStream stream the executor ensures at Start and
+	// publishes dispatches into (ADR-070). It captures DispatchSubject, so a
+	// dispatch is durably queued and delivered whenever a consumer (re)subscribes.
+	DispatchStream string `json:"dispatch_stream,omitempty"`
+	// DispatchStreamMaxAge bounds the dispatch stream's retention (a work stream,
+	// not the graph — ADR-068's no-TTL rule is about ENTITY_STATES). An unconsumed
+	// dispatch older than this is dropped. Duration string; must be > 0.
+	DispatchStreamMaxAge string `json:"dispatch_stream_max_age,omitempty"`
+	// StrandedAfter is the age past which a claimed, non-terminal, non-dirtied unit
+	// stops being treated as healthy in-flight and instead surfaces as a stall
+	// alert (ADR-070; the stranded-unit detector). Duration string; "0" disables
+	// the check (back-compat). Set it ABOVE the max legitimate unit runtime — a
+	// healthy long-running unit held by the consumer heartbeat is KV-
+	// indistinguishable from a stranded one, so this is a soft, alert-only knob.
+	StrandedAfter string `json:"stranded_after,omitempty"`
 
 	// Workers / QueueSize bound the dispatch concurrency leg (pkg/dispatch).
 	Workers   int `json:"workers,omitempty"`
@@ -95,18 +114,21 @@ type Config struct {
 // rejects a config that does not set them.
 func DefaultConfig() Config {
 	return Config{
-		FanOutWorkflow:     FanOutWorkflow,
-		CompletedPredicate: defaultCompletedPredicate,
-		FailedPredicate:    defaultFailedPredicate,
-		DirtiedPredicate:   defaultDirtiedPredicate,
-		DependsOnPredicate: defaultDependsOnPredicate,
-		ClaimPredicate:     defaultClaimPredicate,
-		Workers:            defaultWorkers,
-		QueueSize:          defaultQueueSize,
-		BackstopInterval:   defaultBackstopInterval,
-		QueryTimeout:       defaultQueryTimeout,
-		MaxUnits:           defaultMaxUnits,
-		FailurePolicy:      FailurePolicyContinueOthers,
+		FanOutWorkflow:       FanOutWorkflow,
+		CompletedPredicate:   defaultCompletedPredicate,
+		FailedPredicate:      defaultFailedPredicate,
+		DirtiedPredicate:     defaultDirtiedPredicate,
+		DependsOnPredicate:   defaultDependsOnPredicate,
+		ClaimPredicate:       defaultClaimPredicate,
+		Workers:              defaultWorkers,
+		QueueSize:            defaultQueueSize,
+		BackstopInterval:     defaultBackstopInterval,
+		QueryTimeout:         defaultQueryTimeout,
+		MaxUnits:             defaultMaxUnits,
+		FailurePolicy:        FailurePolicyContinueOthers,
+		DispatchStream:       defaultDispatchStream,
+		DispatchStreamMaxAge: defaultDispatchStreamMaxAge,
+		StrandedAfter:        defaultStrandedAfter,
 	}
 }
 
@@ -149,6 +171,15 @@ func (c Config) withDefaults() Config {
 	if c.FailurePolicy == "" {
 		c.FailurePolicy = d.FailurePolicy
 	}
+	if c.DispatchStream == "" {
+		c.DispatchStream = d.DispatchStream
+	}
+	if c.DispatchStreamMaxAge == "" {
+		c.DispatchStreamMaxAge = d.DispatchStreamMaxAge
+	}
+	if c.StrandedAfter == "" {
+		c.StrandedAfter = d.StrandedAfter
+	}
 	return c
 }
 
@@ -186,6 +217,15 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.queryTimeout(); err != nil {
 		return fmt.Errorf("query_timeout: %w", err)
+	}
+	if c.DispatchStream == "" {
+		return fmt.Errorf("dispatch_stream is required (the durable stream dispatches are published into — ADR-070)")
+	}
+	if _, err := c.dispatchStreamMaxAge(); err != nil {
+		return fmt.Errorf("dispatch_stream_max_age: %w", err)
+	}
+	if _, err := c.strandedAfter(); err != nil {
+		return fmt.Errorf("stranded_after: %w", err)
 	}
 	switch c.FailurePolicy {
 	case FailurePolicyContinueOthers, FailurePolicyStopOnFirstFailure:
@@ -235,6 +275,30 @@ func (c Config) queryTimeout() (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("must be > 0 (got %s)", d)
+	}
+	return d, nil
+}
+
+// dispatchStreamMaxAge parses DispatchStreamMaxAge; must be > 0.
+func (c Config) dispatchStreamMaxAge() (time.Duration, error) {
+	d, err := time.ParseDuration(c.DispatchStreamMaxAge)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", c.DispatchStreamMaxAge, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be > 0 (got %s)", d)
+	}
+	return d, nil
+}
+
+// strandedAfter parses StrandedAfter; must be >= 0 (0 disables the detector).
+func (c Config) strandedAfter() (time.Duration, error) {
+	d, err := time.ParseDuration(c.StrandedAfter)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", c.StrandedAfter, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("must be >= 0 (got %s)", d)
 	}
 	return d, nil
 }

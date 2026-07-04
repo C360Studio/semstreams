@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -105,6 +107,25 @@ func (c *Component) Start(ctx context.Context) error {
 	qTimeout, err := c.cfg.queryTimeout()
 	if err != nil {
 		return err
+	}
+
+	// Provision the durable dispatch stream (ADR-070): it captures DispatchSubject,
+	// so a dispatch published via PublishToStreamWithAck is persisted and delivered
+	// whenever a consumer (re)subscribes — a lost dispatch can no longer strand a
+	// claimed unit. Idempotent (get-or-create). A bounded MaxAge keeps an
+	// unconsumed backlog from growing forever (a work stream, not the graph —
+	// ADR-068's no-TTL rule is about ENTITY_STATES).
+	streamMaxAge, err := c.cfg.dispatchStreamMaxAge()
+	if err != nil {
+		return err
+	}
+	if _, err := c.natsClient.EnsureStream(ctx, jetstream.StreamConfig{
+		Name:     c.cfg.DispatchStream,
+		Subjects: []string{c.cfg.DispatchSubject},
+		MaxAge:   streamMaxAge,
+	}); err != nil {
+		return fmt.Errorf("gated-dag: ensure dispatch stream %q for subject %q: %w",
+			c.cfg.DispatchStream, c.cfg.DispatchSubject, err)
 	}
 
 	var stall stallPublisher

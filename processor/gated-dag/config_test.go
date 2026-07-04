@@ -45,6 +45,11 @@ func TestConfig_Validate(t *testing.T) {
 		{"bad failure policy", func(c *Config) { c.FailurePolicy = "panic" }, "failure_policy"},
 		{"predicate collision", func(c *Config) { c.ClaimPredicate = c.CompletedPredicate }, "must be distinct"},
 		{"empty predicate", func(c *Config) { c.DirtiedPredicate = "" }, "must not be empty"},
+		{"missing dispatch stream", func(c *Config) { c.DispatchStream = "" }, "dispatch_stream is required"},
+		{"bad dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "nope" }, "dispatch_stream_max_age"},
+		{"nonpositive dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "0s" }, "dispatch_stream_max_age"},
+		{"bad stranded after", func(c *Config) { c.StrandedAfter = "nope" }, "stranded_after"},
+		{"negative stranded after", func(c *Config) { c.StrandedAfter = "-1s" }, "stranded_after"},
 		{"instance id with custom workflow", func(c *Config) {
 			c.FanOutInstanceID = "org.plat.gateddag.fanout.instance.x"
 			c.FanOutWorkflow = "custom-wf"
@@ -74,20 +79,23 @@ func TestConfig_ValidateHappy(t *testing.T) {
 // dropped field is caught by inequality rather than coinciding with a default.
 func TestConfig_JSONRoundTrip(t *testing.T) {
 	in := Config{
-		FanOutWorkflow:     "custom-fanout",
-		UnitEntityPrefix:   "acme.ops.plan.fanout.unit",
-		DispatchSubject:    "custom.dispatch",
-		CompletedPredicate: "x.done",
-		FailedPredicate:    "x.failed",
-		DirtiedPredicate:   "x.reset",
-		DependsOnPredicate: "x.needs",
-		ClaimPredicate:     "x.inflight",
-		Workers:            7,
-		QueueSize:          99,
-		BackstopInterval:   "12s",
-		QueryTimeout:       "8s",
-		MaxUnits:           250,
-		FailurePolicy:      FailurePolicyStopOnFirstFailure,
+		FanOutWorkflow:       "custom-fanout",
+		UnitEntityPrefix:     "acme.ops.plan.fanout.unit",
+		DispatchSubject:      "custom.dispatch",
+		CompletedPredicate:   "x.done",
+		FailedPredicate:      "x.failed",
+		DirtiedPredicate:     "x.reset",
+		DependsOnPredicate:   "x.needs",
+		ClaimPredicate:       "x.inflight",
+		Workers:              7,
+		QueueSize:            99,
+		BackstopInterval:     "12s",
+		QueryTimeout:         "8s",
+		MaxUnits:             250,
+		FailurePolicy:        FailurePolicyStopOnFirstFailure,
+		DispatchStream:       "CUSTOM_DISPATCH",
+		DispatchStreamMaxAge: "48h",
+		StrandedAfter:        "15m",
 	}
 	data, err := json.Marshal(in)
 	require.NoError(t, err)
