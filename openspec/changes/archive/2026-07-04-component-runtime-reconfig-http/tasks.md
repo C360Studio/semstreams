@@ -52,10 +52,12 @@
 
 ## 5. Spec + close
 
-- [ ] 5.1 `openspec validate --strict`; gates green (`go test -race`,
+- [x] 5.1 `openspec validate --strict`; gates green (`go test -race`,
       `-tags=integration` for `service`, `task lint`, schema no-drift);
-      semstreams-reviewer; then archive → promote `component-runtime-config` into
-      `openspec/specs/`.
-- [ ] 5.2 Note in gh#455 that the semboids app-side interim gate can be removed.
+      semstreams-reviewer (APPROVE, HIGH addressed); archive → promote
+      `component-runtime-config` into `openspec/specs/`.
+- [x] 5.2 Note in gh#455 that the semboids app-side interim gate can be removed
+      (posted as an issue comment on merge).
 - [ ] 5.3 If/when unification is scoped, open the follow-up change (collapse the
       two reconfig contracts, delete the HTTP-seam bridge) referencing this one.
+      Deferred by design — tracked here, not a blocker for this change.
