@@ -150,27 +150,16 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 		t.Fatalf("StopAll error = %v", err)
 	}
 
-	// Port should be free now — re-binding it succeeds. Poll briefly
-	// since Shutdown returns once the listener stops accepting but the
-	// OS may take a moment to release the port (TIME_WAIT etc.).
-	// gh#209/gh#220: 3s → 10s. The TIME_WAIT-release window under
-	// heavy parallel load can stretch — 10s gives enough headroom.
-	deadline := time.Now().Add(10 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		// gh#220:allow-fixed-port — rebind to the previously-allocated
-		// ephemeral port is the test's load-bearing semantic (verifying
-		// the OS released it). The port itself came from freePort(t),
-		// so this is NOT a static-range collision risk.
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)) // gh#220:allow-fixed-port
-		if err == nil {
-			_ = l.Close()
-			return
-		}
-		lastErr = err
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("port %d never freed after StopAll within 10s; last bind error: %v", port, lastErr)
+	// The health listener must be torn down — that is StopAll's contract
+	// (#100), and what this test guards. Assert the SIGNAL (the server
+	// stopped serving /healthz), NOT OS port release. Re-binding the port
+	// is TIME_WAIT-bound — the kernel can hold it for the MSL window (~15s
+	// on macOS, up to 120s on some Linux configs), which is not provably
+	// ≥3× the old 10s budget and flaked under parallel load — and OS port
+	// release is not this test's concern (gh#316). "Listener no longer
+	// accepts" is bounded by how fast Shutdown closes the listener, so it
+	// is deterministic.
+	waitForListenerGone(t, addr+"/healthz", 2*time.Second)
 }
 
 // freePort asks the kernel for an unused TCP port. Used by tests that
@@ -207,4 +196,27 @@ func waitForListener(t *testing.T, url string, budget time.Duration) {
 		}
 	}
 	t.Fatalf("listener at %s never came up within %s", url, budget)
+}
+
+// waitForListenerGone polls url until a GET FAILS — i.e. the listener stopped
+// accepting — or the budget expires. Signal-bound: bounded by how fast the
+// server closes its listener on Shutdown, NOT by OS port release (which is
+// TIME_WAIT-bound and flaky, gh#316). The complement of waitForListener.
+func waitForListenerGone(t *testing.T, url string, budget time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err != nil {
+			return // no longer serving — teardown confirmed
+		}
+		_ = resp.Body.Close()
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-context.Background().Done():
+			return
+		}
+	}
+	t.Fatalf("health listener at %s still serving after StopAll within %s (StopAll did not tear it down)", url, budget)
 }
