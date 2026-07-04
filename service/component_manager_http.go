@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -683,11 +684,38 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 		}
 	}
 
-	// Configuration is valid, persist to KV
-	// The config is persisted through the config manager which watches KV
-	// For now, update the in-memory config and trigger component reconfiguration
+	// Configuration passed schema validation. Apply it to the running component
+	// via whichever runtime-reconfig contract it implements, learning whether it
+	// was applied live (gh#455). Apply BEFORE persisting so a component's own
+	// validate/apply rejection leaves no stored-but-unapplied config that a
+	// restart would silently load.
+	applied, err := cm.applyRuntimeConfig(r.Context(), comp.Component, req.Config)
+	if err != nil {
+		cm.logger.Error("Failed to apply config update", "component_name", componentName, "error", err)
+		// A component's own validation rejection is a client error (structured
+		// 400), mirroring the schema-validation path above; a genuine apply
+		// failure is a server error (500). Either way nothing was stored (apply
+		// runs before the persist below), so a restart won't load it.
+		if errors.Is(err, errReconfigValidation) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"errors": []string{err.Error()},
+			})
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to apply config: %v", err), http.StatusInternalServerError)
+		return
+	}
 
-	// Update component configuration
+	// Update the ComponentManager's in-memory view of the config, only after a
+	// successful apply or an explicit no-hook accept, so the GET-config read
+	// stays consistent with what was applied. NOTE: this is the manager's
+	// in-memory map only — this endpoint does NOT durably persist to the config
+	// KV store (that write is one-directional KV→cm here, and an in-handler KV
+	// write is a known deadlock hazard — gh#388), so the change does not survive
+	// a restart. That is exactly why the response below does not promise a
+	// restart-time apply.
 	cm.mu.Lock()
 	if cm.componentConfigs != nil {
 		if compConfig, ok := cm.componentConfigs[componentName]; ok {
@@ -697,24 +725,79 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 	}
 	cm.mu.Unlock()
 
-	// If component supports runtime reconfiguration, apply the new config
-	if configurable, ok := comp.Component.(interface {
-		UpdateConfig(ctx context.Context, config json.RawMessage) error
-	}); ok {
-		if err := configurable.UpdateConfig(r.Context(), req.Config); err != nil {
-			cm.logger.Error("Failed to apply config update", "component_name", componentName, "error", err)
-			http.Error(w, fmt.Sprintf("Failed to apply config: %v", err), http.StatusInternalServerError)
-			return
-		}
+	// Honest response (gh#455): report whether the change was applied to the
+	// running component live, instead of an unconditional success that implies a
+	// live apply. A no-hook component is NOT reconfigured live, and this endpoint
+	// does not persist for restart, so we do not claim a restart-time apply.
+	message := "Configuration applied to the running component"
+	if !applied {
+		message = "Component does not support live runtime reconfiguration; the update was not applied to the running component"
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "success",
-		"message": "Configuration updated successfully",
+		"message": message,
+		"applied": applied,
 	})
 }
+
+// applyRuntimeConfig applies a schema-validated raw config to a running
+// component via whichever runtime-reconfig contract it implements, returning
+// whether the change was applied live. It probes two contracts in order:
+//
+//  1. the component-side UpdateConfig(ctx, json.RawMessage) (existing behavior);
+//  2. the service-flavored reconfig method pair
+//     ValidateConfigUpdate/ApplyConfigUpdate over a map[string]any, so a
+//     component implementing it (e.g. processor/rule) is reachable via the
+//     ComponentManager HTTP API (gh#455).
+//
+// It type-asserts the reconfig METHOD PAIR, NOT the full
+// service.RuntimeConfigurable interface: RuntimeConfigurable embeds
+// Configurable.ConfigSchema() service.ConfigSchema, but a component's
+// ConfigSchema() returns component.ConfigSchema — so a full-interface assert
+// would silently miss every component. The narrow anonymous interface matches
+// exactly the methods this bridge calls.
+//
+// A component implementing neither contract returns (false, nil); the caller
+// reports applied:false. On the method-pair path, ValidateConfigUpdate runs
+// before ApplyConfigUpdate — a validation failure returns an error wrapping
+// errReconfigValidation (mapped to a 400 by the caller) and applies nothing.
+func (cm *ComponentManager) applyRuntimeConfig(ctx context.Context, comp component.Discoverable, raw json.RawMessage) (bool, error) {
+	if configurable, ok := comp.(interface {
+		UpdateConfig(ctx context.Context, config json.RawMessage) error
+	}); ok {
+		if err := configurable.UpdateConfig(ctx, raw); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if rc, ok := comp.(interface {
+		ValidateConfigUpdate(changes map[string]any) error
+		ApplyConfigUpdate(changes map[string]any) error
+	}); ok {
+		var changes map[string]any
+		if err := json.Unmarshal(raw, &changes); err != nil {
+			return false, fmt.Errorf("%w: config is not a JSON object: %w", errReconfigValidation, err)
+		}
+		if err := rc.ValidateConfigUpdate(changes); err != nil {
+			return false, fmt.Errorf("%w: %w", errReconfigValidation, err)
+		}
+		if err := rc.ApplyConfigUpdate(changes); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// errReconfigValidation marks a client-side rejection of a runtime config update
+// (a malformed body or a component's ValidateConfigUpdate failure) so the PUT
+// handler maps it to a structured 400. An ApplyConfigUpdate failure after
+// successful validation is a server-side error (bare, → 500).
+var errReconfigValidation = errors.New("runtime config rejected by component validation")
 
 // =============================================================================
 // FlowGraph HTTP Handlers

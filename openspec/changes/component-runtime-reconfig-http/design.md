@@ -59,27 +59,37 @@ bridge. Track as a separate change; reference this one.
 
 ## The honest response
 
-Currently the handler always returns `{"status":"success","message":"…updated…"}`.
-That conflates three outcomes: applied-live, stored-for-restart, and
-validation-rejected (the last already returns 400). The fix distinguishes the
-first two with **additive** fields so no current client breaks:
+Currently the handler always returns `{"status":"success","message":"…updated…"}`,
+which implies a live apply even when nothing was applied. The fix adds a single
+**additive** `applied` boolean (so no current client breaks):
 
 ```json
-{ "status": "success", "message": "...", "applied": true,  "restart_required": false }  // hot-applied
-{ "status": "success", "message": "...", "applied": false, "restart_required": true  }  // stored only
+{ "status": "success", "applied": true,  "message": "Configuration applied to the running component" }
+{ "status": "success", "applied": false, "message": "Component does not support live runtime reconfiguration; ..." }
 ```
 
 `applied` is true iff a reconfig contract (either spelling) accepted the change
-live. `restart_required` is its complement for a stored-but-not-applied update.
+live.
+
+**Why no `restart_required` field (review HIGH).** An earlier draft paired
+`applied` with `restart_required: !applied`. That is a *false promise*: this
+endpoint updates only the manager's **in-memory** `componentConfigs`; it does not
+write the config KV store (the flow is one-directional KV→cm, and an in-handler KV
+write is a known deadlock hazard — gh#388). So a "restart will apply it" claim is
+wrong — a restart reloads from KV and reverts the change. Emitting
+`restart_required: true` would swap the old "fake live success" for a new "fake
+restart success" — the very silent-failure class this change fixes. Durable
+persistence is out of scope (gh#388); until it lands, the response promises only
+what it delivers: a live apply, or an honest `applied: false`.
 
 ## Ordering invariant
 
-Validate → apply-live → then treat as stored. A `ValidateConfigUpdate` failure
-returns the existing structured 400 and does **not** mutate the in-memory
-`componentConfigs` entry, so a rejected update can never be silently loaded on the
-next restart. (Today the handler stores *before* probing the hook; this change
-moves the store to after a successful apply, or explicitly marks it
-restart-pending when no hook exists.)
+Validate → apply-live → then update the in-memory view. A `ValidateConfigUpdate`
+failure returns a structured 400 and does **not** mutate the in-memory
+`componentConfigs` entry. (Today the handler stores *before* probing the hook;
+this change moves the store to after a successful apply / explicit no-hook
+accept.) This keeps the GET-config read consistent with the last accepted update;
+it is NOT a restart-durability guarantee (see above).
 
 ## Risks
 
@@ -88,5 +98,27 @@ restart-pending when no hook exists.)
   already feeds `ApplyConfigUpdate`, so no new decoding semantics — but the bridge
   MUST reuse the component's own validate step, never a second parallel validator.
 - **A component implementing BOTH contracts.** Probe `UpdateConfig` first (current
-  behavior) and only fall through to `RuntimeConfigurable` if it's absent, so
+  behavior) and only fall through to the reconfig method pair if it's absent, so
   existing `UpdateConfig` components are unaffected.
+
+## Implementation note — probe the method pair, not the named interface
+
+Discovered during apply: a component does **not** satisfy the *full*
+`service.RuntimeConfigurable` interface. `RuntimeConfigurable` embeds
+`Configurable`, whose `ConfigSchema()` returns **`service.ConfigSchema`**, but a
+component's `ConfigSchema()` returns **`component.ConfigSchema`** — a different
+method signature. So `processor/rule` implements the reconfig *methods*
+(`ValidateConfigUpdate` / `ApplyConfigUpdate` / `GetRuntimeConfig`) but is **not**
+assignable to `service.RuntimeConfigurable` (the `var _ RuntimeConfigurable`
+asserts exist only for the *services* `metrics` and `message_logger`, which
+return `service.ConfigSchema`).
+
+The bridge therefore type-asserts a **narrow anonymous interface** of exactly the
+two methods it calls —
+`interface{ ValidateConfigUpdate(map[string]any) error; ApplyConfigUpdate(map[string]any) error }` —
+mirroring the existing anonymous `UpdateConfig` probe. Asserting the full
+`RuntimeConfigurable` would silently miss **every** component (ConfigSchema type
+mismatch) and re-introduce the exact silent no-op this change fixes. This also
+sharpens the "two contracts" framing: they are not even nominally compatible at
+the `Configurable`/`ConfigSchema` seam, which is another reason a later
+unification is a deliberate, breaking change rather than a drop-in.

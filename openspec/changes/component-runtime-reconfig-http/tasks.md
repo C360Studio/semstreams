@@ -4,42 +4,51 @@
 
 ## 1. Bridge RuntimeConfigurable in the PUT handler
 
-- [ ] 1.1 In `service/component_manager_http.go` PUT handler, after the existing
-      `UpdateConfig(ctx, json.RawMessage)` probe, fall through to a
-      `service.RuntimeConfigurable` probe: `json.Unmarshal(req.Config, &map)` →
-      `ValidateConfigUpdate(map)` → `ApplyConfigUpdate(map)`.
-- [ ] 1.2 Probe order: `UpdateConfig` first, `RuntimeConfigurable` only if absent
-      (a component implementing both keeps current behavior).
-- [ ] 1.3 Factor the "try each reconfig contract, report which applied" logic into
-      a small shared helper so the component and service managers can't diverge.
+- [x] 1.1 In `service/component_manager_http.go` PUT handler, after the existing
+      `UpdateConfig(ctx, json.RawMessage)` probe, fall through to the reconfig
+      method pair: `json.Unmarshal(req.Config, &map)` → `ValidateConfigUpdate(map)`
+      → `ApplyConfigUpdate(map)`. (Probes the METHOD PAIR, not the full
+      `service.RuntimeConfigurable` — ConfigSchema return-type mismatch; see
+      design.md "Implementation note".)
+- [x] 1.2 Probe order: `UpdateConfig` first, the reconfig method pair only if
+      absent (a component implementing both keeps current behavior).
+- [x] 1.3 Factor the "try each reconfig contract, report which applied" logic into
+      `applyRuntimeConfig` so the probe order + method set live in one place.
 
-## 2. Honest applied / restart-required response
+## 2. Honest applied response
 
-- [ ] 2.1 Add `applied bool` + `restart_required bool` to the PUT response
-      (additive; keep `status`/`message`). `applied=true` iff a reconfig contract
-      accepted the change live.
-- [ ] 2.2 No-hook component returns `applied:false, restart_required:true` instead
-      of unconditional success.
+- [x] 2.1 Add an additive `applied bool` to the PUT response (keep
+      `status`/`message`). `applied=true` iff a reconfig contract accepted the
+      change live. NO `restart_required` field — the endpoint does not durably
+      persist (gh#388), so a restart-time promise would be false (review HIGH).
+- [x] 2.2 No-hook component returns `applied:false` (+ an honest message) instead
+      of unconditional success; it does not claim a restart-time apply.
 
 ## 3. Validate-before-store ordering
 
-- [ ] 3.1 Move the in-memory `componentConfigs` update to AFTER a successful
-      live-apply (or explicitly mark restart-pending when no hook exists), so a
-      `ValidateConfigUpdate` rejection (structured 400) never leaves a
-      stored-but-unapplied config that a restart would load.
+- [x] 3.1 Move the in-memory `componentConfigs` update to AFTER a successful
+      live-apply (or explicit no-hook accept), so a `ValidateConfigUpdate`
+      rejection never leaves a stored-but-unapplied config that a restart would
+      load.
 
 ## 4. Tests
 
-- [ ] 4.1 Integration: `PUT config/rule-processor` with a valid rule change hot-
-      applies via the bridge and returns `applied:true`; the running processor
-      reflects the change (assert through a reconfig-observable behavior, not just
-      the stored config).
-- [ ] 4.2 Integration: `PUT config/<component-with-no-hook>` returns
-      `applied:false, restart_required:true` and does not lie.
-- [ ] 4.3 Integration: a `ValidateConfigUpdate` rejection returns 400 and leaves
+- [x] 4.1 `PUT config/rule-processor`-shaped: a method-pair component hot-applies
+      via the bridge and returns `applied:true`; asserted through a
+      reconfig-observable mock (ApplyConfigUpdate ran) + the stored config update.
+      (`TestHandlePutComponentConfig_MethodPairAppliesAndReportsApplied`,
+      `TestApplyRuntimeConfig_MethodPairBridged`.)
+- [x] 4.2 A no-hook component returns `applied:false`, does not lie, and does NOT
+      emit a `restart_required` promise the endpoint can't keep.
+      (`TestHandlePutComponentConfig_NoHookReportsNotApplied`,
+      `TestApplyRuntimeConfig_NoHookNotApplied`.)
+- [x] 4.3 A `ValidateConfigUpdate` rejection returns a structured 400 and leaves
       the stored config unchanged (no restart-time silent apply).
-- [ ] 4.4 A component implementing `UpdateConfig` still uses that path (regression
-      guard for probe order).
+      (`TestHandlePutComponentConfig_ValidationRejectionReturns400AndDoesNotStore`.)
+- [x] 4.4 A component implementing `UpdateConfig` still uses that path, and a
+      component implementing BOTH prefers it (probe order).
+      (`TestApplyRuntimeConfig_UpdateConfigPath`,
+      `TestApplyRuntimeConfig_UpdateConfigPreferredOverPair`.)
 
 ## 5. Spec + close
 
