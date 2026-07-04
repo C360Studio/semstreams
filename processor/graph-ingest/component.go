@@ -810,6 +810,14 @@ func (c *Component) initStorage(ctx context.Context) error {
 	}
 	c.entityBucket = c.natsClient.NewKVStore(bucket)
 
+	// D1 guardrail (ADR-068): ENTITY_STATES is get-or-create, so another process
+	// could have won the race with a TTL/size cap (e.g. a stale graph-query TTL
+	// default). Age/size eviction is reachability-blind and would silently expire
+	// entities with live inbound edges. Fail-closed at boot rather than proceed.
+	if err := c.entityBucket.AssertNoLifecycleRetention(ctx, graph.BucketEntityStates); err != nil {
+		return errs.Wrap(err, "Component", "Start", "graph retention guardrail")
+	}
+
 	// Entity query cache (HybridCache: LRU capacity + TTL freshness)
 	entityCache, err := cache.NewFromConfig[graph.EntityState](ctx, cache.Config{
 		Enabled:         true,

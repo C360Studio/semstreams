@@ -56,7 +56,11 @@ func DefaultConfig() *Config {
 			History  uint8         `json:"history"`
 			Replicas int           `json:"replicas"`
 		}{
-			TTL:      24 * time.Hour,
+			// TTL MUST be 0 on the live graph: NATS age-eviction is
+			// reachability-blind and would silently expire entities with live
+			// inbound edges (ADR-068 D1). graph-ingest owns ENTITY_STATES
+			// retention; the query client is a reader and must not race in a TTL.
+			TTL:      0,
 			History:  3,
 			Replicas: 1,
 		},
@@ -65,7 +69,7 @@ func DefaultConfig() *Config {
 			History  uint8         `json:"history"`
 			Replicas int           `json:"replicas"`
 		}{
-			TTL:      1 * time.Hour,
+			TTL:      0, // no lifecycle retention on the live graph (ADR-068 D1)
 			History:  1,
 			Replicas: 1,
 		},
@@ -74,7 +78,7 @@ func DefaultConfig() *Config {
 			History  uint8         `json:"history"`
 			Replicas int           `json:"replicas"`
 		}{
-			TTL:      24 * time.Hour,
+			TTL:      0, // no lifecycle retention on the live graph (ADR-068 D1)
 			History:  1,
 			Replicas: 1,
 		},
