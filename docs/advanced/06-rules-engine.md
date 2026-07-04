@@ -1,18 +1,16 @@
 # Rules Engine
 
-> **⚠️ DEPRECATED**
+> **Status: current.** The JSON rules engine (`processor/rule/`) is the blessed
+> orchestration path in SemStreams — *rules trigger, components execute*. See
+> [Orchestration Layers](../concepts/14-orchestration-layers.md) for the full
+> pattern catalog and the Rule Engine / Component boundary.
 >
-> The JSON-based rules engine is superseded by the **Reactive Workflow Engine**.
-> The reactive engine provides:
-> - Typed Go conditions (compile-time safety)
-> - Dual reactive primitives (KV watch + NATS subject consumers)
-> - Async callback correlation
-> - Combined message+state triggers
->
-> **For new development, use:**
-> - [Reactive Workflows Guide](./10-reactive-workflows.md) - Usage documentation
->
-> This documentation is retained for reference during migration.
+> An earlier revision of this page marked the rules engine DEPRECATED in favor of
+> a "Reactive Workflow Engine." That is backwards and has been corrected: the
+> `processor/reactive` engine was **retired** (2026-03-12) and *replaced by*
+> coordinated rules over lifecycle-managed graph entities
+> ([ADR-047](../adr/047-lifecycle-harness-substrate.md)). The
+> [Reactive Workflows](./10-reactive-workflows.md) page is a legacy reference only.
 
 ---
 

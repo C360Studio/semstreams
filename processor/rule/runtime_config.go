@@ -174,6 +174,27 @@ func (rp *Processor) applyCronRuleChange(ruleID string, ruleMap map[string]any) 
 	return nil
 }
 
+// attachLifecycleManager offers the Lifecycle harness Manager (ADR-047) to a
+// freshly created rule instance. Only ExpressionRule implements the setter, so
+// the type-assert keeps the Rule interface narrow. EVERY path that constructs a
+// rule instance — the file/inline load (rule_loader.go) AND the hot-reload KV
+// reconcile (applyExpressionRuleChange) — must route through this, or the rule
+// keeps a nil manager and `$entity.lifecycle.*` conditions silently never
+// resolve (gh#451). It reads rp.lifecycleManager, which is set once at factory
+// time (factory.go, before Start) and never mutated after — so both callers
+// (init-time loadRules and the lock-held reconcile) read it race-free; the
+// helper takes no lock of its own.
+func (rp *Processor) attachLifecycleManager(rule Rule) {
+	if rp.lifecycleManager == nil {
+		return
+	}
+	if setter, ok := rule.(interface {
+		SetLifecycleManager(LifecycleManager)
+	}); ok {
+		setter.SetLifecycleManager(rp.lifecycleManager)
+	}
+}
+
 // applyExpressionRuleChange installs or replaces an expression-style rule.
 // Drops any previous CronRule under the same ID first to keep type swaps
 // symmetric with applyCronRuleChange.
@@ -184,6 +205,12 @@ func (rp *Processor) applyExpressionRuleChange(ruleID string, ruleMap map[string
 	if err != nil {
 		return fmt.Errorf("failed to create rule %s: %w", ruleID, err)
 	}
+
+	// gh#451: hot-reloaded rules must receive the Lifecycle Manager just like
+	// the file-load path (rule_loader.go). Without this, rules created via the
+	// KV-config reconcile have a nil manager and $entity.lifecycle.* conditions
+	// never fire.
+	rp.attachLifecycleManager(newRule)
 
 	if _, hadCron := rp.cronRules[ruleID]; hadCron {
 		if rp.cronScheduler != nil {
