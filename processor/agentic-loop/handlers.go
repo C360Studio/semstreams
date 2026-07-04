@@ -1355,6 +1355,22 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		}
 	}
 
+	// Stamp task-scoped ENFORCEMENT metadata (ADR-067) authoritatively from the
+	// loop's cached task metadata, so it reaches EVERY dispatch path — this main
+	// path, approval re-dispatch (which rebuilds a bare ToolCall,
+	// approval_response_handler.go), and queue dequeue — not just the fill-only
+	// merge in handleToolCallResponse. These are framework enforcement facts (the
+	// read-only execution policy; the decide action allowlist), so dispatch
+	// OVERWRITES rather than yielding: a fill-only merge would let a stray
+	// pre-existing value defeat the control. Absent keys stay absent (back-compat).
+	if cached := h.loopManager.GetCachedMetadata(loopID); len(cached) > 0 {
+		for _, key := range agentic.DispatchEnforcedMetadataKeys {
+			if v, ok := cached[key]; ok {
+				tc.Metadata[key] = v
+			}
+		}
+	}
+
 	toolMsg := message.NewBaseMessage(tc.Schema(), &tc, "agentic-loop")
 	toolData, err := json.Marshal(toolMsg)
 	if err != nil {
