@@ -1,7 +1,13 @@
 # graph-retention Specification
 
 ## Purpose
-TBD - created by archiving change graph-retention-guardrail. Update Purpose after archive.
+Current-truth for how the live graph's KV buckets treat retention and deletion:
+storage-level eviction (NATS TTL/MaxBytes/MaxAge) is never a lifecycle mechanism
+on the graph, because it is reachability-blind. This capability tracks the
+ADR-068 increments; today it covers the D1 guardrail (no lifecycle retention on
+live graph buckets). Later increments (delete-as-refuse/cascade, tombstones, the
+per-entity reverse index, the GC worker) extend it.
+
 ## Requirements
 ### Requirement: The live graph carries no lifecycle retention
 
