@@ -1234,6 +1234,16 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 // filterEntityIDsByType filters entity IDs to those whose type segment (5th part of the
 // 6-part ID: org.platform.domain.system.type.instance) matches any of the requested types.
 // Returns all IDs if typeFilters is empty.
+//
+// Axis note (ADR-071): this is the TYPE-SEGMENT axis (position 5, exact segment
+// equality from the classifier), which is genuinely NOT expressible as a leading
+// ID prefix — it is a distinct, intentional axis, deliberately kept. It is NOT
+// the leading-prefix (domain/system) scope. Leading-prefix ID scoping is the
+// single source-level responsibility applied at the candidate source via
+// graph.embedding.query.search's Scope field (graph.MatchesAnyIDPrefix), never
+// re-added here as a second post-retrieval ID-prefix filter. If a future
+// leading-prefix constraint reaches the semantic path, thread it to
+// SearchRequest.Scope — do not add a prefix filter alongside this one.
 func filterEntityIDsByType(entityIDs []string, typeFilters []string) []string {
 	if len(typeFilters) == 0 {
 		return entityIDs

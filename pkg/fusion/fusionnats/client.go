@@ -81,16 +81,16 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 // Resolve maps a query to seed entity IDs by mode, most relevant first. The mode
 // selects the subject; an unknown mode is an error rather than a silent default
 // (ResolveMode is an open string enum).
-func (c *Client) Resolve(ctx context.Context, query string, mode fusion.ResolveMode, limit int) ([]string, error) {
-	switch mode {
+func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]string, error) {
+	switch q.Mode {
 	case fusion.ResolveModeSymbol:
-		return c.resolveByName(ctx, query, limit)
+		return c.resolveByName(ctx, q.Query, q.Limit)
 	case fusion.ResolveModePrefix:
-		return c.resolvePrefix(ctx, query, limit)
+		return c.resolvePrefix(ctx, q.Query, q.Limit)
 	case fusion.ResolveModeNL:
-		return c.resolveSemantic(ctx, query, limit)
+		return c.resolveSemantic(ctx, q.Query, q.Scope, q.Limit)
 	default:
-		return nil, fmt.Errorf("fusionnats: unsupported resolve mode %q", mode)
+		return nil, fmt.Errorf("fusionnats: unsupported resolve mode %q", q.Mode)
 	}
 }
 
@@ -126,9 +126,17 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 }
 
 // resolveSemantic resolves a natural-language query to embedding-ranked entity
-// IDs via graph.query.semantic.
-func (c *Client) resolveSemantic(ctx context.Context, query string, limit int) ([]string, error) {
-	raw, err := c.request(ctx, subjectSemantic, map[string]any{"query": query, "limit": limit})
+// IDs via graph.query.semantic. A non-empty scope constrains candidates to the
+// given entity-ID prefixes at the source (ADR-071); it is inserted into the
+// request body ONLY when non-empty, so an unscoped call is byte-identical to the
+// pre-scope wire shape (every existing caller, and every symbol/prefix path,
+// sends none).
+func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]string, error) {
+	body := map[string]any{"query": query, "limit": limit}
+	if len(scope) > 0 {
+		body["scope"] = scope
+	}
+	raw, err := c.request(ctx, subjectSemantic, body)
 	if err != nil {
 		return nil, err
 	}

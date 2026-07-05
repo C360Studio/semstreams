@@ -34,9 +34,18 @@ type Budget struct {
 // Request is the fused query, keyed by what an agent already knows — never an
 // entity ID.
 type Request struct {
-	Query  string `json:"query"`
-	Want   []Want `json:"want,omitempty"`
-	Budget Budget `json:"budget,omitzero"`
+	Query string `json:"query"`
+	Want  []Want `json:"want,omitempty"`
+	// Scope optionally constrains NL seed resolution to entities whose ID
+	// matches at least one of these dot-delimited entity-ID prefixes
+	// (OR-matched). Empty/absent means no filter — today's behavior. It lets a
+	// lens instance over a shared embedding index retrieve only its own domain
+	// so a smaller domain is not diluted by a larger co-resident one (ADR-071).
+	// A list, not a scalar: one domain often spans several prefixes (semsource
+	// "all code" = golang/python/ts/svelte). NL-only; ignored by symbol/prefix
+	// resolve modes.
+	Scope  []string `json:"scope,omitempty"`
+	Budget Budget   `json:"budget,omitzero"`
 }
 
 // Provenance records how an answer was produced so callers can calibrate trust.
