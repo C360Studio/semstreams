@@ -2,15 +2,16 @@
 
 ## Status
 
-**Proposed — DRAFT, decision pending.** This ADR records a decision that is not yet
-made: **which mechanism** gives a `pkg/fusion` Lens a per-domain scope over NL
-retrieval (Option 1 vs Option 2 below), and — if Option 1 — the exact shape of the
-scope field added to the embedding-search RPC contract. It is stubbed here because
-the semsource-preferred fix (Option 1) changes a **cross-component NATS RPC
-contract** (`graph.query.semantic` + `graph.embedding.query.search`), which is
-exactly the class of decision an ADR exists to record. Once the option is chosen and
-adversarially reviewed (per the framework-ADR review discipline), the mechanics move
-into an openspec change against the `fusion` + `graph-embedding` capability specs.
+**Proposed — Option 1 selected (2026-07-05); pending pre-Accept adversarial review
+and open-question resolution.** The mechanism decision is made: **Option 1** — a
+`Scope` on `fusion.Request` plumbed to the embedding search. It is recorded as an ADR
+because it changes a **cross-component NATS RPC contract** (`graph.query.semantic` +
+`graph.embedding.query.search`), the class of decision an ADR exists to hold. Before
+Accept, the four open questions below are resolved and the mechanism gets a
+code-grounded adversarial review (framework-ADR discipline —
+`feedback_adversarial_review_framework_adr`); then the mechanics move into an openspec
+change against the `fusion` + `graph-embedding` capability specs and implementation
+follows.
 
 Scopes gh#463 / semsource upstream-asks #16.
 
@@ -44,12 +45,14 @@ hydration. Not MVP-blocking (a broad `code_search` retrieves docs well; `doc_con
 is accurate when domains are balanced), but it blocks accurate small-domain NL
 retrieval on mixed corpora.
 
-## Decision — TO BE MADE
+## Decision
 
-The engine keeps ownership of resolve/rank/budget; the product supplies the scope per
-lens. Three mechanisms were proposed (gh#463); the choice is the open decision.
+**Option 1 is selected** (2026-07-05). The engine keeps ownership of
+resolve/rank/budget; the product supplies the scope per lens. Options 2 and 3 are
+retained below as the considered-and-rejected alternatives (Option 2 may still ship
+*alongside* as a cheap in-engine convenience — open question #3).
 
-### Option 1 — `Scope` on `fusion.Request`, plumbed to the embedding search *(recommended, semsource-preferred)*
+### Option 1 — `Scope` on `fusion.Request`, plumbed to the embedding search *(SELECTED)*
 
 Add an optional scope (an entity-ID glob/prefix, e.g. `*.web.*.doc.*`, matching the
 6-part federated entity ID) to `fusion.Request`, threaded to the vector scan so a
