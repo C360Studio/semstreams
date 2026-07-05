@@ -444,8 +444,11 @@ func (m *Client) Connect(ctx context.Context) error {
 		m.conn = conn
 		m.mu.Unlock()
 
-		// Initialize JetStream with new API
-		if js, err := jetstream.New(conn); err == nil {
+		// Initialize JetStream with new API. The async publish error handler
+		// bridges failed async acks into the circuit breaker so a broken ack
+		// path opens the breaker exactly as a failed synchronous publish does
+		// (see PublishToStreamAsync).
+		if js, err := jetstream.New(conn, jetstream.WithPublishAsyncErrHandler(m.asyncPublishErrHandler)); err == nil {
 			m.mu.Lock()
 			m.js = js
 			m.mu.Unlock()
@@ -839,6 +842,224 @@ func (m *Client) publishToStream(ctx context.Context, subject string, data []byt
 
 	m.resetCircuit()
 	return nil
+}
+
+// asyncPublishErrHandler is the connection-level handler jetstream-go invokes for
+// every failed async publish ack. It bridges the ack failure into the circuit
+// breaker so an async-only producer degrades the breaker exactly as a failed
+// synchronous publish would (see design.md §4 in the gh#470 change). The reset
+// side of the breaker lives on the enqueue path (successful enqueue = connection
+// healthy); this handler only records failures.
+func (m *Client) asyncPublishErrHandler(_ jetstream.JetStream, msg *nats.Msg, err error) {
+	m.recordFailure()
+	if m.jsMetrics != nil {
+		m.jsMetrics.recordError("publish_async")
+	}
+	subject := ""
+	if msg != nil {
+		subject = msg.Subject
+	}
+	m.logger.Debug("Async publish ack failed",
+		slog.String("subject", subject),
+		slog.Any("error", err),
+	)
+}
+
+// PublishToStreamAsync publishes to a JetStream stream WITHOUT blocking on the
+// PubAck, returning a jetstream.PubAckFuture the caller inspects (Ok()/Err()) for
+// the eventual server acknowledgement. A single producer goroutine can pipeline
+// many of these past the synchronous ack-RTT ceiling (gh#470).
+//
+// The enqueue itself is synchronous: an open circuit returns ErrCircuitOpen, a
+// disconnected client returns ErrNotConnected, and a full in-flight window past
+// the stall wait returns jetstream's ErrTooManyStalledMsgs — in all of which the
+// returned future is nil. Trace context injection is preserved. Failed acks are
+// delivered on the future's Err() channel AND recorded against the circuit breaker
+// via the connection-level async error handler.
+//
+// Ordering: jetstream-go preserves per-subject order per connection, so a single
+// caller publishing to one subject gets in-order storage. Cross-goroutine ordering
+// is the caller's responsibility (as with the synchronous path).
+func (m *Client) PublishToStreamAsync(ctx context.Context, subject string, data []byte) (jetstream.PubAckFuture, error) {
+	return m.publishToStreamAsync(ctx, subject, data, "")
+}
+
+// PublishToStreamAsyncWithMsgID is PublishToStreamAsync stamping the Nats-Msg-Id
+// header for server-side duplicate detection. It carries the same ADR-055 T1
+// idempotency contract as the synchronous PublishToStreamWithMsgID: pass a
+// DETERMINISTIC msgID per logical event so a retry/redelivery carries the same ID;
+// dedup holds only within the stream's configured Duplicates window. An empty
+// msgID is equivalent to PublishToStreamAsync (no dedup).
+func (m *Client) PublishToStreamAsyncWithMsgID(ctx context.Context, subject string, data []byte, msgID string) (jetstream.PubAckFuture, error) {
+	return m.publishToStreamAsync(ctx, subject, data, msgID)
+}
+
+// publishToStreamAsync is the shared async publish path. It mirrors
+// publishToStream's pre-checks and header stamping, then enqueues via
+// PublishMsgAsync. A successful enqueue resets the circuit breaker (the
+// connection-health signal); an enqueue error records a failure.
+func (m *Client) publishToStreamAsync(ctx context.Context, subject string, data []byte, msgID string) (jetstream.PubAckFuture, error) {
+	// Check circuit breaker first (the breaker is the outermost gate, as on the
+	// sync path).
+	if m.Status() == StatusCircuitOpen {
+		return nil, ErrCircuitOpen
+	}
+
+	if m.Status() != StatusConnected {
+		return nil, ErrNotConnected
+	}
+
+	// Honor a cancelled context before enqueuing (PublishMsgAsync takes no ctx,
+	// so this is the only cancellation point on the async path). A cancelled ctx
+	// is caller intent, not a connection fault, so it does NOT record a failure.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	js, err := m.JetStream()
+	if err != nil {
+		m.recordFailure()
+		return nil, err
+	}
+
+	// Auto-generate trace context if none exists
+	if _, ok := TraceContextFromContext(ctx); !ok {
+		ctx = ContextWithTrace(ctx, NewTraceContext())
+	}
+
+	// Build message with headers for trace propagation
+	msg := &nats.Msg{
+		Subject: subject,
+		Data:    data,
+	}
+	if msgID != "" {
+		// Initialize the header here (rather than relying on InjectTrace,
+		// which early-returns when no trace context is present) so the
+		// dedup ID is always carried.
+		msg.Header = make(nats.Header)
+		msg.Header.Set(nats.MsgIdHdr, msgID)
+	}
+	InjectTrace(ctx, msg)
+
+	future, err := js.PublishMsgAsync(msg)
+	if err != nil {
+		m.recordFailure()
+		return nil, err
+	}
+
+	// Enqueue succeeded: the connection is up and JetStream accepted the message
+	// onto the wire. On the async path the breaker is a CONNECTION-LIVENESS gate:
+	// a successful enqueue proves the connection is healthy, so we reset here
+	// rather than at ack time. Message-level ack failures (a stream-full nack, a
+	// bad subject) are surfaced to the caller via the future's Err() channel /
+	// the batch aggregate, and do NOT by themselves open the breaker; a genuine
+	// connection outage fires asyncPublishErrHandler for every pending publish
+	// (jetstream-go's reconnect drain) AND makes subsequent enqueues fail, which
+	// trips the breaker. See design.md §4.
+	m.resetCircuit()
+	return future, nil
+}
+
+// PublishAsyncComplete returns a channel that closes when every outstanding async
+// publish has been acknowledged by the server. A producer waits on it to drain
+// before shutdown. When JetStream is unavailable it returns an already-closed
+// channel so a drain loop does not block forever.
+func (m *Client) PublishAsyncComplete() <-chan struct{} {
+	js, err := m.JetStream()
+	if err != nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return js.PublishAsyncComplete()
+}
+
+// PublishAsyncPending returns the number of async publishes enqueued but not yet
+// acknowledged. Returns 0 when JetStream is unavailable.
+func (m *Client) PublishAsyncPending() int {
+	js, err := m.JetStream()
+	if err != nil {
+		return 0
+	}
+	return js.PublishAsyncPending()
+}
+
+// PublishBatchToStream publishes every message in msgs to one subject via the
+// async path, waits for all acks (bounded by ctx), and returns a single aggregate
+// error. Per-subject ordering from this single calling goroutine is preserved
+// (jetstream-go async is in-order per connection, absent a NoResponders retry —
+// see design.md §1). It is the convenience path for bursty producers that do not
+// need per-message futures (gh#470).
+//
+// The drain waits on THIS batch's own futures, not the connection-global
+// PublishAsyncComplete, so a concurrent async producer on the same Client cannot
+// make this batch over-wait. If ctx is cancelled before all acks arrive, it
+// returns the context error rather than hanging; the already-enqueued publishes
+// still resolve in the background (and feed the circuit breaker via the async
+// error handler on a connection fault). An enqueue error stops further enqueuing
+// but already-enqueued messages are still drained. Ack failures are recorded
+// against the breaker once, by asyncPublishErrHandler — this loop only collects
+// them for the returned error (recording here too would double-count).
+func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs [][]byte) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	// Fail fast on an already-cancelled context so nothing is enqueued.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("PublishBatchToStream: context already cancelled: %w", err)
+	}
+
+	futures := make([]jetstream.PubAckFuture, 0, len(msgs))
+	var enqueueErr error
+	for _, data := range msgs {
+		future, err := m.publishToStreamAsync(ctx, subject, data, "")
+		if err != nil {
+			enqueueErr = err
+			break
+		}
+		futures = append(futures, future)
+	}
+
+	// Drain this batch's own futures, honoring ctx. Each future is already
+	// in-flight, so waiting in order costs only the slowest ack, not the sum.
+	errsList := make([]error, 0)
+	if enqueueErr != nil {
+		errsList = append(errsList, fmt.Errorf("enqueue stopped after %d of %d messages: %w",
+			len(futures), len(msgs), enqueueErr))
+	}
+	ackFailures := 0
+	for i, future := range futures {
+		select {
+		case <-future.Ok():
+		case ackErr := <-future.Err():
+			ackFailures++
+			errsList = append(errsList, ackErr)
+		case <-ctx.Done():
+			// ctx.Done() and this future's completion can be ready in the same
+			// instant; select then picks at random. Re-check the future
+			// non-blocking so a publish that actually resolved is counted, not
+			// spuriously reported cancelled — this preserves the "a batch that
+			// finished draining before the cancel returns success" guarantee
+			// (feedback_select_race_on_pre_cancelled_ctx).
+			select {
+			case <-future.Ok():
+			case ackErr := <-future.Err():
+				ackFailures++
+				errsList = append(errsList, ackErr)
+			default:
+				return fmt.Errorf("PublishBatchToStream: context cancelled while draining "+
+					"(%d of %d resolved, %d still pending): %w",
+					i, len(futures), len(futures)-i, ctx.Err())
+			}
+		}
+	}
+	if len(errsList) == 0 {
+		return nil
+	}
+	// Failed publishes = messages that never enqueued + messages whose ack failed.
+	failed := (len(msgs) - len(futures)) + ackFailures
+	return fmt.Errorf("PublishBatchToStream: %d of %d publishes failed (%d ack failures): %w",
+		failed, len(msgs), ackFailures, stderrors.Join(errsList...))
 }
 
 // ConsumeStream creates a consumer for a stream.
