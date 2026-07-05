@@ -36,9 +36,12 @@ are involved.
 ## What Changes
 
 - **Add an opt-in `passthrough` config flag (default `false`).** When enabled, the
-  component validates inbound bytes cheaply with `json.Valid(data)` and broadcasts
-  the **original bytes unchanged** — no decode, no re-encode, no key-order or
-  float-precision perturbation, no `timestamp`/`subject` injection. Non-JSON
+  component validates inbound bytes cheaply with `json.Valid(data)` and hands the
+  **original bytes** to the broadcast path with no decode/re-encode — preserving JSON
+  key order and numeric precision (the two perturbations the default path adds) and
+  injecting no `timestamp`/`subject`. (The shared message-envelope marshal still
+  compacts whitespace and HTML-escapes `<`/`>`/`&`, as it does for every message, so
+  the guarantee is key-order + precision, not literal byte-identity.) Non-JSON
   payloads still fall back to the existing `raw_data` wrapper (so the flag is safe
   even on a mixed subject).
 - **Apply it on both inbound handler paths.** The component has two message

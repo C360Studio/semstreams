@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/natsclient"
 	natspkg "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,10 +44,11 @@ func TestTransformPayload_PassthroughValidJSON(t *testing.T) {
 
 	out := ws.transformPayload("test.subject", original)
 
-	assert.Equal(t, string(original), string(out), "pass-through must broadcast original bytes byte-for-byte")
-	// Explicitly: no envelope fields injected.
-	assert.NotContains(t, string(out), "timestamp")
-	assert.NotContains(t, string(out), "subject")
+	// transformPayload returns the producer bytes verbatim on the pass-through
+	// branch (the downstream envelope marshal still compacts/escapes, but does
+	// NOT reorder keys or reformat numbers — that is the gh#471 win). A map
+	// round-trip would have sorted the keys to a,payload,z.
+	assert.Equal(t, string(original), string(out), "pass-through must return the original bytes (no reorder/re-encode)")
 }
 
 // TestTransformPayload_PassthroughDoesNotInjectMissingFields: the documented
@@ -57,9 +60,34 @@ func TestTransformPayload_PassthroughDoesNotInjectMissingFields(t *testing.T) {
 	original := []byte(`{"entity_id":"123","status":"active"}`)
 	out := ws.transformPayload("graph.updates", original)
 
-	assert.Equal(t, string(original), string(out))
-	assert.NotContains(t, string(out), "timestamp")
-	assert.NotContains(t, string(out), "\"subject\"")
+	// The Equal assertion fully covers "not injected": an injected timestamp or
+	// subject would make out != original.
+	assert.Equal(t, string(original), string(out), "pass-through must not inject missing envelope fields")
+}
+
+// TestCreateOutput_PassthroughConfigRoundTrip drives the operator config wire:
+// raw JSON → SafeUnmarshal → Config.Passthrough → factory → Output.passthrough.
+// The other tests set ConstructorConfig directly, bypassing this json seam; this
+// locks it so a json-tag rename or a dropped factory assignment fails loudly
+// (memory: feedback_polymorphic_config_needs_json_roundtrip_test).
+func TestCreateOutput_PassthroughConfigRoundTrip(t *testing.T) {
+	// CreateOutput only requires a non-nil NATSClient (it does not dial), so an
+	// empty client keeps this a fast unit test with no container.
+	deps := component.Dependencies{NATSClient: &natsclient.Client{}}
+
+	t.Run("passthrough true reaches Output", func(t *testing.T) {
+		out, err := CreateOutput(json.RawMessage(`{"passthrough":true}`), deps)
+		require.NoError(t, err)
+		require.True(t, out.(*Output).passthrough,
+			`operator config {"passthrough":true} must reach Output.passthrough`)
+	})
+
+	t.Run("absent defaults to false", func(t *testing.T) {
+		out, err := CreateOutput(json.RawMessage(`{}`), deps)
+		require.NoError(t, err)
+		require.False(t, out.(*Output).passthrough,
+			"pass-through must default to false when absent from operator config")
+	})
 }
 
 // TestTransformPayload_PassthroughNonJSONFallsBackToRawData: pass-through is safe
@@ -115,6 +143,42 @@ func TestTransformPayload_DefaultNonJSONRawData(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out, &wrapped))
 	assert.Equal(t, "raw_data", wrapped["type"])
 	assert.Equal(t, "plain text", wrapped["data"])
+}
+
+// TestPassthrough_EnvelopeMarshalCompactsAndEscapes documents the ACTUAL
+// end-to-end guarantee (reviewer MEDIUM): the pass-through payload still flows
+// through the shared MessageEnvelope marshal, which compacts insignificant
+// whitespace and HTML-escapes < > & in the RawMessage. So the guarantee is NOT
+// literal byte-identity — it is that key ORDER and numeric PRECISION are
+// preserved (the gh#471 win: no map re-sort, no strconv.fmtF re-formatting).
+func TestPassthrough_EnvelopeMarshalCompactsAndEscapes(t *testing.T) {
+	ws := newTestOutput(t, true)
+
+	// Pretty-printed, keys in non-sorted order, containing < > &, and a
+	// high-precision float that the default map path would reformat.
+	original := []byte(`{ "z": 1, "a": 2, "html": "<svg>&amp;</svg>", "f": 0.12345678901234567 }`)
+
+	payload := ws.transformPayload("t", original)
+	require.Equal(t, string(original), string(payload), "transformPayload returns bytes verbatim")
+
+	// The envelope marshal is where compaction/escaping happens.
+	_, envelopeData := ws.prepareMessageEnvelope(payload)
+	var env MessageEnvelope
+	require.NoError(t, json.Unmarshal(envelopeData, &env))
+	got := string(env.Payload)
+
+	// Semantically equal to the producer JSON (the escaped < decodes back to <)...
+	assert.JSONEq(t, string(original), got)
+	// ...but NOT byte-identical: whitespace is compacted and < > & are HTML-escaped
+	// (each < becomes a < sequence), so no literal '<' survives even though it
+	// decodes back for JSONEq.
+	assert.NotEqual(t, string(original), got, "envelope marshal compacts/escapes — not literal byte-identity")
+	assert.NotContains(t, got, "<", "the envelope marshal HTML-escapes < (no literal < survives)")
+	assert.NotContains(t, got, "  ", "the envelope marshal compacts insignificant whitespace")
+	// The actual win: key order preserved (z before a, not sorted) and the
+	// high-precision float is NOT reformatted (default map path -> float64 would be).
+	assert.Contains(t, got, `"z":1,"a":2`, "key order preserved (not sorted)")
+	assert.Contains(t, got, `0.12345678901234567`, "numeric precision preserved (no float64 reformat)")
 }
 
 // TestBroadcastPayload_BothHandlerEntrypoints verifies both inbound handlers route

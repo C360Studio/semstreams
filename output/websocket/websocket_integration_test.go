@@ -386,14 +386,16 @@ func TestWebSocketFederation_PassthroughPreservesBytes(t *testing.T) {
 			select {
 			case envelope := <-envelopes:
 				if tc.passthrough {
+					// The producer JSON here is already compact and escape-free, so
+					// the envelope marshal (which compacts/HTML-escapes — see the
+					// unit test TestPassthrough_EnvelopeMarshalCompactsAndEscapes) is
+					// a no-op and the payload arrives verbatim. The point this locks
+					// is the gh#471 win: keys are NOT sorted (a decode/re-encode
+					// would reorder to a,entity,z) and no timestamp/subject injected.
 					assert.JSONEq(t, string(original), string(envelope.Payload),
-						"pass-through payload must equal the producer bytes")
+						"pass-through payload must be semantically equal to the producer bytes")
 					assert.Equal(t, string(original), string(envelope.Payload),
-						"pass-through payload must be BYTE-identical (key order preserved, no re-encode)")
-					assert.NotContains(t, string(envelope.Payload), "timestamp",
-						"pass-through must not inject timestamp")
-					assert.NotContains(t, string(envelope.Payload), "subject",
-						"pass-through must not inject subject")
+						"key order preserved and nothing injected (compact escape-free input round-trips verbatim)")
 				} else {
 					var decoded map[string]any
 					require.NoError(t, json.Unmarshal(envelope.Payload, &decoded))
