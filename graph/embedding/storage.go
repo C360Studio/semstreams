@@ -434,9 +434,16 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 // cosine similarity to queryVector is highest, excluding the entity identified
 // by excludeID (pass "" to skip exclusion).
 //
+// keep, when non-nil, is a candidate predicate applied BEFORE cosine similarity:
+// only entity IDs for which keep returns true are scored. Pass nil to score
+// every cached entity (no filter). This is how a scoped semantic search
+// (ADR-071) constrains candidates at the source on the warm path — the caller
+// builds keep from the requested ID prefixes so filtering happens before the
+// expensive cosine, and identically to the cold KV-scan fallback.
+//
 // The second return value reports whether the cache was ready (warm) at the
 // time of the call. Callers must fall back to KV when it is false.
-func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, limit int) ([]ScoredEntity, bool) {
+func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, keep func(string) bool, limit int) ([]ScoredEntity, bool) {
 	// Non-blocking check: is the initial sync complete?
 	select {
 	case <-s.cacheReady:
@@ -450,6 +457,9 @@ func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, 
 	results := make([]ScoredEntity, 0, len(s.vectorCache))
 	for entityID, vector := range s.vectorCache {
 		if entityID == excludeID {
+			continue
+		}
+		if keep != nil && !keep(entityID) {
 			continue
 		}
 		sim := CosineSimilarity(queryVector, vector)

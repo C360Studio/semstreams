@@ -85,7 +85,7 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	}
 
 	mode := lens.ResolveMode(req.Query)
-	seeds, err := e.graph.Resolve(ctx, req.Query, mode, resolveLimit)
+	seeds, err := e.graph.Resolve(ctx, ResolveQuery{Query: req.Query, Mode: mode, Scope: req.Scope, Limit: resolveLimit})
 	if err != nil {
 		return Response{}, err
 	}

@@ -18,8 +18,12 @@ type RetrievalClient interface {
 	// Status reports graph readiness. The honesty envelope's Ready flag is
 	// load-bearing — only Ready permits a not-found conclusion.
 	Status(ctx context.Context) (IndexStatus, error)
-	// Resolve maps a query to seed entity IDs by mode, most relevant first.
-	Resolve(ctx context.Context, query string, mode ResolveMode, limit int) ([]string, error)
+	// Resolve maps a query to seed entity IDs, most relevant first. Its
+	// arguments are a struct rather than positional so the NL-only Scope does
+	// not force symbol/prefix callers to pass an ignored value, and so a future
+	// resolve dimension adds a field instead of re-breaking every impl and fake
+	// (ADR-071).
+	Resolve(ctx context.Context, q ResolveQuery) ([]string, error)
 	// Entity returns an entity by ID, or (nil, nil) if absent.
 	Entity(ctx context.Context, id string) (*Entity, error)
 	// Entities batch-fetches entities by ID. Absent IDs are omitted; a non-nil
@@ -30,6 +34,16 @@ type RetrievalClient interface {
 	Neighbors(ctx context.Context, id string, predicates []string, dir Direction) ([]Edge, error)
 	// Names suggests entity display names near a query (for a miss's did_you_mean).
 	Names(ctx context.Context, query string, limit int) ([]string, error)
+}
+
+// ResolveQuery is the argument set for RetrievalClient.Resolve. Mode selects
+// the resolve strategy; Scope is honored only for ResolveModeNL (a filter on
+// embedding candidates), where empty/nil means no filter.
+type ResolveQuery struct {
+	Query string
+	Mode  ResolveMode
+	Scope []string
+	Limit int
 }
 
 // Direction selects edge traversal direction.

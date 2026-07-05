@@ -84,19 +84,19 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 	})
 
 	t.Run("Resolve_symbol", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, "Widget", fusion.ResolveModeSymbol, 10)
+		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "Widget", Mode: fusion.ResolveModeSymbol, Limit: 10})
 		require.NoError(t, err)
 		require.Equal(t, []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}, ids)
 	})
 
 	t.Run("Resolve_prefix", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, "a.b.c", fusion.ResolveModePrefix, 10)
+		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "a.b.c", Mode: fusion.ResolveModePrefix, Limit: 10})
 		require.NoError(t, err)
 		require.Equal(t, []string{"a.b.c.d.e.1"}, ids)
 	})
 
 	t.Run("Resolve_nl", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, "find a widget", fusion.ResolveModeNL, 10)
+		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "find a widget", Mode: fusion.ResolveModeNL, Limit: 10})
 		require.NoError(t, err)
 		require.Equal(t, []string{"a.b.c.d.e.9"}, ids)
 	})

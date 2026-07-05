@@ -116,7 +116,7 @@ func TestResolve_Symbol(t *testing.T) {
 	}}))}
 	c := New(fake, time.Second)
 
-	ids, err := c.Resolve(context.Background(), "Widget", fusion.ResolveModeSymbol, 10)
+	ids, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "Widget", Mode: fusion.ResolveModeSymbol, Limit: 10})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestResolve_Prefix(t *testing.T) {
 	}})}
 	c := New(fake, time.Second)
 
-	ids, err := c.Resolve(context.Background(), "a.b.c", fusion.ResolveModePrefix, 10)
+	ids, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "a.b.c", Mode: fusion.ResolveModePrefix, Limit: 10})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestResolve_Semantic(t *testing.T) {
 	fake := &fakeRequester{resp: mustJSON(t, resp)}
 	c := New(fake, time.Second)
 
-	ids, err := c.Resolve(context.Background(), "find me a widget", fusion.ResolveModeNL, 10)
+	ids, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "find me a widget", Mode: fusion.ResolveModeNL, Limit: 10})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -175,9 +175,58 @@ func TestResolve_Semantic(t *testing.T) {
 	}
 }
 
+func TestResolve_Semantic_UnscopedByteParity(t *testing.T) {
+	// An unscoped NL request body must be byte-identical to the pre-scope wire
+	// shape {"query","limit"} — no "scope" key — so every existing caller and
+	// every un-migrated server sees exactly today's bytes (ADR-071).
+	fake := &fakeRequester{resp: mustJSON(t, map[string]any{"results": []map[string]any{}})}
+	c := New(fake, time.Second)
+	if _, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "find a widget", Mode: fusion.ResolveModeNL, Limit: 10}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := mustJSON(t, map[string]any{"query": "find a widget", "limit": 10})
+	if string(fake.lastData) != string(want) {
+		t.Errorf("unscoped body = %s, want %s", fake.lastData, want)
+	}
+}
+
+func TestResolve_Semantic_ScopeInBody(t *testing.T) {
+	// A non-empty Scope adds "scope" to the NL request body.
+	fake := &fakeRequester{resp: mustJSON(t, map[string]any{"results": []map[string]any{}})}
+	c := New(fake, time.Second)
+	scope := []string{"c360.semspec.source.doc"}
+	if _, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "find a widget", Mode: fusion.ResolveModeNL, Scope: scope, Limit: 10}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(fake.lastData, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	got, ok := body["scope"].([]any)
+	if !ok || len(got) != 1 || got[0] != scope[0] {
+		t.Errorf("scope in body = %v, want [%q]", body["scope"], scope[0])
+	}
+}
+
+func TestResolve_Symbol_CarriesNoScope(t *testing.T) {
+	// Scope is NL-only: a symbol resolve never carries it even when set.
+	fake := &fakeRequester{resp: mustJSON(t, graph.NewQueryResponse(graph.NameData{}))}
+	c := New(fake, time.Second)
+	if _, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "Widget", Mode: fusion.ResolveModeSymbol, Scope: []string{"a.b.c"}, Limit: 10}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(fake.lastData, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if _, ok := body["scope"]; ok {
+		t.Errorf("symbol request carried scope: %s", fake.lastData)
+	}
+}
+
 func TestResolve_UnknownMode(t *testing.T) {
 	c := New(&fakeRequester{}, time.Second)
-	_, err := c.Resolve(context.Background(), "x", fusion.ResolveMode("bogus"), 10)
+	_, err := c.Resolve(context.Background(), fusion.ResolveQuery{Query: "x", Mode: fusion.ResolveMode("bogus"), Limit: 10})
 	if err == nil {
 		t.Fatal("expected error for unknown mode")
 	}

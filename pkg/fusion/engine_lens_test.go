@@ -23,13 +23,16 @@ type fakeGraph struct {
 	resolveErr   error
 	entErr       error
 	neighborsErr error
+
+	lastResolve fusion.ResolveQuery // captures the most recent Resolve args
 }
 
 func (g *fakeGraph) Status(context.Context) (fusion.IndexStatus, error) {
 	return g.status, g.statusErr
 }
-func (g *fakeGraph) Resolve(_ context.Context, query string, _ fusion.ResolveMode, _ int) ([]string, error) {
-	return g.seeds[query], g.resolveErr
+func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]string, error) {
+	g.lastResolve = q
+	return g.seeds[q.Query], g.resolveErr
 }
 func (g *fakeGraph) Entity(_ context.Context, id string) (*fusion.Entity, error) {
 	return g.entities[id], nil
@@ -143,6 +146,48 @@ func TestEngine_ResolveBuildsNodes(t *testing.T) {
 	if n.Body != "package handlers // body" {
 		t.Errorf("Body = %q, want the hydrated bytes", n.Body)
 	}
+}
+
+// TestEngine_ScopeThreadsToResolve: an NL request's Scope reaches the retrieval
+// client via ResolveQuery; an empty Scope leaves it nil (an unscoped no-op).
+// Scope is the ADR-071 domain filter that keeps a small lens domain from being
+// diluted by a larger co-resident one on a shared embedding index.
+func TestEngine_ScopeThreadsToResolve(t *testing.T) {
+	ent := entity("acme.web.docs.site.doc.Exceptions", "Exceptions", "docs/exceptions.md")
+	const nlQuery = "what exceptions can be raised"
+	newGraph := func() *fakeGraph {
+		return &fakeGraph{
+			status:   readyStatus(),
+			seeds:    map[string][]string{nlQuery: {ent.ID}},
+			entities: map[string]*fusion.Entity{ent.ID: ent},
+		}
+	}
+
+	t.Run("scope threads through to Resolve", func(t *testing.T) {
+		g := newGraph()
+		eng := fusion.NewEngine(g, nil)
+		scope := []string{"acme.web.docs", "acme.web.md"}
+		if _, err := eng.Fuse(context.Background(), fusion.Request{Query: nlQuery, Scope: scope}, refLens{}); err != nil {
+			t.Fatalf("Fuse: %v", err)
+		}
+		if g.lastResolve.Mode != fusion.ResolveModeNL {
+			t.Fatalf("mode = %q, want NL (multi-word query)", g.lastResolve.Mode)
+		}
+		if !slices.Equal(g.lastResolve.Scope, scope) {
+			t.Errorf("Resolve scope = %v, want %v", g.lastResolve.Scope, scope)
+		}
+	})
+
+	t.Run("empty scope is a nil no-op", func(t *testing.T) {
+		g := newGraph()
+		eng := fusion.NewEngine(g, nil)
+		if _, err := eng.Fuse(context.Background(), fusion.Request{Query: nlQuery}, refLens{}); err != nil {
+			t.Fatalf("Fuse: %v", err)
+		}
+		if g.lastResolve.Scope != nil {
+			t.Errorf("Resolve scope = %v, want nil (unscoped)", g.lastResolve.Scope)
+		}
+	})
 }
 
 // TestEngine_Relations: WantRelations expands a node's outgoing edges into

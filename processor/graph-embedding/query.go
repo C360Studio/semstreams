@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -65,6 +66,14 @@ type SimilarEntity struct {
 type SearchRequest struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit"`
+	// Scope optionally constrains the search to candidates whose entity ID
+	// matches at least one of these dot-delimited prefixes (OR-matched, via
+	// graph.MatchesAnyIDPrefix). Empty/absent = no filter (today's behavior).
+	// The filter is applied at the candidate source in every similarity path so
+	// a small domain is never crowded out of the ranked window (ADR-071).
+	// Decoded with json.Unmarshal (unknown-field-tolerant), so a producer that
+	// sends Scope to an un-migrated server degrades to an unscoped search.
+	Scope []string `json:"scope,omitempty"`
 }
 
 // SearchResponse is the response format for text search queries
@@ -128,8 +137,9 @@ func (c *Component) handleQuerySimilarNATS(_ context.Context, data []byte) ([]by
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "handleQuerySimilarNATS", "handler", fmt.Sprintf("no vector for entity %s", req.EntityID))
 	}
 
-	// Find similar entities by scanning all embeddings
-	similar, err := c.findSimilarEntities(ctx, req.EntityID, sourceRecord.Vector, limit)
+	// Find similar entities by scanning all embeddings. The similar-to-entity
+	// path carries no scope (scope is an NL-search concern only).
+	similar, err := c.findSimilarEntities(ctx, req.EntityID, sourceRecord.Vector, nil, limit)
 	if err != nil {
 		return nil, errs.Wrap(err, "handleQuerySimilarNATS", "handler", "find similar entities")
 	}
@@ -188,8 +198,8 @@ func (c *Component) handleQuerySearchNATS(_ context.Context, data []byte) ([]byt
 
 	queryVector := vectors[0]
 
-	// Find similar entities
-	results, err := c.findSimilarEntities(ctx, "", queryVector, limit)
+	// Find similar entities, scoped to the requested ID prefixes (if any).
+	results, err := c.findSimilarEntities(ctx, "", queryVector, req.Scope, limit)
 	if err != nil {
 		return nil, errs.Wrap(err, "handleQuerySearchNATS", "handler", "find similar entities")
 	}
@@ -218,13 +228,27 @@ func (c *Component) handleQuerySearchNATS(_ context.Context, data []byte) ([]byt
 // It first attempts to serve the query from the in-memory vector cache
 // (zero KV round-trips). If the cache is not yet warm it falls back to
 // the original O(n) KV scan path so queries are never blocked during startup.
-func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, queryVector []float32, limit int) ([]SimilarEntity, error) {
+//
+// A non-empty scope constrains candidates to entity IDs matching at least one
+// of the given prefixes (ADR-071). The SAME filter is applied on BOTH paths —
+// the warm cache and the cold KV scan — via one shared predicate, BEFORE the
+// expensive per-candidate op (cosine in the cache loop / the GetEmbedding KV
+// round-trip in the scan). Filtering only the cold fallback would be a silent
+// no-op for essentially every warm-production query. An empty/nil scope keeps a
+// nil predicate so unscoped queries are unchanged.
+func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, queryVector []float32, scope []string, limit int) ([]SimilarEntity, error) {
 	if c.storage == nil {
 		return nil, errs.WrapFatal(errs.ErrInvalidConfig, "findSimilarEntities", "helper", "storage not initialized")
 	}
 
-	// Try in-memory cache first (zero KV I/O).
-	if scored, ok := c.storage.FindSimilarFromCache(excludeID, queryVector, limit); ok {
+	var keep func(string) bool
+	if len(scope) > 0 {
+		keep = func(id string) bool { return graph.MatchesAnyIDPrefix(id, scope) }
+	}
+
+	// Try in-memory cache first (zero KV I/O). The scope predicate filters
+	// inside the cache loop, before cosine similarity.
+	if scored, ok := c.storage.FindSimilarFromCache(excludeID, queryVector, keep, limit); ok {
 		results := make([]SimilarEntity, len(scored))
 		for i, s := range scored {
 			results[i] = SimilarEntity{EntityID: s.EntityID, Similarity: s.Similarity}
@@ -248,6 +272,12 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 	for _, entityID := range entityIDs {
 		// Skip the source entity
 		if entityID == excludeID {
+			continue
+		}
+
+		// Scope filter runs BEFORE the per-candidate KV round-trip: on the
+		// httpx case a docs scope turns ~1334 GetEmbedding reads into ~30.
+		if keep != nil && !keep(entityID) {
 			continue
 		}
 
