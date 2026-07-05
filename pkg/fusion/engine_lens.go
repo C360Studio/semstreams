@@ -174,7 +174,7 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 
 // relations expands a node's forward and reverse edges into role → refs.
 func (e *Engine) relations(ctx context.Context, ent *Entity, lens Lens) map[string][]Ref {
-	preds, fwd, rev := edgePredicates(lens.Edges())
+	preds, fwd, rev := edgePredicates(lens.Edges(), FacetRelations)
 	if len(preds) == 0 {
 		return nil
 	}
@@ -215,11 +215,17 @@ func (e *Engine) refFor(ctx context.Context, id string, lens Lens) (Ref, bool) {
 }
 
 // edgePredicates flattens a lens's EdgeSpecs into the predicate list and the
-// forward/reverse role lookups used during expansion.
-func edgePredicates(specs []EdgeSpec) (preds []string, fwd, rev map[string]string) {
+// forward/reverse role lookups used during expansion, restricted to the specs that
+// participate in facet f. An EdgeSpec with no Facets participates in every facet
+// (backward-compatible default); one with a non-empty Facets is included only for
+// the facets it names (gh#475).
+func edgePredicates(specs []EdgeSpec, f Facet) (preds []string, fwd, rev map[string]string) {
 	fwd = make(map[string]string, len(specs))
 	rev = make(map[string]string, len(specs))
 	for _, s := range specs {
+		if !s.walksFacet(f) {
+			continue
+		}
 		preds = append(preds, s.Predicate)
 		if s.OutgoingRole != "" {
 			fwd[s.Predicate] = s.OutgoingRole

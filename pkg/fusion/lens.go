@@ -3,6 +3,7 @@ package fusion
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/c360studio/semstreams/message"
 )
@@ -91,14 +92,39 @@ const (
 	ResolveModePrefix ResolveMode = "prefix"
 )
 
+// Facet names one of the three edge-walk facets the engine derives from a lens's
+// EdgeSpecs. The string values match the corresponding Want values so lens authors
+// and callers share one vocabulary. (WantBody has no Facet — it is not edge-driven.)
+type Facet string
+
+// The three edge-walk facets.
+const (
+	FacetRelations Facet = "relations" // the per-node relations map (forward + reverse roles)
+	FacetPaths     Facet = "paths"     // the outgoing paths DFS
+	FacetImpact    Facet = "impact"    // the incoming impact BFS
+)
+
 // EdgeSpec declares one relationship predicate the engine should expand around a
 // seed, with the role labels for its forward and (optional) reverse directions.
 // For code: {Predicate: "code.relationship.calls", OutgoingRole: "callee",
 // IncomingRole: "caller"}. An empty IncomingRole skips the reverse direction.
+//
+// Facets optionally restricts which edge-walk facets this predicate feeds. An empty
+// Facets means the edge participates in ALL three facets (relations, paths, impact)
+// — the backward-compatible default. A non-empty Facets restricts the edge to
+// exactly the named facets, so e.g. a containment edge can populate the relations
+// map (Facets: {FacetRelations}) without inflating the impact walk.
 type EdgeSpec struct {
 	Predicate    string
 	OutgoingRole string
-	IncomingRole string // "" to skip the reverse direction
+	IncomingRole string  // "" to skip the reverse direction
+	Facets       []Facet // nil/empty = all facets; else only the named facets
+}
+
+// walksFacet reports whether this EdgeSpec participates in facet f. An empty Facets
+// participates in every facet (backward-compatible default).
+func (s EdgeSpec) walksFacet(f Facet) bool {
+	return len(s.Facets) == 0 || slices.Contains(s.Facets, f)
 }
 
 // Locator is a domain-general place: a file path or URL, an optional section /

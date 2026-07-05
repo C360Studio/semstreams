@@ -3,6 +3,7 @@ package fusion_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
@@ -45,14 +46,28 @@ func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity,
 	}
 	return out, nil
 }
-func (g *fakeGraph) Neighbors(_ context.Context, id string, _ []string, dir fusion.Direction) ([]fusion.Edge, error) {
+func (g *fakeGraph) Neighbors(_ context.Context, id string, preds []string, dir fusion.Direction) ([]fusion.Edge, error) {
 	if g.neighborsErr != nil {
 		return nil, g.neighborsErr
 	}
+	edges := g.in[id]
 	if dir == fusion.Outgoing {
-		return g.out[id], nil
+		edges = g.out[id]
 	}
-	return g.in[id], nil
+	// Model the production RetrievalClient.Neighbors contract: filter by the
+	// predicate set (nil/empty = no filter). computeImpact/computePaths rely on
+	// this filtering — they do not re-check predicates on the returned edges —
+	// so a fake that ignored preds would silently mask per-facet edge selection.
+	if len(preds) == 0 {
+		return edges, nil
+	}
+	var filtered []fusion.Edge
+	for _, ed := range edges {
+		if slices.Contains(preds, ed.Predicate) {
+			filtered = append(filtered, ed)
+		}
+	}
+	return filtered, nil
 }
 func (g *fakeGraph) Names(_ context.Context, _ string, _ int) ([]string, error) {
 	return g.names, nil

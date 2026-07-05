@@ -45,7 +45,7 @@ const (
 // seeds themselves, bounded by maxImpactNodes. Best-effort: a Neighbors/Entity
 // error prunes that branch rather than failing the fuse.
 func (e *Engine) computeImpact(ctx context.Context, seeds []*Entity, lens Lens) *Impact {
-	preds, _, _ := edgePredicates(lens.Edges())
+	preds, _, _ := edgePredicates(lens.Edges(), FacetImpact)
 	imp := &Impact{}
 	if len(preds) == 0 {
 		return imp
@@ -98,7 +98,7 @@ func (e *Engine) computeImpact(ctx context.Context, seeds []*Entity, lens Lens) 
 // the lens's edge predicates, depth-capped; a cycle truncates that branch (kept,
 // not dropped).
 func (e *Engine) computePaths(ctx context.Context, seeds []*Entity, lens Lens) []Path {
-	preds, _, _ := edgePredicates(lens.Edges())
+	preds, _, _ := edgePredicates(lens.Edges(), FacetPaths)
 	if len(preds) == 0 {
 		return nil
 	}
