@@ -52,13 +52,20 @@
 
 ## 5. graph-query — converge the overlapping filter
 
-- [x] 5.1 Route `graphrag.handleStrategySemantic`'s semantic path through the source-level
-      `Scope` (pass to `SearchRequest.Scope`) instead of / in addition to the
-      post-retrieval `filterEntityIDsByType`. Resolve the axis wrinkle: `Scope` =
-      leading-prefix (domain/system), `filterEntityIDsByType` = type segment (position 5).
-      Either re-express the type filter via the shared helper or keep it as a documented,
-      layered-distinct axis — but eliminate any second post-retrieval ID filter that
-      silently duplicates source-level scope. Reviewer confirms "one responsibility."
+- [x] 5.1 Converge the overlapping filter on the semantic path to ONE ID-scoping
+      responsibility. Axis wrinkle resolved: `Scope` = leading-prefix (domain/system);
+      `filterEntityIDsByType` = type segment (position 5, exact equality). These are
+      genuinely distinct axes — routing the type filter through `MatchesAnyIDPrefix`
+      (leading prefix) would be a BUG (a type `drone` is not a leading prefix `drone.`),
+      so `filterEntityIDsByType` is KEPT and now carries a doc comment naming it the
+      distinct type-segment axis (`graphrag.go:1237`). No second post-retrieval
+      ID-prefix filter is added. The actual gh#463 fusion NL path is
+      `fusionnats.resolveSemantic → graph.query.semantic → handleQuerySemantic` (raw
+      passthrough), so leading-prefix `Scope` reaches `SearchRequest.Scope` at the
+      source WITHOUT touching `handleStrategySemantic`; the GraphRAG global-search path
+      (`handleStrategySemantic`) has no leading-prefix scope input today (none is asked
+      for) — no dead nil-plumbing added. semstreams-reviewer confirmed "one
+      responsibility," spec-conformant (not an under-implementation).
 
 ## 6. Tests
 
@@ -89,7 +96,7 @@
 - [x] 7.2 Gates: `go test -race` (fusion, graph-embedding, graph-query), `task lint`,
       schema no-drift (SearchRequest is an RPC type — confirm no generated-schema drift),
       `go vet -tags=integration`.
-- [ ] 7.3 semstreams-reviewer pre-merge (RPC error-contract on the scoped search; the
+- [x] 7.3 semstreams-reviewer pre-merge (RPC error-contract on the scoped search; the
       BOTH-paths filter; the cross-repo `Resolve` blast radius incl. semsource; the
       convergence really is one responsibility; empty-scope byte-parity).
 - [ ] 7.4 Archive → promote `graph-embedding` + `graph-query` into `openspec/specs/`;
