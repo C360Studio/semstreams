@@ -2,17 +2,18 @@
 
 ## Status
 
-**Proposed — Option 1 selected; pre-Accept adversarial review folded (2026-07-05);
-awaiting user sign-off to Accept.** The mechanism is decided: **Option 1** — a
-`Scope []string` on `fusion.Request` plumbed to the embedding search — recorded as an
-ADR because it changes a **cross-component NATS RPC contract**
-(`graph.embedding.query.search`), the class of decision an ADR exists to hold. A
-code-grounded adversarial review (framework-ADR discipline —
-`feedback_adversarial_review_framework_adr`) found a **BLOCKING** shape defect (a
-warm-cache no-op) and two HIGHs (scope must be a list; a cross-repo compile break),
-all folded into the Decision/Consequences/Resolved-decisions below. On Accept, the
-mechanics move into an openspec change against the `fusion` + `graph-embedding`
-capability specs and implementation follows.
+**Accepted — 2026-07-05.** Mechanism: **Option 1** — a `Scope []string` on
+`fusion.Request` plumbed to the embedding search — recorded as an ADR because it
+changes a **cross-component NATS RPC contract** (`graph.embedding.query.search`), the
+class of decision an ADR exists to hold. A code-grounded adversarial review
+(framework-ADR discipline — `feedback_adversarial_review_framework_adr`) found a
+**BLOCKING** shape defect (a warm-cache no-op) and two HIGHs (scope must be a list; a
+cross-repo compile break), all folded into the Decision/Consequences/Resolved-decisions
+below before Accept. **Convergence decided:** the follow-on change unifies the existing
+`graphrag.filterEntityIDsByType` post-filter with the new scope onto one shared
+`graph.MatchesAnyIDPrefix` helper (question c / MEDIUM). The mechanics now move into an
+openspec change against the `fusion` + `graph-embedding` + `graph-query` capability
+specs; implementation follows.
 
 Scopes gh#463 / semsource upstream-asks #16.
 
