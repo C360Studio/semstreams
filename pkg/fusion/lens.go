@@ -93,15 +93,16 @@ const (
 )
 
 // Facet names one of the three edge-walk facets the engine derives from a lens's
-// EdgeSpecs. The string values match the corresponding Want values so lens authors
-// and callers share one vocabulary. (WantBody has no Facet — it is not edge-driven.)
+// EdgeSpecs. It is a distinct type from Want (so WantBody, which is not edge-driven,
+// is unpassable), but its values are DERIVED from the matching Want constants below
+// so the two vocabularies cannot drift. (WantBody has no Facet.)
 type Facet string
 
-// The three edge-walk facets.
+// The three edge-walk facets — values structurally pinned to their Want twins.
 const (
-	FacetRelations Facet = "relations" // the per-node relations map (forward + reverse roles)
-	FacetPaths     Facet = "paths"     // the outgoing paths DFS
-	FacetImpact    Facet = "impact"    // the incoming impact BFS
+	FacetRelations = Facet(WantRelations) // the per-node relations map (forward + reverse roles)
+	FacetPaths     = Facet(WantPaths)     // the outgoing paths DFS
+	FacetImpact    = Facet(WantImpact)    // the incoming impact BFS
 )
 
 // EdgeSpec declares one relationship predicate the engine should expand around a

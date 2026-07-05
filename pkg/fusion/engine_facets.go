@@ -1,6 +1,9 @@
 package fusion
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // Engine-computed Paths/Impact facets (ADR-062 gh#409). These are the outgoing/
 // incoming siblings of the relations facet the engine already owns: same bounded
@@ -69,6 +72,13 @@ func (e *Engine) computeImpact(ctx context.Context, seeds []*Entity, lens Lens) 
 				degraded = true // a walk fault leaves the closure incomplete
 			}
 			for _, ed := range edges {
+				// Re-guard by predicate rather than trusting Neighbors to have
+				// filtered: keeps per-facet exclusion (gh#475) robust to any
+				// RetrievalClient impl, not just the one that filters (mirrors
+				// how relations re-guards via its role map).
+				if !slices.Contains(preds, ed.Predicate) {
+					continue
+				}
 				dep := ed.Target // Incoming target is the node pointing AT id
 				if seedSet[dep] || affected[dep] {
 					continue
@@ -139,6 +149,11 @@ func (e *Engine) dfsPaths(ctx context.Context, id string, lens Lens, preds []str
 	var forward []Edge
 	cycle := false
 	for _, ed := range edges {
+		// Re-guard by predicate (see computeImpact) so per-facet exclusion
+		// holds regardless of whether Neighbors filtered.
+		if !slices.Contains(preds, ed.Predicate) {
+			continue
+		}
 		if onPath[ed.Target] {
 			cycle = true
 			continue
