@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -19,14 +18,21 @@ import (
 const entityStatesBucket = "ENTITY_STATES"
 
 // entityStatesBucketConfig mirrors graph/query/client.go defaults
-// (History=3, TTL=24h). Tool registration races with the graph component's
+// (History=3, TTL=0). Tool registration races with the graph component's
 // ensureBuckets — CreateKeyValueBucket is idempotent Create-or-Get, so
 // whichever side lands first creates with these values and the other gets
 // the existing handle. Config must match the graph component's intent.
+//
+// TTL MUST be 0 on the live graph (ADR-068 D1): age-eviction is
+// reachability-blind and would silently expire entities with live inbound
+// edges. graph-ingest fail-closes at boot if it finds ENTITY_STATES carrying a
+// TTL, so a non-zero value here (a stale 24h mirror of the OLD graph/query
+// default, gh#484) makes this registration win the race and dead-lock
+// graph-ingest. Keep it 0, matching graph/query/client.go:DefaultConfig.
 var entityStatesBucketConfig = jetstream.KeyValueConfig{
 	Bucket:  entityStatesBucket,
 	History: 3,
-	TTL:     24 * time.Hour,
+	TTL:     0,
 }
 
 // registerGraphQuery wires GraphQueryExecutor against ENTITY_STATES.
