@@ -99,7 +99,7 @@
 - [x] 7.3 semstreams-reviewer pre-merge (RPC error-contract on the scoped search; the
       BOTH-paths filter; the cross-repo `Resolve` blast radius incl. semsource; the
       convergence really is one responsibility; empty-scope byte-parity).
-- [ ] 7.4 Archive → promote `graph-embedding` + `graph-query` into `openspec/specs/`;
+- [x] 7.4 Archive → promote `graph-embedding` + `graph-query` into `openspec/specs/`;
       ADD to `fusion`.
 - [ ] 7.5 Breaking-change check: `RetrievalClient.Resolve` signature change is a
       cross-repo break (semsource `MemGraph.Resolve`) — coordinate the semsource bump on
