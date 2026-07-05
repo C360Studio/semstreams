@@ -10,8 +10,16 @@ jetstream-go's async publisher preserves per-subject ordering **per connection**
 server stores in receive order. natsclient holds one `*nats.Conn` per `Client`, so
 a single caller issuing `PublishToStreamAsync` (or `PublishBatchToStream`) to one
 subject gets in-order storage without extra work. We do **not** add per-message
-ordering controls — the guarantee is "single caller, single connection, in-order,"
-matching what the sync path already gives.
+ordering controls — the guarantee is "single caller, single connection, in-order."
+
+**Caveat vs. the sync path (weaker under retry).** This is *slightly weaker* than
+the synchronous path, which fully serializes (message N+1 is not sent until N
+acks/fails). jetstream-go async retries a `NoResponders` publish after `retryWait`
+(≈250ms, up to 2 attempts — `publish.go` `handleAsyncReply`), re-publishing that one
+message *after* later messages already reached the wire. So under a leadership blip
+async storage order can differ from call order for the retried message. Absent a
+`NoResponders` retry, order is preserved. Callers needing strict ordering across a
+fault window use the sync path.
 
 Cross-goroutine ordering is the caller's responsibility (same as sync). We
 document this rather than serialize internally: a global publish mutex would
@@ -36,61 +44,81 @@ actionable:
 
 `PublishBatchToStream` collapses both into one aggregate `error`: enqueue errors
 short-circuit the batch (already-enqueued messages still drain); ack errors are
-collected by ranging the futures after `PublishAsyncComplete`. The returned error
-wraps the first failure and the total count (via `errors.Join`), so a caller gets
-"3 of 200 failed" without threading futures.
+collected by ranging the batch's **own** futures (each `select`s on `Ok()`,
+`Err()`, and `ctx.Done()`). The returned error wraps every failure and the total
+count (via `errors.Join`), so a caller gets "3 of 200 failed" without threading
+futures. The loop does **not** call `recordFailure` on an ack error — the
+connection-level handler already records every async ack failure exactly once
+(both fire from jetstream-go's single `doErr`), so recording here too would
+double-count and trip the breaker at ~half the configured threshold for batches.
 
-## 3. Batch drain is ctx-bounded
+## 3. Batch drain is ctx-bounded — and waits on its OWN futures
 
-`PublishBatchToStream` waits on `PublishAsyncComplete()` **or** `ctx.Done()`,
-whichever fires first. On ctx cancellation it returns `ctx.Err()` wrapped, without
-waiting for the remaining acks — the outstanding publishes are still in
-jetstream-go's pending set and will resolve (or feed the err handler) in the
-background. This mirrors the sync path honoring `ctx` and avoids a batch hanging
-forever on a wedged ack path.
+`PublishBatchToStream` drains by ranging the batch's **own** futures, each in a
+`select` over `Ok()`, `Err()`, and `ctx.Done()`. It deliberately does **not** wait
+on the connection-global `PublishAsyncComplete()`: that channel closes only when the
+whole connection's pending set hits zero, so a concurrent async producer on the same
+`Client` could keep it non-empty and make an otherwise-finished batch over-wait until
+its ctx expired. Per-future waiting scopes the drain to this batch alone. Each future
+is already in-flight, so waiting in order costs the slowest ack, not the sum.
 
-Two edge cases, handled explicitly (memory: select-race-on-pre-cancelled-ctx):
+On ctx cancellation the loop returns `ctx.Err()` wrapped (with an "M of N acked, K
+pending" count), without waiting for the remaining acks — the outstanding publishes
+stay in jetstream-go's pending set and resolve (or feed the err handler on a
+connection fault) in the background. This avoids a batch hanging on a wedged ack path.
+
+Two edge cases (memory: select-race-on-pre-cancelled-ctx):
 
 - **Already-cancelled ctx:** checked up front, before any enqueue, so nothing is
-  published and the drain select never races a pre-satisfied `ctx.Done()`.
-- **Cancel during drain:** `ctx.Done()` and `PublishAsyncComplete()` can become
-  ready in the same instant; `select` then picks at random. On the `ctx.Done()`
-  branch we re-check `PublishAsyncComplete()` non-blocking — a batch that actually
-  finished draining is reported as success, not spuriously cancelled.
+  published.
+- **Cancel during drain:** the per-future `select` includes `ctx.Done()`. If both a
+  future's `Ok()` and `ctx.Done()` are ready, `select` picks at random — harmless
+  here: picking `Ok()` just processes that (genuinely-acked) message and the next
+  iteration observes the still-cancelled ctx. A batch that *fully* drained before the
+  cancel returns `nil` (all futures resolved via `Ok()`/`Err()`, loop completes) —
+  correct, because the work actually finished.
 
-## 4. Circuit-breaker reset is on ENQUEUE, not ACK — the one documented divergence
+## 4. The async breaker is a CONNECTION-LIVENESS gate — the documented divergence
 
 The sync path resets the breaker **after** `PublishMsg` returns (i.e. after the
-ack). The async path cannot mirror this cheaply: jetstream-go offers a global
-failure handler (`WithPublishAsyncErrHandler`) but **no** global success handler,
-and attaching a per-future goroutine purely to reset the breaker on success would
-spawn one goroutine per publish — defeating the throughput win at 100k msg/s.
+ack), giving it *consecutive-failure* semantics (any success re-zeroes the count).
+The async path cannot mirror that cheaply: jetstream-go offers a global failure
+handler (`WithPublishAsyncErrHandler`) but **no** global success handler, and
+attaching a per-future goroutine purely to reset on success would spawn one
+goroutine per publish — defeating the throughput win at 100k msg/s.
 
-Decision: **a successful async enqueue resets the breaker; a failed async ack
-records a failure (via the err handler).** This is honest because this client's
-breaker is fundamentally a *connection-health* gate — `recordFailure()` is called
-across the client for connect failures, a nil JetStream context, consumer-creation
-failures, etc., not solely for publish-ack outcomes. A successful `PublishMsgAsync`
-enqueue proves the connection is up and JetStream accepted the message onto the
-wire, which is exactly the health signal the breaker gates on.
+Decision: **on the async path the breaker gates connection liveness, not
+message-level ack success.** Concretely:
 
-Consequences, stated plainly so the reviewer can check them:
+- **A successful enqueue resets the breaker.** `PublishMsgAsync` accepting the
+  message proves the connection is up and JetStream took it onto the wire — exactly
+  the health signal this client's breaker gates on (`recordFailure()` fires across
+  the client for connect failures, a nil JetStream context, consumer-creation
+  failures, etc., not solely for publish-ack outcomes).
+- **A failed async ack records a failure via the handler** — primarily to catch a
+  *connection outage* fast: on disconnect jetstream-go's `resetPendingAcksOnReconnect`
+  fires the handler for every pending publish (a burst of `recordFailure`), and
+  subsequent enqueues also start failing (`js.PublishMsgAsync` errors /
+  `ErrNotConnected`). Both push the count to threshold and open the breaker.
+- **Message-level nacks on a healthy connection do NOT open the breaker.** If the
+  connection stays up but acks fail for a *stream-level* reason (stream deleted,
+  subject unbound, `MaxMsgs`/`MaxBytes` hit), the interleaved successful enqueues
+  keep re-zeroing `circuitFailures`, so the breaker stays closed. This is
+  **intentional**: those are per-message failures, surfaced to the caller via
+  `future.Err()` / the batch aggregate, not connection faults. It is the deliberate
+  divergence from the sync path (whose consecutive-nack run *would* open). A pure-
+  async load generator therefore is not spuriously interrupted by sporadic nacks,
+  while a real connection outage still trips the breaker.
 
-- A pure-async producer (only `PublishToStreamAsync`, never sync/batch) still has a
-  reset path — every enqueue clears `circuitFailures` — so a transient blip that
-  recorded a few ack failures does not leave the breaker permanently degraded.
-  (Without an enqueue reset it would rely solely on the `testCircuit` backoff timer
-  to move open→disconnected, and `circuitFailures` would never re-zero.)
-- Enqueue-reset can, in principle, race with a slightly-later ack failure arriving
-  via the handler and mask a *single* failure count. This is acceptable: (a) the
-  same reset-races-record window already exists on the sync path under concurrent
-  callers; (b) in a genuine outage the connection drops and enqueue itself starts
-  failing (`ErrTooManyStalledMsgs` / `ErrNotConnected`), which records failures and
-  trips the breaker regardless of ack timing. The breaker still opens under real
-  failure; it just won't over-trip on a lone late nack amidst healthy traffic.
+Why not the alternatives: (a) *never reset on enqueue* → `circuitFailures`
+accumulates cumulatively from sporadic nacks and eventually trips on a healthy
+long-lived connection (wrong for a load generator; breakers should trip on
+*sustained* failure); (b) *per-future success goroutine* → throughput-killing.
+Connection-liveness is the honest middle that this client's breaker already models.
 
-`PublishBatchToStream` additionally records a failure per collected ack error, so a
-batch with failing acks feeds the breaker even though its enqueues succeeded.
+Because ack failures are recorded **only** by the handler, `PublishBatchToStream`
+must NOT also record them in its collect loop (both would fire from jetstream-go's
+single `doErr` → double-count, tripping at ~half the threshold for batches).
 
 ## 5. What we do NOT change
 

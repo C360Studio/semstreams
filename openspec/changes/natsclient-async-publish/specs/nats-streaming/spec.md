@@ -98,15 +98,28 @@ All publish paths — synchronous, asynchronous, and batch — MUST preserve the
 three client invariants: (1) a distributed-trace context is injected into the
 message headers (auto-generated when absent from `ctx`); (2) a non-empty msgID is
 stamped as `Nats-Msg-Id`; (3) the circuit breaker is honored on entry (an open
-circuit rejects the publish) and fed by outcome. A failed **async ack** MUST record
-a breaker failure via the connection-level async error handler, exactly as a failed
-synchronous publish records one. On the async path the breaker resets on successful
-**enqueue** (the connection-health signal), which is the one documented semantic
-difference from the synchronous path's reset-after-ack.
+circuit rejects the publish).
 
-#### Scenario: a failed async ack opens the breaker like a failed sync publish
+On the async path the breaker is a **connection-liveness** gate: a successful
+enqueue resets it (the connection is up), and a failed async ack records a breaker
+failure via the connection-level async error handler. A **connection outage** —
+where jetstream-go fires the handler for every pending publish and subsequent
+enqueues also fail — MUST open the breaker. **Message-level ack failures on a
+healthy connection** (e.g. a stream-full nack) MUST be surfaced to the caller via
+the future's `Err()` channel / the batch aggregate error, and MUST NOT by
+themselves open the breaker (the interleaved successful enqueues keep it closed).
+This is the deliberate divergence from the synchronous path's consecutive-failure
+semantics.
+
+#### Scenario: a connection outage opens the breaker
 
 - **GIVEN** a connected client publishing via `PublishToStreamAsync`
-- **WHEN** async acks fail past the circuit-breaker threshold
+- **WHEN** the connection is lost and pending acks fail past the breaker threshold
 - **THEN** the circuit breaker opens
 - **AND** subsequent publishes are rejected with `ErrCircuitOpen` until it resets
+
+#### Scenario: a successful enqueue resets the breaker failure count
+
+- **GIVEN** a connected client that has recorded some failures below the threshold
+- **WHEN** a message is enqueued successfully via `PublishToStreamAsync`
+- **THEN** the recorded failure count is reset to zero

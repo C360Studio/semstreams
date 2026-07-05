@@ -22,6 +22,26 @@ func TestPublishToStreamAsync_NotConnected(t *testing.T) {
 	assert.Nil(t, future)
 }
 
+// TestPublishToStreamAsync_CancelledContext verifies a cancelled context is
+// honored before enqueue (PublishMsgAsync takes no ctx), returning the context
+// error and a nil future. The breaker gate still takes precedence over ctx.
+func TestPublishToStreamAsync_CancelledContext(t *testing.T) {
+	client, err := NewClient("nats://localhost:4222")
+	require.NoError(t, err)
+	// Force Connected so the ctx check (which sits after the connection gate) is
+	// the one that fires, not ErrNotConnected.
+	client.setStatus(StatusConnected)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	future, err := client.PublishToStreamAsync(ctx, "test.subject", []byte("data"))
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, future)
+	// A cancelled ctx is caller intent, not a connection fault: no failure recorded.
+	assert.Equal(t, int32(0), client.Failures())
+}
+
 // TestPublishToStreamAsync_CircuitOpen verifies an open circuit rejects the async
 // enqueue with ErrCircuitOpen and a nil future (no publish).
 func TestPublishToStreamAsync_CircuitOpen(t *testing.T) {
@@ -59,8 +79,9 @@ func TestAsyncPublishErrHandler_RecordsFailure(t *testing.T) {
 	assert.Equal(t, StatusCircuitOpen, client.Status())
 }
 
-// TestAsyncPublishErrHandler_NilMsg verifies the handler is nil-safe on the
-// message argument (jetstream-go may invoke it with a nil msg on some paths).
+// TestAsyncPublishErrHandler_NilMsg verifies the handler's defensive nil-guard on
+// the message argument. jetstream-go currently always passes a non-nil paf.msg,
+// but the handler must not panic if that ever changes.
 func TestAsyncPublishErrHandler_NilMsg(t *testing.T) {
 	client, err := NewClient("nats://localhost:4222")
 	require.NoError(t, err)
