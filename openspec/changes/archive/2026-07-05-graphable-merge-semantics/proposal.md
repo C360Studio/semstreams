@@ -22,9 +22,11 @@ unbounded KV entry size, index churn over duplicate relationships, and readers
 
 This is a **lane inconsistency**, not just a missing helper call:
 
-- The **mutation lane** (`graph.mutation.entity.*` → `AddTriples`) already uses
-  `graph.MergeTriples` — replace-by-`(subject, predicate)` (`mutations.go:794,
-  :905`, gh#244).
+- The **`update_with_triples` mutation handler** already uses `graph.MergeTriples`
+  — replace-by-`(subject, predicate)` (`mutations.go:794, :905`, gh#244). (Note:
+  the `triple.add` evidence-append lane / `AddTriples` component method appends by
+  design — that is a separate, intentional lane; the inconsistency is with the
+  CAS-update handler.)
 - The **Graphable/JetStream lane** (`MergeEntity`) appends.
 
 The append is an over-correction from gh#177 ("jetstream consumer upserts
@@ -42,6 +44,13 @@ duplicate — gh#466).
   existing-entity branch uses `graph.MergeTriples(existing.Triples, entity.Triples)`
   instead of `append`, making the two graph-write lanes consistent and matching the
   documented merge intent.
+- **Preserve the create-time indexing profile across the merge.** The indexing
+  profile (`entity.indexing.profile`) is create-time-immutable (ADR-054), but
+  `MergeTriples` is newer-wins — so the incoming profile is dropped before merging
+  WHEN the existing entity already has one, and a profile-less referential stub
+  keeps its first real arrival's declared profile (true birth). This is the one
+  immutable-predicate exception on the merge lane (hierarchy/stub markers never
+  arrive on a Graphable payload, so newer-wins can't touch them).
 - **Pin the merge contract.** A predicate present in the incoming entity's triples
   fully replaces that `(subject, predicate)`'s prior triples; a predicate absent
   from the incoming set is preserved untouched. This is *full-set-replace per

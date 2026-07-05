@@ -1,7 +1,8 @@
-# Graph Ingest
+# graph-ingest Specification
 
-## ADDED Requirements
-
+## Purpose
+TBD - created by archiving change graphable-merge-semantics. Update Purpose after archive.
+## Requirements
 ### Requirement: A re-arriving entity's triples merge by predicate-level replacement
 
 graph-ingest MUST merge the incoming triples of a re-arriving (already-existing)
@@ -31,6 +32,27 @@ predicates written by a different writer (e.g. lifecycle-managed triples).
 - **THEN** the stored entity still has `lifecycle.phase = active`
 - **AND** `sensor.temp` is `21`
 
+### Requirement: The create-time indexing profile is not overridden by a re-arrival
+
+MUST preserve the create-time indexing profile across a merge: it is immutable
+after create (ADR-054), so even though the merge is otherwise newer-wins, a
+re-arrival that declares a different indexing profile MUST NOT change the stored
+profile. A profile-less referential-integrity stub is the sole exception — its
+first real arrival's declared profile stands as the entity's true birth.
+
+#### Scenario: a re-arrival cannot change the create-time profile
+
+- **GIVEN** an entity created with indexing profile `content`
+- **WHEN** a later Graphable arrival for that entity declares profile `trace`
+- **THEN** the stored indexing profile is still `content`
+- **AND** the entity has exactly one indexing-profile triple
+
+#### Scenario: a profile-less stub's first real arrival sets the profile
+
+- **GIVEN** a profile-less referential-integrity stub for an entity
+- **WHEN** the first real Graphable arrival declares indexing profile `content`
+- **THEN** the stored indexing profile is `content`
+
 ### Requirement: A multi-valued predicate is full-set replaced
 
 On merge, a multi-valued relationship predicate MUST be full-set replaced.
@@ -46,3 +68,4 @@ append individual relationship objects.
 - **WHEN** a Graphable arrival carries `flock.neighbor` = `{c, d}`
 - **THEN** the stored `flock.neighbor` set is exactly `{c, d}`
 - **AND** the prior-only member `b` is no longer present
+
