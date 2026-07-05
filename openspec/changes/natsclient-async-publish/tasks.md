@@ -76,12 +76,14 @@
       `go test -race -tags=integration ./natsclient/...`, `task lint` (revive clean),
       `task schema:generate` + `git diff schemas/ specs/` no-drift, `go vet` with
       `-tags=integration`.
-- [ ] 6.3 semstreams-reviewer pre-merge (RPC error-contract N/A here — these are
-      publishes, not classified requests — but confirm: trace/msgID/circuit
-      invariants preserved; async-err-handler nil-safety; no goroutine-per-publish;
-      ordering claim honest). Address findings.
-- [ ] 6.4 Archive → promote `nats-streaming` into `openspec/specs/`.
-- [ ] 6.5 e2e:core green before tag (breaking-change rule N/A — additive — but core
-      lane exercises the publish path; confirm no regression). PR; tag.
+- [x] 6.3 semstreams-reviewer pre-merge — two rounds. R1: HIGH (batch
+      double-count) + 3 MEDIUM. R2 (APPROVE-WITH-NITS): fixed the drain
+      select-race re-check, reverted un-tidy go.sum churn, doc-precision on the
+      breaker mechanism. All findings addressed; invariants/ordering/no-goroutine
+      claims verified against jetstream-go source.
+- [x] 6.4 Archive → promote `nats-streaming` into `openspec/specs/`.
+- [ ] 6.5 e2e:core GREEN (passed=2 failed=0: core-health + core-dataflow, 8
+      healthy components, websocket dataflow verified — additive change, no
+      regression). PR; tag.
 - [ ] 6.6 Confirm back to semboids on gh#470 (async publish available; they own the
       in-flight window + ack handling for the load-dial harness).
