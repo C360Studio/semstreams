@@ -1035,9 +1035,22 @@ func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs 
 			ackFailures++
 			errsList = append(errsList, ackErr)
 		case <-ctx.Done():
-			return fmt.Errorf("PublishBatchToStream: context cancelled while draining "+
-				"(%d of %d acked, %d still pending): %w",
-				i, len(futures), len(futures)-i, ctx.Err())
+			// ctx.Done() and this future's completion can be ready in the same
+			// instant; select then picks at random. Re-check the future
+			// non-blocking so a publish that actually resolved is counted, not
+			// spuriously reported cancelled — this preserves the "a batch that
+			// finished draining before the cancel returns success" guarantee
+			// (feedback_select_race_on_pre_cancelled_ctx).
+			select {
+			case <-future.Ok():
+			case ackErr := <-future.Err():
+				ackFailures++
+				errsList = append(errsList, ackErr)
+			default:
+				return fmt.Errorf("PublishBatchToStream: context cancelled while draining "+
+					"(%d of %d resolved, %d still pending): %w",
+					i, len(futures), len(futures)-i, ctx.Err())
+			}
 		}
 	}
 	if len(errsList) == 0 {

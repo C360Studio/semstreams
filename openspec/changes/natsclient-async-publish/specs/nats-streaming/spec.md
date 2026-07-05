@@ -102,14 +102,15 @@ circuit rejects the publish).
 
 On the async path the breaker is a **connection-liveness** gate: a successful
 enqueue resets it (the connection is up), and a failed async ack records a breaker
-failure via the connection-level async error handler. A **connection outage** —
-where jetstream-go fires the handler for every pending publish and subsequent
-enqueues also fail — MUST open the breaker. **Message-level ack failures on a
-healthy connection** (e.g. a stream-full nack) MUST be surfaced to the caller via
-the future's `Err()` channel / the batch aggregate error, and MUST NOT by
-themselves open the breaker (the interleaved successful enqueues keep it closed).
-This is the deliberate divergence from the synchronous path's consecutive-failure
-semantics.
+failure via the connection-level async error handler. On a **connection outage**
+jetstream-go fires that handler for every pending publish; once the recorded
+failures cross the breaker threshold the breaker MUST open. (The `ErrNotConnected`
+status gate additionally rejects enqueues fast during an outage — via status, not
+the failure count.) **Message-level ack failures on a healthy connection** (e.g. a
+stream-full nack) MUST be surfaced to the caller via the future's `Err()` channel /
+the batch aggregate error, and MUST NOT by themselves open the breaker (the
+interleaved successful enqueues keep it closed). This is the deliberate divergence
+from the synchronous path's consecutive-failure semantics.
 
 #### Scenario: a connection outage opens the breaker
 

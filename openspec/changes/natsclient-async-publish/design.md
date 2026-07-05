@@ -62,8 +62,8 @@ whole connection's pending set hits zero, so a concurrent async producer on the 
 its ctx expired. Per-future waiting scopes the drain to this batch alone. Each future
 is already in-flight, so waiting in order costs the slowest ack, not the sum.
 
-On ctx cancellation the loop returns `ctx.Err()` wrapped (with an "M of N acked, K
-pending" count), without waiting for the remaining acks — the outstanding publishes
+On ctx cancellation the loop returns `ctx.Err()` wrapped (with an "M of N resolved,
+K pending" count), without waiting for the remaining acks — the outstanding publishes
 stay in jetstream-go's pending set and resolve (or feed the err handler on a
 connection fault) in the background. This avoids a batch hanging on a wedged ack path.
 
@@ -71,12 +71,16 @@ Two edge cases (memory: select-race-on-pre-cancelled-ctx):
 
 - **Already-cancelled ctx:** checked up front, before any enqueue, so nothing is
   published.
-- **Cancel during drain:** the per-future `select` includes `ctx.Done()`. If both a
-  future's `Ok()` and `ctx.Done()` are ready, `select` picks at random — harmless
-  here: picking `Ok()` just processes that (genuinely-acked) message and the next
-  iteration observes the still-cancelled ctx. A batch that *fully* drained before the
-  cancel returns `nil` (all futures resolved via `Ok()`/`Err()`, loop completes) —
-  correct, because the work actually finished.
+- **Cancel during drain:** the per-future `select` includes `ctx.Done()`. If a
+  future's `Ok()`/`Err()` and `ctx.Done()` become ready in the same instant, `select`
+  picks at random — so on the `ctx.Done()` branch we **re-check the future
+  non-blocking** (`select { Ok / Err / default }`) before returning cancelled. A
+  publish that actually resolved is counted, not spuriously reported as cancelled; a
+  batch that *fully* drained before the cancel therefore returns `nil` (every
+  `ctx.Done()` branch finds its future resolved, the loop completes with no errors).
+  Only a genuinely-still-pending future (the `default` case) returns the ctx error.
+  Without this re-check the simultaneity window would mis-report a completed batch as
+  cancelled ~50% of the time.
 
 ## 4. The async breaker is a CONNECTION-LIVENESS gate — the documented divergence
 
@@ -97,9 +101,13 @@ message-level ack success.** Concretely:
   failures, etc., not solely for publish-ack outcomes).
 - **A failed async ack records a failure via the handler** — primarily to catch a
   *connection outage* fast: on disconnect jetstream-go's `resetPendingAcksOnReconnect`
-  fires the handler for every pending publish (a burst of `recordFailure`), and
-  subsequent enqueues also start failing (`js.PublishMsgAsync` errors /
-  `ErrNotConnected`). Both push the count to threshold and open the breaker.
+  fires the handler for every pending publish (a burst of `recordFailure`). If that
+  burst (plus any `js.PublishMsgAsync` enqueue errors) crosses the threshold, the
+  breaker opens. Note: the `ErrNotConnected` status gate does NOT itself
+  `recordFailure` — it rejects enqueues fast via *status*, not the failure count
+  (same as the sync path) — so it protects liveness without feeding the count. A
+  very-low-in-flight outage (few pending acks at disconnect) may not cross the
+  threshold on the burst alone; the status gate still rejects until reconnect.
 - **Message-level nacks on a healthy connection do NOT open the breaker.** If the
   connection stays up but acks fail for a *stream-level* reason (stream deleted,
   subject unbound, `MaxMsgs`/`MaxBytes` hit), the interleaved successful enqueues
