@@ -15,6 +15,12 @@
       "description": "Delivery reliability mode",
       "category": "advanced"
     },
+    "passthrough": {
+      "type": "boolean",
+      "description": "Broadcast pre-validated JSON unchanged (producer owns envelope; no timestamp/subject injection)",
+      "default": false,
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",

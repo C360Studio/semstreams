@@ -325,6 +325,90 @@ func TestWebSocketFederation_MessageEnvelopeProtocol(t *testing.T) {
 	assert.Equal(t, 0, pendingCount, "Pending messages should be cleared after ack")
 }
 
+// TestWebSocketFederation_PassthroughPreservesBytes drives the full production
+// wire (NATS publish → ws output → connected client) and asserts pass-through's
+// contract on the bytes that actually reach the client: with passthrough on, the
+// envelope Payload is the producer's ORIGINAL bytes (key order preserved, no
+// timestamp/subject injected); with passthrough off, the default path injects
+// subject + timestamp. gh#471.
+func TestWebSocketFederation_PassthroughPreservesBytes(t *testing.T) {
+	// Key order chosen so a map round-trip (Go sorts map keys) would reorder it,
+	// and lacking subject/timestamp so the default path visibly injects them.
+	original := []byte(`{"z":1,"a":2,"entity":"boid-7"}`)
+
+	cases := []struct {
+		name        string
+		passthrough bool
+	}{
+		{"passthrough preserves original bytes", true},
+		{"default injects subject and timestamp", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			natsClient := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+			ctx := context.Background()
+
+			outputPort := getAvailablePort(t)
+			wsOutput := NewOutputFromConfig(ConstructorConfig{
+				Name:        "test-passthrough-wire",
+				Port:        outputPort,
+				Path:        "/stream",
+				Subjects:    []string{"boid.snapshot"},
+				NATSClient:  natsClient.Client,
+				Security:    security.Config{},
+				Passthrough: tc.passthrough,
+			})
+			require.NoError(t, wsOutput.Initialize())
+			require.NoError(t, wsOutput.Start(ctx))
+			defer wsOutput.Stop(5 * time.Second)
+
+			time.Sleep(200 * time.Millisecond)
+
+			wsURL := fmt.Sprintf("ws://localhost:%d/stream", outputPort)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			require.NoError(t, err)
+			defer conn.Close()
+
+			envelopes := make(chan MessageEnvelope, 4)
+			go func() {
+				for {
+					var envelope MessageEnvelope
+					if rerr := conn.ReadJSON(&envelope); rerr != nil {
+						return
+					}
+					envelopes <- envelope
+				}
+			}()
+
+			require.NoError(t, natsClient.Client.Publish(ctx, "boid.snapshot", original))
+
+			select {
+			case envelope := <-envelopes:
+				if tc.passthrough {
+					assert.JSONEq(t, string(original), string(envelope.Payload),
+						"pass-through payload must equal the producer bytes")
+					assert.Equal(t, string(original), string(envelope.Payload),
+						"pass-through payload must be BYTE-identical (key order preserved, no re-encode)")
+					assert.NotContains(t, string(envelope.Payload), "timestamp",
+						"pass-through must not inject timestamp")
+					assert.NotContains(t, string(envelope.Payload), "subject",
+						"pass-through must not inject subject")
+				} else {
+					var decoded map[string]any
+					require.NoError(t, json.Unmarshal(envelope.Payload, &decoded))
+					assert.Equal(t, "boid.snapshot", decoded["subject"],
+						"default path must inject the subject")
+					assert.NotEmpty(t, decoded["timestamp"],
+						"default path must inject a timestamp")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Timeout waiting for message envelope")
+			}
+		})
+	}
+}
+
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================

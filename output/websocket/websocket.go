@@ -44,6 +44,10 @@ type Config struct {
 	DeliveryMode DeliveryMode `json:"delivery_mode,omitempty" schema:"type:string,description:Delivery reliability mode,category:advanced"`
 	// AckTimeout specifies how long to wait for ack before considering message lost
 	AckTimeout string `json:"ack_timeout,omitempty"   schema:"type:string,description:Acknowledgment timeout (e.g. 5s),category:advanced"`
+	// Passthrough broadcasts pre-validated JSON as-is (no decode/re-encode, no
+	// timestamp/subject injection). Opting in asserts the producer emits an
+	// envelope-complete payload; non-JSON still falls back to the raw_data wrapper.
+	Passthrough bool `json:"passthrough,omitempty"   schema:"type:bool,description:Broadcast pre-validated JSON unchanged (producer owns envelope; no timestamp/subject injection),category:advanced,default:false"`
 }
 
 // ConstructorConfig holds all configuration needed to construct an Output instance
@@ -59,6 +63,7 @@ type ConstructorConfig struct {
 	Security        security.Config            // Security configuration
 	DeliveryMode    DeliveryMode               // Reliability semantics
 	AckTimeout      time.Duration              // Acknowledgment timeout for at-least-once
+	Passthrough     bool                       // Broadcast pre-validated JSON unchanged (no inject)
 }
 
 // DefaultConstructorConfig returns sensible defaults for Output construction
@@ -125,6 +130,7 @@ type Output struct {
 	security     security.Config
 	deliveryMode DeliveryMode
 	ackTimeout   time.Duration
+	passthrough  bool // broadcast pre-validated JSON unchanged (no decode/re-encode/inject)
 
 	// WebSocket server
 	server    *http.Server
@@ -360,6 +366,7 @@ func NewOutputFromConfig(cfg ConstructorConfig) *Output {
 		security:     cfg.Security,
 		deliveryMode: cfg.DeliveryMode,
 		ackTimeout:   cfg.AckTimeout,
+		passthrough:  cfg.Passthrough,
 		upgrader:     upgrader,
 		clients:      make(map[*websocket.Conn]*clientInfo),
 		startTime:    time.Now(),
@@ -1010,44 +1017,7 @@ func (w *Output) handleNATSMessageData(ctx context.Context, data []byte, subject
 	// Update activity timestamp atomically
 	w.lastActivity.Store(time.Now().UnixNano())
 
-	// Parse the message data as JSON to validate it
-	var msgData map[string]any
-	if err := json.Unmarshal(data, &msgData); err != nil {
-		// If it's not JSON, wrap it in a simple structure
-		msgData = map[string]any{
-			"type":      "raw_data",
-			"subject":   subject,
-			"data":      string(data),
-			"timestamp": time.Now().Format(time.RFC3339),
-		}
-	} else {
-		// Add metadata if not present
-		if _, exists := msgData["timestamp"]; !exists {
-			msgData["timestamp"] = time.Now().Format(time.RFC3339)
-		}
-		if _, exists := msgData["subject"]; !exists {
-			msgData["subject"] = subject
-		}
-	}
-
-	// Marshal back to JSON for WebSocket transmission
-	jsonData, err := json.Marshal(msgData)
-	if err != nil {
-		w.errors.Add(1)
-		// Update metrics
-		if w.metrics != nil {
-			w.metrics.errorsTotal.WithLabelValues("json_marshal").Inc()
-		}
-		return
-	}
-
-	// Update metrics for received message
-	if w.metrics != nil {
-		w.metrics.messagesReceived.WithLabelValues(subject).Inc()
-	}
-
-	// Broadcast to all connected clients (with message context timeout)
-	w.broadcastToClients(ctx, subject, jsonData)
+	w.broadcastPayload(ctx, subject, data)
 }
 
 // handleNATSMessage processes incoming messages from NATS and broadcasts to WebSocket clients
@@ -1071,31 +1041,26 @@ func (w *Output) handleNATSMessage(ctx context.Context, msg *natspkg.Msg) {
 	// Update activity timestamp atomically
 	w.lastActivity.Store(time.Now().UnixNano())
 
-	// Parse the message data as JSON to validate it
-	var msgData map[string]any
-	if err := json.Unmarshal(msg.Data, &msgData); err != nil {
-		// If it's not JSON, wrap it in a simple structure
-		msgData = map[string]any{
-			"type":      "raw_data",
-			"subject":   msg.Subject,
-			"data":      string(msg.Data),
-			"timestamp": time.Now().Format(time.RFC3339),
-		}
-	} else {
-		// Add metadata if not present
-		if _, exists := msgData["timestamp"]; !exists {
-			msgData["timestamp"] = time.Now().Format(time.RFC3339)
-		}
-		if _, exists := msgData["subject"]; !exists {
-			msgData["subject"] = msg.Subject
-		}
-	}
+	w.broadcastPayload(ctx, msg.Subject, msg.Data)
+}
 
-	// Marshal back to JSON for WebSocket transmission
-	data, err := json.Marshal(msgData)
-	if err != nil {
+// broadcastPayload transforms an inbound NATS payload and broadcasts it to
+// connected WebSocket clients. It is the single transform point shared by both
+// inbound handler entrypoints so their behavior cannot drift.
+//
+// In pass-through mode (opt-in, default off), a payload that is valid JSON is
+// broadcast as its ORIGINAL bytes — no decode/re-encode, so key order and numeric
+// precision are preserved, and no timestamp/subject is injected (the producer owns
+// its envelope). In the default mode the payload is decoded, timestamp/subject are
+// injected when absent, and it is re-encoded. A payload that is not valid JSON is
+// wrapped in a raw_data envelope in either mode, so pass-through is safe on a
+// subject carrying mixed content.
+func (w *Output) broadcastPayload(ctx context.Context, subject string, data []byte) {
+	out := w.transformPayload(subject, data)
+	if out == nil {
+		// Only reachable when re-encoding the decoded map fails (never on the
+		// pass-through or raw_data branches).
 		w.errors.Add(1)
-		// Update metrics
 		if w.metrics != nil {
 			w.metrics.errorsTotal.WithLabelValues("json_marshal").Inc()
 		}
@@ -1104,11 +1069,50 @@ func (w *Output) handleNATSMessage(ctx context.Context, msg *natspkg.Msg) {
 
 	// Update metrics for received message
 	if w.metrics != nil {
-		w.metrics.messagesReceived.WithLabelValues(msg.Subject).Inc()
+		w.metrics.messagesReceived.WithLabelValues(subject).Inc()
 	}
 
-	// Broadcast to all connected clients
-	w.broadcastToClients(ctx, msg.Subject, data)
+	// Broadcast to all connected clients (with message context timeout)
+	w.broadcastToClients(ctx, subject, out)
+}
+
+// transformPayload returns the bytes to broadcast for an inbound payload, or nil
+// if a decoded payload could not be re-encoded. In pass-through mode a payload
+// that is valid JSON is returned as its ORIGINAL bytes — no decode/re-encode, so
+// key order and numeric precision are preserved and no timestamp/subject is
+// injected (the producer owns its envelope). Otherwise the payload is decoded,
+// timestamp/subject are injected when absent, and it is re-encoded; a payload that
+// is not valid JSON is wrapped in a raw_data envelope (in either mode).
+func (w *Output) transformPayload(subject string, data []byte) []byte {
+	// Pass-through fast path: pre-validated JSON goes out untouched.
+	if w.passthrough && json.Valid(data) {
+		return data
+	}
+
+	// Default path: decode, inject metadata when absent, re-encode. Non-JSON
+	// (including non-JSON on the pass-through branch) falls back to raw_data.
+	var msgData map[string]any
+	if err := json.Unmarshal(data, &msgData); err != nil {
+		msgData = map[string]any{
+			"type":      "raw_data",
+			"subject":   subject,
+			"data":      string(data),
+			"timestamp": time.Now().Format(time.RFC3339),
+		}
+	} else {
+		if _, exists := msgData["timestamp"]; !exists {
+			msgData["timestamp"] = time.Now().Format(time.RFC3339)
+		}
+		if _, exists := msgData["subject"]; !exists {
+			msgData["subject"] = subject
+		}
+	}
+
+	jsonData, err := json.Marshal(msgData)
+	if err != nil {
+		return nil
+	}
+	return jsonData
 }
 
 // runServer runs the HTTP server
@@ -1724,6 +1728,7 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		Security:        deps.Security,
 		DeliveryMode:    deliveryMode,
 		AckTimeout:      ackTimeout,
+		Passthrough:     cfg.Passthrough,
 	}
 
 	return NewOutputFromConfig(ctorCfg), nil
