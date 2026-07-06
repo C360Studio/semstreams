@@ -991,6 +991,44 @@ func TestGetConsumerConfigFromDefinition(t *testing.T) {
 	}
 }
 
+// TestGetConsumerConfigFromDefinitionWithDefault pins the idempotent catch-up
+// contract: a component (graph-ingest, objectstore) can default its consumer to
+// "all" so it recovers messages published before its consumer bound, while an
+// explicit port deliver_policy still wins. Regression guard for the first-
+// message loss where a JSON config omitting deliver_policy silently fell to the
+// framework "new" default and dropped the first document/entity.
+func TestGetConsumerConfigFromDefinitionWithDefault(t *testing.T) {
+	// Port omits deliver_policy → the caller's "all" default applies (the fix).
+	{
+		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
+			Name: "write", Type: "jetstream", Subject: "document.processed.entity",
+			Config: JetStreamPort{}, // no deliver_policy
+		}, "all")
+		if cfg.DeliverPolicy != "all" {
+			t.Errorf("DeliverPolicy = %q, want %q (idempotent default must apply when port omits it)", cfg.DeliverPolicy, "all")
+		}
+	}
+	// Explicit port deliver_policy overrides the caller's default.
+	{
+		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
+			Name: "write", Type: "jetstream", Subject: "document.processed.entity",
+			Config: JetStreamPort{DeliverPolicy: "new"},
+		}, "all")
+		if cfg.DeliverPolicy != "new" {
+			t.Errorf("DeliverPolicy = %q, want %q (explicit port policy must win)", cfg.DeliverPolicy, "new")
+		}
+	}
+	// The plain wrapper still yields the framework "new" default (unchanged).
+	{
+		cfg := GetConsumerConfigFromDefinition(PortDefinition{
+			Name: "in", Type: "jetstream", Subject: "x.>", Config: JetStreamPort{},
+		})
+		if cfg.DeliverPolicy != "new" {
+			t.Errorf("DeliverPolicy = %q, want %q (default wrapper unchanged)", cfg.DeliverPolicy, "new")
+		}
+	}
+}
+
 func TestConsumerConfigDefaults(t *testing.T) {
 	// Test that default values are safe for production use
 	emptyPort := Port{Name: "test", Direction: DirectionInput}
