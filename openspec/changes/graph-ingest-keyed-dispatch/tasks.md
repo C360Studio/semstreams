@@ -5,22 +5,23 @@
 
 ## 1. Keyed-ordered dispatch primitive (`pkg/dispatch`)
 
-- [ ] 1.1 Add `KeyedPool[W]` (sibling to `BoundedDispatcher`): `KeyedConfig[W]{Lanes int,
-      QueueDepth int, KeyOf func(W) string, Process func(ctx, W) error, Name string}` +
-      `Deps{MetricsRegistry, Logger}`. `New` validates (`Lanes<1`, missing `KeyOf`/
-      `Process` → error).
-- [ ] 1.2 Lane routing: `lane = fnv1a(KeyOf(w)) % Lanes`; N bounded lane channels; one
+- [x] 1.1 Add `KeyedPool[W]` (sibling to `BoundedDispatcher`): `KeyedConfig[W]{Lanes int,
+      QueueDepth int, KeyOf func(W) string, Process func(ctx, lane int, W) error,
+      OnPanic func(W, any), Name string}` + `KeyedDeps{MetricsRegistry, Logger}`.
+      `NewKeyedPool` validates (`Lanes<1`, `QueueDepth<1`, missing `KeyOf`/`Process` →
+      `ErrInvalidConfig`).
+- [x] 1.2 Lane routing: `lane = fnv1a(KeyOf(w)) % Lanes`; N bounded lane channels; one
       goroutine per lane draining in order and calling `Process`. **Pass the assigned lane
       index into `Process`** (in its signature) so a composer can shard per-lane state by
       the pool's OWN routing — lock-free, since at most one goroutine runs a lane (review
       shard-safety; graph-ingest's guard tier-1 depends on it). `SubmitBlocking(ctx, w)`
       (blocks on full lane) + non-blocking `Submit` (returns `ErrLaneFull`).
-- [ ] 1.3 `Stop(ctx)`: stop accepting, drain lanes, return when idle or ctx done.
-- [ ] 1.4 **Panic recovery (review H2):** `Process` runs in a lane goroutine; the pool
+- [x] 1.3 `Stop(ctx)`: stop accepting, drain lanes, return when idle or ctx done.
+- [x] 1.4 **Panic recovery (review H2):** `Process` runs in a lane goroutine; the pool
       MUST `recover()` a panic in `Process`, invoke a caller disposition hook (so the
       composer can Nak the message), and keep the lane goroutine alive for later items.
       A panicking item MUST NOT crash the process or wedge its lane.
-- [ ] 1.5 Determinism/ordering unit tests: same key → strict submit order on one lane
+- [x] 1.5 Determinism/ordering unit tests: same key → strict submit order on one lane
       (assert via a recording Process); distinct keys → observed concurrency (barrier).
       Backpressure test (full lane blocks SubmitBlocking). Graceful drain on Stop.
       Panic-recovery test (panicking item → disposition invoked, lane survives, later
@@ -28,13 +29,14 @@
 
 ## 2. Primitive metrics
 
-- [ ] 2.1 On `KeyedPool`, register (label `pool=Name`): `dispatch_queue_wait_seconds`
+- [x] 2.1 On `KeyedPool`, register (label `pool=Name`): `dispatch_queue_wait_seconds`
       (hist, stamp submit time on the work item, observe at process start),
       `dispatch_processing_duration_seconds` (hist), `dispatch_queue_depth` (gauge),
       `dispatch_inflight` (gauge), `dispatch_submitted_total`/`_completed_total`/
-      `_dropped_total` (counters). Follow `pkg/worker/pool.go` metric style +
-      `MetricsRegistry.RegisterHistogramVec`; nil-registry → default registerer.
-- [ ] 2.2 Unit-assert the metrics move (submit N, drain, assert submitted==completed,
+      `_dropped_total` (counters). Follow `pkg/worker/pool.go` metric style; per-pool
+      `pool=Name` const-label via `RegisterHistogram`/`RegisterGauge`/`RegisterCounter`;
+      nil-registry → metrics created but unregistered (observing is a harmless no-op).
+- [x] 2.2 Unit-assert the metrics move (submit N, drain, assert submitted==completed,
       inflight returns to 0, queue_wait/processing observed).
 
 ## 3. graph-ingest integration
