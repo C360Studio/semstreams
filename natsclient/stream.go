@@ -43,7 +43,8 @@ type StreamConsumerConfig struct {
 
 	// MaxAckPending limits the number of outstanding (unacknowledged) messages
 	// that can be delivered to a consumer. This provides backpressure to prevent
-	// overwhelming the consumer. 0 means unlimited (default NATS behavior).
+	// overwhelming the consumer. 0 leaves it unset, so the NATS server applies its
+	// default of 1000 for explicit-ack consumers; -1 means unlimited (gh#480).
 	MaxAckPending int
 
 	// AutoCreate enables automatic stream creation if it doesn't exist.
@@ -316,8 +317,10 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 		consumerCfg.AckWait = 30 * time.Second // Default
 	}
 
-	// Set max ack pending for backpressure
-	if cfg.MaxAckPending > 0 {
+	// Set max ack pending for backpressure. Use != 0 (not > 0) so a -1 reaches
+	// NATS as "unlimited" (gh#480) rather than being dropped to the server default;
+	// 0 stays unset (server default 1000).
+	if cfg.MaxAckPending != 0 {
 		consumerCfg.MaxAckPending = cfg.MaxAckPending
 	}
 

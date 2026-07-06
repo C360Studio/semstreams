@@ -58,6 +58,12 @@ var (
 
 	ownerLeaseMismatchOnce sync.Once
 	ownerLeaseMismatchVec  *prometheus.CounterVec
+
+	processingDurationOnce      sync.Once
+	processingDurationHistogram prometheus.Histogram
+
+	ingestLagOnce      sync.Once
+	ingestLagHistogram prometheus.Histogram
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -235,6 +241,53 @@ func getOwnerLeaseMismatchMetric(registry *metric.MetricsRegistry) *prometheus.C
 		}
 	})
 	return ownerLeaseMismatchVec
+}
+
+// getProcessingDurationMetric returns the process-wide histogram of per-message
+// apply time — the merge + CAS write inside handleMessage (gh#480). Paired with
+// getIngestLagMetric it separates processing time from queue wait, which the
+// component previously could not distinguish (callers inferred end-to-end latency
+// downstream). Buckets span sub-ms (a warm CAS is ~1.5ms) to seconds (a stalled KV).
+func getProcessingDurationMetric(registry *metric.MetricsRegistry) prometheus.Histogram {
+	processingDurationOnce.Do(func() {
+		processingDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "processing_duration_seconds",
+			Help:      "Per-message apply time in graph-ingest (merge + CAS write). The processing half of the queue-wait-vs-processing split (gh#480).",
+			Buckets:   []float64{0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+		})
+		if registry != nil {
+			_ = registry.RegisterHistogram("graph-ingest", "processing_duration_seconds", processingDurationHistogram)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(processingDurationHistogram)
+		}
+	})
+	return processingDurationHistogram
+}
+
+// getIngestLagMetric returns the process-wide histogram of message age at the
+// moment graph-ingest begins processing it (now − the JetStream message
+// timestamp) — i.e. how long a message waited in the stream/delivery buffer
+// before ingest reached it (gh#480 queue wait). A rising lag with flat
+// processing_duration is the backlog signature (consumer_pending_messages
+// climbing) the issue describes.
+func getIngestLagMetric(registry *metric.MetricsRegistry) prometheus.Histogram {
+	ingestLagOnce.Do(func() {
+		ingestLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "ingest_lag_seconds",
+			Help:      "Age of a message when graph-ingest starts processing it (queue/backlog wait). The queue-wait half of the split (gh#480).",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60},
+		})
+		if registry != nil {
+			_ = registry.RegisterHistogram("graph-ingest", "ingest_lag_seconds", ingestLagHistogram)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(ingestLagHistogram)
+		}
+	})
+	return ingestLagHistogram
 }
 
 // Config holds configuration for graph-ingest component
@@ -424,6 +477,8 @@ type Component struct {
 	foreignEdgeUnclaimed   *prometheus.CounterVec
 	foreignEdgeDropped     *prometheus.CounterVec
 	ownerLeaseMismatch     *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
+	processingDuration     prometheus.Histogram   // gh#480 per-message apply time (processing half)
+	ingestLag              prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Lifecycle reporting
@@ -474,6 +529,8 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
 		foreignEdgeDropped:     getForeignEdgeDroppedMetric(deps.MetricsRegistry),
 		ownerLeaseMismatch:     getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
+		processingDuration:     getProcessingDurationMetric(deps.MetricsRegistry),
+		ingestLag:              getIngestLagMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -976,12 +1033,24 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
+		MaxAckPending: consumerCfg.MaxAckPending, // gh#480 backpressure knob (0 = server default)
 		AutoCreate:    false,
 	}
 
 	subject := port.Subject // capture for closure
 	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+		// gh#480: record queue wait (message age when we reach it) and processing
+		// time (the apply) separately. Metadata() can error on a non-JetStream msg;
+		// skip the lag observation rather than nil-deref (all inputs here are JS).
+		// meta.Timestamp is the NATS server store time vs our local clock; on a
+		// co-located single-host deploy this is the queue wait, but host clock skew
+		// could make it marginally negative (harmless — skews _sum only, no bucket).
+		if meta, metaErr := msg.Metadata(); metaErr == nil && !meta.Timestamp.IsZero() {
+			c.ingestLag.Observe(time.Since(meta.Timestamp).Seconds())
+		}
+		start := time.Now()
 		c.handleMessage(msgCtx, subject, msg.Data())
+		c.processingDuration.Observe(time.Since(start).Seconds())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack JetStream message", slog.Any("error", ackErr))
 		}
