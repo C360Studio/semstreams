@@ -699,9 +699,13 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 		"consumer", consumerName,
 		"filter_subject", subject)
 
-	// Get consumer config from port definition (allows user configuration)
-	// objectstore defaults to "all" since it's idempotent (KV overwrites)
-	consumerCfg := component.GetConsumerConfigFromDefinition(*portDef)
+	// Get consumer config from port definition (allows user configuration).
+	// objectstore is idempotent (content-addressed storage overwrites), so it
+	// defaults to "all": it MUST catch up on messages published before its
+	// consumer bound. A JSON config that omits deliver_policy would otherwise
+	// fall to the framework "new" default and silently drop the first document
+	// (the startup first-message race). An explicit deliver_policy still wins.
+	consumerCfg := component.GetConsumerConfigFromDefinitionWithDefault(*portDef, "all")
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,

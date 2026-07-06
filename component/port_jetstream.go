@@ -111,8 +111,21 @@ func GetConsumerConfig(port Port) ConsumerConfig {
 // GetConsumerConfigFromDefinition extracts JetStream consumer configuration from a port definition.
 // This is a convenience wrapper for use with PortDefinition instead of Port.
 func GetConsumerConfigFromDefinition(portDef PortDefinition) ConsumerConfig {
+	return GetConsumerConfigFromDefinitionWithDefault(portDef, "new")
+}
+
+// GetConsumerConfigFromDefinitionWithDefault is like GetConsumerConfigFromDefinition
+// but lets the caller choose the DeliverPolicy used when the port does NOT set one.
+// The framework-wide safe default is "new" (don't replay history — correct for
+// non-idempotent consumers). An IDEMPOTENT catch-up consumer (graph-ingest,
+// objectstore) must pass "all" so it recovers messages published before its
+// consumer bound (the first-message startup race): the DefaultConfig-only
+// approach is bypassed whenever an operator supplies an explicit port JSON that
+// omits deliver_policy, silently dropping those messages. An explicit
+// deliver_policy on the port still wins over defaultDeliverPolicy.
+func GetConsumerConfigFromDefinitionWithDefault(portDef PortDefinition, defaultDeliverPolicy string) ConsumerConfig {
 	cfg := ConsumerConfig{
-		DeliverPolicy: "new", // Safe default
+		DeliverPolicy: defaultDeliverPolicy,
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
 	}

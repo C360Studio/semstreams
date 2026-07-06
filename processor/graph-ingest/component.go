@@ -1023,8 +1023,12 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		slog.String("filter_subject", port.Subject))
 
 	// Get consumer config from port definition (allows user configuration)
-	// graph-ingest defaults to "all" since it's idempotent (KV overwrites)
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	// graph-ingest is idempotent (ENTITY_STATES merge/CAS overwrites), so it
+	// defaults to "all": it MUST catch up on entities published before its
+	// consumer bound. A JSON config omitting deliver_policy would otherwise fall
+	// to the framework "new" default and silently drop the first entities (the
+	// startup first-message race). An explicit deliver_policy still wins.
+	consumerCfg := component.GetConsumerConfigFromDefinitionWithDefault(port, "all")
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
