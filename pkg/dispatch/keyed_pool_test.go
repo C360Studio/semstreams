@@ -118,8 +118,13 @@ func TestKeyedPool_SameKeySameLane(t *testing.T) {
 	}, KeyedDeps{})
 	require.NoError(t, err)
 
+	// SubmitBlocking (not Submit): all 20 items key to one lane, so under load a
+	// non-blocking submit could overflow the lane's bounded queue and return
+	// ErrLaneFull before the single lane goroutine drains — a timing flake. The
+	// backpressure form waits for capacity; the test's concern is lane affinity,
+	// not queue sizing.
 	for i := 0; i < 20; i++ {
-		require.NoError(t, p.Submit(fmt.Sprintf("item-%d", i)))
+		require.NoError(t, p.SubmitBlocking(context.Background(), fmt.Sprintf("item-%d", i)))
 	}
 	require.NoError(t, p.Stop(stopCtx(t)))
 	assert.Len(t, lanes, 1, "all same-key items must run on exactly one lane")
