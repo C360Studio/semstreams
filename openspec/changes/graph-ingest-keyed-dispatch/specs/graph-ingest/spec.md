@@ -61,6 +61,27 @@ across lanes.
 - **THEN** the consumer stops fetching further messages until capacity frees
 - **AND** in-memory queued work does not grow without bound
 
+### Requirement: A redelivered stale message MUST NOT overwrite a newer write
+
+graph-ingest MUST NOT apply a message whose source ordering position (its JetStream
+stream sequence) is not newer than the position already applied to that entity, so that
+a delayed redelivery cannot overwrite a newer write through the arrival-order
+(full-set-replace) merge. This matters because acknowledgement moves to after per-lane
+queueing, making redelivery reachable (e.g. ack-wait expiry while queued under overload)
+and re-processing after a newer same-entity message has already been applied. The guard
+MUST make correctness independent of `max_ack_pending`/ack-wait sizing (which remain a
+tuning knob to keep redeliveries rare, not a correctness dependency). A message that
+cannot be enqueued for processing MUST be negatively acknowledged for redelivery, never
+silently dropped.
+
+#### Scenario: a late redelivery of an older update is ignored
+
+- **GIVEN** an entity to which message at stream sequence N has already been applied
+- **WHEN** a message for the same entity at stream sequence < N is (re)delivered and
+      processed
+- **THEN** it is dropped without overwriting the entity
+- **AND** the entity still reflects the sequence-N (or newer) write
+
 ### Requirement: Ingest MUST expose metrics that separate queue wait from processing time
 
 graph-ingest MUST expose Prometheus metrics sufficient to measure the ingest pipeline
@@ -68,9 +89,11 @@ in place: a per-message processing-duration histogram (time spent in the merge +
 write), a queue-wait histogram (time a message waits between dispatch and processing),
 a queue-depth gauge, an achieved-concurrency (in-flight) gauge, and a CAS-retry
 counter. These MUST make it possible to distinguish queue wait from processing time
-(the prior gap: end-to-end latency could only be inferred downstream) and to confirm
-that same-entity keying eliminated CAS contention (the retry counter stays at or near
-zero under correct keying).
+(the prior gap: end-to-end latency could only be inferred downstream). The CAS-retry
+counter is a cross-entity **contention-observability** signal — an entity's own key is
+never written concurrently under keying, but legitimate cross-entity referential writes
+(relationship-target stubs, foreign edges, shared hierarchy containers) still touch
+shared keys and may retry — so it MUST NOT be interpreted as a keying-correctness proof.
 
 #### Scenario: an operator can read processing vs queue time
 
@@ -78,4 +101,4 @@ zero under correct keying).
 - **WHEN** the operator scrapes metrics
 - **THEN** the processing-duration histogram reports merge+CAS time
 - **AND** the queue-wait histogram reports time spent waiting for a lane
-- **AND** the CAS-retry counter is at or near zero
+- **AND** the CAS-retry counter reflects cross-entity contention (not necessarily zero)

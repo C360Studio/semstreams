@@ -54,3 +54,22 @@ own probes.
 - **WHEN** metrics are scraped
 - **THEN** the queue-wait histogram and the processing-duration histogram are reported
       separately
+
+### Requirement: A keyed dispatch pool MUST recover panics in the process function
+
+The keyed dispatch primitive MUST recover a panic raised inside a work item's process
+function so that one bad item cannot crash the host process or wedge its lane. On a
+recovered panic the pool MUST keep the lane's goroutine alive to continue processing
+subsequent items (including other keys that hash to that lane) and MUST invoke the
+caller-supplied disposition (so the composing consumer can, for example, negatively
+acknowledge the underlying message for redelivery). This is load-bearing because a
+composer such as graph-ingest moves work out of the consumer's own panic-recovery
+scope; without this guarantee an unrecovered lane panic would crash a sole-writer
+component.
+
+#### Scenario: a panicking item does not kill the lane
+
+- **GIVEN** a keyed pool whose process function panics on one item
+- **WHEN** that item and later same-lane items are processed
+- **THEN** the panic is recovered and its disposition invoked
+- **AND** the later items on that lane are still processed

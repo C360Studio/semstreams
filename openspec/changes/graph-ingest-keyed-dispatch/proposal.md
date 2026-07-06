@@ -45,14 +45,26 @@ optional (semboids republishes each boid at 30Hz — same-entity ordering is rea
   the throughput fix automatically; the default change to the sole-writer path is why
   this needs the e2e:core gate (below).
 
-- **Bounded in-flight backpressure — plumb `MaxAckPending`.** Today there is **no
-  config path to `MaxAckPending`** at all: `JetStreamPort`
-  (`component/port_jetstream.go`) has no such field, so graph-ingest runs with the
-  NATS default (unlimited unacked). With concurrency this must be bounded. Add
-  `max_ack_pending` to `JetStreamPort` → `component.ConsumerConfig` →
-  `StreamConsumerConfig` (already honored at `natsclient/stream.go:320`), and pair it
-  with the bounded lane queues so total in-flight is capped and memory can't blow up
-  (the 0→87k `consumer_pending_messages` climb in the issue).
+- **Redelivery safety (a per-entity applied-sequence guard).** Moving ack into the lane
+  makes AckWait-expiry redelivery reachable under sustained overload; a stale redelivery
+  re-applying after a newer write would overwrite it via the arrival-order full-set-
+  replace merge. The merge MUST drop any message whose JetStream stream sequence is not
+  newer than the last applied to that entity — so correctness under redelivery does not
+  depend on backpressure sizing. (This was the adversarial review's BLOCKING finding.)
+
+- **Panic recovery in the primitive.** `ingestEntity` now runs in a lane goroutine
+  outside `safeHandleMessage`'s `recover()`; the keyed pool MUST recover panics in its
+  process function, Nak the message, and keep the lane alive — so a bad payload can't
+  crash the sole ENTITY_STATES writer.
+
+- **Bounded in-flight backpressure — plumb `MaxAckPending`.** Memory is capped by the
+  **bounded per-lane queues + `SubmitBlocking`**. Separately, `MaxAckPending` has **no
+  config path** today (`JetStreamPort` has no field), so graph-ingest runs at the
+  nats.go default of **1000** delivered-unacked (not unlimited). Add `max_ack_pending`
+  to `JetStreamPort` → `component.ConsumerConfig` → `StreamConsumerConfig` (already
+  honored at `natsclient/stream.go:320`) to raise/tune that ceiling so N lanes stay fed.
+  (`consumer_pending_messages` is stream backlog, drained by lane throughput, not
+  bounded by MaxAckPending.)
 
 - **Comprehensive Prometheus metrics (first-class — gh#480 observability gap).** The
   issue's core measurement gap is that queue wait can't be separated from processing
@@ -66,9 +78,13 @@ optional (semboids republishes each boid at 30Hz — same-entity ordering is rea
   - `dispatch_inflight` / `dispatch_active_lanes` (gauge) — concurrency actually
     achieved.
   - `dispatch_submitted_total` / `_completed_total` / `_dropped_total` (counters).
-  - `graph_ingest_cas_retries_total` (counter) — CAS-conflict retries; **proves** the
-    no-contention claim (should stay ~0 with correct keying; a spike means the lane
-    key is wrong).
+  - `graph_ingest_cas_retries_total` (counter) — CAS-conflict retries; a
+    **contention-observability** signal (NOT a keying-correctness proof — cross-entity
+    referential writes for stubs/foreign-edges/hierarchy legitimately touch shared keys
+    and can retry; ~0 only on workloads without those, e.g. steady-state semboids).
+  - `graph_ingest_redeliveries_dropped_total` (counter) — messages dropped by the
+    applied-sequence guard (redelivery safety); large values mean MaxAckPending/AckWait
+    are mis-sized.
   Together these let an operator read throughput (`entities_updated_total` rate),
   processing vs queue time, achieved concurrency, backpressure, and contention — and
   make the fix measurable in place, not inferred downstream.
