@@ -21,6 +21,13 @@ lifetime), and the caller MUST supply the key function and the per-item process
 function. Submission MUST offer a blocking form that applies backpressure when the
 target lane is full.
 
+The pool MUST expose the assigned lane index to the process function, so that a composer
+maintaining per-lane state (for example a redelivery guard sharded by lane) can index
+that state by the pool's OWN lane assignment rather than recomputing the hash. Because at
+most one goroutine ever runs a given lane, per-lane state indexed this way needs no
+locking; recomputing the shard index independently of the pool risks diverging from the
+pool's routing and racing two lanes on one shard.
+
 #### Scenario: same-key items are ordered
 
 - **GIVEN** a keyed pool and two items with the same key, item A submitted before B

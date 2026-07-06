@@ -32,7 +32,7 @@ optional (semboids republishes each boid at 30Hz — same-entity ordering is rea
   it in graph-ingest.
 
 - **graph-ingest composes it**, keyed by entity ID. The consume closure
-  (`component.go:983`) decodes the entity **once**, submits `{entity, msg}` keyed by
+  (`component.go:1041`) decodes the entity **once**, submits `{entity, msg}` keyed by
   `entity.ID`, and the lane runs `ingestEntity` then `msg.Ack()` — **ack moves into the
   lane** (today the closure acks synchronously after `handleMessage`). natsclient and
   its 26 other `ConsumeStreamWithConfig` callers are **untouched**. Three wins at once:
@@ -45,12 +45,16 @@ optional (semboids republishes each boid at 30Hz — same-entity ordering is rea
   the throughput fix automatically; the default change to the sole-writer path is why
   this needs the e2e:core gate (below).
 
-- **Redelivery safety (a per-entity applied-sequence guard).** Moving ack into the lane
-  makes AckWait-expiry redelivery reachable under sustained overload; a stale redelivery
-  re-applying after a newer write would overwrite it via the arrival-order full-set-
-  replace merge. The merge MUST drop any message whose JetStream stream sequence is not
-  newer than the last applied to that entity — so correctness under redelivery does not
-  depend on backpressure sizing. (This was the adversarial review's BLOCKING finding.)
+- **Redelivery safety (a two-tier `(entity, stream)` applied-sequence guard).** Moving ack
+  into the lane makes AckWait-expiry redelivery reachable under sustained overload; a stale
+  redelivery re-applying after a newer write would overwrite it via the arrival-order
+  full-set-replace merge. The merge MUST drop any message whose JetStream stream sequence
+  is not newer than the last applied to that entity **from the same input stream** (streams
+  have independent sequence spaces). The guard is an in-memory fast path backed by a
+  **durable** `(entity, stream) → seq` stamp in graph-ingest's own bucket, so it survives
+  restart and cache eviction — correctness under redelivery depends on neither backpressure
+  sizing nor the in-memory retention policy. (The BLOCKING finding B1, sharpened by the
+  round-4 B2/B3 restart+eviction findings.)
 
 - **Panic recovery in the primitive.** `ingestEntity` now runs in a lane goroutine
   outside `safeHandleMessage`'s `recover()`; the keyed pool MUST recover panics in its

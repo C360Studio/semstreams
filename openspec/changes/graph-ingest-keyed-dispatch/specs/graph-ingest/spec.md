@@ -75,10 +75,19 @@ messages for one entity MUST serialize through a single lane regardless of which
 they arrive on, so cross-stream writes to one entity apply in arrival order
 (last-writer-wins), never concurrently. The guard MUST be updated only AFTER a message's
 post-commit side effects complete, so a crash mid-apply re-drives them on redelivery
-rather than a marker suppressing them. It MUST make correctness independent of
-`max_ack_pending`/ack-wait sizing (a tuning knob to keep redeliveries rare). A message
-that cannot be enqueued MUST be negatively acknowledged for redelivery, never silently
-dropped.
+rather than a marker suppressing them.
+
+The guard MUST survive process restart and in-memory cache eviction: a purely in-process
+guard would re-admit a stale redelivery after a crash (empty on restart) or after a
+high-cardinality eviction within the redelivery window, re-opening the overwrite. The
+guard therefore MUST be backed by durable per-`(entity, input stream)` state in a
+graph-ingest-owned store, written AFTER side effects and before ack (NOT inside the
+entity's own record — that would commit before side effects and is a cross-repo schema
+change). An in-memory tier MAY front it as a cache. This makes correctness independent of
+`max_ack_pending`/ack-wait/`max_deliver` sizing (which stay tuning knobs to keep
+redeliveries rare). A message that cannot be enqueued MUST be negatively acknowledged for
+redelivery, never silently dropped; a durable-guard write failure MUST likewise not be
+acknowledged past the unpersisted stamp.
 
 #### Scenario: a late redelivery of an older update is ignored
 
@@ -94,6 +103,14 @@ dropped.
 - **WHEN** a newer message for the same entity arrives from stream B at B's sequence 5
 - **THEN** it is applied (not dropped) — sequences are compared only within a stream
 - **AND** it serialized on the same lane as the stream-A write (no concurrent apply)
+
+#### Scenario: a redelivery after restart is still ignored
+
+- **GIVEN** an entity to which stream S sequence N was applied and acknowledged, then the
+      process restarted (the in-memory guard was lost)
+- **WHEN** an older stream-S message (sequence < N) is redelivered after restart
+- **THEN** it is dropped without overwriting the entity — the durable guard tier survives
+      the restart, so correctness does not depend on the in-memory map
 
 ### Requirement: Ingest MUST expose metrics that separate queue wait from processing time
 

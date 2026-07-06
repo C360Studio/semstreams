@@ -2,13 +2,16 @@
 
 ## Status
 
-**Deferred — 2026-07-06** (was Proposed). Split decision: the low-risk, high-value
-half — ingest **observability metrics + `max_ack_pending` backpressure plumbing** — ships
-first as its own change (`graph-ingest-ingest-metrics`), to make the throughput problem
-measurable before changing the concurrency model. This keyed-concurrency ADR is parked
-pending (a) that metrics change landing and (b) the round-2 rework below.
+**Accepted — 2026-07-06** (was Deferred; originally Proposed). Split decision: the
+low-risk, high-value half — ingest **observability metrics + `max_ack_pending` backpressure
+plumbing** — shipped first as Part 1 (#488, on main), to make the throughput problem
+measurable before changing the concurrency model. Part 2 (this keyed-concurrency model) is
+now Accepted: a fourth code-grounded confirming review verified the architecture against
+post-Part-1 code and the corrected resolution below is folded into the `graph-ingest` +
+`keyed-dispatch` capability specs. Implementation follows on
+`feat/graph-ingest-concurrent-ingest` via the `graph-ingest-keyed-dispatch` openspec change.
 
-**Three code-grounded reviews hardened this before any code.** Round 1 (NEEDS-REWORK) →
+**Four code-grounded reviews hardened this before any code.** Round 1 (NEEDS-REWORK) →
 per-entity applied-sequence guard (B1), primitive panic recovery (H2), corrected
 CAS/backpressure claims (H1/M1). Round 2 (NEEDS-ANOTHER-REWORK) found the sequence guard
 **unsound across multiple input streams**: graph-ingest runs on 2 streams in shipped
@@ -19,19 +22,30 @@ guard silences the lower-sequence stream (silent data loss). Round 3 (Codex, NEE
 sequence spaces but **no longer serialize the same entity across ports** — an entity
 arriving on both streams lands in two lanes and races, violating the core invariant
 (same entity → one lane, required because `MergeTriples` is arrival-order full-set-
-replace, `graph/helpers.go`).
+replace, `graph/helpers.go`). Round 4 (confirming, CONFIRM-ACCEPT) verified all prior fixes
+against code and found the in-memory-only guard re-opens the reorder on **restart (B2)** and
+**high-cardinality LRU eviction (B3)** → resolved by the durable guard tier below.
 
-**Corrected resolution (fold into the mechanics below when this resumes):**
+**Corrected resolution (folded 2026-07-06):**
 - **One GLOBAL keyed pool** (`hash(entityID) → lane`), so the same entity serializes
   through one lane across ALL input streams (cross-port race gone; cross-stream
   same-entity is arrival-order LWW exactly as serial mode is today — no regression, no
   silent drop).
 - **Redelivery guard keyed by `(entityID, streamName)`** (from `msg.Metadata().Stream` +
-  `.Sequence.Stream`) in an **in-memory per-lane map** updated *after* side effects — so
-  it is per-stream (never compares sequences across streams → round-2 unsoundness gone),
-  needs no durable `EntityState` stamp (no cross-repo schema change → round-2 M-C gone),
-  and re-drives post-commit side effects on crash (routeForeignEdges etc.). Bound the map
-  (LRU window > AckWait).
+  `.Sequence.Stream`), a **two-tier guard** — in-memory per-lane map (fast path) backed by
+  a **durable `(entityID, streamName) → seq` stamp in graph-ingest's OWN KV bucket** —
+  both updated *after* side effects and *before* ack. Per-stream (never compares sequences
+  across streams → round-2 unsoundness gone), and re-drives post-commit side effects on
+  crash (routeForeignEdges etc., since neither tier is updated until they complete).
+  **Round-4 correction:** an in-memory-only guard is process-lifetime-scoped, so a
+  crash+restart (B2) or a count-bounded LRU evicting within the `AckWait × MaxDeliver`
+  window under high cardinality (B3, `MaxDeliver=0`=unlimited → unbounded window)
+  re-opens the exact reorder corruption. The durable tier makes correctness **structural**
+  (survives restart + eviction; in-memory becomes a pure cache), written after side
+  effects (not in-CAS → not round-2 M-B's side-effect-skip) in graph-ingest's own bucket
+  (not `EntityState` → not round-2 M-C's cross-repo schema change) — dodging both original
+  durable-guard objections. A durable-write failure Naks; the write is per-message (a
+  batched flush loses un-flushed stamps on crash → re-opens B2).
 - Also fold round-2 MEDIUMs (M-A foreign-edge scope, M-D redelivery amplification,
   L-A/L-B ctx+metadata handling) and **rebase on part 1**: the processing/ingest-lag
   histograms + `max_ack_pending` plumbing already SHIPPED (#488, on main); this change
@@ -53,9 +67,9 @@ A code-grounded adversarial review (framework-ADR discipline,
 sound, but three graph-ingest correctness claims were wrong — a **BLOCKING** redelivery-
 reorder hole (B1), a lost lane-panic recovery (H2), and a false "no concurrent same-key
 CAS / retries prove keying" claim (H1), plus a factual "unlimited unacked" error (M1).
-All are folded into the Decision/Consequences below (B1 → per-entity sequence guard;
-H2 → panic recovery in the primitive; H1/M1 → corrected claims). Pending user sign-off
-before **Accepted**; the reworked correctness model should get one more review pass.
+All are folded into the Decision/Consequences below (B1 → two-tier sequence guard;
+H2 → panic recovery in the primitive; H1/M1 → corrected claims). The round-4 confirming
+review + user sign-off (guard-durability = hybrid) are complete; ADR **Accepted**.
 
 Scopes gh#480.
 
@@ -65,7 +79,7 @@ Scopes gh#480.
 **~92% idle**. The ceiling is structural, not CPU: `ConsumeStreamWithConfig` →
 `consumer.Consume(cb)` dispatches **serially**, and graph-ingest's callback runs the
 full `MergeEntity` — a `Get` for the live revision + a revision-checked CAS `Put`,
-**two sequential KV round-trips** — inline before ack (`component.go:983`). Throughput
+**two sequential KV round-trips** — inline before ack (`component.go:1041`). Throughput
 is bound to `1 / (2 × KV RTT)`; the merge/CAS compute is ~1% of the idle machine
 (gh#480 30s profile). Producers above ~670 entity/s back up unboundedly
 (`consumer_pending_messages` 0→87k in the profile); the publish side (gh#470) sustains
@@ -178,10 +192,18 @@ stub/foreign-edge/hierarchy writes retry) and a **redelivery-drop counter** (gua
 - `max_ack_pending` becomes a real, operator-settable port knob for every JetStream
   input port (additive; absent = today's behavior).
 - Arrival-order merge semantics (gh#466) are **unchanged** — preserved by keying (+ the
-  applied-sequence guard for redeliveries), not by serialization.
+  two-tier applied-sequence guard for redeliveries), not by serialization.
+- **A new graph-ingest-owned KV bucket** holds the durable guard tier
+  (`(entityID, streamName) → last-applied seq`). Operational state graph-ingest owns
+  (bucket-ownership rubric), a bare `uint64` value — no cross-repo/`EntityState` schema
+  change. Redelivery correctness is therefore **independent of `MaxDeliver`/`AckWait`
+  sizing** (those stay defense-in-depth to keep redeliveries rare), closing the round-4
+  B2 (restart) and B3 (cache-eviction) windows an in-memory-only guard would leave open.
 - **Lifecycle ordering is normative (M3):** the pool is built before subscriptions start
-  (else the first message submits to a nil pool) and drained on `Stop` before the KV
-  store / NATS connection closes (else in-flight merges fail).
+  (else the first message submits to a nil pool). On `Stop` the order is: (1) cancel the
+  submit ctx first so a consume callback parked in `SubmitBlocking` unblocks and Naks
+  (else the synchronous consumer callback blocks teardown until timeout); (2) drain lanes;
+  (3) then close the KV store / NATS connection (else in-flight merges fail).
 - **Head-of-line blocking (M2):** `SubmitBlocking` blocks the single dispatch goroutine
   when one lane is full, so a hot key can stall dispatch to all lanes — "~N×" is
   optimistic under key skew. A known limitation, covered by a skewed-key throughput test.

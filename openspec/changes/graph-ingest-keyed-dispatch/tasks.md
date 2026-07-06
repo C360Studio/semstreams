@@ -10,7 +10,10 @@
       `Deps{MetricsRegistry, Logger}`. `New` validates (`Lanes<1`, missing `KeyOf`/
       `Process` → error).
 - [ ] 1.2 Lane routing: `lane = fnv1a(KeyOf(w)) % Lanes`; N bounded lane channels; one
-      goroutine per lane draining in order and calling `Process`. `SubmitBlocking(ctx, w)`
+      goroutine per lane draining in order and calling `Process`. **Pass the assigned lane
+      index into `Process`** (in its signature) so a composer can shard per-lane state by
+      the pool's OWN routing — lock-free, since at most one goroutine runs a lane (review
+      shard-safety; graph-ingest's guard tier-1 depends on it). `SubmitBlocking(ctx, w)`
       (blocks on full lane) + non-blocking `Submit` (returns `ErrLaneFull`).
 - [ ] 1.3 `Stop(ctx)`: stop accepting, drain lanes, return when idle or ctx done.
 - [ ] 1.4 **Panic recovery (review H2):** `Process` runs in a lane goroutine; the pool
@@ -37,14 +40,14 @@
 ## 3. graph-ingest integration
 
 - [ ] 3.1 Add `IngestLanes int json:"ingest_lanes" schema:"type:int,default:8,
-      category:advanced"` to `Config` (`component.go:241`); `ApplyDefaults` → 8 when 0;
+      category:advanced"` to `Config` (`component.go:294`); `ApplyDefaults` → 8 when 0;
       `Validate` clamps `<1 → 1` and caps an upper bound; `DefaultConfig` sets 8.
 - [ ] 3.2 In `Start`, build one `KeyedPool[ingestWork]` (`KeyOf = w.entity.ID`,
       `Process = c.processIngest`). Store on `Component`; `Stop` drains it before the KV
       store closes.
       NOTE (round-3): ONE **global** pool shared across all input ports — NOT one pool
       per port (per-port pools split a cross-stream entity into two lanes → race).
-- [ ] 3.3 Refactor the consume closure (`component.go:983`): decode/extract the entity
+- [ ] 3.3 Refactor the consume closure (`component.go:1041`): decode/extract the entity
       **once** (reuse the `extractEntityFromMessage` path), then submit
       `ingestWork{entity, msg, stream: meta.Stream, seq: meta.Sequence.Stream}` (from
       `msg.Metadata()`). On decode/extract/metadata failure keep today's behavior:
@@ -52,19 +55,43 @@
       `processIngest`, run on the POOL ctx (not the 30s `msgCtx` — else `MergeEntity`'s
       `ctx.Err()` aborts every merge, review L-B). **Submit failure MUST Nak** (review B1)
       — never discard the result; don't block the submit on `msgCtx`.
-- [ ] 3.4 **Redelivery-safety guard (review B1 BLOCKING, round-2+3 corrected):** an
-      in-memory per-lane map keyed by **`(entityID, streamName)`** → last applied stream
-      sequence; drop (ack, no apply) a message not newer than the last applied **from that
-      same stream**. Keyed per-`(entity, stream)` so it never compares across the
-      independent per-stream sequence spaces (structural.json runs 2 input streams). NO
-      durable `EntityState` stamp (would commit in-CAS before side effects → skip them on
-      crash, and is a cross-repo schema change). Update the map AFTER the post-commit side
-      effects (`updateSuffixIndex`/`ensureRelationshipTargetsExist`/`routeForeignEdges`)
-      so a mid-apply crash re-drives them. LRU-bound the map (window > AckWait). Increment
-      `graph_ingest_redeliveries_dropped_total`.
+- [ ] 3.4 **Redelivery-safety guard (review B1 BLOCKING; round-2+3 keying; round-4 B2/B3
+      durability):** a **two-tier** applied-sequence guard keyed by **`(entityID,
+      streamName)`** → last-applied stream sequence; drop (ack, no apply) a message not
+      newer than the last applied **from that same stream**. Keyed per-`(entity, stream)`
+      so it never compares across the independent per-stream sequence spaces
+      (structural.json runs 2 input streams).
+      - **Tier 1 (in-memory):** per-lane map sharded by the pool's lane index (task 1.2/3.2)
+        → lock-free. Fast path, zero extra KV op on an in-process redelivery.
+      - **Tier 2 (durable):** on an in-memory MISS (cold / cache-evicted / post-restart),
+        read the durable `(entityID, streamName) → seq` stamp from graph-ingest's OWN KV
+        bucket (task 3.7). This is what closes B2 (restart) and B3 (high-cardinality
+        eviction) — an in-memory-only guard re-opens the overwrite there.
+      - Update BOTH tiers AFTER the post-commit side effects
+        (`updateSuffixIndex`/`ensureRelationshipTargetsExist`/`routeForeignEdges`) and
+        BEFORE ack, so a mid-apply crash re-drives them. **Order: durable write FIRST, then
+        tier-1, then ack** — on a durable-write failure, Nak and leave tier-1 un-updated so
+        the two tiers never diverge (a tier-1 update ahead of a failed durable write would
+        let a post-restart older redelivery slip past an empty/stale durable stamp).
+        **Per-message** durable write (a batched flush loses un-flushed stamps on crash →
+        re-opens B2); never ack past an unpersisted stamp.
+      - NO stamp inside the entity's own `EntityState` record (would commit in-CAS before
+        side effects → skip them; cross-repo schema change — round-2 M-B/M-C). The durable
+        stamp is a bare `uint64` in graph-ingest's own bucket.
+      - In-memory LRU size is a cache knob only (NOT correctness — the durable tier is the
+        backstop, so correctness is independent of eviction policy + `MaxDeliver`/`AckWait`
+        sizing). Increment `graph_ingest_redeliveries_dropped_total` on a guard drop.
+- [ ] 3.7 **Durable guard bucket:** provision a graph-ingest-owned KV bucket at `Start`
+      (`(entityID, streamName)` composite key → last-applied `uint64` stream seq) for the
+      guard's durable tier (task 3.4). Owned by graph-ingest (operational state,
+      bucket-ownership rubric); no cross-repo schema change. No-TTL is correct for
+      `MaxDeliver=0`; any TTL must be ≥ `AckWait × MaxDeliver` and then requires finite
+      `MaxDeliver` — decide against measured bucket growth, default no-TTL.
 - [ ] 3.5 **Lifecycle ordering is correctness (review M3):** build the pool BEFORE
-      subscriptions start (else first message → nil pool); in `Stop`, drain the pool
-      BEFORE the KV store / NATS connection closes.
+      subscriptions start (else first message → nil pool). In `Stop`: (1) **cancel the
+      submit ctx FIRST** so a consume callback parked in `SubmitBlocking` unblocks + Naks
+      (else the synchronous consumer callback blocks teardown until timeout); (2) drain the
+      pool; (3) THEN close the KV store / NATS connection.
 - [ ] 3.6 Confirm the decode-once refactor doesn't double-decode: `KeyOf` reads the
       already-parsed `entity.ID`; `processIngest` takes the parsed entity.
 
@@ -85,7 +112,10 @@
       `ErrKVRevisionMismatch` retry, `mutations.go:553-576`/`UpdateWithRetry`) —
       documented as **cross-entity contention observability, NOT a keying-correctness
       proof** (review H1); `graph_ingest_redeliveries_dropped_total` (counter, task 3.4).
-      Follow the `sync.Once` getter pattern (`component.go:41-61`).
+      Follow the `sync.Once` getter pattern (`component.go:41-67`). NOTE: a guard drop is a
+      pool-`completed` (the lane picks up + acks), NOT a pool-`dropped_total`; document that
+      `dispatch_dropped_total` and `redeliveries_dropped_total` count disjoint events so
+      operators don't sum them.
 
 ## 6. Tests
 
@@ -107,6 +137,12 @@
       NOT dropped by a prior high-sequence apply from stream A (per-stream guard); (b) the
       same entity E arriving on both streams serializes through one lane (no concurrent
       apply / no lost update). This is the case per-port pools would have broken.
+- [ ] 6.5c **Durable guard: restart (review B2) + high-cardinality eviction (B3):**
+      (a) apply seq N for entity E, drop the in-memory map (simulate restart), redeliver an
+      older seq < N from the same stream → dropped via the durable tier, E keeps N;
+      (b) with a small in-memory LRU and many distinct entities churning so E's in-memory
+      entry is evicted, a redelivery of E's older seq still hits the durable stamp and is
+      dropped. Drive the real merge path; assert `redeliveries_dropped_total` increments.
 - [ ] 6.6 **Panic recovery (review H2):** a `Process` panic Naks the message and leaves
       the lane processing subsequent items; the component does not crash.
 - [ ] 6.7 Throughput smoke (integration, in-process NATS): N-lane ingest of a mixed-key
@@ -127,13 +163,16 @@
       just `e2e:core`, which is single-stream and would miss the cross-stream case
       (review MEDIUM #5). Confirm green.
 - [ ] 7.4 semstreams-reviewer pre-merge, specifically re-checking the adversarial-review
-      findings closed: per-entity ordering under keying; **the applied-sequence guard
-      actually prevents redelivery reorder (B1)**; **panic in a lane is recovered + Nak'd,
-      not a crash (H2)**; lane lifecycle ordering (build-before-subscribe, drain-before-
-      close) (M3); ack-in-lane at-least-once + poison-ack-drop + submit-failure-Nak;
-      bounded in-flight; the `cas_retries` metric is documented as contention observability
-      not a keying proof (H1); metrics separate queue wait from processing; no regression
-      to the other ~30 `ConsumeStreamWithConfig` call sites.
+      findings closed: per-entity ordering under keying; **the two-tier applied-sequence
+      guard actually prevents redelivery reorder (B1)** AND survives restart (B2) +
+      in-memory eviction (B3) via the durable tier; **panic in a lane is recovered + Nak'd,
+      not a crash (H2)**; lane lifecycle ordering — build-before-subscribe, **Stop cancels
+      the submit ctx before draining** (no teardown hang), drain-before-close (M3);
+      per-lane guard state is sharded by the pool's lane index, not an independent hash
+      (no shard race); ack-in-lane at-least-once + poison-ack-drop + submit-failure-Nak +
+      durable-write-failure-Nak; bounded in-flight; the `cas_retries` metric is documented
+      as contention observability not a keying proof (H1); metrics separate queue wait from
+      processing; no regression to the other ~30 `ConsumeStreamWithConfig` call sites.
 - [ ] 7.5 Archive → promote `graph-ingest` (ADD) + `keyed-dispatch` (new) into
       `openspec/specs/`. PR; CI; merge; tag (e2e:core gate first).
 - [ ] 7.6 Confirm on gh#480 + re-run the semboids repro (`task sweep HZ=30 BOIDS=200`):
