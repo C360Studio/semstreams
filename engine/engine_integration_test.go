@@ -252,11 +252,15 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 	// in the config manager propagates asynchronously — reading GetConfig()
 	// immediately races that propagation and flaked intermittently under CI
 	// load. Poll for the end-state instead; a real "never disabled" bug still
-	// fails (the poll times out) rather than being masked.
+	// fails (the poll times out) rather than being masked. The window is
+	// generous (well within the suite's 30s ctx budget) because the async
+	// propagation exceeded a tighter 5s bound under peak CI runner contention
+	// (main CI run 28813286699); widening the poll, not touching prod logic, is
+	// the fix (cf. gh#373). A genuine never-disabled bug still times out.
 	s.Eventually(func() bool {
 		currentConfig := s.configMgr.GetConfig().Get()
 		return !currentConfig.Components["udp-stop-1"].Enabled
-	}, 5*time.Second, 20*time.Millisecond, "Component should be disabled after stop")
+	}, 20*time.Second, 20*time.Millisecond, "Component should be disabled after stop")
 }
 
 // TestStopNotRunningFlow tests that stopping a non-running flow fails
