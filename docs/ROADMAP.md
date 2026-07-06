@@ -259,6 +259,35 @@ Add `SpatialGraphProvider` and `TemporalGraphProvider` for clustering:
 
 ---
 
+### Ingest & Write Path
+
+#### Graph-Ingest Write-Path Parallelism
+**Priority:** Low | **Complexity:** High
+
+Push entity-ingest throughput past the current keyed-concurrent ceiling.
+
+- **Current state:** ADR-072 (v1.0.0-beta.142) made graph-ingest keyed-concurrent — N lanes
+  partitioned by entity ID (same-entity ordered, different entities parallel). Validated
+  live (semboids, 200 boids × 30Hz, `ingest_lanes=8`): **670 → 2,331 entity/s (~3.5×)**;
+  the serial-dispatch bottleneck gh#480 named is fixed.
+- **Gap:** scaling is sublinear (~3.5× on 8 lanes, not ~8×). CPU stays ~1.6/12 cores, the
+  profile is ~65% syscall/netpoll/cond-wait — still round-trip-latency bound. The 8 lanes
+  contend on **one shared NATS connection** and **one KV write stream** (`KV_ENTITY_STATES`,
+  appended serially server-side). The melt line moved up ~3.5×, but at high offered load
+  (~6k/s) ingest is still the bottleneck.
+- **Approaches** (gh#480 deferred options 2/3; measurement-driven — profile which wall
+  dominates first):
+  1. Connection pool for the ingest lanes (client-side connection contention).
+  2. Batch/pipeline the Get+CAS KV writes (fewer synchronous round-trips per entity).
+  3. Shard `ENTITY_STATES` writes across streams (server-side single-stream append is the
+     hard wall; high risk — the bucket is the sole authoritative store every reader/index/
+     watch assumes is one).
+- **Not v1-blocking:** 3.5× is a real shipped win; revisit only if a concrete workload needs
+  &gt; ~2,300 entity/s. Cheapest first step: a lane connection-pool experiment + semboids
+  re-measure to isolate client- vs server-side before committing to the expensive fix.
+
+---
+
 ## Legend
 
 | Priority | Description |
