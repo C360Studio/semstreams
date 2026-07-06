@@ -112,23 +112,33 @@ acknowledged past the unpersisted stamp.
 - **THEN** it is dropped without overwriting the entity — the durable guard tier survives
       the restart, so correctness does not depend on the in-memory map
 
+## MODIFIED Requirements
+
 ### Requirement: Ingest MUST expose metrics that separate queue wait from processing time
 
-graph-ingest MUST expose Prometheus metrics sufficient to measure the ingest pipeline
-in place: a per-message processing-duration histogram (time spent in the merge + CAS
-write), a queue-wait histogram (time a message waits between dispatch and processing),
-a queue-depth gauge, an achieved-concurrency (in-flight) gauge, and a CAS-retry
-counter. These MUST make it possible to distinguish queue wait from processing time
-(the prior gap: end-to-end latency could only be inferred downstream). The CAS-retry
-counter is a cross-entity **contention-observability** signal — an entity's own key is
-never written concurrently under keying, but legitimate cross-entity referential writes
-(relationship-target stubs, foreign edges, shared hierarchy containers) still touch
-shared keys and may retry — so it MUST NOT be interpreted as a keying-correctness proof.
+graph-ingest MUST expose Prometheus metrics that make the ingest pipeline measurable at
+the component. It MUST expose a per-message processing-duration histogram (time applying
+a message — the merge and CAS write) and an ingest-lag histogram (message age when
+processing begins — the stream/delivery-buffer wait). Under keyed-concurrent ingest it
+MUST additionally expose: a LANE queue-wait histogram (time between submit to a lane and
+the start of processing — distinct from the stream-backlog ingest-lag), an
+achieved-concurrency (in-flight) gauge, a lane queue-depth gauge, a CAS-retry counter,
+and a redeliveries-dropped counter. Together these MUST let an operator distinguish
+backlog/queue wait from per-message processing time and observe achieved concurrency;
+the throughput counter (`entities_updated_total`) remains the ingest-rate signal. The
+CAS-retry counter is a cross-entity **contention-observability** signal — an entity's own
+key is never written concurrently under keying, but legitimate cross-entity referential
+writes (relationship-target stubs, foreign edges, shared hierarchy containers) still
+touch shared keys and may retry — so it MUST NOT be interpreted as a keying-correctness
+proof. The redeliveries-dropped counter (applied-sequence guard drops) is disjoint from
+the pool's dropped counter (full-lane rejects); operators MUST NOT sum them.
 
 #### Scenario: an operator can read processing vs queue time
 
-- **GIVEN** ingest under load
+- **GIVEN** graph-ingest processing a backlog of messages
 - **WHEN** the operator scrapes metrics
-- **THEN** the processing-duration histogram reports merge+CAS time
-- **AND** the queue-wait histogram reports time spent waiting for a lane
+- **THEN** the processing-duration histogram reports per-message merge+CAS time
+- **AND** the ingest-lag histogram reports stream/delivery-buffer wait
+- **AND** the lane queue-wait histogram reports time spent waiting for a lane
+- **AND** the achieved-concurrency gauge reports how many lanes are processing
 - **AND** the CAS-retry counter reflects cross-entity contention (not necessarily zero)
