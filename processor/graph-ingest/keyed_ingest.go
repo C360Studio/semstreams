@@ -103,6 +103,20 @@ func (c *Component) buildIngestPool() error {
 	return nil
 }
 
+// teardownIngestPool aborts the keyed ingest pool on a boot-failure path (Start
+// returning an error after buildIngestPool succeeded, where Stop won't run
+// because running is still false). Cancelling the pool ctx makes the lane
+// goroutines + metricsUpdater return; cancelling the submit ctx unblocks any
+// (not-yet-possible) parked submit. Nil-safe.
+func (c *Component) teardownIngestPool() {
+	if c.ingestSubmitCancel != nil {
+		c.ingestSubmitCancel()
+	}
+	if c.ingestPoolCancel != nil {
+		c.ingestPoolCancel()
+	}
+}
+
 // processIngest is the keyed pool's per-item handler, run on lane `lane`'s
 // single goroutine. It applies the redelivery guard, ingests the entity, then
 // stamps the guard (durable first, then in-memory) and acks — the ADR-072

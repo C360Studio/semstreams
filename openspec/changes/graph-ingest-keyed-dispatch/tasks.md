@@ -123,6 +123,11 @@
       documented. REMAINING: `graph_ingest_cas_retries_total` needs a retry-count hook on
       `natsclient.UpdateWithRetry` (it has no per-retry callback today) — deferred to a
       natsclient follow-up so it isn't a hidden no-op counter.
+      FOLLOW-UP (review MINOR): the `dispatch_*` pool metrics are fresh objects registered
+      under a fixed `pool="graph_ingest"` key, so after a component Stop+Start the new
+      pool's objects hit the registry's already-registered early-return and silently stop
+      exporting. No correctness/panic impact. Fix later by reusing metric objects across
+      pool instances (package singletons like the `getX` getters) or unregister-on-Stop.
 
 ## 6. Tests
 

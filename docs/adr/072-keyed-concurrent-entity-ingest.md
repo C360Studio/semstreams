@@ -218,6 +218,15 @@ stub/foreign-edge/hierarchy writes retry) and a **redelivery-drop counter** (gua
   needed once lanes overlap the RTTs; the server-side op has no native NATS primitive.
 - Product half (semboids re-running its graph dial to confirm the ingest-bound
   classification clears) lands once the fix ships.
+- **Two operational limits the keyed design makes load-bearing** (pre-merge review):
+  (a) the durable guard has no TTL and compares *stream sequence*, so deleting and
+  recreating an input stream resets its sequence to 1 and every early message would be
+  dropped as "stale" until the durable seq is surpassed — pathological but silent; a
+  guard reset accompanies any intentional stream recreate. (b) Keyed ordering is
+  **per-instance**: running more than one graph-ingest replica on the same durable
+  consumer splits an entity's messages across replicas and breaks per-entity ordering.
+  This is the pre-existing single-writer assumption for ENTITY_STATES, not a regression —
+  but keyed concurrency now depends on it, so it must stay single-instance.
 
 ## Open questions for implementation (resolved in the specs, not here)
 

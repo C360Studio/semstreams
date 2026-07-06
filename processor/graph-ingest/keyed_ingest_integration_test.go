@@ -10,11 +10,78 @@
 package graphingest
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool drives the
+// ASSEMBLED wire end-to-end: a message published to the ENTITY stream is picked
+// up by the real graph-ingest consumer, decoded once, submitted to the keyed
+// pool, applied by processIngest, and acked — landing in ENTITY_STATES. None of
+// the other tests exercise the consume→pool→ingest composition; this pins that
+// the pool wiring actually processes published messages (the happy path).
+func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T) {
+	ctx := context.Background()
+	streams := []natsclient.TestStreamConfig{
+		{Name: "ENTITY", Subjects: []string{"entity.>"}},
+	}
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+
+	cfg := DefaultConfig() // IngestLanes = 8 (concurrent by default)
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	require.NoError(t, c.Initialize())
+	// Register the test decoder BEFORE Start — the consumer reads c.decoder on
+	// each message, so swapping it after Start would race the consumer goroutine.
+	registerMergeTestPayload(t, c)
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+
+	const entityID = "c360.test.wire.keyed.entity.001"
+	now := time.Now()
+	payload := &mergeTestGraphable{
+		entityID: entityID,
+		triples: []message.Triple{
+			{Subject: entityID, Predicate: "wire.status", Object: "ok", Timestamp: now, Confidence: 1.0},
+		},
+	}
+	baseMsg := message.NewBaseMessage(payload.Schema(), payload, "test-source")
+	data, err := json.Marshal(baseMsg)
+	require.NoError(t, err)
+
+	// Publish to the ENTITY stream — the real consumer decodes, submits to the
+	// keyed pool, and processIngest applies it (no direct handleMessage call).
+	require.NoError(t, testClient.Client.PublishToStream(ctx, "entity."+entityID, data))
+
+	// The entity must land in ENTITY_STATES via the consume→pool→ingest wire.
+	require.Eventually(t, func() bool {
+		stored, _, ferr := c.fetchEntityState(ctx, entityID)
+		return ferr == nil && stored != nil
+	}, 5*time.Second, 20*time.Millisecond, "published entity must ingest through the keyed pool")
+
+	stored, _, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	found := false
+	for _, tr := range stored.Triples {
+		if tr.Predicate == "wire.status" && tr.Object == "ok" {
+			found = true
+		}
+	}
+	assert.True(t, found, "the published triple must be present after pool ingestion")
+}
 
 // TestIntegration_IngestGuard_DurableSurvivesRestart pins B2/B3: after the
 // in-memory tier is wiped (a restart, or a high-cardinality LRU eviction), a

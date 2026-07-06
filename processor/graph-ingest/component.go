@@ -865,20 +865,25 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "keyed ingest pool")
 	}
 
-	// Set up subscriptions for input ports
+	// Set up subscriptions for input ports. On any boot failure past
+	// buildIngestPool, tear down the pool too: Stop early-returns when
+	// !running, so without this the lane goroutines + metricsUpdater leak.
 	if err := c.setupSubscriptions(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "subscription setup")
 	}
 
 	// Set up query handler subscriptions
 	if err := c.setupQueryHandlers(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
 
 	// Set up mutation handler subscriptions (for rule processor actions)
 	if err := c.setupMutationHandlers(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "mutation handler setup")
 	}
