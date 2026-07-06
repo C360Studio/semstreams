@@ -1,0 +1,80 @@
+# keyed-dispatch Specification
+
+## Purpose
+TBD - created by archiving change graph-ingest-keyed-dispatch. Update Purpose after archive.
+## Requirements
+### Requirement: A keyed dispatch pool MUST process same-key work serially and different-key work in parallel
+
+The framework MUST provide a bounded, key-partitioned dispatch primitive that routes
+each work item to one of N lanes by a caller-supplied key, such that all items sharing
+a key are processed serially in submit order on a single lane, while items with
+different keys are processed concurrently across lanes. This is distinct from
+`pkg/worker.Pool` / `BoundedDispatcher`, which distribute work across workers with no
+key affinity or ordering guarantee. The primitive MUST bound memory via per-lane queues
+and MUST drain in-flight work on graceful stop.
+
+Lane assignment MUST be a pure function of the key (same key → same lane for the pool's
+lifetime), and the caller MUST supply the key function and the per-item process
+function. Submission MUST offer a blocking form that applies backpressure when the
+target lane is full.
+
+The pool MUST expose the assigned lane index to the process function, so that a composer
+maintaining per-lane state (for example a redelivery guard sharded by lane) can index
+that state by the pool's OWN lane assignment rather than recomputing the hash. Because at
+most one goroutine ever runs a given lane, per-lane state indexed this way needs no
+locking; recomputing the shard index independently of the pool risks diverging from the
+pool's routing and racing two lanes on one shard.
+
+#### Scenario: same-key items are ordered
+
+- **GIVEN** a keyed pool and two items with the same key, item A submitted before B
+- **WHEN** both are dispatched
+- **THEN** A's process function completes before B's begins
+
+#### Scenario: different-key items run concurrently
+
+- **GIVEN** a keyed pool with more than one lane and items with distinct keys
+- **WHEN** they are submitted
+- **THEN** their process functions may run concurrently on different lanes
+
+#### Scenario: full lane applies backpressure
+
+- **GIVEN** a keyed pool whose target lane queue is full
+- **WHEN** the caller uses the blocking submit
+- **THEN** the submit blocks until the lane has capacity
+
+### Requirement: A keyed dispatch pool MUST expose queue-wait and processing metrics
+
+The keyed dispatch primitive MUST expose Prometheus metrics for queue-wait latency
+(time between submit and process start), processing duration, current queue depth,
+in-flight concurrency, and submitted/completed/dropped counts, each labelled by pool
+name. These MUST allow a consumer to measure achieved concurrency and to separate time
+spent waiting for a lane from time spent processing, without the consumer adding its
+own probes.
+
+#### Scenario: queue wait is observable independent of processing
+
+- **GIVEN** a keyed pool under load
+- **WHEN** metrics are scraped
+- **THEN** the queue-wait histogram and the processing-duration histogram are reported
+      separately
+
+### Requirement: A keyed dispatch pool MUST recover panics in the process function
+
+The keyed dispatch primitive MUST recover a panic raised inside a work item's process
+function so that one bad item cannot crash the host process or wedge its lane. On a
+recovered panic the pool MUST keep the lane's goroutine alive to continue processing
+subsequent items (including other keys that hash to that lane) and MUST invoke the
+caller-supplied disposition (so the composing consumer can, for example, negatively
+acknowledge the underlying message for redelivery). This is load-bearing because a
+composer such as graph-ingest moves work out of the consumer's own panic-recovery
+scope; without this guarantee an unrecovered lane panic would crash a sole-writer
+component.
+
+#### Scenario: a panicking item does not kill the lane
+
+- **GIVEN** a keyed pool whose process function panics on one item
+- **WHEN** that item and later same-lane items are processed
+- **THEN** the panic is recovered and its disposition invoked
+- **AND** the later items on that lane are still processed
+

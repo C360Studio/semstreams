@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/retry"
@@ -64,6 +65,12 @@ var (
 
 	ingestLagOnce      sync.Once
 	ingestLagHistogram prometheus.Histogram
+
+	redeliveriesDroppedOnce    sync.Once
+	redeliveriesDroppedCounter prometheus.Counter
+
+	casRetriesOnce    sync.Once
+	casRetriesCounter prometheus.Counter
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -290,6 +297,57 @@ func getIngestLagMetric(registry *metric.MetricsRegistry) prometheus.Histogram {
 	return ingestLagHistogram
 }
 
+// getRedeliveriesDroppedMetric returns the process-wide counter of messages
+// dropped by the keyed-ingest redelivery guard (ADR-072 B1/B2/B3): a delayed
+// redelivery whose stream sequence is not newer than the last already applied
+// to that entity from the same stream. A small steady number under overload is
+// healthy; a large one means MaxAckPending/AckWait are undersized for the lane
+// throughput. Disjoint from the pool's dispatch_dropped_total (a full-lane
+// non-blocking reject) — these count different events, do not sum them.
+func getRedeliveriesDroppedMetric(registry *metric.MetricsRegistry) prometheus.Counter {
+	redeliveriesDroppedOnce.Do(func() {
+		redeliveriesDroppedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "redeliveries_dropped_total",
+			Help:      "Stale redeliveries dropped by the applied-sequence guard (ADR-072).",
+		})
+		if registry != nil {
+			_ = registry.RegisterCounter("graph-ingest", "redeliveries_dropped_total", redeliveriesDroppedCounter)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(redeliveriesDroppedCounter)
+		}
+	})
+	return redeliveriesDroppedCounter
+}
+
+// getCasRetriesMetric returns the process-wide counter of CAS-conflict retries
+// during entity merge (ADR-072). Incremented each time MergeEntity's CAS
+// callback re-runs (attempt > 1) — the previous attempt's revision-checked Put
+// lost the CAS and retried. This is a **cross-entity contention-observability**
+// signal, NOT a proof of keying correctness (review H1): an entity's OWN key is
+// never written concurrently under keying, but legitimate cross-entity
+// referential writes (relationship-target stubs, foreign edges, shared
+// hierarchy containers) DO touch shared keys and retry. Expect ~0 on workloads
+// without hierarchy / dense relationships / entity-birth churn; a spike is a
+// workload signal, not necessarily a bug.
+func getCasRetriesMetric(registry *metric.MetricsRegistry) prometheus.Counter {
+	casRetriesOnce.Do(func() {
+		casRetriesCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "cas_retries_total",
+			Help:      "Entity-merge CAS-conflict retries — cross-entity contention observability, NOT a keying-correctness proof (ADR-072).",
+		})
+		if registry != nil {
+			_ = registry.RegisterCounter("graph-ingest", "cas_retries_total", casRetriesCounter)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(casRetriesCounter)
+		}
+	})
+	return casRetriesCounter
+}
+
 // Config holds configuration for graph-ingest component
 type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -303,6 +361,13 @@ type Config struct {
 	// once the mismatch metric reads zero. All fail-open cases (empty token,
 	// no claim reader, legacy/pre-fence owner, reader blip) stay fail-open.
 	EnforceOwnerLease bool `json:"enforce_owner_lease" schema:"type:bool,description:Reject writes whose OwnerToken does not match the live owner lease (ADR-056 PR-5); default false keeps observe-only metering,default:false,category:advanced"`
+	// IngestLanes is the number of keyed-concurrent ingest lanes (ADR-072,
+	// gh#480). Messages are partitioned by entity ID (same entity → one lane →
+	// serial in arrival order, preserving the arrival-order merge; different
+	// entities → parallel), so ingest is no longer bound to a single serial
+	// Get+CAS round-trip chain. Default 8 (concurrent); `1` selects the prior
+	// fully-serial behavior.
+	IngestLanes int `json:"ingest_lanes" schema:"type:int,description:Keyed-concurrent ingest lane count (same entity ID → one lane → ordered; 1 = serial),default:8,category:advanced"`
 }
 
 // Validate implements component.Validatable interface
@@ -316,6 +381,11 @@ func (c *Config) Validate() error {
 	if len(c.Ports.Outputs) == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
 	}
+	// IngestLanes < 1 clamps to serial (ADR-072). Clamp rather than reject so a
+	// mis-set 0/negative degrades to safe-serial instead of failing boot.
+	if c.IngestLanes < 1 {
+		c.IngestLanes = 1
+	}
 	return nil
 }
 
@@ -324,6 +394,11 @@ func (c *Config) ApplyDefaults() {
 	// EnableHierarchy defaults to false
 	if c.Ports == nil {
 		c.Ports = &component.PortConfig{}
+	}
+	// Concurrent-by-default (ADR-072): 0 (unset) → 8 lanes. An explicit 1 opts
+	// back into serial and is preserved.
+	if c.IngestLanes == 0 {
+		c.IngestLanes = defaultIngestLanes
 	}
 }
 
@@ -350,8 +425,32 @@ func DefaultConfig() Config {
 			},
 		},
 		EnableHierarchy: false,
+		IngestLanes:     defaultIngestLanes,
 	}
 }
+
+// Keyed-concurrent ingest sizing (ADR-072, gh#480).
+const (
+	// defaultIngestLanes is the default keyed-concurrent lane count. 8 overlaps
+	// the KV Get+CAS round-trips on the ~11/12-idle box the issue profiled;
+	// tune against the semboids repro via the inflight/queue-wait metrics.
+	defaultIngestLanes = 8
+
+	// ingestLaneQueueDepth bounds each lane's in-memory submit queue. Total
+	// buffered work is capped at lanes × this; SubmitBlocking applies
+	// backpressure past it. Sized generously vs. AckWait so the pipeline drains
+	// before redelivery (defense-in-depth atop the applied-sequence guard).
+	ingestLaneQueueDepth = 256
+
+	// ingestGuardMemMaxPerLane bounds the in-memory redelivery-guard cache per
+	// lane. This is a CACHE-SIZE knob only, not correctness: an eviction just
+	// costs a durable-tier read on the next access (ADR-072 B3). Sized to hold
+	// the working set of recently-active entities per lane under load.
+	ingestGuardMemMaxPerLane = 65536
+
+	// graphIngestGuardBucket is the durable redelivery-guard tier's KV bucket.
+	graphIngestGuardBucket = "GRAPH_INGEST_APPLIED_SEQ"
+)
 
 // schema defines the configuration schema for graph-ingest component
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
@@ -479,7 +578,31 @@ type Component struct {
 	ownerLeaseMismatch     *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
 	processingDuration     prometheus.Histogram   // gh#480 per-message apply time (processing half)
 	ingestLag              prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
+	redeliveriesDropped    prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
+	casRetries             prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
 	metricsRegistry        *metric.MetricsRegistry
+
+	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
+	// ingest by entity ID so same-entity updates stay ordered while different
+	// entities ingest in parallel. Built in Start BEFORE subscriptions (M3);
+	// drained in Stop with submit-ctx cancelled first. ingestPoolCtx is the
+	// Process run ctx (independent of the consume ctx so a consumer-ctx cancel
+	// does not abort in-flight merges); ingestSubmitCtx is cancelled first on
+	// Stop so a consume callback parked in SubmitBlocking unblocks and Naks.
+	ingestPool         *dispatch.KeyedPool[ingestWork]
+	ingestPoolCtx      context.Context
+	ingestPoolCancel   context.CancelFunc
+	ingestSubmitCtx    context.Context
+	ingestSubmitCancel context.CancelFunc
+
+	// Redelivery guard (ADR-072 B1/B2/B3), two-tier. ingestGuardMem is the
+	// in-memory fast path, one map per lane (lane-local → lock-free, since a
+	// lane is drained by a single goroutine). ingestGuardBucket is the durable
+	// backstop `(entityID/streamName) → last-applied stream seq`; it survives
+	// restart and cache eviction so correctness does not depend on the in-memory
+	// retention policy or MaxDeliver/AckWait sizing.
+	ingestGuardMem    []*laneGuard
+	ingestGuardBucket *natsclient.KVStore
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
@@ -531,6 +654,8 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		ownerLeaseMismatch:     getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
 		processingDuration:     getProcessingDurationMetric(deps.MetricsRegistry),
 		ingestLag:              getIngestLagMetric(deps.MetricsRegistry),
+		redeliveriesDropped:    getRedeliveriesDroppedMetric(deps.MetricsRegistry),
+		casRetries:             getCasRetriesMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -765,20 +890,32 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize hierarchy inference if enabled (synchronous - no Start/Stop)
 	c.initHierarchyInference()
 
-	// Set up subscriptions for input ports
+	// Build the keyed-concurrent ingest pool BEFORE subscriptions start (ADR-072
+	// M3: else the first delivered message submits to a nil pool).
+	if err := c.buildIngestPool(); err != nil {
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "keyed ingest pool")
+	}
+
+	// Set up subscriptions for input ports. On any boot failure past
+	// buildIngestPool, tear down the pool too: Stop early-returns when
+	// !running, so without this the lane goroutines + metricsUpdater leak.
 	if err := c.setupSubscriptions(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "subscription setup")
 	}
 
 	// Set up query handler subscriptions
 	if err := c.setupQueryHandlers(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "query handler setup")
 	}
 
 	// Set up mutation handler subscriptions (for rule processor actions)
 	if err := c.setupMutationHandlers(ctx); err != nil {
+		c.teardownIngestPool()
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "mutation handler setup")
 	}
@@ -802,13 +939,43 @@ func (c *Component) Start(ctx context.Context) error {
 // Stop gracefully shuts down the component
 func (c *Component) Stop(timeout time.Duration) error {
 	c.mu.Lock()
-
 	if !c.running {
 		c.mu.Unlock()
 		return nil // Already stopped
 	}
+	c.running = false
+	pool := c.ingestPool
+	submitCancel := c.ingestSubmitCancel
+	poolCancel := c.ingestPoolCancel
+	consumeCancel := c.cancel
+	c.mu.Unlock()
 
-	// Unsubscribe from query and mutation handlers
+	// ADR-072 M3 shutdown ordering, BEFORE tearing down KV/NATS:
+	//  1. cancel the submit ctx so a consume callback parked in SubmitBlocking
+	//     unblocks and Naks (else the synchronous consumer callback wedges
+	//     teardown until timeout);
+	//  2. stop the consumer so no new work is submitted;
+	//  3. drain the pool — Process still runs on the live, independent pool ctx;
+	//  4. release the pool ctx.
+	if submitCancel != nil {
+		submitCancel()
+	}
+	if consumeCancel != nil {
+		consumeCancel()
+	}
+	if pool != nil {
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
+		if err := pool.Stop(drainCtx); err != nil {
+			c.logger.Warn("ingest pool drain incomplete", slog.Any("error", err))
+		}
+		cancelDrain()
+	}
+	if poolCancel != nil {
+		poolCancel()
+	}
+
+	// Teardown query/mutation subscriptions + caches now that the pool is drained.
+	c.mu.Lock()
 	for _, sub := range c.subscriptions {
 		if sub != nil {
 			if err := sub.Unsubscribe(); err != nil {
@@ -817,8 +984,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		}
 	}
 	c.subscriptions = nil
-
-	// Close caches
 	if c.entityCache != nil {
 		if err := c.entityCache.Close(); err != nil {
 			c.logger.Warn("entity cache close error", slog.Any("error", err))
@@ -829,13 +994,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 			c.logger.Warn("suffix cache close error", slog.Any("error", err))
 		}
 	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
-	}
-
-	c.running = false
 	c.mu.Unlock()
 
 	// Wait for goroutines with timeout
@@ -910,6 +1068,30 @@ func (c *Component) initStorage(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "suffix cache creation")
 	}
 	c.suffixCache = suffixCacheInst
+
+	// ADR-072 redelivery-guard durable tier: graph-ingest-owned bucket mapping
+	// `(entityID/streamName) → last-applied stream sequence`. Operational state
+	// graph-ingest owns (bucket-ownership rubric), a bare uint64 value — no
+	// cross-repo/EntityState schema change. No TTL: correct for MaxDeliver=0
+	// (unlimited redelivery), and the key set is bounded by entity cardinality
+	// (same order as ENTITY_STATES).
+	guardBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      graphIngestGuardBucket,
+		Description: "graph-ingest redelivery guard: (entityID/streamName) -> last-applied stream sequence (ADR-072)",
+	})
+	if err != nil {
+		return errs.Wrap(err, "Component", "Start", "redelivery guard bucket creation")
+	}
+	c.ingestGuardBucket = c.natsClient.NewKVStore(guardBucket)
+
+	// The guard bucket is correctness-critical no-eviction state (ADR-072 B2/B3):
+	// TTL or size-eviction of a sequence stamp silently reopens the restart/
+	// cache-eviction overwrite this guard closes. CreateKeyValueBucket returns an
+	// existing bucket as-is, so a stale/foreign deploy could have created it with
+	// a retention policy — fail-closed at boot, exactly like ENTITY_STATES.
+	if err := c.ingestGuardBucket.AssertNoLifecycleRetention(ctx, graphIngestGuardBucket); err != nil {
+		return errs.Wrap(err, "Component", "Start", "redelivery guard retention guardrail")
+	}
 
 	// ADR-056 Decision-4 T2-seam: open OWNER_CLAIMS read-only to classify
 	// foreign-subject edges against registered ForeignEdgeClaims. graph-ingest
@@ -1042,21 +1224,54 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	}
 
 	subject := port.Subject // capture for closure
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		// gh#480: record queue wait (message age when we reach it) and processing
-		// time (the apply) separately. Metadata() can error on a non-JetStream msg;
-		// skip the lag observation rather than nil-deref (all inputs here are JS).
-		// meta.Timestamp is the NATS server store time vs our local clock; on a
-		// co-located single-host deploy this is the queue wait, but host clock skew
-		// could make it marginally negative (harmless — skews _sum only, no bucket).
-		if meta, metaErr := msg.Metadata(); metaErr == nil && !meta.Timestamp.IsZero() {
+	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+		// ADR-072: the consume closure decodes ONCE and submits to the keyed pool;
+		// the redelivery guard, apply, and ack move into processIngest (run on a
+		// pool lane, not this consumer goroutine). Metadata carries the stream name
+		// + sequence the guard keys on; a message without it can't be keyed/guarded.
+		meta, metaErr := msg.Metadata()
+		if metaErr != nil {
+			c.logger.Warn("graph-ingest: message missing JetStream metadata; dropping",
+				slog.String("subject", subject), slog.Any("error", metaErr))
+			atomic.AddInt64(&c.errors, 1)
+			if ackErr := msg.Ack(); ackErr != nil {
+				c.logger.Error("Failed to ack metadata-less message", slog.Any("error", ackErr))
+			}
+			return
+		}
+		// gh#480 queue-wait (message age when we reach it). Host clock skew can make
+		// this marginally negative on a co-located deploy — harmless (skews _sum only).
+		if !meta.Timestamp.IsZero() {
 			c.ingestLag.Observe(time.Since(meta.Timestamp).Seconds())
 		}
-		start := time.Now()
-		c.handleMessage(msgCtx, subject, msg.Data())
-		c.processingDuration.Observe(time.Since(start).Seconds())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack JetStream message", slog.Any("error", ackErr))
+		// Decode + extract ONCE (KeyOf reads the already-parsed entity.ID; the lane
+		// reuses the parsed entity — no double parse). A decode/extract failure is a
+		// poison message: count + ack-drop (today's behavior).
+		entity, derr := c.decodeEntity(subject, msg.Data())
+		if derr != nil {
+			c.logger.Warn("graph-ingest: decode/extract failed; dropping",
+				slog.String("subject", subject), slog.Any("error", derr))
+			atomic.AddInt64(&c.errors, 1)
+			if ackErr := msg.Ack(); ackErr != nil {
+				c.logger.Error("Failed to ack poison message", slog.Any("error", ackErr))
+			}
+			return
+		}
+		// Submit on the dedicated submit ctx (NOT msgCtx — a block past AckWait would
+		// otherwise surface as an ignored error → message neither enqueued nor acked).
+		// A submit failure MUST Nak so the server redelivers (ADR-072 B1), never
+		// silent-drop.
+		work := ingestWork{
+			entity:   entity,
+			msg:      msg,
+			entityID: entity.ID,
+			stream:   meta.Stream,
+			seq:      meta.Sequence.Stream,
+		}
+		if serr := c.ingestPool.SubmitBlocking(c.ingestSubmitCtx, work); serr != nil {
+			if nakErr := msg.Nak(); nakErr != nil {
+				c.logger.Error("Failed to Nak after submit failure", slog.Any("error", nakErr))
+			}
 		}
 	})
 	if err != nil {
@@ -1142,27 +1357,32 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 		slog.String("subject", subject),
 		slog.Int("size", len(data)))
 
-	// Try to unmarshal as a BaseMessage containing a Graphable payload
+	entity, err := c.decodeEntity(subject, data)
+	if err != nil {
+		c.logger.Warn("Failed to decode/extract message",
+			slog.String("subject", subject),
+			slog.Any("error", err))
+		atomic.AddInt64(&c.errors, 1)
+		return
+	}
+
+	_ = c.ingestEntity(ctx, entity)
+}
+
+// decodeEntity decodes a message's bytes into an EntityState: unmarshal the
+// BaseMessage envelope, then extract the Graphable payload's entity. Shared by
+// the consume closure (decode-once, then submit to the keyed pool) and
+// handleMessage (the synchronous test/compat path).
+func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityState, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Warn("Failed to unmarshal base message",
-			slog.String("subject", subject),
-			slog.Any("error", err))
-		atomic.AddInt64(&c.errors, 1)
-		return
+		return nil, fmt.Errorf("decode base message (subject %s): %w", subject, err)
 	}
-
-	// Extract entity from BaseMessage payload
 	entity, err := c.extractEntityFromMessage(baseMsg)
 	if err != nil {
-		c.logger.Warn("Failed to extract entity from message",
-			slog.String("subject", subject),
-			slog.Any("error", err))
-		atomic.AddInt64(&c.errors, 1)
-		return
+		return nil, fmt.Errorf("extract entity (subject %s): %w", subject, err)
 	}
-
-	c.ingestEntity(ctx, entity)
+	return entity, nil
 }
 
 // ingestEntity merges an extracted Graphable entity into ENTITY_STATES and
@@ -1172,7 +1392,7 @@ func (c *Component) handleMessage(ctx context.Context, subject string, data []by
 // the primary (envelope-bearing), then route the edges via the evidence-append
 // path. Exposed as a method so the merge+regroup wire is testable end-to-end
 // without standing up the decoder.
-func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) {
+func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) error {
 	// ADR-055 §5 T2 + ADR-056 Decision 4: a Graphable may legitimately emit
 	// cross-entity edges whose Subject != EntityID() (sensorml inverse isHostedBy,
 	// federation/objectstore pass-throughs); extractEntityFromMessage files every
@@ -1194,7 +1414,7 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 		c.logger.Error("Failed to merge entity",
 			slog.String("entity_id", entity.ID),
 			slog.Any("error", err))
-		return
+		return err
 	}
 
 	c.routeForeignEdges(ctx, entity.ID, entity.MessageType, foreign)
@@ -1202,6 +1422,7 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	c.logger.Debug("Entity ingested",
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
+	return nil
 }
 
 // normalizeProjection is the SHARED projection-normalization seam (ADR-056
@@ -1874,7 +2095,15 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	}
 
 	var bytesWritten int
+	// casAttempt counts CAS-callback invocations; each re-run (attempt > 1) means
+	// the prior revision-checked Put lost the CAS and retried (ADR-072
+	// cas_retries — cross-entity contention observability, not a keying proof).
+	casAttempt := 0
 	err := c.entityBucket.UpdateWithRetry(ctx, entity.ID, func(current []byte) ([]byte, error) {
+		casAttempt++
+		if casAttempt > 1 && c.casRetries != nil {
+			c.casRetries.Inc()
+		}
 		// First write: entity didn't exist. Apply hierarchy triples
 		// (deterministic-per-ID so safe to apply once on create),
 		// then store verbatim.

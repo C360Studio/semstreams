@@ -1,6 +1,15 @@
-// Package dispatch provides the BoundedDispatcher substrate primitive
-// — a bounded-concurrency parallel worker pool with optional
-// KV-twofer-aware completion handling.
+// Package dispatch provides two bounded-concurrency substrate
+// primitives:
+//
+//   - BoundedDispatcher — unordered bounded-concurrency parallel worker
+//     pool with optional KV-twofer-aware completion handling (ADR-048).
+//   - KeyedPool — keyed-ORDERED bounded concurrency: same-key work is
+//     serialized on one lane, different keys run in parallel (ADR-072).
+//
+// Pick by whether per-key ordering matters. If any two work items that
+// share a key must be processed in submit order (e.g. graph-ingest,
+// whose arrival-order merge would corrupt on out-of-order same-entity
+// updates), use KeyedPool. Otherwise use BoundedDispatcher.
 //
 // # What this is
 //
@@ -91,11 +100,37 @@
 // should ensure those complete before Stop — typically by canceling
 // the caller's own context and letting Process see the cancellation.
 //
+// # KeyedPool — keyed-ordered concurrency (ADR-072)
+//
+// KeyedPool partitions work into N lanes by a caller-supplied key:
+// lane = fnv1a(KeyOf(work)) % Lanes. Each lane is one goroutine
+// draining a bounded queue in order, so items sharing a key process
+// serially in submit order while distinct keys run concurrently. Its
+// Process receives the assigned lane index, so a composer can shard
+// per-lane state (e.g. an applied-sequence guard) without locking. A
+// panic in Process is recovered — the lane survives and the optional
+// OnPanic disposition fires (so a composer can Nak the message).
+//
+//	pool, err := dispatch.NewKeyedPool(ctx, dispatch.KeyedConfig[ingestWork]{
+//	    Lanes:      c.config.IngestLanes,
+//	    QueueDepth: 256,
+//	    Name:       "graph_ingest",
+//	    KeyOf:      func(w ingestWork) string { return w.entity.ID },
+//	    Process:    c.processIngest,   // (ctx, lane, work) error
+//	    OnPanic:    func(w ingestWork, _ any) { _ = w.msg.Nak() },
+//	}, dispatch.KeyedDeps{MetricsRegistry: deps.MetricsRegistry, Logger: c.logger})
+//
+// SubmitBlocking applies backpressure (blocks on a full lane);
+// non-blocking Submit returns ErrLaneFull. On shutdown, cancel the
+// submit context BEFORE Stop so a producer parked in SubmitBlocking
+// unblocks (ADR-072 M3), then Stop drains the lanes.
+//
 // # See also
 //
 //   - pkg/worker — the underlying worker pool (Pool[T])
 //   - pkg/lifecycle — the workflow-shaped substrate that often
 //     pairs with BoundedDispatcher (component-internal fan-out
 //     over a Lifecycle workflow's instances)
-//   - ADR-048 — the canonical decision
+//   - ADR-048 — the BoundedDispatcher decision
+//   - ADR-072 — the KeyedPool decision (keyed-concurrent entity ingest)
 package dispatch

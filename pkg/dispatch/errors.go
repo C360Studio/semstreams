@@ -27,4 +27,11 @@ var (
 	// CompletionKVBucket is configured but Deps.NATSClient is nil
 	// (no way to subscribe to the bucket).
 	ErrNATSClientRequired = errors.New("dispatch: Deps.NATSClient is required when CompletionKVBucket is set")
+
+	// ErrLaneFull is returned by KeyedPool.Submit (the non-blocking
+	// form) when the target lane's bounded queue is at capacity.
+	// SubmitBlocking waits instead of returning this. Distinct from
+	// ErrQueueFull (the BoundedDispatcher's single-queue variant) so a
+	// caller can tell which primitive rejected the work.
+	ErrLaneFull = errors.New("dispatch: lane queue full")
 )

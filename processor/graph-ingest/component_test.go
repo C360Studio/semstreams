@@ -401,6 +401,53 @@ func TestConfig_EnforceOwnerLease_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestConfig_IngestLanes pins the ADR-072 lane-count knob: unset defaults to 8
+// (concurrent), an explicit 1 is preserved (serial opt-in must survive both
+// ApplyDefaults and Validate), an explicit 0 defaults to 8, and a negative
+// clamps to 1 rather than failing boot.
+func TestConfig_IngestLanes(t *testing.T) {
+	// Unset (absent in JSON) → ApplyDefaults → 8.
+	{
+		var cfg Config
+		require.NoError(t, json.Unmarshal([]byte(`{"ports":{}}`), &cfg))
+		cfg.ApplyDefaults()
+		assert.Equal(t, defaultIngestLanes, cfg.IngestLanes, "unset ingest_lanes defaults to 8")
+	}
+	// Explicit 1 (serial opt-in) survives ApplyDefaults AND Validate.
+	{
+		cfg := DefaultConfig()
+		cfg.IngestLanes = 1
+		cfg.ApplyDefaults()
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, 1, cfg.IngestLanes, "explicit serial (1) must be preserved")
+	}
+	// Explicit 0 → ApplyDefaults → 8 (0 is indistinguishable from unset).
+	{
+		cfg := DefaultConfig()
+		cfg.IngestLanes = 0
+		cfg.ApplyDefaults()
+		assert.Equal(t, defaultIngestLanes, cfg.IngestLanes, "0 defaults to 8")
+	}
+	// Negative clamps to 1 in Validate (degrade to safe-serial, not boot failure).
+	{
+		cfg := DefaultConfig()
+		cfg.IngestLanes = -5
+		require.NoError(t, cfg.Validate())
+		assert.Equal(t, 1, cfg.IngestLanes, "negative ingest_lanes clamps to serial")
+	}
+	// JSON round-trip preserves an explicit value under the json tag.
+	{
+		in := DefaultConfig()
+		in.IngestLanes = 4
+		raw, err := json.Marshal(in)
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"ingest_lanes":4`, "field marshals under its json tag")
+		var out Config
+		require.NoError(t, json.Unmarshal(raw, &out))
+		assert.Equal(t, 4, out.IngestLanes, "explicit lane count survives the round-trip")
+	}
+}
+
 // ====================================================================================
 // Discoverable Interface Tests
 // ====================================================================================
