@@ -224,6 +224,59 @@ func TestKeyedPool_StopDrains(t *testing.T) {
 	assert.Equal(t, int64(total), p.Stats().Completed)
 }
 
+// --- Stop/Submit race: an accepted submit is never stranded (Codex P1) ---
+
+func TestKeyedPool_StopSubmitRace(t *testing.T) {
+	var processed int64
+	p, err := NewKeyedPool(context.Background(), KeyedConfig[string]{
+		Lanes:      4,
+		QueueDepth: 8,
+		KeyOf:      func(s string) string { return s },
+		Process: func(_ context.Context, _ int, _ string) error {
+			atomic.AddInt64(&processed, 1)
+			return nil
+		},
+	}, KeyedDeps{})
+	require.NoError(t, err)
+
+	var acceptedNil int64
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	started := make(chan struct{})
+	var startOnce sync.Once
+	const submitters = 8
+	for i := 0; i < submitters; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; ; j++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Submit returns nil (accepted), ErrLaneFull, or ErrStopped. Only
+				// a nil return asserts the item WILL be processed.
+				if err := p.Submit(fmt.Sprintf("k%d-%d", id, j)); err == nil {
+					atomic.AddInt64(&acceptedNil, 1)
+					startOnce.Do(func() { close(started) })
+				}
+			}
+		}(i)
+	}
+
+	<-started // ensure submits are in flight, racing with Stop
+	require.NoError(t, p.Stop(stopCtx(t)))
+	close(stop)
+	wg.Wait()
+
+	// Contract (Codex P1): once Stop begins draining, no Submit returns success
+	// unless that item is guaranteed processed before Stop completes. So every
+	// nil-returning submit must have been processed — no stranded accepted work.
+	assert.Equal(t, atomic.LoadInt64(&acceptedNil), atomic.LoadInt64(&processed),
+		"every accepted (nil) submit must be processed before Stop completes — no stranded work")
+}
+
 // --- Submit after Stop is rejected ---
 
 func TestKeyedPool_SubmitAfterStop(t *testing.T) {

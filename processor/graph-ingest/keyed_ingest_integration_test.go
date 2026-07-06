@@ -18,9 +18,46 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestIntegration_IngestGuardBucket_RejectsTTLBucket pins the ADR-072 B2/B3
+// durability guarantee at boot: the durable guard bucket is no-eviction
+// correctness state, so if a stale/foreign deploy pre-created
+// GRAPH_INGEST_APPLIED_SEQ with a TTL (CreateKeyValueBucket returns an existing
+// bucket as-is), Start MUST fail-closed rather than run with a bucket that can
+// silently evict sequence stamps and reopen the overwrite bug.
+func TestIntegration_IngestGuardBucket_RejectsTTLBucket(t *testing.T) {
+	ctx := context.Background()
+	streams := []natsclient.TestStreamConfig{
+		{Name: "ENTITY", Subjects: []string{"entity.>"}},
+	}
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+
+	// Pre-create the guard bucket WITH a TTL (a stale/foreign deploy).
+	_, err := testClient.Client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket: graphIngestGuardBucket,
+		TTL:    24 * time.Hour,
+	})
+	require.NoError(t, err)
+
+	cfg := DefaultConfig()
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	require.NoError(t, c.Initialize())
+	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+
+	// Start must fail-closed on the guard bucket's retention policy.
+	err = c.Start(ctx)
+	require.Error(t, err, "Start must reject a TTL-configured guard bucket")
+	assert.ErrorIs(t, err, natsclient.ErrGraphBucketRetention,
+		"the failure must be the retention guardrail, not an unrelated error")
+}
 
 // TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool drives the
 // ASSEMBLED wire end-to-end: a message published to the ENTITY stream is picked

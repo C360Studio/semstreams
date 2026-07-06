@@ -199,11 +199,19 @@ stub/foreign-edge/hierarchy writes retry) and a **redelivery-drop counter** (gua
   change. Redelivery correctness is therefore **independent of `MaxDeliver`/`AckWait`
   sizing** (those stay defense-in-depth to keep redeliveries rare), closing the round-4
   B2 (restart) and B3 (cache-eviction) windows an in-memory-only guard would leave open.
+  Because this is no-eviction correctness state and `CreateKeyValueBucket` returns an
+  existing bucket as-is, `Start` fail-closes via `AssertNoLifecycleRetention` if a
+  stale/foreign deploy created the bucket with a TTL/MaxBytes policy — same boot guard as
+  `ENTITY_STATES` (post-merge review, Codex P1).
 - **Lifecycle ordering is normative (M3):** the pool is built before subscriptions start
   (else the first message submits to a nil pool). On `Stop` the order is: (1) cancel the
   submit ctx first so a consume callback parked in `SubmitBlocking` unblocks and Naks
   (else the synchronous consumer callback blocks teardown until timeout); (2) drain lanes;
-  (3) then close the KV store / NATS connection (else in-flight merges fail).
+  (3) then close the KV store / NATS connection (else in-flight merges fail). The primitive
+  also makes the **accept/stop handoff atomic** (post-merge review, Codex P1): a submit
+  that passes the stopped-check registers on a wait-group under the same lock Stop uses to
+  set `stopped`, and Stop waits on it before signaling drain — so no accepted (nil-return)
+  submit can be stranded by a lane exiting first.
 - **Head-of-line blocking (M2):** `SubmitBlocking` blocks the single dispatch goroutine
   when one lane is full, so a hot key can stall dispatch to all lanes — "~N×" is
   optimistic under key skew. A known limitation, covered by a skewed-key throughput test.

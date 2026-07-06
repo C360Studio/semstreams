@@ -1084,6 +1084,15 @@ func (c *Component) initStorage(ctx context.Context) error {
 	}
 	c.ingestGuardBucket = c.natsClient.NewKVStore(guardBucket)
 
+	// The guard bucket is correctness-critical no-eviction state (ADR-072 B2/B3):
+	// TTL or size-eviction of a sequence stamp silently reopens the restart/
+	// cache-eviction overwrite this guard closes. CreateKeyValueBucket returns an
+	// existing bucket as-is, so a stale/foreign deploy could have created it with
+	// a retention policy — fail-closed at boot, exactly like ENTITY_STATES.
+	if err := c.ingestGuardBucket.AssertNoLifecycleRetention(ctx, graphIngestGuardBucket); err != nil {
+		return errs.Wrap(err, "Component", "Start", "redelivery guard retention guardrail")
+	}
+
 	// ADR-056 Decision-4 T2-seam: open OWNER_CLAIMS read-only to classify
 	// foreign-subject edges against registered ForeignEdgeClaims. graph-ingest
 	// boots AFTER main's EnsureBuckets, so in an ownership-enabled deploy the

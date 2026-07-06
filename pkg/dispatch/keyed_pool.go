@@ -56,6 +56,14 @@ type KeyedPool[W any] struct {
 	lifecycleMu sync.Mutex
 	stopped     bool
 
+	// submitWG tracks in-flight Submit/SubmitBlocking calls between the
+	// stopped-check (which registers the WG) and the channel send. Stop
+	// waits on it BEFORE closing drainCh, so no submit can land an item
+	// after the lanes begin draining — the accept/stop handoff is atomic
+	// (a submit either lands before drain starts and is guaranteed drained,
+	// or sees stopped=true and is rejected).
+	submitWG sync.WaitGroup
+
 	metrics *keyedMetrics
 
 	// Statistics (atomic).
@@ -204,7 +212,11 @@ func (p *KeyedPool[W]) Submit(work W) error {
 		p.lifecycleMu.Unlock()
 		return ErrStopped
 	}
+	// Register in-flight UNDER the lock, alongside the stopped-check, so Stop's
+	// submitWG.Wait() cannot begin until this send completes (atomic handoff).
+	p.submitWG.Add(1)
 	p.lifecycleMu.Unlock()
+	defer p.submitWG.Done()
 
 	lane := p.laneFor(work)
 	item := keyedItem[W]{work: work, submitAt: time.Now()}
@@ -240,7 +252,9 @@ func (p *KeyedPool[W]) SubmitBlocking(ctx context.Context, work W) error {
 		p.lifecycleMu.Unlock()
 		return ErrStopped
 	}
+	p.submitWG.Add(1) // see Submit — atomic accept/stop handoff
 	p.lifecycleMu.Unlock()
+	defer p.submitWG.Done()
 
 	lane := p.laneFor(work)
 	item := keyedItem[W]{work: work, submitAt: time.Now()}
@@ -340,9 +354,31 @@ func (p *KeyedPool[W]) Stop(ctx context.Context) error {
 		p.lifecycleMu.Unlock()
 		return nil
 	}
-	p.stopped = true
-	close(p.drainCh)
+	p.stopped = true // reject NEW submits (they see stopped under the lock)
 	p.lifecycleMu.Unlock()
+
+	// Atomic accept/stop handoff: wait for in-flight submits (those that passed
+	// the stopped-check and registered on submitWG) to finish landing or aborting
+	// BEFORE signaling drain, so no item can land after the lanes start draining
+	// and exiting. drainCh stays OPEN during this wait, so a SubmitBlocking parked
+	// on a full lane still lands as the (still-running) lane frees capacity — or
+	// aborts via its own ctx (the M3 composer cancels it first). Bounded by the
+	// Stop ctx: on timeout we proceed best-effort (shutdown is already incomplete).
+	submitsDone := make(chan struct{})
+	go func() {
+		p.submitWG.Wait()
+		close(submitsDone)
+	}()
+	select {
+	case <-submitsDone:
+	case <-ctx.Done():
+		p.logger.Warn("dispatch: Stop timed out waiting for in-flight submits",
+			slog.String("pool", p.name))
+		close(p.drainCh)
+		return ctx.Err()
+	}
+
+	close(p.drainCh)
 
 	done := make(chan struct{})
 	go func() {

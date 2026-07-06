@@ -141,10 +141,11 @@ graph-ingest MUST bound the number of in-flight (dispatched-but-unacked) message
 that a producer faster than ingest cannot grow unbounded in-memory queues. In-flight
 work MUST be capped by both a bounded per-lane queue and a configurable
 `max_ack_pending` on the consumer, and the ingest handler MUST acknowledge each
-message with the same at-least-once semantics as before (explicit ack after the merge
-completes; a decode/extract failure still acknowledges and is counted rather than
-redelivered; only a panic naks for redelivery). Acknowledgement MAY occur out of order
-across lanes.
+message with at-least-once semantics: an explicit ack after the merge completes; a
+decode/extract/metadata failure or a stale-redelivery guard-drop acknowledges-and-drops
+(counted, not redelivered); and a submit failure, a durable-guard read or write failure,
+or a Process panic naks for redelivery. Acknowledgement MAY occur out of order across
+lanes.
 
 #### Scenario: backpressure caps in-flight work
 
