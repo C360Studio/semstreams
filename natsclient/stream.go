@@ -317,8 +317,10 @@ func (c *Client) buildConsumerConfig(cfg StreamConsumerConfig) jetstream.Consume
 		consumerCfg.AckWait = 30 * time.Second // Default
 	}
 
-	// Set max ack pending for backpressure
-	if cfg.MaxAckPending > 0 {
+	// Set max ack pending for backpressure. Use != 0 (not > 0) so a -1 reaches
+	// NATS as "unlimited" (gh#480) rather than being dropped to the server default;
+	// 0 stays unset (server default 1000).
+	if cfg.MaxAckPending != 0 {
 		consumerCfg.MaxAckPending = cfg.MaxAckPending
 	}
 

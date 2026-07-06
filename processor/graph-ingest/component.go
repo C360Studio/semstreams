@@ -1042,6 +1042,9 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		// gh#480: record queue wait (message age when we reach it) and processing
 		// time (the apply) separately. Metadata() can error on a non-JetStream msg;
 		// skip the lag observation rather than nil-deref (all inputs here are JS).
+		// meta.Timestamp is the NATS server store time vs our local clock; on a
+		// co-located single-host deploy this is the queue wait, but host clock skew
+		// could make it marginally negative (harmless — skews _sum only, no bucket).
 		if meta, metaErr := msg.Metadata(); metaErr == nil && !meta.Timestamp.IsZero() {
 			c.ingestLag.Observe(time.Since(meta.Timestamp).Seconds())
 		}

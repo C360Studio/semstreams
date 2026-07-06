@@ -22,17 +22,19 @@ func TestIngestHistograms_RecordSamples(t *testing.T) {
 		return m.GetHistogram().GetSampleCount()
 	}
 
+	// Process-wide singletons; assert >= before+1 so a future concurrent observer
+	// in this package can't make the assertion order-fragile.
 	proc := getProcessingDurationMetric(nil)
 	before := sampleCount(t, proc)
 	proc.Observe(0.0015)
-	if got := sampleCount(t, proc); got != before+1 {
-		t.Errorf("processing_duration_seconds sample count = %d, want %d", got, before+1)
+	if got := sampleCount(t, proc); got < before+1 {
+		t.Errorf("processing_duration_seconds sample count = %d, want >= %d", got, before+1)
 	}
 
 	lag := getIngestLagMetric(nil)
 	lbefore := sampleCount(t, lag)
 	lag.Observe(0.5)
-	if got := sampleCount(t, lag); got != lbefore+1 {
-		t.Errorf("ingest_lag_seconds sample count = %d, want %d", got, lbefore+1)
+	if got := sampleCount(t, lag); got < lbefore+1 {
+		t.Errorf("ingest_lag_seconds sample count = %d, want >= %d", got, lbefore+1)
 	}
 }
