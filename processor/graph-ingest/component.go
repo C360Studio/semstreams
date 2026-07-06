@@ -68,6 +68,9 @@ var (
 
 	redeliveriesDroppedOnce    sync.Once
 	redeliveriesDroppedCounter prometheus.Counter
+
+	casRetriesOnce    sync.Once
+	casRetriesCounter prometheus.Counter
 )
 
 // entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
@@ -318,6 +321,33 @@ func getRedeliveriesDroppedMetric(registry *metric.MetricsRegistry) prometheus.C
 	return redeliveriesDroppedCounter
 }
 
+// getCasRetriesMetric returns the process-wide counter of CAS-conflict retries
+// during entity merge (ADR-072). Incremented each time MergeEntity's CAS
+// callback re-runs (attempt > 1) — the previous attempt's revision-checked Put
+// lost the CAS and retried. This is a **cross-entity contention-observability**
+// signal, NOT a proof of keying correctness (review H1): an entity's OWN key is
+// never written concurrently under keying, but legitimate cross-entity
+// referential writes (relationship-target stubs, foreign edges, shared
+// hierarchy containers) DO touch shared keys and retry. Expect ~0 on workloads
+// without hierarchy / dense relationships / entity-birth churn; a spike is a
+// workload signal, not necessarily a bug.
+func getCasRetriesMetric(registry *metric.MetricsRegistry) prometheus.Counter {
+	casRetriesOnce.Do(func() {
+		casRetriesCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "cas_retries_total",
+			Help:      "Entity-merge CAS-conflict retries — cross-entity contention observability, NOT a keying-correctness proof (ADR-072).",
+		})
+		if registry != nil {
+			_ = registry.RegisterCounter("graph-ingest", "cas_retries_total", casRetriesCounter)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(casRetriesCounter)
+		}
+	})
+	return casRetriesCounter
+}
+
 // Config holds configuration for graph-ingest component
 type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -549,6 +579,7 @@ type Component struct {
 	processingDuration     prometheus.Histogram   // gh#480 per-message apply time (processing half)
 	ingestLag              prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
 	redeliveriesDropped    prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
+	casRetries             prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
 	metricsRegistry        *metric.MetricsRegistry
 
 	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
@@ -624,6 +655,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		processingDuration:     getProcessingDurationMetric(deps.MetricsRegistry),
 		ingestLag:              getIngestLagMetric(deps.MetricsRegistry),
 		redeliveriesDropped:    getRedeliveriesDroppedMetric(deps.MetricsRegistry),
+		casRetries:             getCasRetriesMetric(deps.MetricsRegistry),
 		metricsRegistry:        deps.MetricsRegistry,
 	}
 
@@ -2054,7 +2086,15 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	}
 
 	var bytesWritten int
+	// casAttempt counts CAS-callback invocations; each re-run (attempt > 1) means
+	// the prior revision-checked Put lost the CAS and retried (ADR-072
+	// cas_retries — cross-entity contention observability, not a keying proof).
+	casAttempt := 0
 	err := c.entityBucket.UpdateWithRetry(ctx, entity.ID, func(current []byte) ([]byte, error) {
+		casAttempt++
+		if casAttempt > 1 && c.casRetries != nil {
+			c.casRetries.Inc()
+		}
 		// First write: entity didn't exist. Apply hierarchy triples
 		// (deterministic-per-ID so safe to apply once on create),
 		// then store verbatim.

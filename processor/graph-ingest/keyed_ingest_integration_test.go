@@ -29,25 +29,7 @@ import (
 // the other tests exercise the consume→pool→ingest composition; this pins that
 // the pool wiring actually processes published messages (the happy path).
 func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T) {
-	ctx := context.Background()
-	streams := []natsclient.TestStreamConfig{
-		{Name: "ENTITY", Subjects: []string{"entity.>"}},
-	}
-	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-
-	cfg := DefaultConfig() // IngestLanes = 8 (concurrent by default)
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-
-	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
-	require.NoError(t, err)
-	c := comp.(*Component)
-	require.NoError(t, c.Initialize())
-	// Register the test decoder BEFORE Start — the consumer reads c.decoder on
-	// each message, so swapping it after Start would race the consumer goroutine.
-	registerMergeTestPayload(t, c)
-	require.NoError(t, c.Start(ctx))
-	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	ctx, c, testClient := startKeyedWireComponent(t)
 
 	const entityID = "c360.test.wire.keyed.entity.001"
 	now := time.Now()
@@ -140,4 +122,83 @@ func TestIntegration_IngestGuard_DurablePerStreamIndependence(t *testing.T) {
 	stale, err := c.ingestGuardStale(ctx, 0, fromB)
 	require.NoError(t, err)
 	assert.False(t, stale, "stream B's low seq is not silenced by stream A's durable high seq")
+}
+
+// startKeyedWireComponent stands up a graph-ingest component with a running
+// consumer on entity.> and the merge-test decoder registered BEFORE Start (so
+// the consumer goroutine never races c.decoder). Returns the component + the
+// test client for publishing to the wire.
+func startKeyedWireComponent(t *testing.T) (context.Context, *Component, *natsclient.TestClient) {
+	t.Helper()
+	ctx := context.Background()
+	streams := []natsclient.TestStreamConfig{
+		{Name: "ENTITY", Subjects: []string{"entity.>"}},
+	}
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+
+	cfg := DefaultConfig() // IngestLanes = 8 (concurrent by default)
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	comp, err := CreateGraphIngest(cfgJSON, component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	require.NoError(t, c.Initialize())
+	registerMergeTestPayload(t, c) // decoder BEFORE Start (no consumer race)
+	require.NoError(t, c.Start(ctx))
+	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
+	return ctx, c, testClient
+}
+
+// TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered drives many rapid
+// updates for ONE entity through the assembled wire and asserts the final state
+// reflects the LAST update — i.e. same-entity messages serialize (one lane, in
+// arrival order) rather than reorder. Each publish gets a strictly higher stream
+// sequence, so none is a stale redelivery; the guard never drops one, and keyed
+// ordering guarantees the last-submitted write wins the single-valued predicate.
+// Without keying, concurrent out-of-order application of the arrival-order merge
+// could leave an older value as the winner.
+func TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered(t *testing.T) {
+	ctx, c, testClient := startKeyedWireComponent(t)
+
+	const entityID = "c360.test.wire.order.entity.001"
+	const updates = 25
+	now := time.Now()
+	for i := 1; i <= updates; i++ {
+		payload := &mergeTestGraphable{
+			entityID: entityID,
+			triples: []message.Triple{
+				{Subject: entityID, Predicate: "order.seq", Object: i, Timestamp: now, Confidence: 1.0},
+			},
+		}
+		baseMsg := message.NewBaseMessage(payload.Schema(), payload, "test-source")
+		data, err := json.Marshal(baseMsg)
+		require.NoError(t, err)
+		require.NoError(t, testClient.Client.PublishToStream(ctx, "entity."+entityID, data))
+	}
+
+	// The single-valued order.seq predicate must converge to the LAST update.
+	orderSeq := func() (float64, bool) {
+		stored, _, err := c.fetchEntityState(ctx, entityID)
+		if err != nil || stored == nil {
+			return 0, false
+		}
+		for _, tr := range stored.Triples {
+			if tr.Predicate == "order.seq" {
+				if f, ok := tr.Object.(float64); ok { // JSON round-trips numbers as float64
+					return f, true
+				}
+			}
+		}
+		return 0, false
+	}
+	require.Eventually(t, func() bool {
+		v, ok := orderSeq()
+		return ok && v == float64(updates)
+	}, 5*time.Second, 20*time.Millisecond, "same-entity updates must apply in order; final must be the last write")
+
+	// Belt-and-suspenders: it settled on exactly the last value, not an earlier one.
+	v, ok := orderSeq()
+	require.True(t, ok)
+	assert.Equal(t, float64(updates), v, "final order.seq must be the last-submitted update (no reorder)")
 }

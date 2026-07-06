@@ -168,6 +168,9 @@ graph-ingest:
   shared keys and can retry. Read it as "how much cross-entity contention is happening,"
   and expect ~0 only on workloads without hierarchy / dense relationships / entity-birth
   churn (e.g. steady-state semboids). A spike is a workload signal, not necessarily a bug.
+  **Impl:** `MergeEntity`'s `UpdateWithRetry` CAS callback counts its own re-invocations
+  (`casAttempt > 1` = the prior revision-checked Put lost the CAS) — no `natsclient`
+  change. Slight over-count on a rare Get network-blip retry; acceptable for observability.
 - `graph_ingest_redeliveries_dropped_total` counter — messages dropped by the applied-
   sequence guard (B1); a healthy small number under overload, a large number means
   MaxAckPending/AckWait are badly sized.
