@@ -84,26 +84,40 @@ wholesale-overwrites the newer relationship set. This is the corruption the ADR 
 to prevent, re-entered through the ack-timing change. It is NOT "panic-only" (the prior
 draft's error).
 
-**Fix — a per-entity applied-sequence guard, so correctness does not depend on
-`MaxAckPending`/`AckWait` sizing.** Each message carries its JetStream stream sequence
-(`msg.Metadata().Sequence.Stream`, monotonic per stream). The merge MUST drop (ack, no
-apply) any message whose stream sequence is **not newer** than the last sequence already
-applied to that entity. Two viable implementations (decide in impl):
-- **Durable (preferred):** stamp the applied stream sequence on the entity; the CAS
-  `Get` already reads the entity, so compare-and-skip is free, memory-safe, and
-  restart-safe.
-- **In-lane map:** a per-lane `map[entityID]uint64` (lane-goroutine-local, lock-free
-  since each lane owns a disjoint key set) — simpler, but grows with distinct-entity
-  cardinality (needs bounding) and resets on restart.
-Sizing `MaxAckPending` to drain within `AckWait` stays as defense-in-depth, but the
-sequence guard is what makes redelivery *safe* rather than *rare*.
+**Fix — an applied-sequence guard keyed by `(entityID, streamName)`, in an in-memory
+per-lane map updated AFTER side effects** (corrected after review round 3 killed both the
+per-entity-only guard and the per-port-pool idea):
+
+- **One GLOBAL pool** (`hash(entityID) → lane`) so the same entity serializes through one
+  lane across ALL input streams. graph-ingest runs multiple input streams
+  (`objectstore.stored.entity` + `sensor.processed.entity` in `structural.json`); a
+  per-port pool would put a cross-stream entity in two lanes → race. The global pool
+  keeps the "same entity → one lane" invariant the arrival-order merge requires.
+- **Guard key = `(entityID, streamName)`**, from `msg.Metadata().Stream` +
+  `.Sequence.Stream`. Stream sequence is monotonic *per stream*, so the guard drops a
+  message only when it is not newer than the last applied **from that same stream** — a
+  redelivery. It NEVER compares sequences across streams (round-2 unsoundness: a low-seq
+  message from stream B was silenced by a high-seq apply from stream A). Cross-stream
+  same-entity messages both apply, in arrival order through the single lane = today's LWW.
+- **In-memory per-lane map** `map[entityID]map[streamName]uint64` (or a composite key),
+  lock-free (each entity only ever on its lane), updated **after** the post-commit side
+  effects (`updateSuffixIndex`, `ensureRelationshipTargetsExist`, `routeForeignEdges`)
+  complete — so a crash between the primary CAS and the side effects leaves the map
+  un-updated and the redelivery **re-drives** them. No durable `EntityState` stamp (that
+  would commit inside the CAS, before side effects, and skip them on crash — round-2 M-B;
+  it would also be a cross-repo schema change — M-C). Bound the map with an LRU whose
+  window exceeds `AckWait` (a redelivery arrives within ~AckWait of the original, so the
+  entity is still resident).
+
+Sizing `MaxAckPending`/`AckWait` to keep redeliveries rare stays as defense-in-depth
+(and bounds M-D amplification), but the guard is what makes redelivery *safe*.
 
 ## Correctness
 
 | Concern | Resolution |
 |---|---|
-| Per-entity order (arrival-order merge, gh#466) | same `entity.ID` → same lane → serial submit order. Dispatch is single-goroutine (`consumer.Consume`, nats.go one dispatcher), so submit order == arrival order. Preserved. |
-| Redelivery reorder (**B1, BLOCKING**) | ack-in-lane makes AckWait-expiry redelivery reachable under overload → stale re-apply overwrites newer via full-set-replace. Fixed by the **per-entity applied-sequence guard** above (drop seq ≤ last-applied), NOT by ack timing. |
+| Per-entity order (arrival-order merge, gh#466) | ONE global pool, same `entity.ID` → same lane → serial across ALL input streams (round-3 fix: per-port pools would split a cross-stream entity into two lanes and race). Within a stream, dispatch is single-goroutine so submit order == arrival order. Cross-stream same-entity applies in arrival order through the one lane = today's LWW. Preserved. |
+| Redelivery reorder (**B1, BLOCKING**) | ack-in-lane makes AckWait-expiry redelivery reachable under overload → stale re-apply overwrites newer via full-set-replace. Fixed by the **`(entityID, streamName)` applied-sequence guard** above (drop a message not newer than the last applied *from that stream*), NOT by ack timing. Per-stream so it never silences a valid lower-seq message from another stream (round-2 fix). |
 | Same-entity CAS | same key never runs on two lanes ⇒ **no concurrent CAS on that entity's OWN key** ⇒ no self-inflicted `ErrKVRevisionMismatch` retry. |
 | Cross-entity CAS (**H1** — claim corrected) | ingesting entity A ALSO writes OTHER keys: relationship-target stubs (`ensureRelationshipTargetsExist`, `component.go:1886/1999-2045`, unconditional), foreign edges (`routeForeignEdges`), and shared hierarchy containers (`EnableHierarchy`). So cross-lane contention on those keys is real (esp. entity-birth, hierarchy, relationship-dense). It is made **safe by atomic create-if-absent (`Create`→`ErrKVKeyExists` no-op) + CAS retry, NOT by lane affinity** — no lost update, but the "no concurrent same-key CAS" claim is only true for an entity's own key. `cas_retries_total` is therefore a **contention-observability** signal, not a keying-correctness proof (legit cross-entity writes make it non-zero). |
 | At-least-once ack | ack in the lane after `ingestEntity`; `AckExplicit` tolerates out-of-order acks across lanes. Submit failure Naks (never silent-drop). |

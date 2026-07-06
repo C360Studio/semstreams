@@ -8,21 +8,39 @@ first as its own change (`graph-ingest-ingest-metrics`), to make the throughput 
 measurable before changing the concurrency model. This keyed-concurrency ADR is parked
 pending (a) that metrics change landing and (b) the round-2 rework below.
 
-**Two adversarial-review rounds (both code-grounded) hardened this before any code:**
-round 1 (NEEDS-REWORK) → per-entity applied-sequence guard (B1), primitive panic
-recovery (H2), corrected CAS/backpressure claims (H1/M1) — all folded below. Round 2
-(NEEDS-ANOTHER-REWORK) found the sequence guard **unsound across multiple input
-streams**: graph-ingest runs on 2 streams in shipped configs (`structural.json`,
-`e2e-structural.json`: `objectstore.stored.entity` + `sensor.processed.entity`), whose
-`Sequence.Stream` counters are independent, so a per-entity guard silences the
-lower-sequence stream (silent data loss). **Resolution direction (not yet folded into the
-mechanics below):** one keyed pool **per input port** (each pool = one consumer = one
-stream sequence space) + an **in-memory per-pool applied-sequence map** updated *after*
-side effects — which also removes the durable `EntityState` stamp (no cross-repo schema
-change) and re-drives post-commit side effects on crash. Essentially Kafka-Streams-style
-per-partition offset tracking. When this ADR resumes, fold that resolution + round-2
-MEDIUMs (M-A foreign-edge scope, M-D redelivery amplification, L-A/L-B ctx+metadata
-handling) before Accept.
+**Three code-grounded reviews hardened this before any code.** Round 1 (NEEDS-REWORK) →
+per-entity applied-sequence guard (B1), primitive panic recovery (H2), corrected
+CAS/backpressure claims (H1/M1). Round 2 (NEEDS-ANOTHER-REWORK) found the sequence guard
+**unsound across multiple input streams**: graph-ingest runs on 2 streams in shipped
+configs (`structural.json`, `e2e-structural.json`: `objectstore.stored.entity` +
+`sensor.processed.entity`) with independent `Sequence.Stream` counters, so a per-entity
+guard silences the lower-sequence stream (silent data loss). Round 3 (Codex, NEEDS-REWORK)
+**killed the round-2 "one pool per input port" fix**: per-port pools restore per-stream
+sequence spaces but **no longer serialize the same entity across ports** — an entity
+arriving on both streams lands in two lanes and races, violating the core invariant
+(same entity → one lane, required because `MergeTriples` is arrival-order full-set-
+replace, `graph/helpers.go`).
+
+**Corrected resolution (fold into the mechanics below when this resumes):**
+- **One GLOBAL keyed pool** (`hash(entityID) → lane`), so the same entity serializes
+  through one lane across ALL input streams (cross-port race gone; cross-stream
+  same-entity is arrival-order LWW exactly as serial mode is today — no regression, no
+  silent drop).
+- **Redelivery guard keyed by `(entityID, streamName)`** (from `msg.Metadata().Stream` +
+  `.Sequence.Stream`) in an **in-memory per-lane map** updated *after* side effects — so
+  it is per-stream (never compares sequences across streams → round-2 unsoundness gone),
+  needs no durable `EntityState` stamp (no cross-repo schema change → round-2 M-C gone),
+  and re-drives post-commit side effects on crash (routeForeignEdges etc.). Bound the map
+  (LRU window > AckWait).
+- Also fold round-2 MEDIUMs (M-A foreign-edge scope, M-D redelivery amplification,
+  L-A/L-B ctx+metadata handling) and **rebase on part 1**: the processing/ingest-lag
+  histograms + `max_ack_pending` plumbing already SHIPPED (#488, on main); this change
+  adds ONLY the keyed-pool metrics (queue-wait vs lane, in-flight, depth), the CAS-retry
+  counter, and the redelivery-drop counter.
+- **Test plan MUST include a two-port (structural-shape) case**: same-entity cross-port
+  serialization + a lower-sequence redelivery from one stream not dropping a valid
+  message from the other. `task e2e:core` is single-stream — use the structural tier or a
+  targeted two-input integration test.
 
 Records the concurrency model for graph-ingest's entity ingest and the placement of the
 primitive it composes. Mechanics (field names, lane routing, backpressure sizing) live in
@@ -142,11 +160,12 @@ the port config to **raise/tune that 1000 ceiling so N lanes stay fed**;
 not bounded by `MaxAckPending`.
 
 **Measurability is part of the decision, not a follow-up (gh#480 observability gap).**
-The primitive and graph-ingest expose Prometheus metrics that separate **queue wait**
-(`dispatch_queue_wait_seconds`) from **processing time**
-(`graph_ingest_processing_duration_seconds`), plus queue depth, achieved concurrency,
-and a **CAS-retry counter** that *proves* the no-contention claim (stays ~0 under
-correct keying). The prior state could only infer end-to-end latency downstream.
+The queue-wait-vs-processing split and `max_ack_pending` already SHIPPED in part 1 (#488,
+`graph_ingest_processing_duration_seconds` + `graph_ingest_ingest_lag_seconds`). This
+change adds the keyed-pool metrics — lane queue-wait (distinct from stream-backlog lag),
+achieved concurrency (in-flight), queue depth — plus a **CAS-retry counter** (a
+cross-entity *contention-observability* signal, NOT a proof of keying — see H1: legit
+stub/foreign-edge/hierarchy writes retry) and a **redelivery-drop counter** (guard hits).
 
 ## Consequences
 

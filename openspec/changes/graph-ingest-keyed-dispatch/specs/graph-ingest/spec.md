@@ -64,23 +64,36 @@ across lanes.
 ### Requirement: A redelivered stale message MUST NOT overwrite a newer write
 
 graph-ingest MUST NOT apply a message whose source ordering position (its JetStream
-stream sequence) is not newer than the position already applied to that entity, so that
-a delayed redelivery cannot overwrite a newer write through the arrival-order
-(full-set-replace) merge. This matters because acknowledgement moves to after per-lane
-queueing, making redelivery reachable (e.g. ack-wait expiry while queued under overload)
-and re-processing after a newer same-entity message has already been applied. The guard
-MUST make correctness independent of `max_ack_pending`/ack-wait sizing (which remain a
-tuning knob to keep redeliveries rare, not a correctness dependency). A message that
-cannot be enqueued for processing MUST be negatively acknowledged for redelivery, never
-silently dropped.
+stream sequence) is not newer than the position already applied to that entity **from
+the same input stream**, so a delayed redelivery cannot overwrite a newer write through
+the arrival-order (full-set-replace) merge. The guard MUST be keyed by
+`(entity, input stream)` and MUST NOT compare positions across different input streams:
+graph-ingest consumes multiple streams (e.g. `objectstore.stored.entity` +
+`sensor.processed.entity`) whose sequence spaces are independent, so a cross-stream
+comparison would silently drop a valid message from the lower-sequence stream. All
+messages for one entity MUST serialize through a single lane regardless of which stream
+they arrive on, so cross-stream writes to one entity apply in arrival order
+(last-writer-wins), never concurrently. The guard MUST be updated only AFTER a message's
+post-commit side effects complete, so a crash mid-apply re-drives them on redelivery
+rather than a marker suppressing them. It MUST make correctness independent of
+`max_ack_pending`/ack-wait sizing (a tuning knob to keep redeliveries rare). A message
+that cannot be enqueued MUST be negatively acknowledged for redelivery, never silently
+dropped.
 
 #### Scenario: a late redelivery of an older update is ignored
 
-- **GIVEN** an entity to which message at stream sequence N has already been applied
-- **WHEN** a message for the same entity at stream sequence < N is (re)delivered and
-      processed
+- **GIVEN** an entity to which a message at stream sequence N from stream S has been applied
+- **WHEN** a message for the same entity at stream sequence < N from the same stream S is
+      (re)delivered and processed
 - **THEN** it is dropped without overwriting the entity
 - **AND** the entity still reflects the sequence-N (or newer) write
+
+#### Scenario: a valid message from another stream is not dropped
+
+- **GIVEN** an entity updated from stream A at A's sequence 1000
+- **WHEN** a newer message for the same entity arrives from stream B at B's sequence 5
+- **THEN** it is applied (not dropped) — sequences are compared only within a stream
+- **AND** it serialized on the same lane as the stream-A write (no concurrent apply)
 
 ### Requirement: Ingest MUST expose metrics that separate queue wait from processing time
 

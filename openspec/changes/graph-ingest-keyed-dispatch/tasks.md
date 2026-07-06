@@ -42,48 +42,50 @@
 - [ ] 3.2 In `Start`, build one `KeyedPool[ingestWork]` (`KeyOf = w.entity.ID`,
       `Process = c.processIngest`). Store on `Component`; `Stop` drains it before the KV
       store closes.
+      NOTE (round-3): ONE **global** pool shared across all input ports — NOT one pool
+      per port (per-port pools split a cross-stream entity into two lanes → race).
 - [ ] 3.3 Refactor the consume closure (`component.go:983`): decode/extract the entity
       **once** (reuse the `extractEntityFromMessage` path), then submit
-      `ingestWork{entity, msg, seq: msg.Metadata().Sequence.Stream}`. On decode/extract
-      failure keep today's behavior: `errors++`, `msg.Ack()` (ack-drop), return. Move
-      `ingestEntity` + `msg.Ack()` into `processIngest` (ack in the lane). **Submit failure
-      MUST Nak** (review B1) — never discard the result; do NOT block the submit on the
-      30s `msgCtx` (use the component ctx) so a >AckWait block can't silently drop.
-- [ ] 3.4 **Redelivery-safety guard (review B1, BLOCKING):** carry each message's JetStream
-      stream sequence; in the merge, drop (ack, no apply) a message whose sequence is not
-      newer than the last applied to that entity. Prefer a durable stamp on the entity
-      (memory/restart-safe; the CAS `Get` already reads it) over a per-lane in-memory map.
-      Increment `graph_ingest_redeliveries_dropped_total`.
+      `ingestWork{entity, msg, stream: meta.Stream, seq: meta.Sequence.Stream}` (from
+      `msg.Metadata()`). On decode/extract/metadata failure keep today's behavior:
+      `errors++`, `msg.Ack()` (ack-drop), return. Move `ingestEntity` + `msg.Ack()` into
+      `processIngest`, run on the POOL ctx (not the 30s `msgCtx` — else `MergeEntity`'s
+      `ctx.Err()` aborts every merge, review L-B). **Submit failure MUST Nak** (review B1)
+      — never discard the result; don't block the submit on `msgCtx`.
+- [ ] 3.4 **Redelivery-safety guard (review B1 BLOCKING, round-2+3 corrected):** an
+      in-memory per-lane map keyed by **`(entityID, streamName)`** → last applied stream
+      sequence; drop (ack, no apply) a message not newer than the last applied **from that
+      same stream**. Keyed per-`(entity, stream)` so it never compares across the
+      independent per-stream sequence spaces (structural.json runs 2 input streams). NO
+      durable `EntityState` stamp (would commit in-CAS before side effects → skip them on
+      crash, and is a cross-repo schema change). Update the map AFTER the post-commit side
+      effects (`updateSuffixIndex`/`ensureRelationshipTargetsExist`/`routeForeignEdges`)
+      so a mid-apply crash re-drives them. LRU-bound the map (window > AckWait). Increment
+      `graph_ingest_redeliveries_dropped_total`.
 - [ ] 3.5 **Lifecycle ordering is correctness (review M3):** build the pool BEFORE
       subscriptions start (else first message → nil pool); in `Stop`, drain the pool
       BEFORE the KV store / NATS connection closes.
 - [ ] 3.6 Confirm the decode-once refactor doesn't double-decode: `KeyOf` reads the
       already-parsed `entity.ID`; `processIngest` takes the parsed entity.
 
-## 4. Backpressure — MaxAckPending port plumbing
+## 4. Backpressure — MaxAckPending (SHIPPED in part 1)
 
-- [ ] 4.1 Add `MaxAckPending int json:"max_ack_pending,omitempty"` to `JetStreamPort`
-      (`component/port_jetstream.go:10`) and to `component.ConsumerConfig`
-      (`port_jetstream.go:77`); copy it in `applyJetStreamConsumerConfig`
-      (`port_jetstream.go:123`).
-- [ ] 4.2 graph-ingest maps `ConsumerConfig.MaxAckPending` →
-      `StreamConsumerConfig.MaxAckPending` (`component.go:972` mapping block); already
-      honored at `natsclient/stream.go:320`. Default sized `≈ Lanes × QueueDepth × k`
-      against AckWait so a full pipeline drains before redelivery.
-- [ ] 4.3 Round-trip test: a port config with `max_ack_pending` reaches
-      `StreamConsumerConfig` (guard the plumbing gap the issue flagged).
+- [x] 4.1–4.3 `max_ack_pending` port plumbing + `stream.go` `!= 0` fix + round-trip test
+      **shipped in part 1 (#488)**. This change only SIZES it as the keyed backpressure
+      ceiling (`≈ Lanes × QueueDepth × k` against AckWait, so a full pipeline drains
+      before redelivery — defense-in-depth atop the sequence guard).
 
-## 5. graph-ingest metrics
+## 5. graph-ingest metrics (base SHIPPED in part 1 — add only the keyed-pool ones)
 
-- [ ] 5.1 `graph_ingest_processing_duration_seconds` (hist) around `ingestEntity`
-      (merge+CAS); `graph_ingest_cas_retries_total` (counter, on `ErrKVRevisionMismatch`
-      retry, `mutations.go:553-576`/`UpdateWithRetry`) — documented as **cross-entity
-      contention observability, NOT a keying-correctness proof** (review H1);
-      `graph_ingest_redeliveries_dropped_total` (counter, task 3.4). Wire the pool's
-      metrics through `deps.MetricsRegistry`. Follow the `sync.Once` getter pattern
-      (`component.go:41-61`).
-- [ ] 5.2 Fix the stale `natsclient/stream.go:46` comment ("0 means unlimited" → "0 =
-      server default 1000; -1 = unlimited") (review M1).
+- [x] 5.0 `graph_ingest_processing_duration_seconds` + `graph_ingest_ingest_lag_seconds`
+      (stream-backlog wait) **shipped in part 1 (#488)**. Do NOT re-add.
+- [ ] 5.1 Add ONLY the keyed-pool metrics: `dispatch_queue_wait_seconds` (LANE queue
+      wait — distinct from part 1's stream-backlog `ingest_lag`), `dispatch_inflight`,
+      `dispatch_queue_depth`; `graph_ingest_cas_retries_total` (counter, on
+      `ErrKVRevisionMismatch` retry, `mutations.go:553-576`/`UpdateWithRetry`) —
+      documented as **cross-entity contention observability, NOT a keying-correctness
+      proof** (review H1); `graph_ingest_redeliveries_dropped_total` (counter, task 3.4).
+      Follow the `sync.Once` getter pattern (`component.go:41-61`).
 
 ## 6. Tests
 
@@ -95,9 +97,16 @@
       graph-ingest integration tests pass unchanged.
 - [ ] 6.4 Backpressure: producer faster than ingest → in-flight capped by lane queue +
       max_ack_pending, no unbounded growth.
-- [ ] 6.5 **Redelivery reorder (review B1):** simulate a redelivered older-sequence
-      message for an entity that already has a newer write applied; assert the guard
-      drops it and the entity keeps the newer state. Drive the real merge path.
+- [ ] 6.5 **Redelivery reorder, same stream (review B1):** a redelivered older-sequence
+      message for an entity that already has a newer write applied is dropped; entity
+      keeps the newer state. Drive the real merge path.
+- [ ] 6.5b **Two-input-stream cases (review round-2/3, MEDIUM #5) — the shipped
+      structural shape:** stand up graph-ingest with TWO input ports
+      (`objectstore.stored.entity` + `sensor.processed.entity`, per `structural.json`).
+      Assert: (a) a valid newer message for entity E from stream B at a LOW sequence is
+      NOT dropped by a prior high-sequence apply from stream A (per-stream guard); (b) the
+      same entity E arriving on both streams serializes through one lane (no concurrent
+      apply / no lost update). This is the case per-port pools would have broken.
 - [ ] 6.6 **Panic recovery (review H2):** a `Process` panic Naks the message and leaves
       the lane processing subsequent items; the component does not crash.
 - [ ] 6.7 Throughput smoke (integration, in-process NATS): N-lane ingest of a mixed-key
@@ -112,9 +121,11 @@
 - [ ] 7.2 Gates: `go test -race` (pkg/dispatch, graph-ingest, component), `task lint`,
       schema no-drift (`ingest_lanes`/`max_ack_pending` are schema'd — regenerate + diff),
       `go vet -tags=integration`.
-- [ ] 7.3 **Core-lane behavior change → `task e2e:core`** before tag (default lanes>1
-      changes the sole ENTITY_STATES writer; see
-      [[feedback_e2e_required_for_breaking_changes]]). Confirm green.
+- [ ] 7.3 **Core-lane behavior change → e2e before tag** (default lanes>1 changes the sole
+      ENTITY_STATES writer; see [[feedback_e2e_required_for_breaking_changes]]). Run
+      **`task e2e:structural`** (exercises the TWO-input-stream graph-ingest shape) — NOT
+      just `e2e:core`, which is single-stream and would miss the cross-stream case
+      (review MEDIUM #5). Confirm green.
 - [ ] 7.4 semstreams-reviewer pre-merge, specifically re-checking the adversarial-review
       findings closed: per-entity ordering under keying; **the applied-sequence guard
       actually prevents redelivery reorder (B1)**; **panic in a lane is recovered + Nak'd,
