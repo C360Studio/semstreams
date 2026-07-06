@@ -22,6 +22,12 @@
       "default": false,
       "category": "advanced"
     },
+    "ingest_lanes": {
+      "type": "integer",
+      "description": "Keyed-concurrent ingest lane count (same entity ID → one lane → ordered; 1 = serial)",
+      "default": 8,
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",
