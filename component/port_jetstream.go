@@ -40,6 +40,12 @@ type JetStreamPort struct {
 	// redelivery. Only honored on consumers that wrap their handler in
 	// natsclient.ConsumeWithHeartbeat — pure-ack consumers ignore it.
 	HeartbeatInterval string `json:"heartbeat_interval,omitempty"`
+	// MaxAckPending caps the number of delivered-but-unacked messages the
+	// server keeps in flight for this consumer — the consumer-side backpressure
+	// lever. Empty/0 falls through to the NATS server default (1000 for
+	// explicit-ack consumers); -1 is unlimited. gh#480: there was previously no
+	// config path to this at all, so operators could not tune ingest backpressure.
+	MaxAckPending int `json:"max_ack_pending,omitempty"`
 
 	// Interface contract
 	Interface *InterfaceContract `json:"interface,omitempty"`
@@ -80,6 +86,7 @@ type ConsumerConfig struct {
 	MaxDeliver        int
 	AckWait           time.Duration
 	HeartbeatInterval time.Duration
+	MaxAckPending     int // 0 = server default (1000); -1 = unlimited (gh#480)
 }
 
 // GetConsumerConfig extracts JetStream consumer configuration from a port.
@@ -129,6 +136,11 @@ func applyJetStreamConsumerConfig(cfg *ConsumerConfig, jsPort JetStreamPort) {
 	}
 	if jsPort.MaxDeliver > 0 {
 		cfg.MaxDeliver = jsPort.MaxDeliver
+	}
+	// MaxAckPending: a non-zero port value (including -1 = unlimited) overrides
+	// the server default. 0 stays 0 (caller leaves the server default).
+	if jsPort.MaxAckPending != 0 {
+		cfg.MaxAckPending = jsPort.MaxAckPending
 	}
 	if jsPort.AckWait != "" {
 		if d, err := time.ParseDuration(jsPort.AckWait); err == nil {

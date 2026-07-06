@@ -43,7 +43,8 @@ type StreamConsumerConfig struct {
 
 	// MaxAckPending limits the number of outstanding (unacknowledged) messages
 	// that can be delivered to a consumer. This provides backpressure to prevent
-	// overwhelming the consumer. 0 means unlimited (default NATS behavior).
+	// overwhelming the consumer. 0 leaves it unset, so the NATS server applies its
+	// default of 1000 for explicit-ack consumers; -1 means unlimited (gh#480).
 	MaxAckPending int
 
 	// AutoCreate enables automatic stream creation if it doesn't exist.
