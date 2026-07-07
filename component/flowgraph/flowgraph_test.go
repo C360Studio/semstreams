@@ -364,6 +364,65 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 	})
 }
 
+// TestTimerPortFlowGraph verifies the flowgraph behaviours required by the
+// TimerPort cadence-boundary contract (gh#312):
+//  1. classifyInteractionPattern returns PatternTimer (NOT the PatternStream
+//     safe-default, which would make the timer look stream-shaped).
+//  2. findOrphanedPorts does NOT flag an unconnected TimerPort input as orphaned —
+//     a cadence/scheduler boundary has no internal publisher by design.
+func TestTimerPortFlowGraph(t *testing.T) {
+	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
+
+	t.Run("classifyInteractionPattern returns PatternTimer", func(t *testing.T) {
+		port := component.TimerPort{Interval: "30s"}
+		got := g.classifyInteractionPattern(port)
+		assert.Equal(t, PatternTimer, got, "TimerPort must classify as PatternTimer, not the PatternStream default")
+	})
+
+	t.Run("TimerPort input is NOT reported as orphaned", func(t *testing.T) {
+		// A CAP-poller-style component: an HTTPClientPort whose cadence is a
+		// sibling TimerPort input, plus a NATS output. The TimerPort has no
+		// internal publisher — it IS the scheduler boundary — so
+		// findOrphanedPorts must NOT flag it.
+		comp := createMockComponentWithPorts("cap_poller", "input",
+			[]component.Port{
+				{
+					Name:      "cap_feed",
+					Direction: component.DirectionInput,
+					Required:  true,
+					Config: component.HTTPClientPort{
+						Method:      "GET",
+						URLPattern:  "https://api.weather.gov/alerts/active",
+						TriggerPort: "poll_tick",
+					},
+				},
+				{
+					Name:      "poll_tick",
+					Direction: component.DirectionInput,
+					Config:    component.TimerPort{Interval: "30s"},
+				},
+			},
+			[]component.Port{{
+				Name:      "raw_alerts",
+				Direction: component.DirectionOutput,
+				Config:    component.NATSPort{Subject: "alerts.cap.>"},
+			}},
+		)
+		graph := NewFlowGraph()
+		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+
+		orphans := graph.findOrphanedPorts()
+
+		for _, o := range orphans {
+			if o.PortName == "poll_tick" {
+				t.Errorf("TimerPort input %q incorrectly reported as orphaned (issue=%s); "+
+					"a cadence/scheduler boundary has no internal publisher by design",
+					o.PortName, o.Issue)
+			}
+		}
+	})
+}
+
 // Test helper functions
 func createMockComponent(name, componentType string) component.Discoverable {
 	return createMockComponentWithPorts(name, componentType, nil, nil)
