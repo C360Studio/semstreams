@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/gorilla/websocket"
@@ -1881,4 +1882,36 @@ func TestDeriveStreamName(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestWebSocketOutput_MetricsRegistrationIdempotent reproduces gh#490: a runtime
+// component restart re-constructs the output against the SAME MetricsRegistry.
+// The previous raw MustRegister panicked with "duplicate metrics collector
+// registration attempted" on the second construction; routing through the
+// idempotent MetricsRegistry.Register* helpers must make restart panic-free.
+func TestWebSocketOutput_MetricsRegistrationIdempotent(t *testing.T) {
+	registry := metric.NewMetricsRegistry()
+	newCfg := func() ConstructorConfig {
+		return ConstructorConfig{
+			Name:            "ws-restart",
+			Port:            9090,
+			Path:            "/ws",
+			Subjects:        []string{"test.>"},
+			NATSClient:      &natsclient.Client{},
+			MetricsRegistry: registry,
+			DeliveryMode:    DeliveryAtMostOnce,
+			AckTimeout:      5 * time.Second,
+		}
+	}
+
+	// First construction registers the collectors.
+	first := NewOutputFromConfig(newCfg())
+	require.NotNil(t, first.metrics)
+
+	// Second construction against the same registry mimics restart — must not
+	// panic (would previously fail via MustRegister).
+	require.NotPanics(t, func() {
+		second := NewOutputFromConfig(newCfg())
+		require.NotNil(t, second.metrics)
+	})
 }
