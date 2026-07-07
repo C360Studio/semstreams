@@ -688,7 +688,10 @@ func (cm *ComponentManager) CreateComponent(
 	// Initialize if supported
 	if lifecycle, ok := component.AsLifecycleComponent(comp); ok {
 		if err := lifecycle.Initialize(); err != nil {
-			// Remove from registry on initialization failure
+			// Release the port ownership registered just above (the component
+			// never makes it into cm.components, so unregisterPorts-by-name
+			// can't find it) and remove from registry on init failure (gh#417).
+			cm.unregisterPortsForComp(instanceName, comp)
 			cm.registry.UnregisterInstance(instanceName)
 			return fmt.Errorf("failed to initialize component '%s': %w", instanceName, err)
 		}
@@ -820,14 +823,22 @@ func (cm *ComponentManager) registerPorts(name string, comp component.Discoverab
 	}
 }
 
-// unregisterPorts removes all port registrations for a component
+// unregisterPorts removes all port registrations for a component still tracked
+// in cm.components. Caller must hold cm.mu.
 func (cm *ComponentManager) unregisterPorts(name string) {
 	mc, exists := cm.components[name]
 	if !exists || mc.Component == nil {
 		return
 	}
-	comp := mc.Component
+	cm.unregisterPortsForComp(name, mc.Component)
+}
 
+// unregisterPortsForComp releases cm.resources ownership entries for comp's
+// ports. It takes the component directly (rather than looking it up in
+// cm.components) so it can also clean up a component that registerPorts already
+// recorded but that was never committed to cm.components — e.g. a
+// CreateComponent that fails at Initialize. Caller must hold cm.mu.
+func (cm *ComponentManager) unregisterPortsForComp(name string, comp component.Discoverable) {
 	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
 	for _, port := range allPorts {
 		if port.Config == nil {
@@ -1302,6 +1313,7 @@ func (cm *ComponentManager) restartComponentWithNewConfig(
 
 	// Step 3: Remove from tracking and unregister from registry
 	cm.mu.Lock()
+	cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
 	delete(cm.components, name)
 	cm.removeFromStartOrder(name)
 	cm.mu.Unlock()
@@ -1344,6 +1356,7 @@ func (cm *ComponentManager) createAndStartComponent(ctx context.Context, name st
 			// If start fails, remove the component to keep state clean
 			cm.mu.Lock()
 			if mc, exists := cm.components[name]; exists {
+				cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
 				delete(cm.components, name)
 				cm.removeFromStartOrder(name)
 				if mc.Cancel != nil {
@@ -1399,6 +1412,7 @@ func (cm *ComponentManager) stopAndRemoveComponent(
 
 	// Step 3: Remove from tracking and unregister from registry
 	cm.mu.Lock()
+	cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
 	delete(cm.components, name)
 	cm.removeFromStartOrder(name)
 	cm.mu.Unlock()
