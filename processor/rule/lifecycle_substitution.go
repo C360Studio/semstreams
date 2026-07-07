@@ -9,11 +9,14 @@
 //   - $entity.lifecycle.workflow_def → JSON of WorkflowDef (rare;
 //     tooling-shaped, not condition-shaped)
 //
-// The Participant lookup is O(workflows × bucket-size) per first
-// call on an ExecutionContext; subsequent calls in the same ec hit
-// the cache. Negative lookups (entity isn't lifecycle-managed) are
-// also cached so that a multi-template rule pays the scan cost at
-// most once per fire even when the trigger entity has no Participant.
+// The Participant lookup is O(workflows) — a match over the registered
+// EntityIDPattern set (Manager.findRegistrationForEntity) — plus one
+// direct-key KV Get (the key IS the entity ID; no bucket scan), on the
+// first call for an entity on an ExecutionContext; subsequent calls in
+// the same ec hit the cache. Negative lookups (entity isn't
+// lifecycle-managed) are also cached so that a multi-template rule pays
+// that cost at most once per fire even when the trigger entity has no
+// Participant.
 //
 // All paths leave tokens verbatim on lookup failure or missing-manager
 // — the unresolved-template warning downstream surfaces the issue.
