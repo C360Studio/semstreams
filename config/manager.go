@@ -37,6 +37,15 @@ type Manager struct {
 	wg         sync.WaitGroup // Track all goroutines
 	stopped    atomic.Bool    // Indicates manager is stopped
 
+	// detached is set when Start refuses to adopt config from a bucket
+	// owned by a different platform identity (gh#459). In detached mode the
+	// manager runs on its local file config and must not touch the shared KV
+	// bucket at all — the write methods (PushToKV / PutComponentToKV /
+	// DeleteComponentFromKV) no-op so a later operator-triggered flow deploy
+	// cannot bleed the local app's components INTO the foreign bucket
+	// (the reverse-direction of the adoption bug).
+	detached atomic.Bool
+
 	// engineHighWaterRev is the highest KV revision the Manager has
 	// produced via its own write methods (PutComponentToKV,
 	// DeleteComponentFromKV, PushToKV). The watcher's handleUpdate
@@ -190,6 +199,37 @@ func (cm *Manager) Start(ctx context.Context) error {
 			// Continue anyway - UI won't have initial state but app can run
 		}
 	} else {
+		// Guard against cross-app config bleed on shared NATS (gh#459).
+		// The config bucket has a fixed global name (semstreams_config), so
+		// two sem* apps pointed at the same NATS server share it. Sync
+		// direction is otherwise decided purely by version, and matching
+		// versions is NOT matching identity — the second app to boot would
+		// silently adopt the first's components (and can panic creating a
+		// foreign component). If the stored config carries a DIFFERENT
+		// platform identity (org+id+env) than the local file, refuse to
+		// adopt: mark the manager detached, run on local file config, and
+		// touch the shared bucket no further (no sync, push, watch, or later
+		// runtime write — see the detached field). Shout so the operator
+		// notices they're on the wrong NATS. Identity-less configs (no
+		// org/id on either side) fall through to the existing behavior —
+		// they're indistinguishable, and per-platform bucket namespacing is
+		// the complete fix for that case.
+		if kvIdentity, found := cm.kvPlatformIdentity(ctx); found {
+			localIdentity := cm.config.Get().Platform
+			if platformHasIdentity(localIdentity) && platformHasIdentity(kvIdentity) &&
+				platformIdentityKey(localIdentity) != platformIdentityKey(kvIdentity) {
+				cm.detached.Store(true)
+				cm.logger.Error(
+					"Refusing to adopt config from a bucket owned by a different platform identity; "+
+						"running on local file config, detached from KV. Likely pointed at the wrong "+
+						"NATS server, or the shared config bucket needs per-platform namespacing.",
+					"local_identity", platformIdentityKey(localIdentity),
+					"kv_identity", platformIdentityKey(kvIdentity),
+					"bucket", "semstreams_config")
+				return nil
+			}
+		}
+
 		// Subsequent boot: compare versions to decide sync direction
 		fileVersion := cm.config.Get().Version
 		kvVersion, err := cm.getKVVersion(ctx)
@@ -582,6 +622,11 @@ func sanitizeNATSKey(key string) string {
 // Stop's Enabled=false PUT) are filtered out by the watermark
 // because their revisions are <= the latest PUT we captured.
 func (cm *Manager) DeleteComponentFromKV(ctx context.Context, name string) error {
+	if cm.detached.Load() {
+		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component delete",
+			"component", name)
+		return nil
+	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	if err := cm.kvStore.Delete(ctx, key); err != nil {
 		if err == natsclient.ErrKVKeyNotFound {
@@ -627,6 +672,11 @@ func (cm *Manager) bumpEngineHighWater(rev uint64) {
 // caller has already applied this change synchronously (engine
 // pattern: write memory → write KV).
 func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig types.ComponentConfig) error {
+	if cm.detached.Load() {
+		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping component write",
+			"component", name)
+		return nil
+	}
 	key := fmt.Sprintf("components.%s", sanitizeNATSKey(name))
 	data, err := json.Marshal(compConfig)
 	if err != nil {
@@ -644,6 +694,10 @@ func (cm *Manager) PutComponentToKV(ctx context.Context, name string, compConfig
 // PushToKV pushes the current configuration to NATS KV
 // This is useful for initial setup or config synchronization
 func (cm *Manager) PushToKV(ctx context.Context) error {
+	if cm.detached.Load() {
+		cm.logger.Warn("Config manager detached from foreign KV bucket; skipping config push")
+		return nil
+	}
 	cfg := cm.config.Get()
 
 	// Push version first
@@ -797,6 +851,40 @@ func (cm *Manager) getKVVersion(ctx context.Context) (string, error) {
 	}
 
 	return version, nil
+}
+
+// kvPlatformIdentity reads the stored platform identity from the KV `platform`
+// key. Returns found=false when the key is absent or unparseable (an old config
+// format, or a bucket written before platform identity was populated), in which
+// case the caller must not treat the bucket as identity-mismatched.
+func (cm *Manager) kvPlatformIdentity(ctx context.Context) (PlatformConfig, bool) {
+	entry, err := cm.kv.Get(ctx, "platform")
+	if err != nil {
+		return PlatformConfig{}, false
+	}
+	var p PlatformConfig
+	if err := json.Unmarshal(entry.Value(), &p); err != nil {
+		cm.logger.Warn("Failed to parse platform identity from KV", "error", err)
+		return PlatformConfig{}, false
+	}
+	return p, true
+}
+
+// platformHasIdentity reports whether a platform config carries a discriminating
+// identity (org or id). An identity-less config cannot be told apart from
+// another, so the cross-app guard does not fire on it.
+func platformHasIdentity(p PlatformConfig) bool {
+	return p.Org != "" || p.ID != ""
+}
+
+// platformIdentityKey is the identity tuple used to compare two platform
+// configs for the cross-app config-bleed guard (gh#459). Environment is
+// included so two instances of the same org+id but different environments
+// (prod vs dev) sharing one NATS are also treated as distinct. A NUL
+// separator (illegal in every segment) is used so the join is unambiguous —
+// {org:"a",id:"b.c"} and {org:"a.b",id:"c"} must not collide.
+func platformIdentityKey(p PlatformConfig) string {
+	return p.Org + "\x00" + p.ID + "\x00" + p.Environment
 }
 
 // syncFromKV loads all configuration from KV and applies it

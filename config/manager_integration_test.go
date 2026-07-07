@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -361,4 +362,73 @@ func TestManagerIntegrationSuite(t *testing.T) {
 		t.Skip("Skipping integration tests in short mode")
 	}
 	suite.Run(t, new(ManagerIntegrationSuite))
+}
+
+// TestConfigManager_RefusesForeignPlatformIdentity is a regression test for
+// gh#459: two sem* apps sharing one NATS server also share the fixed-name
+// semstreams_config bucket. With matching config versions, the second app to
+// boot silently adopted the first's components (and could panic creating a
+// foreign one). The manager must refuse to adopt config whose platform
+// identity (org+id) differs from the local file's, and run on local config.
+func TestConfigManager_RefusesForeignPlatformIdentity(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Manager A — the "foreign" app boots first and seeds the shared bucket.
+	foreignCfg := &Config{
+		Version:  "1.0.0",
+		Platform: PlatformConfig{Org: "foreignorg", ID: "foreign-app", Type: "test"},
+		Services: make(types.ServiceConfigs),
+		Components: ComponentConfigs{
+			"foreign-comp": types.ComponentConfig{
+				Type: "input", Name: "udp", Enabled: true,
+				Config: json.RawMessage(`{"port": 8080}`),
+			},
+		},
+	}
+	mgrA, err := NewConfigManager(foreignCfg, tc.Client, nil)
+	require.NoError(t, err)
+	require.NoError(t, mgrA.Start(ctx)) // first boot → pushes foreign config to KV
+	require.NoError(t, mgrA.Stop(5*time.Second))
+
+	// Manager B — the "local" app boots second against the same bucket with a
+	// DIFFERENT platform identity but the SAME version. It must NOT adopt the
+	// foreign config.
+	localCfg := &Config{
+		Version:  "1.0.0", // matching version is not matching identity
+		Platform: PlatformConfig{Org: "localorg", ID: "local-app", Type: "test"},
+		Services: make(types.ServiceConfigs),
+		Components: ComponentConfigs{
+			"local-comp": types.ComponentConfig{
+				Type: "output", Name: "websocket", Enabled: true,
+				Config: json.RawMessage(`{"port": 9099}`),
+			},
+		},
+	}
+	mgrB, err := NewConfigManager(localCfg, tc.Client, nil)
+	require.NoError(t, err)
+	require.NoError(t, mgrB.Start(ctx))
+	defer mgrB.Stop(5 * time.Second)
+
+	got := mgrB.GetConfig().Get()
+
+	// Kept its own platform identity — did not adopt the foreign one.
+	require.Equal(t, "localorg", got.Platform.Org, "manager B must keep its own org")
+	require.Equal(t, "local-app", got.Platform.ID, "manager B must keep its own platform id")
+
+	// Kept its own component; did not adopt the foreign app's (the gh#459 bleed).
+	_, hasForeign := got.Components["foreign-comp"]
+	require.False(t, hasForeign, "manager B must not adopt the foreign app's component")
+	_, hasLocal := got.Components["local-comp"]
+	require.True(t, hasLocal, "manager B must keep its own component")
+
+	// Reverse-bleed guard: a detached manager must not write the local app's
+	// config INTO the foreign bucket either. PushToKV must no-op, leaving the
+	// stored platform identity as the foreign one.
+	require.NoError(t, mgrB.PushToKV(ctx))
+	kvID, found := mgrB.kvPlatformIdentity(ctx)
+	require.True(t, found)
+	require.Equal(t, "foreign-app", kvID.ID,
+		"detached manager must not overwrite the foreign bucket's platform identity")
 }
