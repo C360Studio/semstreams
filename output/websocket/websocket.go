@@ -228,7 +228,7 @@ type Metrics struct {
 }
 
 // newMetrics creates and registers Output metrics
-func newMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
+func newMetrics(registry *metric.MetricsRegistry, componentName string) *Metrics {
 	// Return nil if no registry provided (nil input = nil feature pattern)
 	if registry == nil {
 		return nil
@@ -309,19 +309,21 @@ func newMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 		}),
 	}
 
-	// Register all metrics (no conditional needed since metrics only exist with registry)
-	registry.PrometheusRegistry().MustRegister(
-		metrics.messagesReceived,
-		metrics.messagesSent,
-		metrics.bytesSent,
-		metrics.clientsConnected,
-		metrics.connectionTotal,
-		metrics.disconnectionTotal,
-		metrics.broadcastDuration,
-		metrics.messageSizeBytes,
-		metrics.errorsTotal,
-		metrics.serverUptimeSeconds,
-	)
+	// Register through the idempotent MetricsRegistry helpers (keyed by
+	// componentName.metricName) rather than the raw Prometheus registry.
+	// MustRegister panics on the second registration of the same collector,
+	// which crashes runtime component restart (gh#490); the Register* methods
+	// swallow AlreadyRegisteredError so restart is safe.
+	registry.RegisterCounterVec(componentName, "messages_received", metrics.messagesReceived)
+	registry.RegisterCounterVec(componentName, "messages_sent", metrics.messagesSent)
+	registry.RegisterCounter(componentName, "bytes_sent", metrics.bytesSent)
+	registry.RegisterGauge(componentName, "clients_connected", metrics.clientsConnected)
+	registry.RegisterCounter(componentName, "connection_total", metrics.connectionTotal)
+	registry.RegisterCounterVec(componentName, "disconnection_total", metrics.disconnectionTotal)
+	registry.RegisterHistogramVec(componentName, "broadcast_duration", metrics.broadcastDuration)
+	registry.RegisterHistogramVec(componentName, "message_size_bytes", metrics.messageSizeBytes)
+	registry.RegisterCounterVec(componentName, "errors_total", metrics.errorsTotal)
+	registry.RegisterGauge(componentName, "server_uptime_seconds", metrics.serverUptimeSeconds)
 
 	return metrics
 }
