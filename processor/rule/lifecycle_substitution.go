@@ -48,8 +48,9 @@ import (
 // the operator wants when a rule references the harness for an
 // entity that isn't lifecycle-managed.
 //
-// O(workflows × bucket-size) per call; intended for the rule-fire
-// path, not per-message-shaped. See LookupByEntityID's contract.
+// O(workflows) plus one direct-key KV Get per call (no bucket scan);
+// intended for the rule-fire path, not per-message-shaped. See
+// LookupByEntityID's contract.
 func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) {
 	if manager == nil || entityID == "" || fields == nil {
 		return

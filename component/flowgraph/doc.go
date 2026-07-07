@@ -106,6 +106,12 @@
 //   - Non-exclusive; skipped by orphan detection like PatternNetwork (a store
 //     with no reader, or a federation store-read, is not an orphan)
 //
+// PatternTimer (cadence/scheduler boundary):
+//   - TimerPort drives a component on an interval (e.g. an HTTPClientPort
+//     poller via HTTPClientPort.TriggerPort), not a NATS stream
+//   - Not connected in graph; skipped by orphan detection like PatternNetwork
+//     (a legitimately unconnected timer input is a scheduler boundary, not an orphan)
+//
 // # Connection Matching
 //
 // NATS subject matching follows standard semantics:

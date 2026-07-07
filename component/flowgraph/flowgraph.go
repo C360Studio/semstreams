@@ -74,6 +74,13 @@ const (
 	// store-read federation port, is not "orphaned"; findOrphanedPorts skips
 	// PatternStore for the same reason it skips PatternHTTPClient.
 	PatternStore InteractionPattern = "store"
+	// PatternTimer represents TimerPort (cadence/scheduler boundary) interactions.
+	// A TimerPort is an external scheduling boundary — it drives a component on an
+	// interval (e.g. an HTTPClientPort.TriggerPort poller), not a NATS stream, so it
+	// must not be classified as PatternStream (the safe default) and matched as a
+	// data edge. Like PatternNetwork/PatternHTTPClient, a legitimately unconnected
+	// timer input is not orphaned: findOrphanedPorts skips PatternTimer.
+	PatternTimer InteractionPattern = "timer"
 )
 
 // Issue type constants for orphaned port classification
@@ -226,6 +233,8 @@ func (g *FlowGraph) classifyInteractionPattern(portConfig component.Portable) In
 		return PatternStore
 	case component.StoreReadPort:
 		return PatternStore
+	case component.TimerPort:
+		return PatternTimer
 	default:
 		return PatternStream // Safe default
 	}
@@ -862,9 +871,10 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 				// internal graph because their "publisher" is outside the system.
 				// PatternStore (ADR-063) is a federation-capability declaration whose
 				// pairing is producer-chosen at runtime — an unmatched store-read is
-				// not orphaned.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore {
-					continue // Not orphaned, it's an external/federation input
+				// not orphaned. PatternTimer is a cadence/scheduler boundary that
+				// drives the component on an interval, not a data edge.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore || port.Pattern == PatternTimer {
+					continue // Not orphaned, it's an external/federation/cadence input
 				}
 
 				// Determine issue type based on pattern
@@ -895,8 +905,9 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 				// PatternHTTPClient is also skipped: the component owns the
 				// outbound connection so no internal subscriber is expected.
 				// PatternStore (ADR-063): a store-provide with no consumer is a
-				// legitimately-unread store, not an orphan.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore {
+				// legitimately-unread store, not an orphan. PatternTimer is a
+				// cadence boundary, symmetric with the input side.
+				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore || port.Pattern == PatternTimer {
 					continue // Not orphaned, it's an external/federation output
 				}
 
