@@ -1555,6 +1555,19 @@ func (w *Output) sendToClient(conn *websocket.Conn, info *clientInfo, data []byt
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
+// pingClient sends a ping frame to a client while holding the per-connection
+// write lock. gorilla/websocket panics on concurrent writes, so the background
+// ping path must serialize against the frame fan-out path (sendToClient) on the
+// same info.writeMutex — otherwise a ping racing a frame write is a hard
+// process panic, not a dropped frame (gh#500).
+func (w *Output) pingClient(conn *websocket.Conn, info *clientInfo) error {
+	info.writeMutex.Lock()
+	defer info.writeMutex.Unlock()
+
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return conn.WriteMessage(websocket.PingMessage, nil)
+}
+
 // maintainClients performs periodic maintenance on client connections
 func (w *Output) maintainClients(ctx context.Context) {
 	defer w.wg.Done()
@@ -1603,7 +1616,7 @@ func (w *Output) pingClients(ctx context.Context) {
 			continue
 		}
 
-		if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+		if err := w.pingClient(conn, info); err != nil {
 			// Client error, remove client
 			w.removeClient(conn, info)
 			w.errors.Add(1)

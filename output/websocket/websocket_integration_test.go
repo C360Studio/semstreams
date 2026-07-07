@@ -438,3 +438,91 @@ func getIntegrationPort(t *testing.T) int {
 	_ = ln.Close()
 	return port
 }
+
+// TestWebSocketOutput_PingSerializesWithFrameWrites is a regression test for
+// gh#500: pingClients wrote a ping frame without holding the per-connection
+// writeMutex, racing the frame fan-out path (sendToClient). gorilla/websocket
+// panics on concurrent writes to one conn, so this was a hard process crash
+// under load, not a dropped frame. The fix routes the ping through pingClient,
+// which takes info.writeMutex. Rather than hope a race hammer trips the panic
+// (flaky — see gh#469), this proves the lock is held deterministically:
+// pingClients must BLOCK while the frame path holds the write lock, then
+// proceed once it is released.
+func TestWebSocketOutput_PingSerializesWithFrameWrites(t *testing.T) {
+	natsClient := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	outputPort := getAvailablePort(t)
+	wsOutput := NewOutputFromConfig(ConstructorConfig{
+		Name:            "test-output-ping-lock",
+		Port:            outputPort,
+		Path:            "/stream",
+		Subjects:        []string{"sensor.pinglock"},
+		NATSClient:      natsClient.Client,
+		MetricsRegistry: metric.NewMetricsRegistry(),
+		Security:        security.Config{},
+		DeliveryMode:    DeliveryAtMostOnce,
+		AckTimeout:      5 * time.Second,
+	})
+	require.NoError(t, wsOutput.Initialize())
+	require.NoError(t, wsOutput.Start(ctx))
+	defer wsOutput.Stop(5 * time.Second)
+
+	time.Sleep(200 * time.Millisecond)
+
+	wsURL := fmt.Sprintf("ws://localhost:%d/stream", outputPort)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Drain the client so server-side writes never block on a full buffer.
+	go func() {
+		for {
+			if _, _, rerr := conn.ReadMessage(); rerr != nil {
+				return
+			}
+		}
+	}()
+
+	// Wait for the server to register the accepted connection, then grab its
+	// clientInfo (same-package white-box access).
+	var info *clientInfo
+	require.Eventually(t, func() bool {
+		wsOutput.clientsMu.RLock()
+		defer wsOutput.clientsMu.RUnlock()
+		for _, i := range wsOutput.clients {
+			info = i
+			return true
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "client never registered on server")
+	require.NotNil(t, info)
+
+	// Simulate the frame path holding the per-connection write lock.
+	info.writeMutex.Lock()
+
+	// pingClients must now block trying to acquire the same lock.
+	done := make(chan struct{})
+	go func() {
+		wsOutput.pingClients(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		info.writeMutex.Unlock()
+		t.Fatal("pingClients did not block on the per-connection write lock — " +
+			"ping path bypasses info.writeMutex (gh#500 regression)")
+	case <-time.After(300 * time.Millisecond):
+		// Expected: blocked on writeMutex.
+	}
+
+	// Release the lock; pingClients should now proceed and return.
+	info.writeMutex.Unlock()
+	select {
+	case <-done:
+		// ping completed after the lock was released — serialization confirmed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("pingClients never completed after write lock released")
+	}
+}
