@@ -370,6 +370,9 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 //     safe-default, which would make the timer look stream-shaped).
 //  2. findOrphanedPorts does NOT flag an unconnected TimerPort input as orphaned —
 //     a cadence/scheduler boundary has no internal publisher by design.
+//  3. extractPortInfo surfaces the polling cadence as the port's ConnectionID
+//     ("timer:<interval>") so operators can inspect it from the flowgraph,
+//     instead of the "unknown_type_*" fallthrough.
 func TestTimerPortFlowGraph(t *testing.T) {
 	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
 
@@ -420,6 +423,34 @@ func TestTimerPortFlowGraph(t *testing.T) {
 					o.PortName, o.Issue)
 			}
 		}
+	})
+
+	t.Run("TimerPort ConnectionID surfaces the interval", func(t *testing.T) {
+		// The stored PortInfo.ConnectionID must expose the polling cadence
+		// ("timer:30s") so operators can inspect it from the flowgraph, rather
+		// than the "unknown_type_*" fallthrough it hit before gh#312.
+		comp := createMockComponentWithPorts("cap_poller", "input",
+			[]component.Port{{
+				Name:      "poll_tick",
+				Direction: component.DirectionInput,
+				Config:    component.TimerPort{Interval: "30s"},
+			}},
+			nil,
+		)
+		graph := NewFlowGraph()
+		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+
+		node := graph.nodes["cap_poller"]
+		require.NotNil(t, node)
+		var found bool
+		for _, p := range node.InputPorts {
+			if p.Name == "poll_tick" {
+				found = true
+				assert.Equal(t, "timer:30s", p.ConnectionID,
+					"TimerPort ConnectionID must surface the interval, not the unknown_type fallthrough")
+			}
+		}
+		assert.True(t, found, "poll_tick port info must be present on the node")
 	})
 }
 

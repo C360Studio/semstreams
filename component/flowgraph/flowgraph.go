@@ -205,6 +205,8 @@ func (g *FlowGraph) extractInterfaceContract(portConfig component.Portable) *com
 		return nil
 	case component.HTTPClientPort:
 		return config.Interface
+	case component.TimerPort:
+		return config.Interface
 	default:
 		return nil
 	}
@@ -294,6 +296,13 @@ func (g *FlowGraph) extractConnectionID(portConfig component.Portable) string {
 			return "http_client_missing_url"
 		}
 		return config.URLPattern
+	case component.TimerPort:
+		// Surface the polling cadence so operators can inspect it from the
+		// flowgraph (gh#312). Matches TimerPort.ResourceID()'s "timer:<interval>".
+		if config.Interval == "" {
+			return "timer_missing_interval"
+		}
+		return "timer:" + config.Interval
 	case component.StoreProvidePort:
 		// A provider is identified by the StorageInstance it owns.
 		if config.Instance == "" {
