@@ -28,6 +28,14 @@ Datomic, Cassandra, Kafka, time-series DBs). This document is that audit.
   semteams, semconnect, semstreams-ui, semspec (archiving).
 - **Prior-art research pass** (110-agent verified harness): how mature systems
   bound growth while preserving referential integrity.
+- **Evidence & reproducibility.** Each per-product section below is *distilled*
+  from those traces, but **every load-bearing claim carries an inline `file:line`
+  citation** into the named repo — that citation IS the durable evidence, and any
+  claim is reproducible by reading the cited file at the cited path (`../<product>/…`).
+  The raw agent transcripts were the working input, not the record; where a claim
+  lacks a cite it is a summary judgement, not a code fact. Codex's independent
+  code-grounded pass (PR #509) re-verified the SemStreams-side claims against
+  head — they held.
 
 ## Prior-art idioms (verified against primary sources)
 
@@ -50,9 +58,12 @@ rare exception (git prune, Datomic excision, Cassandra tombstone purge).
 2. **Incomplete root declaration** — any un-enumerated root deletes live data
    (git's root set is deliberately extensive). Fix: complete, explicit roots.
 3. **Partial-cluster expiry** — reclaiming a subset of a connected cluster
-   strands dangling refs. Fix: reclaim connected clusters **all-or-none**.
+   strands dangling refs. Fix: **never partial *blind* expiry** — a tree-owned
+   cluster reclaims all-or-none, but a **DAG-shared satellite dies with its last
+   referrer** (refcount / refuse-if-referenced; ADR-073 §2 supersedes the naive
+   all-or-none framing, which breaks on DAG sharing).
 
-## Per-product findings (distilled; full traces in session record)
+## Per-product findings (distilled; inline `file:line` cites are the durable, reproducible evidence — see Method)
 
 ### semstreams-ui — clean negative
 Owns **no durable graph data**; a read/derive projection. Only durable datum is
@@ -240,8 +251,9 @@ Four refinements the traces forced:
 - **Under-declared roots = data loss:** semops `EdgeNoBirthStub`; the permanent
   audit/institutional roots (semdev ledger, semspec Lessons) **must** be in the
   keep-set. → complete, explicit root declaration.
-- **Partial-cluster expiry:** semspec `down -v` (whole namespace only). →
-  reclaim connected clusters all-or-none.
+- **Partial-cluster expiry:** semspec `down -v` (whole namespace only). → never
+  partial *blind* expiry: tree-owned clusters all-or-none, DAG-shared satellites
+  die-with-last-referrer (refcount; ADR-073 §2).
 - **Births outrun GC:** semboids (no population cap; cull 2-RTT vs spawn 1-RTT).
   → the write side must be rate-matched to the reaper.
 
@@ -254,10 +266,12 @@ export). This is git "delete a namespace" and it is the correct shape.
 
 ## Implications
 
-- **ADR-068** (retention/deletion/GC mechanism) is *validated* by the prior art,
-  not superseded — it gets *completed* (reverse-index, tombstone, GC) with the
-  three failure-mode guardrails, and gains the `lesson-curator` pattern as the
-  identity-tier reference implementation.
+- **ADR-068** (retention/deletion/GC mechanism) is *validated* by the prior art
+  and **amended-and-completed** by ADR-073: D3's *single shared* reverse-index
+  becomes a per-owner / tombstone-payload choice, and D5's *central* sweeper is
+  demoted to an off-by-default backstop (primary index cleanup is decentralized
+  reactive) — with the failure-mode guardrails and `lesson-curator` as the
+  identity-tier tombstone-mechanism reference.
 - **ADR-073** is repurposed from the dead "DataClass policy layer" to **the
   graph's three-tier ingestion + retention contract**: firehose→time-windowed
   streams (with a MaxBytes backstop default), identity→reachability-GC + per-facet

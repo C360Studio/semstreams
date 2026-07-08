@@ -13,9 +13,24 @@ the skeleton (three tiers by shape, the per-facet retention unit, firehose-by-ti
 blob-by-refcount, D1) survived attack.
 
 **Supersedes this ADR's own earlier "entity DataClass policy layer" draft.**
-**Completes** (does not supersede) [ADR-068](068-graph-retention-deletion-lifecycle.md)
-— the prior art validates 068's mechanism and this ADR supplies the policy layer +
-the reactive reclamation shape 068 left open. **Leaves ADR-054 intact** (indexing
+**Amends and completes** [ADR-068](068-graph-retention-deletion-lifecycle.md).
+The prior art validates 068's mechanism *family* and this ADR supplies the policy
+layer it lacked — but it **refines two load-bearing 068 mechanisms**, so the
+relationship is amendment, not mere completion (stated precisely so a follow-on
+cannot claim compliance under both readings):
+- **068 D3 (cleanup primitive):** 068 mandates a *single shared per-entity reverse
+  index* maintained on the write path. ADR-073 **replaces that with a per-owner
+  choice** — each derived-store owner keeps its *own* reverse-knowledge, OR the
+  tombstone carries the entity's last-known triples (the open fork in §4). There is
+  no longer one central reverse index.
+- **068 D5 (GC worker):** 068 frames a fixed-interval central sweeper as the
+  mechanism for index cleanup, tombstone purge, and blob GC. ADR-073 **demotes the
+  central sweeper to an off-by-default *backstop*** (orphan mark-sweep + purge +
+  blob GC); the **primary identity-tier index cleanup is decentralized, reactive,
+  per-owner** (§4).
+
+Everything else in 068 stands (D0 per-producer watermark, D1 guardrail, D3
+refuse/cascade + refcount, the tombstone). **Leaves ADR-054 intact** (indexing
 profile is a retrieval dial, not retention). Mechanics live in the follow-on
 OpenSpec change and the `graph-retention` spec.
 
