@@ -33,7 +33,7 @@ here.
 ## 5. Docs + gates
 
 - [x] 5.1 Reclamation + delete-visible observation usage note added to the `lifecycle` package `doc.go`; the seeded `lifecycle` spec delta (this change's `specs/lifecycle/spec.md`) is the current-truth home for the mechanics and syncs on archive. ADR-047 not re-documented.
-- [ ] 5.2 Pre-push gate: `go test -race ./pkg/lifecycle/...` + integration, `go vet` (incl. `-tags=integration`), `gofmt`, `revive` (no new warnings), `task schema:generate` no-drift. semstreams-reviewer pre-merge (new substrate API + RPC error contract on the new delete emit).
+- [x] 5.2 Pre-push gate: `go test -race ./pkg/lifecycle/...` + integration (green), `go vet` default + `-tags=integration` (clean), `gofmt` (clean), `revive` via `task lint` (0 warnings), `task schema:generate` no-drift. semstreams-reviewer pre-merge: **APPROVE**, no blocking/high findings (verified the delete RPC error contract against `handleEntityDelete`, the Watch-refactor byte-for-byte fidelity, and the Complete/DespawnWith terminal resolution). One doc nit (Deleted-during-bootstrap) addressed.
 
 ## 6. Increment 2 — batch (gh#498), FOLLOW-UP CHANGE (not executed here)
 

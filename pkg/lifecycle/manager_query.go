@@ -166,9 +166,12 @@ func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participan
 // Events — Upserted (with projected Participant) for matching
 // creates/phase-changes, and Deleted (Participant nil) for reclaims
 // (KeyValueDelete/KeyValuePurge) whose key matches the workflow's
-// EntityIDPattern. Bootstrap-then-live like Watch for Upserted; deletes
-// are live only. Lets an observer learn of reclaims without a parallel
-// raw KV watch (gh#497).
+// EntityIDPattern. Bootstrap-then-live like Watch for Upserted; Deleted
+// events are normally live, but the WatchAll bootstrap can also replay a
+// key whose latest revision is a tombstone — so a Deleted may arrive
+// during initial values too. Either way treat Deleted as "ensure absent"
+// (idempotent), never "remove a row I saw upserted." Lets an observer
+// learn of reclaims without a parallel raw KV watch (gh#497).
 //
 // CALLER MUST CANCEL ctx when done — same pinning contract as Watch.
 func (m *Manager) WatchEvents(ctx context.Context, workflow string) (<-chan Event, error) {
