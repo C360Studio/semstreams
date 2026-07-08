@@ -35,8 +35,11 @@ here.
 - [x] 5.1 Reclamation + delete-visible observation usage note added to the `lifecycle` package `doc.go`; the seeded `lifecycle` spec delta (this change's `specs/lifecycle/spec.md`) is the current-truth home for the mechanics and syncs on archive. ADR-047 not re-documented.
 - [x] 5.2 Pre-push gate: `go test -race ./pkg/lifecycle/...` + integration (green), `go vet` default + `-tags=integration` (clean), `gofmt` (clean), `revive` via `task lint` (0 warnings), `task schema:generate` no-drift. semstreams-reviewer pre-merge: **APPROVE**, no blocking/high findings (verified the delete RPC error contract against `handleEntityDelete`, the Watch-refactor byte-for-byte fidelity, and the Complete/DespawnWith terminal resolution). One doc nit (Deleted-during-bootstrap) addressed.
 
-## 6. Increment 2 — batch (gh#498), FOLLOW-UP CHANGE (not executed here)
+## 6. Increment 2 — batch (gh#498), DEFERRED to its own change
 
-- [ ] 6.1 Scope a follow-up change adding a graph-ingest batch-entity-write handler (`graph.mutation.entity.write_batch`), applying N create/update ops under single-writer + ADR-055 envelope + CAS, with a `graph-ingest` spec delta authored at that time.
-- [ ] 6.2 Add emitter `writeBatch` + `Manager.CreateBatch([]Participant)` / `TransitionBatch(...)` that coalesce a wave into one request (do NOT ship a loop-only stand-in — no coalescing = no gh#498 benefit).
-- [ ] 6.3 Decide partial-success reporting (per-entity error slice) vs strict all-or-nothing (open question in design.md).
+Increment 1 (despawn + WatchEvents) is complete and archived here. The batch
+wave path (gh#498) is **deferred to a separate OpenSpec change** when scoped —
+it is gated on a new graph-ingest `graph.mutation.entity.write_batch` handler
+(single-writer + ADR-055 envelope + CAS, adjacent to gh#480) and carries its own
+`graph-ingest` spec delta and the partial-success-vs-all-or-nothing decision
+(design.md open question). Not part of this archived change.
