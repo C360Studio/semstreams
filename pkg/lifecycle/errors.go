@@ -108,6 +108,14 @@ var (
 	// on transient-vs-permanent.
 	ErrEmitFailed = errors.New("lifecycle: emit to graph-ingest failed")
 
+	// ErrEntityIDPatternMismatch is returned by Manager.Despawn / DespawnWith
+	// when the given entityID does not match the named (and registered)
+	// workflow's EntityIDPattern. Distinct from ErrWorkflowNotRegistered (the
+	// workflow itself is known) — this scopes a reclaim to a known workflow and
+	// refuses to emit a delete for an entity that provably belongs to a
+	// different pattern (a caller wire-up bug: wrong workflow for the entity).
+	ErrEntityIDPatternMismatch = errors.New("lifecycle: entity_id does not match workflow EntityIDPattern")
+
 	// ErrOwnerQuiesced is returned by Manager.Create / TransitionWith /
 	// UpdateFromOperator when the attached ownership Registry has QUIESCED this
 	// workflow's owner — WatchRevival detected another process re-registered the

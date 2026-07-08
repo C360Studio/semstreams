@@ -54,6 +54,13 @@ type graphEmitter interface {
 	// is already present in ENTITY_STATES (the per-entity CAS race
 	// surface for fresh-create).
 	create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error)
+
+	// delete sends a DeleteEntityRequest to graph-ingest, reclaiming an
+	// entity from ENTITY_STATES (Manager.Despawn). The handler is
+	// idempotent: deleting an already-absent entity returns
+	// DeleteEntityResponse{Deleted: false} with no error, so there is no
+	// not-found sentinel to translate.
+	delete(ctx context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error)
 }
 
 // graphEmitterNATS is the production graphEmitter — sends requests
@@ -77,6 +84,7 @@ func newGraphEmitterNATS(client *natsclient.Client, timeout time.Duration) *grap
 const (
 	graphSubjectUpdateWithTriples = "graph.mutation.entity.update_with_triples"
 	graphSubjectCreateWithTriples = "graph.mutation.entity.create_with_triples"
+	graphSubjectEntityDelete      = "graph.mutation.entity.delete"
 )
 
 // lifecycleEmitRetryConfig is the retry budget for Manager emit
@@ -182,6 +190,37 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 	}
 
 	var resp graph.CreateEntityWithTriplesResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
+	}
+	return &resp, nil
+}
+
+// delete marshals a DeleteEntityRequest, fires it as a NATS
+// request/reply, and returns the response. Targets
+// graph.mutation.entity.delete — the reclaim path for Manager.Despawn.
+//
+// Uses RequestWithRetryClassified with lifecycleEmitRetryConfig to
+// survive the graph-ingest cold-start race (gh#170); retry is safe
+// because delete is idempotent — a duplicate delivery after a lost
+// response re-deletes an already-absent entity, which the handler
+// reports as DeleteEntityResponse{Deleted: false} with no error. There
+// is therefore no not-found sentinel to translate (unlike create/update):
+// any error here is a genuine transport/handler failure → ErrEmitFailed.
+//
+// No outer context.WithTimeout: see update() rationale.
+func (g *graphEmitterNATS) delete(ctx context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
+	}
+
+	respBody, err := g.client.RequestWithRetryClassified(ctx, graphSubjectEntityDelete, body, g.timeout, lifecycleEmitRetryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectEntityDelete, err)
+	}
+
+	var resp graph.DeleteEntityResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
 	}

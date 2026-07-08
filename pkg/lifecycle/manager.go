@@ -848,6 +848,20 @@ func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
 		return fmt.Errorf("%w: workflow=%q entity_id=%q from=%q",
 			ErrTerminalPhase, reg.workflow.Name, entityID, from)
 	}
+	terminal, err := m.selectReachableTerminal(reg, entityID, from)
+	if err != nil {
+		return err
+	}
+	return m.Transition(ctx, workflow, entityID, terminal, TransitionSourceFramework, "")
+}
+
+// selectReachableTerminal returns the terminal phase deterministically
+// reachable from `from` — the first declared terminal with a direct out-edge
+// from `from`. This is the selection Complete and DespawnWith share. It logs a
+// Warn when the choice is ambiguous (more than one terminal reachable) and
+// returns ErrInvalidTransition when none is. Callers MUST have already
+// confirmed `from` is non-terminal.
+func (m *Manager) selectReachableTerminal(reg *registration, entityID, from string) (string, error) {
 	outEdges := reg.workflow.Transitions[from]
 	terminals := reg.workflow.Transitions.TerminalPhases()
 	var reachable []string
@@ -860,18 +874,18 @@ func (m *Manager) Complete(ctx context.Context, workflow, entityID string) error
 		}
 	}
 	if len(reachable) == 0 {
-		return fmt.Errorf("%w: workflow=%q entity_id=%q phase=%q has no edge to any terminal phase (declared terminals: %v)",
+		return "", fmt.Errorf("%w: workflow=%q entity_id=%q phase=%q has no edge to any terminal phase (declared terminals: %v)",
 			ErrInvalidTransition, reg.workflow.Name, entityID, from, terminals)
 	}
 	if len(reachable) > 1 {
-		m.logger.Warn("lifecycle: Complete selection is ambiguous — multiple terminals reachable from current phase; consider Transition for explicit selection",
+		m.logger.Warn("lifecycle: terminal selection is ambiguous — multiple terminals reachable from current phase; consider Transition for explicit selection",
 			slog.String("workflow", reg.workflow.Name),
 			slog.String("entity_id", entityID),
 			slog.String("from", from),
 			slog.String("picked", reachable[0]),
 			slog.Any("alternatives", reachable[1:]))
 	}
-	return m.Transition(ctx, workflow, entityID, reachable[0], TransitionSourceFramework, "")
+	return reachable[0], nil
 }
 
 // Fail transitions the entity to the "failed" terminal phase,
@@ -896,4 +910,89 @@ func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) e
 			ErrInvalidTransition, reg.workflow.Name, failedPhase)
 	}
 	return m.Transition(ctx, workflow, entityID, failedPhase, TransitionSourceFramework, reason)
+}
+
+// Despawn reclaims a lifecycle entity by deleting it from ENTITY_STATES
+// through the graph-ingest graph.mutation.entity.delete mutation, so no
+// consumer hand-rolls the raw delete (gh#497). It reclaims ONLY — it does NOT
+// transition the entity to a terminal phase first; a caller that wants a
+// terminal audit trail should Complete/Fail beforehand, or use DespawnWith.
+//
+// Idempotent: reclaiming an already-absent entity succeeds (the delete handler
+// reports Deleted:false with no error).
+//
+// workflow MUST be registered and its EntityIDPattern MUST match entityID; a
+// mismatch returns ErrEntityIDPatternMismatch and emits no delete (scopes the
+// reclaim to a known workflow and refuses a delete for a foreign entity).
+//
+// RECLAIM ≠ INDEX GC: Despawn removes the entity from ENTITY_STATES but does
+// NOT clean derived indexes (PREDICATE/NAME/ALIAS/CONTEXT/spatial/embedding) —
+// that is gh#433/ADR-068 work. Until it lands, a despawned entity may leave
+// stale index rows. Despawn introduces no new leak (it centralizes the same
+// entity.delete consumers already call); it does not fix the existing one.
+func (m *Manager) Despawn(ctx context.Context, workflow, entityID string) error {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return err
+	}
+	if !matchPattern(reg.workflow.EntityIDPattern, entityID) {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q",
+			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern)
+	}
+	if _, err := m.emitter.delete(ctx, &graph.DeleteEntityRequest{EntityID: entityID}); err != nil {
+		return fmt.Errorf("lifecycle: Despawn %q: %w", entityID, err)
+	}
+	m.logger.Debug("lifecycle: despawn",
+		slog.String("workflow", reg.workflow.Name),
+		slog.String("entity_id", entityID),
+	)
+	return nil
+}
+
+// DespawnWith is the common cull: it transitions the entity to its workflow's
+// terminal phase (producing the phase write + audit TransitionEvent with the
+// given source/note), then reclaims it via Despawn. The terminal is selected
+// like Complete (first reachable terminal from the current phase).
+//
+// The two graph-ingest operations are NOT atomic. On partial failure the state
+// is recoverable, never corrupt: if the terminal transition commits but the
+// delete fails (or the process dies between them), the entity is left
+// terminal-but-present and a subsequent Despawn reclaims it. Re-invoking
+// DespawnWith is also safe — an already-terminal entity skips the transition
+// and only reclaims; an already-absent entity is a no-op success.
+//
+// Like Despawn, reclaim is NOT index GC (gh#433/ADR-068).
+func (m *Manager) DespawnWith(ctx context.Context, workflow, entityID string, source TransitionSource, note string) error {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return err
+	}
+	if !matchPattern(reg.workflow.EntityIDPattern, entityID) {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q",
+			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern)
+	}
+	state, _, err := m.getEntity(ctx, entityID)
+	if errors.Is(err, ErrEntityNotFound) {
+		return nil // already gone — nothing to transition or reclaim
+	}
+	if err != nil {
+		return err
+	}
+	from := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
+	if from == "" {
+		return fmt.Errorf("%w: workflow=%q entity_id=%q (no %s triple)",
+			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID, reg.workflow.PhasePredicate)
+	}
+	// Skip the transition when already terminal — keeps DespawnWith idempotent
+	// and lets it complete the recovery path a bare Despawn started.
+	if !reg.workflow.Transitions.IsTerminal(from) {
+		terminal, err := m.selectReachableTerminal(reg, entityID, from)
+		if err != nil {
+			return err
+		}
+		if err := m.Transition(ctx, workflow, entityID, terminal, source, note); err != nil {
+			return err
+		}
+	}
+	return m.Despawn(ctx, workflow, entityID)
 }
