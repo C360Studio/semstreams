@@ -876,52 +876,39 @@ func (cm *ComponentManager) healthCheck() error {
 		return nil // Still starting up, assume healthy
 	}
 
-	// Try to perform detailed health check with timeout to avoid deadlocks
-	done := make(chan error, 1)
-	go func() {
-		done <- cm.performDetailedHealthCheck()
-	}()
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(100 * time.Millisecond):
-		// Timeout - avoid blocking the health check
-		// Return healthy if basic checks pass to prevent false alarms during high contention
-		return nil
-	}
+	// performDetailedHealthCheck is non-blocking (best-effort TryRLock), so it is
+	// safe to call directly — no goroutine/timeout wrapper needed.
+	return cm.performDetailedHealthCheck()
 }
 
-// performDetailedHealthCheck performs the actual health check with locks
+// performDetailedHealthCheck performs the actual health check with locks.
+//
+// It is best-effort and MUST never block: if the read lock cannot be taken
+// immediately (a writer holds or is pending it, e.g. during the cold-boot
+// startup window), it assumes healthy rather than waiting. We use TryRLock
+// rather than a goroutine + timeout to acquire the lock, because abandoning a
+// lock-acquiring goroutine on a timeout leaks a phantom reader that later
+// deadlocks every writer and, in turn, Stop (gh#508).
 func (cm *ComponentManager) performDetailedHealthCheck() error {
-	// Try to acquire read lock with timeout context
-	acquired := make(chan struct{})
-	go func() {
-		cm.mu.RLock()
-		close(acquired)
-	}()
-
-	select {
-	case <-acquired:
-		defer cm.mu.RUnlock()
-
-		// Check for any failed components
-		for name, comp := range cm.components {
-			if comp.Component == nil {
-				return fmt.Errorf("component %s has nil implementation", name)
-			}
-
-			// Check if component context is cancelled (indicates failure)
-			if comp.Context != nil && comp.Context.Err() != nil {
-				return fmt.Errorf("component %s context cancelled: %w", name, comp.Context.Err())
-			}
-		}
-
-		return nil
-	case <-time.After(50 * time.Millisecond):
-		// Could not acquire lock quickly - assume healthy to avoid blocking
+	if !cm.mu.TryRLock() {
+		// Under write contention - assume healthy to avoid blocking.
 		return nil
 	}
+	defer cm.mu.RUnlock()
+
+	// Check for any failed components
+	for name, comp := range cm.components {
+		if comp.Component == nil {
+			return fmt.Errorf("component %s has nil implementation", name)
+		}
+
+		// Check if component context is cancelled (indicates failure)
+		if comp.Context != nil && comp.Context.Err() != nil {
+			return fmt.Errorf("component %s context cancelled: %w", name, comp.Context.Err())
+		}
+	}
+
+	return nil
 }
 
 // shutdownCallback is called during graceful shutdown
