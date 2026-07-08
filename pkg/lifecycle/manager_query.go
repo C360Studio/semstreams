@@ -92,10 +92,47 @@ func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) (
 	return out, nil
 }
 
+// EventOp is the kind of change an Event carries.
+type EventOp int
+
+const (
+	// Upserted marks a create or a phase/field change; the event's
+	// Participant holds the projected state.
+	Upserted EventOp = iota
+	// Deleted marks a reclaim (Manager.Despawn or a raw entity.delete).
+	// The event's Participant is nil — only EntityID is meaningful.
+	Deleted
+)
+
+// String renders the op for logs.
+func (o EventOp) String() string {
+	switch o {
+	case Upserted:
+		return "upserted"
+	case Deleted:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+// Event is one observation delivered by Manager.WatchEvents.
+//
+// Consumers MUST treat a Deleted event as "ensure absent for EntityID", not
+// "remove a row I previously saw": a delete can arrive for an entity the
+// observer filtered out, or one deleted before the watch started. Participant
+// is populated only for Upserted.
+type Event struct {
+	Op          EventOp
+	EntityID    string
+	Participant Participant
+}
+
 // Watch streams Participant snapshots for every write to
 // ENTITY_STATES whose key matches the workflow's EntityIDPattern.
 // Bootstrap-then-live: the first batch is the snapshot of current
-// state, then live updates as KV writes land.
+// state, then live updates as KV writes land. Deletes are NOT
+// delivered (upsert-only) — use WatchEvents to observe reclaims.
 //
 // Each delivered Participant is a fresh instance. Mutating it does
 // NOT persist.
@@ -103,75 +140,163 @@ func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) (
 // CALLER MUST CANCEL ctx when done iterating — the watcher goroutine
 // and the underlying jetstream subscription pin until ctx.Done().
 func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participant, error) {
-	reg, err := m.lookupByWorkflow(workflow)
+	reg, watcher, err := m.startWatch(ctx, workflow, "Watch")
 	if err != nil {
 		return nil, err
 	}
-	bucket, err := m.ensureBucket(ctx)
-	if err != nil {
-		return nil, err
-	}
-	watcher, err := bucket.WatchAll(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("lifecycle: Watch for workflow %q: %w", reg.workflow.Name, err)
-	}
-
 	out := make(chan Participant, 16)
 	go func() {
 		defer close(out)
-		defer watcher.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case entry, ok := <-watcher.Updates():
-				if !ok {
-					return
-				}
-				if entry == nil {
-					// nil entry marks end-of-initial-values per
-					// the NATS KV bootstrap contract; live events
-					// follow.
-					continue
-				}
-				if entry.Operation() == jetstream.KeyValueDelete ||
-					entry.Operation() == jetstream.KeyValuePurge {
-					continue
-				}
-				if !matchPattern(reg.workflow.EntityIDPattern, entry.Key()) {
-					continue
-				}
-				var state graph.EntityState
-				if err := json.Unmarshal(entry.Value(), &state); err != nil {
-					m.logger.Warn("lifecycle: Watch unmarshal failed; skipping entry",
-						slog.String("workflow", reg.workflow.Name),
-						slog.String("key", entry.Key()),
-						slog.Uint64("revision", entry.Revision()),
-						slog.String("error", err.Error()),
-					)
-					continue
-				}
-				if !hasTriple(state.Triples, entry.Key(), reg.workflow.PhasePredicate) {
-					continue
-				}
-				target := reflect.New(reg.meta.GoType).Interface().(Participant)
-				if err := projectTriples(reg.meta, entry.Key(), state.Triples, target); err != nil {
-					m.logger.Warn("lifecycle: Watch projection failed; skipping entry",
-						slog.String("workflow", reg.workflow.Name),
-						slog.String("key", entry.Key()),
-						slog.String("error", err.Error()),
-					)
-					continue
-				}
+		m.runWatchLoop(ctx, reg, watcher,
+			func(_ string, p Participant) bool {
 				select {
-				case out <- target:
+				case out <- p:
+					return true
 				case <-ctx.Done():
-					return
+					return false
 				}
-			}
-		}
+			},
+			nil, // upsert-only: reclaims are not delivered on this surface
+		)
 	}()
 	return out, nil
+}
+
+// WatchEvents is the delete-visible sibling of Watch: it streams
+// Events — Upserted (with projected Participant) for matching
+// creates/phase-changes, and Deleted (Participant nil) for reclaims
+// (KeyValueDelete/KeyValuePurge) whose key matches the workflow's
+// EntityIDPattern. Bootstrap-then-live like Watch for Upserted; deletes
+// are live only. Lets an observer learn of reclaims without a parallel
+// raw KV watch (gh#497).
+//
+// CALLER MUST CANCEL ctx when done — same pinning contract as Watch.
+func (m *Manager) WatchEvents(ctx context.Context, workflow string) (<-chan Event, error) {
+	reg, watcher, err := m.startWatch(ctx, workflow, "WatchEvents")
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan Event, 16)
+	send := func(ev Event) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	go func() {
+		defer close(out)
+		m.runWatchLoop(ctx, reg, watcher,
+			func(entityID string, p Participant) bool {
+				return send(Event{Op: Upserted, EntityID: entityID, Participant: p})
+			},
+			func(entityID string) bool {
+				return send(Event{Op: Deleted, EntityID: entityID})
+			},
+		)
+	}()
+	return out, nil
+}
+
+// startWatch resolves the workflow and opens a WatchAll subscription over
+// ENTITY_STATES — the synchronous setup shared by Watch and WatchEvents so a
+// subscription error is returned to the caller rather than lost in a goroutine.
+func (m *Manager) startWatch(ctx context.Context, workflow, caller string) (*registration, jetstream.KeyWatcher, error) {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return nil, nil, err
+	}
+	bucket, err := m.ensureBucket(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	watcher, err := bucket.WatchAll(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lifecycle: %s for workflow %q: %w", caller, reg.workflow.Name, err)
+	}
+	return reg, watcher, nil
+}
+
+// runWatchLoop drives a WatchAll loop over ENTITY_STATES, invoking onUpsert for
+// each matching projected write and onDelete for each matching reclaim. A
+// callback returning false stops the loop (callers use this to honor ctx
+// cancellation on a blocked send); the loop also returns on ctx.Done or watcher
+// close. onDelete may be nil (Watch's upsert-only surface). Shared by Watch and
+// WatchEvents so the projection/dispatch logic is not duplicated.
+func (m *Manager) runWatchLoop(
+	ctx context.Context,
+	reg *registration,
+	watcher jetstream.KeyWatcher,
+	onUpsert func(entityID string, p Participant) bool,
+	onDelete func(entityID string) bool,
+) {
+	defer watcher.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				return
+			}
+			if entry == nil {
+				// nil entry marks end-of-initial-values per the NATS KV
+				// bootstrap contract; live events follow.
+				continue
+			}
+			if !matchPattern(reg.workflow.EntityIDPattern, entry.Key()) {
+				continue
+			}
+			if entry.Operation() == jetstream.KeyValueDelete ||
+				entry.Operation() == jetstream.KeyValuePurge {
+				if onDelete != nil && !onDelete(entry.Key()) {
+					return
+				}
+				continue
+			}
+			participant, ok := m.projectWatchEntry(reg, entry)
+			if !ok {
+				continue
+			}
+			if !onUpsert(entry.Key(), participant) {
+				return
+			}
+		}
+	}
+}
+
+// projectWatchEntry decodes, phase-gates, and projects a single upsert KV
+// entry into a fresh Participant of the workflow's Schema type. Returns
+// (participant, true) on a matching lifecycle-managed write, or (nil, false)
+// when the entry should be skipped — an unmarshal failure, a missing phase
+// triple (not yet lifecycle-managed), or a projection failure (the two error
+// cases are logged). The caller has already pattern-matched the key and
+// confirmed the op is an upsert.
+func (m *Manager) projectWatchEntry(reg *registration, entry jetstream.KeyValueEntry) (Participant, bool) {
+	var state graph.EntityState
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+		m.logger.Warn("lifecycle: watch unmarshal failed; skipping entry",
+			slog.String("workflow", reg.workflow.Name),
+			slog.String("key", entry.Key()),
+			slog.Uint64("revision", entry.Revision()),
+			slog.String("error", err.Error()),
+		)
+		return nil, false
+	}
+	if !hasTriple(state.Triples, entry.Key(), reg.workflow.PhasePredicate) {
+		return nil, false
+	}
+	target := reflect.New(reg.meta.GoType).Interface().(Participant)
+	if err := projectTriples(reg.meta, entry.Key(), state.Triples, target); err != nil {
+		m.logger.Warn("lifecycle: watch projection failed; skipping entry",
+			slog.String("workflow", reg.workflow.Name),
+			slog.String("key", entry.Key()),
+			slog.String("error", err.Error()),
+		)
+		return nil, false
+	}
+	return target, true
 }
 
 // History returns the phase-transition history for the entity at

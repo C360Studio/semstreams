@@ -24,6 +24,11 @@ type fakeEmitter struct {
 	mu       sync.Mutex
 	bucket   *fakeBucket
 	requests []*graph.UpdateEntityWithTriplesRequest
+	deletes  []*graph.DeleteEntityRequest
+	// deleteErr, when non-nil, makes delete() fail WITHOUT touching the
+	// bucket — used to drive the DespawnWith partial-failure recovery path
+	// (transition committed, delete failed, entity terminal-but-present).
+	deleteErr error
 }
 
 // update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
@@ -97,6 +102,21 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	}, nil
 }
 
+// delete mirrors graph-ingest's handleEntityDelete — idempotent
+// reclaim. Removes the entity from the bucket and reports whether it
+// existed (DeleteEntityResponse.Deleted); an already-absent entity is a
+// no-op success, matching the production handler.
+func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletes = append(f.deletes, req)
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	existed := f.bucket.remove(req.EntityID)
+	return &graph.DeleteEntityResponse{Deleted: existed}, nil
+}
+
 // fakeBucket is the minimal jetstream.KeyValue surface Manager.getEntity
 // + manager_query.go exercise. We implement only the methods the
 // Manager calls; the rest panic if invoked.
@@ -147,6 +167,16 @@ func (b *fakeBucket) put(id string, state *graph.EntityState) {
 	defer b.mu.Unlock()
 	b.nextRev++
 	b.entries[id] = &fakeBucketEntry{state: state, revision: b.nextRev, createdAt: time.Now()}
+}
+
+// remove deletes an entry and reports whether it existed (mirrors the
+// graph-ingest delete handler's Deleted flag).
+func (b *fakeBucket) remove(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, existed := b.entries[id]
+	delete(b.entries, id)
+	return existed
 }
 
 // jetstream.KeyValue minimum surface — embedding via composition is
@@ -639,5 +669,116 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 	}
 	if _, ok := gotPreds["mission.owner_org_id"]; ok {
 		t.Error("zero-value OwnerOrgID should not emit a delta against missing predicate baseline")
+	}
+}
+
+// --- Despawn / DespawnWith (gh#497) ---
+
+func TestManager_Despawn_ReclaimsAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dsp1"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !bucket.exists(id) {
+		t.Fatalf("precondition: entity should exist after Create")
+	}
+	if err := mgr.Despawn(ctx, "fixture", id); err != nil {
+		t.Fatalf("Despawn: %v", err)
+	}
+	if bucket.exists(id) {
+		t.Errorf("entity should be gone from ENTITY_STATES after Despawn")
+	}
+	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id {
+		t.Errorf("expected exactly 1 delete for %q, got %+v", id, emitter.deletes)
+	}
+	// Idempotent: despawning an already-absent entity succeeds.
+	if err := mgr.Despawn(ctx, "fixture", id); err != nil {
+		t.Errorf("Despawn on absent entity should be idempotent success, got %v", err)
+	}
+}
+
+func TestManager_Despawn_RejectsUnregisteredWorkflow(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, _ := newTestManager(t)
+	err := mgr.Despawn(context.Background(), "nope", "c360.platform1.lifecycle.gcs.mission.x")
+	if !errors.Is(err, ErrWorkflowNotRegistered) {
+		t.Errorf("want ErrWorkflowNotRegistered, got %v", err)
+	}
+	if len(emitter.deletes) != 0 {
+		t.Errorf("no delete should be emitted for an unregistered workflow, got %d", len(emitter.deletes))
+	}
+}
+
+func TestManager_Despawn_RejectsPatternMismatch(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, _ := newTestManager(t)
+	// Registered workflow, but the id does not match its EntityIDPattern.
+	err := mgr.Despawn(context.Background(), "fixture", "c360.platform1.other.gcs.sensor.9")
+	if !errors.Is(err, ErrEntityIDPatternMismatch) {
+		t.Errorf("want ErrEntityIDPatternMismatch, got %v", err)
+	}
+	if len(emitter.deletes) != 0 {
+		t.Errorf("no delete should be emitted on pattern mismatch, got %d", len(emitter.deletes))
+	}
+}
+
+func TestManager_DespawnWith_TransitionsThenReclaims(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dsp2"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// planning's only reachable terminal is "aborted" (planning→aborted edge).
+	if err := mgr.DespawnWith(ctx, "fixture", id, TransitionSourceRule, "predator-cull"); err != nil {
+		t.Fatalf("DespawnWith: %v", err)
+	}
+	if bucket.exists(id) {
+		t.Errorf("entity should be gone after DespawnWith")
+	}
+	sawTerminal := false
+	for _, r := range emitter.requests {
+		for _, tr := range r.AddTriples {
+			if tr.Predicate == "mission.phase" && tr.Object == "aborted" {
+				sawTerminal = true
+			}
+		}
+	}
+	if !sawTerminal {
+		t.Errorf("DespawnWith should transition to terminal 'aborted' before delete; emits=%+v", emitter.requests)
+	}
+	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id {
+		t.Errorf("expected exactly 1 delete for %q, got %+v", id, emitter.deletes)
+	}
+}
+
+func TestManager_DespawnWith_PartialFailureRecoverableViaDespawn(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dsp3"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// The delete leg fails: the terminal transition commits but the entity is
+	// left terminal-but-present (the documented non-atomic partial failure).
+	emitter.deleteErr = errors.New("simulated delete failure")
+	if err := mgr.DespawnWith(ctx, "fixture", id, TransitionSourceRule, "cull"); err == nil {
+		t.Fatal("DespawnWith should surface the delete failure")
+	}
+	if !bucket.exists(id) {
+		t.Fatalf("after a failed delete, entity should still be present (terminal-but-present)")
+	}
+	// Recovery: a subsequent Despawn (delete now succeeds) reclaims it.
+	emitter.deleteErr = nil
+	if err := mgr.Despawn(ctx, "fixture", id); err != nil {
+		t.Fatalf("recovery Despawn: %v", err)
+	}
+	if bucket.exists(id) {
+		t.Errorf("entity should be reclaimed after recovery Despawn")
 	}
 }

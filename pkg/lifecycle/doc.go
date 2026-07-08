@@ -68,4 +68,26 @@
 //	}, transitions)
 //
 // See ADR-047 for the complete worked example.
+//
+// # Reclamation and delete-visible observation
+//
+// A terminal entity is not automatically removed — terminal phase and
+// reclamation are distinct. To reclaim (delete from ENTITY_STATES):
+//
+//   - Manager.Despawn(ctx, workflow, entityID) — bare reclaim; idempotent
+//     (already-absent is a no-op success). Does NOT transition to terminal
+//     first, so Complete/Fail beforehand if an audit trail is wanted.
+//   - Manager.DespawnWith(ctx, workflow, entityID, source, note) — the cull
+//     path: transitions to the workflow's terminal phase (with an audit
+//     TransitionEvent), then reclaims. The two ops are not atomic; a partial
+//     failure leaves the entity terminal-but-present, reclaimable by a later
+//     Despawn.
+//
+// Reclaim is NOT derived-index GC (gh#433/ADR-068): Despawn removes the entity
+// but does not clean PREDICATE/NAME/ALIAS/CONTEXT/spatial/embedding index rows.
+//
+// To observe reclaims, use Manager.WatchEvents (the delete-visible sibling of
+// Watch): it streams Events carrying Upserted (with the projected
+// Participant) or Deleted (EntityID only). The existing Watch stays upsert-only
+// so current callers are unaffected.
 package lifecycle

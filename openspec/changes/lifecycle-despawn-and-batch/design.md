@@ -65,10 +65,12 @@ exists and is idempotent (`DeleteEntityRequest`/`Response`).
 
 ### D2. Delete-visibility via a new `WatchEvents` surface, existing `Watch` untouched
 
-- Add `Manager.WatchEvents(ctx, workflow) (<-chan LifecycleEvent, error)` where
-  `LifecycleEvent{ Op LifecycleOp; EntityID string; Participant Participant }`
+- Add `Manager.WatchEvents(ctx, workflow) (<-chan Event, error)` where
+  `Event{ Op EventOp; EntityID string; Participant Participant }`
   and `Op ∈ {Upserted, Deleted}`. On `Upserted`, `Participant` is the projected
   state; on `Deleted`, `Participant` is nil and only `EntityID` is meaningful.
+  (Types named `Event`/`EventOp`, not `Lifecycle*`, to avoid the
+  `lifecycle.Lifecycle*` package-name stutter the revive gate rejects.)
 - Existing `Watch(ctx, workflow) <-chan Participant` is **unchanged** (still
   upsert-only) — no break for current callers.
 - Internally `WatchEvents` shares the KV-watch/projection path; on a
