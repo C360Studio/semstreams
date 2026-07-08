@@ -357,6 +357,69 @@ func (s *ManagerIntegrationSuite) TestKVStore_OptimisticLocking() {
 	s.NoError(err)
 }
 
+// TestRuntimeComponentAdd_AppliesAndReconciles (gh#388) proves PutComponentToKV
+// applies the component to the in-memory config synchronously AND drives a
+// components.* notification, so a runtime add reconciles without PushToKV.
+func (s *ManagerIntegrationSuite) TestRuntimeComponentAdd_AppliesAndReconciles() {
+	updates := s.configManager.OnChange("components.*")
+	select {
+	case <-updates: // drain the initial-config send
+	case <-time.After(500 * time.Millisecond):
+		s.Fail("no initial config from OnChange")
+	}
+
+	comp := types.ComponentConfig{Type: "input", Name: "doc-source-003", Enabled: true}
+	s.Require().NoError(s.configManager.PutComponentToKV(s.ctx, "doc-source-003", comp))
+
+	// In-memory config reflects the add synchronously (right after the call).
+	_, present := s.configManager.config.Get().Components["doc-source-003"]
+	s.True(present, "PutComponentToKV must apply the component in memory synchronously")
+
+	// A components.* notification is delivered carrying the added component.
+	select {
+	case up := <-updates:
+		s.Equal("components.doc-source-003", up.Path)
+		_, ok := up.Config.Get().Components["doc-source-003"]
+		s.True(ok, "notified config must carry the added component")
+	case <-time.After(2 * time.Second):
+		s.Fail("PutComponentToKV did not deliver a reconcile notification (gh#388)")
+	}
+}
+
+// TestRuntimeComponentRemove_AppliesAndReconciles (gh#388) proves
+// DeleteComponentFromKV removes the component from the in-memory config
+// synchronously AND drives a components.* notification, so a runtime remove
+// reconciles (teardown) without PushToKV.
+func (s *ManagerIntegrationSuite) TestRuntimeComponentRemove_AppliesAndReconciles() {
+	// Seed a component.
+	comp := types.ComponentConfig{Type: "input", Name: "doc-source-009", Enabled: true}
+	s.Require().NoError(s.configManager.PutComponentToKV(s.ctx, "doc-source-009", comp))
+	_, present := s.configManager.config.Get().Components["doc-source-009"]
+	s.Require().True(present, "precondition: component seeded in memory")
+
+	updates := s.configManager.OnChange("components.*")
+	select {
+	case <-updates: // drain initial
+	case <-time.After(500 * time.Millisecond):
+		s.Fail("no initial config from OnChange")
+	}
+
+	s.Require().NoError(s.configManager.DeleteComponentFromKV(s.ctx, "doc-source-009"))
+
+	// In-memory config reflects the removal synchronously.
+	_, stillPresent := s.configManager.config.Get().Components["doc-source-009"]
+	s.False(stillPresent, "DeleteComponentFromKV must remove the component in memory synchronously")
+
+	// A components.* notification is delivered without the removed component.
+	select {
+	case up := <-updates:
+		_, ok := up.Config.Get().Components["doc-source-009"]
+		s.False(ok, "notified config must not carry the removed component")
+	case <-time.After(2 * time.Second):
+		s.Fail("DeleteComponentFromKV did not deliver a reconcile notification (gh#388)")
+	}
+}
+
 func TestManagerIntegrationSuite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests in short mode")

@@ -457,6 +457,67 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 	s.NotContains(currentConfig.Components, "ws-lifecycle-1")
 }
 
+// TestStart_AfterDeploy_DoesNotRewriteAlreadyEnabledComponents (gh#388) proves
+// enableComponent is idempotent: Deploy writes components Enabled=true, so a
+// subsequent Start must NOT re-write an identical config. A redundant write
+// would notify the ComponentManager, whose per-key handler restarts an
+// already-running component unconditionally — spuriously stop-recreating every
+// running component on every Start. This regressed when the config watcher began
+// notifying on engine-owned revisions (previously the redundant write's event
+// was silently dropped).
+func (s *EngineIntegrationSuite) TestStart_AfterDeploy_DoesNotRewriteAlreadyEnabledComponents() {
+	flow := &flowstore.Flow{
+		ID:           "idempotent-start-flow",
+		Name:         "Idempotent Start",
+		RuntimeState: flowstore.StateNotDeployed,
+		Nodes: []flowstore.FlowNode{
+			{
+				ID:        "node-1",
+				Component: "udp",
+				Type:      types.ComponentTypeInput,
+				Name:      "udp-idem-1",
+				Position:  flowstore.Position{X: 100, Y: 100},
+				Config:    map[string]any{"port": 5051},
+			},
+		},
+		Connections: []flowstore.FlowConnection{},
+	}
+	s.Require().NoError(s.flowStore.Create(s.ctx, flow))
+	s.Require().NoError(s.engine.Deploy(s.ctx, "idempotent-start-flow"))
+	s.Require().True(s.configMgr.GetConfig().Get().Components["udp-idem-1"].Enabled,
+		"precondition: Deploy writes the component Enabled=true")
+
+	// Subscribe AFTER Deploy so we observe only Start's writes. Drain to
+	// quiescence first: OnChange's initial send plus any lagging engine-owned
+	// Deploy watcher events (which now notify post-fix) must not bleed into the
+	// post-Start assertion window.
+	updates := s.configMgr.OnChange("components.*")
+	drainUntilQuiet(updates, 300*time.Millisecond)
+
+	// Start re-enables each node — but the component is already enabled, so the
+	// idempotent enableComponent must emit NO redundant per-component write.
+	s.Require().NoError(s.engine.Start(s.ctx, "idempotent-start-flow"))
+
+	select {
+	case up := <-updates:
+		s.Failf("spurious reconcile on idempotent Start",
+			"Start re-wrote an already-enabled component (would restart it): path=%s", up.Path)
+	case <-time.After(1 * time.Second):
+		// no notification — enableComponent correctly no-op'd on the already-enabled component
+	}
+}
+
+// drainUntilQuiet drains ch until no update arrives for the quiet window.
+func drainUntilQuiet(ch <-chan config.Update, quiet time.Duration) {
+	for {
+		select {
+		case <-ch:
+		case <-time.After(quiet):
+			return
+		}
+	}
+}
+
 func TestEngineIntegrationSuite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests in short mode")

@@ -387,6 +387,15 @@ func (e *Engine) enableComponent(ctx context.Context, name string) error {
 		return fmt.Errorf("component %s not found", name)
 	}
 
+	// Idempotent: if already enabled, do NOT re-write an identical config. A
+	// redundant PutComponentToKV notifies the ComponentManager, whose per-key
+	// handler restarts an already-running component unconditionally — so a
+	// no-op enable (e.g. Start after Deploy, which already writes Enabled=true)
+	// would spuriously stop-recreate every running component (gh#388).
+	if compConfig.Enabled {
+		return nil
+	}
+
 	// Set enabled to true
 	compConfig.Enabled = true
 	currentConfig.Components[name] = compConfig
@@ -413,6 +422,13 @@ func (e *Engine) disableComponent(ctx context.Context, name string) error {
 	compConfig, exists := currentConfig.Components[name]
 	if !exists {
 		return fmt.Errorf("component %s not found", name)
+	}
+
+	// Idempotent: if already disabled, do NOT re-write an identical config
+	// (symmetric with enableComponent — avoids a spurious teardown/reconcile
+	// on a no-op disable, gh#388).
+	if !compConfig.Enabled {
+		return nil
 	}
 
 	// Set enabled to false
