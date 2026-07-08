@@ -163,6 +163,55 @@ func TestComponentManagerLifecycle(t *testing.T) {
 	})
 }
 
+// TestPerformDetailedHealthCheckDoesNotLeakReader is a regression test for gh#508.
+//
+// The buggy implementation spawned a goroutine that called cm.mu.RLock() and, on
+// its 50ms timeout branch, abandoned it. The goroutine would later acquire the
+// read lock, signal completion, and exit WITHOUT ever calling RUnlock — leaking a
+// phantom reader with no live holder. From that point every cm.mu.Lock()
+// (updateComponentState) blocked forever, and Stop's stopAllComponents RLock
+// deadlocked the whole shutdown. This reproduces the cold-boot startup window:
+// a writer holds cm.mu while a health tick fires, then releases it.
+func TestPerformDetailedHealthCheckDoesNotLeakReader(t *testing.T) {
+	cm := &ComponentManager{
+		BaseService: NewBaseServiceWithOptions("component-manager", nil),
+		components:  make(map[string]*component.ManagedComponent),
+		registry:    component.NewRegistry(),
+	}
+
+	// A writer (e.g. updateComponentState) holds cm.mu while a health tick fires.
+	cm.mu.Lock()
+
+	healthDone := make(chan error, 1)
+	go func() { healthDone <- cm.performDetailedHealthCheck() }()
+	select {
+	case err := <-healthDone:
+		require.NoError(t, err, "health check under write contention should assume healthy")
+	case <-time.After(1 * time.Second):
+		cm.mu.Unlock()
+		t.Fatal("performDetailedHealthCheck blocked under write contention")
+	}
+
+	// Release the writer. With the buggy implementation, the abandoned goroutine
+	// now acquires the read lock and exits without RUnlock, leaking a reader.
+	cm.mu.Unlock()
+	time.Sleep(50 * time.Millisecond) // let any leaked goroutine take the phantom lock
+
+	// A subsequent writer must be able to acquire cm.mu. With the leak it blocks
+	// forever (phantom reader, no live holder) — the deadlock that wedged Stop.
+	writerAcquired := make(chan struct{})
+	go func() {
+		cm.mu.Lock()
+		cm.mu.Unlock() //nolint:staticcheck // immediately releasing to prove acquirability
+		close(writerAcquired)
+	}()
+	select {
+	case <-writerAcquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cm.mu.Lock() deadlocked: performDetailedHealthCheck leaked a reader (gh#508)")
+	}
+}
+
 // TestComponentManagerMandatoryBehavior verifies ComponentManager behaves as mandatory service
 func TestComponentManagerMandatoryBehavior(t *testing.T) {
 	t.Run("always creates when configured", func(t *testing.T) {
