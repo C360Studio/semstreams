@@ -679,10 +679,13 @@ func (cm *ComponentManager) CreateComponent(
 	// Register resource usage
 	cm.registerPorts(instanceName, comp)
 
-	// Track as managed component
+	// Track as managed component. Retain the effective config so a later
+	// per-component config update can be compared and skipped when unchanged
+	// (gh#520).
 	mc := &component.ManagedComponent{
 		Component: comp,
 		State:     component.StateCreated,
+		Config:    cfg,
 	}
 
 	// Initialize if supported
@@ -784,6 +787,7 @@ func (cm *ComponentManager) GetManagedComponents() map[string]*component.Managed
 		result[name] = &component.ManagedComponent{
 			Component:  mc.Component,
 			State:      mc.State,
+			Config:     mc.Config,
 			Context:    mc.Context, // Component's individual context
 			Cancel:     mc.Cancel,  // Note: this is just a function pointer
 			StartOrder: mc.StartOrder,
@@ -1108,13 +1112,33 @@ func slicesContains(haystack []string, needle string) bool {
 
 // handleComponentConfigUpdate handles configuration updates for a specific component
 func (cm *ComponentManager) handleComponentConfigUpdate(ctx context.Context, name string, cfg types.ComponentConfig) {
-	// Check if component exists - need lock for this
+	// Check if component exists, and snapshot its retained effective config under
+	// the lock. The snapshot is required for the idempotency guard below: the
+	// live PUT-reconfig handler mutates ManagedComponent.Config from the HTTP
+	// goroutine (also under cm.mu), so reading existingComp.Config after the
+	// unlock would race the json.RawMessage header (gh#520).
 	cm.mu.Lock()
 	existingComp, exists := cm.components[name]
+	var existingCfg types.ComponentConfig
+	if exists {
+		existingCfg = existingComp.Config
+	}
 	cm.mu.Unlock()
 
 	if cfg.Enabled {
 		if exists {
+			// Idempotency guard (gh#520): only restart when the effective config
+			// actually changed. A no-op update (e.g. a full-config sync that
+			// re-emits an unchanged component) must not stop/start-cycle a healthy
+			// running component — that would drop external resources/subscriptions
+			// and re-register one-shot mux HTTP handlers (a panic).
+			if existingCfg.Equal(cfg) {
+				cm.logger.Debug("Component config unchanged, skipping restart",
+					"component", name,
+					"action", "noop")
+				return
+			}
+
 			// Component exists - attempt graceful restart with new config
 			cm.logger.Debug("Component config update detected",
 				"component", name,

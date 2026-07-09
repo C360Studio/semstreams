@@ -723,6 +723,15 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 			cm.componentConfigs[componentName] = compConfig
 		}
 	}
+	// Keep the retained ManagedComponent.Config baseline in step with the
+	// live-applied config so the KV-watch idempotency guard (gh#520) compares
+	// against what the component is actually running. Without this, a later KV
+	// re-push of the same config would either spuriously restart (stale baseline
+	// != pushed config) or, if KV still holds the pre-PUT config, silently skip
+	// reconverging the durable desired state.
+	if mc, ok := cm.components[componentName]; ok {
+		mc.Config.Config = req.Config
+	}
 	cm.mu.Unlock()
 
 	// Honest response (gh#455): report whether the change was applied to the

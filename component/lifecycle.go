@@ -3,6 +3,8 @@ package component
 import (
 	"context"
 	"time"
+
+	"github.com/c360studio/semstreams/types"
 )
 
 // State represents the current lifecycle state of a component
@@ -59,6 +61,13 @@ type ManagedComponent struct {
 
 	// State tracks the current lifecycle state
 	State State
+
+	// Config is the effective component configuration this instance was
+	// created from. The ComponentManager retains it so a per-component runtime
+	// config update can restart the component only when the effective config
+	// actually changed — a no-op update is skipped instead of stop/start-cycling
+	// a healthy running component (gh#520).
+	Config types.ComponentConfig
 
 	// Named Context Management for Individual Component Lifecycle Control
 	//

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -438,7 +439,7 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 			serviceStart := time.Now()
 			logger.Debug("Stopping service", "service", name)
 
-			if err := service.Stop(timeout); err != nil {
+			if err := service.Stop(timeout); err != nil && !stderrors.Is(err, ErrAlreadyStopped) {
 				logger.Error("Service stop failed",
 					"service", name,
 					"duration_ms", time.Since(serviceStart).Milliseconds(),
