@@ -74,11 +74,12 @@ const fsBackstop = "250ms"
 // "a re-flake here means a real stall" prediction was thereby falsified). So CI
 // gets a generous 90s budget (~18x the local baseline) while local stays tight.
 //
-// Earlier attempts: #374 widened 10s→30s; #386 made marker writes reliable.
-// Giving the contended environment headroom — rather than a blind global bump —
-// is the investigated fix for confirmed host-saturation slowness. The systemic
-// lever (cap integration `-p` so fewer NATS containers run at once) is the
-// broader fix tracked on gh#404.
+// Earlier attempts: #374 widened 10s→30s; #386 made marker writes reliable; the
+// 90s bump above absorbed more contention but still flaked (gh#511). The systemic
+// lever — cap integration `-p` so fewer NATS containers run at once — is now
+// applied: CI and `task test:integration` run with `-p 2` (ci.yml / taskfiles/
+// test.yml), roughly halving concurrent testcontainer packages on the shared
+// Docker host. The 90s window is kept as a safety margin on top of the cap.
 var fsEventually = fsEventuallyWindow()
 
 // fsEventuallyWindow returns the Eventually budget: tight locally for fast stall

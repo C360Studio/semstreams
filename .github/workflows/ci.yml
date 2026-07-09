@@ -108,7 +108,13 @@ jobs:
         run: go test -v -race ./...
 
       - name: Run integration tests
-        run: go test -tags=integration -v -race ./...
+        # -p 2 caps concurrent test PACKAGES so at most 2 testcontainer-booting
+        # integration packages run at once. Unbounded parallelism (default
+        # -p=GOMAXPROCS=4 on ubuntu-latest) CPU/IO-starves the shared Docker host,
+        # slowing every NATS round-trip until contention-sensitive full-stack tests
+        # exhaust their wait windows or containers miss their start deadline
+        # (gh#511, gh#199, and the gated-dag fullstack comment's "systemic lever").
+        run: go test -tags=integration -v -race -p 2 ./...
 
   build:
     name: Build

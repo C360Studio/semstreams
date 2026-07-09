@@ -21,7 +21,11 @@ tasks:
       TESTCONTAINERS_RYUK_DISABLED: "true"
     cmds:
       - echo "[INTEGRATION] Running integration tests with real NATS (via testcontainers)..."
-      - go test -race -tags=integration ./...
+      # -p 2 caps concurrent test packages so at most 2 testcontainer-booting
+      # packages run at once — mirrors CI. Unbounded parallelism (default
+      # -p=GOMAXPROCS, e.g. 12 on a dev laptop) thrashes the Docker host and makes
+      # contention-sensitive full-stack tests / container starts flake (gh#511/#199).
+      - go test -race -tags=integration -p 2 ./...
       - echo "[OK] Integration tests complete"
 
   integration:iot:
