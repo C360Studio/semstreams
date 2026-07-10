@@ -305,22 +305,17 @@ func (e *Engine) translateToComponentConfigs(flow *flowstore.Flow) (map[string]t
 
 // writeComponentConfigs writes component configs to memory and KV atomically
 func (e *Engine) writeComponentConfigs(ctx context.Context, configs map[string]types.ComponentConfig) error {
-	// Get current config once
-	safeConfig := e.configMgr.GetConfig()
-	currentConfig := safeConfig.Get()
-
-	// Initialize components map if nil
-	if currentConfig.Components == nil {
-		currentConfig.Components = make(config.ComponentConfigs)
-	}
-
-	// Add all components to memory in a single pass
-	for name, compConfig := range configs {
-		currentConfig.Components[name] = compConfig
-	}
-
-	// Update atomically - this ensures Start() will see all components
-	if err := safeConfig.Update(currentConfig); err != nil {
+	// Serialized read-modify-write so a concurrent config mutation cannot drop
+	// these components (gh#515). Start() will see all of them after the swap.
+	if err := e.configMgr.GetConfig().Mutate(func(currentConfig *config.Config) error {
+		if currentConfig.Components == nil {
+			currentConfig.Components = make(config.ComponentConfigs)
+		}
+		for name, compConfig := range configs {
+			currentConfig.Components[name] = compConfig
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("update config: %w", err)
 	}
 
@@ -337,9 +332,6 @@ func (e *Engine) writeToKV(ctx context.Context, key string, value []byte) error 
 	// Get the config to access KV operations
 	// We'll need to add a method to Manager to expose KV operations
 	// For now, update the config and push
-	safeConfig := e.configMgr.GetConfig()
-	currentConfig := safeConfig.Get()
-
 	// Parse the key to update the right section
 	parts := strings.Split(key, ".")
 	if len(parts) != 2 {
@@ -349,22 +341,22 @@ func (e *Engine) writeToKV(ctx context.Context, key string, value []byte) error 
 	section := parts[0]
 	name := parts[1]
 
-	switch section {
-	case "components":
+	if section != "components" {
+		return fmt.Errorf("unsupported section: %s", section)
+	}
+	var compConfig types.ComponentConfig
+	if err := json.Unmarshal(value, &compConfig); err != nil {
+		return fmt.Errorf("unmarshal component config: %w", err)
+	}
+
+	// Serialized read-modify-write (gh#515).
+	if err := e.configMgr.GetConfig().Mutate(func(currentConfig *config.Config) error {
 		if currentConfig.Components == nil {
 			currentConfig.Components = make(config.ComponentConfigs)
 		}
-		var compConfig types.ComponentConfig
-		if err := json.Unmarshal(value, &compConfig); err != nil {
-			return fmt.Errorf("unmarshal component config: %w", err)
-		}
 		currentConfig.Components[name] = compConfig
-	default:
-		return fmt.Errorf("unsupported section: %s", section)
-	}
-
-	// Update the config atomically
-	if err := safeConfig.Update(currentConfig); err != nil {
+		return nil
+	}); err != nil {
 		return fmt.Errorf("update config: %w", err)
 	}
 
@@ -378,35 +370,39 @@ func (e *Engine) writeToKV(ctx context.Context, key string, value []byte) error 
 
 // enableComponent enables a component in the config
 func (e *Engine) enableComponent(ctx context.Context, name string) error {
-	safeConfig := e.configMgr.GetConfig()
-	currentConfig := safeConfig.Get()
-
-	// Check if component exists
-	compConfig, exists := currentConfig.Components[name]
-	if !exists {
-		return fmt.Errorf("component %s not found", name)
+	// Read-decide-mutate under the config lock (gh#515): the idempotent-enable
+	// check now runs on the authoritative current state, not a clone that may be
+	// stale by the swap. skip carries the no-op decision out; toPut carries the
+	// enabled config to the post-mutation KV write.
+	var toPut types.ComponentConfig
+	skip := false
+	if err := e.configMgr.GetConfig().Mutate(func(currentConfig *config.Config) error {
+		compConfig, exists := currentConfig.Components[name]
+		if !exists {
+			return fmt.Errorf("component %s not found", name)
+		}
+		// Idempotent: if already enabled, do NOT re-write an identical config. A
+		// redundant PutComponentToKV notifies the ComponentManager, whose per-key
+		// handler restarts an already-running component unconditionally — so a
+		// no-op enable (e.g. Start after Deploy, which already writes Enabled=true)
+		// would spuriously stop-recreate every running component (gh#388).
+		if compConfig.Enabled {
+			skip = true
+			return nil
+		}
+		compConfig.Enabled = true
+		currentConfig.Components[name] = compConfig
+		toPut = compConfig
+		return nil
+	}); err != nil {
+		return fmt.Errorf("update config: %w", err)
 	}
-
-	// Idempotent: if already enabled, do NOT re-write an identical config. A
-	// redundant PutComponentToKV notifies the ComponentManager, whose per-key
-	// handler restarts an already-running component unconditionally — so a
-	// no-op enable (e.g. Start after Deploy, which already writes Enabled=true)
-	// would spuriously stop-recreate every running component (gh#388).
-	if compConfig.Enabled {
+	if skip {
 		return nil
 	}
 
-	// Set enabled to true
-	compConfig.Enabled = true
-	currentConfig.Components[name] = compConfig
-
-	// Update config in memory
-	if err := safeConfig.Update(currentConfig); err != nil {
-		return fmt.Errorf("update config: %w", err)
-	}
-
 	// Push only this component to KV (not all components)
-	if err := e.configMgr.PutComponentToKV(ctx, name, compConfig); err != nil {
+	if err := e.configMgr.PutComponentToKV(ctx, name, toPut); err != nil {
 		return fmt.Errorf("put component to KV: %w", err)
 	}
 
@@ -415,34 +411,35 @@ func (e *Engine) enableComponent(ctx context.Context, name string) error {
 
 // disableComponent disables a component in the config
 func (e *Engine) disableComponent(ctx context.Context, name string) error {
-	safeConfig := e.configMgr.GetConfig()
-	currentConfig := safeConfig.Get()
-
-	// Check if component exists
-	compConfig, exists := currentConfig.Components[name]
-	if !exists {
-		return fmt.Errorf("component %s not found", name)
-	}
-
-	// Idempotent: if already disabled, do NOT re-write an identical config
-	// (symmetric with enableComponent — avoids a spurious teardown/reconcile
-	// on a no-op disable, gh#388).
-	if !compConfig.Enabled {
+	// Read-decide-mutate under the config lock (gh#515), symmetric with enableComponent.
+	var toPut types.ComponentConfig
+	skip := false
+	if err := e.configMgr.GetConfig().Mutate(func(currentConfig *config.Config) error {
+		compConfig, exists := currentConfig.Components[name]
+		if !exists {
+			return fmt.Errorf("component %s not found", name)
+		}
+		// Idempotent: if already disabled, do NOT re-write an identical config
+		// (symmetric with enableComponent — avoids a spurious teardown/reconcile
+		// on a no-op disable, gh#388).
+		if !compConfig.Enabled {
+			skip = true
+			return nil
+		}
+		compConfig.Enabled = false
+		currentConfig.Components[name] = compConfig
+		toPut = compConfig
 		return nil
-	}
-
-	// Set enabled to false
-	compConfig.Enabled = false
-	currentConfig.Components[name] = compConfig
-
-	// Update config in memory
-	if err := safeConfig.Update(currentConfig); err != nil {
+	}); err != nil {
 		return fmt.Errorf("update config: %w", err)
+	}
+	if skip {
+		return nil
 	}
 
 	// Push only this component to KV (not all components)
 	// This avoids race conditions with KV watchers when multiple operations are in flight
-	if err := e.configMgr.PutComponentToKV(ctx, name, compConfig); err != nil {
+	if err := e.configMgr.PutComponentToKV(ctx, name, toPut); err != nil {
 		return fmt.Errorf("put component to KV: %w", err)
 	}
 
@@ -451,19 +448,15 @@ func (e *Engine) disableComponent(ctx context.Context, name string) error {
 
 // deleteComponentConfig removes a component config from memory and KV
 func (e *Engine) deleteComponentConfig(ctx context.Context, name string) error {
-	safeConfig := e.configMgr.GetConfig()
-	currentConfig := safeConfig.Get()
-
-	// Check if component exists
-	if _, exists := currentConfig.Components[name]; !exists {
-		return fmt.Errorf("component %s not found", name)
-	}
-
-	// Delete from in-memory config
-	delete(currentConfig.Components, name)
-
-	// Update the SafeConfig with the modified config
-	if err := safeConfig.Update(currentConfig); err != nil {
+	// Serialized read-modify-write (gh#515): the existence check and the delete
+	// run atomically against the current state.
+	if err := e.configMgr.GetConfig().Mutate(func(currentConfig *config.Config) error {
+		if _, exists := currentConfig.Components[name]; !exists {
+			return fmt.Errorf("component %s not found", name)
+		}
+		delete(currentConfig.Components, name)
+		return nil
+	}); err != nil {
 		return fmt.Errorf("update config: %w", err)
 	}
 

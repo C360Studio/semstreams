@@ -527,86 +527,96 @@ func (cm *Manager) updateConfig(key string, value []byte) error {
 		return fmt.Errorf("invalid key format: %s", key)
 	}
 
-	// Get current config
-	currentConfig := cm.config.Get()
-
-	// Update the appropriate section
-	switch parts[0] {
-	case "services":
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid service key format: %s", key)
-		}
-		serviceName := parts[1]
-
-		// Handle deletion
-		if len(value) == 0 {
-			delete(currentConfig.Services, serviceName)
-		} else {
-			if currentConfig.Services == nil {
-				currentConfig.Services = make(types.ServiceConfigs)
+	// Apply the update as a single serialized read-modify-write so a concurrent
+	// mutation (the watcher goroutine vs a caller-goroutine PutComponentToKV /
+	// DeleteComponentFromKV, or an engine deploy) cannot drop this change (gh#515).
+	// Returning errNoConfigChange from the mutation signals an ignored key without
+	// swapping — surfaced as a nil error to the caller.
+	err := cm.config.Mutate(func(currentConfig *Config) error {
+		switch parts[0] {
+		case "services":
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid service key format: %s", key)
 			}
-			// Parse the value as ServiceConfig (already validated above)
-			var svcConfig types.ServiceConfig
-			if err := json.Unmarshal(value, &svcConfig); err != nil {
-				return fmt.Errorf("failed to parse service config: %w", err)
+			serviceName := parts[1]
+
+			// Handle deletion
+			if len(value) == 0 {
+				delete(currentConfig.Services, serviceName)
+			} else {
+				if currentConfig.Services == nil {
+					currentConfig.Services = make(types.ServiceConfigs)
+				}
+				// Parse the value as ServiceConfig (already validated above)
+				var svcConfig types.ServiceConfig
+				if err := json.Unmarshal(value, &svcConfig); err != nil {
+					return fmt.Errorf("failed to parse service config: %w", err)
+				}
+				currentConfig.Services[serviceName] = svcConfig
 			}
-			currentConfig.Services[serviceName] = svcConfig
-		}
 
-	case "components":
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid component key format: %s", key)
-		}
-		componentName := parts[1]
-
-		// Handle deletion
-		if len(value) == 0 {
-			delete(currentConfig.Components, componentName)
-		} else {
-			// Parse component config (already validated above)
-			var compConfig types.ComponentConfig
-			if err := json.Unmarshal(value, &compConfig); err != nil {
-				return fmt.Errorf("parse component config: %w", err)
+		case "components":
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid component key format: %s", key)
 			}
-			if currentConfig.Components == nil {
-				currentConfig.Components = make(ComponentConfigs)
+			componentName := parts[1]
+
+			// Handle deletion
+			if len(value) == 0 {
+				delete(currentConfig.Components, componentName)
+			} else {
+				// Parse component config (already validated above)
+				var compConfig types.ComponentConfig
+				if err := json.Unmarshal(value, &compConfig); err != nil {
+					return fmt.Errorf("parse component config: %w", err)
+				}
+				if currentConfig.Components == nil {
+					currentConfig.Components = make(ComponentConfigs)
+				}
+				currentConfig.Components[componentName] = compConfig
 			}
-			currentConfig.Components[componentName] = compConfig
-		}
 
-	case "platform":
-		// Update platform config (already validated above)
-		if err := json.Unmarshal(value, &currentConfig.Platform); err != nil {
-			return fmt.Errorf("parse platform config: %w", err)
-		}
-
-	case "nats":
-		// Update NATS config (already validated above)
-		if err := json.Unmarshal(value, &currentConfig.NATS); err != nil {
-			return fmt.Errorf("parse NATS config: %w", err)
-		}
-
-	case "model_registry":
-		if len(value) == 0 {
-			currentConfig.ModelRegistry = nil
-		} else {
-			var registry model.Registry
-			if err := json.Unmarshal(value, &registry); err != nil {
-				return fmt.Errorf("parse model_registry config: %w", err)
+		case "platform":
+			// Update platform config (already validated above)
+			if err := json.Unmarshal(value, &currentConfig.Platform); err != nil {
+				return fmt.Errorf("parse platform config: %w", err)
 			}
-			currentConfig.ModelRegistry = &registry
+
+		case "nats":
+			// Update NATS config (already validated above)
+			if err := json.Unmarshal(value, &currentConfig.NATS); err != nil {
+				return fmt.Errorf("parse NATS config: %w", err)
+			}
+
+		case "model_registry":
+			if len(value) == 0 {
+				currentConfig.ModelRegistry = nil
+			} else {
+				var registry model.Registry
+				if err := json.Unmarshal(value, &registry); err != nil {
+					return fmt.Errorf("parse model_registry config: %w", err)
+				}
+				currentConfig.ModelRegistry = &registry
+			}
+
+		// Graph and ObjectStore config moved to components
+
+		default:
+			// Unknown top-level key, ignore — no config change.
+			return errNoConfigChange
 		}
-
-	// Graph and ObjectStore config moved to components
-
-	default:
-		// Unknown top-level key, ignore
+		return nil
+	})
+	if errors.Is(err, errNoConfigChange) {
 		return nil
 	}
-
-	// Update the config atomically
-	return cm.config.Update(currentConfig)
+	return err
 }
+
+// errNoConfigChange is returned by an updateConfig mutation for an ignored
+// (unknown) key so the SafeConfig swap is skipped; updateConfig maps it to a nil
+// error for the caller.
+var errNoConfigChange = errors.New("no config change")
 
 // sanitizeNATSKey replaces characters invalid in NATS keys with underscore s
 // NATS key restrictions: no spaces, must use printable ASCII

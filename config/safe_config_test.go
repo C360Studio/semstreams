@@ -242,3 +242,75 @@ func TestConfigClone(t *testing.T) {
 		})
 	}
 }
+
+// TestSafeConfig_MutateNoLostUpdate is the gh#515 regression: many goroutines
+// each add a distinct component via Mutate concurrently, and every one must
+// survive. The old Get()→mutate→Update() pattern (lock released between the read
+// and the swap) drops updates under this interleaving — and -race does NOT flag
+// it, because each individual Get/Update is locked; the atomicity violation is at
+// the compound level. So this asserts on the surviving count, not via -race.
+func TestSafeConfig_MutateNoLostUpdate(t *testing.T) {
+	base := &Config{
+		Platform:   PlatformConfig{Org: "c360", ID: "test-platform", Type: "vessel"},
+		Components: make(ComponentConfigs),
+	}
+	sc := NewSafeConfig(base)
+
+	const n = 200
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			name := fmt.Sprintf("comp-%03d", i)
+			_ = sc.Mutate(func(cfg *Config) error {
+				if cfg.Components == nil {
+					cfg.Components = make(ComponentConfigs)
+				}
+				cfg.Components[name] = types.ComponentConfig{
+					Type: types.ComponentTypeProcessor, Name: "test", Enabled: true,
+				}
+				return nil
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	got := sc.Get()
+	if len(got.Components) != n {
+		t.Fatalf("lost updates: got %d components, want %d (concurrent Mutate must not drop writes)", len(got.Components), n)
+	}
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("comp-%03d", i)
+		if _, ok := got.Components[name]; !ok {
+			t.Errorf("component %s was lost", name)
+		}
+	}
+}
+
+// TestSafeConfig_MutateAbortOnError verifies a fn error aborts the swap (no change)
+// and the returned error propagates.
+func TestSafeConfig_MutateAbortOnError(t *testing.T) {
+	base := &Config{
+		Platform:   PlatformConfig{Org: "c360", ID: "test-platform", Type: "vessel"},
+		Components: ComponentConfigs{"keep": {Type: types.ComponentTypeProcessor, Name: "test", Enabled: true}},
+	}
+	sc := NewSafeConfig(base)
+
+	sentinel := fmt.Errorf("abort")
+	err := sc.Mutate(func(cfg *Config) error {
+		cfg.Components["should-not-persist"] = types.ComponentConfig{Type: types.ComponentTypeProcessor, Name: "x", Enabled: true}
+		return sentinel
+	})
+	if err != sentinel {
+		t.Fatalf("Mutate should return fn's error, got %v", err)
+	}
+
+	got := sc.Get()
+	if _, ok := got.Components["should-not-persist"]; ok {
+		t.Error("aborted Mutate must not swap in the draft")
+	}
+	if _, ok := got.Components["keep"]; !ok {
+		t.Error("original config must be intact after an aborted Mutate")
+	}
+}

@@ -94,6 +94,41 @@ func (sc *SafeConfig) Update(cfg *Config) error {
 	return nil
 }
 
+// Mutate atomically applies a read-modify-write to the configuration. It holds
+// the write lock across the WHOLE clone → mutate → validate → swap sequence, so
+// two concurrent mutations cannot lose one another's change (gh#515). Without
+// this, a caller doing Get() (a clone) → mutate → Update() races another doing
+// the same: each starts from the same base and the second swap clobbers the
+// first. -race does not flag it — each Get/Update is individually locked; the
+// atomicity violation is at the compound level.
+//
+// fn receives a private deep copy it may mutate freely; returning a non-nil error
+// aborts the mutation with no change. The result is validated before the swap.
+//
+// Re-entrancy contract: fn MUST NOT call any SafeConfig method (Get/Update/Mutate)
+// — it operates only on the draft it is handed, or it self-deadlocks on sc.mu. Do
+// post-mutation side effects (KV writes, subscriber notification) AFTER Mutate
+// returns; capture any value they need into a variable inside fn.
+//
+// Unlike Update, validation runs INSIDE the write lock (it must, to keep the whole
+// RMW atomic). Validate does filesystem I/O (os.Stat) when TLS is configured, so a
+// mutation briefly blocks concurrent Get() readers — acceptable because config
+// mutations are rare and off the hot path.
+func (sc *SafeConfig) Mutate(fn func(*Config) error) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	draft := sc.config.Clone()
+	if err := fn(draft); err != nil {
+		return err
+	}
+	if err := draft.Validate(); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+	sc.config = draft
+	return nil
+}
+
 // Clone creates a deep copy of the configuration
 func (c *Config) Clone() *Config {
 	if c == nil {

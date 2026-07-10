@@ -62,9 +62,15 @@
 //	// Read config (deep copy returned, safe to use)
 //	cfg := safeConfig.Get()
 //
-//	// Update config atomically
-//	safeConfig.Update(func(cfg *Config) {
-//		cfg.Components["my-component"].Enabled = true
+//	// Read-modify-write atomically: Mutate holds the write lock across the whole
+//	// clone → mutate → swap so concurrent mutations cannot lose one another's
+//	// change (gh#515). Do NOT do Get() → mutate → Update() — the lock is released
+//	// between the read and the swap, so a concurrent writer can clobber you.
+//	safeConfig.Mutate(func(cfg *Config) error {
+//		c := cfg.Components["my-component"]
+//		c.Enabled = true
+//		cfg.Components["my-component"] = c
+//		return nil
 //	})
 //
 //	// Push updates to NATS KV
