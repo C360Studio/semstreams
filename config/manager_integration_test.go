@@ -5,6 +5,8 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -417,6 +419,51 @@ func (s *ManagerIntegrationSuite) TestRuntimeComponentRemove_AppliesAndReconcile
 		s.False(ok, "notified config must not carry the removed component")
 	case <-time.After(2 * time.Second):
 		s.Fail("DeleteComponentFromKV did not deliver a reconcile notification (gh#388)")
+	}
+}
+
+// TestRuntimeComponentAddRemove_ConcurrentNoLostUpdate is the gh#515 regression at
+// the Manager level: many concurrent PutComponentToKV (adds) interleaved with
+// DeleteComponentFromKV (removes) must not drop one another's in-memory change.
+// Both paths funnel through updateConfig → SafeConfig.Mutate, which serializes the
+// read-modify-write. The old lock-free Get→mutate→Update would lose writes here
+// (and -race would not flag it — the atomicity violation is compound-level), so
+// this asserts on the surviving set, not via -race.
+func (s *ManagerIntegrationSuite) TestRuntimeComponentAddRemove_ConcurrentNoLostUpdate() {
+	const n = 40
+
+	// Seed n "remove-target" components that concurrent deletes will remove.
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("del-%03d", i)
+		s.Require().NoError(s.configManager.PutComponentToKV(s.ctx,
+			name, types.ComponentConfig{Type: "input", Name: name, Enabled: true}))
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2 * n)
+	for i := 0; i < n; i++ {
+		addName := fmt.Sprintf("add-%03d", i)
+		delName := fmt.Sprintf("del-%03d", i)
+		go func() {
+			defer wg.Done()
+			_ = s.configManager.PutComponentToKV(s.ctx,
+				addName, types.ComponentConfig{Type: "input", Name: addName, Enabled: true})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = s.configManager.DeleteComponentFromKV(s.ctx, delName)
+		}()
+	}
+	wg.Wait()
+
+	comps := s.configManager.config.Get().Components
+	for i := 0; i < n; i++ {
+		addName := fmt.Sprintf("add-%03d", i)
+		delName := fmt.Sprintf("del-%03d", i)
+		_, added := comps[addName]
+		s.True(added, "concurrent add %s must survive (no lost update)", addName)
+		_, removed := comps[delName]
+		s.False(removed, "concurrent remove %s must take effect (no lost update)", delName)
 	}
 }
 

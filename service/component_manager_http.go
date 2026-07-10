@@ -335,14 +335,11 @@ func (cm *ComponentManager) handleComponentsList(w http.ResponseWriter, r *http.
 			"state": mc.State.String(),
 		}
 
-		// Get component type and ID from config if available
-		if cm.componentConfigs != nil {
-			if compConfig, ok := cm.componentConfigs[name]; ok {
-				compInfo["component"] = compConfig.Name    // Component factory name (e.g., "udp", "graph-processor")
-				compInfo["type"] = string(compConfig.Type) // Component category (input/processor/output/storage/gateway)
-				compInfo["enabled"] = compConfig.Enabled
-			}
-		}
+		// Report the effective config the component is actually running, from the
+		// single source of truth refreshed on every write path (gh#522).
+		compInfo["component"] = mc.Config.Name    // Component factory name (e.g., "udp", "graph-processor")
+		compInfo["type"] = string(mc.Config.Type) // Component category (input/processor/output/storage/gateway)
+		compInfo["enabled"] = mc.Config.Enabled
 
 		// Add health status
 		healthStatus := mc.Component.Health()
@@ -526,13 +523,9 @@ func (cm *ComponentManager) handleComponentStatus(w http.ResponseWriter, r *http
 		"start_order": mc.StartOrder,
 	}
 
-	// Get component type from config if available
-	if cm.componentConfigs != nil {
-		if compConfig, ok := cm.componentConfigs[componentName]; ok {
-			status["type"] = string(compConfig.Type)
-			status["enabled"] = compConfig.Enabled
-		}
-	}
+	// Effective config from the single source of truth (gh#522).
+	status["type"] = string(mc.Config.Type)
+	status["enabled"] = mc.Config.Enabled
 
 	// Add health information
 	healthStatus := mc.Component.Health()
@@ -589,31 +582,22 @@ func (cm *ComponentManager) handleGetComponentConfig(w http.ResponseWriter, r *h
 	defer cm.mu.RUnlock()
 
 	// Check if component exists
-	if _, exists := cm.components[componentName]; !exists {
+	mc, exists := cm.components[componentName]
+	if !exists {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Get the configuration for this component
-	var config any
-	if cm.componentConfigs != nil {
-		if compConfig, ok := cm.componentConfigs[componentName]; ok {
-			// Return the raw config
-			config = map[string]any{
-				"type":    compConfig.Type,
-				"name":    compConfig.Name,
-				"enabled": compConfig.Enabled,
-				"config":  json.RawMessage(compConfig.Config),
-			}
-		}
-	}
-
-	if config == nil {
-		// Component exists but no config found
-		config = map[string]any{
-			"message": "No configuration available for this component",
-		}
-	}
+	// Return the effective config the component is actually running, from the
+	// single source of truth refreshed on every write path — create, KV-restart,
+	// and live-PUT — so a KV-driven restart does not leave a stale body (gh#522).
+	compConfig := mc.Config
+	config := any(map[string]any{
+		"type":    compConfig.Type,
+		"name":    compConfig.Name,
+		"enabled": compConfig.Enabled,
+		"config":  json.RawMessage(compConfig.Config),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(config); err != nil {
@@ -630,9 +614,16 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Check if component exists
+	// Check if component exists, and capture the factory name from the component's
+	// effective config under the same lock (gh#522: the single source of truth, not
+	// the boot-time componentConfigs which is stale for a KV-restarted or
+	// runtime-added component).
 	cm.mu.RLock()
 	comp, exists := cm.components[componentName]
+	var componentType string
+	if exists {
+		componentType = comp.Config.Name // Factory name
+	}
 	cm.mu.RUnlock()
 
 	if !exists {
@@ -647,14 +638,6 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
-	}
-
-	// Get component type
-	var componentType string
-	if cm.componentConfigs != nil {
-		if compConfig, ok := cm.componentConfigs[componentName]; ok {
-			componentType = compConfig.Name // Factory name
-		}
 	}
 
 	if componentType == "" {
@@ -709,26 +692,19 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 	}
 
 	// Update the ComponentManager's in-memory view of the config, only after a
-	// successful apply or an explicit no-hook accept, so the GET-config read
-	// stays consistent with what was applied. NOTE: this is the manager's
-	// in-memory map only — this endpoint does NOT durably persist to the config
-	// KV store (that write is one-directional KV→cm here, and an in-handler KV
-	// write is a known deadlock hazard — gh#388), so the change does not survive
-	// a restart. That is exactly why the response below does not promise a
-	// restart-time apply.
+	// successful apply or an explicit no-hook accept, so the GET-config read stays
+	// consistent with what was applied. NOTE: this is the manager's in-memory state
+	// only — this endpoint does NOT durably persist to the config KV store (that
+	// write is one-directional KV→cm here, and an in-handler KV write is a known
+	// deadlock hazard — gh#388), so the change does not survive a restart. That is
+	// exactly why the response below does not promise a restart-time apply.
+	//
+	// The retained ManagedComponent.Config is the single source of truth for the
+	// component's effective config (gh#522): it backs the GET /config read AND the
+	// KV-watch idempotency guard (gh#520). Refreshing it here keeps both correct —
+	// GET returns the live-applied body, and a later KV re-push of the same config
+	// is a no-op rather than a spurious restart.
 	cm.mu.Lock()
-	if cm.componentConfigs != nil {
-		if compConfig, ok := cm.componentConfigs[componentName]; ok {
-			compConfig.Config = req.Config
-			cm.componentConfigs[componentName] = compConfig
-		}
-	}
-	// Keep the retained ManagedComponent.Config baseline in step with the
-	// live-applied config so the KV-watch idempotency guard (gh#520) compares
-	// against what the component is actually running. Without this, a later KV
-	// re-push of the same config would either spuriously restart (stale baseline
-	// != pushed config) or, if KV still holds the pre-PUT config, silently skip
-	// reconverging the durable desired state.
 	if mc, ok := cm.components[componentName]; ok {
 		mc.Config.Config = req.Config
 	}

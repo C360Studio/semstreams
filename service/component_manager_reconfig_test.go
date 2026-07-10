@@ -182,6 +182,40 @@ func putConfig(cm *ComponentManager, name string, body string) *httptest.Respons
 	return w
 }
 
+func getConfig(cm *ComponentManager, name string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/components/config/"+name, nil)
+	w := httptest.NewRecorder()
+	cm.handleGetComponentConfig(w, req)
+	return w
+}
+
+// TestHandleGetComponentConfig_ReflectsEffectiveConfigNotStaleBaseline is the
+// gh#522 regression: GET /config must return the effective config the component is
+// running (ManagedComponent.Config, the single source of truth refreshed on every
+// write path), NOT the boot-time componentConfigs baseline that is left stale by a
+// KV-watch-driven restart. We reproduce the stale condition directly: refresh only
+// mc.Config (as CreateComponent does on a KV restart) while componentConfigs still
+// holds the old body, and assert GET returns the new body.
+func TestHandleGetComponentConfig_ReflectsEffectiveConfigNotStaleBaseline(t *testing.T) {
+	comp := &reconfigPairComponent{baseDiscoverable: baseDiscoverable{name: "rule-processor"}}
+	cm := newReconfigTestCM("rule-processor", comp, json.RawMessage(`{"old":true}`))
+
+	// Simulate a KV-watch restart: only mc.Config is refreshed (componentConfigs
+	// stays stale, exactly the gh#522 bug condition).
+	cm.mu.Lock()
+	mc := cm.components["rule-processor"]
+	mc.Config.Config = json.RawMessage(`{"new":true}`)
+	cm.mu.Unlock()
+
+	w := getConfig(cm, "rule-processor")
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	body, _ := json.Marshal(resp["config"])
+	assert.JSONEq(t, `{"new":true}`, string(body),
+		"GET /config must reflect the effective config, not the stale componentConfigs baseline")
+}
+
 func TestHandlePutComponentConfig_MethodPairAppliesAndReportsApplied(t *testing.T) {
 	comp := &reconfigPairComponent{baseDiscoverable: baseDiscoverable{name: "rule-processor"}}
 	cm := newReconfigTestCM("rule-processor", comp, json.RawMessage(`{"old":true}`))
@@ -194,8 +228,11 @@ func TestHandlePutComponentConfig_MethodPairAppliesAndReportsApplied(t *testing.
 	assert.Equal(t, true, resp["applied"], "bridge must report applied=true")
 	// Reconfig-observable: the component's ApplyConfigUpdate actually ran.
 	require.Len(t, comp.applied, 1)
-	// Stored config was updated to the new value.
-	assert.JSONEq(t, `{"enable_graph_integration":false}`, string(cm.componentConfigs["rule-processor"].Config))
+	// The effective config (the single source of truth, gh#522) was updated.
+	cm.mu.Lock()
+	effective := cm.components["rule-processor"].Config.Config
+	cm.mu.Unlock()
+	assert.JSONEq(t, `{"enable_graph_integration":false}`, string(effective))
 }
 
 func TestHandlePutComponentConfig_NoHookReportsNotApplied(t *testing.T) {
@@ -254,6 +291,10 @@ func TestHandlePutComponentConfig_ValidationRejectionReturns400AndDoesNotStore(t
 
 	require.Equal(t, http.StatusBadRequest, w.Code, "component validation rejection → structured 400")
 	assert.Empty(t, comp.applied, "nothing applied on validation failure")
-	// The stored config MUST be unchanged — a restart must not load the rejected update.
-	assert.JSONEq(t, `{"old":true}`, string(cm.componentConfigs["rule-processor"].Config))
+	// The effective config MUST be unchanged — apply runs before the in-memory
+	// refresh, so a rejected update leaves the source of truth untouched (gh#522).
+	cm.mu.Lock()
+	effective := cm.components["rule-processor"].Config.Config
+	cm.mu.Unlock()
+	assert.JSONEq(t, `{"old":true}`, string(effective))
 }
