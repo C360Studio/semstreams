@@ -161,13 +161,16 @@ func TestApplyRuntimeConfig_ValidationRejectionWrapsSentinelAndSkipsApply(t *tes
 // handler: one component + its stored ComponentConfig, configManager nil so the
 // schema-validation step is skipped and the reconfig path is exercised directly.
 func newReconfigTestCM(name string, comp component.Discoverable, storedConfig json.RawMessage) *ComponentManager {
+	effectiveConfig := types.ComponentConfig{Type: "processor", Name: name, Enabled: true, Config: storedConfig}
 	cm := &ComponentManager{
 		BaseService: NewBaseServiceWithOptions("component-manager", nil),
-		components:  map[string]*component.ManagedComponent{name: {Component: comp, State: component.StateStarted}},
-		componentConfigs: config.ComponentConfigs{
-			name: types.ComponentConfig{Type: "processor", Name: name, Enabled: true, Config: storedConfig},
+		// Mirror production: the managed component retains its effective config
+		// (populated by CreateComponent) so the gh#520 guard baseline is realistic.
+		components: map[string]*component.ManagedComponent{
+			name: {Component: comp, State: component.StateStarted, Config: effectiveConfig},
 		},
-		registry: component.NewRegistry(),
+		componentConfigs: config.ComponentConfigs{name: effectiveConfig},
+		registry:         component.NewRegistry(),
 	}
 	return cm
 }
@@ -208,6 +211,35 @@ func TestHandlePutComponentConfig_NoHookReportsNotApplied(t *testing.T) {
 	// Must NOT promise a restart-time apply — this endpoint does not persist
 	// durably (gh#388), so a restart would revert the change (gh#455 review HIGH).
 	assert.NotContains(t, resp, "restart_required", "must not promise a restart-time apply the endpoint can't keep")
+}
+
+// TestHandlePutComponentConfig_RefreshesGuardBaseline locks the gh#520 finding-#1
+// fix: a live PUT reconfig must refresh the retained ManagedComponent.Config
+// baseline that the KV-watch idempotency guard compares against. Otherwise a later
+// KV re-push of the same config would spuriously restart (stale baseline != push)
+// or silently skip reconverging durable desired state.
+func TestHandlePutComponentConfig_RefreshesGuardBaseline(t *testing.T) {
+	comp := &reconfigPairComponent{baseDiscoverable: baseDiscoverable{name: "rule-processor"}}
+	cm := newReconfigTestCM("rule-processor", comp, json.RawMessage(`{"old":true}`))
+
+	w := putConfig(cm, "rule-processor", `{"config":{"enable_graph_integration":false}}`)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// The retained baseline on the managed component (not just componentConfigs)
+	// now reflects the live-applied config.
+	cm.mu.Lock()
+	baseline := cm.components["rule-processor"].Config.Config
+	cm.mu.Unlock()
+	assert.JSONEq(t, `{"enable_graph_integration":false}`, string(baseline),
+		"live PUT must refresh ManagedComponent.Config so the KV-watch guard baseline is not stale")
+
+	// And a subsequent KV-watch update carrying that same effective config is a
+	// no-op (Equal against the refreshed baseline), not a spurious restart.
+	updated := types.ComponentConfig{Type: "processor", Name: "rule-processor", Enabled: true, Config: json.RawMessage(`{"enable_graph_integration":false}`)}
+	cm.mu.Lock()
+	same := cm.components["rule-processor"].Config.Equal(updated)
+	cm.mu.Unlock()
+	assert.True(t, same, "refreshed baseline must compare equal to the live-applied config")
 }
 
 func TestHandlePutComponentConfig_ValidationRejectionReturns400AndDoesNotStore(t *testing.T) {

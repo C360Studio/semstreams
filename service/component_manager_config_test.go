@@ -657,3 +657,198 @@ func TestComponentManagerReconcileOnBulkPush(t *testing.T) {
 
 	t.Logf("Reconciliation created %d components from bulk push of 22 configs (20 enabled, 2 disabled)", len(comps))
 }
+
+// TestComponentManagerNoOpConfigUpdateSkipsRestart verifies the gh#520
+// idempotency guard: a per-component config update whose effective config is
+// unchanged does NOT restart the running component, while a genuinely changed
+// config restarts it exactly once. Restart is observed via factory re-invocation
+// (a restart tears down the old instance and builds a new one via the factory).
+func TestComponentManagerNoOpConfigUpdateSkipsRestart(t *testing.T) {
+	ctx := context.Background()
+
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer testClient.Terminate()
+
+	var mu sync.Mutex
+	factoryCalls := 0
+	testFactory := func(cfg json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+		mu.Lock()
+		factoryCalls++
+		id := factoryCalls
+		mu.Unlock()
+		return &TestMockComponent{id: fmt.Sprintf("noop-%d", id), config: cfg}, nil
+	}
+	calls := func() int { mu.Lock(); defer mu.Unlock(); return factoryCalls }
+
+	registry := component.NewRegistry()
+	require.NoError(t, registry.RegisterFactory("test-noop", &component.Registration{
+		Name:        "test-noop",
+		Type:        string(types.ComponentTypeProcessor),
+		Protocol:    "test",
+		Description: "Test no-op component",
+		Version:     "1.0.0",
+		Factory:     testFactory,
+	}))
+
+	initialConfig := &config.Config{
+		Version:    "1.0.0",
+		Platform:   config.PlatformConfig{Org: "test", ID: "test-platform", InstanceID: "test-001", Environment: "test"},
+		Components: config.ComponentConfigs{},
+	}
+
+	configManager, err := config.NewConfigManager(initialConfig, testClient.Client, slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, configManager.PushToKV(ctx))
+	require.NoError(t, configManager.Start(ctx))
+	defer configManager.Stop(5 * time.Second)
+
+	kv, err := testClient.Client.GetKeyValueBucket(ctx, "semstreams_config")
+	require.NoError(t, err)
+
+	deps := &service.Dependencies{
+		NATSClient:        testClient.Client,
+		Manager:           configManager,
+		Logger:            slog.Default(),
+		ComponentRegistry: registry,
+	}
+	cmService, err := service.NewComponentManager(json.RawMessage(`{"watch_config": true}`), deps)
+	require.NoError(t, err)
+	cm := cmService.(*service.ComponentManager)
+	require.NoError(t, cm.Initialize())
+	require.NoError(t, cm.Start(ctx))
+	defer cm.Stop(5 * time.Second)
+	time.Sleep(300 * time.Millisecond)
+
+	compCfg := types.ComponentConfig{
+		Type:    types.ComponentTypeProcessor,
+		Name:    "test-noop",
+		Enabled: true,
+		Config:  json.RawMessage(`{"setting":"a"}`),
+	}
+	put := func(c types.ComponentConfig) {
+		data, err := json.Marshal(c)
+		require.NoError(t, err)
+		_, err = kv.Put(ctx, "components.noop-1", data)
+		require.NoError(t, err)
+	}
+
+	// Create the component.
+	put(compCfg)
+	require.Eventually(t, func() bool {
+		_, ok := cm.ListComponents()["noop-1"]
+		return ok
+	}, 5*time.Second, 100*time.Millisecond, "component should be created")
+	require.Equal(t, 1, calls(), "factory called once for initial create")
+
+	// Push the IDENTICAL config (re-marshaled — exercises canonical compare).
+	put(compCfg)
+	// And a key-reordered/whitespaced form of the same config.
+	reordered := compCfg
+	reordered.Config = json.RawMessage("{ \"setting\" : \"a\" }")
+	put(reordered)
+	// Negative assertion (absence of a restart): sleep well past the
+	// put→watcher→handleComponentConfigUpdate latency (the 300ms warm-up above
+	// shows that path completes in well under a second) so a restart, if the
+	// guard were broken, would have incremented the factory count by now.
+	time.Sleep(1 * time.Second)
+	assert.Equal(t, 1, calls(), "no-op config updates must NOT restart (factory count unchanged)")
+	assert.Contains(t, cm.ListComponents(), "noop-1", "component still present after no-op updates")
+
+	// Push a CHANGED config — exactly one restart.
+	changed := compCfg
+	changed.Config = json.RawMessage(`{"setting":"b"}`)
+	put(changed)
+	require.Eventually(t, func() bool { return calls() == 2 }, 5*time.Second, 100*time.Millisecond,
+		"changed config must restart exactly once (factory called a 2nd time)")
+	time.Sleep(500 * time.Millisecond)
+	assert.Equal(t, 2, calls(), "changed config restarts exactly once, not repeatedly")
+}
+
+// TestComponentManagerRepushUnchangedRestartsNothing verifies that re-pushing an
+// unchanged full config (which fans out per-component notifications AND a bulk
+// reconcile) restarts none of the running components (gh#520).
+func TestComponentManagerRepushUnchangedRestartsNothing(t *testing.T) {
+	ctx := context.Background()
+
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer testClient.Terminate()
+
+	var mu sync.Mutex
+	factoryCalls := 0
+	testFactory := func(cfg json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+		mu.Lock()
+		factoryCalls++
+		id := factoryCalls
+		mu.Unlock()
+		return &TestMockComponent{id: fmt.Sprintf("repush-%d", id), config: cfg}, nil
+	}
+	calls := func() int { mu.Lock(); defer mu.Unlock(); return factoryCalls }
+
+	registry := component.NewRegistry()
+	require.NoError(t, registry.RegisterFactory("test-repush", &component.Registration{
+		Name:        "test-repush",
+		Type:        string(types.ComponentTypeProcessor),
+		Protocol:    "test",
+		Description: "Test repush component",
+		Version:     "1.0.0",
+		Factory:     testFactory,
+	}))
+
+	components := make(config.ComponentConfigs, 5)
+	for i := range 5 {
+		components[fmt.Sprintf("repush-%02d", i)] = types.ComponentConfig{
+			Type:    types.ComponentTypeProcessor,
+			Name:    "test-repush",
+			Enabled: true,
+			Config:  json.RawMessage(fmt.Sprintf(`{"id":%d}`, i)),
+		}
+	}
+
+	initialConfig := &config.Config{
+		Version:    "1.0.0",
+		Platform:   config.PlatformConfig{Org: "test", ID: "test-platform", InstanceID: "test-001", Environment: "test"},
+		Components: config.ComponentConfigs{},
+	}
+	configManager, err := config.NewConfigManager(initialConfig, testClient.Client, slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, configManager.PushToKV(ctx))
+	require.NoError(t, configManager.Start(ctx))
+	defer configManager.Stop(5 * time.Second)
+
+	deps := &service.Dependencies{
+		NATSClient:        testClient.Client,
+		Manager:           configManager,
+		Logger:            slog.Default(),
+		ComponentRegistry: registry,
+	}
+	cmService, err := service.NewComponentManager(json.RawMessage(`{"watch_config": true}`), deps)
+	require.NoError(t, err)
+	cm := cmService.(*service.ComponentManager)
+	require.NoError(t, cm.Initialize())
+	require.NoError(t, cm.Start(ctx))
+	defer cm.Stop(5 * time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	// Create the 5 components via the full config.
+	fullConfig := configManager.GetConfig()
+	cfg := fullConfig.Get()
+	cfg.Components = components
+	require.NoError(t, fullConfig.Update(cfg))
+	require.NoError(t, configManager.PushToKV(ctx))
+	require.Eventually(t, func() bool { return len(cm.ListComponents()) >= 5 }, 10*time.Second, 200*time.Millisecond,
+		"all 5 components created")
+	require.Equal(t, 5, calls(), "5 factory calls for the 5 creates")
+
+	// Re-push the SAME full config. This exercises the guard via the individual
+	// per-component notifications (components.<name>), which without the guard
+	// would each restart; the coalesced components.* bulk that may also fire is
+	// reconcile-only (never restarts running components), so it can't mask a
+	// broken guard — the sibling TestComponentManagerNoOpConfigUpdateSkipsRestart
+	// pins the individual-notification path with explicit single-key puts.
+	require.NoError(t, configManager.PushToKV(ctx))
+	// Negative assertion: sleep past the notification-handling latency so any
+	// spurious restart would have re-invoked the factory by the time we assert.
+	time.Sleep(2 * time.Second)
+	assert.Equal(t, 5, calls(), "re-pushing unchanged config must restart nothing (no extra factory calls)")
+	assert.Len(t, cm.ListComponents(), 5, "still 5 components after unchanged re-push")
+}

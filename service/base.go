@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -16,6 +17,13 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 )
+
+// ErrAlreadyStopped signals that a Stop was invoked on a service already in a
+// stopped or stopping terminal state. It is an idempotent, non-fatal outcome:
+// Manager.StopAll treats it as a successful stop and does not aggregate it as a
+// shutdown error (gh#520). A Stop that reaches an already-stopped state MAY
+// return nil (the BaseService.Stop default) OR this sentinel; both are success.
+var ErrAlreadyStopped = errors.New("service already stopped")
 
 // Status represents the current status of a service
 type Status int
@@ -471,6 +479,12 @@ func (s *BaseService) performGracefulShutdown() {
 type Service interface {
 	Name() string
 	Start(ctx context.Context) error
+	// Stop stops the service gracefully. Stop MUST be idempotent: invoking it
+	// on a service already stopped or stopping returns success (nil or
+	// ErrAlreadyStopped) and does not re-run teardown side effects. During
+	// coordinated shutdown a service may reach a terminal state via
+	// parent-context cancellation before the manager calls Stop; that ordering
+	// is clean, not an error (gh#520).
 	Stop(timeout time.Duration) error
 	Status() Status
 	IsHealthy() bool       // Keep for compatibility during migration
