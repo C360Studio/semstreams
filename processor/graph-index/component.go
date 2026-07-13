@@ -892,6 +892,30 @@ func (c *Component) processEntityUpdateWorker(ctx context.Context, entry jetstre
 // entries. It is the single funnel for every update-completion path — the pool
 // worker, the direct branch, and the coalescer batch all route through here — so it
 // is the one place the readiness watermark's completion fires (ADR-066 §1).
+// retryIndexWrites runs writeAll up to indexWriteMaxAttempts times, returning nil on
+// the first success and the last error otherwise (gh#474 P1b). writeAll is idempotent,
+// so retrying the whole set recovers a transient KV blip; a cancelled context aborts
+// immediately.
+func (c *Component) retryIndexWrites(ctx context.Context, writeAll func() error) error {
+	var writeErr error
+	for attempt := 0; attempt < indexWriteMaxAttempts; attempt++ {
+		if writeErr = writeAll(); writeErr == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if attempt < indexWriteMaxAttempts-1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
+			}
+		}
+	}
+	return writeErr
+}
+
 // markEntityFailed records that entityID's required index writes did not all succeed
 // after retry (gh#474 P1b). Idempotent: failedCount increments only on the first mark
 // so it mirrors the set size. While failedCount > 0 the index withholds readiness.
@@ -1074,23 +1098,7 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 
 	// Bounded retry: writes are idempotent, so a transient KV blip is retried rather
 	// than immediately marking the entity failed.
-	var writeErr error
-	for attempt := 0; attempt < indexWriteMaxAttempts; attempt++ {
-		if writeErr = writeAll(); writeErr == nil {
-			break
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			writeErr = ctxErr
-			break
-		}
-		if attempt < indexWriteMaxAttempts-1 {
-			select {
-			case <-ctx.Done():
-				writeErr = ctx.Err()
-			case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
-			}
-		}
-	}
+	writeErr := c.retryIndexWrites(ctx, writeAll)
 
 	if writeErr != nil {
 		// Required writes did not all land — withhold readiness until re-index (P1b).
