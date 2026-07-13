@@ -64,7 +64,7 @@ func setupIntegrationTest(t *testing.T) (*Component, *natsclient.Client, func())
 
 // TestQueryOutgoing_Integration tests outgoing query with real NATS
 func TestQueryOutgoing_Integration(t *testing.T) {
-	_, natsClient, cleanup := setupIntegrationTest(t)
+	comp, natsClient, cleanup := setupIntegrationTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -98,30 +98,55 @@ func TestQueryOutgoing_Integration(t *testing.T) {
 	_, err = entityBucket.Put(ctx, entityID, stateJSON)
 	require.NoError(t, err)
 
-	// Wait for indexing
-	time.Sleep(300 * time.Millisecond)
-
 	// Create query request
-	nc := natsClient.GetConnection()
 	request := map[string]string{"entity_id": entityID}
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	// Send query request
-	msg, err := nc.Request("graph.index.query.outgoing", requestJSON, 2*time.Second)
+	// Synchronize on the query-visible projection rather than sleeping. The classified
+	// request path rejects typed index-not-ready responses instead of letting their JSON
+	// envelopes decode as a false empty success.
+	require.Eventually(t, func() bool {
+		data, requestErr := natsClient.RequestClassified(
+			ctx, "graph.index.query.outgoing", requestJSON, 2*time.Second,
+		)
+		if requestErr != nil {
+			return false
+		}
+		var current graph.OutgoingQueryResponse
+		if json.Unmarshal(data, &current) != nil || len(current.Data.Relationships) != 1 {
+			return false
+		}
+		return current.Data.Relationships[0].ToEntityID == targetID &&
+			current.Data.Relationships[0].Predicate == predicate
+	}, 3*time.Second, 25*time.Millisecond, "initial relationship never became query-visible")
+
+	// The entity remains present while its authoritative relationship set becomes
+	// empty. The watcher reconciliation must overwrite the owner key with [] and the
+	// query surface must stop returning the removed edge.
+	state.Triples = nil
+	stateJSON, err = json.Marshal(state)
+	require.NoError(t, err)
+	_, err = entityBucket.Put(ctx, entityID, stateJSON)
 	require.NoError(t, err)
 
-	// Parse response (envelope: {"data": {"relationships": [...]}, ...})
-	var response graph.OutgoingQueryResponse
-	err = json.Unmarshal(msg.Data, &response)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		data, requestErr := natsClient.RequestClassified(
+			ctx, "graph.index.query.outgoing", requestJSON, 2*time.Second,
+		)
+		if requestErr != nil {
+			return false
+		}
+		var current graph.OutgoingQueryResponse
+		if json.Unmarshal(data, &current) != nil {
+			return false
+		}
+		return len(current.Data.Relationships) == 0
+	}, 3*time.Second, 25*time.Millisecond, "removed relationship remained query-visible")
 
-	// Verify response
-	assert.Len(t, response.Data.Relationships, 1, "should have one outgoing relationship")
-	if len(response.Data.Relationships) > 0 {
-		assert.Equal(t, targetID, response.Data.Relationships[0].ToEntityID)
-		assert.Equal(t, predicate, response.Data.Relationships[0].Predicate)
-	}
+	ownerEntry, err := comp.outgoingBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(ownerEntry.Value))
 }
 
 // TestQueryIncoming_Integration tests incoming query with real NATS

@@ -395,9 +395,16 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			// Verify outgoing index
 			outgoing := outgoingMock(comp)
 			outgoing.mu.Lock()
-			_, hasOutgoing := outgoing.data[entityID]
+			outgoingData, hasOutgoing := outgoing.data[entityID]
 			outgoing.mu.Unlock()
-			assert.Equal(t, tt.wantOutgoing, hasOutgoing, "outgoing index presence mismatch")
+			require.True(t, hasOutgoing, "present entity should have an outgoing owner projection")
+			var outgoingEntries []graph.OutgoingEntry
+			require.NoError(t, json.Unmarshal(outgoingData, &outgoingEntries))
+			if tt.wantOutgoing {
+				assert.NotEmpty(t, outgoingEntries, "outgoing projection should contain relationships")
+			} else {
+				assert.Empty(t, outgoingEntries, "outgoing projection should be explicitly empty")
+			}
 
 			// Verify incoming index
 			if tt.wantIncoming {
@@ -487,14 +494,17 @@ func TestProcessEntityUpdate_RelationshipDetection(t *testing.T) {
 			entry := &mockKVEntry{data: data}
 			comp.processEntityUpdate(context.Background(), entry)
 
-			// Check if outgoing/incoming indexes were populated
+			// Every present entity owns an OUTGOING projection. Relationship detection
+			// determines whether that projection contains edges or an explicit [].
 			outgoing := outgoingMock(comp)
 			outgoing.mu.Lock()
-			_, hasOutgoing := outgoing.data[entityID]
+			outgoingData, hasOutgoing := outgoing.data[entityID]
 			outgoing.mu.Unlock()
-
-			assert.Equal(t, tt.isRelationship, hasOutgoing,
-				"relationship detection mismatch: expected %v, got %v", tt.isRelationship, hasOutgoing)
+			require.True(t, hasOutgoing)
+			var outgoingEntries []graph.OutgoingEntry
+			require.NoError(t, json.Unmarshal(outgoingData, &outgoingEntries))
+			assert.Equal(t, tt.isRelationship, len(outgoingEntries) > 0,
+				"relationship detection mismatch: expected %v", tt.isRelationship)
 		})
 	}
 }

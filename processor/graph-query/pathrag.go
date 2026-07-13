@@ -307,9 +307,10 @@ func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID st
 	return rels, nil
 }
 
-// getRelationships fetches relationships based on direction and predicate filters. It
-// returns a non-nil error only when the index is not ready (gh#474 Codex #1) — the
-// caller must abort the traversal rather than emit a partial result.
+// getRelationships fetches relationships based on direction and predicate filters.
+// It propagates index availability, protocol, and decode failures; the caller must
+// abort the traversal rather than emit a partial result. Only an explicit empty
+// relationship array is a successful empty result.
 func (p *PathSearcher) getRelationships(ctx context.Context, entityID, direction string, predicateFilter map[string]bool) ([]RelationshipEntry, error) {
 	var rels []RelationshipEntry
 

@@ -97,14 +97,14 @@ func TestOrderedDispatcher_UpdateCannotFinishAfterDelete(t *testing.T) {
 
 	comp.watermark.Observe(1, entityID)
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexUpdate, completionRevision: 1,
+		entityID: entityID, completionRevision: 1,
 	}))
 	<-entered
 
 	entityDeleted.Store(true)
 	comp.watermark.Observe(2, entityID)
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexDelete, completionRevision: 2,
+		entityID: entityID, completionRevision: 2,
 	}))
 	select {
 	case <-deleted:
@@ -145,13 +145,13 @@ func TestAuthoritativeReconcilePreventsLateOlderWatcherClobber(t *testing.T) {
 	// Repair/coalesced reconciliation applies authoritative R2 before the watcher
 	// gets CPU to submit the already captured R1 entry.
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexReconcile,
+		entityID: entityID,
 	}))
 	require.Eventually(t, func() bool { return gets.Load() == 1 }, time.Second, time.Millisecond)
 
 	comp.watermark.Observe(1, entityID)
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexUpdate, completionRevision: 1,
+		entityID: entityID, completionRevision: 1,
 	}))
 	require.Eventually(t, func() bool { return comp.watermark.Indexed() == 1 }, time.Second, time.Millisecond,
 		"late R1 work did not reach terminal stale-skip completion")
@@ -164,6 +164,41 @@ func TestAuthoritativeReconcilePreventsLateOlderWatcherClobber(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, newTarget, got[0].ToEntityID)
 	require.Equal(t, int64(2), gets.Load(), "late R1 must re-read authoritative R2 instead of applying its snapshot")
+}
+
+func TestAuthoritativeReconcileReplacesOutgoingWithExplicitEmptyArray(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	entityID := "acme.ops.robotics.gcs.drone.005"
+	targetID := "acme.ops.robotics.gcs.mission.001"
+
+	var current atomic.Value
+	current.Store(entityStateData(t, entityID, targetID))
+	states := newMockKVBucket()
+	states.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+		return &orderedTestEntry{key: key, value: current.Load().([]byte), revision: 1}, nil
+	}
+	comp.entityStatesBucket = states
+
+	comp.processEntityWork(context.Background(), entityIndexWork{entityID: entityID})
+	outgoing := outgoingMock(comp)
+	outgoing.mu.Lock()
+	var before []graph.OutgoingEntry
+	require.NoError(t, json.Unmarshal(outgoing.data[entityID], &before))
+	outgoing.mu.Unlock()
+	require.Len(t, before, 1)
+	require.Equal(t, targetID, before[0].ToEntityID)
+
+	// The entity still exists, but its authoritative relationship set is now empty.
+	// Reconciliation must replace the old owner projection with [] so queries cannot
+	// continue to traverse the removed edge.
+	current.Store(entityStateData(t, entityID, ""))
+	comp.processEntityWork(context.Background(), entityIndexWork{entityID: entityID})
+
+	outgoing.mu.Lock()
+	data, exists := outgoing.data[entityID]
+	outgoing.mu.Unlock()
+	require.True(t, exists, "present entities retain an explicit outgoing owner projection")
+	require.JSONEq(t, `[]`, string(data))
 }
 
 func TestRepairRefetchesAtOrderedExecution(t *testing.T) {
@@ -201,7 +236,7 @@ func TestRepairRefetchesAtOrderedExecution(t *testing.T) {
 	comp.entityStatesBucket = states
 
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexUpdate, completionRevision: 1,
+		entityID: entityID, completionRevision: 1,
 	}))
 	<-entered
 	comp.markEntityFailed(entityID)
@@ -246,14 +281,14 @@ func TestOlderDeleteCannotClearFailedNewerAuthoritativeState(t *testing.T) {
 	}
 
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexReconcile, completionRevision: 2,
+		entityID: entityID, completionRevision: 2,
 	}))
 	require.Eventually(t, func() bool { return comp.failedCount.Load() == 1 && writes.Load() >= 3 }, time.Second, time.Millisecond)
 
 	// A delayed R1 tombstone is older than authoritative R2. It must reconcile R2,
 	// not execute a delete that clears the failed marker and advertises readiness.
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
-		entityID: entityID, kind: entityIndexDelete, completionRevision: 1,
+		entityID: entityID, completionRevision: 1,
 	}))
 	require.Eventually(t, func() bool { return writes.Load() >= 6 }, time.Second, time.Millisecond)
 	require.Equal(t, int64(0), deletes.Load(), "older tombstone deleted newer authoritative state")

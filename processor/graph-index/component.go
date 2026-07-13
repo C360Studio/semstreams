@@ -307,17 +307,8 @@ type Component struct {
 	querySubscriptions []*natsclient.Subscription
 }
 
-type entityIndexWorkKind uint8
-
-const (
-	entityIndexUpdate entityIndexWorkKind = iota
-	entityIndexDelete
-	entityIndexReconcile
-)
-
 type entityIndexWork struct {
 	entityID           string
-	kind               entityIndexWorkKind
 	completionRevision uint64
 }
 
@@ -838,7 +829,6 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				}
 				if err := c.submitEntityWork(ctx, entityIndexWork{
 					entityID:           entry.Key(),
-					kind:               entityIndexDelete,
 					completionRevision: entry.Revision(),
 				}); err != nil {
 					c.logger.Warn("failed to submit entity delete",
@@ -852,7 +842,6 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 			} else if c.indexPool != nil {
 				if err := c.submitEntityWork(ctx, entityIndexWork{
 					entityID:           entry.Key(),
-					kind:               entityIndexUpdate,
 					completionRevision: entry.Revision(),
 				}); err != nil {
 					c.logger.Warn("failed to submit entity for indexing",
@@ -940,7 +929,7 @@ func (c *Component) processEntityWork(ctx context.Context, work entityIndexWork)
 	// watcher submits a captured R1: regardless of queue order, each lane item
 	// applies current truth rather than its stale event snapshot. It also avoids an
 	// unbounded per-entity generation ledger.
-	_, _ = c.reconcileEntity(ctx, work.entityID, work.completionRevision)
+	c.reconcileEntity(ctx, work.entityID)
 	if c.watermark != nil && work.completionRevision > 0 {
 		c.watermark.Complete(work.entityID, work.completionRevision)
 	}
@@ -1029,7 +1018,6 @@ func (c *Component) repairFailedEntities(ctx context.Context) {
 		}
 		if err := c.submitEntityWork(ctx, entityIndexWork{
 			entityID: entityID,
-			kind:     entityIndexReconcile,
 		}); err != nil {
 			c.logger.Debug("repair: ordered submit failed",
 				slog.String("entity", entityID), slog.Any("error", err))
@@ -1038,29 +1026,25 @@ func (c *Component) repairFailedEntities(ctx context.Context) {
 	})
 }
 
-func (c *Component) reconcileEntity(ctx context.Context, entityID string, absentRevision uint64) (uint64, bool) {
+func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
 	entry, err := c.entityStatesBucket.Get(ctx, entityID)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
 			if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
 				c.logger.Debug("reconcile: delete still failing",
 					slog.String("entity", entityID), slog.Any("error", delErr))
-				return absentRevision, false
 			}
-			return absentRevision, true
+			return
 		}
 		c.markEntityFailed(entityID)
 		c.logger.Warn("reconcile: authoritative entity read failed; readiness withheld",
 			slog.String("entity", entityID), slog.Any("error", err))
-		return absentRevision, false
+		return
 	}
-	revision := max(entry.Revision(), absentRevision)
 	if err := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); err != nil {
 		c.logger.Debug("reconcile: re-index still failing",
 			slog.String("entity", entityID), slog.Any("error", err))
-		return revision, false
 	}
-	return revision, true
 }
 
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
@@ -1201,10 +1185,8 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 				errList = append(errList, fmt.Errorf("incoming[%s]: %w", targetID, err))
 			}
 		}
-		if len(outgoingTargets) > 0 {
-			if err := c.updateOutgoingIndexBatch(ctx, resolvedID, outgoingTargets); err != nil {
-				errList = append(errList, fmt.Errorf("outgoing: %w", err))
-			}
+		if err := c.updateOutgoingIndexBatch(ctx, resolvedID, outgoingTargets); err != nil {
+			errList = append(errList, fmt.Errorf("outgoing: %w", err))
 		}
 		for predicate := range predicatesUsed {
 			if err := c.UpdatePredicateIndex(ctx, resolvedID, predicate); err != nil {
@@ -1324,7 +1306,6 @@ func (c *Component) processEntityBatch(ctx context.Context, entities []coalesced
 		}
 		if err := c.submitEntityWork(ctx, entityIndexWork{
 			entityID:           entity.entityID,
-			kind:               entityIndexReconcile,
 			completionRevision: entity.revision,
 		}); err != nil {
 			c.logger.Warn("failed to submit coalesced entity reconciliation",
@@ -1695,8 +1676,9 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 // appears as the sourceID middle-token) is the pre-existing gh#433 gap — unchanged
 // here (design.md D3).
 //
-// NAME and CONTEXT have no delete path today (never touched by this function) —
-// adding one is gh#433, out of scope; nothing regresses.
+// CONTEXT is entity-prefixed and cleaned immediately below. NAME, ALIAS, and
+// PREDICATE cannot be enumerated from a bare entityID tombstone with their current
+// key shapes/former values, so their reciprocal cleanup remains the gh#433 gap.
 func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIndexes", "entity ID cannot be empty")

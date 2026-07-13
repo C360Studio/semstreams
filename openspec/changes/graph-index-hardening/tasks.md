@@ -98,3 +98,17 @@
   downloading `onnx/model.onnx` with HTTP 403. This is an environment/dependency
   failure before the SemStreams semantic tier, not a SemStreams test result;
   rerun remains required.
+
+## 10. Codex 5th-pass OUTGOING replacement correction
+
+- [x] 10.1 Reconcile every present authoritative entity by replacing its complete
+  `OUTGOING[entityID]` value, including explicit `[]`; reserve owner-key deletion
+  for authoritative `ENTITY_STATES` absence.
+- [x] 10.2 Add regression coverage for relationship transition `[A]` to `[]` so
+  the stored projection and outgoing query result contain no phantom edge.
+- [x] 10.3 Update design/spec/tasks with the bounded live-entity-cardinality
+  tradeoff and the authoritative replacement contract.
+- [x] 10.4 Focused unit and real-NATS graph-index tests pass under `-race`;
+  `task check:push` and strict OpenSpec validation pass; `task e2e:structural`
+  passes all 37 validations with `validation_errors=0`.
+- [ ] 10.5 Push the correction to PR #524 and verify required GitHub checks.

@@ -145,6 +145,12 @@ yet been repaired.
   reconciler and mark the entity failed; it MUST NOT be treated as successful completion merely
   because the asynchronous watcher continues. The re-index no-op baseline MUST be stored only after
   a successful write, so a failed entity re-attempts rather than being suppressed as a no-op.
+- **Authoritative OUTGOING replacement.** Every successful reconciliation of a present authoritative
+  `ENTITY_STATES` entity MUST replace `OUTGOING[entityID]` with the entity's complete current
+  relationship array, including an explicit empty array when it has no relationships. Only
+  authoritative `ENTITY_STATES` absence MUST delete the owner key. Explicit empty values are bounded
+  by live-entity cardinality and MUST prevent historical relationship churn from leaving phantom
+  outgoing query results.
 - **Readiness withholding.** While any entity is in the failed set, `graph.index.query.status` MUST
   report not-ready, and the `INCOMING`, `OUTGOING`, `byName`, `ALIAS`, and every `PREDICATE` query
   handler MUST return a typed `index_not_ready` error — including after initial bootstrap has
@@ -199,6 +205,14 @@ yet been repaired.
 - **WHEN** both execute through the entity's keyed FIFO lane
 - **THEN** each operation reads current `ENTITY_STATES` at execution
 - **AND** the older work cannot overwrite the newer state or resurrect a deleted entity
+
+#### Scenario: removing the final relationship clears the outgoing projection
+
+- **GIVEN** a present entity previously had an outgoing relationship
+- **WHEN** its authoritative `ENTITY_STATES` value is reconciled with no relationships
+- **THEN** `OUTGOING[entityID]` is replaced with an explicit empty array
+- **AND** outgoing queries return no phantom relationship from the former projection
+- **AND** the owner key remains present until authoritative `ENTITY_STATES` absence
 
 #### Scenario: a structurally incomplete PathRAG response is not an empty graph
 

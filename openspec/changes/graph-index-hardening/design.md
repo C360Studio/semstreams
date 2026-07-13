@@ -186,6 +186,10 @@ concrete. The following revisions supersede the shapes above where they differ:
 - Updates, deletes, coalesced work, and repair use one hash-keyed FIFO dispatcher. Every work item
   re-reads authoritative `ENTITY_STATES` when it reaches its lane, so an old queued event applies
   current presence/state rather than clobbering a newer write or resurrecting a deleted entity.
+- Reconciliation of a present entity replaces `OUTGOING[entityID]` with its complete current
+  relationship array, including explicit `[]`. Only authoritative `ENTITY_STATES` absence deletes
+  the owner key. Empty values are bounded by live-entity cardinality and prevent stale outgoing
+  results from accumulating across relationship churn.
 - Coalescing retains the greatest delivered revision per pending key; watermark completion uses the
   exact revision represented by the detached batch. Repair is bounded and keeps the failed entity
   in the readiness gate until reconciliation succeeds.
