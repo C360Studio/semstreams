@@ -559,12 +559,24 @@ func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
 		return st
 	}
 
-	// Empty ENTITY_STATES: LastSeq==0 → not ready, building. The old sticky signal
-	// would also say building here, but for the wrong reason (NAME_INDEX empty);
-	// this asserts the honest target-based path.
+	// Empty ENTITY_STATES: an authoritatively empty 0/0 graph is READY once initial
+	// enumeration completes (gh#474 Codex #5) — it must not reject queries forever
+	// just because target==0. The enumeration-complete sentinel is async, so wait.
+	require.Eventually(t, func() bool {
+		msg, err := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
+		if err != nil {
+			return false
+		}
+		var s graph.IndexStatusResponse
+		if json.Unmarshal(msg.Data, &s) != nil {
+			return false
+		}
+		return s.Ready
+	}, 5*time.Second, 50*time.Millisecond, "empty enumerated graph must become ready")
+
 	st := statusNow(t)
-	assert.False(t, st.Ready, "empty bucket must not read ready")
-	assert.Equal(t, graph.IndexStateBuilding, st.State)
+	assert.True(t, st.Ready, "empty enumerated graph reads ready (Codex #5)")
+	assert.Equal(t, graph.IndexStateReady, st.State)
 	assert.Zero(t, st.TargetRevision, "empty bucket target should be 0")
 
 	// Write several entities — each Put advances ENTITY_STATES LastSeq (the target).

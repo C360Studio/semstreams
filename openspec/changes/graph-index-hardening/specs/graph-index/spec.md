@@ -24,23 +24,40 @@ lost-update.
 - **WHEN** both write to `CONTEXT_INDEX`
 - **THEN** both memberships are present afterward (no read-modify-write clobber)
 
-### Requirement: Low-cardinality key axes are hashed; entity-ID axes are validated
+### Requirement: Key axes are KV-safe; entity-ID axes are validated; free-form axes are encoded
 
-A sharded index key MUST hash any low-cardinality or open-vocabulary axis it prefixes on — the
-name or context value — to a fixed-width token, so a raw dotted value cannot token-position-collide
-under NATS prefix matching (ADR-065; `CONTEXT_INDEX` today uses the raw value and must switch).
-An axis that is an entity ID MAY stay raw (fixed 6-token, collision-safe as a prefix), but the
-write path MUST validate every entity ID it composes into a key with `IsValidEntityID` and
-skip-with-log on failure, so a malformed ID cannot silently mis-split on read or poison the prefix
-keyspace. A key MUST NOT contain an empty token (e.g. a missing predicate producing a trailing dot).
-Where the human-readable value cannot be recovered from a hashed prefix (name original-case +
-priority, context value), the small per-key value MUST carry it.
+Every token of a sharded index key MUST be NATS-KV-safe and unambiguously reconstructable:
 
-#### Scenario: a context value cannot over-match a nested context
+- **Open-vocabulary hashed axes** — a name or context value — MUST hash to a fixed-width token so a
+  raw dotted value cannot token-position-collide under NATS prefix matching (ADR-065). The
+  human-readable value is not recoverable from the hash, so the small per-key value MUST carry it
+  (name original-case + priority; context value).
+- **The predicate axis** MUST be reversibly **hex-encoded** in the key. graph-ingest accepts any
+  non-empty predicate, including KV-unsafe values (spaces, unicode, wildcard tokens); a raw predicate
+  token would make the reverse-index `Put` fail while `PREDICATE_INDEX` (hashed) and `ENTITY_STATES`
+  succeed, silently desyncing the forward and reverse views. Hex is chosen over a hash so the reader
+  recovers the exact predicate from the key with no per-row value lookup (keeping `INCOMING` a pure
+  prefix key-scan).
+- **Entity-ID axes** MAY stay raw (fixed 6-token, collision-safe as a prefix), but the write path
+  MUST validate every entity ID it composes into a key with `IsValidEntityID` and skip-with-log on
+  failure. A key MUST NOT contain an empty token.
 
-- **GIVEN** memberships under context `inference.hierarchy` and under `inference.hierarchy.deep`
-- **WHEN** the members of `inference.hierarchy` are enumerated
-- **THEN** the result excludes `inference.hierarchy.deep` members (the context axis is hashed)
+`CONTEXT_INDEX` — which has no production reader — MUST be keyed with the **entity ID as the prefix**
+(`entityID.hash(context).hex(predicate)`), not the context value, so the write path can enumerate an
+entity's own memberships by prefix scan to RETRACT superseded rows on update and to self-clean on
+delete. `INCOMING` keys on the target ID; `NAME` keys on the name hash.
+
+#### Scenario: a KV-unsafe predicate round-trips through the key
+
+- **GIVEN** a triple whose predicate contains a space or other KV-unsafe character
+- **WHEN** the reverse index is written and later read
+- **THEN** the write succeeds and the reader reconstructs the exact original predicate
+
+#### Scenario: re-indexing an entity retracts its superseded context memberships
+
+- **GIVEN** an entity previously indexed under context predicates {p1, p2} for a context value
+- **WHEN** it is re-indexed carrying only {p1} for that context
+- **THEN** the p2 membership is removed (the entity-prefixed CONTEXT index reconciles), not left stale
 
 #### Scenario: a malformed entity ID is skipped, not indexed into a mis-split key
 
@@ -52,13 +69,23 @@ priority, context value), the small per-key value MUST carry it.
 
 Every reader of a sharded index MUST enumerate via the prefix scan and reconstruct entries from
 keys — including all query handlers AND internal consumers such as graph-clustering's neighbor
-expansion — and the entity-delete path MUST remove the entity's own `<entityID>.*` keyset by prefix
-scan (its aggregate keys are prefixed by the entity, so this is a clean prefix delete, not a scan
-of the whole bucket). The NATS query-API wire response types (e.g. `IncomingEntry` populating
+expansion. The NATS query-API wire response types (e.g. `IncomingEntry` populating
 `graph.index.query.incoming`) MUST be preserved and reconstructed from keys — only the storage
-format changes, not the wire contract. Removing a deleted entity from *other* entities' keys (where
-it appears as a non-prefix token) is the pre-existing gh#433 reciprocal-cleanup gap and remains out
-of scope.
+format changes, not the wire contract.
+
+The entity-delete path removes an entity's `<entityID>.*` keyset by prefix scan, but the semantics
+differ by index and MUST be labeled as such:
+
+- For `CONTEXT` (entity-prefixed), the `<entityID>.*` keyset is the entity's OWN memberships, so
+  removing it on the entity's death is correct cleanup.
+- For `INCOMING` (target-prefixed), the `<entityID>.*` keyset is every row where the entity is the
+  TARGET — but each such row is a SOURCE's evidence that it still points at this entity. Deleting
+  them on the target's death is a LEGACY HARD-DELETE of a leaf entity and MUST NOT be treated as, or
+  reused by, logical retirement (which must retract SOURCE-owned rows via the source, not the
+  target). Source-owned retraction is deferred to the retention increment (gh#527).
+
+Removing a deleted entity from *other* entities' keys (where it appears as a non-prefix token) is the
+pre-existing gh#433 reciprocal-cleanup gap and remains out of scope.
 
 #### Scenario: deleting an entity removes its own sharded index keys
 
@@ -105,3 +132,57 @@ only); it is the data gate for the deferred change-detection work.
 - **WHEN** the re-index event is processed
 - **THEN** the no-op counter increments
 - **AND** the index writes still occur (instrumentation does not change behavior)
+
+### Requirement: Readiness is authoritative — no consumer serves partial results or advertises ready after a failed index write or delete
+
+Graph-index MUST NOT advertise readiness, and its reverse-index query/traversal/clustering consumers
+MUST NOT return a successful result, while the index is known-incomplete — whether because it is
+still building (cutover / cold replay) or because a required index write or delete has failed and not
+yet been repaired.
+
+- **Failure honesty.** A required index write (incoming/context/name/alias/predicate/outgoing) or a
+  required delete that ultimately fails after bounded retry MUST mark the entity failed and be
+  RETURNED as an error, never logged-and-continued as success. The re-index no-op baseline MUST be
+  stored only after a successful write, so a failed entity re-attempts rather than being suppressed
+  as a no-op.
+- **Readiness withholding.** While any entity is in the failed set, `graph.index.query.status` MUST
+  report not-ready, and the `INCOMING`, `OUTGOING`, and `byName` query handlers MUST return a typed
+  `index_not_ready` error — including after the initial bootstrap has completed (a sticky
+  "bootstrapped" flag MUST NOT mask a later failure).
+- **Consumer propagation.** Consumers that read the reverse indexes — PathRAG traversal, the graph
+  query client's incoming reads, and graph-clustering's community detection — MUST honor the
+  not-ready signal (abort/defer) rather than convert it into an empty-but-successful result.
+- **Durable recovery.** A failed entity MUST be retried by a durable owner-driven path (not only on
+  the next incidental event for that entity), so a transient backend outage self-heals and readiness
+  is restored once the failed set drains.
+- **Empty graph.** An authoritatively empty graph (initial enumeration complete, 0/0) MUST become
+  ready, so a fresh empty graph does not reject every query forever.
+
+#### Scenario: a post-bootstrap write failure withholds readiness
+
+- **GIVEN** the index has bootstrapped and is serving queries
+- **WHEN** a required index write for an entity subsequently fails after retry
+- **THEN** `graph.index.query.status` reports not-ready
+- **AND** an `incoming` or `byName` query returns `index_not_ready`, not a partial result
+
+#### Scenario: a failed delete does not advertise ready
+
+- **WHEN** an entity delete's required index cleanup fails
+- **THEN** the entity remains marked failed and readiness is withheld until the cleanup succeeds
+
+#### Scenario: a traversal aborts rather than returning a partial path set
+
+- **GIVEN** the index is not ready
+- **WHEN** a PathRAG traversal requests incoming relationships
+- **THEN** the traversal returns the not-ready error rather than a truncated/empty path set
+
+#### Scenario: an empty graph becomes ready
+
+- **GIVEN** a fresh graph with no entities and initial enumeration complete
+- **WHEN** readiness is evaluated
+- **THEN** the index reports ready and reverse-index queries are served
+
+#### Scenario: a byName lookup over a huge shared name is bounded
+
+- **WHEN** a `byName` lookup would hydrate more memberships than the read budget
+- **THEN** it returns a typed `resource_exhausted` error rather than an unbounded serial scan

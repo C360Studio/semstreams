@@ -99,6 +99,12 @@ const (
 	// and commits the write instead.
 	ErrorCodeOwnerLeaseStale = "owner_lease_stale"
 
+	// ErrorCodeResourceExhausted indicates a query would exceed a server-side read
+	// budget — e.g. a byName lookup on a name shared by more entities than the
+	// hydration cap (gh#474 Codex P2a interim guard). The caller should narrow the
+	// query rather than retry unchanged; the full hot-key NAME redesign is gh#381.
+	ErrorCodeResourceExhausted = "resource_exhausted"
+
 	// ErrorCodeIndexNotReady indicates a reverse-index query (incoming, byName)
 	// arrived before the index caught up to ENTITY_STATES — e.g. during the breaking
 	// composite-key format cutover on an in-place upgrade (gh#474 Codex P1d), when old

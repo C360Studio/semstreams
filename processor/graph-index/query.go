@@ -115,6 +115,12 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
+	// Cutover-readiness gate (P1d/#6): OUTGOING is also rebuilt from ENTITY_STATES on a
+	// cold/cutover replay, so don't serve a partial owner keyset while catching up.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	entry, err := c.outgoingBucket.Get(ctx, req.EntityID)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
@@ -142,6 +148,13 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 // retries rather than acting on the partial keyset a format cutover / cold replay is
 // still materialising (old aggregate keys are inert, new keys incomplete).
 func (c *Component) ensureQueryReady(ctx context.Context) error {
+	// A known-incomplete index — a required write/delete failed and has not yet been
+	// repaired — is NEVER authoritative, even after bootstrap (gh#474 P1b / Codex #2).
+	// Check this first so the sticky bootstrap flag can't mask a later failure.
+	if c.failedCount.Load() > 0 {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("index not ready: unresolved index write/delete failures"))
+	}
 	if c.indexBootstrapped.Load() {
 		return nil
 	}

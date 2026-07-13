@@ -56,10 +56,20 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	stuck, lastSynced := c.trackReadinessProgress(indexed, target)
 	status := graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
 
-	// Withhold authoritative readiness while any entity's required index writes are
-	// unresolved (gh#474 P1b): the reverse index is known-incomplete even when the
-	// revision watermark is caught up, so incoming/byName must not report a smaller
-	// graph than exists. Cleared when every failed entity re-indexes cleanly.
+	// An authoritatively empty graph (initial enumeration complete, 0/0) is ready even
+	// though the revision-lag check requires target>0 — otherwise a fresh empty graph
+	// never becomes ready and every reverse-index query is rejected forever (gh#474
+	// Codex #5). indexBootstrapped flips when the WatchAll initial-sync sentinel fires.
+	if !status.Ready && target == 0 && c.indexBootstrapped.Load() {
+		status.Ready = true
+		status.State = graph.IndexStateReady
+	}
+
+	// Withhold authoritative readiness while any entity's required index writes/deletes
+	// are unresolved (gh#474 P1b/#4): the reverse index is known-incomplete even when the
+	// revision watermark is caught up, so incoming/byName must not report a smaller graph
+	// than exists. Overrides the empty-graph case above; cleared when the repair loop
+	// drains the failed set.
 	if c.failedCount.Load() > 0 && status.Ready {
 		status.Ready = false
 		status.State = graph.IndexStateDegraded

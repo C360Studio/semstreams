@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -283,18 +285,41 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 	return len(keys), nil
 }
 
-// GetIncomingEdges retrieves entity IDs that reference the given entity.
+// indexNotReadyErr gates a direct INCOMING_INDEX read on graph-index readiness (gh#474
+// Codex #6). It returns a classified ErrorCodeIndexNotReady only when graph-index is up
+// and EXPLICITLY reports not-ready (still building / degraded by an unresolved write
+// failure) — the cutover/failure window where a direct bucket read would return partial
+// topology. It FAILS OPEN (returns nil) when the status endpoint is unreachable or
+// unparseable: that means graph-index is absent, a different failure mode, and blocking
+// the read on it would break setups that read the index without the handler co-deployed.
+func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
+	if err != nil {
+		return nil // fail-open: can't determine readiness (graph-index absent)
+	}
+	var st gtypes.IndexStatusResponse
+	if json.Unmarshal(respData, &st) != nil {
+		return nil
+	}
+	if !st.Ready {
+		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+			errors.New("graph index not ready"))
+	}
+	return nil
+}
+
+// GetIncomingEdges retrieves distinct source entity IDs that reference the given
+// entity (one per unique source, regardless of how many predicates connect the pair).
 //
-// After composite-key sharding (gh#474): the INCOMING_INDEX now stores one
-// composite key per edge — "targetID.sourceID.predicate" with an empty marker
-// value. This method was previously BROKEN: it attempted to unmarshal
-// map[string][]string{"incoming": [...]} against the actual format of
-// []IncomingEntry, always returning empty results. The fix scans the prefix
-// entityID.">" and parses the sourceID from each composite key.
-//
-// Returns distinct source entity IDs (one per unique source, regardless of how
-// many predicates connect the pair).
+// Gates on graph-index readiness first (gh#474 Codex #6): reading the INCOMING_INDEX
+// bucket directly bypasses graph-index's cutover-readiness gate, so during an in-place
+// format upgrade this consumer (and its callers — CountIncomingEdges, the anomaly
+// detector) could serve partial topology. When graph-index reports not-ready this
+// returns ErrorCodeIndexNotReady instead of a partial result.
 func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]string, error) {
+	if err := qc.indexNotReadyErr(ctx); err != nil {
+		return nil, err
+	}
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
 	}
@@ -314,7 +339,7 @@ func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]
 			continue
 		}
 		suffix := key[len(prefix):]
-		// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated tokens.
 		parts := strings.SplitN(suffix, ".", 7)
 		if len(parts) < 7 {
 			continue
@@ -326,9 +351,7 @@ func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]
 		}
 	}
 
-	// Deterministic order (gh#474 Codex P1c): KeysByPrefix returns storage order,
-	// which a no-op replay can reshuffle. Sort so a capped consumer (PathRAG) sees a
-	// stable set for identical graph state.
+	// Deterministic order (gh#474 P1c): a no-op replay can reshuffle storage order.
 	sort.Strings(result)
 	return result, nil
 }

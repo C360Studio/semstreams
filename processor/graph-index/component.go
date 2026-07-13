@@ -784,8 +784,14 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				return
 			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete
+				// nil entry indicates initial state enumeration complete: every entity
+				// that existed at watch-start has now been delivered (0 or more). The
+				// index is caught up for query purposes even for an authoritatively empty
+				// 0/0 graph, which the revision-lag check (target > 0) can never confirm
+				// (gh#474 Codex #5). Flip the sticky bootstrap flag so incoming/byName
+				// stop returning ErrorCodeIndexNotReady on an empty or fully-synced graph.
 				c.logger.Debug("entity watcher initial sync complete")
+				c.indexBootstrapped.Store(true)
 				continue
 			}
 
@@ -860,6 +866,11 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, c.entityStatesBucket)
+
+	// Durable repair loop (gh#474 Codex #3): retries entities whose index writes/deletes
+	// failed so a transient outage self-heals without waiting for another entity event.
+	c.wg.Add(1)
+	go c.repairLoop(ctx)
 	return nil
 }
 
@@ -934,6 +945,63 @@ func (c *Component) clearEntityFailed(entityID string) {
 	if _, loaded := c.failedEntities.LoadAndDelete(entityID); loaded {
 		c.failedCount.Add(-1)
 	}
+}
+
+// indexRepairInterval is how often the repair loop retries entities whose required
+// index writes/deletes failed (gh#474 Codex #3).
+const indexRepairInterval = 30 * time.Second
+
+// repairLoop periodically re-drives entities marked failed so a transient KV outage
+// self-heals without waiting for another entity event or a process restart (gh#474
+// Codex #3 — the durable recovery path). Runs until ctx is cancelled (Stop).
+func (c *Component) repairLoop(ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(indexRepairInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.repairFailedEntities(ctx)
+		}
+	}
+}
+
+// repairFailedEntities re-drives each failed entity: re-fetch ENTITY_STATES → present
+// ⇒ re-index, absent ⇒ re-run the delete. A successful re-index / delete clears the
+// failure marker (inside processEntityUpdateFromData / DeleteFromIndexes), restoring
+// readiness once the set drains. Best-effort: a persistent failure stays marked, so the
+// index stays not-ready — the honest signal. Safe to Delete-during-Range on sync.Map.
+func (c *Component) repairFailedEntities(ctx context.Context) {
+	if c.failedCount.Load() == 0 || c.entityStatesBucket == nil {
+		return
+	}
+	c.failedEntities.Range(func(k, _ any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		entityID, ok := k.(string)
+		if !ok {
+			return true
+		}
+		entry, err := c.entityStatesBucket.Get(ctx, entityID)
+		if err != nil {
+			// Gone from ENTITY_STATES → the pending work is a delete; retry it.
+			if natsclient.IsKVNotFoundError(err) {
+				if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
+					c.logger.Debug("repair: delete retry still failing",
+						slog.String("entity", entityID), slog.Any("error", delErr))
+				}
+			}
+			return true
+		}
+		if idxErr := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); idxErr != nil {
+			c.logger.Debug("repair: re-index still failing",
+				slog.String("entity", entityID), slog.Any("error", idxErr))
+		}
+		return true
+	})
 }
 
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
@@ -1596,9 +1664,12 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		return errs.Wrap(err, "Component", "DeleteFromIndexes", "context cancelled")
 	}
 
+	failures := 0
+
 	// Delete from outgoing index (single key, entity-as-owner format unchanged)
 	if err := c.outgoingBucket.Delete(ctx, entityID); err != nil && !natsclient.IsKVNotFoundError(err) {
 		atomic.AddInt64(&c.errors, 1)
+		failures++
 		c.logger.Warn("failed to delete from outgoing index", slog.String("entity_id", entityID), slog.Any("error", err))
 	}
 
@@ -1615,6 +1686,7 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	incomingKeys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(entityID))
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
+		failures++
 		c.logger.Warn("failed to list incoming index keys for delete",
 			slog.String("entity_id", entityID),
 			slog.Any("error", err))
@@ -1622,6 +1694,7 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		for _, key := range incomingKeys {
 			if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
 				atomic.AddInt64(&c.errors, 1)
+				failures++
 				c.logger.Warn("failed to delete incoming index key",
 					slog.String("key", key),
 					slog.Any("error", delErr))
@@ -1636,6 +1709,7 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	contextKeys, ctxErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
 	if ctxErr != nil {
 		atomic.AddInt64(&c.errors, 1)
+		failures++
 		c.logger.Warn("failed to list context index keys for delete",
 			slog.String("entity_id", entityID),
 			slog.Any("error", ctxErr))
@@ -1643,6 +1717,7 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		for _, key := range contextKeys {
 			if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
 				atomic.AddInt64(&c.errors, 1)
+				failures++
 				c.logger.Warn("failed to delete context index key",
 					slog.String("key", key),
 					slog.Any("error", delErr))
@@ -1650,19 +1725,23 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		}
 	}
 
-	// Also evict from the no-op projection cache (stale projection on re-add
-	// would incorrectly suppress a real first-index event) and clear any pending
-	// write-failure for this entity — a deleted entity's missing adjacency is no
-	// longer a readiness gap (gh#474 P1b).
+	// A failed list/delete means stale rows may remain — the index is known-incomplete,
+	// so withhold readiness (mark failed, gh#474 Codex #4) and do NOT clear the projection
+	// cache or the failure marker. The repair loop re-runs the delete until it succeeds.
+	if failures > 0 {
+		c.markEntityFailed(entityID)
+		return errs.WrapTransient(errIndexWritePartial, "Component", "DeleteFromIndexes",
+			fmt.Sprintf("%d delete/list operations failed for %s (stale index rows may remain)", failures, entityID))
+	}
+
+	// Clean delete — evict the no-op projection cache (a stale projection on re-add would
+	// suppress a real first-index event) and clear any prior write/delete failure.
 	c.lastProjections.Delete(entityID)
 	c.clearEntityFailed(entityID)
 
-	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
 	c.logger.Debug("entity deleted from indexes", slog.String("entity_id", entityID))
-
 	return nil
 }
 

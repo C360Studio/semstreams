@@ -151,8 +151,13 @@ func (p *PathSearcher) Search(ctx context.Context, req PathSearchRequest) (*Path
 			continue
 		}
 
-		// Use direction-aware relationship fetching with predicate filtering
-		rels := p.getRelationships(ctx, current.entityID, direction, predicateFilter)
+		// Use direction-aware relationship fetching with predicate filtering. A
+		// not-ready error aborts the whole traversal (gh#474 Codex #1) rather than
+		// yielding a partial path set the caller would mistake for complete.
+		rels, err := p.getRelationships(ctx, current.entityID, direction, predicateFilter)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, rel := range rels {
 			if nodesDiscovered >= maxNodes {
@@ -244,41 +249,56 @@ func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) 
 }
 
 // getOutgoingRelationships fetches outgoing relationships for an entity.
-func (p *PathSearcher) getOutgoingRelationships(ctx context.Context, entityID string) []RelationshipEntry {
+// isIndexNotReady reports whether err is the graph-index readiness signal
+// (ErrorCodeIndexNotReady, gh#474 Codex #1). Such an error MUST NOT be treated as
+// "this entity has no edges" — the index is still building, so an empty result would
+// under-report the graph. It is propagated so the traversal fails loud instead.
+func isIndexNotReady(err error) bool {
+	var ce *errs.ClassifiedError
+	return errors.As(err, &ce) && ce.Code == graph.ErrorCodeIndexNotReady
+}
+
+func (p *PathSearcher) getOutgoingRelationships(ctx context.Context, entityID string) ([]RelationshipEntry, error) {
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
 	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.outgoing", relsReqData, p.timeout)
 	if err != nil {
-		return nil
+		if isIndexNotReady(err) {
+			return nil, err
+		}
+		return nil, nil
 	}
 
 	var envelope graph.OutgoingQueryResponse
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
-		return nil
+		return nil, nil
 	}
 
 	rels := make([]RelationshipEntry, len(envelope.Data.Relationships))
 	for i, r := range envelope.Data.Relationships {
 		rels[i] = RelationshipEntry{ToEntityID: r.ToEntityID, Predicate: r.Predicate}
 	}
-	return rels
+	return rels, nil
 }
 
 // getIncomingRelationships fetches incoming relationships for an entity.
 // Returns relationships where this entity is the target (sources pointing to us).
-func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID string) []RelationshipEntry {
+func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID string) ([]RelationshipEntry, error) {
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
 	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.incoming", relsReqData, p.timeout)
 	if err != nil {
-		return nil
+		if isIndexNotReady(err) {
+			return nil, err
+		}
+		return nil, nil
 	}
 
 	var envelope graph.IncomingQueryResponse
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
-		return nil
+		return nil, nil
 	}
 
 	// Convert incoming entries to relationship entries
@@ -287,20 +307,32 @@ func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID st
 	for i, r := range envelope.Data.Relationships {
 		rels[i] = RelationshipEntry{ToEntityID: r.FromEntityID, Predicate: r.Predicate}
 	}
-	return rels
+	return rels, nil
 }
 
-// getRelationships fetches relationships based on direction and predicate filters.
-func (p *PathSearcher) getRelationships(ctx context.Context, entityID, direction string, predicateFilter map[string]bool) []RelationshipEntry {
+// getRelationships fetches relationships based on direction and predicate filters. It
+// returns a non-nil error only when the index is not ready (gh#474 Codex #1) — the
+// caller must abort the traversal rather than emit a partial result.
+func (p *PathSearcher) getRelationships(ctx context.Context, entityID, direction string, predicateFilter map[string]bool) ([]RelationshipEntry, error) {
 	var rels []RelationshipEntry
 
 	switch direction {
 	case DirectionIncoming:
-		rels = p.getIncomingRelationships(ctx, entityID)
+		incoming, err := p.getIncomingRelationships(ctx, entityID)
+		if err != nil {
+			return nil, err
+		}
+		rels = incoming
 	case DirectionBoth:
 		// Merge outgoing and incoming, deduplicating by target+predicate
-		outgoing := p.getOutgoingRelationships(ctx, entityID)
-		incoming := p.getIncomingRelationships(ctx, entityID)
+		outgoing, err := p.getOutgoingRelationships(ctx, entityID)
+		if err != nil {
+			return nil, err
+		}
+		incoming, err := p.getIncomingRelationships(ctx, entityID)
+		if err != nil {
+			return nil, err
+		}
 
 		seen := make(map[string]bool)
 		rels = make([]RelationshipEntry, 0, len(outgoing)+len(incoming))
@@ -320,7 +352,11 @@ func (p *PathSearcher) getRelationships(ctx context.Context, entityID, direction
 			}
 		}
 	default: // DirectionOutgoing or empty
-		rels = p.getOutgoingRelationships(ctx, entityID)
+		outgoing, err := p.getOutgoingRelationships(ctx, entityID)
+		if err != nil {
+			return nil, err
+		}
+		rels = outgoing
 	}
 
 	// Apply predicate filter if specified
@@ -331,10 +367,10 @@ func (p *PathSearcher) getRelationships(ctx context.Context, entityID, direction
 				filtered = append(filtered, r)
 			}
 		}
-		return filtered
+		return filtered, nil
 	}
 
-	return rels
+	return rels, nil
 }
 
 // calculateDecayScore calculates the score based on depth using decay factor.

@@ -8,9 +8,57 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestEnsureQueryReady_FailedCountWithholdsAfterBootstrap covers Codex #2: the sticky
+// indexBootstrapped flag must NOT mask a later required-write failure — a bootstrapped
+// index with an unresolved failure must still reject reverse-index queries.
+func TestEnsureQueryReady_FailedCountWithholdsAfterBootstrap(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+
+	// Bootstrapped, no failures → ready.
+	comp.indexBootstrapped.Store(true)
+	require.NoError(t, comp.ensureQueryReady(ctx))
+
+	// A post-bootstrap write failure must withhold readiness despite the sticky flag.
+	comp.markEntityFailed("acme.ops.robotics.gcs.drone.001")
+	err := comp.ensureQueryReady(ctx)
+	require.Error(t, err, "bootstrapped index with a failed entity must reject queries")
+	var ce *errs.ClassifiedError
+	require.True(t, errors.As(err, &ce))
+	assert.Equal(t, graph.ErrorCodeIndexNotReady, ce.Code)
+
+	// Recovery clears it.
+	comp.clearEntityFailed("acme.ops.robotics.gcs.drone.001")
+	require.NoError(t, comp.ensureQueryReady(ctx))
+}
+
+// TestDeleteFromIndexes_Failure_MarksFailed covers Codex #4: a failed required delete
+// must be reported and mark the entity failed (withholding readiness), not logged and
+// reported as success.
+func TestDeleteFromIndexes_Failure_MarksFailed(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+	entityID := "acme.ops.robotics.gcs.drone.004"
+	source := "acme.ops.robotics.gcs.sensor.004"
+
+	// Seed an incoming edge (entity as target) so the delete path has a key to remove.
+	require.NoError(t, comp.UpdateIncomingIndex(ctx, entityID, source, "robotics.assigned.mission"))
+
+	// Inject a persistent delete failure on the incoming bucket.
+	incomingMock(comp).deleteFunc = func(_ context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {
+		return errors.New("kv delete down")
+	}
+
+	err := comp.DeleteFromIndexes(ctx, entityID)
+	require.Error(t, err, "a failed delete must be reported, not swallowed as success")
+	assert.Equal(t, int64(1), comp.failedCount.Load(), "failed delete must withhold readiness")
+}
 
 // TestProcessEntityUpdate_WriteFailure_WithholdsReadiness covers the P1b failure-honesty
 // contract (gh#474): a required index write that ultimately fails must (1) propagate an

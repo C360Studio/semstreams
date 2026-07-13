@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -17,6 +18,11 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
+
+// nameQueryMaxHydration bounds how many NAME_INDEX memberships graph.query.byName will
+// serially hydrate before refusing with ErrorCodeResourceExhausted (gh#474 Codex P2a
+// interim guard). The bounded-parallel / paginated redesign is gh#381.
+const nameQueryMaxHydration = 2000
 
 // nameIndexKey is the NAME_INDEX KV key PREFIX for a name: the hex sha256 of the
 // case-folded, trimmed name. Names contain arbitrary characters (spaces,
@@ -245,6 +251,14 @@ func (c *Component) handleQueryByNameNATS(ctx context.Context, data []byte) ([]b
 	keys, err := c.nameBucket.KeysByPrefix(ctx, prefix)
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+	}
+	// Hard read budget (gh#474 Codex P2a interim): this handler does one serial Get per
+	// membership below, so a name shared by a huge number of entities is an unbounded
+	// N+1 under the 5s timeout. Refuse with a typed resource-exhausted error rather than
+	// grind; the caller narrows the query. The bounded-parallel/paginated redesign is gh#381.
+	if len(keys) > nameQueryMaxHydration {
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeResourceExhausted,
+			fmt.Errorf("name lookup exceeds read budget: %d memberships > %d", len(keys), nameQueryMaxHydration))
 	}
 	if len(keys) == 0 {
 		// No entries — name not yet indexed or bucket empty.

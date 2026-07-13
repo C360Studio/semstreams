@@ -973,9 +973,39 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 				c.logger.Debug("detection loop stopping - context cancelled")
 				return
 			}
+			// Cutover-readiness gate (gh#474 Codex #6): community detection reads
+			// INCOMING_INDEX directly, so skip this cycle while graph-index is still
+			// building or degraded — running would derive communities from partial
+			// topology. The next tick retries once the index is ready.
+			if !c.graphIndexReady(ctx) {
+				c.logger.Debug("graph-index not ready; deferring community detection")
+				continue
+			}
 			c.runCommunityDetection(ctx)
 		}
 	}
+}
+
+// graphIndexReady reports whether it is safe to run community detection against the
+// INCOMING_INDEX (gh#474 Codex #6). It DEFERS only on an EXPLICIT not-ready/degraded
+// status — i.e. graph-index is up and reports it is still building or has unresolved
+// write failures, exactly the cutover/failure window where reading would derive
+// communities from partial topology. It FAILS OPEN when the status endpoint is
+// unreachable or unparseable: that means graph-index is absent (or not co-deployed),
+// a different failure mode than a mid-rebuild index, and blocking detection forever on
+// it would be wrong (and would break setups that run clustering without the handler).
+func (c *Component) graphIndexReady(ctx context.Context) bool {
+	respData, err := c.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
+	if err != nil {
+		c.logger.Debug("graph-index status unreachable; proceeding (fail-open)", slog.Any("error", err))
+		return true
+	}
+	var status graph.IndexStatusResponse
+	if err := json.Unmarshal(respData, &status); err != nil {
+		c.logger.Debug("graph-index status unparseable; proceeding (fail-open)", slog.Any("error", err))
+		return true
+	}
+	return status.Ready
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.
