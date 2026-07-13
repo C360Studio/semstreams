@@ -11,10 +11,10 @@ during-implementation correction (bucket-name decision reversed back to
 in-place cutover after discovering ~9 operator-facing configs hardcode the
 bucket name, plus explicit sem*-team migration guidance and a wired-up
 namespace-query capability, both prompted directly by Coby). Adjacent
-correctness gap found during this investigation filed separately as
-GH #433 (entity-delete never cleans up
-PREDICATE_INDEX/NAME_INDEX/ALIAS_INDEX/CONTEXT_INDEX) — explicitly out of
-scope here.
+correctness gap found during this investigation filed separately as GH #433.
+PR #524 later added entity-prefix reconciliation/delete cleanup for
+`CONTEXT_INDEX`; predicate/name/alias and reciprocal INCOMING cleanup remain
+retention-manifest work.
 
 **Implemented and verified** (2026-07-03). A fourth review round — go-reviewer
 and semstreams-reviewer independently reading the actual diff, not the
@@ -554,16 +554,16 @@ and preserves it everywhere else, including a deliberate, safe path to
 namespace-style predicate queries via `PREDICATE_CATALOG` if a real use
 case wants it later.
 
-Still open, safe to resolve during implementation:
+Current implementation notes:
 
 - Marker value contents: bare empty value, or a debug timestamp? Leaning
   empty/fixed-constant by construction (see the footgun-comment mitigation
   above) — a timestamp invites a future reader to treat it as "most
   recent," which isn't a guarantee this design provides (worker-pool
   completion order is not ordered across entities).
-- Whether to extend the GH #397 readiness envelope to predicate-index
-  build completion now or defer — leaning defer, flagged as a risk above
-  rather than blocking this fix.
+- PR #524 extends authoritative graph-index readiness to predicate catalog/list,
+  stats, compound, alias, incoming, outgoing, and byName handlers. Required
+  predicate-catalog write failures now withhold readiness.
 
 ## Related decisions
 
@@ -573,15 +573,16 @@ Still open, safe to resolve during implementation:
   a sibling subsystem.
 - **GH #376 / `NAME_INDEX`** (`processor/graph-index/name_index.go`) — the
   direct precedent for hashing arbitrary-content strings into single-token
-  KV keys, reused here for predicates. Note `NAME_INDEX` itself has the
-  identical CAS-blob-per-hash-key shape as PREDICATE_INDEX pre-fix,
-  currently masked by better-behaved cardinality (names are rarely shared
-  by thousands of entities the way a common predicate is) — not addressed
-  by this ADR, flagged as a one-line callout for a future fix if it ever
-  becomes hot.
-- **GH #397** — the index-readiness envelope (`graph.index.query.status`)
-  this ADR's risk section suggests extending to predicate-index build
-  completion, deferred rather than included here.
+  KV keys, reused here for predicates. `NAME_INDEX` had the identical
+  CAS-blob-per-hash-key shape as PREDICATE_INDEX pre-fix, masked by
+  better-behaved cardinality; this ADR flagged it as a future fix. **Now
+  addressed:** gh#474 (PR #524) sharded NAME_INDEX (and INCOMING_INDEX,
+  CONTEXT_INDEX) to composite keys `hash(name).entityID.hex(predicate)`,
+  applying this ADR's pattern. Predicate tokens are hex-encoded there for
+  KV-safety, extending — not contradicting — the hashed-key doctrine below.
+- **GH #397 / PR #524** — the index-readiness envelope
+  (`graph.index.query.status`) now gates predicate and alias handlers as well as
+  incoming/outgoing/byName.
 - **GH #433** — entity-delete index cleanup, filed separately; this
   design's fixed-arity key shape makes that fix cheaper whenever it's
   tackled, but implementing it is explicitly out of scope here.

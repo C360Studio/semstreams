@@ -23,6 +23,16 @@ guarantees monotonic-ascending delivery. That review also fixed the completion w
 (coalescer-collapse + delete-orphan) and pinned two honest-scope boundaries (§1
 *Scope boundary*). Those corrections — not a redesign — are the substance below.
 
+**Current graph-index hardening (PR #524, 2026-07-13).** Entity updates,
+deletes, coalesced events, and repair now share hash-keyed FIFO lanes and
+reconcile authoritative `ENTITY_STATES` at execution. Coalescing retains the
+greatest delivered revision per key and completes the watermark for that exact
+revision. Required write/delete failures withhold readiness until bounded repair
+succeeds; all reverse-index handlers and direct query/clustering consumers fail
+closed (with an explicit standalone-only `allow_ungated_reads` opt-out). A
+dedicated ENTITY_STATES KV handle isolates query-time `LastSeq` reads from the
+watch/Get handle.
+
 ## Decision
 
 Replace the sticky "indexing started = ready" signal with a **revision-lag /
@@ -359,9 +369,11 @@ type IndexStatusResponse struct {
 
 1. ✅ `natsclient.BucketLastSeq` (query-time Target).
 2. ✅ graph-index: low-water-of-pending watermark (`pkg/revlag.Watermark`) with the
-   single key-scoped `Complete(key, rev)` on pool return + inline delete; query-time
-   Target; honest `Ready`/`Lag`/`State`; degraded stuck-detector. Sparse-stream unit
-   tests + a wired integration test. (commit `2ccffba3`)
+   single key-scoped `Complete(key, rev)` after entity-keyed FIFO reconciliation;
+   query-time Target; honest `Ready`/`Lag`/`State`; degraded stuck-detector.
+   Sparse-stream unit tests + wired integration coverage. PR #524 adds exact
+   revision-aware coalescing, empty-graph enumeration handling, failure gating,
+   bounded repair, and the dedicated target-status KV handle.
 3. ✅ Mirror on `pkg/fusion.IndexStatus` + fix the fusionnats client to decode all
    fields (was dropping the revision-lag fields).
 4. ✅ graph-embedding: `Record.SourceRevision` threaded through both hops; terminal
@@ -393,15 +405,12 @@ type IndexStatusResponse struct {
 - **GH #435** — the QoL-bundle sibling (a healthy path no longer over-reports as a
   reject).
 
-### Companion follow-ups (surfaced by the code-grounded review, NOT bundled here)
+### Companion follow-ups and resolution status
 
-- **Multi-worker stale overwrite** — the pool has no completion ordering, so under
-  same-key churn an older revision's index writes can land last. `Ready` stays honest
-  about *coverage*; a per-key last-applied-revision drop-guard would make it honest
-  about *freshness*. To file. Does not affect the #431 bulk-ingest path.
-- **Silent per-index write failures** — `processEntityUpdateFromData` swallows
-  sub-index write errors at Debug; readiness trusts worker-return. Elevate to
-  Warn + counter so `Ready` cannot over-report on persistent write failure. To file.
+- **Graph-index ordering and silent write failures — resolved by PR #524.** All
+  work for an entity uses one FIFO lane and re-reads authoritative state at
+  execution. Required write/delete errors mark the entity failed, withhold
+  readiness, and enter bounded repair.
 - **Embedding mass-failure reads as caught-up** — a backend outage that
   mass-`SaveFailed`s advances the watermark (every revision terminal) → `embedding.ready`
   true with embeddings missing. Add a failed-terminal counter / failure-ratio degraded
@@ -410,14 +419,9 @@ type IndexStatusResponse struct {
 
 ## References
 
-- `processor/graph-index/name_index.go` (sticky bug, handler); `component.go`
-  (watch/pool dispatch `722-761`; inline delete `740-746`; coalescer create
-  `522-527` + re-Get `984-1010`; worker completion `820-980`; `Workers` floors to 1
-  at `96`).
-- `pkg/worker/pool.go` (single-channel N-worker pool, no completion ordering
-  `301-338`).
-- `pkg/cache/coalescing_set.go` (batches by KEY only, drops revisions; `Remove` on
-  delete `60-64`).
+- `processor/graph-index/component.go`, `keyed_dispatcher.go`, and
+  `revision_coalescer.go` (shared keyed FIFO dispatch, authoritative execution-time
+  reconciliation, exact completion revision, bounded repair).
 - `graph/index_status.go` + `pkg/fusion/contract.go` (wire shapes); `engine_lens.go:83-85`
   (single-shot Ready gate); `pkg/fusion/retrieval.go:20` (`Status` decode site).
 - `processor/graph-ingest/component.go:804` (ENTITY_STATES created with no `History`

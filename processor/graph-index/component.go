@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,11 +19,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/c360studio/semstreams/pkg/revlag"
-	"github.com/c360studio/semstreams/pkg/worker"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -210,6 +210,10 @@ type Component struct {
 	contextBucket          *natsclient.KVStore
 	nameBucket             *natsclient.KVStore
 	entityStatesBucket     jetstream.KeyValue // raw: read-only watcher, no CAS needed
+	// entityStatesStatusBucket is a separate JetStream KV handle used only for
+	// Status/LastSeq reads. nats.go's KV handle caches stream info internally, and
+	// concurrent Status and Get calls on one handle race under -race.
+	entityStatesStatusBucket jetstream.KeyValue
 
 	// Lifecycle state
 	mu              sync.RWMutex
@@ -218,8 +222,8 @@ type Component struct {
 	startTime       time.Time
 	wg              sync.WaitGroup
 	cancel          context.CancelFunc
-	indexPool       *worker.Pool[jetstream.KeyValueEntry]
-	entityCoalescer *cache.CoalescingSet
+	indexPool       *keyedDispatcher[entityIndexWork]
+	entityCoalescer *revisionCoalescer
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -246,6 +250,7 @@ type Component struct {
 	// observed IndexedRevision advance; a stall past degradedStuckAfter while not
 	// caught-up flips State to degraded.
 	statusMu        sync.Mutex
+	statusTargetMu  sync.Mutex
 	lastIndexedSeen uint64
 	lastProgressAt  time.Time
 
@@ -254,6 +259,42 @@ type Component struct {
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
+
+	// Re-index no-op instrumentation (D6, design.md / gh#474).
+	// lastProjections maps entityID → canonical projection string for change detection.
+	// sync.Map provides safe concurrent access from worker-pool goroutines.
+	lastProjections sync.Map
+	// reindexTotal counts total entity re-index events; reindexUnchanged counts
+	// events where the index-input projection was identical to the last-indexed one.
+	// These are the L2 change-detection data gates — observe only, never skip writes.
+	reindexTotal     int64 // atomic
+	reindexUnchanged int64 // atomic
+
+	// indexBootstrapped is a sticky flag (gh#474 Codex P1d): false until the index has
+	// been observed CAUGHT UP to ENTITY_STATES at least once after Start (indexed >=
+	// target). While false, the reverse-index query handlers return ErrorCodeIndexNotReady
+	// rather than serving the partial keyset a cutover / cold replay is still building.
+	// Set ONLY on an observed catch-up — NOT on the initial-enumeration sentinel, which
+	// means "all pre-existing entries were DELIVERED to the worker pool," not "their
+	// async writes completed" (gh#474 Codex #1). Once true it never flips back; steady-
+	// state lag is surfaced via graph.index.query.status.
+	indexBootstrapped atomic.Bool
+
+	// initialEnumerationComplete flips when the WatchAll initial-sync sentinel fires: every
+	// entity that existed at watch-start has been delivered. It authorizes ONLY the
+	// authoritative-empty readiness exception (target==0/indexed==0), never the non-empty
+	// case — a preloaded bucket's workers may still be writing (gh#474 Codex #1).
+	initialEnumerationComplete atomic.Bool
+
+	// failedEntities / failedCount track entities whose required index writes did not
+	// all succeed after bounded retry (gh#474 Codex P1b). While failedCount > 0 the
+	// index is NOT authoritative — computeIndexStatus withholds Ready so incoming/byName
+	// queries return ErrorCodeIndexNotReady rather than serving adjacency that is known
+	// to be missing. An entry is added on ultimate write failure and removed when that
+	// same entity later indexes cleanly (or is deleted). failedCount mirrors the map
+	// size as a cheap O(1) gate for the per-query readiness check.
+	failedEntities sync.Map
+	failedCount    atomic.Int64
 
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
@@ -264,6 +305,11 @@ type Component struct {
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
+}
+
+type entityIndexWork struct {
+	entityID           string
+	completionRevision uint64
 }
 
 // CreateGraphIndex is the factory function for creating graph-index components
@@ -527,6 +573,17 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize lifecycle reporter (throttled for high-throughput indexing)
 	c.initLifecycleReporter(ctx)
 
+	// Initialize the optional revision-aware coalescer before the watcher can
+	// observe it. The callback submits a reconciliation key into the same ordered
+	// dispatcher used by ordinary updates, deletes, and repair.
+	if c.config.CoalesceMs > 0 {
+		c.entityCoalescer = newRevisionCoalescer(
+			ctx,
+			time.Duration(c.config.CoalesceMs)*time.Millisecond,
+			func(entities []coalescedEntity) { c.processEntityBatch(ctx, entities) },
+		)
+	}
+
 	// Wait for input KV bucket (ENTITY_STATES) with bounded startup attempts
 	js, err := c.natsClient.JetStream()
 	if err != nil {
@@ -538,13 +595,6 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := c.waitAndWatchEntityStates(ctx, js); err != nil {
 		cancel()
 		return err
-	}
-
-	// Optionally coalesce rapid entity updates to reduce KV write amplification
-	if c.config.CoalesceMs > 0 {
-		c.entityCoalescer = cache.NewCoalescingSet(ctx, time.Duration(c.config.CoalesceMs)*time.Millisecond, func(entityIDs []string) {
-			c.processEntityBatch(ctx, entityIDs)
-		})
 	}
 
 	// Set up query handler subscriptions
@@ -588,21 +638,22 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 	c.querySubscriptions = nil
 
-	// Stop the entity coalescer before the worker pool so any pending keys are flushed
-	if c.entityCoalescer != nil {
-		_ = c.entityCoalescer.Close()
+	// Cancel producers before stopping the ordered dispatcher. This prevents a
+	// watcher submission from racing a closed execution lane.
+	if c.cancel != nil {
+		c.cancel()
 	}
 
-	// Stop the index worker pool before cancelling the context so it can drain
+	// Stop the entity coalescer before the worker pool.
+	if c.entityCoalescer != nil {
+		c.entityCoalescer.Close()
+	}
+
+	// Wait for ordered execution lanes to observe cancellation and exit.
 	if c.indexPool != nil {
 		if err := c.indexPool.Stop(timeout); err != nil {
 			c.logger.Warn("index pool stop error", slog.Any("error", err))
 		}
-	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
 	}
 
 	c.running = false
@@ -753,8 +804,15 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				return
 			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete
+				// nil entry indicates initial state enumeration complete: every entity that
+				// existed at watch-start has been DELIVERED (0 or more) — NOT that their
+				// async worker-pool writes finished. So this authorizes only the
+				// authoritative-empty 0/0 readiness exception (via computeIndexStatus),
+				// which the revision-lag check (target>0) can never confirm; it must NOT
+				// flip the sticky bootstrap flag, or a large non-empty cold replay would
+				// serve partial state before its workers complete (gh#474 Codex #1).
 				c.logger.Debug("entity watcher initial sync complete")
+				c.initialEnumerationComplete.Store(true)
 				continue
 			}
 
@@ -769,20 +827,23 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				if c.entityCoalescer != nil {
 					c.entityCoalescer.Remove(entry.Key())
 				}
-				c.handleEntityDelete(ctx, entry.Key())
-				// Key-scoped completion: the tombstone's revision drains the delete
-				// itself AND any earlier still-pending update for this key that the
-				// delete supersedes (ADR-066 §1).
-				if c.watermark != nil {
-					c.watermark.Complete(entry.Key(), entry.Revision())
+				if err := c.submitEntityWork(ctx, entityIndexWork{
+					entityID:           entry.Key(),
+					completionRevision: entry.Revision(),
+				}); err != nil {
+					c.logger.Warn("failed to submit entity delete",
+						slog.String("entity", entry.Key()), slog.Any("error", err))
 				}
 				continue
 			}
 
 			if c.entityCoalescer != nil {
-				c.entityCoalescer.Add(entry.Key())
+				c.entityCoalescer.Add(entry.Key(), entry.Revision())
 			} else if c.indexPool != nil {
-				if err := c.indexPool.SubmitBlocking(ctx, entry); err != nil {
+				if err := c.submitEntityWork(ctx, entityIndexWork{
+					entityID:           entry.Key(),
+					completionRevision: entry.Revision(),
+				}); err != nil {
 					c.logger.Warn("failed to submit entity for indexing",
 						slog.String("entity", entry.Key()),
 						slog.Any("error", err))
@@ -826,56 +887,202 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 	if c.entityStatesBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
 		return errs.Wrap(err, "Component", "Start", "get entity bucket after availability check")
 	}
+	if c.entityStatesStatusBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
+		return errs.Wrap(err, "Component", "Start", "get entity status bucket after availability check")
+	}
 
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, c.entityStatesBucket)
+
+	// Durable repair loop (gh#474 Codex #3): retries entities whose index writes/deletes
+	// failed so a transient outage self-heals without waiting for another entity event.
+	c.wg.Add(1)
+	go c.repairLoop(ctx)
 	return nil
 }
 
 // startIndexPool creates and starts the entity index worker pool.
 func (c *Component) startIndexPool(ctx context.Context) error {
-	poolOpts := []worker.Option[jetstream.KeyValueEntry]{}
-	if c.metricsRegistry != nil {
-		poolOpts = append(poolOpts, worker.WithMetricsRegistry[jetstream.KeyValueEntry](c.metricsRegistry, "graph_index"))
-	}
-	c.indexPool = worker.NewPool[jetstream.KeyValueEntry](
+	c.indexPool = newKeyedDispatcher(
 		c.config.Workers,
 		1000,
-		c.processEntityUpdateWorker,
-		poolOpts...,
+		func(work entityIndexWork) string { return work.entityID },
+		c.processEntityWork,
 	)
-	if err := c.indexPool.Start(ctx); err != nil {
-		return errs.Wrap(err, "Component", "Start", "start index worker pool")
+	c.indexPool.Start(ctx)
+	return nil
+}
+
+func (c *Component) submitEntityWork(ctx context.Context, work entityIndexWork) error {
+	if c.indexPool == nil {
+		c.processEntityWork(ctx, work)
+		return nil
 	}
-	return nil
+	return c.indexPool.Submit(ctx, work)
 }
 
-// processEntityUpdateWorker is the worker pool adapter for processEntityUpdate.
-func (c *Component) processEntityUpdateWorker(ctx context.Context, entry jetstream.KeyValueEntry) error {
-	c.processEntityUpdate(ctx, entry)
-	return nil
+// processEntityWork is the only mutation entry point used by the watcher,
+// coalescer, and repair loop. The keyed dispatcher guarantees FIFO per entity.
+func (c *Component) processEntityWork(ctx context.Context, work entityIndexWork) {
+	// Every operation reconciles authoritative ENTITY_STATES at execution. This
+	// handles the inverse-submission race where repair observes R2 before the
+	// watcher submits a captured R1: regardless of queue order, each lane item
+	// applies current truth rather than its stale event snapshot. It also avoids an
+	// unbounded per-entity generation ledger.
+	c.reconcileEntity(ctx, work.entityID)
+	if c.watermark != nil && work.completionRevision > 0 {
+		c.watermark.Complete(work.entityID, work.completionRevision)
+	}
 }
 
-// processEntityUpdate indexes an entity's relationships from its triples.
-// It is a thin wrapper around processEntityUpdateFromData for use with KV watcher
-// entries. It is the single funnel for every update-completion path — the pool
-// worker, the direct branch, and the coalescer batch all route through here — so it
-// is the one place the readiness watermark's completion fires (ADR-066 §1).
+// retryIndexWrites runs writeAll up to indexWriteMaxAttempts times, returning nil on
+// the first success and the last error otherwise (gh#474 P1b). writeAll is idempotent,
+// so retrying the whole set recovers a transient KV blip; a cancelled context aborts
+// immediately.
+func (c *Component) retryIndexWrites(ctx context.Context, writeAll func() error) error {
+	var writeErr error
+	for attempt := 0; attempt < indexWriteMaxAttempts; attempt++ {
+		if writeErr = writeAll(); writeErr == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if attempt < indexWriteMaxAttempts-1 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
+			}
+		}
+	}
+	return writeErr
+}
+
+// markEntityFailed records that entityID's required index writes did not all succeed
+// after retry (gh#474 P1b). Idempotent: failedCount increments only on the first mark
+// so it mirrors the set size. While failedCount > 0 the index withholds readiness.
+func (c *Component) markEntityFailed(entityID string) {
+	if _, loaded := c.failedEntities.LoadOrStore(entityID, struct{}{}); !loaded {
+		c.failedCount.Add(1)
+		if c.metrics != nil {
+			c.metrics.recordIndexWriteFailure()
+		}
+	}
+}
+
+// clearEntityFailed removes entityID from the failed set after a clean re-index or a
+// delete, decrementing failedCount only if it was present.
+func (c *Component) clearEntityFailed(entityID string) {
+	if _, loaded := c.failedEntities.LoadAndDelete(entityID); loaded {
+		c.failedCount.Add(-1)
+	}
+}
+
+// indexRepairInterval is how often the repair loop retries entities whose required
+// index writes/deletes failed (gh#474 Codex #3).
+const indexRepairInterval = 30 * time.Second
+
+// repairLoop periodically re-drives entities marked failed so a transient KV outage
+// self-heals without waiting for another entity event or a process restart (gh#474
+// Codex #3 — the durable recovery path). Runs until ctx is cancelled (Stop).
+func (c *Component) repairLoop(ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(indexRepairInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.repairFailedEntities(ctx)
+		}
+	}
+}
+
+// repairFailedEntities enqueues reconciliation keys into the same ordered lanes as
+// watcher updates and deletes. The authoritative KV value is fetched only when the
+// key reaches the head of its lane; repair therefore cannot submit a stale snapshot
+// that later clobbers a newer watcher operation.
+func (c *Component) repairFailedEntities(ctx context.Context) {
+	if c.failedCount.Load() == 0 || c.entityStatesBucket == nil {
+		return
+	}
+	c.failedEntities.Range(func(k, _ any) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		entityID, ok := k.(string)
+		if !ok {
+			return true
+		}
+		if err := c.submitEntityWork(ctx, entityIndexWork{
+			entityID: entityID,
+		}); err != nil {
+			c.logger.Debug("repair: ordered submit failed",
+				slog.String("entity", entityID), slog.Any("error", err))
+		}
+		return true
+	})
+}
+
+func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
+	entry, err := c.entityStatesBucket.Get(ctx, entityID)
+	if err != nil {
+		if natsclient.IsKVNotFoundError(err) {
+			if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
+				c.logger.Debug("reconcile: delete still failing",
+					slog.String("entity", entityID), slog.Any("error", delErr))
+			}
+			return
+		}
+		c.markEntityFailed(entityID)
+		c.logger.Warn("reconcile: authoritative entity read failed; readiness withheld",
+			slog.String("entity", entityID), slog.Any("error", err))
+		return
+	}
+	if err := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); err != nil {
+		c.logger.Debug("reconcile: re-index still failing",
+			slog.String("entity", entityID), slog.Any("error", err))
+	}
+}
+
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
-	c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value())
-	// Completion fires on RETURN, not on indexing success: a malformed entry that
-	// early-returns inside processEntityUpdateFromData must still complete or its
-	// revision strands the watermark forever (ADR-066 §1 Scope boundary — Ready
-	// means revision coverage, not per-index write success). Key-scoped <=rev drains
-	// coalescer-collapsed lower revisions of this key that no worker sees alone.
+	c.processEntityUpdateResult(ctx, entry)
 	if c.watermark != nil {
 		c.watermark.Complete(entry.Key(), entry.Revision())
 	}
 }
 
-// processEntityUpdateFromData indexes an entity's relationships from its triples using raw data.
-// It is the core implementation used by both processEntityUpdate and processEntityBatch.
-func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID string, data []byte) {
+// processEntityUpdateResult applies one captured watcher snapshot. Ordered
+// production work completes its watermark in processEntityWork; the wrapper above
+// retains direct-call completion semantics for unit callers.
+func (c *Component) processEntityUpdateResult(ctx context.Context, entry jetstream.KeyValueEntry) bool {
+	if err := c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value()); err != nil {
+		// The failedCount side-effect (inside processEntityUpdateFromData) already
+		// withheld readiness; log for operators. Completion below still fires — a
+		// stranded revision would pin the watermark forever, and readiness is gated on
+		// failedCount, not on completing this revision (ADR-066 §1 stays intact).
+		c.logger.Warn("entity index write failed; readiness withheld until re-index",
+			slog.String("entity", entry.Key()), slog.Any("error", err))
+		return false
+	}
+	return true
+}
+
+// indexWriteMaxAttempts bounds the in-place retry of an entity's required index
+// writes (gh#474 P1b). Writes are idempotent, so retrying the whole set is safe;
+// this recovers a transient KV blip so it does not mark the entity failed (and
+// withhold readiness) unnecessarily.
+const indexWriteMaxAttempts = 3
+
+// processEntityUpdateFromData indexes an entity's relationships from its triples using
+// raw data. It is the core implementation used by both processEntityUpdate and
+// processEntityBatch. Returns nil on success (or a permanent, non-retryable skip such
+// as unparseable data — completing is correct there) and an aggregated error when one
+// or more REQUIRED index writes ultimately failed after retry (gh#474 P1b): the entity
+// is then marked failed, which withholds authoritative readiness until it re-indexes.
+func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID string, data []byte) error {
 	// Report indexing stage (throttled to avoid KV spam)
 	if err := c.lifecycleReporter.ReportStage(ctx, "indexing"); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "indexing"), slog.Any("error", err))
@@ -883,10 +1090,13 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 
 	var state graph.EntityState
 	if err := json.Unmarshal(data, &state); err != nil {
+		// Permanent parse failure — retrying can't help and it drives no writes, so it
+		// is not an index-write failure. Report processed and return nil (the revision
+		// is legitimately covered).
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		return
+		return nil
 	}
 
 	// Determine entity ID: use state.ID if set, otherwise entityID arg, otherwise first triple subject
@@ -902,112 +1112,120 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	}
 
 	// Collect all outgoing relationships for this entity
-	type RelationshipTarget struct {
-		ID        string `json:"id"`
-		Predicate string `json:"predicate"`
-	}
 	outgoingTargets := make([]map[string]interface{}, 0)
-
 	// Collect predicates for this entity
 	predicatesUsed := make(map[string]bool)
-
 	// Track indexed relationships for this entity
 	var indexed int
-
-	// Collect incoming entries grouped by target ID to batch CAS cycles
+	// Collect incoming entries per target for per-edge writes
 	incomingByTarget := make(map[string][]graph.IncomingEntry)
+	// Collect alias/name writes to perform (with the rest) in the retryable write phase.
+	type aliasWrite struct{ alias string }
+	type nameWrite struct {
+		name, predicate string
+		priority        int
+	}
+	var aliasWrites []aliasWrite
+	var nameWrites []nameWrite
 
 	// Index each triple
 	for _, triple := range state.Triples {
-		// Track predicate usage
 		predicatesUsed[triple.Predicate] = true
 
-		// Check if this is a relationship (object is an entity ID)
 		if triple.IsRelationship() {
 			targetID, _ := triple.Object.(string)
-
-			// Collect outgoing relationship
 			outgoingTargets = append(outgoingTargets, map[string]interface{}{
 				"id":        targetID,
 				"predicate": triple.Predicate,
 			})
-
-			// Collect incoming entry; will be written in batch after the loop
 			incomingByTarget[targetID] = append(incomingByTarget[targetID], graph.IncomingEntry{
 				FromEntityID: resolvedID,
 				Predicate:    triple.Predicate,
 			})
-
 			indexed++
 		}
 
-		// Check for alias predicate and index it
-		// Supports both the canonical core.identity.alias predicate AND vocabulary-registered alias predicates
+		// Alias predicate (canonical core.identity.alias OR vocabulary-registered).
 		_, isVocabAlias := c.aliasPredicates[triple.Predicate]
-		isCoreAlias := triple.Predicate == "core.identity.alias"
-		if isVocabAlias || isCoreAlias {
+		if isVocabAlias || triple.Predicate == "core.identity.alias" {
 			if alias, ok := triple.Object.(string); ok && alias != "" {
-				if err := c.UpdateAliasIndex(ctx, alias, resolvedID); err != nil {
-					c.logger.Debug("failed to update alias index",
-						slog.String("alias", alias),
-						slog.String("entity", resolvedID),
-						slog.String("predicate", triple.Predicate),
-						slog.Any("error", err))
-				}
+				aliasWrites = append(aliasWrites, aliasWrite{alias: alias})
 			}
 		}
 
-		// Index display-name (label) predicates into NAME_INDEX for
-		// graph.query.byName (gh#376). These are exactly the predicates the alias
-		// index excludes (AliasTypeLabel).
+		// Display-name (label) predicates → NAME_INDEX for graph.query.byName (gh#376).
 		if priority, isName := c.namePredicates[triple.Predicate]; isName {
 			if name, ok := triple.Object.(string); ok && name != "" {
-				if err := c.UpdateNameIndex(ctx, name, resolvedID, triple.Predicate, priority); err != nil {
-					c.logger.Debug("failed to update name index",
-						slog.String("name", name),
-						slog.String("entity", resolvedID),
-						slog.String("predicate", triple.Predicate),
-						slog.Any("error", err))
-				}
+				nameWrites = append(nameWrites, nameWrite{name: name, predicate: triple.Predicate, priority: priority})
 			}
 		}
 	}
 
-	// Write incoming index in batches — one CAS cycle per distinct target ID
-	for targetID, entries := range incomingByTarget {
-		if err := c.updateIncomingIndexBatch(ctx, targetID, entries); err != nil {
-			c.logger.Debug("failed to update incoming index",
-				slog.String("target", targetID),
-				slog.String("source", resolvedID),
-				slog.Any("error", err))
-		}
+	// Re-index no-op instrumentation (D6, design.md / gh#474): compute the index-input
+	// projection and compare to the last-indexed one (OBSERVE ONLY). The baseline is
+	// stored only AFTER a successful write below (P2b) — a failed projection must not
+	// become the comparison baseline, or a later retry would be suppressed as a no-op.
+	projection := computeIndexProjection(state, c.namePredicates, c.aliasPredicates)
+	atomic.AddInt64(&c.reindexTotal, 1)
+	prev, loaded := c.lastProjections.Load(resolvedID)
+	unchanged := loaded && prev.(string) == projection
+	if unchanged {
+		atomic.AddInt64(&c.reindexUnchanged, 1)
+	}
+	if c.metrics != nil {
+		c.metrics.recordReindex(unchanged)
 	}
 
-	// Write outgoing index with all targets
-	if len(outgoingTargets) > 0 {
+	// writeAll performs every REQUIRED reverse-index write, aggregating failures. It is
+	// idempotent (unconditional Puts + reconcile), so the caller retries it as a unit.
+	writeAll := func() error {
+		var errList []error
+		for targetID, entries := range incomingByTarget {
+			if err := c.updateIncomingIndexBatch(ctx, targetID, entries); err != nil {
+				errList = append(errList, fmt.Errorf("incoming[%s]: %w", targetID, err))
+			}
+		}
 		if err := c.updateOutgoingIndexBatch(ctx, resolvedID, outgoingTargets); err != nil {
-			c.logger.Debug("failed to update outgoing index",
-				slog.String("entity", resolvedID),
-				slog.Any("error", err))
+			errList = append(errList, fmt.Errorf("outgoing: %w", err))
 		}
+		for predicate := range predicatesUsed {
+			if err := c.UpdatePredicateIndex(ctx, resolvedID, predicate); err != nil {
+				errList = append(errList, fmt.Errorf("predicate[%s]: %w", predicate, err))
+			}
+		}
+		if err := c.UpdateContextIndex(ctx, resolvedID, state.Triples); err != nil {
+			errList = append(errList, fmt.Errorf("context: %w", err))
+		}
+		for _, a := range aliasWrites {
+			if err := c.UpdateAliasIndex(ctx, a.alias, resolvedID); err != nil {
+				errList = append(errList, fmt.Errorf("alias[%s]: %w", a.alias, err))
+			}
+		}
+		for _, n := range nameWrites {
+			if err := c.UpdateNameIndex(ctx, n.name, resolvedID, n.predicate, n.priority); err != nil {
+				errList = append(errList, fmt.Errorf("name[%s]: %w", n.name, err))
+			}
+		}
+		return errors.Join(errList...)
 	}
 
-	// Update predicate index for all predicates used by this entity
-	for predicate := range predicatesUsed {
-		if err := c.UpdatePredicateIndex(ctx, resolvedID, predicate); err != nil {
-			c.logger.Debug("failed to update predicate index",
-				slog.String("entity", resolvedID),
-				slog.String("predicate", predicate),
-				slog.Any("error", err))
-		}
+	// Bounded retry: writes are idempotent, so a transient KV blip is retried rather
+	// than immediately marking the entity failed.
+	writeErr := c.retryIndexWrites(ctx, writeAll)
+
+	if writeErr != nil {
+		// Required writes did not all land — withhold readiness until re-index (P1b).
+		// Do NOT store the projection baseline, so the next delivery re-attempts rather
+		// than being suppressed as a no-op.
+		c.markEntityFailed(resolvedID)
+		return errs.WrapTransient(writeErr, "Component", "processEntityUpdateFromData",
+			fmt.Sprintf("index writes failed for %s after %d attempts", resolvedID, indexWriteMaxAttempts))
 	}
 
-	// Update context index for triples with provenance (e.g., "inference.hierarchy")
-	if err := c.UpdateContextIndex(ctx, resolvedID, state.Triples); err != nil {
-		c.logger.Debug("failed to update context index",
-			slog.String("entity", resolvedID),
-			slog.Any("error", err))
-	}
+	// Success — the entity is fully indexed. Clear any prior failure and record the
+	// baseline for no-op detection.
+	c.clearEntityFailed(resolvedID)
+	c.lastProjections.Store(resolvedID, projection)
 
 	c.logger.Debug("indexed entity",
 		slog.String("entity", resolvedID),
@@ -1016,49 +1234,82 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
-	// Record Prometheus metrics
 	if c.metrics != nil {
 		c.metrics.recordEventProcessed()
 		c.metrics.recordWatchEvent("update")
 	}
+	return nil
 }
 
-// processEntityBatch is the CoalescingSet callback. It re-fetches each entity from KV
-// by ID and routes it through the worker pool (or direct processing if no pool).
-func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) {
-	c.logger.Debug("processing coalesced entity batch", slog.Int("count", len(entityIDs)))
+// computeIndexProjection computes a canonical, sorted string representing the
+// index-input projection for an entity state. The projection covers:
+//   - relationship (predicate, targetID) pairs — driving INCOMING/OUTGOING writes
+//   - the full distinct predicate set — driving PREDICATE_INDEX writes
+//   - (namePredicate, name) pairs — driving NAME_INDEX writes
+//   - (aliasPredicate, alias) pairs — driving ALIAS_INDEX writes (gh#474 P2b)
+//   - (context, predicate) pairs — driving CONTEXT_INDEX writes (NOT raw object values)
+//
+// Two entities with the same projection will produce identical index writes on
+// re-index. The projection is intentionally NOT excluding literal-only predicates
+// (community.member_of is a literal but still a predicate-index membership; excluding
+// it silently drops memberships from the no-op signal). It MUST cover every indexed
+// axis, including alias values — otherwise an alias-only change reads as "unchanged"
+// and miscounts the no-op rate (P2b).
+func computeIndexProjection(state graph.EntityState, namePredicates, aliasPredicates map[string]int) string {
+	parts := make([]string, 0, len(state.Triples)*3)
+	predicateSeen := make(map[string]bool, len(state.Triples))
 
-	for _, entityID := range entityIDs {
+	for _, t := range state.Triples {
+		// 1. Relationship (predicate, target) pairs
+		if t.IsRelationship() {
+			if targetID, ok := t.Object.(string); ok {
+				parts = append(parts, "rel:"+t.Predicate+":"+targetID)
+			}
+		}
+		// 2. Full distinct predicate set
+		if !predicateSeen[t.Predicate] {
+			predicateSeen[t.Predicate] = true
+			parts = append(parts, "pred:"+t.Predicate)
+		}
+		// 3. (namePredicate, name) pairs
+		if _, isName := namePredicates[t.Predicate]; isName {
+			if name, ok := t.Object.(string); ok && name != "" {
+				parts = append(parts, "name:"+t.Predicate+":"+name)
+			}
+		}
+		// 4. (aliasPredicate, alias) pairs
+		_, isVocabAlias := aliasPredicates[t.Predicate]
+		if isVocabAlias || t.Predicate == "core.identity.alias" {
+			if alias, ok := t.Object.(string); ok && alias != "" {
+				parts = append(parts, "alias:"+t.Predicate+":"+alias)
+			}
+		}
+		// 5. (context, predicate) pairs — NOT raw object values
+		if t.Context != "" {
+			parts = append(parts, "ctx:"+t.Context+":"+t.Predicate)
+		}
+	}
+
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
+
+// processEntityBatch is the revision-aware coalescer callback. Each key is submitted
+// as reconciliation work; the execution lane re-fetches current state only when the
+// work reaches the head of the entity's FIFO.
+func (c *Component) processEntityBatch(ctx context.Context, entities []coalescedEntity) {
+	c.logger.Debug("processing coalesced entity batch", slog.Int("count", len(entities)))
+
+	for _, entity := range entities {
 		if ctx.Err() != nil {
 			return
 		}
-
-		entry, err := c.entityStatesBucket.Get(ctx, entityID)
-		if err != nil {
-			c.logger.Debug("entity not found during batch processing",
-				slog.String("entity", entityID),
-				slog.Any("error", err))
-			// The coalescer discarded the source revision(s), so there is no exact
-			// revision to complete here. Drain the key's pending (complete at max
-			// revision) rather than strand it: a transient Get failure would
-			// otherwise pin the watermark and flip the whole index to degraded
-			// forever (ADR-066 §1). Draining fails toward caught-up (within the
-			// Scope boundary) — the next update to this key re-observes it.
-			if c.watermark != nil {
-				c.watermark.Complete(entityID, ^uint64(0))
-			}
-			continue
-		}
-
-		if c.indexPool != nil {
-			if err := c.indexPool.SubmitBlocking(ctx, entry); err != nil {
-				c.logger.Warn("failed to submit coalesced entity for indexing",
-					slog.String("entity", entityID),
-					slog.Any("error", err))
-			}
-		} else {
-			c.processEntityUpdate(ctx, entry)
+		if err := c.submitEntityWork(ctx, entityIndexWork{
+			entityID:           entity.entityID,
+			completionRevision: entity.revision,
+		}); err != nil {
+			c.logger.Warn("failed to submit coalesced entity reconciliation",
+				slog.String("entity", entity.entityID), slog.Any("error", err))
 		}
 	}
 }
@@ -1121,14 +1372,16 @@ func (c *Component) updateOutgoingIndexBatch(ctx context.Context, entityID strin
 }
 
 // handleEntityDelete removes an entity from all indexes
-func (c *Component) handleEntityDelete(ctx context.Context, entityID string) {
+func (c *Component) handleEntityDelete(ctx context.Context, entityID string) error {
 	c.logger.Debug("removing entity from indexes", slog.String("entity", entityID))
 
 	if err := c.DeleteFromIndexes(ctx, entityID); err != nil {
 		c.logger.Warn("failed to delete entity from indexes",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		return err
 	}
+	return nil
 }
 
 // ============================================================================
@@ -1215,8 +1468,8 @@ func (c *Component) UpdateOutgoingIndex(ctx context.Context, entityID, targetID,
 }
 
 // UpdateIncomingIndex updates the incoming index for a single relationship.
-// It delegates to updateIncomingIndexBatch so that tests and ad-hoc callers
-// share the same merge logic as the batched path in processEntityUpdate.
+// Writes one composite-key entry at targetID.sourceID.predicate with an empty
+// marker value (ADR-065 footgun comment: key uniqueness → CAS unnecessary).
 func (c *Component) UpdateIncomingIndex(ctx context.Context, targetID, sourceID, predicate string) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateIncomingIndex", "target ID cannot be empty")
@@ -1241,8 +1494,10 @@ func (c *Component) UpdateIncomingIndex(ctx context.Context, targetID, sourceID,
 	})
 }
 
-// updateIncomingIndexBatch merges newEntries into the incoming index for targetID
-// in a single CAS cycle. Duplicate (FromEntityID, Predicate) pairs are skipped.
+// updateIncomingIndexBatch writes one composite-key entry per incoming edge in
+// newEntries. Replaces the old CAS read-modify-write approach (gh#474): each key
+// encodes the full (targetID, sourceID, predicate) triple, so writes are O(edges),
+// idempotent, and never contend (ADR-065 footgun comment in incoming_index.go).
 func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID string, newEntries []graph.IncomingEntry) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateIncomingIndexBatch", "target ID cannot be empty")
@@ -1259,38 +1514,33 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 		return errs.Wrap(err, "Component", "updateIncomingIndexBatch", "context cancelled")
 	}
 
-	// CAS update: read-modify-write with automatic retry on conflict.
-	// One cycle handles all newEntries regardless of how many triples point at this target.
-	err := c.incomingBucket.UpdateWithRetry(ctx, targetID, func(current []byte) ([]byte, error) {
-		var entries []graph.IncomingEntry
-		if len(current) > 0 {
-			if unmarshalErr := json.Unmarshal(current, &entries); unmarshalErr != nil {
-				// Start fresh on corrupt data (backward compatibility)
-				entries = []graph.IncomingEntry{}
-			}
+	written := 0
+	failures := 0
+	for _, entry := range newEntries {
+		if !validateIncomingKeyInputs(targetID, entry.FromEntityID, entry.Predicate, c.logger) {
+			continue
 		}
-
-		// Build a lookup set of already-stored (FromEntityID, Predicate) pairs
-		type entryKey struct{ from, predicate string }
-		existing := make(map[entryKey]bool, len(entries))
-		for _, e := range entries {
-			existing[entryKey{e.FromEntityID, e.Predicate}] = true
+		key := incomingIndexKey(targetID, entry.FromEntityID, entry.Predicate)
+		if _, err := c.incomingBucket.Put(ctx, key, incomingIndexMarker); err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			failures++
+			c.logger.Debug("failed to write incoming index key",
+				slog.String("key", key),
+				slog.Any("error", err))
+			continue
 		}
+		written++
+	}
 
-		// Append only entries that are not already present
-		for _, ne := range newEntries {
-			k := entryKey{ne.FromEntityID, ne.Predicate}
-			if !existing[k] {
-				entries = append(entries, ne)
-				existing[k] = true // guard against duplicates within newEntries itself
-			}
-		}
+	// A failed edge write must propagate so readiness is withheld (gh#474 P1b) — a
+	// silently-dropped incoming edge is exactly the missing-adjacency this closes.
+	if failures > 0 {
+		return errs.WrapTransient(errIndexWritePartial, "Component", "updateIncomingIndexBatch",
+			fmt.Sprintf("%d of %d incoming edge writes failed for target %s", failures, len(newEntries), targetID))
+	}
 
-		return json.Marshal(entries)
-	})
-	if err != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "updateIncomingIndexBatch", "CAS update")
+	if written == 0 {
+		return nil
 	}
 
 	// Update metrics
@@ -1305,7 +1555,7 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 
 	c.logger.Debug("incoming index batch updated",
 		slog.String("target_id", targetID),
-		slog.Int("new_entries", len(newEntries)))
+		slog.Int("written_entries", written))
 
 	return nil
 }
@@ -1381,19 +1631,18 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "KV store")
 	}
 
-	// Membership write above is the source of truth and already succeeded;
-	// a catalog-write failure here doesn't corrupt membership, but it does
-	// silently drop this predicate from predicateList's output (both
-	// unfiltered and namespace-filtered — both enumerate via the catalog,
-	// not the membership bucket) until some other entity's write retries
-	// the same catalog Put. That's a real, if narrow, visibility gap —
-	// Warn + count it rather than the Debug-and-forget treatment a merely
-	// cosmetic failure would get.
+	// Membership write above is the source of truth and already succeeded; a catalog-write
+	// failure here doesn't corrupt membership, but it silently drops this predicate from
+	// predicateList's output (both unfiltered and namespace-filtered enumerate via the
+	// catalog, not the membership bucket). predicate-list is a gated reverse-index query,
+	// so a required catalog write must PROPAGATE (gh#474 Codex #6): the entity is then
+	// marked failed and readiness withheld until the repair loop re-runs the Put.
 	if err := c.updatePredicateCatalog(ctx, predicate); err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		c.logger.Warn("failed to update predicate catalog",
 			slog.String("predicate", predicate),
 			slog.Any("error", err))
+		return errs.WrapTransient(err, "Component", "UpdatePredicateIndex", "catalog write")
 	}
 
 	// Update metrics
@@ -1417,7 +1666,19 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 // Index Deletion Operations
 // ============================================================================
 
-// DeleteFromIndexes deletes an entity from all indexes
+// DeleteFromIndexes deletes an entity from all indexes.
+//
+// INCOMING uses composite-key sharding (gh#474): the entity is the key PREFIX
+// for its own incoming aggregate (all keys "entityID.sourceID.predicate"). A clean
+// prefix scan enumerates the whole keyset; each key is deleted individually.
+// This removes all incoming edges where this entity is the TARGET. Reciprocal
+// cleanup (removing this entity from other entities' incoming entries, where it
+// appears as the sourceID middle-token) is the pre-existing gh#433 gap — unchanged
+// here (design.md D3).
+//
+// CONTEXT is entity-prefixed and cleaned immediately below. NAME, ALIAS, and
+// PREDICATE cannot be enumerated from a bare entityID tombstone with their current
+// key shapes/former values, so their reciprocal cleanup remains the gh#433 gap.
 func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIndexes", "entity ID cannot be empty")
@@ -1431,24 +1692,84 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		return errs.Wrap(err, "Component", "DeleteFromIndexes", "context cancelled")
 	}
 
-	// Delete from outgoing index
+	failures := 0
+
+	// Delete from outgoing index (single key, entity-as-owner format unchanged)
 	if err := c.outgoingBucket.Delete(ctx, entityID); err != nil && !natsclient.IsKVNotFoundError(err) {
 		atomic.AddInt64(&c.errors, 1)
+		failures++
 		c.logger.Warn("failed to delete from outgoing index", slog.String("entity_id", entityID), slog.Any("error", err))
 	}
 
-	// Delete from incoming index
-	if err := c.incomingBucket.Delete(ctx, entityID); err != nil && !natsclient.IsKVNotFoundError(err) {
+	// LEGACY HARD-DELETE — do NOT reuse for logical retirement (gh#474 Codex P1e,
+	// gh#527). This removes every INCOMING row where entityID is the TARGET
+	// ("entityID.sourceID.predicate"). Those rows are the SOURCES' evidence that they
+	// still point at this entity — semantic support belongs to the source, not the
+	// target — so deleting them on the target's death discards still-live assertions
+	// and makes a later incoming-reference check falsely empty. That is acceptable only
+	// for a full hard delete of a leaf entity; the retention increment (#527) replaces
+	// this with source-owned retraction + a durable reverse manifest. The reciprocal
+	// rows (this entity as a mid-key SOURCE on other targets) are not reachable by a
+	// bare-key delete and are left for #527.
+	incomingKeys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(entityID))
+	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		c.logger.Warn("failed to delete from incoming index", slog.String("entity_id", entityID), slog.Any("error", err))
+		failures++
+		c.logger.Warn("failed to list incoming index keys for delete",
+			slog.String("entity_id", entityID),
+			slog.Any("error", err))
+	} else {
+		for _, key := range incomingKeys {
+			if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+				atomic.AddInt64(&c.errors, 1)
+				failures++
+				c.logger.Warn("failed to delete incoming index key",
+					slog.String("key", key),
+					slog.Any("error", delErr))
+			}
+		}
 	}
 
-	// Update metrics
+	// Delete from context index — entity-as-prefix (gh#474 P1f): enumerate the
+	// entity's own composite keys "entityID.hash(context).hex(predicate)" and delete
+	// each. Unlike INCOMING, these rows ARE owned by this entity (its own provenance
+	// memberships), so removing them on its death is correct, not legacy behavior.
+	contextKeys, ctxErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
+	if ctxErr != nil {
+		atomic.AddInt64(&c.errors, 1)
+		failures++
+		c.logger.Warn("failed to list context index keys for delete",
+			slog.String("entity_id", entityID),
+			slog.Any("error", ctxErr))
+	} else {
+		for _, key := range contextKeys {
+			if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+				atomic.AddInt64(&c.errors, 1)
+				failures++
+				c.logger.Warn("failed to delete context index key",
+					slog.String("key", key),
+					slog.Any("error", delErr))
+			}
+		}
+	}
+
+	// A failed list/delete means stale rows may remain — the index is known-incomplete,
+	// so withhold readiness (mark failed, gh#474 Codex #4) and do NOT clear the projection
+	// cache or the failure marker. The repair loop re-runs the delete until it succeeds.
+	if failures > 0 {
+		c.markEntityFailed(entityID)
+		return errs.WrapTransient(errIndexWritePartial, "Component", "DeleteFromIndexes",
+			fmt.Sprintf("%d delete/list operations failed for %s (stale index rows may remain)", failures, entityID))
+	}
+
+	// Clean delete — evict the no-op projection cache (a stale projection on re-add would
+	// suppress a real first-index event) and clear any prior write/delete failure.
+	c.lastProjections.Delete(entityID)
+	c.clearEntityFailed(entityID)
+
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
 	c.logger.Debug("entity deleted from indexes", slog.String("entity_id", entityID))
-
 	return nil
 }
 
@@ -1521,7 +1842,9 @@ func (c *Component) DeleteFromAliasIndex(ctx context.Context, alias string) erro
 	return nil
 }
 
-// DeleteFromIncomingIndex deletes a specific incoming reference
+// DeleteFromIncomingIndex deletes all incoming edges from sourceID to targetID
+// (all predicates). Under composite-key sharding, this is a prefix scan for
+// "targetID.sourceID." + delete-each.
 func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourceID string) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIncomingIndex", "target ID cannot be empty")
@@ -1538,19 +1861,31 @@ func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourc
 		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "context cancelled")
 	}
 
-	// For simplicity, delete the entire target entry (in real implementation, would remove specific source)
-	if err := c.incomingBucket.Delete(ctx, targetID); err != nil && !natsclient.IsKVNotFoundError(err) {
+	// Prefix: all edges from sourceID to targetID (all predicates)
+	prefix := incomingIndexPrefix(targetID) + sourceID + "."
+	keys, err := c.incomingBucket.KeysByPrefix(ctx, prefix)
+	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "KV delete")
+		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "list keys")
+	}
+
+	for _, key := range keys {
+		if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+			atomic.AddInt64(&c.errors, 1)
+			c.logger.Warn("failed to delete incoming index key",
+				slog.String("key", key),
+				slog.Any("error", delErr))
+		}
 	}
 
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
 
-	c.logger.Debug("incoming index entry deleted",
+	c.logger.Debug("incoming index entries deleted",
 		slog.String("target_id", targetID),
-		slog.String("source_id", sourceID))
+		slog.String("source_id", sourceID),
+		slog.Int("deleted_count", len(keys)))
 
 	return nil
 }
@@ -1559,16 +1894,18 @@ func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourc
 // Context Index Operations (Triple Provenance Tracking)
 // ============================================================================
 
-// ContextEntry represents an entry in the context index.
-// Each entry tracks which entity+predicate pair has a triple with a specific context value.
-type ContextEntry struct {
-	EntityID  string `json:"entity_id"`
-	Predicate string `json:"predicate"`
-}
-
 // UpdateContextIndex updates the context index for triples with a context value.
 // This enables provenance queries like "all triples from hierarchy inference".
-// The operation is idempotent - replaying the same update has no effect.
+//
+// After composite-key sharding (gh#474): one unconditional Put per (entityID,
+// predicate, contextValue) triple, keyed as hash(contextValue).entityID.predicate.
+// This replaces the former non-CAS Get+Put of a list, which had a lost-update
+// race AND used the raw context value as the key (collision-prone for dotted
+// hierarchies like "inference.hierarchy" vs "inference.hierarchy.deep" — ADR-065).
+//
+// CONTEXT_INDEX has no production reader (design.md D2, no query consumer);
+// the write path is the sole migration target. e2e readers are in scope for
+// task 5 (the breaking-change gate), not here.
 func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, triples []message.Triple) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex", "entity ID cannot be empty")
@@ -1582,76 +1919,61 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 		return errs.Wrap(err, "Component", "UpdateContextIndex", "context cancelled")
 	}
 
-	// Group entries by context value
-	byContext := make(map[string][]ContextEntry)
+	// Build the entity's DESIRED current context memberships (gh#474 P1f: keys are
+	// entity-prefixed). Marshal failure is a bug, not a transient — count it.
+	desired := make(map[string][]byte, len(triples))
 	for _, t := range triples {
-		if t.Context != "" {
-			entry := ContextEntry{
-				EntityID:  entityID,
-				Predicate: t.Predicate,
-			}
-			byContext[t.Context] = append(byContext[t.Context], entry)
+		if t.Context == "" {
+			continue
+		}
+		if !validateContextKeyInputs(entityID, t.Predicate, c.logger) {
+			continue
+		}
+		key := contextIndexKey(entityID, contextHashHex(t.Context), t.Predicate)
+		value, marshalErr := json.Marshal(contextIndexValue{Context: t.Context})
+		if marshalErr != nil {
+			c.logger.Debug("context index: failed to marshal value",
+				slog.String("context", t.Context),
+				slog.Any("error", marshalErr))
+			continue
+		}
+		desired[key] = value
+	}
+
+	// Reconcile against what the entity currently owns: prefix-scan "entityID.",
+	// RETRACT superseded keys, then Put the desired set (P1f — this is why per-key
+	// Puts alone leaked; the entity prefix makes the retraction findable). Failures
+	// are aggregated and returned so the caller can withhold readiness (P1b).
+	existing, listErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
+	if listErr != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return errs.WrapTransient(listErr, "Component", "UpdateContextIndex", "list existing context keys")
+	}
+
+	var failures int
+	for _, key := range existing {
+		if _, keep := desired[key]; keep {
+			continue // still current — leave it (idempotent)
+		}
+		if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+			atomic.AddInt64(&c.errors, 1)
+			failures++
+			c.logger.Debug("context index: failed to retract superseded entry",
+				slog.String("key", key), slog.Any("error", delErr))
 		}
 	}
-
-	if len(byContext) == 0 {
-		return nil // No context values to index
-	}
-
-	// Update each context key
-	for contextValue, newEntries := range byContext {
-		if err := c.mergeContextEntries(ctx, contextValue, entityID, newEntries); err != nil {
-			return err
+	for key, value := range desired {
+		if _, putErr := c.contextBucket.Put(ctx, key, value); putErr != nil {
+			atomic.AddInt64(&c.errors, 1)
+			failures++
+			c.logger.Debug("context index: failed to write entry",
+				slog.String("key", key), slog.Any("error", putErr))
 		}
 	}
-
-	return nil
-}
-
-// mergeContextEntries merges new entries into existing context index.
-// Uses set semantics: removes old entries for the entity, adds new ones.
-func (c *Component) mergeContextEntries(ctx context.Context, contextValue, entityID string, newEntries []ContextEntry) error {
-	// Use context value directly as key - dotted keys enable wildcard filtering
-	// (e.g., Watch("inference.>") to observe all inference-related contexts)
-	key := contextValue
-
-	// Get existing entries
-	var existing []ContextEntry
-	entry, err := c.contextBucket.Get(ctx, key)
-	if err != nil && !natsclient.IsKVNotFoundError(err) {
-		return errs.WrapTransient(err, "Component", "mergeContextEntries", "get existing entries")
+	if failures > 0 {
+		return errs.WrapTransient(errIndexWritePartial, "Component", "UpdateContextIndex",
+			fmt.Sprintf("%d of %d context writes/retractions failed for %s", failures, len(desired)+len(existing), entityID))
 	}
-	if err == nil {
-		if err := json.Unmarshal(entry.Value, &existing); err != nil {
-			return errs.WrapInvalid(err, "Component", "mergeContextEntries", "unmarshal existing entries")
-		}
-	}
-
-	// Remove old entries for this entity (idempotent update)
-	filtered := make([]ContextEntry, 0, len(existing))
-	for _, e := range existing {
-		if e.EntityID != entityID {
-			filtered = append(filtered, e)
-		}
-	}
-
-	// Add new entries
-	filtered = append(filtered, newEntries...)
-
-	// Serialize and save
-	data, err := json.Marshal(filtered)
-	if err != nil {
-		return errs.Wrap(err, "Component", "mergeContextEntries", "marshal entries")
-	}
-
-	if _, err := c.contextBucket.Put(ctx, key, data); err != nil {
-		return errs.WrapTransient(err, "Component", "mergeContextEntries", "put entries")
-	}
-
-	c.logger.Debug("context index updated",
-		slog.String("context", contextValue),
-		slog.String("entity_id", entityID),
-		slog.Int("entry_count", len(newEntries)))
 
 	return nil
 }

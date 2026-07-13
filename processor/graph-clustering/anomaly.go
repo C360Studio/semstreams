@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/structural"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -98,26 +100,37 @@ func (q *kvRelationshipQuerier) GetOutgoingRelationships(ctx context.Context, en
 }
 
 func (q *kvRelationshipQuerier) GetIncomingRelationships(ctx context.Context, entityID string) ([]inference.RelationshipInfo, error) {
-	entry, err := q.incomingBucket.Get(ctx, entityID)
+	// After composite-key sharding (gh#474): INCOMING_INDEX stores one key per
+	// edge — "targetID.sourceID.predicate" with an empty marker value.
+	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty).
+	keys, err := natsclient.FilteredKeys(ctx, q.incomingBucket, entityID+".>")
 	if err != nil {
-		if err == jetstream.ErrKeyNotFound {
-			return nil, nil
+		return nil, err
+	}
+
+	prefix := entityID + "."
+	result := make([]inference.RelationshipInfo, 0, len(keys))
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
 		}
-		return nil, err
-	}
-
-	var relationships []relationshipEntry
-	if err := json.Unmarshal(entry.Value(), &relationships); err != nil {
-		return nil, err
-	}
-
-	result := make([]inference.RelationshipInfo, len(relationships))
-	for i, rel := range relationships {
-		result[i] = inference.RelationshipInfo{
-			FromEntityID: rel.FromEntityID,
+		suffix := key[len(prefix):]
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated
+		// tokens; the predicate is hex-encoded (gh#474 P1a — graph.DecodePredicateToken).
+		parts := strings.SplitN(suffix, ".", 7)
+		if len(parts) < 7 {
+			continue
+		}
+		sourceID := strings.Join(parts[:6], ".")
+		predicate, ok := graph.DecodePredicateToken(parts[6])
+		if !ok || predicate == "" {
+			continue
+		}
+		result = append(result, inference.RelationshipInfo{
+			FromEntityID: sourceID,
 			ToEntityID:   entityID,
-			Predicate:    rel.Predicate,
-		}
+			Predicate:    predicate,
+		})
 	}
 	return result, nil
 }

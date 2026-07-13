@@ -64,7 +64,7 @@ func setupIntegrationTest(t *testing.T) (*Component, *natsclient.Client, func())
 
 // TestQueryOutgoing_Integration tests outgoing query with real NATS
 func TestQueryOutgoing_Integration(t *testing.T) {
-	_, natsClient, cleanup := setupIntegrationTest(t)
+	comp, natsClient, cleanup := setupIntegrationTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -98,30 +98,55 @@ func TestQueryOutgoing_Integration(t *testing.T) {
 	_, err = entityBucket.Put(ctx, entityID, stateJSON)
 	require.NoError(t, err)
 
-	// Wait for indexing
-	time.Sleep(300 * time.Millisecond)
-
 	// Create query request
-	nc := natsClient.GetConnection()
 	request := map[string]string{"entity_id": entityID}
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	// Send query request
-	msg, err := nc.Request("graph.index.query.outgoing", requestJSON, 2*time.Second)
+	// Synchronize on the query-visible projection rather than sleeping. The classified
+	// request path rejects typed index-not-ready responses instead of letting their JSON
+	// envelopes decode as a false empty success.
+	require.Eventually(t, func() bool {
+		data, requestErr := natsClient.RequestClassified(
+			ctx, "graph.index.query.outgoing", requestJSON, 2*time.Second,
+		)
+		if requestErr != nil {
+			return false
+		}
+		var current graph.OutgoingQueryResponse
+		if json.Unmarshal(data, &current) != nil || len(current.Data.Relationships) != 1 {
+			return false
+		}
+		return current.Data.Relationships[0].ToEntityID == targetID &&
+			current.Data.Relationships[0].Predicate == predicate
+	}, 3*time.Second, 25*time.Millisecond, "initial relationship never became query-visible")
+
+	// The entity remains present while its authoritative relationship set becomes
+	// empty. The watcher reconciliation must overwrite the owner key with [] and the
+	// query surface must stop returning the removed edge.
+	state.Triples = nil
+	stateJSON, err = json.Marshal(state)
+	require.NoError(t, err)
+	_, err = entityBucket.Put(ctx, entityID, stateJSON)
 	require.NoError(t, err)
 
-	// Parse response (envelope: {"data": {"relationships": [...]}, ...})
-	var response graph.OutgoingQueryResponse
-	err = json.Unmarshal(msg.Data, &response)
-	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		data, requestErr := natsClient.RequestClassified(
+			ctx, "graph.index.query.outgoing", requestJSON, 2*time.Second,
+		)
+		if requestErr != nil {
+			return false
+		}
+		var current graph.OutgoingQueryResponse
+		if json.Unmarshal(data, &current) != nil {
+			return false
+		}
+		return len(current.Data.Relationships) == 0
+	}, 3*time.Second, 25*time.Millisecond, "removed relationship remained query-visible")
 
-	// Verify response
-	assert.Len(t, response.Data.Relationships, 1, "should have one outgoing relationship")
-	if len(response.Data.Relationships) > 0 {
-		assert.Equal(t, targetID, response.Data.Relationships[0].ToEntityID)
-		assert.Equal(t, predicate, response.Data.Relationships[0].Predicate)
-	}
+	ownerEntry, err := comp.outgoingBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(ownerEntry.Value))
 }
 
 // TestQueryIncoming_Integration tests incoming query with real NATS
@@ -543,6 +568,83 @@ func TestQueryInvalidRequest_Integration(t *testing.T) {
 // bucket is not-ready with a zero target, and after the writes settle the status
 // catches up to Lag==0 with the numeric revision fields populated (not the old
 // sticky NAME_INDEX-non-empty false-ready).
+// TestQueryStatus_NonEmptyReplay_NotReadyUntilCaughtUp covers Codex #1: the WatchAll
+// initial-sync sentinel means pre-existing entries were DELIVERED, not that their async
+// worker writes completed. A non-empty preloaded bucket must NOT read ready (nor serve
+// reverse-index queries) until the watermark is actually caught up. Preloads entities
+// BEFORE Start, then asserts the query gate and status agree throughout replay: an
+// incoming query never succeeds while status reports not-ready (which the pre-fix
+// sentinel-sets-indexBootstrapped bug would violate).
+func TestQueryStatus_NonEmptyReplay_NotReadyUntilCaughtUp(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	nc := testClient.Client.GetConnection()
+
+	// Preload the bucket with entities BEFORE the component starts, so the initial-sync
+	// sentinel fires with a non-empty target.
+	js, err := testClient.Client.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.KeyValue(ctx, graph.BucketEntityStates)
+	require.NoError(t, err)
+	const n = 60
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("c360.platform.robotics.mav1.drone.%03d", i)
+		target := fmt.Sprintf("c360.platform.robotics.mav1.mission.%03d", i)
+		data, mErr := json.Marshal(graph.EntityState{
+			ID:      id,
+			Triples: []message.Triple{{Subject: id, Predicate: "robotics.assigned.mission", Object: target}},
+		})
+		require.NoError(t, mErr)
+		_, pErr := entityBucket.Put(ctx, id, data)
+		require.NoError(t, pErr)
+	}
+
+	config := DefaultConfig()
+	configJSON, err := json.Marshal(config)
+	require.NoError(t, err)
+	comp, err := CreateGraphIndex(configJSON, component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	graphIndexComp := comp.(*Component)
+	require.NoError(t, graphIndexComp.Initialize())
+	require.NoError(t, graphIndexComp.Start(ctx))
+	defer graphIndexComp.Stop(5 * time.Second)
+
+	// Readiness is monotonic (the sticky bootstrap flag never un-sets, and there are no
+	// write failures here), so the race-free invariant is: an incoming query succeeds
+	// ONLY when the index is ready. Query incoming FIRST; the moment it succeeds, status
+	// queried immediately after MUST report ready. The pre-fix bug (sentinel sets the
+	// sticky flag, bypassing the watermark) would let incoming succeed during replay while
+	// status still reports building — caught here. (Ordering status-then-incoming would be
+	// a TOCTOU flake: the index can catch up between the two requests.)
+	inReq, _ := json.Marshal(map[string]string{"entity_id": "c360.platform.robotics.mav1.mission.001"})
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		inMsg, iErr := nc.Request("graph.index.query.incoming", inReq, 2*time.Second)
+		require.NoError(t, iErr)
+		if !incomingQuerySucceeded(inMsg.Data) {
+			time.Sleep(5 * time.Millisecond)
+			continue // still not ready — the expected pre-catch-up window
+		}
+		// Incoming succeeded ⇒ the index must be authoritatively ready.
+		stMsg, sErr := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
+		require.NoError(t, sErr)
+		var st graph.IndexStatusResponse
+		require.NoError(t, json.Unmarshal(stMsg.Data, &st))
+		assert.True(t, st.Ready,
+			"incoming query succeeded but status is not ready — the query gate bypassed the watermark (Codex #1)")
+		return
+	}
+	t.Fatal("index never became ready within the deadline")
+}
+
+// incomingQuerySucceeded reports whether a NATS reply body is a valid incoming-query
+// success envelope (as opposed to a classified error reply such as index_not_ready,
+// which does not decode into this envelope with a non-nil relationships slice).
+func incomingQuerySucceeded(body []byte) bool {
+	var resp graph.IncomingQueryResponse
+	return json.Unmarshal(body, &resp) == nil && resp.Data.Relationships != nil
+}
+
 func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
 	_, natsClient, cleanup := setupIntegrationTest(t)
 	defer cleanup()
@@ -559,12 +661,24 @@ func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
 		return st
 	}
 
-	// Empty ENTITY_STATES: LastSeq==0 → not ready, building. The old sticky signal
-	// would also say building here, but for the wrong reason (NAME_INDEX empty);
-	// this asserts the honest target-based path.
+	// Empty ENTITY_STATES: an authoritatively empty 0/0 graph is READY once initial
+	// enumeration completes (gh#474 Codex #5) — it must not reject queries forever
+	// just because target==0. The enumeration-complete sentinel is async, so wait.
+	require.Eventually(t, func() bool {
+		msg, err := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
+		if err != nil {
+			return false
+		}
+		var s graph.IndexStatusResponse
+		if json.Unmarshal(msg.Data, &s) != nil {
+			return false
+		}
+		return s.Ready
+	}, 5*time.Second, 50*time.Millisecond, "empty enumerated graph must become ready")
+
 	st := statusNow(t)
-	assert.False(t, st.Ready, "empty bucket must not read ready")
-	assert.Equal(t, graph.IndexStateBuilding, st.State)
+	assert.True(t, st.Ready, "empty enumerated graph reads ready (Codex #5)")
+	assert.Equal(t, graph.IndexStateReady, st.State)
 	assert.Zero(t, st.TargetRevision, "empty bucket target should be 0")
 
 	// Write several entities — each Put advances ENTITY_STATES LastSeq (the target).

@@ -7,6 +7,7 @@ package graphindex
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,23 +62,21 @@ func TestUpdateIncomingIndex_SerializationFormat(t *testing.T) {
 	err := comp.UpdateIncomingIndex(ctx, targetID, sourceID, predicate)
 	require.NoError(t, err)
 
-	// Verify data was written
+	// After composite-key sharding (gh#474): one key per edge, keyed as
+	// targetID.sourceID.predicate with an empty marker value.
+	expectedKey := incomingIndexKey(targetID, sourceID, predicate)
 	bucket := incomingMock(comp)
 	bucket.mu.Lock()
-	data, exists := bucket.data[targetID]
+	_, exists := bucket.data[expectedKey]
 	bucket.mu.Unlock()
 
-	assert.True(t, exists, "incoming index should have entry for target")
-	assert.NotEmpty(t, data, "incoming index data should not be empty")
+	assert.True(t, exists, "incoming index should have a composite-key entry for this edge")
 
-	// Verify serialization format (array format matching graph/indexmanager)
-	var entries []map[string]interface{}
-	err = json.Unmarshal(data, &entries)
-	require.NoError(t, err, "incoming index should serialize as JSON array")
-	require.Len(t, entries, 1, "should have one entry")
-
-	assert.Equal(t, sourceID, entries[0]["from_entity_id"], "should have from_entity_id field")
-	assert.Equal(t, predicate, entries[0]["predicate"], "should have predicate field")
+	// The old monolithic key (bare targetID) must NOT exist under the new format.
+	bucket.mu.Lock()
+	_, oldKeyExists := bucket.data[targetID]
+	bucket.mu.Unlock()
+	assert.False(t, oldKeyExists, "old monolithic key must not be written under sharded format")
 }
 
 func TestUpdateAliasIndex_StoresPlainString(t *testing.T) {
@@ -396,9 +395,16 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			// Verify outgoing index
 			outgoing := outgoingMock(comp)
 			outgoing.mu.Lock()
-			_, hasOutgoing := outgoing.data[entityID]
+			outgoingData, hasOutgoing := outgoing.data[entityID]
 			outgoing.mu.Unlock()
-			assert.Equal(t, tt.wantOutgoing, hasOutgoing, "outgoing index presence mismatch")
+			require.True(t, hasOutgoing, "present entity should have an outgoing owner projection")
+			var outgoingEntries []graph.OutgoingEntry
+			require.NoError(t, json.Unmarshal(outgoingData, &outgoingEntries))
+			if tt.wantOutgoing {
+				assert.NotEmpty(t, outgoingEntries, "outgoing projection should contain relationships")
+			} else {
+				assert.Empty(t, outgoingEntries, "outgoing projection should be explicitly empty")
+			}
 
 			// Verify incoming index
 			if tt.wantIncoming {
@@ -488,14 +494,17 @@ func TestProcessEntityUpdate_RelationshipDetection(t *testing.T) {
 			entry := &mockKVEntry{data: data}
 			comp.processEntityUpdate(context.Background(), entry)
 
-			// Check if outgoing/incoming indexes were populated
+			// Every present entity owns an OUTGOING projection. Relationship detection
+			// determines whether that projection contains edges or an explicit [].
 			outgoing := outgoingMock(comp)
 			outgoing.mu.Lock()
-			_, hasOutgoing := outgoing.data[entityID]
+			outgoingData, hasOutgoing := outgoing.data[entityID]
 			outgoing.mu.Unlock()
-
-			assert.Equal(t, tt.isRelationship, hasOutgoing,
-				"relationship detection mismatch: expected %v, got %v", tt.isRelationship, hasOutgoing)
+			require.True(t, hasOutgoing)
+			var outgoingEntries []graph.OutgoingEntry
+			require.NoError(t, json.Unmarshal(outgoingData, &outgoingEntries))
+			assert.Equal(t, tt.isRelationship, len(outgoingEntries) > 0,
+				"relationship detection mismatch: expected %v", tt.isRelationship)
 		})
 	}
 }
@@ -509,32 +518,48 @@ func TestHandleEntityDelete_RemovesFromIndexes(t *testing.T) {
 	ctx := context.Background()
 
 	entityID := "c360.platform.robotics.mav1.drone.001"
+	sourceID := "c360.platform.robotics.mav1.sensor.001" // valid 6-part entity ID
 
-	// Create some index entries first
-	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID, "target", "predicate"))
-	require.NoError(t, comp.UpdateIncomingIndex(ctx, entityID, "source", "predicate"))
+	// Create some index entries first (outgoing uses entityID as plain key; incoming
+	// uses composite key targetID.sourceID.predicate after gh#474).
+	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID, sourceID, "robotics.assigned.mission"))
+	require.NoError(t, comp.UpdateIncomingIndex(ctx, entityID, sourceID, "robotics.assigned.mission"))
 
-	// Verify entries exist
+	// Verify outgoing entry exists
 	outgoing := outgoingMock(comp)
 	outgoing.mu.Lock()
 	_, hasOutgoing := outgoing.data[entityID]
 	outgoing.mu.Unlock()
 	assert.True(t, hasOutgoing, "should have outgoing entry before delete")
 
+	// Verify incoming composite key exists
+	expectedIncomingKey := incomingIndexKey(entityID, sourceID, "robotics.assigned.mission")
+	incoming := incomingMock(comp)
+	incoming.mu.Lock()
+	_, hasIncoming := incoming.data[expectedIncomingKey]
+	incoming.mu.Unlock()
+	assert.True(t, hasIncoming, "should have composite incoming key before delete")
+
 	// Delete entity
 	comp.handleEntityDelete(ctx, entityID)
 
-	// Verify entries removed
+	// Verify outgoing entry removed
 	outgoing.mu.Lock()
 	_, stillHasOutgoing := outgoing.data[entityID]
 	outgoing.mu.Unlock()
 	assert.False(t, stillHasOutgoing, "should remove outgoing entry after delete")
 
-	incoming := incomingMock(comp)
+	// Verify ALL composite incoming keys for this entity are removed (prefix scan delete)
 	incoming.mu.Lock()
-	_, stillHasIncoming := incoming.data[entityID]
+	var hasAnyIncomingForEntity bool
+	for k := range incoming.data {
+		if strings.HasPrefix(k, entityID+".") {
+			hasAnyIncomingForEntity = true
+			break
+		}
+	}
 	incoming.mu.Unlock()
-	assert.False(t, stillHasIncoming, "should remove incoming entry after delete")
+	assert.False(t, hasAnyIncomingForEntity, "should remove all composite incoming keys after delete")
 }
 
 func TestDeleteFromIndexes_IgnoresKeyNotFoundError(t *testing.T) {

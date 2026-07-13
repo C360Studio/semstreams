@@ -57,6 +57,15 @@ type Config struct {
 	MinCommunitySize     int                   `json:"min_community_size" schema:"type:int,description:Minimum number of entities to form a community,category:advanced"`
 	MaxIterations        int                   `json:"max_iterations" schema:"type:int,description:Maximum iterations for LPA algorithm,category:advanced"`
 
+	// AllowUngatedReads permits community detection to run when graph-index's readiness
+	// status endpoint is unreachable (gh#474 Codex #4). Default false = FAIL-CLOSED:
+	// unknown readiness defers the cycle, so detection cannot derive communities from a
+	// partial INCOMING_INDEX during a cutover when the authoritative owner is
+	// crashed/restarting. Set true ONLY for a standalone deployment (or test) that runs
+	// clustering without a co-deployed graph-index handler; it MUST NOT be used during a
+	// format cutover.
+	AllowUngatedReads bool `json:"allow_ungated_reads" schema:"type:bool,description:Allow detection when graph-index readiness is unknown (standalone only; never during cutover),category:advanced"`
+
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
 	PivotCount       int  `json:"pivot_count" schema:"type:int,description:Number of pivot nodes for distance indexing (default 16),category:advanced"`
@@ -973,9 +982,42 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 				c.logger.Debug("detection loop stopping - context cancelled")
 				return
 			}
+			// Cutover-readiness gate (gh#474 Codex #6): community detection reads
+			// INCOMING_INDEX directly, so skip this cycle while graph-index is still
+			// building or degraded — running would derive communities from partial
+			// topology. The next tick retries once the index is ready.
+			if !c.graphIndexReady(ctx) {
+				c.logger.Debug("graph-index not ready; deferring community detection")
+				continue
+			}
 			c.runCommunityDetection(ctx)
 		}
 	}
+}
+
+// graphIndexReady reports whether it is safe to run community detection against the
+// INCOMING_INDEX (gh#474 Codex #6). It DEFERS only on an EXPLICIT not-ready/degraded
+// status — i.e. graph-index is up and reports it is still building or has unresolved
+// write failures, exactly the cutover/failure window where reading would derive
+// communities from partial topology. It FAILS OPEN when the status endpoint is
+// unreachable or unparseable: that means graph-index is absent (or not co-deployed),
+// a different failure mode than a mid-rebuild index, and blocking detection forever on
+// it would be wrong (and would break setups that run clustering without the handler).
+func (c *Component) graphIndexReady(ctx context.Context) bool {
+	respData, err := c.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
+	if err != nil {
+		// Unknown readiness — FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
+		// graph-index mid-cutover is indistinguishable from an absent one, and its stale
+		// bucket is not proof of completeness. Only an explicit standalone config proceeds.
+		c.logger.Debug("graph-index status unreachable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
+		return c.config.AllowUngatedReads
+	}
+	var status graph.IndexStatusResponse
+	if err := json.Unmarshal(respData, &status); err != nil {
+		c.logger.Debug("graph-index status unparseable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
+		return c.config.AllowUngatedReads
+	}
+	return status.Ready
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.
@@ -1112,7 +1154,11 @@ func (p *kvProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
 	return keys, nil
 }
 
-// GetNeighbors returns entity IDs connected to the given entity
+// GetNeighbors returns entity IDs connected to the given entity.
+//
+// After composite-key sharding (gh#474): INCOMING_INDEX uses a composite format
+// "targetID.sourceID.predicate" while OUTGOING_INDEX keeps its flat JSON-array
+// format. The two directions are handled by separate methods.
 func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
 	if entityID == "" {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetNeighbors", "entityID is empty")
@@ -1120,7 +1166,7 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 
 	neighbors := make(map[string]bool)
 
-	// Get outgoing neighbors
+	// Get outgoing neighbors — unchanged format: single key, JSON array of {to_entity_id, predicate}
 	if direction == "outgoing" || direction == "both" {
 		outgoing, err := p.getNeighborsFromBucket(ctx, p.outgoingBucket, entityID)
 		if err != nil {
@@ -1131,9 +1177,9 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 		}
 	}
 
-	// Get incoming neighbors
+	// Get incoming neighbors — composite-key sharded format: prefix scan
 	if direction == "incoming" || direction == "both" {
-		incoming, err := p.getNeighborsFromBucket(ctx, p.incomingBucket, entityID)
+		incoming, err := p.getIncomingNeighbors(ctx, entityID)
 		if err != nil {
 			p.logger.Debug("failed to get incoming neighbors", slog.String("entity", entityID), slog.Any("error", err))
 		}
@@ -1156,7 +1202,10 @@ type relationshipEntry struct {
 	FromEntityID string `json:"from_entity_id,omitempty"` // For INCOMING_INDEX
 }
 
-// getNeighborsFromBucket reads neighbor entity IDs from a relationship index bucket
+// getNeighborsFromBucket reads neighbor entity IDs from the OUTGOING_INDEX bucket.
+// The outgoing format is a single key (entityID) with a JSON array of
+// {to_entity_id, predicate} entries — unchanged after composite-key sharding (gh#474).
+// Do NOT use this for INCOMING_INDEX; call getIncomingNeighbors instead.
 func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstream.KeyValue, entityID string) ([]string, error) {
 	entry, err := bucket.Get(ctx, entityID)
 	if err != nil {
@@ -1179,6 +1228,41 @@ func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstrea
 			neighbors = append(neighbors, rel.ToEntityID)
 		} else if rel.FromEntityID != "" {
 			neighbors = append(neighbors, rel.FromEntityID)
+		}
+	}
+	return neighbors, nil
+}
+
+// getIncomingNeighbors reads entity IDs that have an incoming edge to entityID
+// from the composite-keyed INCOMING_INDEX (gh#474). Keys have the form
+// "targetID.sourceID.predicate"; this method scans the prefix entityID.">" and
+// returns distinct source entity IDs.
+func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) ([]string, error) {
+	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty bucket).
+	keys, err := natsclient.FilteredKeys(ctx, p.incomingBucket, entityID+".>")
+	if err != nil {
+		return nil, err
+	}
+
+	prefix := entityID + "."
+	seen := make(map[string]struct{}, len(keys))
+	neighbors := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		suffix := key[len(prefix):]
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated
+		// tokens. Only the source is needed here, so the hex predicate token (gh#474
+		// P1a) is left untouched.
+		parts := strings.SplitN(suffix, ".", 7)
+		if len(parts) < 7 {
+			continue
+		}
+		sourceID := strings.Join(parts[:6], ".")
+		if _, dup := seen[sourceID]; !dup {
+			seen[sourceID] = struct{}{}
+			neighbors = append(neighbors, sourceID)
 		}
 	}
 	return neighbors, nil

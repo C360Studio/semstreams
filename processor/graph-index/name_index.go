@@ -6,21 +6,34 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// nameIndexKey is the NAME_INDEX KV key for a name: the hex sha256 of the
+// nameQueryMaxHydration bounds how many NAME_INDEX memberships graph.query.byName will
+// serially hydrate before refusing with ErrorCodeResourceExhausted (gh#474 Codex P2a
+// interim guard). The bounded-parallel / paginated redesign is gh#381.
+const nameQueryMaxHydration = 2000
+
+// nameIndexKey is the NAME_INDEX KV key PREFIX for a name: the hex sha256 of the
 // case-folded, trimmed name. Names contain arbitrary characters (spaces,
 // punctuation, unicode) that are not KV-key-safe, so the index keys on a hash;
 // the original-case name rides in the stored value for exact-case ranking.
 // Folding the key gives case-insensitive recall.
+//
+// After composite-key sharding (gh#474, design.md D1), the full key for one
+// membership is hash(name) + "." + entityID + "." + predicate. This function
+// returns only the hash prefix — use nameCompositeKey for the full key and
+// nameCompositePrefix for prefix scans.
 func nameIndexKey(name string) string {
 	sum := sha256.Sum256([]byte(normalizeName(name)))
 	return hex.EncodeToString(sum[:])
@@ -31,10 +44,86 @@ func normalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// nameCompositeKey builds the full NAME_INDEX composite key for one
+// (name, entityID, predicate) membership:
+// key = hash(name) + "." + entityID + "." + hex(predicate).
+//
+// The predicate is hex-encoded (encodePredicateToken, gh#474 Codex P1a) for the
+// same KV-safety reason as INCOMING; the reader decodes it back in nameEntryFromKey.
+//
+// Unconditional Put, no CAS — ADR-065 footgun comment: each (name, entityID,
+// predicate) triple is globally unique; concurrent writers on different triples
+// never contend on the same key. The CAS UpdateWithRetry this replaces cost an
+// extra round-trip per name-write; with composite keys the write is a single Put.
+func nameCompositeKey(nameHash, entityID, predicate string) string {
+	return nameHash + "." + entityID + "." + encodePredicateToken(predicate)
+}
+
+// nameCompositePrefix builds the KeysByPrefix argument that enumerates every
+// entity currently carrying a given name (case-insensitive, folded to the same
+// hash).
+func nameCompositePrefix(name string) string {
+	return nameIndexKey(name) + "."
+}
+
+// nameCompositeValue is the JSON value stored at each NAME_INDEX composite key.
+// The original-case name and predicate priority are NOT recoverable from the
+// hashed prefix alone, so they ride in the value.
+type nameCompositeValue struct {
+	Name     string `json:"name"`     // original-case name as stored on the entity
+	Priority int    `json:"priority"` // label-predicate salience (lower = higher)
+}
+
+// nameEntryFromKey extracts entityID and predicate from a NAME_INDEX composite
+// key. The key format is "hash(name).entityID.predicate", where the hash prefix
+// is already known (stripped by nameCompositePrefix). entityID is exactly 6
+// dot-separated tokens; predicate is everything after the 6th token.
+// Returns ("", "", false) when the key is malformed.
+func nameEntryFromKey(key, nameHash string) (entityID, predicate string, ok bool) {
+	prefix := nameHash + "."
+	if !strings.HasPrefix(key, prefix) {
+		return "", "", false
+	}
+	suffix := key[len(prefix):]
+
+	// suffix = "entityID.hex(predicate)"; entityID is exactly 6 dot-separated
+	// tokens; the hex predicate token is dot-free by construction.
+	parts := strings.SplitN(suffix, ".", 7)
+	if len(parts) < 7 {
+		return "", "", false
+	}
+	entityID = strings.Join(parts[:6], ".")
+	predicate, decoded := decodePredicateToken(parts[6])
+	if !decoded || predicate == "" || !message.IsValidEntityID(entityID) {
+		return "", "", false
+	}
+	return entityID, predicate, true
+}
+
+// validateNameKeyInputs checks that entityID and predicate are valid for
+// constructing a NAME_INDEX composite key. Returns false and logs at Debug on
+// failure. Structural, mirroring validateIncomingKeyInputs / validateContextKeyInputs
+// (design.md D1): an invalid entity ID or empty predicate would produce a key the
+// reader silently rejects (data loss) or mis-splits (silent corruption) — exactly
+// the class this change closes, so the write must skip rather than store it.
+func validateNameKeyInputs(entityID, predicate string, logger *slog.Logger) bool {
+	if !message.IsValidEntityID(entityID) {
+		logger.Debug("name index: invalid entity ID, skipping",
+			slog.String("entity_id", entityID))
+		return false
+	}
+	if predicate == "" {
+		logger.Debug("name index: empty predicate would produce trailing-dot key, skipping",
+			slog.String("entity_id", entityID))
+		return false
+	}
+	return true
+}
+
 // UpdateNameIndex records that entityID carries name under the given label
-// predicate. CAS read-modify-write; de-duplicates by (entityID, predicate) so
-// re-indexing the same entity is idempotent. Multiple entities may share a name
-// (names are not unique) — all are kept and ranked at query time.
+// predicate. Writes one composite-key entry; de-duplication by (entityID,
+// predicate) is automatic — the same (name, entityID, predicate) triple always
+// maps to the same composite key, and unconditional Put is idempotent.
 func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predicate string, priority int) error {
 	if name == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateNameIndex", "name cannot be empty")
@@ -49,37 +138,28 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 		return errs.Wrap(err, "Component", "UpdateNameIndex", "context cancelled")
 	}
 
-	key := nameIndexKey(name)
-	err := c.nameBucket.UpdateWithRetry(ctx, key, func(current []byte) ([]byte, error) {
-		var entry graph.NameIndexEntry
-		if len(current) > 0 {
-			if unmarshalErr := json.Unmarshal(current, &entry); unmarshalErr != nil {
-				entry = graph.NameIndexEntry{}
-			}
-		}
-		entry.Name = normalizeName(name)
+	// Structural key-input guard (design.md D1 MUST): skip-log a malformed entity
+	// ID or empty predicate rather than store a key the reader would reject or
+	// mis-split. Symmetric with INCOMING (validateIncomingKeyInputs) and CONTEXT.
+	if !validateNameKeyInputs(entityID, predicate, c.logger) {
+		return nil
+	}
 
-		// De-dup by (entityID, predicate): an entity carrying the same name under
-		// the same predicate updates in place (refresh original-case + priority);
-		// the same name under a different predicate is a distinct item.
-		for i := range entry.Items {
-			if entry.Items[i].EntityID == entityID && entry.Items[i].Predicate == predicate {
-				entry.Items[i].Name = name
-				entry.Items[i].Priority = priority
-				return json.Marshal(entry)
-			}
-		}
-		entry.Items = append(entry.Items, graph.NameIndexItem{
-			EntityID:  entityID,
-			Name:      name,
-			Predicate: predicate,
-			Priority:  priority,
-		})
-		return json.Marshal(entry)
+	nameHash := nameIndexKey(name)
+	key := nameCompositeKey(nameHash, entityID, predicate)
+
+	value, err := json.Marshal(nameCompositeValue{
+		Name:     name,
+		Priority: priority,
 	})
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "UpdateNameIndex", "CAS update")
+		return errs.Wrap(err, "Component", "UpdateNameIndex", "marshal value")
+	}
+
+	if _, err := c.nameBucket.Put(ctx, key, value); err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return errs.Wrap(err, "Component", "UpdateNameIndex", "KV put")
 	}
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
@@ -100,7 +180,8 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 // flag never flips back to false. Any list error — including an empty bucket
 // (ErrNoKeysFound) or a transient backend fault — reports NOT ready, the
 // conservative honest answer (the caller must fall back rather than treat empty
-// as an authoritative not-found).
+// as an authoritative not-found). The Keys() check remains valid after
+// composite-key sharding: composite keys still exist and still have len>0.
 func (c *Component) nameIndexIsReady(ctx context.Context) bool {
 	if c.nameIndexReady.Load() {
 		return true
@@ -138,6 +219,11 @@ func (c *Component) handleQueryStatusNATS(ctx context.Context, _ []byte) ([]byte
 // then by label-predicate salience, then entity ID. Empty matches (not an error)
 // when the name is unknown — the caller distinguishes ready-but-absent from a
 // backend failure (the latter is a classified error).
+//
+// After composite-key sharding (gh#474), the reader scans the prefix
+// hash(name).">" to enumerate all (entityID, predicate) pairs, then fetches each
+// entry's value for original-case name and priority. The wire response type
+// (graph.NameMatch, graph.NameData) is unchanged.
 func (c *Component) handleQueryByNameNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -153,20 +239,67 @@ func (c *Component) handleQueryByNameNATS(ctx context.Context, data []byte) ([]b
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty name"))
 	}
 
-	entry, err := c.nameBucket.Get(ctx, nameIndexKey(req.Name))
+	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
+	// still catching up after a format cutover / cold replay.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
+	nameHash := nameIndexKey(req.Name)
+	prefix := nameCompositePrefix(req.Name)
+
+	keys, err := c.nameBucket.KeysByPrefix(ctx, prefix)
 	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return json.Marshal(graph.NewQueryResponse(graph.NameData{Matches: []graph.NameMatch{}}))
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+	}
+	// Hard read budget (gh#474 Codex P2a interim): this handler does one serial Get per
+	// membership below, so a name shared by a huge number of entities is an unbounded
+	// N+1 under the 5s timeout. Refuse with a typed resource-exhausted error rather than
+	// grind; the caller narrows the query. The bounded-parallel/paginated redesign is gh#381.
+	if len(keys) > nameQueryMaxHydration {
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeResourceExhausted,
+			fmt.Errorf("name lookup exceeds read budget: %d memberships > %d", len(keys), nameQueryMaxHydration))
+	}
+	if len(keys) == 0 {
+		// No entries — name not yet indexed or bucket empty.
+		return json.Marshal(graph.NewQueryResponse(graph.NameData{Matches: []graph.NameMatch{}}))
+	}
+
+	// Reconstruct NameIndexItems from composite keys + per-key values.
+	items := make([]graph.NameIndexItem, 0, len(keys))
+	for _, key := range keys {
+		entityID, predicate, ok := nameEntryFromKey(key, nameHash)
+		if !ok {
+			c.logger.Debug("name index: skipping malformed composite key",
+				slog.String("key", key))
+			continue
 		}
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+
+		entry, err := c.nameBucket.Get(ctx, key)
+		if err != nil {
+			if natsclient.IsKVNotFoundError(err) {
+				continue // concurrently deleted — skip
+			}
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+		}
+
+		var v nameCompositeValue
+		if unmarshalErr := json.Unmarshal(entry.Value, &v); unmarshalErr != nil {
+			c.logger.Debug("name index: skipping malformed value",
+				slog.String("key", key),
+				slog.Any("error", unmarshalErr))
+			continue
+		}
+
+		items = append(items, graph.NameIndexItem{
+			EntityID:  entityID,
+			Name:      v.Name,
+			Predicate: predicate,
+			Priority:  v.Priority,
+		})
 	}
 
-	var stored graph.NameIndexEntry
-	if unmarshalErr := json.Unmarshal(entry.Value, &stored); unmarshalErr != nil {
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
-	}
-
-	matches := rankNameMatches(stored.Items, req.Name, req.Limit)
+	matches := rankNameMatches(items, req.Name, req.Limit)
 	return json.Marshal(graph.NewQueryResponse(graph.NameData{Matches: matches}))
 }
 

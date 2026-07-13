@@ -1193,6 +1193,8 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 		alias:            newMockKVBucket(),
 		predicate:        newMockKVBucket(),
 		predicateCatalog: newMockKVBucket(),
+		context:          newMockKVBucket(),
+		name:             newMockKVBucket(),
 	}
 
 	graphIndexComp := comp.(*Component)
@@ -1201,6 +1203,8 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	graphIndexComp.aliasBucket = nc.NewKVStore(mocks.alias)
 	graphIndexComp.predicateBucket = nc.NewKVStore(mocks.predicate)
 	graphIndexComp.predicateCatalogBucket = nc.NewKVStore(mocks.predicateCatalog)
+	graphIndexComp.contextBucket = nc.NewKVStore(mocks.context)
+	graphIndexComp.nameBucket = nc.NewKVStore(mocks.name)
 	// Initialize lifecycle reporter (normally done in Start())
 	graphIndexComp.lifecycleReporter = component.NewNoOpLifecycleReporter()
 

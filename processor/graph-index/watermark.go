@@ -40,7 +40,15 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 
 	indexed := c.watermark.Indexed()
 
-	target, err := natsclient.BucketLastSeq(ctx, c.entityStatesBucket)
+	statusBucket := c.entityStatesStatusBucket
+	if statusBucket == nil {
+		// Unit-test/early-construction fallback. Production Start always creates a
+		// separate status handle before installing query subscriptions.
+		statusBucket = c.entityStatesBucket
+	}
+	c.statusTargetMu.Lock()
+	target, err := natsclient.BucketLastSeq(ctx, statusBucket)
+	c.statusTargetMu.Unlock()
 	if err != nil {
 		// Can't read the target → can't honestly confirm caught-up. A backend fault
 		// is a degraded signal, not "building" (ADR-066 §4).
@@ -54,7 +62,28 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	}
 
 	stuck, lastSynced := c.trackReadinessProgress(indexed, target)
-	return graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+	status := graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+
+	// An authoritatively empty graph (initial enumeration complete, 0/0) is ready even
+	// though the revision-lag check requires target>0 — otherwise a fresh empty graph
+	// never becomes ready and every reverse-index query is rejected forever (gh#474
+	// Codex #5). Gated on initialEnumerationComplete (enumeration DELIVERED) AND target==0
+	// specifically — NOT on a non-empty replay, whose workers may still be writing (#1).
+	if !status.Ready && target == 0 && c.initialEnumerationComplete.Load() {
+		status.Ready = true
+		status.State = graph.IndexStateReady
+	}
+
+	// Withhold authoritative readiness while any entity's required index writes/deletes
+	// are unresolved (gh#474 P1b/#4): the reverse index is known-incomplete even when the
+	// revision watermark is caught up, so incoming/byName must not report a smaller graph
+	// than exists. Overrides the empty-graph case above; cleared when the repair loop
+	// drains the failed set.
+	if c.failedCount.Load() > 0 && status.Ready {
+		status.Ready = false
+		status.State = graph.IndexStateDegraded
+	}
+	return status
 }
 
 // trackReadinessProgress updates the wall-clock stuck-watermark detector and returns

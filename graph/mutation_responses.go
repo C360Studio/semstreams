@@ -98,6 +98,22 @@ const (
 	// posture (PR-3) meters owner_lease_mismatch_total + Warn-logs the mismatch
 	// and commits the write instead.
 	ErrorCodeOwnerLeaseStale = "owner_lease_stale"
+
+	// ErrorCodeResourceExhausted indicates a query would exceed a server-side read
+	// budget — e.g. a byName lookup on a name shared by more entities than the
+	// hydration cap (gh#474 Codex P2a interim guard). The caller should narrow the
+	// query rather than retry unchanged; the full hot-key NAME redesign is gh#381.
+	ErrorCodeResourceExhausted = "resource_exhausted"
+
+	// ErrorCodeIndexNotReady indicates a reverse-index query (incoming, byName)
+	// arrived before the index caught up to ENTITY_STATES — e.g. during the breaking
+	// composite-key format cutover on an in-place upgrade (gh#474 Codex P1d), when old
+	// aggregate keys are inert and the new keyset is still replaying. Serving the
+	// partial-to-empty new keyset would advertise a smaller graph than exists; the
+	// handler returns this transient code instead so a caller retries once the index
+	// reports caught-up (graph.index.query.status Ready), rather than acting on a
+	// silently-incomplete result.
+	ErrorCodeIndexNotReady = "index_not_ready"
 )
 
 // CreateEntityResponse response for entity creation

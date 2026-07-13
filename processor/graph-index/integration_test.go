@@ -5,6 +5,7 @@ package graphindex
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// readIncomingEntries reconstructs every incoming edge for a target from the
+// sharded INCOMING_INDEX (gh#474): one empty-value key "targetID.sourceID.predicate"
+// per edge. Mirrors the production reader handleQueryIncomingNATS — prefix-scan
+// "targetID.>" then reconstruct via incomingEntryFromKey. Replaces the pre-sharding
+// bare-key Get(targetID) of a JSON list.
+func readIncomingEntries(ctx context.Context, t *testing.T, kv *natsclient.KVStore, targetID string) []graph.IncomingEntry {
+	t.Helper()
+	keys, err := kv.KeysByPrefix(ctx, incomingIndexPrefix(targetID))
+	require.NoError(t, err)
+	entries := make([]graph.IncomingEntry, 0, len(keys))
+	for _, key := range keys {
+		e, ok := incomingEntryFromKey(key, targetID)
+		require.True(t, ok, "incoming composite key should reconstruct: %s", key)
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// readContextEntityIDs returns the entity IDs indexed under a context value from the
+// sharded CONTEXT_INDEX (gh#474 P1f): keys are entity-prefixed
+// "entityID.hash(context).hex(predicate)" and the raw context rides in the value. The
+// context is no longer a key prefix, so this value-scans the bucket and matches on the
+// stored context, extracting the entity from each matching key.
+func readContextEntityIDs(ctx context.Context, t *testing.T, kv *natsclient.KVStore, contextValue string) []string {
+	t.Helper()
+	keys, err := kv.Keys(ctx)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entry, getErr := kv.Get(ctx, key)
+		if getErr != nil {
+			continue
+		}
+		var v contextIndexValue
+		if json.Unmarshal(entry.Value, &v) != nil || v.Context != contextValue {
+			continue
+		}
+		// key = "entityID.hash(context).hex(predicate)"; entity is the first 6 tokens.
+		parts := strings.SplitN(key, ".", 8)
+		require.GreaterOrEqual(t, len(parts), 8, "context composite key should split: %s", key)
+		ids = append(ids, strings.Join(parts[:6], "."))
+	}
+	return ids
+}
 
 // TestIntegration_KVWatchToIndexFlow tests the full KV watch -> index update flow
 func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
@@ -117,18 +163,12 @@ func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
 	assert.Equal(t, targetID, outgoingData[0]["to_entity_id"])
 	assert.Equal(t, "robotics.assigned.mission", outgoingData[0]["predicate"])
 
-	// Verify incoming index was created (array format: [{from_entity_id, predicate}])
-	incomingEntry, err := graphIndex.incomingBucket.Get(ctx, targetID)
-	require.NoError(t, err)
-	assert.NotNil(t, incomingEntry)
-
-	var incomingData []map[string]interface{}
-	err = json.Unmarshal(incomingEntry.Value, &incomingData)
-	require.NoError(t, err)
-	require.Len(t, incomingData, 1, "should have one incoming relationship")
-
-	assert.Equal(t, entityID, incomingData[0]["from_entity_id"])
-	assert.Equal(t, "robotics.assigned.mission", incomingData[0]["predicate"])
+	// Verify incoming index was created (composite-key format after gh#474:
+	// one empty-value key "targetID.sourceID.predicate" per edge).
+	incomingEntries := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
+	require.Len(t, incomingEntries, 1, "should have one incoming relationship")
+	assert.Equal(t, entityID, incomingEntries[0].FromEntityID)
+	assert.Equal(t, "robotics.assigned.mission", incomingEntries[0].Predicate)
 
 	// Verify alias index was created
 	aliasEntry, err := graphIndex.aliasBucket.Get(ctx, alias)
@@ -235,8 +275,30 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
 	assert.True(t, natsclient.IsKVNotFoundError(err), "outgoing index should be deleted, got: %v", err)
 
-	_, err = graphIndex.incomingBucket.Get(ctx, entityID)
-	assert.True(t, natsclient.IsKVNotFoundError(err), "incoming index should be deleted, got: %v", err)
+	// Entity-owned cleanup: the delete path prefix-scans "entityID." and removes the
+	// deleted entity's own incoming-as-TARGET keyset. Nothing targets this entity, so
+	// that set is empty either way — this only proves the prefix-scan-delete runs without
+	// resurrecting a keyset, not that a populated one is cleaned.
+	ownIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
+	assert.Empty(t, ownIncoming, "the deleted entity's own incoming-as-target keyset should be gone")
+
+	// Reciprocal cleanup is NOT implemented (gh#433, subsumed by the ADR-073 retention
+	// epic): the deleted entity is a SOURCE, so its edge lives on the TARGET's incoming
+	// index at "targetID.entityID.predicate" — a mid-key sourceID token a bare-key
+	// tombstone cannot reach. Characterization assertion documenting the current gap;
+	// FLIP to assert.NotContains / require empty once gh#433 (composite reciprocal
+	// cleanup driven by a durable reverse projection) lands.
+	targetIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
+	staleReciprocal := false
+	for _, e := range targetIncoming {
+		if e.FromEntityID == entityID {
+			staleReciprocal = true
+			break
+		}
+	}
+	assert.True(t, staleReciprocal,
+		"gh#433: deleting the source leaves a stale reciprocal edge on the target's incoming index "+
+			"(reciprocal cleanup unimplemented) — flip this assertion when gh#433 lands")
 }
 
 // TestIntegration_MultipleRelationships tests indexing entities with multiple relationships
@@ -345,17 +407,11 @@ func TestIntegration_MultipleRelationships(t *testing.T) {
 	assert.True(t, targetIDs[mission2], "should have mission2 relationship")
 	assert.True(t, targetIDs[operator], "should have operator relationship")
 
-	// Verify incoming indexes on all targets (array format)
+	// Verify incoming indexes on all targets (composite-key format after gh#474).
 	for _, targetID := range []string{mission1, mission2, operator} {
-		incomingEntry, err := graphIndex.incomingBucket.Get(ctx, targetID)
-		require.NoError(t, err, "incoming index should exist for %s", targetID)
-
-		var incomingData []map[string]interface{}
-		err = json.Unmarshal(incomingEntry.Value, &incomingData)
-		require.NoError(t, err)
-		require.NotEmpty(t, incomingData, "should have at least one incoming relationship")
-
-		assert.Equal(t, entityID, incomingData[0]["from_entity_id"])
+		incomingEntries := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
+		require.NotEmpty(t, incomingEntries, "incoming index should exist for %s", targetID)
+		assert.Equal(t, entityID, incomingEntries[0].FromEntityID)
 	}
 }
 
@@ -594,21 +650,16 @@ func TestIntegration_HierarchyEdgeIndexing(t *testing.T) {
 	assert.Equal(t, "hierarchy.domain.member", targetIDs[domainContainer],
 		"domain container should be in outgoing index with hierarchy.domain.member predicate")
 
-	// CRITICAL TEST: Verify incoming indexes on containers
-	// This is how community detection finds connections
+	// CRITICAL TEST: Verify incoming indexes on containers (composite-key format
+	// after gh#474). This is how community detection finds connections.
 	for _, containerID := range []string{typeContainer, systemContainer, domainContainer} {
-		incomingEntry, err := graphIndex.incomingBucket.Get(ctx, containerID)
-		require.NoError(t, err, "incoming index should exist for container %s", containerID)
-
-		var incomingData []map[string]interface{}
-		err = json.Unmarshal(incomingEntry.Value, &incomingData)
-		require.NoError(t, err)
-		require.NotEmpty(t, incomingData, "container %s should have incoming edges", containerID)
+		incomingEntries := readIncomingEntries(ctx, t, graphIndex.incomingBucket, containerID)
+		require.NotEmpty(t, incomingEntries, "container %s should have incoming edges", containerID)
 
 		// Verify entity is in incoming index
 		found := false
-		for _, entry := range incomingData {
-			if entry["from_entity_id"].(string) == entityID {
+		for _, entry := range incomingEntries {
+			if entry.FromEntityID == entityID {
 				found = true
 				break
 			}
@@ -616,22 +667,9 @@ func TestIntegration_HierarchyEdgeIndexing(t *testing.T) {
 		assert.True(t, found, "entity should be in incoming index for container %s", containerID)
 	}
 
-	// Verify context index tracks hierarchy inference provenance
-	contextEntry, err := graphIndex.contextBucket.Get(ctx, "inference.hierarchy")
-	require.NoError(t, err, "context index should exist for inference.hierarchy")
-
-	// Context index stores []ContextEntry (entity_id, predicate pairs)
-	var contextData []map[string]interface{}
-	err = json.Unmarshal(contextEntry.Value, &contextData)
-	require.NoError(t, err)
-
-	// Verify entity is in context index
-	foundEntity := false
-	for _, entry := range contextData {
-		if entry["entity_id"].(string) == entityID {
-			foundEntity = true
-			break
-		}
-	}
-	assert.True(t, foundEntity, "entity should be in inference.hierarchy context")
+	// Verify context index tracks hierarchy inference provenance (composite-key format
+	// after gh#474: keys are "hash(inference.hierarchy).entityID.predicate").
+	contextEntityIDs := readContextEntityIDs(ctx, t, graphIndex.contextBucket, "inference.hierarchy")
+	require.NotEmpty(t, contextEntityIDs, "context index should exist for inference.hierarchy")
+	assert.Contains(t, contextEntityIDs, entityID, "entity should be in inference.hierarchy context")
 }

@@ -3,8 +3,11 @@ package query
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,11 +17,21 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Config contains configuration for the Client
 type Config struct {
+	// AllowUngatedReads permits direct INCOMING_INDEX reads to proceed when graph-index's
+	// readiness status endpoint is unreachable (gh#474 Codex #4). Default false =
+	// FAIL-CLOSED: an unknown readiness is treated as not-ready, so a query cannot serve
+	// a partial bucket during a cutover when the authoritative owner is crashed/restarting.
+	// Set true ONLY for a deliberately standalone deployment (or test) that reads the
+	// index without a co-deployed graph-index handler — it MUST NOT be used during a
+	// format cutover.
+	AllowUngatedReads bool `json:"allow_ungated_reads"`
+
 	// EntityCache configuration
 	EntityCache cache.Config `json:"entity_cache"`
 
@@ -281,28 +294,86 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 	return len(keys), nil
 }
 
-// GetIncomingEdges retrieves entity IDs that reference the given entity
+// indexNotReadyErr gates a direct INCOMING_INDEX read on graph-index readiness (gh#474
+// Codex #6). It returns a classified ErrorCodeIndexNotReady only when graph-index is up
+// and EXPLICITLY reports not-ready (still building / degraded by an unresolved write
+// failure) — the cutover/failure window where a direct bucket read would return partial
+// topology. It FAILS CLOSED when status is unreachable or malformed unless the caller
+// explicitly enables AllowUngatedReads for a standalone deployment.
+func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
+	notReady := errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+		errors.New("graph index not ready"))
+
+	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
+	if err != nil {
+		// Unknown readiness. FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
+		// graph-index during a cutover is indistinguishable from an intentionally-absent
+		// one, and a stale bucket without a reachable authoritative owner is not proof of
+		// completeness. Only an explicit standalone config opts into proceeding.
+		if qc.config != nil && qc.config.AllowUngatedReads {
+			return nil
+		}
+		return notReady
+	}
+	var st gtypes.IndexStatusResponse
+	if json.Unmarshal(respData, &st) != nil {
+		if qc.config != nil && qc.config.AllowUngatedReads {
+			return nil
+		}
+		return notReady
+	}
+	if !st.Ready {
+		return notReady
+	}
+	return nil
+}
+
+// GetIncomingEdges retrieves distinct source entity IDs that reference the given
+// entity (one per unique source, regardless of how many predicates connect the pair).
+//
+// Gates on graph-index readiness first (gh#474 Codex #6): reading the INCOMING_INDEX
+// bucket directly bypasses graph-index's cutover-readiness gate, so during an in-place
+// format upgrade this consumer (and its callers — CountIncomingEdges, the anomaly
+// detector) could serve partial topology. When graph-index reports not-ready this
+// returns ErrorCodeIndexNotReady instead of a partial result.
 func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]string, error) {
+	if err := qc.indexNotReadyErr(ctx); err != nil {
+		return nil, err
+	}
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
 	}
 
-	entry, err := qc.incomingBucket.Get(ctx, entityID)
+	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty).
+	keys, err := natsclient.FilteredKeys(ctx, qc.incomingBucket, entityID+".>")
 	if err != nil {
-		// No incoming edges found
-		return []string{}, nil
+		return nil, fmt.Errorf("failed to list incoming edges for %s: %w", entityID, err)
 	}
 
-	var incomingData map[string][]string
-	if err := json.Unmarshal(entry.Value(), &incomingData); err != nil {
-		return []string{}, fmt.Errorf("failed to unmarshal incoming index: %w", err)
+	// Parse the sourceID (first 6 tokens) from each composite key suffix.
+	prefix := entityID + "."
+	seen := make(map[string]struct{}, len(keys))
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		suffix := key[len(prefix):]
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated tokens.
+		parts := strings.SplitN(suffix, ".", 7)
+		if len(parts) < 7 {
+			continue
+		}
+		sourceID := strings.Join(parts[:6], ".")
+		if _, dup := seen[sourceID]; !dup {
+			seen[sourceID] = struct{}{}
+			result = append(result, sourceID)
+		}
 	}
 
-	if incoming, exists := incomingData["incoming"]; exists {
-		return incoming, nil
-	}
-
-	return []string{}, nil
+	// Deterministic order (gh#474 P1c): a no-op replay can reshuffle storage order.
+	sort.Strings(result)
+	return result, nil
 }
 
 // GetIncomingRelationships retrieves entity IDs that reference the given entity
@@ -363,13 +434,14 @@ func (qc *natsClient) GetEntityConnections(ctx context.Context, entityID string)
 
 	// Get incoming connections using INCOMING_INDEX
 	incomingEntityIDs, err := qc.GetIncomingEdges(ctx, entityID)
-	if err == nil {
-		for _, incomingID := range incomingEntityIDs {
-			if !seenIDs[incomingID] {
-				if incomingEntity, err := qc.GetEntity(ctx, incomingID); err == nil {
-					connectedEntities = append(connectedEntities, incomingEntity)
-					seenIDs[incomingID] = true
-				}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get incoming connections: %w", err)
+	}
+	for _, incomingID := range incomingEntityIDs {
+		if !seenIDs[incomingID] {
+			if incomingEntity, err := qc.GetEntity(ctx, incomingID); err == nil {
+				connectedEntities = append(connectedEntities, incomingEntity)
+				seenIDs[incomingID] = true
 			}
 		}
 	}
@@ -396,7 +468,9 @@ func (qc *natsClient) VerifyRelationship(ctx context.Context, fromID, toID, pred
 	return false, nil
 }
 
-// CountIncomingEdges returns the number of edges pointing to the specified entity
+// CountIncomingEdges returns the number of distinct source entities pointing to the
+// specified entity (one per unique source, regardless of how many predicates connect
+// the pair) — it counts GetIncomingEdges' deduplicated sources, not raw edges.
 func (qc *natsClient) CountIncomingEdges(ctx context.Context, entityID string) (int, error) {
 	incomingIDs, err := qc.GetIncomingEdges(ctx, entityID)
 	if err != nil {

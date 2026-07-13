@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 )
 
@@ -62,22 +63,24 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_PreservesPredicates(t *t
 	outgoingBucket := newMockKVBucket()
 	incomingBucket := newMockKVBucket()
 
-	// Store incoming relationships with predicates
-	relationships := []relationshipEntry{
-		{Predicate: "worksFor", FromEntityID: "entity-A"},
-		{Predicate: "reports_to", FromEntityID: "entity-C"},
+	// Store incoming relationships in the composite-key sharded format (gh#474):
+	// one key per edge — "targetID.sourceID.hex(predicate)" with an empty marker value
+	// (the predicate is hex-encoded, gh#474 P1a). Entity IDs must be valid 6-part
+	// federated IDs for the parser to reconstruct them.
+	targetID := "acme.ops.graph.test.entity.b"
+	sourceA := "acme.ops.graph.test.entity.a"
+	sourceC := "acme.ops.graph.test.entity.c"
+
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceA+"."+graph.EncodePredicateToken("worksFor"), []byte{}); err != nil {
+		t.Fatalf("failed to put data: %v", err)
 	}
-	data, err := json.Marshal(relationships)
-	if err != nil {
-		t.Fatalf("failed to marshal relationships: %v", err)
-	}
-	if _, err := incomingBucket.Put(context.Background(), "entity-B", data); err != nil {
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceC+"."+graph.EncodePredicateToken("reports_to"), []byte{}); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	result, err := querier.GetIncomingRelationships(context.Background(), "entity-B")
+	result, err := querier.GetIncomingRelationships(context.Background(), targetID)
 	if err != nil {
 		t.Fatalf("GetIncomingRelationships failed: %v", err)
 	}
@@ -86,19 +89,19 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_PreservesPredicates(t *t
 		t.Fatalf("expected 2 relationships, got %d", len(result))
 	}
 
-	// Verify predicates are preserved
-	if result[0].Predicate != "worksFor" {
-		t.Errorf("expected predicate 'worksFor', got %s", result[0].Predicate)
+	// Verify predicates and entity IDs are correctly reconstructed from composite keys.
+	bySource := make(map[string]string)
+	for _, r := range result {
+		bySource[r.FromEntityID] = r.Predicate
+		if r.ToEntityID != targetID {
+			t.Errorf("expected ToEntityID %q, got %q", targetID, r.ToEntityID)
+		}
 	}
-	if result[0].FromEntityID != "entity-A" {
-		t.Errorf("expected FromEntityID 'entity-A', got %s", result[0].FromEntityID)
+	if bySource[sourceA] != "worksFor" {
+		t.Errorf("expected predicate 'worksFor' for source %s, got %q", sourceA, bySource[sourceA])
 	}
-	if result[0].ToEntityID != "entity-B" {
-		t.Errorf("expected ToEntityID 'entity-B', got %s", result[0].ToEntityID)
-	}
-
-	if result[1].Predicate != "reports_to" {
-		t.Errorf("expected predicate 'reports_to', got %s", result[1].Predicate)
+	if bySource[sourceC] != "reports_to" {
+		t.Errorf("expected predicate 'reports_to' for source %s, got %q", sourceC, bySource[sourceC])
 	}
 }
 
@@ -127,8 +130,10 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for missing entity, got: %v", err)
 	}
-	if result != nil {
-		t.Errorf("expected nil result for missing entity, got: %v", result)
+	// The composite-key scan returns an empty slice (not nil) when no keys match.
+	// Callers should check len(result) == 0, not result != nil.
+	if len(result) != 0 {
+		t.Errorf("expected empty result for missing entity, got: %v", result)
 	}
 }
 

@@ -115,6 +115,12 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
+	// Cutover-readiness gate (P1d/#6): OUTGOING is also rebuilt from ENTITY_STATES on a
+	// cold/cutover replay, so don't serve a partial owner keyset while catching up.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	entry, err := c.outgoingBucket.Get(ctx, req.EntityID)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
@@ -135,7 +141,44 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 	}))
 }
 
-// handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply
+// ensureQueryReady gates the composite-key reverse-index query handlers (incoming,
+// byName) on the index having caught up to ENTITY_STATES at least once after Start
+// (gh#474 Codex P1d). Sticky-fast once caught-up; otherwise it does one revision-lag
+// probe. Returns a transient ErrorCodeIndexNotReady while still building so a caller
+// retries rather than acting on the partial keyset a format cutover / cold replay is
+// still materialising (old aggregate keys are inert, new keys incomplete).
+func (c *Component) ensureQueryReady(ctx context.Context) error {
+	// A known-incomplete index — a required write/delete failed and has not yet been
+	// repaired — is NEVER authoritative, even after bootstrap (gh#474 P1b / Codex #2).
+	// Check this first so the sticky bootstrap flag can't mask a later failure.
+	if c.failedCount.Load() > 0 {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("index not ready: unresolved index write/delete failures"))
+	}
+	if c.indexBootstrapped.Load() {
+		return nil
+	}
+	// No watermark wired means the watcher never started (unit tests, pre-Start) —
+	// there is no cutover replay to gate on, so treat as ready. In production Start
+	// always wires the watermark before subscribing these handlers, so a live request
+	// takes the honest revision-lag path below.
+	if c.watermark == nil {
+		return nil
+	}
+	if c.computeIndexStatus(ctx).Ready {
+		c.indexBootstrapped.Store(true)
+		return nil
+	}
+	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+		errors.New("index not ready: still catching up to ENTITY_STATES"))
+}
+
+// handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply.
+//
+// After composite-key sharding (gh#474): scans the prefix entityID.">" to enumerate
+// all incoming edges, then reconstructs graph.IncomingEntry from each composite key.
+// The wire response type (graph.IncomingRelationshipsData, graph.IncomingEntry) is
+// unchanged — only the storage format changed.
 func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -151,20 +194,39 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
-	entry, err := c.incomingBucket.Get(ctx, req.EntityID)
+	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
+	// still catching up after a format cutover / cold replay.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
+	keys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(req.EntityID))
 	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
-				Relationships: []graph.IncomingEntry{},
-			}))
-		}
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
-	var entries []graph.IncomingEntry
-	if err := json.Unmarshal(entry.Value, &entries); err != nil {
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+	entries := make([]graph.IncomingEntry, 0, len(keys))
+	for _, key := range keys {
+		entry, ok := incomingEntryFromKey(key, req.EntityID)
+		if !ok {
+			c.logger.Debug("incoming query: skipping malformed key",
+				slog.String("key", key),
+				slog.String("entity_id", req.EntityID))
+			continue
+		}
+		entries = append(entries, entry)
 	}
+
+	// Deterministic order (gh#474 Codex P1c): KeysByPrefix returns storage order,
+	// which a no-op replay can reshuffle with worker scheduling. PathRAG stops at
+	// max_nodes/max_paths, so an unsorted result makes the capped set depend on
+	// write timing rather than graph state. Sort by (FromEntityID, Predicate).
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].FromEntityID != entries[j].FromEntityID {
+			return entries[i].FromEntityID < entries[j].FromEntityID
+		}
+		return entries[i].Predicate < entries[j].Predicate
+	})
 
 	return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
 		Relationships: entries,
@@ -175,6 +237,12 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Readiness gate (gh#474 Codex #6): ALIAS is also a derived reverse index rebuilt on
+	// cutover and covered by the failure gate, so it must not serve partial data either.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var req struct {
 		Alias string `json:"alias"`
@@ -207,6 +275,12 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Readiness gate (gh#474 Codex #6): PREDICATE_INDEX is rebuilt on cutover and covered
+	// by the failure gate; don't serve partial predicate memberships.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var req struct {
 		Predicate string  `json:"predicate"`
@@ -331,6 +405,12 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byt
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// Readiness gate (gh#474 Codex #6): predicate-list depends on the predicate catalog,
+	// which is rebuilt on cutover; don't serve a partial catalog.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var req graph.PredicateListQuery
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -444,6 +524,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// Readiness gate (gh#474 Codex #6).
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var req struct {
 		Predicate   string `json:"predicate"`
 		SampleLimit int    `json:"sample_limit"`
@@ -489,6 +574,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Readiness gate (gh#474 Codex #6).
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var req graph.CompoundPredicateQuery
 	if err := json.Unmarshal(data, &req); err != nil {

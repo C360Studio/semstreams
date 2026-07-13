@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -915,7 +916,14 @@ type IncomingEntry struct {
 }
 
 // GetIncomingEntries retrieves incoming relationship entries for a target entity.
-// Phase 5: Added to verify IncomingIndex stores predicates (not just entity IDs).
+//
+// After composite-key sharding (gh#474) INCOMING_INDEX stores one empty-value key
+// per directed edge: "targetID.sourceID.predicate". This reader prefix-scans
+// "targetID.>" and reconstructs each entry from its key — the same reconstruction
+// graph-index's handleQueryIncomingNATS performs. It reads the ON-DISK format
+// directly (not via the query API) so a bug shared by the writer and the query
+// handler cannot pass this gate. The source entity ID is exactly 6 dot-separated
+// tokens; the predicate is everything after it.
 func (c *NATSValidationClient) GetIncomingEntries(ctx context.Context, targetEntityID string) ([]IncomingEntry, error) {
 	bucket, err := c.client.GetKeyValueBucket(ctx, IndexBuckets.Incoming)
 	if err != nil {
@@ -925,19 +933,48 @@ func (c *NATSValidationClient) GetIncomingEntries(ctx context.Context, targetEnt
 		return nil, fmt.Errorf("failed to get incoming bucket: %w", err)
 	}
 
-	entry, err := bucket.Get(ctx, targetEntityID)
+	keys, err := natsclient.FilteredKeys(ctx, bucket, targetEntityID+".>")
 	if err != nil {
-		if err == jetstream.ErrKeyNotFound {
-			return nil, nil // No incoming relationships
-		}
-		return nil, fmt.Errorf("failed to get incoming entry: %w", err)
+		return nil, fmt.Errorf("failed to list incoming keys for %s: %w", targetEntityID, err)
 	}
 
-	var entries []IncomingEntry
-	if err := json.Unmarshal(entry.Value(), &entries); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal incoming entries: %w", err)
+	entries := make([]IncomingEntry, 0, len(keys))
+	for _, key := range keys {
+		entry, ok := incomingEntryFromCompositeKey(key, targetEntityID)
+		if !ok {
+			continue // malformed key — skip, mirrors handleQueryIncomingNATS
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// incomingEntryFromCompositeKey reconstructs an IncomingEntry from an
+// INCOMING_INDEX composite key of the form "targetID.sourceID.predicate", with
+// targetID already known and stripped. Mirrors graph-index's incomingEntryFromKey:
+// the source ID is exactly 6 dot-separated tokens and the predicate is everything
+// after it. Returns false when the key is malformed (too short or empty predicate).
+func incomingEntryFromCompositeKey(key, targetID string) (IncomingEntry, bool) {
+	prefix := targetID + "."
+	if !strings.HasPrefix(key, prefix) {
+		return IncomingEntry{}, false
+	}
+	suffix := key[len(prefix):]
+
+	// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated tokens;
+	// the predicate is hex-encoded (gh#474 P1a — graph.DecodePredicateToken).
+	parts := strings.SplitN(suffix, ".", 7)
+	if len(parts) < 7 {
+		return IncomingEntry{}, false
+	}
+	predicate, ok := graph.DecodePredicateToken(parts[6])
+	if !ok || predicate == "" {
+		return IncomingEntry{}, false
+	}
+	return IncomingEntry{
+		FromEntityID: strings.Join(parts[:6], "."),
+		Predicate:    predicate,
+	}, true
 }
 
 // ContextEntry matches the indexmanager.ContextEntry structure.
@@ -947,8 +984,21 @@ type ContextEntry struct {
 	Predicate string `json:"predicate"`
 }
 
+// contextIndexValue mirrors the JSON value graph-index stores at each
+// CONTEXT_INDEX composite key (gh#474). The raw context string is not recoverable
+// from the sha256 key prefix, so it rides in the value.
+type contextIndexValue struct {
+	Context string `json:"context"`
+}
+
 // GetContextEntries retrieves all entries for a specific context value.
-// Phase 5: Added to verify ContextIndex is populated by hierarchy inference.
+//
+// After composite-key sharding (gh#474) CONTEXT_INDEX keys are
+// "hash(contextValue).entityID.predicate" and the raw context rides in the value.
+// This reader scans the bucket and matches on the AUTHORITATIVE stored context
+// value rather than recomputing the sha256 prefix — so it needs no copy of the
+// production hash and cannot silently drift from it. Entity ID + predicate are
+// reconstructed from the composite key.
 func (c *NATSValidationClient) GetContextEntries(ctx context.Context, contextValue string) ([]ContextEntry, error) {
 	bucket, err := c.client.GetKeyValueBucket(ctx, IndexBuckets.Context)
 	if err != nil {
@@ -958,23 +1008,58 @@ func (c *NATSValidationClient) GetContextEntries(ctx context.Context, contextVal
 		return nil, fmt.Errorf("failed to get context bucket: %w", err)
 	}
 
-	entry, err := bucket.Get(ctx, contextValue)
+	keys, err := bucket.Keys(ctx)
 	if err != nil {
-		if err == jetstream.ErrKeyNotFound {
-			return nil, nil // No entries for this context
+		if isNoKeysError(err) {
+			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get context entry: %w", err)
+		return nil, fmt.Errorf("failed to list context keys: %w", err)
 	}
 
-	var entries []ContextEntry
-	if err := json.Unmarshal(entry.Value(), &entries); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal context entries: %w", err)
+	entries := make([]ContextEntry, 0)
+	for _, key := range keys {
+		entry, getErr := bucket.Get(ctx, key)
+		if getErr != nil {
+			continue // concurrently deleted or transient — skip
+		}
+		var v contextIndexValue
+		if json.Unmarshal(entry.Value(), &v) != nil || v.Context != contextValue {
+			continue
+		}
+		entityID, predicate, ok := contextEntryFromCompositeKey(key)
+		if !ok {
+			continue
+		}
+		entries = append(entries, ContextEntry{EntityID: entityID, Predicate: predicate})
 	}
 	return entries, nil
 }
 
-// GetAllContexts lists all context values in the CONTEXT_INDEX bucket.
-// Phase 6: Added for provenance audit scenario - demonstrates querying all inference contexts.
+// contextEntryFromCompositeKey extracts entityID and predicate from a
+// CONTEXT_INDEX composite key of the form "entityID.hash(context).hex(predicate)"
+// (entity-prefix, gh#474 P1f). The entity ID is the first 6 dot-separated tokens;
+// the context hash and hex predicate are each a single dot-free token. The raw
+// context is not in the key (it rides in the value). Returns false when the key is
+// malformed.
+func contextEntryFromCompositeKey(key string) (entityID, predicate string, ok bool) {
+	// parts[0..5] = entityID tokens, parts[6] = context hash, parts[7] = hex predicate.
+	parts := strings.SplitN(key, ".", 8)
+	if len(parts) < 8 {
+		return "", "", false
+	}
+	predicate, decoded := graph.DecodePredicateToken(parts[7])
+	if !decoded || predicate == "" {
+		return "", "", false
+	}
+	return strings.Join(parts[:6], "."), predicate, true
+}
+
+// GetAllContexts lists all distinct context values in the CONTEXT_INDEX bucket.
+//
+// After composite-key sharding (gh#474) the raw context value is no longer the
+// key (keys are "hash(context).entityID.predicate") — it rides in each entry's
+// value. This reader scans values and returns the distinct set of stored context
+// strings, sorted for deterministic output.
 func (c *NATSValidationClient) GetAllContexts(ctx context.Context) ([]string, error) {
 	bucket, err := c.client.GetKeyValueBucket(ctx, IndexBuckets.Context)
 	if err != nil {
@@ -992,7 +1077,25 @@ func (c *NATSValidationClient) GetAllContexts(ctx context.Context) ([]string, er
 		return nil, fmt.Errorf("failed to list context keys: %w", err)
 	}
 
-	return keys, nil
+	seen := make(map[string]struct{})
+	for _, key := range keys {
+		entry, getErr := bucket.Get(ctx, key)
+		if getErr != nil {
+			continue
+		}
+		var v contextIndexValue
+		if json.Unmarshal(entry.Value(), &v) != nil || v.Context == "" {
+			continue
+		}
+		seen[v.Context] = struct{}{}
+	}
+
+	contexts := make([]string, 0, len(seen))
+	for ctxVal := range seen {
+		contexts = append(contexts, ctxVal)
+	}
+	sort.Strings(contexts)
+	return contexts, nil
 }
 
 // OutgoingEntry matches the indexmanager.OutgoingEntry structure.
