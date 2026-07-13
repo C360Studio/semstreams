@@ -267,6 +267,9 @@ func (p *PathSearcher) getOutgoingRelationships(ctx context.Context, entityID st
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
 		return nil, fmt.Errorf("outgoing response decode failed for %s: %w", entityID, err)
 	}
+	if envelope.Data.Relationships == nil {
+		return nil, fmt.Errorf("outgoing response invalid for %s: missing relationships", entityID)
+	}
 
 	rels := make([]RelationshipEntry, len(envelope.Data.Relationships))
 	for i, r := range envelope.Data.Relationships {
@@ -290,6 +293,9 @@ func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID st
 	var envelope graph.IncomingQueryResponse
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
 		return nil, fmt.Errorf("incoming response decode failed for %s: %w", entityID, err)
+	}
+	if envelope.Data.Relationships == nil {
+		return nil, fmt.Errorf("incoming response invalid for %s: missing relationships", entityID)
 	}
 
 	// Convert incoming entries to relationship entries

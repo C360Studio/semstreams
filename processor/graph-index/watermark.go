@@ -40,7 +40,15 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 
 	indexed := c.watermark.Indexed()
 
-	target, err := natsclient.BucketLastSeq(ctx, c.entityStatesBucket)
+	statusBucket := c.entityStatesStatusBucket
+	if statusBucket == nil {
+		// Unit-test/early-construction fallback. Production Start always creates a
+		// separate status handle before installing query subscriptions.
+		statusBucket = c.entityStatesBucket
+	}
+	c.statusTargetMu.Lock()
+	target, err := natsclient.BucketLastSeq(ctx, statusBucket)
+	c.statusTargetMu.Unlock()
 	if err != nil {
 		// Can't read the target → can't honestly confirm caught-up. A backend fault
 		// is a degraded signal, not "building" (ADR-066 §4).

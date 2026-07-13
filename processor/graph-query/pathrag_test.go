@@ -155,3 +155,73 @@ func TestVerifyEntityExists_ClassificationBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestPathSearcher_RejectsStructurallyInvalidRelationshipEnvelopes(t *testing.T) {
+	t.Parallel()
+	for _, direction := range []string{DirectionOutgoing, DirectionIncoming} {
+		direction := direction
+		t.Run(direction, func(t *testing.T) {
+			t.Parallel()
+			for _, body := range []string{`{}`, `null`, `{"data":{}}`} {
+				body := body
+				t.Run(body, func(t *testing.T) {
+					mock := newMockNATSClient()
+					mock.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+						return []byte(body), nil
+					}
+					p := NewPathSearcher(mock, time.Second, 5, slog.Default())
+					_, err := p.getRelationships(context.Background(), "acme.ops.robotics.gcs.drone.001", direction, nil)
+					if err == nil || !strings.Contains(err.Error(), "missing relationships") {
+						t.Fatalf("expected structural response error for %s, got %v", body, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPathSearcher_BothDirectionPropagatesOneLegStructuralError(t *testing.T) {
+	t.Parallel()
+	mock := newMockNATSClient()
+	mock.requestFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		switch subject {
+		case "graph.index.query.outgoing":
+			return []byte(`{"data":{"relationships":[]}}`), nil
+		case "graph.index.query.incoming":
+			return []byte(`{"data":{}}`), nil
+		default:
+			return nil, errors.New("unexpected subject")
+		}
+	}
+	p := NewPathSearcher(mock, time.Second, 5, slog.Default())
+	result, err := p.getRelationships(
+		context.Background(),
+		"acme.ops.robotics.gcs.drone.001",
+		DirectionBoth,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "incoming response invalid") {
+		t.Fatalf("expected incoming-leg error, got result=%v err=%v", result, err)
+	}
+	if result != nil {
+		t.Fatalf("both-direction failure returned partial relationships: %v", result)
+	}
+}
+
+func TestPathSearcher_AcceptsExplicitEmptyRelationships(t *testing.T) {
+	t.Parallel()
+	mock := newMockNATSClient()
+	mock.requestFunc = func(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
+		return []byte(`{"data":{"relationships":[]}}`), nil
+	}
+	p := NewPathSearcher(mock, time.Second, 5, slog.Default())
+	result, err := p.getRelationships(
+		context.Background(),
+		"acme.ops.robotics.gcs.drone.001",
+		DirectionOutgoing,
+		nil,
+	)
+	if err != nil || len(result) != 0 || result == nil {
+		t.Fatalf("explicit empty relationship list must be a valid empty success: result=%v err=%v", result, err)
+	}
+}

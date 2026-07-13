@@ -298,9 +298,8 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 // Codex #6). It returns a classified ErrorCodeIndexNotReady only when graph-index is up
 // and EXPLICITLY reports not-ready (still building / degraded by an unresolved write
 // failure) — the cutover/failure window where a direct bucket read would return partial
-// topology. It FAILS OPEN (returns nil) when the status endpoint is unreachable or
-// unparseable: that means graph-index is absent, a different failure mode, and blocking
-// the read on it would break setups that read the index without the handler co-deployed.
+// topology. It FAILS CLOSED when status is unreachable or malformed unless the caller
+// explicitly enables AllowUngatedReads for a standalone deployment.
 func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 	notReady := errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
 		errors.New("graph index not ready"))
@@ -435,13 +434,14 @@ func (qc *natsClient) GetEntityConnections(ctx context.Context, entityID string)
 
 	// Get incoming connections using INCOMING_INDEX
 	incomingEntityIDs, err := qc.GetIncomingEdges(ctx, entityID)
-	if err == nil {
-		for _, incomingID := range incomingEntityIDs {
-			if !seenIDs[incomingID] {
-				if incomingEntity, err := qc.GetEntity(ctx, incomingID); err == nil {
-					connectedEntities = append(connectedEntities, incomingEntity)
-					seenIDs[incomingID] = true
-				}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get incoming connections: %w", err)
+	}
+	for _, incomingID := range incomingEntityIDs {
+		if !seenIDs[incomingID] {
+			if incomingEntity, err := qc.GetEntity(ctx, incomingID); err == nil {
+				connectedEntities = append(connectedEntities, incomingEntity)
+				seenIDs[incomingID] = true
 			}
 		}
 	}

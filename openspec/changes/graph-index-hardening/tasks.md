@@ -1,8 +1,12 @@
 ## 1. Sharded write paths + key helpers (INCOMING, NAME, CONTEXT)
 
 - [x] 1.1 `incoming_index.go`: key/prefix/parse helpers (raw target prefix; `IsValidEntityID` guards on target+source; reject empty predicate); empty marker; footgun comment (unconditional Put).
-- [x] 1.2 `name_index.go`: shard to `hash(name).entity.predicate` + `{name,priority}` value; replace the CAS `UpdateWithRetry`.
-- [x] 1.3 `context_index.go`: shard to `hash(context).entity.predicate` + `{contextValue,...}` value; replace the non-CAS `Get`+`Put` (fixes the lost-update race AND the raw-key collision).
+- [x] 1.2 `name_index.go`: shard to `hash(name).entity.hex(predicate)` +
+  `{name,priority}` value; replace the CAS `UpdateWithRetry`.
+- [x] 1.3 `context_index.go`: shard entity-first to
+  `entity.hash(context).hex(predicate)` + `{contextValue,...}`; replace the
+  non-CAS `Get`+`Put`, reconcile superseded memberships, and enable
+  entity-prefix delete cleanup.
 - [x] 1.4 Rewrite `updateIncomingIndexBatch` to per-edge Put (no CAS/list merge); keep the single-edge wrapper.
 
 ## 2. Reader migration + delete paths + wire-types
@@ -10,7 +14,9 @@
 - [x] 2.1 INCOMING readers → prefix-scan + reconstruct: `query.go handleQueryIncomingNATS`; `client.go GetIncomingEdges` (bugfix — assert correct edges); clustering `anomaly.go:39/:100`; `component.go:1160 getNeighborsFromBucket` (direction-aware — incoming branch prefix-scans, outgoing stays Get). Use `natsclient.FilteredKeys` for raw `jetstream.KeyValue` holders.
 - [x] 2.2 NAME readers → prefix-scan: `name_index.go:156 handleQueryByNameNATS` (reconstruct `{EntityID,Name,Predicate,Priority}` from key+value); keep `:108` `Keys()`-len ready check.
 - [x] 2.3 CONTEXT: no production reader — migrate the write only; e2e readers handled in task 5.
-- [x] 2.4 Delete path: `DeleteFromIndexes` incoming branch → `KeysByPrefix(entityID+".")`+delete-each (entity is the prefix). Confirm NAME/CONTEXT have no delete path today (no regression; reciprocal cleanup stays gh#433).
+- [x] 2.4 Delete path: `DeleteFromIndexes` prefix-scans INCOMING target rows
+  (legacy hard-delete semantics) and entity-owned CONTEXT rows.
+  Reciprocal/source-owned semantic retraction remains gh#527.
 - [x] 2.5 Preserve wire types (`IncomingEntry` etc.) — reconstruct from keys; grep before deleting any type.
 
 ## 3. Instrumentation (L2/L3 data gate)
@@ -48,15 +54,47 @@
 - [x] 7.6 P1d — gate incoming/byName on caught-up watermark (sticky), returning `ErrorCodeIndexNotReady` during cutover/cold-replay.
 - [x] 7.7 P2b — expose `reindex_events_total{result}` + `write_failures_total` Prometheus metrics; add the ALIAS axis to `computeIndexProjection`.
 - [x] 7.8 Re-verified: `task check:push` green (one confirmed graph-ingest contention flake, passes isolated); e2e:structural + e2e:semantic GREEN with the re-changed format (exit 0, validation_errors:0); pushed to PR #524; reply posted to Codex.
-- [ ] 7.9 P2a byName bounded-read → deferred to gh#381; upgrade-debris versioned purge + source-owned retraction → gh#527.
+- [x] 7.9 P2a byName bounded-read: cap serial hydration and return typed
+  `resource_exhausted`; upgrade-debris purge + source-owned retraction remain
+  gh#527.
 
 ## 8. Codex 3rd-pass review blockers (PR #524, airtight readiness under concurrency)
 
 - [x] 8.1 #1 — split `initialEnumerationComplete` (sentinel; empty-graph exception only) from `indexBootstrapped` (set only when the watermark is caught up), so a non-empty cold replay stays not-ready until workers finish. Test: preloaded non-empty bucket, incoming-fails-while-not-ready invariant.
-- [x] 8.2 #5 — PathRAG propagates EVERY availability/protocol/decode failure (not just index_not_ready); only a valid zero-relationship response is a genuine empty; direction=both fails if either leg fails.
+- [x] 8.2 #5 — PathRAG propagates every availability/protocol/decode failure
+  and rejects structurally incomplete success envelopes; only an explicit empty
+  relationships array is empty; direction=both fails if either leg fails.
 - [x] 8.3 #6 — gate ALIAS + all PREDICATE query handlers on `ensureQueryReady`; propagate predicate-catalog write failures into the entity failure gate.
 - [x] 8.4 #3 — coalescer Get-error: mark-failed on a TRANSIENT read error (readiness withheld + repair retries); only a genuine not-found drains the watermark.
 - [x] 8.5 #4 — direct readers (query client, clustering) FAIL-CLOSED by default; explicit `allow_ungated_reads` config for standalone/test; fixed the "routes through the handler" doc claim.
-- [x] 8.6 #2 — repair loop routes present-entity re-index through the SAME keyed coalescer/pool dispatch (ordered, re-fetch-latest); full per-revision fencing deferred to gh#527; honest spec.
-- [x] 8.7 #7 — spec.md readiness requirement matches delivered (bounded keyed-ordered repair; full generation-safety → gh#527); design.md D1 marked SUPERSEDED (hex predicate, CONTEXT entity-first + delete path).
+- [x] 8.6 #2 — repair routes through the same entity-keyed FIFO dispatcher as
+  watcher updates/deletes and reconciles authoritative state at execution;
+  ordering correctness is delivered here, not deferred to gh#527.
+- [x] 8.7 #7 — spec/design match the delivered key formats, CONTEXT
+  reconciliation/delete path, exact watermark completion, bounded repair, and
+  retention-only gh#527 scope.
 - [ ] 8.8 Re-verify: check:push + e2e:structural + e2e:semantic green; push; reply to Codex (3rd).
+
+## 9. Codex 4th-pass correctness close-out
+
+- [x] 9.1 Replace the generic worker pool with hash-keyed FIFO entity lanes
+  shared by updates, deletes, coalesced work, and repair.
+- [x] 9.2 Reconcile authoritative `ENTITY_STATES` at execution so stale queued
+  work cannot clobber a newer write or resurrect a delete.
+- [x] 9.3 Make coalescing revision-aware and complete the watermark at the exact
+  detached revision; initialize it before the watcher.
+- [x] 9.4 Use a dedicated ENTITY_STATES status handle for concurrent `LastSeq` reads.
+- [x] 9.5 Propagate direct-client incoming readiness failures and reject
+  structurally invalid PathRAG responses.
+- [x] 9.6 Update proposal/design/spec/tasks and ADR current-status notes; strict OpenSpec validation.
+- [x] 9.7 Final fourth-pass `task check:push` GREEN on the complete rerun,
+  including lint, schema no-drift, contract, race unit, and race integration
+  gates. The first run hit one transient Ollama timeout; that test passed in
+  isolation, then the full `task check:push` rerun passed. OpenSpec strict
+  validation also passed.
+- [x] 9.8 `task e2e:structural` PASS: 37/37 validations,
+  `validation_errors=0`.
+- [ ] 9.9 `task e2e:semantic` could not reach SemStreams: SemEmbed failed while
+  downloading `onnx/model.onnx` with HTTP 403. This is an environment/dependency
+  failure before the SemStreams semantic tier, not a SemStreams test result;
+  rerun remains required.

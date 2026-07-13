@@ -22,9 +22,10 @@ indexes (plus a lesser variant, `OUTGOING`, deferred — see Non-goals):
 - `INCOMING_INDEX` — CAS list keyed by target; O(in-degree²). ADR-065 *wrongly* claimed this
   one safe ("bounded by in-degree").
 - `NAME_INDEX` — CAS list keyed by `hash(name)`; O(shared-name²). ADR-065 flagged it.
-- `CONTEXT_INDEX` — list keyed by the **raw** (unhashed, collision-prone) context value via a
-  **non-CAS** `Get`+`Put`; O(context-fan-in²) write **plus** a lost-update race. It is a
-  **write-only** index (no production reader), so the fix is right-sized to the *write*.
+- `CONTEXT_INDEX` — before this change, a list keyed by the **raw** (unhashed,
+  collision-prone) context value via a **non-CAS** `Get`+`Put`; O(context-fan-in²)
+  write **plus** a lost-update race. The replacement is entity-prefixed so update
+  reconciliation and delete cleanup can enumerate the entity's own memberships.
 
 The reviews also found two *deeper* candidate defects — a re-index feedback loop (change
 detection) and NATS-client resource isolation — but their premises did not survive code
@@ -35,14 +36,23 @@ are **deferred behind measurement** rather than built on an unverified root caus
 ## What Changes
 
 - **Composite-key sharding** of `INCOMING`, `NAME`, and `CONTEXT`: one KV key per
-  edge/membership, keyed for a server-side prefix scan; writes become unconditional `Put`
-  (no CAS, no list rewrite) ⇒ O(edges), no CAS-retry storms. This also **fixes the
-  `CONTEXT_INDEX` lost-update race** (per-key Puts never share a list) and its raw-key
-  collision (the context value is now hashed, per ADR-065).
+  edge/membership with KV-safe predicate tokens. `INCOMING` is target-prefixed,
+  `NAME` is name-hash-prefixed, and `CONTEXT` is entity-prefixed. Writes become
+  unconditional `Put` operations (no CAS/list rewrite), while `CONTEXT` can retract
+  superseded memberships and self-clean by entity prefix.
 - **Exhaustive per-index reader migration** (INCOMING + NAME; CONTEXT has no production
-  reader) to prefix-scan + reconstruct; **delete paths** migrated (the in-scope entity delete
-  is a clean prefix scan — the entity is the key prefix). Wire response types (`IncomingEntry`,
-  etc.) are **preserved** — only the storage format dies.
+  reader) to prefix-scan + reconstruct; **delete paths** migrate INCOMING's legacy
+  target-prefix cleanup and add correct entity-owned CONTEXT cleanup. Wire response
+  types (`IncomingEntry`, etc.) are **preserved** — only the storage format changes.
+- **Authoritative readiness and repair**: all entity work (update, delete, coalesced
+  replay, and repair) runs through hash-keyed FIFO lanes and reconciles current
+  `ENTITY_STATES` at execution. Watermark completion remains tied to the exact delivered
+  revision. Required-write failures withhold readiness until bounded background repair
+  succeeds.
+- **Fail-closed reads**: incoming, outgoing, byName, alias, and predicate handlers gate
+  on readiness. Direct query/clustering consumers also fail closed unless a standalone
+  deployment explicitly sets `allow_ungated_reads`; PathRAG rejects transport, decode,
+  and structurally incomplete responses instead of returning partial/empty success.
 - **Instrument a re-index no-op counter** — per re-index event, record whether the entity's
   index-input projection actually changed vs. what was last indexed. This is the data gate for
   the deferred change-detection follow-up.
@@ -65,9 +75,10 @@ are **deferred behind measurement** rather than built on an unverified root caus
   key helpers; the re-index no-op counter; delete paths); readers in `graph/query/client.go`,
   `processor/graph-index/query.go`, `processor/graph-clustering/{anomaly.go,component.go}`;
   `test/e2e/client/nats.go` + scenarios (raw readers → prefix-scan, warn → hard-fail).
-- **Consumers**: no NATS query-API wire-contract change. semsource/semboids and any bulk-seed
-  adopter get the runaway fixed; no consumer code change. Ad-hoc tooling reading raw index
-  buckets sees sharded (hashed for name/context) keys.
+- **Consumers**: no NATS query-API wire-shape change. Query behavior becomes fail-closed
+  while graph-index is building or degraded; standalone direct-bucket consumers must
+  explicitly opt out with `allow_ungated_reads`. Ad-hoc tooling reading raw index buckets
+  sees the new sharded key formats.
 - **Docs**: correct ADR-065's incomplete "incoming is safe" claim and extend its sibling-index
   sweep to NAME/CONTEXT (via this spec — ADRs are history).
 - **Issues**: closes gh#474; folds the NAME + CONTEXT class members (and CONTEXT's lost-update
@@ -83,5 +94,8 @@ are **deferred behind measurement** rather than built on an unverified root caus
 - **Reciprocal entity-delete cleanup** (removing a deleted entity from *other* entities'
   index keys, where it appears as a middle token) — the pre-existing gh#433 gap; unchanged
   here (the in-scope delete of an entity's *own* prefix keys is migrated).
+- **Retention manifests, source-owned semantic retraction, tombstone payloads, and
+  upgrade-debris purge** — remain gh#527 scope. Per-entity execution ordering and
+  no-stale-clobber reconciliation are correctness requirements of this change, not #527.
 - **Change-detection (L2)** and **resource isolation (L3)** — deferred behind this change's
   measurement (filed as follow-ups).

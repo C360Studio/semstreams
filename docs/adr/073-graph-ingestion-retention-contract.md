@@ -34,6 +34,14 @@ refuse/cascade + refcount, the tombstone). **Leaves ADR-054 intact** (indexing
 profile is a retrieval dial, not retention). Mechanics live in the follow-on
 OpenSpec change and the `graph-retention` spec.
 
+**Current substrate note (PR #524, 2026-07-13).** Graph-index now supplies the
+ordering prerequisite this retention design assumed: hash-keyed FIFO entity work,
+execution-time reconciliation against `ENTITY_STATES`, exact watermark completion,
+and bounded fail-closed repair. `CONTEXT_INDEX` is entity-prefixed and self-cleans.
+gh#527 remains responsible for retention semantics and manifests — source-owned
+INCOMING retraction, predicate/name/alias cleanup, tombstone payloads, blob policy,
+and legacy-format purge — not basic update/delete ordering correctness.
+
 ## Context
 
 The graph grows without bound. The **framework provides no reclamation of the
@@ -116,8 +124,9 @@ re-review found the substrate is only half there, so state it honestly:
 - **Watch + delete-delivery exists; self-clean mostly does not.** `graph-index` and
   `graph-embedding` watch `ENTITY_STATES` async, each with its own `revlag.Watermark`
   (ADR-068 D0), and the KV watch *does* deliver delete events. But today only
-  `OUTGOING_INDEX` (+ the dead entity's own `INCOMING` key) and **`graph-index-temporal`**
-  actually reclaim on a delete; `NAME`/`PREDICATE`/`ALIAS`/`CONTEXT`/spatial/
+  `OUTGOING_INDEX`, entity-owned `CONTEXT_INDEX`, legacy target-prefixed
+  `INCOMING_INDEX`, and **`graph-index-temporal`** actually reclaim on a delete;
+  `NAME`/`PREDICATE`/`ALIAS`/spatial/
   embedding-vector/embedding-dedup/`OASF_RECORDS` silently keep stale entries
   (gh#433 realized — the very rot this ADR fixes, *not* a capability it reuses).
   `graph-clustering` is **timer-driven rebuild** (`Clear()` + full rescan), *not*

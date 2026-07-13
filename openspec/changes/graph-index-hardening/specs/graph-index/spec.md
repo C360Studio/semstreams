@@ -8,7 +8,7 @@ key, and each write MUST be an unconditional `Put` (no CAS read-modify-write of 
 Ingesting E memberships into any one key's dimension is therefore O(E) total writes, not O(E²),
 with no CAS-retry contention because no two writers share a key. This replaces the
 O(in-degree²) `INCOMING`, O(shared-name²) `NAME`, and O(context-fan-in²) `CONTEXT` rewrites, and —
-because `CONTEXT_INDEX` today uses a non-CAS `Get`+`Put` — also eliminates its concurrent
+because the pre-change `CONTEXT_INDEX` used a non-CAS `Get`+`Put` — also eliminates its concurrent
 lost-update.
 
 #### Scenario: a hub dimension ingests members in linear write volume
@@ -141,25 +141,37 @@ still building (cutover / cold replay) or because a required index write or dele
 yet been repaired.
 
 - **Failure honesty.** A required index write (incoming/context/name/alias/predicate/outgoing) or a
-  required delete that ultimately fails after bounded retry MUST mark the entity failed and be
-  RETURNED as an error, never logged-and-continued as success. The re-index no-op baseline MUST be
-  stored only after a successful write, so a failed entity re-attempts rather than being suppressed
-  as a no-op.
+  required delete that ultimately fails after bounded retry MUST return failure to the entity-work
+  reconciler and mark the entity failed; it MUST NOT be treated as successful completion merely
+  because the asynchronous watcher continues. The re-index no-op baseline MUST be stored only after
+  a successful write, so a failed entity re-attempts rather than being suppressed as a no-op.
 - **Readiness withholding.** While any entity is in the failed set, `graph.index.query.status` MUST
-  report not-ready, and the `INCOMING`, `OUTGOING`, and `byName` query handlers MUST return a typed
-  `index_not_ready` error — including after the initial bootstrap has completed (a sticky
-  "bootstrapped" flag MUST NOT mask a later failure).
+  report not-ready, and the `INCOMING`, `OUTGOING`, `byName`, `ALIAS`, and every `PREDICATE` query
+  handler MUST return a typed `index_not_ready` error — including after initial bootstrap has
+  completed (a sticky "bootstrapped" flag MUST NOT mask a later failure).
 - **Consumer propagation.** Consumers that read the reverse indexes — PathRAG traversal, the graph
   query client's incoming reads, and graph-clustering's community detection — MUST honor the
-  not-ready signal (abort/defer) rather than convert it into an empty-but-successful result.
+  not-ready signal (abort/defer) rather than convert it into an empty-but-successful result. Direct
+  bucket consumers MUST fail closed when status is unavailable or malformed by default. They MAY
+  expose `allow_ungated_reads` only as an explicit standalone/test deployment opt-out.
+- **Protocol completeness.** PathRAG MUST propagate request and JSON decode failures and MUST reject
+  a syntactically valid response whose required `relationships` field is absent. A zero-length
+  relationships array is a valid empty result; direction `both` MUST fail if either leg fails.
 - **Durable recovery.** A failed entity MUST be retried by a background repair loop (not only on the
   next incidental event for that entity), so a transient backend outage self-heals and readiness is
-  restored once the failed set drains. The repair re-drives each entity through the SAME keyed
-  dispatch as the watcher (re-fetching the latest state), so it is ordered per-key with concurrent
-  updates/deletes and does not clobber a newer write. Full per-revision fencing — closing the residual
-  window where a delete lands between the repair's read and its re-index — is the ordered-processing
-  increment (gh#527); this change delivers the bounded, keyed-ordered repair, not full generation
-  safety.
+  restored once the failed set drains. Updates, deletes, coalesced events, and repair MUST use the
+  SAME hash-keyed FIFO dispatch per entity, with concurrency permitted across entities. Every work
+  item MUST reconcile authoritative `ENTITY_STATES` when it executes, so stale queued work cannot
+  clobber a newer write or resurrect a deleted entity. Each repair attempt and its write retries
+  MUST remain bounded and fail closed;
+  gh#527 retains semantic retention/manifest/retraction scope, not ordering correctness.
+- **Exact watermark completion.** Coalescing MUST retain the greatest delivered revision for each
+  pending entity and MUST complete the watermark for the exact revision represented by a detached
+  batch or dispatched event. Initial enumeration is not processing completion: for a non-empty
+  graph, readiness MUST wait until the watermark reaches the query-time ENTITY_STATES target.
+- **Status-handle isolation.** Query-time ENTITY_STATES target revision reads MUST use a dedicated
+  KV handle rather than sharing the watcher/Get handle, so concurrent status evaluation does not
+  race the NATS client's cached stream-info state.
 - **Empty graph.** An authoritatively empty graph (initial enumeration complete, 0/0) MUST become
   ready, so a fresh empty graph does not reject every query forever.
 
@@ -180,6 +192,18 @@ yet been repaired.
 - **GIVEN** the index is not ready
 - **WHEN** a PathRAG traversal requests incoming relationships
 - **THEN** the traversal returns the not-ready error rather than a truncated/empty path set
+
+#### Scenario: stale queued work reconciles current entity truth
+
+- **GIVEN** an older update is queued before a newer update or delete for the same entity
+- **WHEN** both execute through the entity's keyed FIFO lane
+- **THEN** each operation reads current `ENTITY_STATES` at execution
+- **AND** the older work cannot overwrite the newer state or resurrect a deleted entity
+
+#### Scenario: a structurally incomplete PathRAG response is not an empty graph
+
+- **WHEN** an outgoing or incoming handler returns valid JSON without a `relationships` field
+- **THEN** PathRAG returns a protocol error rather than a successful empty relationship set
 
 #### Scenario: an empty graph becomes ready
 

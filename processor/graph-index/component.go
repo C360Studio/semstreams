@@ -19,11 +19,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/c360studio/semstreams/pkg/revlag"
-	"github.com/c360studio/semstreams/pkg/worker"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -212,6 +210,10 @@ type Component struct {
 	contextBucket          *natsclient.KVStore
 	nameBucket             *natsclient.KVStore
 	entityStatesBucket     jetstream.KeyValue // raw: read-only watcher, no CAS needed
+	// entityStatesStatusBucket is a separate JetStream KV handle used only for
+	// Status/LastSeq reads. nats.go's KV handle caches stream info internally, and
+	// concurrent Status and Get calls on one handle race under -race.
+	entityStatesStatusBucket jetstream.KeyValue
 
 	// Lifecycle state
 	mu              sync.RWMutex
@@ -220,8 +222,8 @@ type Component struct {
 	startTime       time.Time
 	wg              sync.WaitGroup
 	cancel          context.CancelFunc
-	indexPool       *worker.Pool[jetstream.KeyValueEntry]
-	entityCoalescer *cache.CoalescingSet
+	indexPool       *keyedDispatcher[entityIndexWork]
+	entityCoalescer *revisionCoalescer
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -248,6 +250,7 @@ type Component struct {
 	// observed IndexedRevision advance; a stall past degradedStuckAfter while not
 	// caught-up flips State to degraded.
 	statusMu        sync.Mutex
+	statusTargetMu  sync.Mutex
 	lastIndexedSeen uint64
 	lastProgressAt  time.Time
 
@@ -302,6 +305,20 @@ type Component struct {
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
+}
+
+type entityIndexWorkKind uint8
+
+const (
+	entityIndexUpdate entityIndexWorkKind = iota
+	entityIndexDelete
+	entityIndexReconcile
+)
+
+type entityIndexWork struct {
+	entityID           string
+	kind               entityIndexWorkKind
+	completionRevision uint64
 }
 
 // CreateGraphIndex is the factory function for creating graph-index components
@@ -565,6 +582,17 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize lifecycle reporter (throttled for high-throughput indexing)
 	c.initLifecycleReporter(ctx)
 
+	// Initialize the optional revision-aware coalescer before the watcher can
+	// observe it. The callback submits a reconciliation key into the same ordered
+	// dispatcher used by ordinary updates, deletes, and repair.
+	if c.config.CoalesceMs > 0 {
+		c.entityCoalescer = newRevisionCoalescer(
+			ctx,
+			time.Duration(c.config.CoalesceMs)*time.Millisecond,
+			func(entities []coalescedEntity) { c.processEntityBatch(ctx, entities) },
+		)
+	}
+
 	// Wait for input KV bucket (ENTITY_STATES) with bounded startup attempts
 	js, err := c.natsClient.JetStream()
 	if err != nil {
@@ -576,13 +604,6 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := c.waitAndWatchEntityStates(ctx, js); err != nil {
 		cancel()
 		return err
-	}
-
-	// Optionally coalesce rapid entity updates to reduce KV write amplification
-	if c.config.CoalesceMs > 0 {
-		c.entityCoalescer = cache.NewCoalescingSet(ctx, time.Duration(c.config.CoalesceMs)*time.Millisecond, func(entityIDs []string) {
-			c.processEntityBatch(ctx, entityIDs)
-		})
 	}
 
 	// Set up query handler subscriptions
@@ -626,21 +647,22 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 	c.querySubscriptions = nil
 
-	// Stop the entity coalescer before the worker pool so any pending keys are flushed
-	if c.entityCoalescer != nil {
-		_ = c.entityCoalescer.Close()
+	// Cancel producers before stopping the ordered dispatcher. This prevents a
+	// watcher submission from racing a closed execution lane.
+	if c.cancel != nil {
+		c.cancel()
 	}
 
-	// Stop the index worker pool before cancelling the context so it can drain
+	// Stop the entity coalescer before the worker pool.
+	if c.entityCoalescer != nil {
+		c.entityCoalescer.Close()
+	}
+
+	// Wait for ordered execution lanes to observe cancellation and exit.
 	if c.indexPool != nil {
 		if err := c.indexPool.Stop(timeout); err != nil {
 			c.logger.Warn("index pool stop error", slog.Any("error", err))
 		}
-	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
 	}
 
 	c.running = false
@@ -814,20 +836,25 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				if c.entityCoalescer != nil {
 					c.entityCoalescer.Remove(entry.Key())
 				}
-				c.handleEntityDelete(ctx, entry.Key())
-				// Key-scoped completion: the tombstone's revision drains the delete
-				// itself AND any earlier still-pending update for this key that the
-				// delete supersedes (ADR-066 §1).
-				if c.watermark != nil {
-					c.watermark.Complete(entry.Key(), entry.Revision())
+				if err := c.submitEntityWork(ctx, entityIndexWork{
+					entityID:           entry.Key(),
+					kind:               entityIndexDelete,
+					completionRevision: entry.Revision(),
+				}); err != nil {
+					c.logger.Warn("failed to submit entity delete",
+						slog.String("entity", entry.Key()), slog.Any("error", err))
 				}
 				continue
 			}
 
 			if c.entityCoalescer != nil {
-				c.entityCoalescer.Add(entry.Key())
+				c.entityCoalescer.Add(entry.Key(), entry.Revision())
 			} else if c.indexPool != nil {
-				if err := c.indexPool.SubmitBlocking(ctx, entry); err != nil {
+				if err := c.submitEntityWork(ctx, entityIndexWork{
+					entityID:           entry.Key(),
+					kind:               entityIndexUpdate,
+					completionRevision: entry.Revision(),
+				}); err != nil {
 					c.logger.Warn("failed to submit entity for indexing",
 						slog.String("entity", entry.Key()),
 						slog.Any("error", err))
@@ -871,6 +898,9 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 	if c.entityStatesBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
 		return errs.Wrap(err, "Component", "Start", "get entity bucket after availability check")
 	}
+	if c.entityStatesStatusBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
+		return errs.Wrap(err, "Component", "Start", "get entity status bucket after availability check")
+	}
 
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, c.entityStatesBucket)
@@ -884,33 +914,38 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 
 // startIndexPool creates and starts the entity index worker pool.
 func (c *Component) startIndexPool(ctx context.Context) error {
-	poolOpts := []worker.Option[jetstream.KeyValueEntry]{}
-	if c.metricsRegistry != nil {
-		poolOpts = append(poolOpts, worker.WithMetricsRegistry[jetstream.KeyValueEntry](c.metricsRegistry, "graph_index"))
-	}
-	c.indexPool = worker.NewPool[jetstream.KeyValueEntry](
+	c.indexPool = newKeyedDispatcher(
 		c.config.Workers,
 		1000,
-		c.processEntityUpdateWorker,
-		poolOpts...,
+		func(work entityIndexWork) string { return work.entityID },
+		c.processEntityWork,
 	)
-	if err := c.indexPool.Start(ctx); err != nil {
-		return errs.Wrap(err, "Component", "Start", "start index worker pool")
+	c.indexPool.Start(ctx)
+	return nil
+}
+
+func (c *Component) submitEntityWork(ctx context.Context, work entityIndexWork) error {
+	if c.indexPool == nil {
+		c.processEntityWork(ctx, work)
+		return nil
 	}
-	return nil
+	return c.indexPool.Submit(ctx, work)
 }
 
-// processEntityUpdateWorker is the worker pool adapter for processEntityUpdate.
-func (c *Component) processEntityUpdateWorker(ctx context.Context, entry jetstream.KeyValueEntry) error {
-	c.processEntityUpdate(ctx, entry)
-	return nil
+// processEntityWork is the only mutation entry point used by the watcher,
+// coalescer, and repair loop. The keyed dispatcher guarantees FIFO per entity.
+func (c *Component) processEntityWork(ctx context.Context, work entityIndexWork) {
+	// Every operation reconciles authoritative ENTITY_STATES at execution. This
+	// handles the inverse-submission race where repair observes R2 before the
+	// watcher submits a captured R1: regardless of queue order, each lane item
+	// applies current truth rather than its stale event snapshot. It also avoids an
+	// unbounded per-entity generation ledger.
+	_, _ = c.reconcileEntity(ctx, work.entityID, work.completionRevision)
+	if c.watermark != nil && work.completionRevision > 0 {
+		c.watermark.Complete(work.entityID, work.completionRevision)
+	}
 }
 
-// processEntityUpdate indexes an entity's relationships from its triples.
-// It is a thin wrapper around processEntityUpdateFromData for use with KV watcher
-// entries. It is the single funnel for every update-completion path — the pool
-// worker, the direct branch, and the coalescer batch all route through here — so it
-// is the one place the readiness watermark's completion fires (ADR-066 §1).
 // retryIndexWrites runs writeAll up to indexWriteMaxAttempts times, returning nil on
 // the first success and the last error otherwise (gh#474 P1b). writeAll is idempotent,
 // so retrying the whole set recovers a transient KV blip; a cancelled context aborts
@@ -976,11 +1011,10 @@ func (c *Component) repairLoop(ctx context.Context) {
 	}
 }
 
-// repairFailedEntities re-drives each failed entity: re-fetch ENTITY_STATES → present
-// ⇒ re-index, absent ⇒ re-run the delete. A successful re-index / delete clears the
-// failure marker (inside processEntityUpdateFromData / DeleteFromIndexes), restoring
-// readiness once the set drains. Best-effort: a persistent failure stays marked, so the
-// index stays not-ready — the honest signal. Safe to Delete-during-Range on sync.Map.
+// repairFailedEntities enqueues reconciliation keys into the same ordered lanes as
+// watcher updates and deletes. The authoritative KV value is fetched only when the
+// key reaches the head of its lane; repair therefore cannot submit a stale snapshot
+// that later clobbers a newer watcher operation.
 func (c *Component) repairFailedEntities(ctx context.Context) {
 	if c.failedCount.Load() == 0 || c.entityStatesBucket == nil {
 		return
@@ -993,42 +1027,53 @@ func (c *Component) repairFailedEntities(ctx context.Context) {
 		if !ok {
 			return true
 		}
-		entry, err := c.entityStatesBucket.Get(ctx, entityID)
-		if err != nil {
-			// Gone from ENTITY_STATES → the pending work is a delete; retry it (idempotent).
-			if natsclient.IsKVNotFoundError(err) {
-				if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
-					c.logger.Debug("repair: delete retry still failing",
-						slog.String("entity", entityID), slog.Any("error", delErr))
-				}
-			}
-			return true
-		}
-		// Present → re-drive through the SAME keyed dispatch as the watcher (gh#474 Codex
-		// #2): the coalescer serializes work per entity key and re-fetches the latest
-		// state, so the repair is ordered with concurrent updates/deletes rather than a
-		// direct write clobbering a newer one. Full per-revision fencing — a delete landing
-		// between this Get and the re-index — is the ordered-processing increment (gh#527);
-		// this closes the common repair-vs-newer-update race.
-		switch {
-		case c.entityCoalescer != nil:
-			c.entityCoalescer.Add(entityID)
-		case c.indexPool != nil:
-			if subErr := c.indexPool.SubmitBlocking(ctx, entry); subErr != nil {
-				c.logger.Debug("repair: pool submit failed",
-					slog.String("entity", entityID), slog.Any("error", subErr))
-			}
-		default:
-			if idxErr := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); idxErr != nil {
-				c.logger.Debug("repair: re-index still failing",
-					slog.String("entity", entityID), slog.Any("error", idxErr))
-			}
+		if err := c.submitEntityWork(ctx, entityIndexWork{
+			entityID: entityID,
+			kind:     entityIndexReconcile,
+		}); err != nil {
+			c.logger.Debug("repair: ordered submit failed",
+				slog.String("entity", entityID), slog.Any("error", err))
 		}
 		return true
 	})
 }
 
+func (c *Component) reconcileEntity(ctx context.Context, entityID string, absentRevision uint64) (uint64, bool) {
+	entry, err := c.entityStatesBucket.Get(ctx, entityID)
+	if err != nil {
+		if natsclient.IsKVNotFoundError(err) {
+			if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
+				c.logger.Debug("reconcile: delete still failing",
+					slog.String("entity", entityID), slog.Any("error", delErr))
+				return absentRevision, false
+			}
+			return absentRevision, true
+		}
+		c.markEntityFailed(entityID)
+		c.logger.Warn("reconcile: authoritative entity read failed; readiness withheld",
+			slog.String("entity", entityID), slog.Any("error", err))
+		return absentRevision, false
+	}
+	revision := max(entry.Revision(), absentRevision)
+	if err := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); err != nil {
+		c.logger.Debug("reconcile: re-index still failing",
+			slog.String("entity", entityID), slog.Any("error", err))
+		return revision, false
+	}
+	return revision, true
+}
+
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
+	c.processEntityUpdateResult(ctx, entry)
+	if c.watermark != nil {
+		c.watermark.Complete(entry.Key(), entry.Revision())
+	}
+}
+
+// processEntityUpdateResult applies one captured watcher snapshot. Ordered
+// production work completes its watermark in processEntityWork; the wrapper above
+// retains direct-call completion semantics for unit callers.
+func (c *Component) processEntityUpdateResult(ctx context.Context, entry jetstream.KeyValueEntry) bool {
 	if err := c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value()); err != nil {
 		// The failedCount side-effect (inside processEntityUpdateFromData) already
 		// withheld readiness; log for operators. Completion below still fires — a
@@ -1036,15 +1081,9 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 		// failedCount, not on completing this revision (ADR-066 §1 stays intact).
 		c.logger.Warn("entity index write failed; readiness withheld until re-index",
 			slog.String("entity", entry.Key()), slog.Any("error", err))
+		return false
 	}
-	// Completion fires on RETURN, not on indexing success: a malformed entry that
-	// early-returns inside processEntityUpdateFromData must still complete or its
-	// revision strands the watermark forever (ADR-066 §1 Scope boundary — Ready
-	// means revision coverage, not per-index write success). Key-scoped <=rev drains
-	// coalescer-collapsed lower revisions of this key that no worker sees alone.
-	if c.watermark != nil {
-		c.watermark.Complete(entry.Key(), entry.Revision())
-	}
+	return true
 }
 
 // indexWriteMaxAttempts bounds the in-place retry of an entity's required index
@@ -1273,47 +1312,23 @@ func computeIndexProjection(state graph.EntityState, namePredicates, aliasPredic
 	return strings.Join(parts, "|")
 }
 
-// processEntityBatch is the CoalescingSet callback. It re-fetches each entity from KV
-// by ID and routes it through the worker pool (or direct processing if no pool).
-func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) {
-	c.logger.Debug("processing coalesced entity batch", slog.Int("count", len(entityIDs)))
+// processEntityBatch is the revision-aware coalescer callback. Each key is submitted
+// as reconciliation work; the execution lane re-fetches current state only when the
+// work reaches the head of the entity's FIFO.
+func (c *Component) processEntityBatch(ctx context.Context, entities []coalescedEntity) {
+	c.logger.Debug("processing coalesced entity batch", slog.Int("count", len(entities)))
 
-	for _, entityID := range entityIDs {
+	for _, entity := range entities {
 		if ctx.Err() != nil {
 			return
 		}
-
-		entry, err := c.entityStatesBucket.Get(ctx, entityID)
-		if err != nil {
-			// A genuine not-found means the entity was deleted after coalescing — draining
-			// the key's pending (complete at max revision) is correct, it is gone. But a
-			// TRANSIENT Get failure would otherwise complete the watermark and advertise
-			// caught-up while omitting the latest entity (gh#474 Codex #3): mark it failed
-			// so readiness is withheld and the repair loop re-fetches it. We still drain to
-			// avoid pinning the watermark forever — failedCount, not the stranded revision,
-			// is what withholds readiness (ADR-066 §1 stays intact).
-			if !natsclient.IsKVNotFoundError(err) {
-				c.markEntityFailed(entityID)
-				c.logger.Warn("transient read failure during batch processing; readiness withheld until repair",
-					slog.String("entity", entityID), slog.Any("error", err))
-			} else {
-				c.logger.Debug("entity not found during batch processing (deleted after coalescing)",
-					slog.String("entity", entityID))
-			}
-			if c.watermark != nil {
-				c.watermark.Complete(entityID, ^uint64(0))
-			}
-			continue
-		}
-
-		if c.indexPool != nil {
-			if err := c.indexPool.SubmitBlocking(ctx, entry); err != nil {
-				c.logger.Warn("failed to submit coalesced entity for indexing",
-					slog.String("entity", entityID),
-					slog.Any("error", err))
-			}
-		} else {
-			c.processEntityUpdate(ctx, entry)
+		if err := c.submitEntityWork(ctx, entityIndexWork{
+			entityID:           entity.entityID,
+			kind:               entityIndexReconcile,
+			completionRevision: entity.revision,
+		}); err != nil {
+			c.logger.Warn("failed to submit coalesced entity reconciliation",
+				slog.String("entity", entity.entityID), slog.Any("error", err))
 		}
 	}
 }
@@ -1376,14 +1391,16 @@ func (c *Component) updateOutgoingIndexBatch(ctx context.Context, entityID strin
 }
 
 // handleEntityDelete removes an entity from all indexes
-func (c *Component) handleEntityDelete(ctx context.Context, entityID string) {
+func (c *Component) handleEntityDelete(ctx context.Context, entityID string) error {
 	c.logger.Debug("removing entity from indexes", slog.String("entity", entityID))
 
 	if err := c.DeleteFromIndexes(ctx, entityID); err != nil {
 		c.logger.Warn("failed to delete entity from indexes",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		return err
 	}
+	return nil
 }
 
 // ============================================================================

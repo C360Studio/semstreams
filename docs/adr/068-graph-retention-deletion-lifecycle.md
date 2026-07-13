@@ -10,6 +10,14 @@ here is on anyone's critical path today: the framework does **not** delete in
 steady state, and this ADR's first job is to keep it that way safely. Implement
 incrementally, only as the exception paths are actually exercised.
 
+**Current implementation note (PR #524, 2026-07-13).** Graph-index now orders
+updates, deletes, and repair per entity and reconciles authoritative state at
+execution; this closes the stale-write/resurrection prerequisite for future
+retention work. It also self-reconciles and self-cleans entity-prefixed
+`CONTEXT_INDEX` rows. This does not implement semantic retirement: durable
+manifests, source-owned INCOMING retraction, predicate/name/alias cleanup,
+tombstone payload, blob reclamation, and purge remain follow-on scope (gh#527).
+
 An adversarial code-grounded review sharpened this draft: every "what exists
 today" claim was verified against source, and the forward-looking design was
 corrected on three points — refuse-if-referenced is NOT race-free on its own
@@ -70,12 +78,12 @@ documented ways**:
   is purely that someone adds TTL/MaxBytes to bound growth.
 - **The three gaps:**
   - **(a) Derived-index leak (gh#433).** On delete, `graph-index`
-    `DeleteFromIndexes` removes only the deleted entity's OWN
-    `OUTGOING_INDEX`/`INCOMING_INDEX` keys (`component.go:1421`). It does NOT
-    clean the entity's `PREDICATE_INDEX` memberships, nor remove it as a stale
-    `FromEntityID` inside **other** entities' `INCOMING_INDEX` lists, nor touch
-    `NAME_INDEX`/`ALIAS_INDEX`/`CONTEXT_INDEX`. Deleted entities keep answering
-    `byName`/predicate/prefix/alias queries forever. The blocker is real: a
+    `DeleteFromIndexes` removes the deleted entity's own `OUTGOING_INDEX` and
+    `CONTEXT_INDEX` rows plus legacy target-prefixed `INCOMING_INDEX` rows. It
+    does NOT clean the entity's `PREDICATE_INDEX` memberships, remove it as a
+    source from other targets' INCOMING composite keys, or clean
+    `NAME_INDEX`/`ALIAS_INDEX`. Deleted entities can therefore keep answering
+    byName/predicate/alias queries. The blocker is real: a
     KV-watch delete event carries only the deleted key, not the entity's former
     triples (`component.go:1455-1460`), so cleanup needs a **per-entity reverse
     index** ("which predicates/names/aliases did this entity carry").

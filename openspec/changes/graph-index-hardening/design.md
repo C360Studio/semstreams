@@ -15,12 +15,12 @@ graph-index watch, hitting INCOMING's O(in-degree²) CAS on hub targets. It keep
 
 Audit of every graph-index write path:
 
-| Index | Write today | Class | This change |
+| Index | Pre-change write | Class | Delivered shape |
 |---|---|---|---|
 | PREDICATE | composite-key `Put` (sharded, ADR-065) | fixed | — |
-| **INCOMING** | `UpdateWithRetry` CAS of `[]IncomingEntry` per target (`component.go:1264`) | O(in-degree²) | **shard, full** |
-| **NAME** | `UpdateWithRetry` CAS of `NameIndexEntry.Items` per `hash(name)` (`name_index.go:53`) | O(shared-name²) | **shard, full** |
-| **CONTEXT** | non-CAS `Get`+`Put` of `[]ContextEntry` per **raw** context value (`component.go:1616-1647`) | O(fan-in²) + lost-update race; **write-only (no reader)** | **shard, write-side only** |
+| **INCOMING** | `UpdateWithRetry` CAS of `[]IncomingEntry` per target | O(in-degree²) | `targetID.sourceID.hex(predicate)` |
+| **NAME** | `UpdateWithRetry` CAS of `NameIndexEntry.Items` per `hash(name)` | O(shared-name²) | `hash(name).entityID.hex(predicate)` |
+| **CONTEXT** | non-CAS `Get`+`Put` of `[]ContextEntry` per raw context value | O(fan-in²) + lost-update race | `entityID.hash(context).hex(predicate)`, reconcile + delete by entity prefix |
 | OUTGOING | full-overwrite `Put` per owning entity (`component.go:1101`) | self-bounded, no O(N²) | **deferred (Non-goal)** |
 | ALIAS / spatial / temporal / community / structural | single-value or composite | safe | — |
 
@@ -36,18 +36,13 @@ measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension)
 
 ## Decisions
 
-### D1 — Per-index composite key (one teachable rule: hash open axes, keep entity-ID axes raw + validated)
-
-> **SUPERSEDED key formats — see "Codex P1 review revisions" below.** The table records the ORIGINAL
-> design. As shipped: the predicate token is **hex-encoded** (not raw); CONTEXT is keyed
-> **entity-first** `entityID.hash(context).hex(predicate)` (not context-first) and self-reconciles /
-> self-cleans (it DOES have a delete path); INCOMING/NAME predicates are `hex(predicate)`.
+### D1 — Per-index composite key (hash open axes, keep entity-ID axes raw + validated)
 
 | Index | Prefix (scan) axis | Key | Value | Notes |
 |---|---|---|---|---|
-| INCOMING | target (raw 6-token) | `targetID.sourceID.predicate` | empty | source = next 6 tokens, predicate = rest |
-| NAME | `hash(name)` | `hash(name).entityID.predicate` | `{name, priority}` | value carries original-case + priority |
-| CONTEXT | `hash(contextValue)` | `hash(context).entityID.predicate` | `{contextValue}` (+ fields) | context value MUST be hashed (raw `inference.hierarchy` vs `.deep` collides — ADR-065) |
+| INCOMING | target (raw 6-token) | `targetID.sourceID.hex(predicate)` | empty | source = next 6 tokens; predicate token reversibly decodes |
+| NAME | `hash(name)` | `hash(name).entityID.hex(predicate)` | `{name, priority}` | value carries original-case + priority |
+| CONTEXT | entity (raw 6-token) | `entityID.hash(context).hex(predicate)` | `{contextValue}` (+ fields) | entity prefix enables update reconciliation and delete cleanup |
 
 - **Raw entity-ID prefixes are collision-safe** (fixed 6-token; no ID is a token-prefix of another —
   `IsValidEntityID` `message/triple.go:145`), matching graph-ingest's `handleQueryPrefixNATS`.
@@ -57,8 +52,8 @@ measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension)
 - NAME/CONTEXT need a **small value** (original-case name/priority; context provenance) — not
   recoverable from a hashed prefix. Empty marker for INCOMING.
 - Unconditional `Put`, no CAS — ADR-065 footgun comment (key uniqueness → CAS unnecessary).
-- NAME already hashes (`nameIndexKey`, `name_index.go:24`); CONTEXT does not — CONTEXT is the one
-  that must start hashing.
+- Predicate tokens are reversibly hex-encoded because graph-ingest accepts KV-unsafe
+  predicate text. Name/context values use hashes and remain recoverable from their small values.
 
 ### D2 — Definitive reader inventory (do not defer the audit — the first review found a missed reader)
 
@@ -85,15 +80,12 @@ graph-index's own bucket is a `*KVStore`).
 
 ### D3 — Delete path (in-scope = clean prefix scan; reciprocal = gh#433)
 
-`DeleteFromIndexes` (`component.go:1441`) today deletes `incomingBucket[entityID]` (entity as target =
-prefix) and `outgoingBucket[entityID]` (entity as owner = prefix). Under sharding the INCOMING delete
-becomes `KeysByPrefix(entityID+".")` + delete-each — **entity is the prefix, trivially tractable**
-(the earlier "middle-token" framing was wrong for the in-scope delete). NAME/CONTEXT have **no**
-delete path today (never touched by `DeleteFromIndexes`) — adding one is gh#433, out of scope; nothing
-regresses. The genuine middle-token case (removing E from *other* entities' keys) is gh#433; if ever
-tackled, a `*.<entityID>.>` leading-wildcard filter is theoretically legal but **unverified** in this
-repo (every `FilteredKeys` caller uses trailing-`>` only — needs a real-container test before anyone
-relies on it).
+`DeleteFromIndexes` prefix-scans INCOMING rows where the deleted entity is the target and
+CONTEXT rows owned by the deleted entity. CONTEXT cleanup is semantically correct because the
+entity owns those provenance memberships. INCOMING target-prefix cleanup remains explicitly a
+legacy hard-delete behavior: those rows are supported by source entities and logical retirement
+must not discard that evidence. Source-owned retraction, reciprocal cleanup, and its durable
+manifest remain gh#527 scope.
 
 ### D4 — Wire-type preservation
 
@@ -135,9 +127,9 @@ L2 is justified and the projection defined here is its signature primitive.
 
 - **Breaking on-disk format** — mitigated by the both-tier hard-fail e2e gate + rebuild-on-boot; old
   keys provably inert.
-- **CONTEXT is write-only** — migration justified by the O(N²) write + race, not a reader; do not
-  over-invest in its read/delete paths. (Open question deliberately NOT taken here: whether CONTEXT
-  should be populated at all before a reader exists — left as-is, write made O(1).)
+- **CONTEXT has no production query reader** — the storage migration is justified by its write
+  amplification and lost-update race, while entity-prefix reconciliation/delete are required to
+  avoid retaining superseded or deleted memberships.
 - **Source-axis validation** — enforced structurally in the key helper (skip-log), converting a silent
   mis-split into an observable non-corrupting skip.
 - **NAME e2e gap** — closed with a production-wire integration test, and flagged per the breaking-change
@@ -176,9 +168,10 @@ concrete. The following revisions supersede the shapes above where they differ:
 - **P1c — deterministic reads.** `handleQueryIncomingNATS` / `GetIncomingEdges` sort by
   `(FromEntityID, Predicate)` so a no-op replay can't reshuffle a capped PathRAG result set.
 
-- **P1d — cutover readiness gate.** incoming/byName return `ErrorCodeIndexNotReady` until the index
-  has caught up to ENTITY_STATES at least once after Start (sticky) — an in-place upgrade must not
-  serve the partial new keyset while the old aggregate keys are inert and replay is in flight.
+- **P1d — authoritative readiness gate.** incoming, outgoing, byName, alias, and all predicate
+  handlers return `ErrorCodeIndexNotReady` while initial replay is incomplete or any required
+  entity work remains failed. The initial-enumeration sentinel authorizes only the empty 0/0 case;
+  non-empty replay becomes ready only when the watermark catches the exact target revision.
 
 - **P2b — no-op counter is a real metric + covers alias.** Exposed as
   `graph_index_reindex_events_total{result}` and `graph_index_write_failures_total`;
@@ -187,3 +180,21 @@ concrete. The following revisions supersede the shapes above where they differ:
 - **Upgrade debris** (from the retention review) — a one-time versioned purge of pre-#524 monolithic
   keys before v1 is required (rollback would reactivate stale indexes); tracked in gh#527. Do not
   teach steady-state GC both formats.
+
+### D7 — Ordered execution, authoritative reconciliation, and fail-closed consumers
+
+- Updates, deletes, coalesced work, and repair use one hash-keyed FIFO dispatcher. Every work item
+  re-reads authoritative `ENTITY_STATES` when it reaches its lane, so an old queued event applies
+  current presence/state rather than clobbering a newer write or resurrecting a deleted entity.
+- Coalescing retains the greatest delivered revision per pending key; watermark completion uses the
+  exact revision represented by the detached batch. Repair is bounded and keeps the failed entity
+  in the readiness gate until reconciliation succeeds.
+- Status/`LastSeq` reads use a dedicated ENTITY_STATES KV handle because the NATS handle caches
+  stream information and concurrent `Get`/`Status` use of one handle races under `-race`.
+- Direct graph-query and clustering readers fail closed when graph-index status is unavailable,
+  malformed, building, or degraded. `allow_ungated_reads` is an explicit standalone/test-only
+  opt-out, not a cutover default.
+- PathRAG propagates request/decode failures and rejects syntactically valid but structurally
+  incomplete envelopes (missing `relationships`); direction `both` fails if either leg fails.
+- gh#527 retains semantic retention work: manifests, source-owned retraction, tombstone payload,
+  blob reclamation, and legacy-format purge. It does not own per-entity ordering correctness.
