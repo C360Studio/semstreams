@@ -1,0 +1,139 @@
+## Context
+
+gh#474 measured `INCOMING_INDEX` at 2,300 writes/s / 3.2M total vs ~1k live keys after a bulk
+seed, starving the shared NATS client. Two adversarial reviews (semstreams-reviewer, architect)
+confirmed the mechanism and corrected the root cause.
+
+**Root cause (corrected).** The post-drain churn is NOT clustering/embedding write-backs:
+`graph/clustering/storage.go` runs `CreateTriples: false` (community `member_of` triples are not
+emitted) and graph-embedding writes a separate `EMBEDDINGS_CACHE` — **neither writes to
+`ENTITY_STATES`**. The driver is a post-ingest **inference edge wave**: inference stamps fleet-wide
+inferred relationships (`Context: inference.hierarchy`, Subject+Object are entity IDs —
+`graph/inference/hierarchy.go`) via `graph.mutation` → graph-ingest → `ENTITY_STATES` → the
+graph-index watch, hitting INCOMING's O(in-degree²) CAS on hub targets. It keeps churning after
+`pending=0` because inference is a *second* wave.
+
+Audit of every graph-index write path:
+
+| Index | Write today | Class | This change |
+|---|---|---|---|
+| PREDICATE | composite-key `Put` (sharded, ADR-065) | fixed | — |
+| **INCOMING** | `UpdateWithRetry` CAS of `[]IncomingEntry` per target (`component.go:1264`) | O(in-degree²) | **shard, full** |
+| **NAME** | `UpdateWithRetry` CAS of `NameIndexEntry.Items` per `hash(name)` (`name_index.go:53`) | O(shared-name²) | **shard, full** |
+| **CONTEXT** | non-CAS `Get`+`Put` of `[]ContextEntry` per **raw** context value (`component.go:1616-1647`) | O(fan-in²) + lost-update race; **write-only (no reader)** | **shard, write-side only** |
+| OUTGOING | full-overwrite `Put` per owning entity (`component.go:1101`) | self-bounded, no O(N²) | **deferred (Non-goal)** |
+| ALIAS / spatial / temporal / community / structural | single-value or composite | safe | — |
+
+## Goals / Non-Goals
+
+**Goals:** bounded per-index write cost for INCOMING/NAME/CONTEXT; fix CONTEXT's lost-update +
+raw-key collision; migrate every reader and the in-scope delete without silent breakage;
+instrument the re-index no-op rate; both-tier e2e-verified cutover.
+
+**Non-Goals:** OUTGOING sharding (net-negative — see proposal); reciprocal entity-delete cleanup
+(gh#433); change-detection (L2) and resource isolation (L3) — deferred behind this change's
+measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension).
+
+## Decisions
+
+### D1 — Per-index composite key (one teachable rule: hash open axes, keep entity-ID axes raw + validated)
+
+| Index | Prefix (scan) axis | Key | Value | Notes |
+|---|---|---|---|---|
+| INCOMING | target (raw 6-token) | `targetID.sourceID.predicate` | empty | source = next 6 tokens, predicate = rest |
+| NAME | `hash(name)` | `hash(name).entityID.predicate` | `{name, priority}` | value carries original-case + priority |
+| CONTEXT | `hash(contextValue)` | `hash(context).entityID.predicate` | `{contextValue}` (+ fields) | context value MUST be hashed (raw `inference.hierarchy` vs `.deep` collides — ADR-065) |
+
+- **Raw entity-ID prefixes are collision-safe** (fixed 6-token; no ID is a token-prefix of another —
+  `IsValidEntityID` `message/triple.go:145`), matching graph-ingest's `handleQueryPrefixNATS`.
+- **Guard `IsValidEntityID` at key construction** (target AND source) and skip-log on failure —
+  structural, not a doc caveat (the source axis is only upstream-validated). Reject empty predicate
+  (no trailing-dot key).
+- NAME/CONTEXT need a **small value** (original-case name/priority; context provenance) — not
+  recoverable from a hashed prefix. Empty marker for INCOMING.
+- Unconditional `Put`, no CAS — ADR-065 footgun comment (key uniqueness → CAS unnecessary).
+- NAME already hashes (`nameIndexKey`, `name_index.go:24`); CONTEXT does not — CONTEXT is the one
+  that must start hashing.
+
+### D2 — Definitive reader inventory (do not defer the audit — the first review found a missed reader)
+
+**INCOMING** (all migrate to prefix-scan + reconstruct):
+- `processor/graph-index/query.go` `handleQueryIncomingNATS`
+- `graph/query/client.go` `GetIncomingEdges` — **broken today** (unmarshals `{"incoming":[...]}` vs
+  written `[]IncomingEntry`); migration is a *bugfix*, parity test asserts *correct* edges.
+- `processor/graph-clustering/anomaly.go:100` `kvRelationshipQuerier` + `:39` `graphProviderAdapter`
+- `processor/graph-clustering/component.go:1160` `kvProvider.getNeighborsFromBucket` — direction-agnostic
+  today; its **incoming** branch must become prefix-scan; the **outgoing** branch stays on the old
+  format (OUTGOING is not sharded) → split by direction.
+- e2e `test/e2e/client/nats.go:919` `GetIncomingEntries`
+
+**NAME**: `name_index.go:156` `handleQueryByNameNATS`, `:108` `nameIndexIsReady` (both in-package;
+`Keys()`-len check stays valid). No e2e today (see D5).
+
+**CONTEXT**: **no production reader** (only its own RMW `Get`, `component.go:1620`); e2e only
+(`nats.go:962 GetContextEntries`, `:976 GetAllContexts`). Migrate the write + the e2e readers; do
+NOT hunt for a query consumer.
+
+Readers holding a raw `jetstream.KeyValue` (client.go, anomaly.go, clustering component.go) MUST use
+`natsclient.FilteredKeys(ctx, kv, prefix+">")` (`kv.go:469`), not `KVStore.KeysByPrefix` (only
+graph-index's own bucket is a `*KVStore`).
+
+### D3 — Delete path (in-scope = clean prefix scan; reciprocal = gh#433)
+
+`DeleteFromIndexes` (`component.go:1441`) today deletes `incomingBucket[entityID]` (entity as target =
+prefix) and `outgoingBucket[entityID]` (entity as owner = prefix). Under sharding the INCOMING delete
+becomes `KeysByPrefix(entityID+".")` + delete-each — **entity is the prefix, trivially tractable**
+(the earlier "middle-token" framing was wrong for the in-scope delete). NAME/CONTEXT have **no**
+delete path today (never touched by `DeleteFromIndexes`) — adding one is gh#433, out of scope; nothing
+regresses. The genuine middle-token case (removing E from *other* entities' keys) is gh#433; if ever
+tackled, a `*.<entityID>.>` leading-wildcard filter is theoretically legal but **unverified** in this
+repo (every `FilteredKeys` caller uses trailing-`>` only — needs a real-container test before anyone
+relies on it).
+
+### D4 — Wire-type preservation
+
+`graph.IncomingEntry` is the `graph.index.query.incoming` **wire element** (`query_index_types.go:33`,
+consumed by PathRAG `pathrag.go:274`) — NOT dead code. Do NOT delete/rename it or its JSON tags; only
+the stored blob format dies; readers reconstruct `[]IncomingEntry` from keys. Same for NAME wire types.
+
+### D5 — Cutover, e2e gate, and NAME coverage gap
+
+Same bucket names (ADR-065's ~9-config lesson). Rebuild from ENTITY_STATES on boot; old monolithic
+keys inert (bare key can't match `prefix.>`). BREAKING format → **`e2e:structural` AND `e2e:semantic`
+green before merge** (ADR-065 precedent). Tighten to **hard-fail** (not warn) and migrate the raw
+e2e readers: incoming `GetIncomingEntries`; CONTEXT `validateContextIndexHierarchy` (matches the
+literal key `inference.hierarchy` today — must read the reconstructed context *value*),
+`GetAllContexts`, `GetContextEntries`. **NAME has NO e2e tier** — gate it on an integration test
+driving `graph.index.query.byName` through the production wire (assert reconstructed
+`{EntityID,Name,Predicate,Priority}`), and note the e2e gap explicitly per the breaking-change rule.
+
+### D6 — Re-index no-op instrumentation (the L2/L3 data gate)
+
+Add a counter in the re-index funnel (`processEntityUpdateFromData`, `component.go:878`): compute the
+entity's index-input projection (relationship `(predicate,target)` pairs, the full distinct-predicate
+set, `(namePredicate,name)`, `(context,predicate)` pairs — NOT raw object values) and compare to the
+last-indexed projection; increment `unchanged` or `changed`. **Observe only — do not skip.** This
+tests the inference-wave hypothesis: if unchanged≈0%, change-detection (L2) is dead code; if material,
+L2 is justified and the projection defined here is its signature primitive.
+
+### Deferred follow-ups (filed, not built)
+
+- **L2 change-detection** — gated on D6's counter. If built: signature over the FULL projection above
+  (NOT excluding literals — `community.member_of` is a literal but still a predicate-index membership;
+  excluding it silently drops memberships), invalidated on entity delete (else delete→recreate-identical
+  leaves the entity unindexed), concurrency-safe.
+- **L3 resource isolation** — gated on post-merge starvation re-measurement. Prefer a Put-path CPU/rate
+  bound (the starvation is CPU-bound: ~4 workers on O(N²) CAS+JSON); a dedicated `*nats.Conn` was tried
+  and reverted (`674cbcb6`→`eb4da982`) and does not buy back CPU.
+
+## Risks / Trade-offs
+
+- **Breaking on-disk format** — mitigated by the both-tier hard-fail e2e gate + rebuild-on-boot; old
+  keys provably inert.
+- **CONTEXT is write-only** — migration justified by the O(N²) write + race, not a reader; do not
+  over-invest in its read/delete paths. (Open question deliberately NOT taken here: whether CONTEXT
+  should be populated at all before a reader exists — left as-is, write made O(1).)
+- **Source-axis validation** — enforced structurally in the key helper (skip-log), converting a silent
+  mis-split into an observable non-corrupting skip.
+- **NAME e2e gap** — closed with a production-wire integration test, and flagged per the breaking-change
+  discipline.

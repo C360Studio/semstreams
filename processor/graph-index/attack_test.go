@@ -521,28 +521,26 @@ func TestAttack_MultipleSourcesSameTarget(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Query incoming index for the target
-	incomingEntry, err := graphIndex.incomingBucket.Get(ctx, targetID)
-	require.NoError(t, err, "incoming index should exist")
+	// Query incoming index for the target using the composite-key sharded format (gh#474).
+	// One key per edge: targetID.sourceID.predicate — scan the target prefix.
+	incomingKeys, err := graphIndex.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(targetID))
+	require.NoError(t, err, "incoming index key scan should succeed")
+	require.NotEmpty(t, incomingKeys, "incoming index should have composite-key entries")
 
-	// Now uses array format matching graph/indexmanager for PathRAG compatibility
-	var incomingData []map[string]interface{}
-	err = json.Unmarshal(incomingEntry.Value, &incomingData)
-	require.NoError(t, err)
-
-	// With array format, we can now verify all sources are captured
-	// Extract source IDs from the array entries
+	// Reconstruct IncomingEntry for each key; collect distinct source IDs.
 	var storedSourceIDs []string
-	for _, entry := range incomingData {
-		if fromID, ok := entry["from_entity_id"].(string); ok {
-			storedSourceIDs = append(storedSourceIDs, fromID)
+	for _, key := range incomingKeys {
+		entry, ok := incomingEntryFromKey(key, targetID)
+		if ok {
+			storedSourceIDs = append(storedSourceIDs, entry.FromEntityID)
 		}
 	}
 
-	// ATTACK TEST: Verify multiple sources are properly indexed
-	// With the new array format, all sources should be captured
+	// ATTACK TEST: Verify multiple sources are properly indexed.
+	// With composite-key sharding every edge gets its own key — no CAS
+	// contention, all sources must be present.
 	assert.Len(t, storedSourceIDs, len(sources),
-		"incoming index should contain all sources with array format")
+		"incoming index should contain all sources with composite-key format")
 	for _, source := range sources {
 		assert.Contains(t, storedSourceIDs, source,
 			"incoming index should contain source %s", source)

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -254,6 +256,16 @@ type Component struct {
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
+
+	// Re-index no-op instrumentation (D6, design.md / gh#474).
+	// lastProjections maps entityID → canonical projection string for change detection.
+	// sync.Map provides safe concurrent access from worker-pool goroutines.
+	lastProjections sync.Map
+	// reindexTotal counts total entity re-index events; reindexUnchanged counts
+	// events where the index-input projection was identical to the last-indexed one.
+	// These are the L2 change-detection data gates — observe only, never skip writes.
+	reindexTotal     int64 // atomic
+	reindexUnchanged int64 // atomic
 
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
@@ -914,7 +926,7 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	// Track indexed relationships for this entity
 	var indexed int
 
-	// Collect incoming entries grouped by target ID to batch CAS cycles
+	// Collect incoming entries per target for per-edge writes
 	incomingByTarget := make(map[string][]graph.IncomingEntry)
 
 	// Index each triple
@@ -932,7 +944,7 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 				"predicate": triple.Predicate,
 			})
 
-			// Collect incoming entry; will be written in batch after the loop
+			// Collect incoming entry; will be written after the loop
 			incomingByTarget[targetID] = append(incomingByTarget[targetID], graph.IncomingEntry{
 				FromEntityID: resolvedID,
 				Predicate:    triple.Predicate,
@@ -973,7 +985,19 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 		}
 	}
 
-	// Write incoming index in batches — one CAS cycle per distinct target ID
+	// Re-index no-op instrumentation (D6, design.md / gh#474).
+	// Compute the index-input projection for this entity: the set of facts that
+	// actually drive index writes. Compare to the last-indexed projection; if
+	// identical, increment the unchanged counter. OBSERVE ONLY — all writes proceed
+	// regardless. This is the L2 change-detection data gate.
+	projection := computeIndexProjection(state, c.namePredicates)
+	atomic.AddInt64(&c.reindexTotal, 1)
+	if prev, loaded := c.lastProjections.Load(resolvedID); loaded && prev.(string) == projection {
+		atomic.AddInt64(&c.reindexUnchanged, 1)
+	}
+	c.lastProjections.Store(resolvedID, projection)
+
+	// Write incoming index — one unconditional Put per edge (no CAS)
 	for targetID, entries := range incomingByTarget {
 		if err := c.updateIncomingIndexBatch(ctx, targetID, entries); err != nil {
 			c.logger.Debug("failed to update incoming index",
@@ -1022,6 +1046,49 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 		c.metrics.recordEventProcessed()
 		c.metrics.recordWatchEvent("update")
 	}
+}
+
+// computeIndexProjection computes a canonical, sorted string representing the
+// index-input projection for an entity state. The projection covers:
+//   - relationship (predicate, targetID) pairs — driving INCOMING/OUTGOING writes
+//   - the full distinct predicate set — driving PREDICATE_INDEX writes
+//   - (namePredicate, name) pairs — driving NAME_INDEX writes
+//   - (context, predicate) pairs — driving CONTEXT_INDEX writes (NOT raw object values)
+//
+// Two entities with the same projection will produce identical index writes on
+// re-index. The projection is intentionally NOT excluding literal-only predicates
+// (community.member_of is a literal but still a predicate-index membership; excluding
+// it silently drops memberships from the no-op signal).
+func computeIndexProjection(state graph.EntityState, namePredicates map[string]int) string {
+	parts := make([]string, 0, len(state.Triples)*3)
+	predicateSeen := make(map[string]bool, len(state.Triples))
+
+	for _, t := range state.Triples {
+		// 1. Relationship (predicate, target) pairs
+		if t.IsRelationship() {
+			if targetID, ok := t.Object.(string); ok {
+				parts = append(parts, "rel:"+t.Predicate+":"+targetID)
+			}
+		}
+		// 2. Full distinct predicate set
+		if !predicateSeen[t.Predicate] {
+			predicateSeen[t.Predicate] = true
+			parts = append(parts, "pred:"+t.Predicate)
+		}
+		// 3. (namePredicate, name) pairs
+		if _, isName := namePredicates[t.Predicate]; isName {
+			if name, ok := t.Object.(string); ok && name != "" {
+				parts = append(parts, "name:"+t.Predicate+":"+name)
+			}
+		}
+		// 4. (context, predicate) pairs — NOT raw object values
+		if t.Context != "" {
+			parts = append(parts, "ctx:"+t.Context+":"+t.Predicate)
+		}
+	}
+
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
 }
 
 // processEntityBatch is the CoalescingSet callback. It re-fetches each entity from KV
@@ -1215,8 +1282,8 @@ func (c *Component) UpdateOutgoingIndex(ctx context.Context, entityID, targetID,
 }
 
 // UpdateIncomingIndex updates the incoming index for a single relationship.
-// It delegates to updateIncomingIndexBatch so that tests and ad-hoc callers
-// share the same merge logic as the batched path in processEntityUpdate.
+// Writes one composite-key entry at targetID.sourceID.predicate with an empty
+// marker value (ADR-065 footgun comment: key uniqueness → CAS unnecessary).
 func (c *Component) UpdateIncomingIndex(ctx context.Context, targetID, sourceID, predicate string) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateIncomingIndex", "target ID cannot be empty")
@@ -1241,8 +1308,10 @@ func (c *Component) UpdateIncomingIndex(ctx context.Context, targetID, sourceID,
 	})
 }
 
-// updateIncomingIndexBatch merges newEntries into the incoming index for targetID
-// in a single CAS cycle. Duplicate (FromEntityID, Predicate) pairs are skipped.
+// updateIncomingIndexBatch writes one composite-key entry per incoming edge in
+// newEntries. Replaces the old CAS read-modify-write approach (gh#474): each key
+// encodes the full (targetID, sourceID, predicate) triple, so writes are O(edges),
+// idempotent, and never contend (ADR-065 footgun comment in incoming_index.go).
 func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID string, newEntries []graph.IncomingEntry) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateIncomingIndexBatch", "target ID cannot be empty")
@@ -1259,38 +1328,24 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 		return errs.Wrap(err, "Component", "updateIncomingIndexBatch", "context cancelled")
 	}
 
-	// CAS update: read-modify-write with automatic retry on conflict.
-	// One cycle handles all newEntries regardless of how many triples point at this target.
-	err := c.incomingBucket.UpdateWithRetry(ctx, targetID, func(current []byte) ([]byte, error) {
-		var entries []graph.IncomingEntry
-		if len(current) > 0 {
-			if unmarshalErr := json.Unmarshal(current, &entries); unmarshalErr != nil {
-				// Start fresh on corrupt data (backward compatibility)
-				entries = []graph.IncomingEntry{}
-			}
+	written := 0
+	for _, entry := range newEntries {
+		if !validateIncomingKeyInputs(targetID, entry.FromEntityID, entry.Predicate, c.logger) {
+			continue
 		}
-
-		// Build a lookup set of already-stored (FromEntityID, Predicate) pairs
-		type entryKey struct{ from, predicate string }
-		existing := make(map[entryKey]bool, len(entries))
-		for _, e := range entries {
-			existing[entryKey{e.FromEntityID, e.Predicate}] = true
+		key := incomingIndexKey(targetID, entry.FromEntityID, entry.Predicate)
+		if _, err := c.incomingBucket.Put(ctx, key, incomingIndexMarker); err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			c.logger.Debug("failed to write incoming index key",
+				slog.String("key", key),
+				slog.Any("error", err))
+			continue
 		}
+		written++
+	}
 
-		// Append only entries that are not already present
-		for _, ne := range newEntries {
-			k := entryKey{ne.FromEntityID, ne.Predicate}
-			if !existing[k] {
-				entries = append(entries, ne)
-				existing[k] = true // guard against duplicates within newEntries itself
-			}
-		}
-
-		return json.Marshal(entries)
-	})
-	if err != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "updateIncomingIndexBatch", "CAS update")
+	if written == 0 {
+		return nil
 	}
 
 	// Update metrics
@@ -1305,7 +1360,7 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 
 	c.logger.Debug("incoming index batch updated",
 		slog.String("target_id", targetID),
-		slog.Int("new_entries", len(newEntries)))
+		slog.Int("written_entries", written))
 
 	return nil
 }
@@ -1417,7 +1472,18 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 // Index Deletion Operations
 // ============================================================================
 
-// DeleteFromIndexes deletes an entity from all indexes
+// DeleteFromIndexes deletes an entity from all indexes.
+//
+// INCOMING uses composite-key sharding (gh#474): the entity is the key PREFIX
+// for its own incoming aggregate (all keys "entityID.sourceID.predicate"). A clean
+// prefix scan enumerates the whole keyset; each key is deleted individually.
+// This removes all incoming edges where this entity is the TARGET. Reciprocal
+// cleanup (removing this entity from other entities' incoming entries, where it
+// appears as the sourceID middle-token) is the pre-existing gh#433 gap — unchanged
+// here (design.md D3).
+//
+// NAME and CONTEXT have no delete path today (never touched by this function) —
+// adding one is gh#433, out of scope; nothing regresses.
 func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIndexes", "entity ID cannot be empty")
@@ -1431,17 +1497,34 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		return errs.Wrap(err, "Component", "DeleteFromIndexes", "context cancelled")
 	}
 
-	// Delete from outgoing index
+	// Delete from outgoing index (single key, entity-as-owner format unchanged)
 	if err := c.outgoingBucket.Delete(ctx, entityID); err != nil && !natsclient.IsKVNotFoundError(err) {
 		atomic.AddInt64(&c.errors, 1)
 		c.logger.Warn("failed to delete from outgoing index", slog.String("entity_id", entityID), slog.Any("error", err))
 	}
 
-	// Delete from incoming index
-	if err := c.incomingBucket.Delete(ctx, entityID); err != nil && !natsclient.IsKVNotFoundError(err) {
+	// Delete from incoming index — entity-as-prefix: enumerate all composite keys
+	// "entityID.sourceID.predicate" and delete each (design.md D3).
+	incomingKeys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(entityID))
+	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		c.logger.Warn("failed to delete from incoming index", slog.String("entity_id", entityID), slog.Any("error", err))
+		c.logger.Warn("failed to list incoming index keys for delete",
+			slog.String("entity_id", entityID),
+			slog.Any("error", err))
+	} else {
+		for _, key := range incomingKeys {
+			if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+				atomic.AddInt64(&c.errors, 1)
+				c.logger.Warn("failed to delete incoming index key",
+					slog.String("key", key),
+					slog.Any("error", delErr))
+			}
+		}
 	}
+
+	// Also evict from the no-op projection cache (stale projection on re-add
+	// would incorrectly suppress a real first-index event).
+	c.lastProjections.Delete(entityID)
 
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
@@ -1521,7 +1604,9 @@ func (c *Component) DeleteFromAliasIndex(ctx context.Context, alias string) erro
 	return nil
 }
 
-// DeleteFromIncomingIndex deletes a specific incoming reference
+// DeleteFromIncomingIndex deletes all incoming edges from sourceID to targetID
+// (all predicates). Under composite-key sharding, this is a prefix scan for
+// "targetID.sourceID." + delete-each.
 func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourceID string) error {
 	if targetID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIncomingIndex", "target ID cannot be empty")
@@ -1538,19 +1623,31 @@ func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourc
 		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "context cancelled")
 	}
 
-	// For simplicity, delete the entire target entry (in real implementation, would remove specific source)
-	if err := c.incomingBucket.Delete(ctx, targetID); err != nil && !natsclient.IsKVNotFoundError(err) {
+	// Prefix: all edges from sourceID to targetID (all predicates)
+	prefix := incomingIndexPrefix(targetID) + sourceID + "."
+	keys, err := c.incomingBucket.KeysByPrefix(ctx, prefix)
+	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "KV delete")
+		return errs.Wrap(err, "Component", "DeleteFromIncomingIndex", "list keys")
+	}
+
+	for _, key := range keys {
+		if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+			atomic.AddInt64(&c.errors, 1)
+			c.logger.Warn("failed to delete incoming index key",
+				slog.String("key", key),
+				slog.Any("error", delErr))
+		}
 	}
 
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
 
-	c.logger.Debug("incoming index entry deleted",
+	c.logger.Debug("incoming index entries deleted",
 		slog.String("target_id", targetID),
-		slog.String("source_id", sourceID))
+		slog.String("source_id", sourceID),
+		slog.Int("deleted_count", len(keys)))
 
 	return nil
 }
@@ -1559,16 +1656,18 @@ func (c *Component) DeleteFromIncomingIndex(ctx context.Context, targetID, sourc
 // Context Index Operations (Triple Provenance Tracking)
 // ============================================================================
 
-// ContextEntry represents an entry in the context index.
-// Each entry tracks which entity+predicate pair has a triple with a specific context value.
-type ContextEntry struct {
-	EntityID  string `json:"entity_id"`
-	Predicate string `json:"predicate"`
-}
-
 // UpdateContextIndex updates the context index for triples with a context value.
 // This enables provenance queries like "all triples from hierarchy inference".
-// The operation is idempotent - replaying the same update has no effect.
+//
+// After composite-key sharding (gh#474): one unconditional Put per (entityID,
+// predicate, contextValue) triple, keyed as hash(contextValue).entityID.predicate.
+// This replaces the former non-CAS Get+Put of a list, which had a lost-update
+// race AND used the raw context value as the key (collision-prone for dotted
+// hierarchies like "inference.hierarchy" vs "inference.hierarchy.deep" — ADR-065).
+//
+// CONTEXT_INDEX has no production reader (design.md D2, no query consumer);
+// the write path is the sole migration target. e2e readers are in scope for
+// task 5 (the breaking-change gate), not here.
 func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, triples []message.Triple) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex", "entity ID cannot be empty")
@@ -1582,76 +1681,36 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 		return errs.Wrap(err, "Component", "UpdateContextIndex", "context cancelled")
 	}
 
-	// Group entries by context value
-	byContext := make(map[string][]ContextEntry)
 	for _, t := range triples {
-		if t.Context != "" {
-			entry := ContextEntry{
-				EntityID:  entityID,
-				Predicate: t.Predicate,
-			}
-			byContext[t.Context] = append(byContext[t.Context], entry)
+		if t.Context == "" {
+			continue
+		}
+		if !validateContextKeyInputs(entityID, t.Predicate, c.logger) {
+			continue
+		}
+
+		hash := contextHashHex(t.Context)
+		key := contextIndexKey(hash, entityID, t.Predicate)
+
+		value, marshalErr := json.Marshal(contextIndexValue{Context: t.Context})
+		if marshalErr != nil {
+			c.logger.Debug("context index: failed to marshal value",
+				slog.String("context", t.Context),
+				slog.Any("error", marshalErr))
+			continue
+		}
+
+		if _, putErr := c.contextBucket.Put(ctx, key, value); putErr != nil {
+			c.logger.Debug("context index: failed to write entry",
+				slog.String("key", key),
+				slog.Any("error", putErr))
+		} else {
+			c.logger.Debug("context index updated",
+				slog.String("context", t.Context),
+				slog.String("entity_id", entityID),
+				slog.String("predicate", t.Predicate))
 		}
 	}
-
-	if len(byContext) == 0 {
-		return nil // No context values to index
-	}
-
-	// Update each context key
-	for contextValue, newEntries := range byContext {
-		if err := c.mergeContextEntries(ctx, contextValue, entityID, newEntries); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// mergeContextEntries merges new entries into existing context index.
-// Uses set semantics: removes old entries for the entity, adds new ones.
-func (c *Component) mergeContextEntries(ctx context.Context, contextValue, entityID string, newEntries []ContextEntry) error {
-	// Use context value directly as key - dotted keys enable wildcard filtering
-	// (e.g., Watch("inference.>") to observe all inference-related contexts)
-	key := contextValue
-
-	// Get existing entries
-	var existing []ContextEntry
-	entry, err := c.contextBucket.Get(ctx, key)
-	if err != nil && !natsclient.IsKVNotFoundError(err) {
-		return errs.WrapTransient(err, "Component", "mergeContextEntries", "get existing entries")
-	}
-	if err == nil {
-		if err := json.Unmarshal(entry.Value, &existing); err != nil {
-			return errs.WrapInvalid(err, "Component", "mergeContextEntries", "unmarshal existing entries")
-		}
-	}
-
-	// Remove old entries for this entity (idempotent update)
-	filtered := make([]ContextEntry, 0, len(existing))
-	for _, e := range existing {
-		if e.EntityID != entityID {
-			filtered = append(filtered, e)
-		}
-	}
-
-	// Add new entries
-	filtered = append(filtered, newEntries...)
-
-	// Serialize and save
-	data, err := json.Marshal(filtered)
-	if err != nil {
-		return errs.Wrap(err, "Component", "mergeContextEntries", "marshal entries")
-	}
-
-	if _, err := c.contextBucket.Put(ctx, key, data); err != nil {
-		return errs.WrapTransient(err, "Component", "mergeContextEntries", "put entries")
-	}
-
-	c.logger.Debug("context index updated",
-		slog.String("context", contextValue),
-		slog.String("entity_id", entityID),
-		slog.Int("entry_count", len(newEntries)))
 
 	return nil
 }

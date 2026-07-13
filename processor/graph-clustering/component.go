@@ -1112,7 +1112,11 @@ func (p *kvProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
 	return keys, nil
 }
 
-// GetNeighbors returns entity IDs connected to the given entity
+// GetNeighbors returns entity IDs connected to the given entity.
+//
+// After composite-key sharding (gh#474): INCOMING_INDEX uses a composite format
+// "targetID.sourceID.predicate" while OUTGOING_INDEX keeps its flat JSON-array
+// format. The two directions are handled by separate methods.
 func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
 	if entityID == "" {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetNeighbors", "entityID is empty")
@@ -1120,7 +1124,7 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 
 	neighbors := make(map[string]bool)
 
-	// Get outgoing neighbors
+	// Get outgoing neighbors — unchanged format: single key, JSON array of {to_entity_id, predicate}
 	if direction == "outgoing" || direction == "both" {
 		outgoing, err := p.getNeighborsFromBucket(ctx, p.outgoingBucket, entityID)
 		if err != nil {
@@ -1131,9 +1135,9 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 		}
 	}
 
-	// Get incoming neighbors
+	// Get incoming neighbors — composite-key sharded format: prefix scan
 	if direction == "incoming" || direction == "both" {
-		incoming, err := p.getNeighborsFromBucket(ctx, p.incomingBucket, entityID)
+		incoming, err := p.getIncomingNeighbors(ctx, entityID)
 		if err != nil {
 			p.logger.Debug("failed to get incoming neighbors", slog.String("entity", entityID), slog.Any("error", err))
 		}
@@ -1156,7 +1160,10 @@ type relationshipEntry struct {
 	FromEntityID string `json:"from_entity_id,omitempty"` // For INCOMING_INDEX
 }
 
-// getNeighborsFromBucket reads neighbor entity IDs from a relationship index bucket
+// getNeighborsFromBucket reads neighbor entity IDs from the OUTGOING_INDEX bucket.
+// The outgoing format is a single key (entityID) with a JSON array of
+// {to_entity_id, predicate} entries — unchanged after composite-key sharding (gh#474).
+// Do NOT use this for INCOMING_INDEX; call getIncomingNeighbors instead.
 func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstream.KeyValue, entityID string) ([]string, error) {
 	entry, err := bucket.Get(ctx, entityID)
 	if err != nil {
@@ -1179,6 +1186,39 @@ func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstrea
 			neighbors = append(neighbors, rel.ToEntityID)
 		} else if rel.FromEntityID != "" {
 			neighbors = append(neighbors, rel.FromEntityID)
+		}
+	}
+	return neighbors, nil
+}
+
+// getIncomingNeighbors reads entity IDs that have an incoming edge to entityID
+// from the composite-keyed INCOMING_INDEX (gh#474). Keys have the form
+// "targetID.sourceID.predicate"; this method scans the prefix entityID.">" and
+// returns distinct source entity IDs.
+func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) ([]string, error) {
+	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty bucket).
+	keys, err := natsclient.FilteredKeys(ctx, p.incomingBucket, entityID+".>")
+	if err != nil {
+		return nil, err
+	}
+
+	prefix := entityID + "."
+	seen := make(map[string]struct{}, len(keys))
+	neighbors := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		suffix := key[len(prefix):]
+		// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+		parts := strings.SplitN(suffix, ".", 7)
+		if len(parts) < 7 {
+			continue
+		}
+		sourceID := strings.Join(parts[:6], ".")
+		if _, dup := seen[sourceID]; !dup {
+			seen[sourceID] = struct{}{}
+			neighbors = append(neighbors, sourceID)
 		}
 	}
 	return neighbors, nil

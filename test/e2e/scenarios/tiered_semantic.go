@@ -784,6 +784,21 @@ func toWordSet(s string) map[string]bool {
 	return set
 }
 
+// effectiveVariant resolves the tier used for strict/soft gating decisions. It
+// prefers the explicit config, falling back to the auto-detected variant that
+// Execute stamps into result.Metrics["variant"] — s.config.Variant stays "" when
+// the caller omits --variant (Execute keeps the detected value local), so reading
+// it raw would send an intentionally-empty structural index down the strict path.
+func (s *TieredScenario) effectiveVariant(result *Result) string {
+	if s.config.Variant != "" {
+		return s.config.Variant
+	}
+	if v, ok := result.Metrics["variant"].(string); ok {
+		return v
+	}
+	return ""
+}
+
 // validateContextIndexHierarchy validates that the ContextIndex is tracking inference provenance.
 // Phase 5: Verifies that hierarchy inference triples are tracked in CONTEXT_INDEX.
 func (s *TieredScenario) validateContextIndexHierarchy(ctx context.Context, result *Result) error {
@@ -794,33 +809,27 @@ func (s *TieredScenario) validateContextIndexHierarchy(ctx context.Context, resu
 
 	fmt.Println("[CONTEXT INDEX] Validating context index hierarchy tracking...")
 
-	// Count CONTEXT_INDEX keys (each key is a context value like "inference.hierarchy")
+	// Count raw CONTEXT_INDEX keys. After composite-key sharding (gh#474) a key is
+	// "hash(context).entityID.predicate", so this counts memberships, not distinct
+	// contexts — but non-zero still means the write path populated the bucket.
 	count, err := s.natsClient.CountBucketKeys(ctx, client.IndexBuckets.Context)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("context index query failed: %v", err))
-		return nil
+		return fmt.Errorf("context index query failed: %w", err)
 	}
 
-	// Sample keys to verify hierarchy inference context exists
-	samples, _ := s.natsClient.GetBucketKeysSample(ctx, client.IndexBuckets.Context, 10)
-
-	// Check if "inference.hierarchy" key exists
-	hierarchyContextFound := false
-	for _, key := range samples {
-		if key == "inference.hierarchy" {
-			hierarchyContextFound = true
-			break
-		}
+	// Read the DISTINCT context values from entry values (the sharded key no longer
+	// carries the raw context) and the hierarchy memberships by value-match. This is
+	// the sharded reader under test — see client.GetAllContexts / GetContextEntries.
+	allContexts, err := s.natsClient.GetAllContexts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list context values: %w", err)
 	}
-
-	// Get hierarchy context entries to count entity+predicate pairs
-	hierarchyEntryCount := 0
-	if hierarchyContextFound {
-		entries, err := s.natsClient.GetContextEntries(ctx, "inference.hierarchy")
-		if err == nil {
-			hierarchyEntryCount = len(entries)
-		}
+	hierarchyEntries, err := s.natsClient.GetContextEntries(ctx, "inference.hierarchy")
+	if err != nil {
+		return fmt.Errorf("failed to read inference.hierarchy context entries: %w", err)
 	}
+	hierarchyContextFound := len(hierarchyEntries) > 0
+	hierarchyEntryCount := len(hierarchyEntries)
 
 	// Record metrics
 	result.Metrics["context_index_keys"] = count
@@ -828,33 +837,44 @@ func (s *TieredScenario) validateContextIndexHierarchy(ctx context.Context, resu
 	result.Metrics["context_hierarchy_entries"] = hierarchyEntryCount
 
 	// Log results
-	fmt.Printf("[CONTEXT INDEX] Results: total_keys=%d, hierarchy_found=%v, hierarchy_entries=%d\n",
-		count, hierarchyContextFound, hierarchyEntryCount)
-	if len(samples) > 0 {
-		fmt.Printf("[CONTEXT INDEX] Sample contexts: %v\n", samples)
+	fmt.Printf("[CONTEXT INDEX] Results: total_keys=%d, distinct_contexts=%d, hierarchy_found=%v, hierarchy_entries=%d\n",
+		count, len(allContexts), hierarchyContextFound, hierarchyEntryCount)
+	if len(allContexts) > 0 {
+		fmt.Printf("[CONTEXT INDEX] Distinct contexts: %v\n", allContexts)
 	}
 
-	// Validation warnings (tier-aware: structural tier has short run, async index may not complete)
-	if count == 0 {
-		if s.config.Variant == "structural" {
-			// Structural tier runs quickly - async context indexing may not complete in time
-			// Hierarchy inference validation already confirms containers are created
+	// Drift guard (all tiers): keys exist but the value-reader recovers zero distinct
+	// contexts ⇒ the sharded on-disk format and this reader disagree. HARD-FAIL — a
+	// warn here is exactly the "tier passes validating nothing" trap this change closes.
+	if count > 0 && len(allContexts) == 0 {
+		return fmt.Errorf("CONTEXT_INDEX has %d keys but no context values are readable — sharded key/value format drift (gh#474)", count)
+	}
+
+	// Populated-expectation guard (non-structural tiers): hierarchy inference runs to
+	// completion here, and every hierarchy triple carries Context:"inference.hierarchy",
+	// so both an empty index and a populated-but-unreadable hierarchy are real failures.
+	variant := s.effectiveVariant(result)
+	if variant == "structural" {
+		if count == 0 {
+			// Structural tier runs quickly — async context indexing may not complete in
+			// time; hierarchy-inference validation already confirms containers exist.
 			fmt.Println("[CONTEXT INDEX] Note: Context index empty (expected in short structural tier run)")
-		} else {
-			result.Warnings = append(result.Warnings, "CONTEXT_INDEX is empty - hierarchy inference may not be running")
 		}
-	} else if !hierarchyContextFound {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("CONTEXT_INDEX has %d keys but 'inference.hierarchy' not found in sample", count))
 	} else {
+		if count == 0 {
+			return fmt.Errorf("CONTEXT_INDEX is empty on the %s tier — hierarchy inference did not populate the index", variant)
+		}
+		if !hierarchyContextFound {
+			return fmt.Errorf("CONTEXT_INDEX has %d keys and %d distinct contexts but 'inference.hierarchy' has no readable entries — sharded reader drift (gh#474)", count, len(allContexts))
+		}
 		fmt.Printf("[CONTEXT INDEX] Success: hierarchy inference provenance tracked (%d entries)\n", hierarchyEntryCount)
 	}
 
 	result.Details["context_index_validation"] = map[string]any{
 		"total_keys":             count,
+		"distinct_contexts":      allContexts,
 		"hierarchy_found":        hierarchyContextFound,
 		"hierarchy_entry_count":  hierarchyEntryCount,
-		"sample_contexts":        samples,
 		"provenance_tracking_ok": hierarchyContextFound && hierarchyEntryCount > 0,
 	}
 
@@ -898,11 +918,27 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 		return nil
 	}
 
-	// Get incoming entries for the container
+	// Get incoming entries for the container. A reader error is unambiguous — fail.
 	entries, err := s.natsClient.GetIncomingEntries(ctx, containerID)
 	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("incoming entries query failed: %v", err))
-		return nil
+		return fmt.Errorf("incoming entries query failed for %s: %w", containerID, err)
+	}
+
+	// Drift guard: a .group container exists only because hierarchy inference pointed
+	// member edges INTO it, so it must have incoming edges. Zero reconstructed entries
+	// ⇒ the sharded reader cannot read the on-disk INCOMING_INDEX format (gh#474).
+	// HARD-FAIL on non-structural tiers; structural's short run may not have indexed
+	// yet — a warn here is the "tier passes validating nothing" trap this change closes.
+	// Ordering note: a container's incoming keys are written when its MEMBER entities are
+	// processed (async vs. container creation). On non-structural tiers this is settled by
+	// the preceding wait-for-entity-stabilization + validate-hierarchy-inference stages and
+	// the ADR-066 caught-up watermark, so a non-empty result is expected by the time we run.
+	if len(entries) == 0 {
+		if s.effectiveVariant(result) == "structural" {
+			fmt.Println("[INCOMING INDEX] Note: no incoming edges yet (expected in short structural tier run)")
+		} else {
+			return fmt.Errorf("container %s exists but INCOMING_INDEX returned 0 incoming edges — sharded reader/format drift (gh#474)", containerID)
+		}
 	}
 
 	// Verify predicates are stored (not just entity IDs)

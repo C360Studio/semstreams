@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -281,28 +282,50 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 	return len(keys), nil
 }
 
-// GetIncomingEdges retrieves entity IDs that reference the given entity
+// GetIncomingEdges retrieves entity IDs that reference the given entity.
+//
+// After composite-key sharding (gh#474): the INCOMING_INDEX now stores one
+// composite key per edge — "targetID.sourceID.predicate" with an empty marker
+// value. This method was previously BROKEN: it attempted to unmarshal
+// map[string][]string{"incoming": [...]} against the actual format of
+// []IncomingEntry, always returning empty results. The fix scans the prefix
+// entityID.">" and parses the sourceID from each composite key.
+//
+// Returns distinct source entity IDs (one per unique source, regardless of how
+// many predicates connect the pair).
 func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]string, error) {
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
 	}
 
-	entry, err := qc.incomingBucket.Get(ctx, entityID)
+	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty).
+	keys, err := natsclient.FilteredKeys(ctx, qc.incomingBucket, entityID+".>")
 	if err != nil {
-		// No incoming edges found
-		return []string{}, nil
+		return nil, fmt.Errorf("failed to list incoming edges for %s: %w", entityID, err)
 	}
 
-	var incomingData map[string][]string
-	if err := json.Unmarshal(entry.Value(), &incomingData); err != nil {
-		return []string{}, fmt.Errorf("failed to unmarshal incoming index: %w", err)
+	// Parse the sourceID (first 6 tokens) from each composite key suffix.
+	prefix := entityID + "."
+	seen := make(map[string]struct{}, len(keys))
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		suffix := key[len(prefix):]
+		// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+		parts := strings.SplitN(suffix, ".", 7)
+		if len(parts) < 7 {
+			continue
+		}
+		sourceID := strings.Join(parts[:6], ".")
+		if _, dup := seen[sourceID]; !dup {
+			seen[sourceID] = struct{}{}
+			result = append(result, sourceID)
+		}
 	}
 
-	if incoming, exists := incomingData["incoming"]; exists {
-		return incoming, nil
-	}
-
-	return []string{}, nil
+	return result, nil
 }
 
 // GetIncomingRelationships retrieves entity IDs that reference the given entity
@@ -396,7 +419,9 @@ func (qc *natsClient) VerifyRelationship(ctx context.Context, fromID, toID, pred
 	return false, nil
 }
 
-// CountIncomingEdges returns the number of edges pointing to the specified entity
+// CountIncomingEdges returns the number of distinct source entities pointing to the
+// specified entity (one per unique source, regardless of how many predicates connect
+// the pair) — it counts GetIncomingEdges' deduplicated sources, not raw edges.
 func (qc *natsClient) CountIncomingEdges(ctx context.Context, entityID string) (int, error) {
 	incomingIDs, err := qc.GetIncomingEdges(ctx, entityID)
 	if err != nil {

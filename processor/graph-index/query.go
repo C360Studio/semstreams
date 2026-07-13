@@ -135,7 +135,12 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 	}))
 }
 
-// handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply
+// handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply.
+//
+// After composite-key sharding (gh#474): scans the prefix entityID.">" to enumerate
+// all incoming edges, then reconstructs graph.IncomingEntry from each composite key.
+// The wire response type (graph.IncomingRelationshipsData, graph.IncomingEntry) is
+// unchanged — only the storage format changed.
 func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -151,19 +156,21 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
-	entry, err := c.incomingBucket.Get(ctx, req.EntityID)
+	keys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(req.EntityID))
 	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
-				Relationships: []graph.IncomingEntry{},
-			}))
-		}
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
-	var entries []graph.IncomingEntry
-	if err := json.Unmarshal(entry.Value, &entries); err != nil {
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
+	entries := make([]graph.IncomingEntry, 0, len(keys))
+	for _, key := range keys {
+		entry, ok := incomingEntryFromKey(key, req.EntityID)
+		if !ok {
+			c.logger.Debug("incoming query: skipping malformed key",
+				slog.String("key", key),
+				slog.String("entity_id", req.EntityID))
+			continue
+		}
+		entries = append(entries, entry)
 	}
 
 	return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
