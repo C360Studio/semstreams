@@ -37,18 +37,28 @@ func readIncomingEntries(ctx context.Context, t *testing.T, kv *natsclient.KVSto
 }
 
 // readContextEntityIDs returns the entity IDs indexed under a context value from the
-// sharded CONTEXT_INDEX (gh#474): keys are "hash(context).entityID.predicate". The
-// prefix hash(context)+"." isolates the context; the entity ID is the six tokens after
-// the hash. Replaces the pre-sharding bare-key Get(contextValue) of a JSON list.
+// sharded CONTEXT_INDEX (gh#474 P1f): keys are entity-prefixed
+// "entityID.hash(context).hex(predicate)" and the raw context rides in the value. The
+// context is no longer a key prefix, so this value-scans the bucket and matches on the
+// stored context, extracting the entity from each matching key.
 func readContextEntityIDs(ctx context.Context, t *testing.T, kv *natsclient.KVStore, contextValue string) []string {
 	t.Helper()
-	keys, err := kv.KeysByPrefix(ctx, contextIndexPrefix(contextValue))
+	keys, err := kv.Keys(ctx)
 	require.NoError(t, err)
 	ids := make([]string, 0, len(keys))
 	for _, key := range keys {
-		parts := strings.SplitN(key, ".", 8) // [hash, e1..e6, predicate]
+		entry, getErr := kv.Get(ctx, key)
+		if getErr != nil {
+			continue
+		}
+		var v contextIndexValue
+		if json.Unmarshal(entry.Value, &v) != nil || v.Context != contextValue {
+			continue
+		}
+		// key = "entityID.hash(context).hex(predicate)"; entity is the first 6 tokens.
+		parts := strings.SplitN(key, ".", 8)
 		require.GreaterOrEqual(t, len(parts), 8, "context composite key should split: %s", key)
-		ids = append(ids, strings.Join(parts[1:7], "."))
+		ids = append(ids, strings.Join(parts[:6], "."))
 	}
 	return ids
 }

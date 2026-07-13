@@ -961,13 +961,14 @@ func incomingEntryFromCompositeKey(key, targetID string) (IncomingEntry, bool) {
 	}
 	suffix := key[len(prefix):]
 
-	// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+	// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated tokens;
+	// the predicate is hex-encoded (gh#474 P1a — graph.DecodePredicateToken).
 	parts := strings.SplitN(suffix, ".", 7)
 	if len(parts) < 7 {
 		return IncomingEntry{}, false
 	}
-	predicate := parts[6]
-	if predicate == "" {
+	predicate, ok := graph.DecodePredicateToken(parts[6])
+	if !ok || predicate == "" {
 		return IncomingEntry{}, false
 	}
 	return IncomingEntry{
@@ -1035,21 +1036,22 @@ func (c *NATSValidationClient) GetContextEntries(ctx context.Context, contextVal
 }
 
 // contextEntryFromCompositeKey extracts entityID and predicate from a
-// CONTEXT_INDEX composite key of the form "hash(context).entityID.predicate".
-// The hash is a single dot-free hex token; the entity ID is exactly 6
-// dot-separated tokens; the predicate is everything after it. Returns false when
-// the key is malformed.
+// CONTEXT_INDEX composite key of the form "entityID.hash(context).hex(predicate)"
+// (entity-prefix, gh#474 P1f). The entity ID is the first 6 dot-separated tokens;
+// the context hash and hex predicate are each a single dot-free token. The raw
+// context is not in the key (it rides in the value). Returns false when the key is
+// malformed.
 func contextEntryFromCompositeKey(key string) (entityID, predicate string, ok bool) {
-	// parts[0] = hash, parts[1..6] = entityID tokens, parts[7] = predicate.
+	// parts[0..5] = entityID tokens, parts[6] = context hash, parts[7] = hex predicate.
 	parts := strings.SplitN(key, ".", 8)
 	if len(parts) < 8 {
 		return "", "", false
 	}
-	predicate = parts[7]
-	if predicate == "" {
+	predicate, decoded := graph.DecodePredicateToken(parts[7])
+	if !decoded || predicate == "" {
 		return "", "", false
 	}
-	return strings.Join(parts[1:7], "."), predicate, true
+	return strings.Join(parts[:6], "."), predicate, true
 }
 
 // GetAllContexts lists all distinct context values in the CONTEXT_INDEX bucket.

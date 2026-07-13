@@ -13,21 +13,22 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/stretchr/testify/assert"
 )
 
 // buildIncomingKey mirrors processor/graph-index/incoming_index.go incomingIndexKey:
-// key = targetID + "." + sourceID + "." + predicate. Kept in sync by the live e2e
-// HARD-FAIL gate and graph/query/incoming_shard_integration_test.go.
+// key = targetID + "." + sourceID + "." + hex(predicate) (gh#474 P1a). Kept in sync by
+// the live e2e HARD-FAIL gate and graph/query/incoming_shard_integration_test.go.
 func buildIncomingKey(targetID, sourceID, predicate string) string {
-	return targetID + "." + sourceID + "." + predicate
+	return targetID + "." + sourceID + "." + graph.EncodePredicateToken(predicate)
 }
 
-// buildContextKey mirrors processor/graph-index/context_index.go contextIndexKey:
-// key = hex(sha256(context)) + "." + entityID + "." + predicate.
+// buildContextKey mirrors processor/graph-index/context_index.go contextIndexKey
+// (gh#474 P1f entity-prefix): key = entityID + "." + hex(sha256(context)) + "." + hex(predicate).
 func buildContextKey(contextValue, entityID, predicate string) string {
 	sum := sha256.Sum256([]byte(contextValue))
-	return hex.EncodeToString(sum[:]) + "." + entityID + "." + predicate
+	return entityID + "." + hex.EncodeToString(sum[:]) + "." + graph.EncodePredicateToken(predicate)
 }
 
 func TestIncomingEntryFromCompositeKey(t *testing.T) {
@@ -48,6 +49,17 @@ func TestIncomingEntryFromCompositeKey(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, source, got.FromEntityID)
 		assert.Equal(t, "contains", got.Predicate)
+	})
+
+	t.Run("KV-unsafe predicate survives via hex (P1a)", func(t *testing.T) {
+		// graph-ingest accepts predicates with spaces/wildcards/unicode; a raw key token
+		// would make the Put fail. Hex keeps it KV-safe AND reversible (gh#474 P1a).
+		const weird = "has space/and*wild>chars☃"
+		key := buildIncomingKey(target, source, weird)
+		got, ok := incomingEntryFromCompositeKey(key, target)
+		assert.True(t, ok)
+		assert.Equal(t, source, got.FromEntityID)
+		assert.Equal(t, weird, got.Predicate)
 	})
 
 	t.Run("wrong prefix rejected", func(t *testing.T) {

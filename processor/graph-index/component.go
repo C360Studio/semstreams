@@ -1503,8 +1503,16 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		c.logger.Warn("failed to delete from outgoing index", slog.String("entity_id", entityID), slog.Any("error", err))
 	}
 
-	// Delete from incoming index — entity-as-prefix: enumerate all composite keys
-	// "entityID.sourceID.predicate" and delete each (design.md D3).
+	// LEGACY HARD-DELETE — do NOT reuse for logical retirement (gh#474 Codex P1e,
+	// gh#527). This removes every INCOMING row where entityID is the TARGET
+	// ("entityID.sourceID.predicate"). Those rows are the SOURCES' evidence that they
+	// still point at this entity — semantic support belongs to the source, not the
+	// target — so deleting them on the target's death discards still-live assertions
+	// and makes a later incoming-reference check falsely empty. That is acceptable only
+	// for a full hard delete of a leaf entity; the retention increment (#527) replaces
+	// this with source-owned retraction + a durable reverse manifest. The reciprocal
+	// rows (this entity as a mid-key SOURCE on other targets) are not reachable by a
+	// bare-key delete and are left for #527.
 	incomingKeys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(entityID))
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
@@ -1516,6 +1524,27 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 			if delErr := c.incomingBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
 				atomic.AddInt64(&c.errors, 1)
 				c.logger.Warn("failed to delete incoming index key",
+					slog.String("key", key),
+					slog.Any("error", delErr))
+			}
+		}
+	}
+
+	// Delete from context index — entity-as-prefix (gh#474 P1f): enumerate the
+	// entity's own composite keys "entityID.hash(context).hex(predicate)" and delete
+	// each. Unlike INCOMING, these rows ARE owned by this entity (its own provenance
+	// memberships), so removing them on its death is correct, not legacy behavior.
+	contextKeys, ctxErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
+	if ctxErr != nil {
+		atomic.AddInt64(&c.errors, 1)
+		c.logger.Warn("failed to list context index keys for delete",
+			slog.String("entity_id", entityID),
+			slog.Any("error", ctxErr))
+	} else {
+		for _, key := range contextKeys {
+			if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+				atomic.AddInt64(&c.errors, 1)
+				c.logger.Warn("failed to delete context index key",
 					slog.String("key", key),
 					slog.Any("error", delErr))
 			}
@@ -1681,6 +1710,9 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 		return errs.Wrap(err, "Component", "UpdateContextIndex", "context cancelled")
 	}
 
+	// Build the entity's DESIRED current context memberships (gh#474 P1f: keys are
+	// entity-prefixed). Marshal failure is a bug, not a transient — count it.
+	desired := make(map[string][]byte, len(triples))
 	for _, t := range triples {
 		if t.Context == "" {
 			continue
@@ -1688,10 +1720,7 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 		if !validateContextKeyInputs(entityID, t.Predicate, c.logger) {
 			continue
 		}
-
-		hash := contextHashHex(t.Context)
-		key := contextIndexKey(hash, entityID, t.Predicate)
-
+		key := contextIndexKey(entityID, contextHashHex(t.Context), t.Predicate)
 		value, marshalErr := json.Marshal(contextIndexValue{Context: t.Context})
 		if marshalErr != nil {
 			c.logger.Debug("context index: failed to marshal value",
@@ -1699,17 +1728,42 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 				slog.Any("error", marshalErr))
 			continue
 		}
+		desired[key] = value
+	}
 
-		if _, putErr := c.contextBucket.Put(ctx, key, value); putErr != nil {
-			c.logger.Debug("context index: failed to write entry",
-				slog.String("key", key),
-				slog.Any("error", putErr))
-		} else {
-			c.logger.Debug("context index updated",
-				slog.String("context", t.Context),
-				slog.String("entity_id", entityID),
-				slog.String("predicate", t.Predicate))
+	// Reconcile against what the entity currently owns: prefix-scan "entityID.",
+	// RETRACT superseded keys, then Put the desired set (P1f — this is why per-key
+	// Puts alone leaked; the entity prefix makes the retraction findable). Failures
+	// are aggregated and returned so the caller can withhold readiness (P1b).
+	existing, listErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
+	if listErr != nil {
+		atomic.AddInt64(&c.errors, 1)
+		return errs.WrapTransient(listErr, "Component", "UpdateContextIndex", "list existing context keys")
+	}
+
+	var failures int
+	for _, key := range existing {
+		if _, keep := desired[key]; keep {
+			continue // still current — leave it (idempotent)
 		}
+		if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+			atomic.AddInt64(&c.errors, 1)
+			failures++
+			c.logger.Debug("context index: failed to retract superseded entry",
+				slog.String("key", key), slog.Any("error", delErr))
+		}
+	}
+	for key, value := range desired {
+		if _, putErr := c.contextBucket.Put(ctx, key, value); putErr != nil {
+			atomic.AddInt64(&c.errors, 1)
+			failures++
+			c.logger.Debug("context index: failed to write entry",
+				slog.String("key", key), slog.Any("error", putErr))
+		}
+	}
+	if failures > 0 {
+		return errs.WrapTransient(errIndexWritePartial, "Component", "UpdateContextIndex",
+			fmt.Sprintf("%d of %d context writes/retractions failed for %s", failures, len(desired)+len(existing), entityID))
 	}
 
 	return nil

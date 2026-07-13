@@ -12,6 +12,8 @@ type mockRefs struct {
 	alias            *mockKVBucket
 	predicate        *mockKVBucket
 	predicateCatalog *mockKVBucket
+	context          *mockKVBucket
+	name             *mockKVBucket
 }
 
 var (

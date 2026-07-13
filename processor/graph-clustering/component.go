@@ -1210,7 +1210,9 @@ func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) 
 			continue
 		}
 		suffix := key[len(prefix):]
-		// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated
+		// tokens. Only the source is needed here, so the hex predicate token (gh#474
+		// P1a) is left untouched.
 		parts := strings.SplitN(suffix, ".", 7)
 		if len(parts) < 7 {
 			continue

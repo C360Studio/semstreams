@@ -4,58 +4,78 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
+	"strings"
 
 	"github.com/c360studio/semstreams/message"
 )
 
 // contextHashHex returns the fixed-width, dot-free hex token used as the
-// CONTEXT_INDEX key prefix for a context value.
+// CONTEXT_INDEX key's context axis.
 //
 // Hashing is required, not a style choice: raw context values are a dotted,
 // self-nesting vocabulary (e.g. "inference.hierarchy" vs
-// "inference.hierarchy.deep"), and NATS KV's KeysByPrefix wildcarding matches
-// on token position, not string prefix — a raw dotted prefix would silently
-// absorb membership for any context value that shares a dot-token prefix with
-// it. A fixed-width hex digest can't collide that way. See ADR-065 (the same
-// argument applies identically to CONTEXT as to PREDICATE_INDEX and NAME_INDEX).
+// "inference.hierarchy.deep"), so a raw context token would collide across
+// dot-token prefixes. A fixed-width hex digest can't. The raw context value is not
+// recoverable from the digest, so it rides in the row value (contextIndexValue).
 func contextHashHex(contextValue string) string {
 	sum := sha256.Sum256([]byte(contextValue))
 	return hex.EncodeToString(sum[:])
 }
 
 // contextIndexKey builds the CONTEXT_INDEX composite key for one
-// (contextValue, entityID, predicate) triple:
-// key = hash(contextValue) + "." + entityID + "." + predicate.
+// (entityID, contextValue, predicate) triple:
+// key = entityID + "." + hash(contextValue) + "." + hex(predicate).
 //
-// Unconditional Put, no CAS — ADR-065 footgun comment: each (contextValue,
-// entityID, predicate) triple is globally unique; no two callers ever contend
-// on the same key. The raw Get+Put sequence this replaces had a lost-update
-// race between concurrent writers; per-key unconditional Puts eliminate it by
-// construction (design.md, CONTEXT row).
+// The ENTITY is the key PREFIX (gh#474 Codex P1f). CONTEXT has no production
+// reader (design.md D2), so nothing needs a by-context scan; keying by entity
+// instead makes the index self-reconciling and self-cleaning, which the former
+// hash(context)-prefix layout could not do:
+//   - update: prefix-scan "entityID." to retract the entity's superseded
+//     memberships before writing its current ones (contextIndexEntityPrefix);
+//   - delete: prefix-scan "entityID." to remove the entity's whole keyset.
 //
-// Retraction tradeoff (retention, gh#433 / ADR-073): the replaced merge-list
-// writer removed the entity's prior entries before re-adding current ones, so a
-// re-index of C:{p1,p2}→C:{p1} pruned the p2 membership. Per-key Puts do NOT
-// retract a superseded (context,entity,predicate) key — it leaks until an owner
-// cleans it. This is why a tombstone carrying only last-known triples is
-// insufficient (it can't name the orphaned p2 key); cleanup needs a durable
-// per-entity reverse projection. Harmless today only because CONTEXT has no
-// production reader (design.md D2).
-func contextIndexKey(contextHash, entityID, predicate string) string {
-	return contextHash + "." + entityID + "." + predicate
+// The reconcile-delete-then-write is bounded by ONE entity's context memberships
+// (small), not the O(fan-in) shared-context list the pre-gh#474 writer merged —
+// so it does not reintroduce the CAS-contention class this change removed.
+//
+// The predicate is hex-encoded (encodePredicateToken) for KV-safety, decoded back
+// in contextEntryFromKey. The raw context value is not recoverable from its hash,
+// so it rides in the value.
+func contextIndexKey(entityID, contextHash, predicate string) string {
+	return entityID + "." + contextHash + "." + encodePredicateToken(predicate)
 }
 
-// contextIndexPrefix builds the KeysByPrefix argument for enumerating all
-// CONTEXT_INDEX entries for a given context value.
-func contextIndexPrefix(contextValue string) string {
-	return contextHashHex(contextValue) + "."
+// contextIndexEntityPrefix is the KeysByPrefix argument enumerating every
+// CONTEXT_INDEX entry OWNED BY entityID (all contexts, all predicates). Used by
+// the update-reconcile and delete paths.
+func contextIndexEntityPrefix(entityID string) string {
+	return entityID + "."
 }
 
-// contextIndexValue is the JSON value stored at each CONTEXT_INDEX composite
-// key. The raw context value is NOT recoverable from the sha256 prefix alone
-// (a property shared with NAME_INDEX's name hash), so it rides in the value.
+// contextIndexValue is the JSON value stored at each CONTEXT_INDEX composite key.
+// The raw context value is not recoverable from the sha256 key token, so it rides
+// here (a property shared with NAME_INDEX's name hash).
 type contextIndexValue struct {
 	Context string `json:"context"`
+}
+
+// contextEntryFromKey reconstructs (entityID, predicate) from a CONTEXT_INDEX
+// composite key "entityID.hash(context).hex(predicate)". entityID is the first 6
+// dot-separated tokens; the sha256 token and the hex predicate token are each
+// dot-free. The raw context is not in the key — read it from the row value.
+// Returns ("", "", false) when the key is malformed.
+func contextEntryFromKey(key string) (entityID, predicate string, ok bool) {
+	// parts[0..5] = entityID tokens, parts[6] = context hash, parts[7] = hex predicate.
+	parts := strings.SplitN(key, ".", 8)
+	if len(parts) < 8 {
+		return "", "", false
+	}
+	entityID = strings.Join(parts[:6], ".")
+	predicate, decoded := decodePredicateToken(parts[7])
+	if !decoded || predicate == "" || !message.IsValidEntityID(entityID) {
+		return "", "", false
+	}
+	return entityID, predicate, true
 }
 
 // validateContextKeyInputs checks that entityID and predicate are valid for
@@ -68,7 +88,7 @@ func validateContextKeyInputs(entityID, predicate string, logger *slog.Logger) b
 		return false
 	}
 	if predicate == "" {
-		logger.Debug("context index: empty predicate would produce trailing-dot key, skipping",
+		logger.Debug("context index: empty predicate, skipping",
 			slog.String("entity_id", entityID))
 		return false
 	}

@@ -40,14 +40,17 @@ func normalizeName(name string) string {
 
 // nameCompositeKey builds the full NAME_INDEX composite key for one
 // (name, entityID, predicate) membership:
-// key = hash(name) + "." + entityID + "." + predicate.
+// key = hash(name) + "." + entityID + "." + hex(predicate).
+//
+// The predicate is hex-encoded (encodePredicateToken, gh#474 Codex P1a) for the
+// same KV-safety reason as INCOMING; the reader decodes it back in nameEntryFromKey.
 //
 // Unconditional Put, no CAS — ADR-065 footgun comment: each (name, entityID,
 // predicate) triple is globally unique; concurrent writers on different triples
 // never contend on the same key. The CAS UpdateWithRetry this replaces cost an
 // extra round-trip per name-write; with composite keys the write is a single Put.
 func nameCompositeKey(nameHash, entityID, predicate string) string {
-	return nameHash + "." + entityID + "." + predicate
+	return nameHash + "." + entityID + "." + encodePredicateToken(predicate)
 }
 
 // nameCompositePrefix builds the KeysByPrefix argument that enumerates every
@@ -77,14 +80,15 @@ func nameEntryFromKey(key, nameHash string) (entityID, predicate string, ok bool
 	}
 	suffix := key[len(prefix):]
 
-	// suffix = "entityID.predicate"; entityID is exactly 6 dot-separated tokens.
+	// suffix = "entityID.hex(predicate)"; entityID is exactly 6 dot-separated
+	// tokens; the hex predicate token is dot-free by construction.
 	parts := strings.SplitN(suffix, ".", 7)
 	if len(parts) < 7 {
 		return "", "", false
 	}
 	entityID = strings.Join(parts[:6], ".")
-	predicate = parts[6]
-	if predicate == "" || !message.IsValidEntityID(entityID) {
+	predicate, decoded := decodePredicateToken(parts[6])
+	if !decoded || predicate == "" || !message.IsValidEntityID(entityID) {
 		return "", "", false
 	}
 	return entityID, predicate, true

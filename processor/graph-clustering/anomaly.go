@@ -115,13 +115,17 @@ func (q *kvRelationshipQuerier) GetIncomingRelationships(ctx context.Context, en
 			continue
 		}
 		suffix := key[len(prefix):]
-		// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
+		// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated
+		// tokens; the predicate is hex-encoded (gh#474 P1a — graph.DecodePredicateToken).
 		parts := strings.SplitN(suffix, ".", 7)
 		if len(parts) < 7 {
 			continue
 		}
 		sourceID := strings.Join(parts[:6], ".")
-		predicate := parts[6]
+		predicate, ok := graph.DecodePredicateToken(parts[6])
+		if !ok || predicate == "" {
+			continue
+		}
 		result = append(result, inference.RelationshipInfo{
 			FromEntityID: sourceID,
 			ToEntityID:   entityID,

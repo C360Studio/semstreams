@@ -121,20 +121,34 @@ func TestContextIndex_HashPreventsCollision(t *testing.T) {
 	assert.NotEqual(t, h1, h2, "distinct context values must produce distinct hashes")
 }
 
-func TestContextIndex_NestedContextNotOverMatched(t *testing.T) {
-	// Prefix scan for "inference.hierarchy" must not match keys stored under
-	// "inference.hierarchy.deep" (a stricter context value nested under the first).
-	entity := "acme.ops.robotics.gcs.drone.001"
+func TestContextIndex_EntityPrefixReconcileAndIsolation(t *testing.T) {
+	// CONTEXT keys are entity-prefixed (gh#474 P1f): "entityID.hash(context).hex(pred)".
+	// The entity prefix enumerates exactly one entity's memberships (driving reconcile
+	// + delete) and never cross-matches another entity. The raw context rides in the
+	// value, so nested contexts are disambiguated by the hash token, not the prefix.
+	entityA := "acme.ops.robotics.gcs.drone.001"
+	entityB := "acme.ops.robotics.gcs.drone.002"
 	pred := "inference.tier"
 
-	keyShallow := contextIndexKey(contextHashHex("inference.hierarchy"), entity, pred)
-	keyDeep := contextIndexKey(contextHashHex("inference.hierarchy.deep"), entity, pred)
+	// Distinct contexts for the SAME entity → distinct keys (hash token), both under
+	// that entity's prefix — including the shallow/deep nesting the old layout feared.
+	keyShallow := contextIndexKey(entityA, contextHashHex("inference.hierarchy"), pred)
+	keyDeep := contextIndexKey(entityA, contextHashHex("inference.hierarchy.deep"), pred)
+	assert.NotEqual(t, keyShallow, keyDeep, "distinct contexts must produce distinct keys")
 
-	prefix := contextIndexPrefix("inference.hierarchy")
-	assert.True(t, strings.HasPrefix(keyShallow, prefix),
-		"shallow context key must match its own prefix")
-	assert.False(t, strings.HasPrefix(keyDeep, prefix),
-		"nested context key must NOT match the shallow context's hash prefix")
+	prefixA := contextIndexEntityPrefix(entityA)
+	assert.True(t, strings.HasPrefix(keyShallow, prefixA), "entity's key must match its own prefix")
+	assert.True(t, strings.HasPrefix(keyDeep, prefixA), "nested-context key still belongs to the same entity")
+
+	// A different entity's key must NOT match entityA's prefix.
+	keyB := contextIndexKey(entityB, contextHashHex("inference.hierarchy"), pred)
+	assert.False(t, strings.HasPrefix(keyB, prefixA), "entity B's key must not match entity A's prefix")
+
+	// Round-trip: reconstruct entity + predicate from the key (context comes from the value).
+	gotEntity, gotPred, ok := contextEntryFromKey(keyShallow)
+	require.True(t, ok)
+	assert.Equal(t, entityA, gotEntity)
+	assert.Equal(t, pred, gotPred)
 }
 
 // NAME index key tests

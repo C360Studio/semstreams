@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 )
 
@@ -63,16 +64,17 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_PreservesPredicates(t *t
 	incomingBucket := newMockKVBucket()
 
 	// Store incoming relationships in the composite-key sharded format (gh#474):
-	// one key per edge — "targetID.sourceID.predicate" with an empty marker value.
-	// Entity IDs must be valid 6-part federated IDs for the parser to reconstruct them.
+	// one key per edge — "targetID.sourceID.hex(predicate)" with an empty marker value
+	// (the predicate is hex-encoded, gh#474 P1a). Entity IDs must be valid 6-part
+	// federated IDs for the parser to reconstruct them.
 	targetID := "acme.ops.graph.test.entity.b"
 	sourceA := "acme.ops.graph.test.entity.a"
 	sourceC := "acme.ops.graph.test.entity.c"
 
-	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceA+".worksFor", []byte{}); err != nil {
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceA+"."+graph.EncodePredicateToken("worksFor"), []byte{}); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
-	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceC+".reports_to", []byte{}); err != nil {
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceC+"."+graph.EncodePredicateToken("reports_to"), []byte{}); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 

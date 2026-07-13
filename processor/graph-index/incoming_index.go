@@ -16,7 +16,13 @@ import (
 var incomingIndexMarker = []byte{}
 
 // incomingIndexKey builds the INCOMING_INDEX composite key for one directed
-// edge: key = targetID + "." + sourceID + "." + predicate.
+// edge: key = targetID + "." + sourceID + "." + hex(predicate).
+//
+// The predicate is hex-encoded (encodePredicateToken, gh#474 Codex P1a): a
+// free-form predicate can contain KV-unsafe bytes, and a raw token would make the
+// Put fail asymmetrically vs the hashed PREDICATE_INDEX. Hex keeps it reversible,
+// so the reader recovers the predicate from the key with no value lookup — INCOMING
+// stays a pure prefix key-scan (empty row value).
 //
 // Using the raw targetID as the scan prefix is collision-safe: a valid 6-token
 // entity ID (dot-separated, enforced by IsValidEntityID) cannot be a NATS
@@ -32,7 +38,7 @@ var incomingIndexMarker = []byte{}
 // the key-uniqueness invariant no longer holds — don't "fix" this back to
 // UpdateWithRetry without re-establishing it.
 func incomingIndexKey(targetID, sourceID, predicate string) string {
-	return targetID + "." + sourceID + "." + predicate
+	return targetID + "." + sourceID + "." + encodePredicateToken(predicate)
 }
 
 // incomingIndexPrefix builds the KeysByPrefix argument that enumerates every
@@ -56,16 +62,16 @@ func incomingEntryFromKey(key, targetID string) (graph.IncomingEntry, bool) {
 	}
 	suffix := key[len(prefix):]
 
-	// suffix = "sourceID.predicate"; sourceID is exactly 6 dot-separated tokens.
-	// SplitN with n=7 yields at most 7 parts: parts[0..5] = sourceID tokens,
-	// parts[6] = predicate (with any dots intact).
+	// suffix = "sourceID.hex(predicate)"; sourceID is exactly 6 dot-separated
+	// tokens; the hex predicate token is dot-free by construction. SplitN with
+	// n=7 yields parts[0..5] = sourceID tokens, parts[6] = the hex predicate.
 	parts := strings.SplitN(suffix, ".", 7)
 	if len(parts) < 7 {
 		return graph.IncomingEntry{}, false
 	}
 	sourceID := strings.Join(parts[:6], ".")
-	predicate := parts[6]
-	if predicate == "" {
+	predicate, ok := decodePredicateToken(parts[6])
+	if !ok || predicate == "" {
 		return graph.IncomingEntry{}, false
 	}
 	if !message.IsValidEntityID(sourceID) {
