@@ -265,11 +265,30 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
 	assert.True(t, natsclient.IsKVNotFoundError(err), "outgoing index should be deleted, got: %v", err)
 
-	// After gh#474 the incoming index is entity-as-prefix; the delete path prefix-scans
-	// "entityID." and removes each composite key. Assert the whole keyset is gone rather
-	// than a bare key that no longer exists post-sharding (which would pass vacuously).
-	incomingAfterDelete := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
-	assert.Empty(t, incomingAfterDelete, "incoming index entries should be deleted")
+	// Entity-owned cleanup: the delete path prefix-scans "entityID." and removes the
+	// deleted entity's own incoming-as-TARGET keyset. Nothing targets this entity, so
+	// that set is empty either way — this only proves the prefix-scan-delete runs without
+	// resurrecting a keyset, not that a populated one is cleaned.
+	ownIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
+	assert.Empty(t, ownIncoming, "the deleted entity's own incoming-as-target keyset should be gone")
+
+	// Reciprocal cleanup is NOT implemented (gh#433, subsumed by the ADR-073 retention
+	// epic): the deleted entity is a SOURCE, so its edge lives on the TARGET's incoming
+	// index at "targetID.entityID.predicate" — a mid-key sourceID token a bare-key
+	// tombstone cannot reach. Characterization assertion documenting the current gap;
+	// FLIP to assert.NotContains / require empty once gh#433 (composite reciprocal
+	// cleanup driven by a durable reverse projection) lands.
+	targetIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
+	staleReciprocal := false
+	for _, e := range targetIncoming {
+		if e.FromEntityID == entityID {
+			staleReciprocal = true
+			break
+		}
+	}
+	assert.True(t, staleReciprocal,
+		"gh#433: deleting the source leaves a stale reciprocal edge on the target's incoming index "+
+			"(reciprocal cleanup unimplemented) — flip this assertion when gh#433 lands")
 }
 
 // TestIntegration_MultipleRelationships tests indexing entities with multiple relationships

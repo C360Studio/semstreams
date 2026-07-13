@@ -32,6 +32,15 @@ func contextHashHex(contextValue string) string {
 // on the same key. The raw Get+Put sequence this replaces had a lost-update
 // race between concurrent writers; per-key unconditional Puts eliminate it by
 // construction (design.md, CONTEXT row).
+//
+// Retraction tradeoff (retention, gh#433 / ADR-073): the replaced merge-list
+// writer removed the entity's prior entries before re-adding current ones, so a
+// re-index of C:{p1,p2}→C:{p1} pruned the p2 membership. Per-key Puts do NOT
+// retract a superseded (context,entity,predicate) key — it leaks until an owner
+// cleans it. This is why a tombstone carrying only last-known triples is
+// insufficient (it can't name the orphaned p2 key); cleanup needs a durable
+// per-entity reverse projection. Harmless today only because CONTEXT has no
+// production reader (design.md D2).
 func contextIndexKey(contextHash, entityID, predicate string) string {
 	return contextHash + "." + entityID + "." + predicate
 }
