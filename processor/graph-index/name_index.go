@@ -233,6 +233,12 @@ func (c *Component) handleQueryByNameNATS(ctx context.Context, data []byte) ([]b
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty name"))
 	}
 
+	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
+	// still catching up after a format cutover / cold replay.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	nameHash := nameIndexKey(req.Name)
 	prefix := nameCompositePrefix(req.Name)
 

@@ -135,6 +135,31 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 	}))
 }
 
+// ensureQueryReady gates the composite-key reverse-index query handlers (incoming,
+// byName) on the index having caught up to ENTITY_STATES at least once after Start
+// (gh#474 Codex P1d). Sticky-fast once caught-up; otherwise it does one revision-lag
+// probe. Returns a transient ErrorCodeIndexNotReady while still building so a caller
+// retries rather than acting on the partial keyset a format cutover / cold replay is
+// still materialising (old aggregate keys are inert, new keys incomplete).
+func (c *Component) ensureQueryReady(ctx context.Context) error {
+	if c.indexBootstrapped.Load() {
+		return nil
+	}
+	// No watermark wired means the watcher never started (unit tests, pre-Start) —
+	// there is no cutover replay to gate on, so treat as ready. In production Start
+	// always wires the watermark before subscribing these handlers, so a live request
+	// takes the honest revision-lag path below.
+	if c.watermark == nil {
+		return nil
+	}
+	if c.computeIndexStatus(ctx).Ready {
+		c.indexBootstrapped.Store(true)
+		return nil
+	}
+	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+		errors.New("index not ready: still catching up to ENTITY_STATES"))
+}
+
 // handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply.
 //
 // After composite-key sharding (gh#474): scans the prefix entityID.">" to enumerate
@@ -156,6 +181,12 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
 
+	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
+	// still catching up after a format cutover / cold replay.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	keys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(req.EntityID))
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
@@ -172,6 +203,17 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		}
 		entries = append(entries, entry)
 	}
+
+	// Deterministic order (gh#474 Codex P1c): KeysByPrefix returns storage order,
+	// which a no-op replay can reshuffle with worker scheduling. PathRAG stops at
+	// max_nodes/max_paths, so an unsorted result makes the capped set depend on
+	// write timing rather than graph state. Sort by (FromEntityID, Predicate).
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].FromEntityID != entries[j].FromEntityID {
+			return entries[i].FromEntityID < entries[j].FromEntityID
+		}
+		return entries[i].Predicate < entries[j].Predicate
+	})
 
 	return json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
 		Relationships: entries,

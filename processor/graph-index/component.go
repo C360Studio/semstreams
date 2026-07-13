@@ -267,6 +267,15 @@ type Component struct {
 	reindexTotal     int64 // atomic
 	reindexUnchanged int64 // atomic
 
+	// indexBootstrapped is a sticky flag (gh#474 Codex P1d): false until the index
+	// has been observed caught-up to ENTITY_STATES at least once after Start. While
+	// false, the composite-key reverse-index query handlers (incoming, byName) return
+	// ErrorCodeIndexNotReady instead of serving the partial keyset that a format
+	// cutover / cold replay is still building. Once true it never flips back — steady-
+	// state lag is surfaced via graph.index.query.status, not by failing reads — so the
+	// per-query readiness probe runs only during the brief pre-catch-up window.
+	indexBootstrapped atomic.Bool
+
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
 

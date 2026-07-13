@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -325,6 +326,10 @@ func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]
 		}
 	}
 
+	// Deterministic order (gh#474 Codex P1c): KeysByPrefix returns storage order,
+	// which a no-op replay can reshuffle. Sort so a capped consumer (PathRAG) sees a
+	// stable set for identical graph state.
+	sort.Strings(result)
 	return result, nil
 }
 
