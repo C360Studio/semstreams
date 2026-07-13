@@ -276,6 +276,16 @@ type Component struct {
 	// per-query readiness probe runs only during the brief pre-catch-up window.
 	indexBootstrapped atomic.Bool
 
+	// failedEntities / failedCount track entities whose required index writes did not
+	// all succeed after bounded retry (gh#474 Codex P1b). While failedCount > 0 the
+	// index is NOT authoritative — computeIndexStatus withholds Ready so incoming/byName
+	// queries return ErrorCodeIndexNotReady rather than serving adjacency that is known
+	// to be missing. An entry is added on ultimate write failure and removed when that
+	// same entity later indexes cleanly (or is deleted). failedCount mirrors the map
+	// size as a cheap O(1) gate for the per-query readiness check.
+	failedEntities sync.Map
+	failedCount    atomic.Int64
+
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
 
@@ -882,8 +892,35 @@ func (c *Component) processEntityUpdateWorker(ctx context.Context, entry jetstre
 // entries. It is the single funnel for every update-completion path — the pool
 // worker, the direct branch, and the coalescer batch all route through here — so it
 // is the one place the readiness watermark's completion fires (ADR-066 §1).
+// markEntityFailed records that entityID's required index writes did not all succeed
+// after retry (gh#474 P1b). Idempotent: failedCount increments only on the first mark
+// so it mirrors the set size. While failedCount > 0 the index withholds readiness.
+func (c *Component) markEntityFailed(entityID string) {
+	if _, loaded := c.failedEntities.LoadOrStore(entityID, struct{}{}); !loaded {
+		c.failedCount.Add(1)
+		if c.metrics != nil {
+			c.metrics.recordIndexWriteFailure()
+		}
+	}
+}
+
+// clearEntityFailed removes entityID from the failed set after a clean re-index or a
+// delete, decrementing failedCount only if it was present.
+func (c *Component) clearEntityFailed(entityID string) {
+	if _, loaded := c.failedEntities.LoadAndDelete(entityID); loaded {
+		c.failedCount.Add(-1)
+	}
+}
+
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
-	c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value())
+	if err := c.processEntityUpdateFromData(ctx, entry.Key(), entry.Value()); err != nil {
+		// The failedCount side-effect (inside processEntityUpdateFromData) already
+		// withheld readiness; log for operators. Completion below still fires — a
+		// stranded revision would pin the watermark forever, and readiness is gated on
+		// failedCount, not on completing this revision (ADR-066 §1 stays intact).
+		c.logger.Warn("entity index write failed; readiness withheld until re-index",
+			slog.String("entity", entry.Key()), slog.Any("error", err))
+	}
 	// Completion fires on RETURN, not on indexing success: a malformed entry that
 	// early-returns inside processEntityUpdateFromData must still complete or its
 	// revision strands the watermark forever (ADR-066 §1 Scope boundary — Ready
@@ -894,9 +931,19 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 	}
 }
 
-// processEntityUpdateFromData indexes an entity's relationships from its triples using raw data.
-// It is the core implementation used by both processEntityUpdate and processEntityBatch.
-func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID string, data []byte) {
+// indexWriteMaxAttempts bounds the in-place retry of an entity's required index
+// writes (gh#474 P1b). Writes are idempotent, so retrying the whole set is safe;
+// this recovers a transient KV blip so it does not mark the entity failed (and
+// withhold readiness) unnecessarily.
+const indexWriteMaxAttempts = 3
+
+// processEntityUpdateFromData indexes an entity's relationships from its triples using
+// raw data. It is the core implementation used by both processEntityUpdate and
+// processEntityBatch. Returns nil on success (or a permanent, non-retryable skip such
+// as unparseable data — completing is correct there) and an aggregated error when one
+// or more REQUIRED index writes ultimately failed after retry (gh#474 P1b): the entity
+// is then marked failed, which withholds authoritative readiness until it re-indexes.
+func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID string, data []byte) error {
 	// Report indexing stage (throttled to avoid KV spam)
 	if err := c.lifecycleReporter.ReportStage(ctx, "indexing"); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "indexing"), slog.Any("error", err))
@@ -904,10 +951,13 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 
 	var state graph.EntityState
 	if err := json.Unmarshal(data, &state); err != nil {
+		// Permanent parse failure — retrying can't help and it drives no writes, so it
+		// is not an index-write failure. Report processed and return nil (the revision
+		// is legitimately covered).
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		return
+		return nil
 	}
 
 	// Determine entity ID: use state.ID if set, otherwise entityID arg, otherwise first triple subject
@@ -923,124 +973,138 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	}
 
 	// Collect all outgoing relationships for this entity
-	type RelationshipTarget struct {
-		ID        string `json:"id"`
-		Predicate string `json:"predicate"`
-	}
 	outgoingTargets := make([]map[string]interface{}, 0)
-
 	// Collect predicates for this entity
 	predicatesUsed := make(map[string]bool)
-
 	// Track indexed relationships for this entity
 	var indexed int
-
 	// Collect incoming entries per target for per-edge writes
 	incomingByTarget := make(map[string][]graph.IncomingEntry)
+	// Collect alias/name writes to perform (with the rest) in the retryable write phase.
+	type aliasWrite struct{ alias string }
+	type nameWrite struct {
+		name, predicate string
+		priority        int
+	}
+	var aliasWrites []aliasWrite
+	var nameWrites []nameWrite
 
 	// Index each triple
 	for _, triple := range state.Triples {
-		// Track predicate usage
 		predicatesUsed[triple.Predicate] = true
 
-		// Check if this is a relationship (object is an entity ID)
 		if triple.IsRelationship() {
 			targetID, _ := triple.Object.(string)
-
-			// Collect outgoing relationship
 			outgoingTargets = append(outgoingTargets, map[string]interface{}{
 				"id":        targetID,
 				"predicate": triple.Predicate,
 			})
-
-			// Collect incoming entry; will be written after the loop
 			incomingByTarget[targetID] = append(incomingByTarget[targetID], graph.IncomingEntry{
 				FromEntityID: resolvedID,
 				Predicate:    triple.Predicate,
 			})
-
 			indexed++
 		}
 
-		// Check for alias predicate and index it
-		// Supports both the canonical core.identity.alias predicate AND vocabulary-registered alias predicates
+		// Alias predicate (canonical core.identity.alias OR vocabulary-registered).
 		_, isVocabAlias := c.aliasPredicates[triple.Predicate]
-		isCoreAlias := triple.Predicate == "core.identity.alias"
-		if isVocabAlias || isCoreAlias {
+		if isVocabAlias || triple.Predicate == "core.identity.alias" {
 			if alias, ok := triple.Object.(string); ok && alias != "" {
-				if err := c.UpdateAliasIndex(ctx, alias, resolvedID); err != nil {
-					c.logger.Debug("failed to update alias index",
-						slog.String("alias", alias),
-						slog.String("entity", resolvedID),
-						slog.String("predicate", triple.Predicate),
-						slog.Any("error", err))
-				}
+				aliasWrites = append(aliasWrites, aliasWrite{alias: alias})
 			}
 		}
 
-		// Index display-name (label) predicates into NAME_INDEX for
-		// graph.query.byName (gh#376). These are exactly the predicates the alias
-		// index excludes (AliasTypeLabel).
+		// Display-name (label) predicates → NAME_INDEX for graph.query.byName (gh#376).
 		if priority, isName := c.namePredicates[triple.Predicate]; isName {
 			if name, ok := triple.Object.(string); ok && name != "" {
-				if err := c.UpdateNameIndex(ctx, name, resolvedID, triple.Predicate, priority); err != nil {
-					c.logger.Debug("failed to update name index",
-						slog.String("name", name),
-						slog.String("entity", resolvedID),
-						slog.String("predicate", triple.Predicate),
-						slog.Any("error", err))
-				}
+				nameWrites = append(nameWrites, nameWrite{name: name, predicate: triple.Predicate, priority: priority})
 			}
 		}
 	}
 
-	// Re-index no-op instrumentation (D6, design.md / gh#474).
-	// Compute the index-input projection for this entity: the set of facts that
-	// actually drive index writes. Compare to the last-indexed projection; if
-	// identical, increment the unchanged counter. OBSERVE ONLY — all writes proceed
-	// regardless. This is the L2 change-detection data gate.
-	projection := computeIndexProjection(state, c.namePredicates)
+	// Re-index no-op instrumentation (D6, design.md / gh#474): compute the index-input
+	// projection and compare to the last-indexed one (OBSERVE ONLY). The baseline is
+	// stored only AFTER a successful write below (P2b) — a failed projection must not
+	// become the comparison baseline, or a later retry would be suppressed as a no-op.
+	projection := computeIndexProjection(state, c.namePredicates, c.aliasPredicates)
 	atomic.AddInt64(&c.reindexTotal, 1)
-	if prev, loaded := c.lastProjections.Load(resolvedID); loaded && prev.(string) == projection {
+	prev, loaded := c.lastProjections.Load(resolvedID)
+	unchanged := loaded && prev.(string) == projection
+	if unchanged {
 		atomic.AddInt64(&c.reindexUnchanged, 1)
 	}
+	if c.metrics != nil {
+		c.metrics.recordReindex(unchanged)
+	}
+
+	// writeAll performs every REQUIRED reverse-index write, aggregating failures. It is
+	// idempotent (unconditional Puts + reconcile), so the caller retries it as a unit.
+	writeAll := func() error {
+		var errList []error
+		for targetID, entries := range incomingByTarget {
+			if err := c.updateIncomingIndexBatch(ctx, targetID, entries); err != nil {
+				errList = append(errList, fmt.Errorf("incoming[%s]: %w", targetID, err))
+			}
+		}
+		if len(outgoingTargets) > 0 {
+			if err := c.updateOutgoingIndexBatch(ctx, resolvedID, outgoingTargets); err != nil {
+				errList = append(errList, fmt.Errorf("outgoing: %w", err))
+			}
+		}
+		for predicate := range predicatesUsed {
+			if err := c.UpdatePredicateIndex(ctx, resolvedID, predicate); err != nil {
+				errList = append(errList, fmt.Errorf("predicate[%s]: %w", predicate, err))
+			}
+		}
+		if err := c.UpdateContextIndex(ctx, resolvedID, state.Triples); err != nil {
+			errList = append(errList, fmt.Errorf("context: %w", err))
+		}
+		for _, a := range aliasWrites {
+			if err := c.UpdateAliasIndex(ctx, a.alias, resolvedID); err != nil {
+				errList = append(errList, fmt.Errorf("alias[%s]: %w", a.alias, err))
+			}
+		}
+		for _, n := range nameWrites {
+			if err := c.UpdateNameIndex(ctx, n.name, resolvedID, n.predicate, n.priority); err != nil {
+				errList = append(errList, fmt.Errorf("name[%s]: %w", n.name, err))
+			}
+		}
+		return errors.Join(errList...)
+	}
+
+	// Bounded retry: writes are idempotent, so a transient KV blip is retried rather
+	// than immediately marking the entity failed.
+	var writeErr error
+	for attempt := 0; attempt < indexWriteMaxAttempts; attempt++ {
+		if writeErr = writeAll(); writeErr == nil {
+			break
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			writeErr = ctxErr
+			break
+		}
+		if attempt < indexWriteMaxAttempts-1 {
+			select {
+			case <-ctx.Done():
+				writeErr = ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 25 * time.Millisecond):
+			}
+		}
+	}
+
+	if writeErr != nil {
+		// Required writes did not all land — withhold readiness until re-index (P1b).
+		// Do NOT store the projection baseline, so the next delivery re-attempts rather
+		// than being suppressed as a no-op.
+		c.markEntityFailed(resolvedID)
+		return errs.WrapTransient(writeErr, "Component", "processEntityUpdateFromData",
+			fmt.Sprintf("index writes failed for %s after %d attempts", resolvedID, indexWriteMaxAttempts))
+	}
+
+	// Success — the entity is fully indexed. Clear any prior failure and record the
+	// baseline for no-op detection.
+	c.clearEntityFailed(resolvedID)
 	c.lastProjections.Store(resolvedID, projection)
-
-	// Write incoming index — one unconditional Put per edge (no CAS)
-	for targetID, entries := range incomingByTarget {
-		if err := c.updateIncomingIndexBatch(ctx, targetID, entries); err != nil {
-			c.logger.Debug("failed to update incoming index",
-				slog.String("target", targetID),
-				slog.String("source", resolvedID),
-				slog.Any("error", err))
-		}
-	}
-
-	// Write outgoing index with all targets
-	if len(outgoingTargets) > 0 {
-		if err := c.updateOutgoingIndexBatch(ctx, resolvedID, outgoingTargets); err != nil {
-			c.logger.Debug("failed to update outgoing index",
-				slog.String("entity", resolvedID),
-				slog.Any("error", err))
-		}
-	}
-
-	// Update predicate index for all predicates used by this entity
-	for predicate := range predicatesUsed {
-		if err := c.UpdatePredicateIndex(ctx, resolvedID, predicate); err != nil {
-			c.logger.Debug("failed to update predicate index",
-				slog.String("entity", resolvedID),
-				slog.String("predicate", predicate),
-				slog.Any("error", err))
-		}
-	}
-
-	// Update context index for triples with provenance (e.g., "inference.hierarchy")
-	if err := c.UpdateContextIndex(ctx, resolvedID, state.Triples); err != nil {
-		c.logger.Debug("failed to update context index",
-			slog.String("entity", resolvedID),
-			slog.Any("error", err))
-	}
 
 	c.logger.Debug("indexed entity",
 		slog.String("entity", resolvedID),
@@ -1049,12 +1113,11 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
-	// Record Prometheus metrics
 	if c.metrics != nil {
 		c.metrics.recordEventProcessed()
 		c.metrics.recordWatchEvent("update")
 	}
+	return nil
 }
 
 // computeIndexProjection computes a canonical, sorted string representing the
@@ -1062,13 +1125,16 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 //   - relationship (predicate, targetID) pairs — driving INCOMING/OUTGOING writes
 //   - the full distinct predicate set — driving PREDICATE_INDEX writes
 //   - (namePredicate, name) pairs — driving NAME_INDEX writes
+//   - (aliasPredicate, alias) pairs — driving ALIAS_INDEX writes (gh#474 P2b)
 //   - (context, predicate) pairs — driving CONTEXT_INDEX writes (NOT raw object values)
 //
 // Two entities with the same projection will produce identical index writes on
 // re-index. The projection is intentionally NOT excluding literal-only predicates
 // (community.member_of is a literal but still a predicate-index membership; excluding
-// it silently drops memberships from the no-op signal).
-func computeIndexProjection(state graph.EntityState, namePredicates map[string]int) string {
+// it silently drops memberships from the no-op signal). It MUST cover every indexed
+// axis, including alias values — otherwise an alias-only change reads as "unchanged"
+// and miscounts the no-op rate (P2b).
+func computeIndexProjection(state graph.EntityState, namePredicates, aliasPredicates map[string]int) string {
 	parts := make([]string, 0, len(state.Triples)*3)
 	predicateSeen := make(map[string]bool, len(state.Triples))
 
@@ -1090,7 +1156,14 @@ func computeIndexProjection(state graph.EntityState, namePredicates map[string]i
 				parts = append(parts, "name:"+t.Predicate+":"+name)
 			}
 		}
-		// 4. (context, predicate) pairs — NOT raw object values
+		// 4. (aliasPredicate, alias) pairs
+		_, isVocabAlias := aliasPredicates[t.Predicate]
+		if isVocabAlias || t.Predicate == "core.identity.alias" {
+			if alias, ok := t.Object.(string); ok && alias != "" {
+				parts = append(parts, "alias:"+t.Predicate+":"+alias)
+			}
+		}
+		// 5. (context, predicate) pairs — NOT raw object values
 		if t.Context != "" {
 			parts = append(parts, "ctx:"+t.Context+":"+t.Predicate)
 		}
@@ -1338,6 +1411,7 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 	}
 
 	written := 0
+	failures := 0
 	for _, entry := range newEntries {
 		if !validateIncomingKeyInputs(targetID, entry.FromEntityID, entry.Predicate, c.logger) {
 			continue
@@ -1345,12 +1419,20 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 		key := incomingIndexKey(targetID, entry.FromEntityID, entry.Predicate)
 		if _, err := c.incomingBucket.Put(ctx, key, incomingIndexMarker); err != nil {
 			atomic.AddInt64(&c.errors, 1)
+			failures++
 			c.logger.Debug("failed to write incoming index key",
 				slog.String("key", key),
 				slog.Any("error", err))
 			continue
 		}
 		written++
+	}
+
+	// A failed edge write must propagate so readiness is withheld (gh#474 P1b) — a
+	// silently-dropped incoming edge is exactly the missing-adjacency this closes.
+	if failures > 0 {
+		return errs.WrapTransient(errIndexWritePartial, "Component", "updateIncomingIndexBatch",
+			fmt.Sprintf("%d of %d incoming edge writes failed for target %s", failures, len(newEntries), targetID))
 	}
 
 	if written == 0 {
@@ -1561,8 +1643,11 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	}
 
 	// Also evict from the no-op projection cache (stale projection on re-add
-	// would incorrectly suppress a real first-index event).
+	// would incorrectly suppress a real first-index event) and clear any pending
+	// write-failure for this entity — a deleted entity's missing adjacency is no
+	// longer a readiness gap (gh#474 P1b).
 	c.lastProjections.Delete(entityID)
+	c.clearEntityFailed(entityID)
 
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)

@@ -55,6 +55,16 @@ func predicateMock(comp *Component) *mockKVBucket {
 	return getMocks(comp).predicate
 }
 
+// contextMock retrieves the mock context bucket for a test component.
+func contextMock(comp *Component) *mockKVBucket {
+	return getMocks(comp).context
+}
+
+// nameMock retrieves the mock name bucket for a test component.
+func nameMock(comp *Component) *mockKVBucket {
+	return getMocks(comp).name
+}
+
 // predicateCatalogMock retrieves the mock predicate catalog bucket for a test component.
 func predicateCatalogMock(comp *Component) *mockKVBucket {
 	return getMocks(comp).predicateCatalog

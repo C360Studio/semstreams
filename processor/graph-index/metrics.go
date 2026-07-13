@@ -14,6 +14,8 @@ type indexMetrics struct {
 	indexUpdates    *prometheus.CounterVec
 	kvOperations    *prometheus.CounterVec
 	watchEvents     *prometheus.CounterVec
+	writeFailures   prometheus.Counter     // gh#474 P1b: required index write ultimately failed
+	reindexEvents   *prometheus.CounterVec // gh#474 P2b: re-index events by result (changed|unchanged)
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -53,6 +55,20 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 				Name:      "watch_events_total",
 				Help:      "Total watch events received",
 			}, []string{"event_type"}),
+
+			writeFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_index",
+				Name:      "write_failures_total",
+				Help:      "Entities whose required index writes ultimately failed after retry (readiness withheld until re-index)",
+			}),
+
+			reindexEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_index",
+				Name:      "reindex_events_total",
+				Help:      "Re-index events by whether the index-input projection changed (the L2 change-detection data gate)",
+			}, []string{"result"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -61,12 +77,16 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = registry.RegisterCounterVec("graph-index", "updates_total", metrics.indexUpdates)
 			_ = registry.RegisterCounterVec("graph-index", "kv_operations_total", metrics.kvOperations)
 			_ = registry.RegisterCounterVec("graph-index", "watch_events_total", metrics.watchEvents)
+			_ = registry.RegisterCounter("graph-index", "write_failures_total", metrics.writeFailures)
+			_ = registry.RegisterCounterVec("graph-index", "reindex_events_total", metrics.reindexEvents)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.eventsProcessed)
 			_ = prometheus.DefaultRegisterer.Register(metrics.indexUpdates)
 			_ = prometheus.DefaultRegisterer.Register(metrics.kvOperations)
 			_ = prometheus.DefaultRegisterer.Register(metrics.watchEvents)
+			_ = prometheus.DefaultRegisterer.Register(metrics.writeFailures)
+			_ = prometheus.DefaultRegisterer.Register(metrics.reindexEvents)
 		}
 	})
 	return metrics
@@ -90,4 +110,20 @@ func (m *indexMetrics) recordKVOperation(operation, bucket string) {
 // recordWatchEvent records a watch event of the given type.
 func (m *indexMetrics) recordWatchEvent(eventType string) {
 	m.watchEvents.WithLabelValues(eventType).Inc()
+}
+
+// recordIndexWriteFailure increments the count of entities whose required index
+// writes ultimately failed after retry (gh#474 P1b).
+func (m *indexMetrics) recordIndexWriteFailure() {
+	m.writeFailures.Inc()
+}
+
+// recordReindex records a re-index event, labeled by whether the index-input
+// projection was unchanged from the last indexed one (gh#474 P2b).
+func (m *indexMetrics) recordReindex(unchanged bool) {
+	result := "changed"
+	if unchanged {
+		result = "unchanged"
+	}
+	m.reindexEvents.WithLabelValues(result).Inc()
 }

@@ -54,7 +54,17 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	}
 
 	stuck, lastSynced := c.trackReadinessProgress(indexed, target)
-	return graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+	status := graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+
+	// Withhold authoritative readiness while any entity's required index writes are
+	// unresolved (gh#474 P1b): the reverse index is known-incomplete even when the
+	// revision watermark is caught up, so incoming/byName must not report a smaller
+	// graph than exists. Cleared when every failed entity re-indexes cleanly.
+	if c.failedCount.Load() > 0 && status.Ready {
+		status.Ready = false
+		status.State = graph.IndexStateDegraded
+	}
+	return status
 }
 
 // trackReadinessProgress updates the wall-clock stuck-watermark detector and returns
