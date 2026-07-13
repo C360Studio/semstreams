@@ -47,5 +47,5 @@
 - [x] 7.5 P1c — sort incoming results by `(FromEntityID, Predicate)` in `handleQueryIncomingNATS` + `GetIncomingEdges`.
 - [x] 7.6 P1d — gate incoming/byName on caught-up watermark (sticky), returning `ErrorCodeIndexNotReady` during cutover/cold-replay.
 - [x] 7.7 P2b — expose `reindex_events_total{result}` + `write_failures_total` Prometheus metrics; add the ALIAS axis to `computeIndexProjection`.
-- [ ] 7.8 Re-verify: `task check:push` + e2e:structural + e2e:semantic green (breaking format re-change); semstreams-reviewer; reply to Codex on PR #524.
+- [x] 7.8 Re-verified: `task check:push` green (one confirmed graph-ingest contention flake, passes isolated); e2e:structural + e2e:semantic GREEN with the re-changed format (exit 0, validation_errors:0); pushed to PR #524; reply posted to Codex.
 - [ ] 7.9 P2a byName bounded-read → deferred to gh#381; upgrade-debris versioned purge + source-owned retraction → gh#527.
