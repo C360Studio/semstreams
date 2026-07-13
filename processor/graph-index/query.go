@@ -238,6 +238,12 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// Readiness gate (gh#474 Codex #6): ALIAS is also a derived reverse index rebuilt on
+	// cutover and covered by the failure gate, so it must not serve partial data either.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var req struct {
 		Alias string `json:"alias"`
 	}
@@ -269,6 +275,12 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Readiness gate (gh#474 Codex #6): PREDICATE_INDEX is rebuilt on cutover and covered
+	// by the failure gate; don't serve partial predicate memberships.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var req struct {
 		Predicate string  `json:"predicate"`
@@ -393,6 +405,12 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byt
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// Readiness gate (gh#474 Codex #6): predicate-list depends on the predicate catalog,
+	// which is rebuilt on cutover; don't serve a partial catalog.
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var req graph.PredicateListQuery
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -506,6 +524,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// Readiness gate (gh#474 Codex #6).
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
+
 	var req struct {
 		Predicate   string `json:"predicate"`
 		SampleLimit int    `json:"sample_limit"`
@@ -551,6 +574,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Readiness gate (gh#474 Codex #6).
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var req graph.CompoundPredicateQuery
 	if err := json.Unmarshal(data, &req); err != nil {

@@ -249,30 +249,23 @@ func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) 
 }
 
 // getOutgoingRelationships fetches outgoing relationships for an entity.
-// isIndexNotReady reports whether err is the graph-index readiness signal
-// (ErrorCodeIndexNotReady, gh#474 Codex #1). Such an error MUST NOT be treated as
-// "this entity has no edges" — the index is still building, so an empty result would
-// under-report the graph. It is propagated so the traversal fails loud instead.
-func isIndexNotReady(err error) bool {
-	var ce *errs.ClassifiedError
-	return errors.As(err, &ce) && ce.Code == graph.ErrorCodeIndexNotReady
-}
-
 func (p *PathSearcher) getOutgoingRelationships(ctx context.Context, entityID string) ([]RelationshipEntry, error) {
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
+	// Propagate EVERY availability/protocol/decode failure (gh#474 Codex #5): a timeout,
+	// no-responder, classified error, or malformed reply must NOT be silently treated as
+	// "no edges" — that under-reports the graph and, in direction=both, would drop one
+	// leg while returning the other as complete. Only a valid response containing zero
+	// relationships is a genuine empty result.
 	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.outgoing", relsReqData, p.timeout)
 	if err != nil {
-		if isIndexNotReady(err) {
-			return nil, err
-		}
-		return nil, nil
+		return nil, fmt.Errorf("outgoing query failed for %s: %w", entityID, err)
 	}
 
 	var envelope graph.OutgoingQueryResponse
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("outgoing response decode failed for %s: %w", entityID, err)
 	}
 
 	rels := make([]RelationshipEntry, len(envelope.Data.Relationships))
@@ -288,17 +281,15 @@ func (p *PathSearcher) getIncomingRelationships(ctx context.Context, entityID st
 	relsReq := map[string]string{"entity_id": entityID}
 	relsReqData, _ := json.Marshal(relsReq)
 
+	// Propagate every failure — see getOutgoingRelationships (gh#474 Codex #5).
 	relsResponse, err := p.nats.RequestClassified(ctx, "graph.index.query.incoming", relsReqData, p.timeout)
 	if err != nil {
-		if isIndexNotReady(err) {
-			return nil, err
-		}
-		return nil, nil
+		return nil, fmt.Errorf("incoming query failed for %s: %w", entityID, err)
 	}
 
 	var envelope graph.IncomingQueryResponse
 	if err := json.Unmarshal(relsResponse, &envelope); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("incoming response decode failed for %s: %w", entityID, err)
 	}
 
 	// Convert incoming entries to relationship entries

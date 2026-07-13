@@ -5,6 +5,11 @@
   "title": "graph-clustering Configuration",
   "description": "Graph community detection and clustering processor",
   "properties": {
+    "allow_ungated_reads": {
+      "type": "boolean",
+      "description": "Allow detection when graph-index readiness is unknown (standalone only; never during cutover)",
+      "category": "advanced"
+    },
     "anomaly_config": {
       "type": "object",
       "description": "Configuration for anomaly detection",

@@ -59,8 +59,9 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	// An authoritatively empty graph (initial enumeration complete, 0/0) is ready even
 	// though the revision-lag check requires target>0 — otherwise a fresh empty graph
 	// never becomes ready and every reverse-index query is rejected forever (gh#474
-	// Codex #5). indexBootstrapped flips when the WatchAll initial-sync sentinel fires.
-	if !status.Ready && target == 0 && c.indexBootstrapped.Load() {
+	// Codex #5). Gated on initialEnumerationComplete (enumeration DELIVERED) AND target==0
+	// specifically — NOT on a non-empty replay, whose workers may still be writing (#1).
+	if !status.Ready && target == 0 && c.initialEnumerationComplete.Load() {
 		status.Ready = true
 		status.State = graph.IndexStateReady
 	}

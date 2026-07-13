@@ -267,14 +267,21 @@ type Component struct {
 	reindexTotal     int64 // atomic
 	reindexUnchanged int64 // atomic
 
-	// indexBootstrapped is a sticky flag (gh#474 Codex P1d): false until the index
-	// has been observed caught-up to ENTITY_STATES at least once after Start. While
-	// false, the composite-key reverse-index query handlers (incoming, byName) return
-	// ErrorCodeIndexNotReady instead of serving the partial keyset that a format
-	// cutover / cold replay is still building. Once true it never flips back — steady-
-	// state lag is surfaced via graph.index.query.status, not by failing reads — so the
-	// per-query readiness probe runs only during the brief pre-catch-up window.
+	// indexBootstrapped is a sticky flag (gh#474 Codex P1d): false until the index has
+	// been observed CAUGHT UP to ENTITY_STATES at least once after Start (indexed >=
+	// target). While false, the reverse-index query handlers return ErrorCodeIndexNotReady
+	// rather than serving the partial keyset a cutover / cold replay is still building.
+	// Set ONLY on an observed catch-up — NOT on the initial-enumeration sentinel, which
+	// means "all pre-existing entries were DELIVERED to the worker pool," not "their
+	// async writes completed" (gh#474 Codex #1). Once true it never flips back; steady-
+	// state lag is surfaced via graph.index.query.status.
 	indexBootstrapped atomic.Bool
+
+	// initialEnumerationComplete flips when the WatchAll initial-sync sentinel fires: every
+	// entity that existed at watch-start has been delivered. It authorizes ONLY the
+	// authoritative-empty readiness exception (target==0/indexed==0), never the non-empty
+	// case — a preloaded bucket's workers may still be writing (gh#474 Codex #1).
+	initialEnumerationComplete atomic.Bool
 
 	// failedEntities / failedCount track entities whose required index writes did not
 	// all succeed after bounded retry (gh#474 Codex P1b). While failedCount > 0 the
@@ -784,14 +791,15 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				return
 			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete: every entity
-				// that existed at watch-start has now been delivered (0 or more). The
-				// index is caught up for query purposes even for an authoritatively empty
-				// 0/0 graph, which the revision-lag check (target > 0) can never confirm
-				// (gh#474 Codex #5). Flip the sticky bootstrap flag so incoming/byName
-				// stop returning ErrorCodeIndexNotReady on an empty or fully-synced graph.
+				// nil entry indicates initial state enumeration complete: every entity that
+				// existed at watch-start has been DELIVERED (0 or more) — NOT that their
+				// async worker-pool writes finished. So this authorizes only the
+				// authoritative-empty 0/0 readiness exception (via computeIndexStatus),
+				// which the revision-lag check (target>0) can never confirm; it must NOT
+				// flip the sticky bootstrap flag, or a large non-empty cold replay would
+				// serve partial state before its workers complete (gh#474 Codex #1).
 				c.logger.Debug("entity watcher initial sync complete")
-				c.indexBootstrapped.Store(true)
+				c.initialEnumerationComplete.Store(true)
 				continue
 			}
 
@@ -987,7 +995,7 @@ func (c *Component) repairFailedEntities(ctx context.Context) {
 		}
 		entry, err := c.entityStatesBucket.Get(ctx, entityID)
 		if err != nil {
-			// Gone from ENTITY_STATES → the pending work is a delete; retry it.
+			// Gone from ENTITY_STATES → the pending work is a delete; retry it (idempotent).
 			if natsclient.IsKVNotFoundError(err) {
 				if delErr := c.DeleteFromIndexes(ctx, entityID); delErr != nil {
 					c.logger.Debug("repair: delete retry still failing",
@@ -996,9 +1004,25 @@ func (c *Component) repairFailedEntities(ctx context.Context) {
 			}
 			return true
 		}
-		if idxErr := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); idxErr != nil {
-			c.logger.Debug("repair: re-index still failing",
-				slog.String("entity", entityID), slog.Any("error", idxErr))
+		// Present → re-drive through the SAME keyed dispatch as the watcher (gh#474 Codex
+		// #2): the coalescer serializes work per entity key and re-fetches the latest
+		// state, so the repair is ordered with concurrent updates/deletes rather than a
+		// direct write clobbering a newer one. Full per-revision fencing — a delete landing
+		// between this Get and the re-index — is the ordered-processing increment (gh#527);
+		// this closes the common repair-vs-newer-update race.
+		switch {
+		case c.entityCoalescer != nil:
+			c.entityCoalescer.Add(entityID)
+		case c.indexPool != nil:
+			if subErr := c.indexPool.SubmitBlocking(ctx, entry); subErr != nil {
+				c.logger.Debug("repair: pool submit failed",
+					slog.String("entity", entityID), slog.Any("error", subErr))
+			}
+		default:
+			if idxErr := c.processEntityUpdateFromData(ctx, entityID, entry.Value()); idxErr != nil {
+				c.logger.Debug("repair: re-index still failing",
+					slog.String("entity", entityID), slog.Any("error", idxErr))
+			}
 		}
 		return true
 	})
@@ -1261,15 +1285,21 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 
 		entry, err := c.entityStatesBucket.Get(ctx, entityID)
 		if err != nil {
-			c.logger.Debug("entity not found during batch processing",
-				slog.String("entity", entityID),
-				slog.Any("error", err))
-			// The coalescer discarded the source revision(s), so there is no exact
-			// revision to complete here. Drain the key's pending (complete at max
-			// revision) rather than strand it: a transient Get failure would
-			// otherwise pin the watermark and flip the whole index to degraded
-			// forever (ADR-066 §1). Draining fails toward caught-up (within the
-			// Scope boundary) — the next update to this key re-observes it.
+			// A genuine not-found means the entity was deleted after coalescing — draining
+			// the key's pending (complete at max revision) is correct, it is gone. But a
+			// TRANSIENT Get failure would otherwise complete the watermark and advertise
+			// caught-up while omitting the latest entity (gh#474 Codex #3): mark it failed
+			// so readiness is withheld and the repair loop re-fetches it. We still drain to
+			// avoid pinning the watermark forever — failedCount, not the stranded revision,
+			// is what withholds readiness (ADR-066 §1 stays intact).
+			if !natsclient.IsKVNotFoundError(err) {
+				c.markEntityFailed(entityID)
+				c.logger.Warn("transient read failure during batch processing; readiness withheld until repair",
+					slog.String("entity", entityID), slog.Any("error", err))
+			} else {
+				c.logger.Debug("entity not found during batch processing (deleted after coalescing)",
+					slog.String("entity", entityID))
+			}
 			if c.watermark != nil {
 				c.watermark.Complete(entityID, ^uint64(0))
 			}
@@ -1603,19 +1633,18 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 		return errs.Wrap(err, "Component", "UpdatePredicateIndex", "KV store")
 	}
 
-	// Membership write above is the source of truth and already succeeded;
-	// a catalog-write failure here doesn't corrupt membership, but it does
-	// silently drop this predicate from predicateList's output (both
-	// unfiltered and namespace-filtered — both enumerate via the catalog,
-	// not the membership bucket) until some other entity's write retries
-	// the same catalog Put. That's a real, if narrow, visibility gap —
-	// Warn + count it rather than the Debug-and-forget treatment a merely
-	// cosmetic failure would get.
+	// Membership write above is the source of truth and already succeeded; a catalog-write
+	// failure here doesn't corrupt membership, but it silently drops this predicate from
+	// predicateList's output (both unfiltered and namespace-filtered enumerate via the
+	// catalog, not the membership bucket). predicate-list is a gated reverse-index query,
+	// so a required catalog write must PROPAGATE (gh#474 Codex #6): the entity is then
+	// marked failed and readiness withheld until the repair loop re-runs the Put.
 	if err := c.updatePredicateCatalog(ctx, predicate); err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		c.logger.Warn("failed to update predicate catalog",
 			slog.String("predicate", predicate),
 			slog.Any("error", err))
+		return errs.WrapTransient(err, "Component", "UpdatePredicateIndex", "catalog write")
 	}
 
 	// Update metrics

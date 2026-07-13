@@ -23,6 +23,15 @@ import (
 
 // Config contains configuration for the Client
 type Config struct {
+	// AllowUngatedReads permits direct INCOMING_INDEX reads to proceed when graph-index's
+	// readiness status endpoint is unreachable (gh#474 Codex #4). Default false =
+	// FAIL-CLOSED: an unknown readiness is treated as not-ready, so a query cannot serve
+	// a partial bucket during a cutover when the authoritative owner is crashed/restarting.
+	// Set true ONLY for a deliberately standalone deployment (or test) that reads the
+	// index without a co-deployed graph-index handler — it MUST NOT be used during a
+	// format cutover.
+	AllowUngatedReads bool `json:"allow_ungated_reads"`
+
 	// EntityCache configuration
 	EntityCache cache.Config `json:"entity_cache"`
 
@@ -293,17 +302,29 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 // unparseable: that means graph-index is absent, a different failure mode, and blocking
 // the read on it would break setups that read the index without the handler co-deployed.
 func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
+	notReady := errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+		errors.New("graph index not ready"))
+
 	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
 	if err != nil {
-		return nil // fail-open: can't determine readiness (graph-index absent)
+		// Unknown readiness. FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
+		// graph-index during a cutover is indistinguishable from an intentionally-absent
+		// one, and a stale bucket without a reachable authoritative owner is not proof of
+		// completeness. Only an explicit standalone config opts into proceeding.
+		if qc.config != nil && qc.config.AllowUngatedReads {
+			return nil
+		}
+		return notReady
 	}
 	var st gtypes.IndexStatusResponse
 	if json.Unmarshal(respData, &st) != nil {
-		return nil
+		if qc.config != nil && qc.config.AllowUngatedReads {
+			return nil
+		}
+		return notReady
 	}
 	if !st.Ready {
-		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
-			errors.New("graph index not ready"))
+		return notReady
 	}
 	return nil
 }

@@ -38,6 +38,11 @@ measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension)
 
 ### D1 — Per-index composite key (one teachable rule: hash open axes, keep entity-ID axes raw + validated)
 
+> **SUPERSEDED key formats — see "Codex P1 review revisions" below.** The table records the ORIGINAL
+> design. As shipped: the predicate token is **hex-encoded** (not raw); CONTEXT is keyed
+> **entity-first** `entityID.hash(context).hex(predicate)` (not context-first) and self-reconciles /
+> self-cleans (it DOES have a delete path); INCOMING/NAME predicates are `hex(predicate)`.
+
 | Index | Prefix (scan) axis | Key | Value | Notes |
 |---|---|---|---|---|
 | INCOMING | target (raw 6-token) | `targetID.sourceID.predicate` | empty | source = next 6 tokens, predicate = rest |

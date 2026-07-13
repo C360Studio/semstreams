@@ -24,7 +24,11 @@ func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer func() { _ = tc.Terminate() }()
 
-	client, err := NewClient(ctx, tc.Client, DefaultConfig())
+	// Standalone: no graph-index handler runs here, so allow the direct bucket read
+	// (gh#474 Codex #4 — AllowUngatedReads is the explicit opt-out from fail-closed).
+	cfg := DefaultConfig()
+	cfg.AllowUngatedReads = true
+	client, err := NewClient(ctx, tc.Client, cfg)
 	require.NoError(t, err)
 	qc := client.(*natsClient)
 	require.NoError(t, qc.ensureBuckets(ctx))

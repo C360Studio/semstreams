@@ -29,6 +29,7 @@ func TestIntegration_ClusteringFlow(t *testing.T) {
 
 	// Create component with short detection interval for testing
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -231,6 +232,7 @@ func TestIntegration_ClusteringHierarchy(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -412,6 +414,7 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 
 	// Set min_community_size = 3 (requires at least 3 entities to form community)
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -583,6 +586,7 @@ func TestIntegration_ClusteringMetrics(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -697,6 +701,7 @@ func TestIntegration_LLMEnhancementWorkerStarts(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -797,6 +802,7 @@ func TestIntegration_LLMEnhancementDisabled(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -870,6 +876,7 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -1013,6 +1020,7 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -1159,6 +1167,7 @@ func TestIntegration_StructuralDisabledByDefault(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
@@ -1239,6 +1248,7 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 	nc := testClient.Client
 
 	config := Config{
+		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},

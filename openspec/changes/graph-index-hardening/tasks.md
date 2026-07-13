@@ -49,3 +49,14 @@
 - [x] 7.7 P2b — expose `reindex_events_total{result}` + `write_failures_total` Prometheus metrics; add the ALIAS axis to `computeIndexProjection`.
 - [x] 7.8 Re-verified: `task check:push` green (one confirmed graph-ingest contention flake, passes isolated); e2e:structural + e2e:semantic GREEN with the re-changed format (exit 0, validation_errors:0); pushed to PR #524; reply posted to Codex.
 - [ ] 7.9 P2a byName bounded-read → deferred to gh#381; upgrade-debris versioned purge + source-owned retraction → gh#527.
+
+## 8. Codex 3rd-pass review blockers (PR #524, airtight readiness under concurrency)
+
+- [x] 8.1 #1 — split `initialEnumerationComplete` (sentinel; empty-graph exception only) from `indexBootstrapped` (set only when the watermark is caught up), so a non-empty cold replay stays not-ready until workers finish. Test: preloaded non-empty bucket, incoming-fails-while-not-ready invariant.
+- [x] 8.2 #5 — PathRAG propagates EVERY availability/protocol/decode failure (not just index_not_ready); only a valid zero-relationship response is a genuine empty; direction=both fails if either leg fails.
+- [x] 8.3 #6 — gate ALIAS + all PREDICATE query handlers on `ensureQueryReady`; propagate predicate-catalog write failures into the entity failure gate.
+- [x] 8.4 #3 — coalescer Get-error: mark-failed on a TRANSIENT read error (readiness withheld + repair retries); only a genuine not-found drains the watermark.
+- [x] 8.5 #4 — direct readers (query client, clustering) FAIL-CLOSED by default; explicit `allow_ungated_reads` config for standalone/test; fixed the "routes through the handler" doc claim.
+- [x] 8.6 #2 — repair loop routes present-entity re-index through the SAME keyed coalescer/pool dispatch (ordered, re-fetch-latest); full per-revision fencing deferred to gh#527; honest spec.
+- [x] 8.7 #7 — spec.md readiness requirement matches delivered (bounded keyed-ordered repair; full generation-safety → gh#527); design.md D1 marked SUPERSEDED (hex predicate, CONTEXT entity-first + delete path).
+- [ ] 8.8 Re-verify: check:push + e2e:structural + e2e:semantic green; push; reply to Codex (3rd).

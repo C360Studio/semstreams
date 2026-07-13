@@ -152,9 +152,14 @@ yet been repaired.
 - **Consumer propagation.** Consumers that read the reverse indexes — PathRAG traversal, the graph
   query client's incoming reads, and graph-clustering's community detection — MUST honor the
   not-ready signal (abort/defer) rather than convert it into an empty-but-successful result.
-- **Durable recovery.** A failed entity MUST be retried by a durable owner-driven path (not only on
-  the next incidental event for that entity), so a transient backend outage self-heals and readiness
-  is restored once the failed set drains.
+- **Durable recovery.** A failed entity MUST be retried by a background repair loop (not only on the
+  next incidental event for that entity), so a transient backend outage self-heals and readiness is
+  restored once the failed set drains. The repair re-drives each entity through the SAME keyed
+  dispatch as the watcher (re-fetching the latest state), so it is ordered per-key with concurrent
+  updates/deletes and does not clobber a newer write. Full per-revision fencing — closing the residual
+  window where a delete lands between the repair's read and its re-index — is the ordered-processing
+  increment (gh#527); this change delivers the bounded, keyed-ordered repair, not full generation
+  safety.
 - **Empty graph.** An authoritatively empty graph (initial enumeration complete, 0/0) MUST become
   ready, so a fresh empty graph does not reject every query forever.
 
