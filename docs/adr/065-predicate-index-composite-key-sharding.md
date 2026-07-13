@@ -573,12 +573,13 @@ Still open, safe to resolve during implementation:
   a sibling subsystem.
 - **GH #376 / `NAME_INDEX`** (`processor/graph-index/name_index.go`) — the
   direct precedent for hashing arbitrary-content strings into single-token
-  KV keys, reused here for predicates. Note `NAME_INDEX` itself has the
-  identical CAS-blob-per-hash-key shape as PREDICATE_INDEX pre-fix,
-  currently masked by better-behaved cardinality (names are rarely shared
-  by thousands of entities the way a common predicate is) — not addressed
-  by this ADR, flagged as a one-line callout for a future fix if it ever
-  becomes hot.
+  KV keys, reused here for predicates. `NAME_INDEX` had the identical
+  CAS-blob-per-hash-key shape as PREDICATE_INDEX pre-fix, masked by
+  better-behaved cardinality; this ADR flagged it as a future fix. **Now
+  addressed:** gh#474 (PR #524) sharded NAME_INDEX (and INCOMING_INDEX,
+  CONTEXT_INDEX) to composite keys `hash(name).entityID.hex(predicate)`,
+  applying this ADR's pattern. Predicate tokens are hex-encoded there for
+  KV-safety, extending — not contradicting — the hashed-key doctrine below.
 - **GH #397** — the index-readiness envelope (`graph.index.query.status`)
   this ADR's risk section suggests extending to predicate-index build
   completion, deferred rather than included here.

@@ -37,3 +37,15 @@
 - [x] 6.2 **Final semstreams-reviewer pass** on the full diff — **APPROVE**. One MEDIUM fixed: strict/soft tier gate keyed off raw `s.config.Variant`, which stays `""` on a flagless `./e2e` run (Execute keeps the auto-detected variant local) → false-fails a legitimately-empty structural index; added `effectiveVariant(result)` fallback to the stamped `result.Metrics["variant"]`. Two minors fixed: `CountIncomingEdges` doc (distinct-source count, not edges); container-incoming async-ordering note.
 - [ ] 6.3 `openspec validate graph-index-hardening --strict`; branch + PR + CI (both e2e tiers in the PR body); on merge close gh#474 and note the class-fix + ADR-065 correction.
 - [ ] 6.4 File the L2 (change-detection) + L3 (isolation) follow-up issues, each gated on this change's no-op counter / post-merge starvation re-measurement, carrying the corrected designs (B1 full-projection signature, B2 delete-invalidation; L3 rate-limit-not-dedicated-conn + the revert reference).
+
+## 7. Codex P1 review blockers (PR #524, post-freeze correctness)
+
+- [x] 7.1 P1a — hex-encode the predicate key token (INCOMING/NAME/CONTEXT) via shared `graph.EncodePredicateToken`; carry hashed name/context in the value; KV-unsafe-predicate round-trip test.
+- [x] 7.2 P1f — re-key CONTEXT to entity-prefix `entityID.hash(context).hex(pred)`; self-reconcile on update (prefix-scan + retract superseded) and self-clean on delete.
+- [x] 7.3 P1e — relabel the target-prefix incoming delete as LEGACY HARD-DELETE (source-owned evidence; not for logical retirement); design.md D3 + ADR-065 corrected.
+- [x] 7.4 P1b — writes aggregate + return failures; bounded idempotent retry; on ultimate failure mark entity failed + withhold `Ready` via `failedCount`; baseline stored only on success; failure-injection tests.
+- [x] 7.5 P1c — sort incoming results by `(FromEntityID, Predicate)` in `handleQueryIncomingNATS` + `GetIncomingEdges`.
+- [x] 7.6 P1d — gate incoming/byName on caught-up watermark (sticky), returning `ErrorCodeIndexNotReady` during cutover/cold-replay.
+- [x] 7.7 P2b — expose `reindex_events_total{result}` + `write_failures_total` Prometheus metrics; add the ALIAS axis to `computeIndexProjection`.
+- [ ] 7.8 Re-verify: `task check:push` + e2e:structural + e2e:semantic green (breaking format re-change); semstreams-reviewer; reply to Codex on PR #524.
+- [ ] 7.9 P2a byName bounded-read → deferred to gh#381; upgrade-debris versioned purge + source-owned retraction → gh#527.

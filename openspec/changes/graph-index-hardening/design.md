@@ -137,3 +137,48 @@ L2 is justified and the projection defined here is its signature primitive.
   mis-split into an observable non-corrupting skip.
 - **NAME e2e gap** — closed with a production-wire integration test, and flagged per the breaking-change
   discipline.
+
+## Codex P1 review revisions (PR #524) — corrections to the frozen storage contract
+
+The initial L1 design (above) shipped, then a retention-contract review (Codex) blocked merge
+because #524 FREEZES the reverse-index storage format and several correctness gaps would be cast in
+concrete. The following revisions supersede the shapes above where they differ:
+
+- **P1a — predicate token is `hex(predicate)`, not raw.** graph-ingest accepts KV-unsafe predicates;
+  a raw token made INCOMING/NAME/CONTEXT Puts fail while the hashed PREDICATE_INDEX / raw
+  ENTITY_STATES / OUTGOING succeeded, desyncing forward vs reverse. Hex (reversible, shared
+  `graph.EncodePredicateToken`) keeps INCOMING a pure key-scan (no value Get); entity axes stay raw,
+  hashed name/context ride in the value. Updated key shapes: INCOMING `targetID.sourceID.hex(pred)`,
+  NAME `hash(name).entityID.hex(pred)`.
+
+- **P1f — CONTEXT is entity-prefixed and self-reconciling: `entityID.hash(context).hex(pred)`.** The
+  original hash(context)-prefix layout could not retract superseded memberships on update
+  (`C:{p1,p2}→C:{p1}` leaked `p2`) — a regression vs the replaced merge-list writer. Because CONTEXT
+  has no reader, keying by entity costs nothing on reads and makes update a prefix-scan
+  `entityID.` + retract-then-write (bounded per entity) and delete a prefix-scan — correct retraction
+  AND self-cleaning, without the O(fan-in) CAS class this change removed.
+
+- **P1e — D3 correction (source-support ownership).** An INCOMING row `(target=A, source=B, pred=p)`
+  is supported by B's live triple, not by A. So `DeleteFromIndexes(A)` deleting the whole `A.*`
+  target-prefix is a LEGACY HARD-DELETE of a leaf entity, NOT semantically-complete cleanup — it
+  discards B's still-live evidence. It is explicitly labeled MUST-NOT-be-reused-by-logical-retirement;
+  source-owned retraction + a durable reverse manifest is gh#527 (retention Increment-0).
+
+- **P1b — write failures withhold readiness.** Required index writes aggregate + return errors,
+  retry (idempotent) up to 3×, and on ultimate failure mark the entity failed; `computeIndexStatus`
+  withholds `Ready` while any entity is unindexed. The no-op baseline is stored only on success.
+
+- **P1c — deterministic reads.** `handleQueryIncomingNATS` / `GetIncomingEdges` sort by
+  `(FromEntityID, Predicate)` so a no-op replay can't reshuffle a capped PathRAG result set.
+
+- **P1d — cutover readiness gate.** incoming/byName return `ErrorCodeIndexNotReady` until the index
+  has caught up to ENTITY_STATES at least once after Start (sticky) — an in-place upgrade must not
+  serve the partial new keyset while the old aggregate keys are inert and replay is in flight.
+
+- **P2b — no-op counter is a real metric + covers alias.** Exposed as
+  `graph_index_reindex_events_total{result}` and `graph_index_write_failures_total`;
+  `computeIndexProjection` now includes the ALIAS axis (an alias-only change was miscounted unchanged).
+
+- **Upgrade debris** (from the retention review) — a one-time versioned purge of pre-#524 monolithic
+  keys before v1 is required (rollback would reactivate stale indexes); tracked in gh#527. Do not
+  teach steady-state GC both formats.
