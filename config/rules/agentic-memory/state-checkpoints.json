@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "iteration",
+      "field": "$message.iteration",
       "operator": "gte",
       "value": 1,
       "required": true

@@ -23,9 +23,9 @@ func TestNormalizeName_FoldsAndTrims(t *testing.T) {
 
 func TestRankNameMatches(t *testing.T) {
 	items := []graph.NameIndexItem{
-		{EntityID: "e.pref", Name: "foo", Predicate: "skos.core.prefLabel", Priority: 0}, // high salience, not exact-case
-		{EntityID: "e.exact", Name: "Foo", Predicate: "dc.terms.title", Priority: 1},     // exact-case
-		{EntityID: "e.upper", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},     // fold-only
+		{EntityID: "e.pref", Name: "foo", Predicate: "skos.core.pref-label", Priority: 0}, // high salience, not exact-case
+		{EntityID: "e.exact", Name: "Foo", Predicate: "dc.terms.title", Priority: 1},      // exact-case
+		{EntityID: "e.upper", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},      // fold-only
 	}
 
 	got := rankNameMatches(items, "Foo", 0)
@@ -44,11 +44,11 @@ func TestRankNameMatches_DedupsByEntityKeepingBest(t *testing.T) {
 	// Same entity carries the name under two predicates; keep its best (exact + salient).
 	items := []graph.NameIndexItem{
 		{EntityID: "e1", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},
-		{EntityID: "e1", Name: "Foo", Predicate: "skos.core.prefLabel", Priority: 0},
+		{EntityID: "e1", Name: "Foo", Predicate: "skos.core.pref-label", Priority: 0},
 	}
 	got := rankNameMatches(items, "Foo", 0)
 	require.Len(t, got, 1)
-	assert.Equal(t, "skos.core.prefLabel", got[0].Predicate)
+	assert.Equal(t, "skos.core.pref-label", got[0].Predicate)
 	assert.True(t, got[0].ExactCase)
 }
 
@@ -92,7 +92,7 @@ func TestUpdateNameIndex_RoundTripRankingAndRecall(t *testing.T) {
 
 	require.NoError(t, comp.UpdateNameIndex(ctx, "Foo", "org.p.d.s.t.exact", "dc.terms.title", 1))
 	require.NoError(t, comp.UpdateNameIndex(ctx, "FOO", "org.p.d.s.t.upper", "dc.terms.title", 1))
-	require.NoError(t, comp.UpdateNameIndex(ctx, "foo", "org.p.d.s.t.pref", "skos.core.prefLabel", 0))
+	require.NoError(t, comp.UpdateNameIndex(ctx, "foo", "org.p.d.s.t.pref", "skos.core.pref-label", 0))
 
 	// Case-insensitive recall: a lowercase query finds all three.
 	got := queryByName(t, comp, "Foo", 0)

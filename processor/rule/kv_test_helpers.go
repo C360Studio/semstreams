@@ -66,13 +66,13 @@ func CreateBatteryEntity(id string, level float64, voltage float64) *gtypes.Enti
 		},
 		{
 			Subject:   id,
-			Predicate: "robotics.battery.systemId",
+			Predicate: "robotics.battery.system-id",
 			Object:    1,
 			Timestamp: now,
 		},
 		{
 			Subject:   id,
-			Predicate: "robotics.battery.batteryId",
+			Predicate: "robotics.battery.battery-id",
 			Object:    0,
 			Timestamp: now,
 		},
@@ -124,7 +124,7 @@ func CreateDroneEntity(id string, armed bool, mode string, altitude float64) *gt
 		},
 		{
 			Subject:   id,
-			Predicate: "robotics.drone.systemId",
+			Predicate: "robotics.drone.system-id",
 			Object:    1,
 			Timestamp: now,
 		},

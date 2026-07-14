@@ -6,7 +6,7 @@
   "enabled": true,
   "conditions": [
     {
-      "field": "mission.command",
+      "field": "mission.command.requested",
       "operator": "eq",
       "value": "launch"
     }

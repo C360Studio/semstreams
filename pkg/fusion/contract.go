@@ -63,9 +63,10 @@ type IndexState string
 
 // The readiness phases. Only Ready permits a not-found conclusion.
 const (
-	StateBuilding IndexState = "building"
-	StateReady    IndexState = "ready"
-	StateDegraded IndexState = "degraded"
+	StateBuilding      IndexState = "building"
+	StateReady         IndexState = "ready"
+	StateDegraded      IndexState = "degraded"
+	StateResetRequired IndexState = "reset_required"
 )
 
 // IndexStatus is attached to every response. Ready is load-bearing: when false
@@ -74,8 +75,10 @@ const (
 // (ADR-066). Field-identical to graph.IndexStatusResponse — the RetrievalClient
 // decodes graph.index.query.status directly into this; the two change together.
 type IndexStatus struct {
-	Ready bool       `json:"ready"`
-	State IndexState `json:"state"`
+	Ready  bool       `json:"ready"`
+	State  IndexState `json:"state"`
+	Code   string     `json:"code,omitempty"`
+	Reason string     `json:"reason,omitempty"`
 	// IndexedRevision / TargetRevision / Lag expose the exact revision-lag so a
 	// caller that knows its own target revision can gate on IndexedRevision >=
 	// myRev rather than the coarse global Ready bool (ADR-066).

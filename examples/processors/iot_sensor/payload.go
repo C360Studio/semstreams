@@ -25,6 +25,13 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 )
 
+var measurementPredicateByUnit = map[string]string{
+	"celsius":    PredicateMeasurementCelsius,
+	"fahrenheit": PredicateMeasurementFahrenheit,
+	"percent":    PredicateMeasurementPercent,
+	"hpa":        PredicateMeasurementHPA,
+}
+
 func buildSensorReading(fields map[string]any) (any, error) {
 	msg := &SensorReading{}
 
@@ -196,12 +203,13 @@ func (s *SensorReading) EntityID() string {
 //   - Temporal tracking (time.observation.recorded)
 func (s *SensorReading) Triples() []message.Triple {
 	entityID := s.EntityID()
+	measurementPredicate := measurementPredicateByUnit[s.Unit]
 
 	triples := []message.Triple{
 		// Measurement value with unit-specific predicate
 		{
 			Subject:    entityID,
-			Predicate:  fmt.Sprintf("sensor.measurement.%s", s.Unit),
+			Predicate:  measurementPredicate,
 			Object:     s.Value,
 			Source:     "iot_sensor",
 			Timestamp:  s.ObservedAt,
@@ -305,6 +313,9 @@ func (s *SensorReading) Validate() error {
 	}
 	if s.Unit == "" {
 		return fmt.Errorf("unit is required")
+	}
+	if _, ok := measurementPredicateByUnit[s.Unit]; !ok {
+		return fmt.Errorf("unsupported unit %q; supported units are celsius, fahrenheit, percent, hpa", s.Unit)
 	}
 	if s.OrgID == "" {
 		return fmt.Errorf("org_id is required")

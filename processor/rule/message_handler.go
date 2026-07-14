@@ -90,6 +90,9 @@ func (rp *Processor) handleSemanticMessage(ctx context.Context, subject string, 
 
 // evaluateRulesForMessage performs rule evaluation for any message type
 func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string, msg message.Message) {
+	if !rp.graphRuleEvaluationReady() {
+		return
+	}
 	// Increment evaluation counter for all messages (NATS and KV watcher)
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
@@ -133,7 +136,7 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 
 		// Get rule definition for stateful evaluation from the local snapshot.
 		ruleDef, hasDefinition := ruleDefs[ruleName]
-		hasStatefulActions := hasDefinition && (len(ruleDef.OnEnter) > 0 || len(ruleDef.OnExit) > 0 || len(ruleDef.WhileTrue) > 0)
+		hasStatefulActions := hasDefinition && hasStatefulRuleActions(ruleDef)
 
 		// Handle stateful evaluation if rule has OnEnter/OnExit/WhileTrue actions
 		if hasStatefulActions && rp.statefulEvaluator != nil {
@@ -185,6 +188,9 @@ func (rp *Processor) fireRuleActions(
 	ruleInstance Rule,
 	messages []message.Message,
 ) {
+	if !rp.graphRuleEvaluationReady() {
+		return
+	}
 	// Apply FireEveryNEvents gate: match counted; action fires only on Nth match.
 	counter := counters[ruleName]
 	n := 0
@@ -231,6 +237,13 @@ func (rp *Processor) fireRuleActions(
 // the per-rule feedback tracker: a rule's own write is skipped only by that
 // rule, so sibling rules watching the same bucket still fire.
 func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey string, snap entitySnapshot, bootstrap bool) {
+	// Re-check at the final evaluation seam. Watch and coalescer callers gate
+	// earlier too, but a concurrent poison observation can race an already
+	// dispatched evaluation. No rule, metric, state transition, or action may
+	// derive from graph state after reset-required has latched.
+	if !rp.graphRuleEvaluationReady() {
+		return
+	}
 	// Skip evaluation for deleted entities
 	if snap.State == nil {
 		rp.logger.Debug("Skipping rule evaluation for deleted entity", "entity_key", entityKey)
@@ -285,7 +298,7 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 		}
 
 		ruleDef, hasDefinition := ruleDefs[ruleName]
-		hasStatefulActions := hasDefinition && (len(ruleDef.OnEnter) > 0 || len(ruleDef.OnExit) > 0 || len(ruleDef.WhileTrue) > 0)
+		hasStatefulActions := hasDefinition && hasStatefulRuleActions(ruleDef)
 
 		if hasStatefulActions && rp.statefulEvaluator != nil {
 			entityID := snap.State.ID
@@ -326,6 +339,10 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 			rp.logger.Debug("Rule did not trigger", "rule_name", ruleName)
 		}
 	}
+}
+
+func hasStatefulRuleActions(def Definition) bool {
+	return len(def.OnEnter) > 0 || len(def.OnExit) > 0 || len(def.WhileTrue) > 0 || len(def.OnRecovery) > 0
 }
 
 // entityStateToMinimalMessage creates a minimal message wrapper for ExecuteEvents compatibility

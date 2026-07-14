@@ -287,7 +287,7 @@ func TestWorkflowState_ZeroValue(t *testing.T) {
 // directly — without a live NATS connection.
 func TestWriteTripleRequestFormat(t *testing.T) {
 	entityID := "acme.github.repo.myapp.workflow.42"
-	predicate := "workflow.phase"
+	predicate := "workflow.state.phase"
 	object := "qualifying"
 
 	triple := message.Triple{
@@ -343,7 +343,7 @@ func TestWriteTriple_NilClient(t *testing.T) {
 		natsClient: nil,
 		logger:     newNopLogger(),
 	}
-	err := c.writeTriple(context.Background(), "acme.github.repo.myapp.workflow.1", "workflow.phase", "qualifying")
+	err := c.writeTriple(context.Background(), "acme.github.repo.myapp.workflow.1", "workflow.state.phase", "qualifying")
 	if err == nil {
 		t.Error("writeTriple with nil natsClient should return an error")
 	}

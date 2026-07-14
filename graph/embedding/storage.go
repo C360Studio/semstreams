@@ -96,6 +96,11 @@ type Storage struct {
 	vectorCacheMu sync.RWMutex
 	cacheReady    chan struct{} // closed once initial watcher sync completes
 	cacheStarted  bool
+	// cacheWatchHealthy is true only while the WatchAll stream that populated
+	// vectorCache is intact and every observed record was decodable. Once the
+	// watcher is lost or a record cannot be decoded, the cache is permanently
+	// non-authoritative for this Storage lifetime and callers fall back to KV.
+	cacheWatchHealthy bool // guarded by vectorCacheMu
 }
 
 // NewStorage creates a new embedding storage instance
@@ -338,15 +343,29 @@ func (s *Storage) DeleteEmbedding(ctx context.Context, entityID string) error {
 func (s *Storage) ListGeneratedEntityIDs(ctx context.Context) ([]string, error) {
 	keys, err := s.indexBucket.ListKeys(ctx)
 	if err != nil {
+		if errors.Is(err, jetstream.ErrNoKeysFound) || errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, nil
+		}
 		return nil, errs.WrapTransient(err, "Storage", "ListGeneratedEntityIDs", "list keys")
 	}
+	defer func() { _ = keys.Stop() }()
 
 	var entityIDs []string
-	for key := range keys.Keys() {
-		entityIDs = append(entityIDs, key)
+	keyUpdates := keys.Keys()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errs.WrapTransient(ctx.Err(), "Storage", "ListGeneratedEntityIDs", "list keys")
+		case key, ok := <-keyUpdates:
+			if !ok {
+				if err := ctx.Err(); err != nil {
+					return nil, errs.WrapTransient(err, "Storage", "ListGeneratedEntityIDs", "list keys")
+				}
+				return entityIDs, nil
+			}
+			entityIDs = append(entityIDs, key)
+		}
 	}
-
-	return entityIDs, nil
 }
 
 // StartVectorCache launches a goroutine that keeps the in-memory vector cache
@@ -372,6 +391,7 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 		}
 		return errs.WrapTransient(err, "Storage", "StartVectorCache", "watch index bucket")
 	}
+	s.setCacheWatchHealthy(true)
 
 	go func() {
 		// NOTE: explicit watcher.Stop() before each return avoids the nats.go
@@ -381,10 +401,12 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
+				s.invalidateVectorCache()
 				watcher.Stop()
 				return
 			case entry, ok := <-watcher.Updates():
 				if !ok {
+					s.invalidateVectorCache()
 					watcher.Stop()
 					return
 				}
@@ -410,6 +432,11 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 
 				var record Record
 				if err := json.Unmarshal(entry.Value(), &record); err != nil {
+					// A malformed update may replace a vector already held in the
+					// cache. Continuing would make stale memory query-authoritative.
+					// Keep consuming for lifecycle hygiene, but permanently force
+					// callers onto authoritative KV for this Storage lifetime.
+					s.invalidateVectorCache()
 					continue
 				}
 
@@ -430,6 +457,20 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 	return nil
 }
 
+// setCacheWatchHealthy changes cache authority in the same mutex domain as the
+// cached vectors. This makes watcher invalidation and a query's health-check +
+// vector scan one linearizable operation: invalidation cannot become visible
+// between a query observing healthy and acquiring the cache read lock.
+func (s *Storage) setCacheWatchHealthy(healthy bool) {
+	s.vectorCacheMu.Lock()
+	s.cacheWatchHealthy = healthy
+	s.vectorCacheMu.Unlock()
+}
+
+func (s *Storage) invalidateVectorCache() {
+	s.setCacheWatchHealthy(false)
+}
+
 // FindSimilarFromCache scans the in-memory vector cache for entities whose
 // cosine similarity to queryVector is highest, excluding the entity identified
 // by excludeID (pass "" to skip exclusion).
@@ -441,8 +482,9 @@ func (s *Storage) StartVectorCache(ctx context.Context) error {
 // builds keep from the requested ID prefixes so filtering happens before the
 // expensive cosine, and identically to the cold KV-scan fallback.
 //
-// The second return value reports whether the cache was ready (warm) at the
-// time of the call. Callers must fall back to KV when it is false.
+// The second return value reports whether the cache was ready (warm) and its
+// maintaining watcher was still healthy at the time of the call. Callers must
+// fall back to authoritative KV when it is false.
 func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, keep func(string) bool, limit int) ([]ScoredEntity, bool) {
 	// Non-blocking check: is the initial sync complete?
 	select {
@@ -450,9 +492,11 @@ func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, 
 	default:
 		return nil, false
 	}
-
 	s.vectorCacheMu.RLock()
 	defer s.vectorCacheMu.RUnlock()
+	if !s.cacheWatchHealthy {
+		return nil, false
+	}
 
 	results := make([]ScoredEntity, 0, len(s.vectorCache))
 	for entityID, vector := range s.vectorCache {

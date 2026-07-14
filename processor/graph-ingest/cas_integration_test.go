@@ -370,16 +370,16 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 		ID: parentID, Version: 1, UpdatedAt: time.Now(),
-		Triples: []message.Triple{{Subject: parentID, Predicate: "system.label", Object: "P", Timestamp: time.Now(), Confidence: 1}},
+		Triples: []message.Triple{{Subject: parentID, Predicate: "test.system.label", Object: "P", Timestamp: time.Now(), Confidence: 1}},
 	}))
 
-	foreignEdge := message.Triple{Subject: childID, Predicate: "child.isHostedBy", Object: parentID, Timestamp: time.Now(), Confidence: 1}
+	foreignEdge := message.Triple{Subject: childID, Predicate: "test.edge.is-hosted-by", Object: parentID, Timestamp: time.Now(), Confidence: 1}
 
 	t.Run("stale_revision_does_not_route_foreign", func(t *testing.T) {
 		req := graph.UpdateEntityWithTriplesRequest{
 			Entity: &graph.EntityState{ID: parentID},
 			AddTriples: []message.Triple{
-				{Subject: parentID, Predicate: "system.note", Object: "n", Timestamp: time.Now(), Confidence: 1}, // own
+				{Subject: parentID, Predicate: "test.system.note", Object: "n", Timestamp: time.Now(), Confidence: 1}, // own
 				foreignEdge, // foreign
 			},
 			ExpectedRevision: 9999, // stale → CAS fails
@@ -420,6 +420,6 @@ func TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign(t *testing.T) {
 		require.NoError(t, getErr, "foreign edge must be routed onto the child when the CAS primary write committed")
 		var child graph.EntityState
 		require.NoError(t, json.Unmarshal(entry.Value, &child))
-		assert.True(t, hasPredicate(&child, "child.isHostedBy"))
+		assert.True(t, hasPredicate(&child, "test.edge.is-hosted-by"))
 	})
 }

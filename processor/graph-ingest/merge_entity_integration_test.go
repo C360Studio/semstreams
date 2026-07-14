@@ -50,7 +50,7 @@ func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
 	const entityID = "c360.test.merge.firstwrite.entity.001"
 	now := time.Now()
 	entity := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "merge.kind", Object: "alpha", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "test.merge.kind", Object: "alpha", Timestamp: now, Confidence: 1.0},
 	)
 
 	require.NoError(t, c.MergeEntity(ctx, entity))
@@ -59,7 +59,7 @@ func TestIntegration_MergeEntity_FirstWriteCreatesAtomically(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, 1, nonProfileTripleCount(stored), "ADR-054 profile stamp excluded from the seed-triple count")
-	assert.Equal(t, "merge.kind", stored.Triples[0].Predicate)
+	assert.Equal(t, "test.merge.kind", stored.Triples[0].Predicate)
 	assert.Equal(t, "alpha", stored.Triples[0].Object)
 }
 
@@ -79,13 +79,13 @@ func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 
 	// First write: phase triple (simulates Manager.Create's stamp).
 	first := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "mission.phase", Object: "planning", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "mission.state.phase", Object: "planning", Timestamp: now, Confidence: 1.0},
 	)
 	require.NoError(t, c.MergeEntity(ctx, first))
 
 	// Second write: command triple (simulates a mission-command Graphable arrival).
 	second := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "mission.command", Object: "launch", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "mission.command.requested", Object: "launch", Timestamp: now, Confidence: 1.0},
 	)
 	second.MessageType = message.Type{Domain: "mission", Category: "command", Version: "v1"}
 	require.NoError(t, c.MergeEntity(ctx, second))
@@ -96,13 +96,13 @@ func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 
 	// Both triples must be present — pre-fix this assertion failed
 	// because the second MergeEntity (then CreateEntity → Put) wiped
-	// mission.phase.
+	// mission.state.phase.
 	predicates := make(map[string]any, len(stored.Triples))
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = tr.Object
 	}
-	assert.Equal(t, "planning", predicates["mission.phase"], "phase triple must survive the second arrival (gh#177)")
-	assert.Equal(t, "launch", predicates["mission.command"], "command triple must be present after the second arrival")
+	assert.Equal(t, "planning", predicates["mission.state.phase"], "phase triple must survive the second arrival (gh#177)")
+	assert.Equal(t, "launch", predicates["mission.command.requested"], "command triple must be present after the second arrival")
 
 	// Metadata: latest-wins on MessageType, monotonic Version.
 	assert.Equal(t, "mission", stored.MessageType.Domain)
@@ -145,7 +145,7 @@ func TestIntegration_MergeEntity_SamePredicateReplaces(t *testing.T) {
 
 // TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace pins the
 // full-set-replace contract for a multi-valued relationship predicate: a new
-// flock.neighbor set replaces the prior set (not a union). Producers own
+// flock.relation.neighbor set replaces the prior set (not a union). Producers own
 // publishing the complete set per arrival (gh#466 design).
 func TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
@@ -155,19 +155,19 @@ func TestIntegration_MergeEntity_MultiValuedPredicateFullSetReplace(t *testing.T
 
 	// First arrival: neighbor set {b, c}.
 	require.NoError(t, c.MergeEntity(ctx, newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "b", Timestamp: now, Confidence: 1.0},
-		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "c", Timestamp: now, Confidence: 1.0})))
+		message.Triple{Subject: entityID, Predicate: "flock.relation.neighbor", Object: "b", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "flock.relation.neighbor", Object: "c", Timestamp: now, Confidence: 1.0})))
 	// Second arrival: neighbor set {c, d} — must fully replace the prior set.
 	require.NoError(t, c.MergeEntity(ctx, newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "c", Timestamp: now, Confidence: 1.0},
-		message.Triple{Subject: entityID, Predicate: "flock.neighbor", Object: "d", Timestamp: now, Confidence: 1.0})))
+		message.Triple{Subject: entityID, Predicate: "flock.relation.neighbor", Object: "c", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "flock.relation.neighbor", Object: "d", Timestamp: now, Confidence: 1.0})))
 
 	stored, _, err := c.fetchEntityState(ctx, entityID)
 	require.NoError(t, err)
 
 	neighbors := map[any]bool{}
 	for _, tr := range stored.Triples {
-		if tr.Predicate == "flock.neighbor" {
+		if tr.Predicate == "flock.relation.neighbor" {
 			neighbors[tr.Object] = true
 		}
 	}
@@ -194,17 +194,17 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 	// Step 1: seed the entity through the atomic mutation handler
 	// path — same shape Manager.Create produces.
 	seed := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "mission.phase", Object: "planning", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "mission.state.phase", Object: "planning", Timestamp: now, Confidence: 1.0},
 	)
 	require.NoError(t, c.CreateEntityStrict(ctx, seed))
 
 	// Step 2: build a BaseMessage carrying a Graphable that stamps
-	// one extra triple (mission.command=launch). This is the shape
+	// one extra triple (mission.command.requested=launch). This is the shape
 	// the mission-command processor publishes to mission.processed.entity.
 	graphablePayload := &mergeTestGraphable{
 		entityID: entityID,
 		triples: []message.Triple{
-			{Subject: entityID, Predicate: "mission.command", Object: "launch", Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: "mission.command.requested", Object: "launch", Timestamp: now, Confidence: 1.0},
 		},
 	}
 	registerMergeTestPayload(t, c)
@@ -217,7 +217,7 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 	c.handleMessage(ctx, "test.subject", data)
 
 	// Step 4: assert both triples are present. Pre-fix, only the
-	// second arrival's triple survived; the seeded mission.phase
+	// second arrival's triple survived; the seeded mission.state.phase
 	// vanished. Post-fix, MergeEntity preserves both.
 	stored, _, err := c.fetchEntityState(ctx, entityID)
 	require.NoError(t, err)
@@ -226,9 +226,9 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = tr.Object
 	}
-	assert.Equal(t, "planning", predicates["mission.phase"],
+	assert.Equal(t, "planning", predicates["mission.state.phase"],
 		"seeded phase triple must survive a subsequent jetstream-consumer arrival (gh#177)")
-	assert.Equal(t, "launch", predicates["mission.command"],
+	assert.Equal(t, "launch", predicates["mission.command.requested"],
 		"new Graphable's triple must also be present")
 }
 
@@ -269,7 +269,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 
 	// First merge — entity is fresh; hierarchy inference runs and stamps edges.
 	first := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "robotics.status", Object: "armed", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "robotics.state.status", Object: "armed", Timestamp: now, Confidence: 1.0},
 	)
 	require.NoError(t, c.MergeEntity(ctx, first))
 
@@ -279,10 +279,10 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	require.Greater(t, tripleCountAfterFirst, 1,
 		"after first merge, expected hierarchy triples to land (got %d total)", tripleCountAfterFirst)
 
-	// Snapshot hierarchy triples (anything not the caller-supplied robotics.status).
+	// Snapshot hierarchy triples (anything not the caller-supplied robotics.state.status).
 	hierarchyTripleCount := 0
 	for _, tr := range stored.Triples {
-		if tr.Predicate != "robotics.status" {
+		if tr.Predicate != "robotics.state.status" {
 			hierarchyTripleCount++
 		}
 	}
@@ -293,7 +293,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	// the hierarchy triple count; the fix skips re-applying hierarchy and
 	// merges predicate-level, so the count holds.
 	second := newSeedEntity(entityID,
-		message.Triple{Subject: entityID, Predicate: "robotics.command", Object: "land", Timestamp: now, Confidence: 1.0},
+		message.Triple{Subject: entityID, Predicate: "robotics.command.requested", Object: "land", Timestamp: now, Confidence: 1.0},
 	)
 	require.NoError(t, c.MergeEntity(ctx, second))
 
@@ -304,7 +304,7 @@ func TestIntegration_MergeEntity_HierarchyDoesNotDuplicate(t *testing.T) {
 	// Hierarchy count must MATCH the snapshot, not double.
 	hierarchyAfterSecond := 0
 	for _, tr := range stored2.Triples {
-		if tr.Predicate != "robotics.status" && tr.Predicate != "robotics.command" {
+		if tr.Predicate != "robotics.state.status" && tr.Predicate != "robotics.command.requested" {
 			hierarchyAfterSecond++
 		}
 	}

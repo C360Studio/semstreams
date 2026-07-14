@@ -3,8 +3,10 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
+	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -269,6 +271,14 @@ func validateConditionFields(def Definition) error {
 		if c.Field == "" {
 			continue
 		}
+		if strings.HasPrefix(c.Field, "$") {
+			continue
+		}
+		if err := vocabulary.RequireDeclaredPredicate(c.Field); err != nil {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule %s condition[%d] field: %w; message/state fields must use an explicit $message.* or $state.* namespace", def.ID, i, err),
+				"RuleProcessor", "ValidateDefinition", "validate condition predicate declaration")
+		}
 		if vocabulary.IsRuleOpaque(c.Field) {
 			return errs.WrapInvalid(
 				fmt.Errorf("rule %s condition[%d] predicates on rule-opaque field %q; rule-opaque predicates carry agent-private content and cannot be matched in rule conditions (see ADR-036)", def.ID, i, c.Field),
@@ -298,6 +308,24 @@ var validRunScopeValues = map[string]bool{
 func validateActionLists(def Definition) error {
 	check := func(label string, actions []Action) error {
 		for i, a := range actions {
+			if isTripleMutationAction(a.Type) {
+				if strings.Contains(a.Predicate, "$") {
+					return errs.WrapInvalid(
+						fmt.Errorf("rule %s %s[%d] predicate %q must be a declared literal; dynamic predicate substitution is forbidden", def.ID, label, i, a.Predicate),
+						"RuleProcessor", "ValidateDefinition", "validate action predicate declaration")
+				}
+				if err := vocabulary.RequireDeclaredPredicate(a.Predicate); err != nil {
+					return errs.WrapInvalid(
+						fmt.Errorf("rule %s %s[%d] predicate: %w", def.ID, label, i, err),
+						"RuleProcessor", "ValidateDefinition", "validate action predicate declaration")
+				}
+			}
+			if a.Type == ActionTypeUpdateKV && !strings.Contains(a.Bucket, "$") && gtypes.IsFrameworkOwnedBucket(a.Bucket) {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] update_kv cannot write framework-owned graph bucket %q; use graph mutation APIs",
+						def.ID, label, i, a.Bucket),
+					"RuleProcessor", "ValidateDefinition", "validate update_kv bucket ownership")
+			}
 			if a.MaxIterations != nil && *a.MaxIterations < 0 {
 				return errs.WrapInvalid(
 					fmt.Errorf("rule %s %s[%d] max_iterations must be >= 0 (0 = unlimited), got %d",
@@ -344,6 +372,15 @@ func validateActionLists(def Definition) error {
 		}
 	}
 	return nil
+}
+
+func isTripleMutationAction(actionType string) bool {
+	switch actionType {
+	case ActionTypeAddTriple, ActionTypeRemoveTriple, ActionTypeUpdateTriple:
+		return true
+	default:
+		return false
+	}
 }
 
 // definitionFromMap converts a ruleMap (the hot-reload wire format) into a

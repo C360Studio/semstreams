@@ -17,14 +17,9 @@ var predicateIndexMarker = []byte{}
 // predicateHashHex returns the fixed-width, dot-free hex token used as the
 // PREDICATE_INDEX key prefix for a predicate.
 //
-// Hashing (rather than using the raw predicate string) is required, not a
-// style choice: predicates are an open, self-nesting dotted vocabulary
-// (e.g. "agent.run" vs "agent.run.phase" both ship today), and NATS KV's
-// KeysByPrefix wildcarding matches on token *position*, not token
-// *identity* — a raw dotted prefix would silently absorb membership for
-// any predicate it happens to be a dot-token-prefix of. A fixed-width hex
-// digest can't collide that way. See ADR-065 ("Rejected alternative: raw
-// predicate string as the KV key prefix").
+// The hash+catalog representation remains the active ADR-065 format while the
+// fixed-nine-token candidate is measured under the graph-index reconciliation
+// decision gate. Canonical predicate enforcement is independent of this codec.
 func predicateHashHex(predicate string) string {
 	sum := sha256.Sum256([]byte(predicate))
 	return hex.EncodeToString(sum[:])
@@ -40,6 +35,12 @@ func predicateIndexKey(predicate, entityID string) string {
 // every entity currently carrying the given predicate.
 func predicateIndexPrefix(predicate string) string {
 	return predicateHashHex(predicate) + "."
+}
+
+// predicateIndexEntityFilter enumerates the complete predicate membership set
+// owned by one entity under the current hash(predicate).entity6 layout.
+func predicateIndexEntityFilter(entityID string) string {
+	return "*." + entityID
 }
 
 // entityIDFromPredicateKey strips a known predicate's hash prefix from a

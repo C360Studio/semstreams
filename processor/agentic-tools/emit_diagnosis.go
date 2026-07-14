@@ -277,7 +277,7 @@ func buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID string, args emit
 	// Back-link from the diagnosis entity to the ops loop that emitted it.
 	triples = append(triples, message.Triple{
 		Subject:    diagnosisEntityID,
-		Predicate:  "agent.action.executed_by",
+		Predicate:  "agent.action.executed-by",
 		Object:     loopEntityID,
 		Source:     emitDiagnosisSource,
 		Timestamp:  now,

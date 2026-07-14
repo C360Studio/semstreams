@@ -1631,7 +1631,7 @@ The fix is to see that these are **three layers of ONE declarative chain**, not 
 | Layer | Question it answers | Where it lives today |
 |---|---|---|
 | **Payload type registration** | "When I see `agentic.task.v1`, what Go type do I decode?" — in-process type dispatch | `payloadregistry/registry.go` (point-to-point graph mutation request/reply is intentionally exempt, `graph/mutation_requests.go:7`) |
-| **Graph projection contract** | "What graph facts does this type emit, and in what write mode is each predicate group?" | THE MISSING LAYER — today `Graphable.Triples()` (`graph/messagemanager/processor.go:259`) is treated as the whole truth; it says *what* triples but not whether they are append-evidence, owned current state, CAS-transition state, or foreign edges |
+| **Graph projection contract** | "What graph facts does this type emit, and in what write mode is each predicate group?" | Declared beside the Graphable or gateway-resource projection and validated through `pkg/projection`; `Graphable.Triples()` alone says *what* triples exist but not whether they are append-evidence, owned current state, CAS-transition state, or foreign edges |
 | **Ownership enforcement** | "Who may author/reconcile those facts at runtime, and is anyone else already there?" | `pkg/ownership` (this ADR) — substrate only |
 
 The missing middle layer is the **graph projection contract**, declared ONCE beside the type /

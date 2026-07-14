@@ -1,11 +1,89 @@
 package vocabulary
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRegisterRejectsNonCanonicalPredicate(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	assert.PanicsWithValue(t,
+		`register predicate "Agent.run.phase": predicate "Agent.run.phase" is invalid: segment_start at segment 1`,
+		func() { Register("Agent.run.phase") })
+	assert.Nil(t, GetPredicateMetadata("Agent.run.phase"), "rejected registration must not mutate the registry")
+}
+
+func TestRegisterRejectsNonCanonicalInverse(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	assert.PanicsWithValue(t,
+		`register predicate "test.rel.parent": inverse predicate "test.rel.parent_of": predicate "test.rel.parent_of" is invalid: segment_character at segment 3`,
+		func() { Register("test.rel.parent", WithInverseOf("test.rel.parent_of")) })
+	assert.Nil(t, GetPredicateMetadata("test.rel.parent"), "rejected registration must not mutate the registry")
+}
+
+func TestRegisterRejectsSymmetricPredicateWithExplicitInverse(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	assert.PanicsWithValue(t,
+		`register predicate "test.rel.sibling": symmetric predicate cannot also declare inverse "test.rel.related"`,
+		func() {
+			Register("test.rel.sibling", WithSymmetric(true), WithInverseOf("test.rel.related"))
+		})
+}
+
+func TestRegisterPredicateRejectsInconsistentMetadata(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	assert.PanicsWithValue(t,
+		`register predicate "test.rel.parent": metadata domain "other" does not match predicate domain "test"`,
+		func() {
+			RegisterPredicate(PredicateMetadata{
+				Name:     "test.rel.parent",
+				Domain:   "other",
+				Category: "rel",
+			})
+		})
+}
+
+func TestRegisterPredicateFillsCanonicalMetadata(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	RegisterPredicate(PredicateMetadata{Name: "test.rel.parent"})
+	meta := GetPredicateMetadata("test.rel.parent")
+	if meta == nil {
+		t.Fatal("registered metadata not found")
+	}
+	assert.Equal(t, "test", meta.Domain)
+	assert.Equal(t, "rel", meta.Category)
+}
+
+func TestRegisterPredicateRejectsInvalidAliasMetadata(t *testing.T) {
+	defer SnapshotRegistry()()
+
+	panicValue := capturePanic(func() {
+		RegisterPredicate(PredicateMetadata{
+			Name:      "test.identity.alias",
+			IsAlias:   true,
+			AliasType: AliasType("invented"),
+		})
+	})
+	assert.Contains(t, panicValue, `register predicate "test.identity.alias": invalid alias type "invented"`)
+}
+
+func capturePanic(fn func()) (panicValue string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panicValue = fmt.Sprint(recovered)
+		}
+	}()
+	fn()
+	return ""
+}
 
 func TestRegisterWithInverseOf(t *testing.T) {
 	// Save and restore registry state

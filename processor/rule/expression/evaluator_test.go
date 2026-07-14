@@ -664,6 +664,20 @@ func TestDistance(t *testing.T) {
 	}
 }
 
+func TestExtractLatLonIgnoresBarePredicateAliases(t *testing.T) {
+	t.Parallel()
+	entity := &gtypes.EntityState{Triples: []message.Triple{
+		{Predicate: "geo.location.latitude", Object: 40.0},
+		{Predicate: "geo.location.longitude", Object: -100.0},
+		{Predicate: "latitude", Object: 1.0},
+		{Predicate: "longitude", Object: 2.0},
+	}}
+	lat, lon := extractLatLonFromTriples(entity)
+	if lat != 40 || lon != -100 {
+		t.Fatalf("coordinates = (%v, %v), want canonical (40, -100)", lat, lon)
+	}
+}
+
 func TestExpressionEvaluator_InOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
 

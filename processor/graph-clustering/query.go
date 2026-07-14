@@ -4,6 +4,7 @@ package graphclustering
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -102,9 +103,12 @@ type LevelResponse struct {
 }
 
 // handleQueryCommunityNATS handles community query requests via NATS request/reply
-func (c *Component) handleQueryCommunityNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQueryCommunityNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.graphStateContractError("handleQueryCommunityNATS"); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operations
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -132,9 +136,12 @@ func (c *Component) handleQueryCommunityNATS(_ context.Context, data []byte) ([]
 }
 
 // handleQueryMembersNATS handles members query requests via NATS request/reply
-func (c *Component) handleQueryMembersNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQueryMembersNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.graphStateContractError("handleQueryMembersNATS"); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operations
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -164,9 +171,12 @@ func (c *Component) handleQueryMembersNATS(_ context.Context, data []byte) ([]by
 }
 
 // handleQueryEntityNATS handles entity community query requests via NATS request/reply
-func (c *Component) handleQueryEntityNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQueryEntityNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.graphStateContractError("handleQueryEntityNATS"); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operations
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -202,9 +212,12 @@ func (c *Component) handleQueryEntityNATS(_ context.Context, data []byte) ([]byt
 }
 
 // handleQueryLevelNATS handles level query requests via NATS request/reply
-func (c *Component) handleQueryLevelNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQueryLevelNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.graphStateContractError("handleQueryLevelNATS"); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operations
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 10*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -311,12 +324,18 @@ func (c *Component) getCommunitiesByLevel(ctx context.Context, level int) ([]*cl
 	for _, key := range keys {
 		entry, err := c.communityBucket.Get(ctx, key)
 		if err != nil {
-			continue
+			// A key can disappear between the filtered listing and the point read.
+			// That proven not-found race is safe to omit; every other failure means
+			// the scan is incomplete and must not be returned as authoritative.
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				continue
+			}
+			return nil, errs.WrapTransient(err, "Component", "getCommunitiesByLevel", "get community")
 		}
 
 		var community clustering.Community
 		if err := json.Unmarshal(entry.Value(), &community); err != nil {
-			continue
+			return nil, errs.WrapInvalid(err, "Component", "getCommunitiesByLevel", "community unmarshal")
 		}
 
 		communities = append(communities, &community)

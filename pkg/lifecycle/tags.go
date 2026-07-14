@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // fieldMeta captures the parsed lifecycle-tag attributes for one
@@ -185,6 +187,11 @@ func absorbField(sm *structMeta, t reflect.Type, field reflect.StructField, idx 
 	}
 	if err := parseLifecycleTag(meta, field); err != nil {
 		return err
+	}
+	if meta.Predicate != "" {
+		if err := vocabulary.RequireDeclaredPredicate(meta.Predicate); err != nil {
+			return fmt.Errorf("lifecycle: field %s declares undeclared or invalid predicate: %w", field.Name, err)
+		}
 	}
 	if err := validateRoleFlags(meta, field); err != nil {
 		return err

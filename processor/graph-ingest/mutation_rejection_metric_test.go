@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // ADR-060: meteredMutation wraps every graph-mutation request handler and
@@ -102,4 +103,27 @@ func TestMeteredMutation_HandlerErrorMeteredAsInternal(t *testing.T) {
 	require.ErrorIs(t, err, sentinel, "the handler error must pass through unchanged")
 	assert.InDelta(t, before+1, testutil.ToFloat64(counter), 0.0001,
 		"a non-nil handler error must be metered as reason=internal")
+}
+
+func TestMeteredMutation_PredicateReasonsCountOncePerCandidate(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	const lane = "test.mutation.metric.predicate-contract"
+	contractErr := &graph.EntityPredicateContractError{Violations: []graph.InvalidEntityPredicate{
+		{Predicate: "legacy.one", Reason: vocabulary.PredicateReasonArity},
+		{Predicate: "legacy.two", Reason: vocabulary.PredicateReasonArity},
+		{Predicate: "Legacy.valid.shape", Reason: vocabulary.PredicateReasonSegmentStart},
+	}}
+	wrapped := comp.meteredMutation(lane, func(_ context.Context, _ []byte) ([]byte, error) {
+		return nil, errs.WrapInvalid(contractErr, "test", "predicateMetric", "reject candidate")
+	})
+	ary := comp.predicateContractRejections.WithLabelValues(lane, string(vocabulary.PredicateReasonArity))
+	start := comp.predicateContractRejections.WithLabelValues(lane, string(vocabulary.PredicateReasonSegmentStart))
+	beforeArity := testutil.ToFloat64(ary)
+	beforeStart := testutil.ToFloat64(start)
+
+	_, err := wrapped(context.Background(), nil)
+	require.Error(t, err)
+	assert.InDelta(t, beforeArity+1, testutil.ToFloat64(ary), 0.0001,
+		"two predicates with one reason count as one rejected reason")
+	assert.InDelta(t, beforeStart+1, testutil.ToFloat64(start), 0.0001)
 }

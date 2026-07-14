@@ -134,11 +134,8 @@ ast-source/filestore work; the ref is lifted onto `EntityState` at ingest alread
   search). Semantic (`globalSearch`/`searchGraph`) covers NL.
 - **Expand — complete.** `graph.index.query.{outgoing,incoming,predicate,predicateCompound}` + `pathSearch`.
 - **Hydrate — complete.** `graph.query.batch` (bounded-concurrent, partial-success; chunk above ~1 MB).
-- **Readiness — MISSING (to build).** The honesty envelope's `ready ≠ not-found` needs a queryable index-
-  readiness surface; there is **no `graph.*.query.status` subject today** (the only `IndexStatus`-shaped
-  type is `graph/datamanager`'s internal cache struct, not queryable). semsource's engine reads a
-  `Status` today against a subject that does not yet exist framework-side — a readiness query is net-new
-  work (folded into increment 2's `GraphQueryClient`).
+- **Readiness — available.** `graph.index.query.status` exposes the queryable index-readiness envelope used by
+  `GraphQueryClient`; consumers must check it before interpreting an empty result as not-found.
 
 ## Honesty envelope
 

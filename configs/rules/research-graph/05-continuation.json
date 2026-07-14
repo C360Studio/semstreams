@@ -2,16 +2,16 @@
   "id": "research_continuation",
   "type": "expression",
   "name": "R6 — Continuation: route SearchResult to parent",
-  "description": "ADR-045 R6. Fires on research.search_result.complete (synthesize_answer's terminal stamp). Publishes a follow-up agent task to the parent loop's role; the parent's next iteration fetches the SearchResult via read_loop_result(loop_id=<rg_…>) — synthesize_answer also wrote the envelope to AGENT_LOOPS at COMPLETE_<loopID> so this works out of the box. Note: when research.parent_role is empty (research_graph tool invoked outside an agent loop), the role substitution leaves a literal $entity.triple.research.parent_role in the spawned task — the spawn fails loudly rather than silently mis-routing. Phase 2 may add a configured default_parent_role fallback per ADR-045 § Open questions.",
+  "description": "ADR-045 R6. Fires on research.search-result.complete (synthesize_answer's terminal stamp). Publishes a follow-up agent task to the parent loop's role; the parent's next iteration fetches the SearchResult via read_loop_result(loop_id=<rg_…>) — synthesize_answer also wrote the envelope to AGENT_LOOPS at COMPLETE_<loopID> so this works out of the box. Note: when research.parent.role is empty (research_graph tool invoked outside an agent loop), the role substitution leaves a literal $entity.triple.research.parent.role in the spawned task — the spawn fails loudly rather than silently mis-routing. Phase 2 may add a configured default_parent_role fallback per ADR-045 § Open questions.",
   "enabled": true,
   "conditions": [
     {
-      "field": "loop.role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "research_pipeline"
     },
     {
-      "field": "research.search_result.complete",
+      "field": "research.search-result.complete",
       "operator": "ne",
       "value": ""
     }
@@ -21,12 +21,12 @@
     {
       "type": "publish_agent",
       "subject": "agent.task.research_continuation",
-      "role": "$entity.triple.research.parent_role",
+      "role": "$entity.triple.research.parent.role",
       "model": "general",
       "tools": ["read_loop_result"],
-      "prompt": "A research operation completed. The SearchResult is at AGENT_LOOPS loop_id=$entity.triple.research.loop_id — call read_loop_result with that ID to fetch the synthesis text + evidence refs + DecompTrace. The original topic was $entity.triple.research.topic — quote evidence refs verbatim where you cite them.",
+      "prompt": "A research operation completed. The SearchResult is at AGENT_LOOPS loop_id=$entity.triple.research.loop.id — call read_loop_result with that ID to fetch the synthesis text + evidence refs + DecompTrace. The original topic was $entity.triple.research.request.topic — quote evidence refs verbatim where you cite them.",
       "related_loops": {
-        "research_pipeline": "$entity.triple.research.loop_id"
+        "research_pipeline": "$entity.triple.research.loop.id"
       }
     }
   ]

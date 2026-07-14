@@ -71,7 +71,7 @@ func (c *Command) EntityID() string {
 func (c *Command) Triples() []message.Triple {
 	return []message.Triple{{
 		Subject:    c.EntityID(),
-		Predicate:  "mission.command",
+		Predicate:  PredicateCommand,
 		Object:     c.Command,
 		Source:     "mission-command",
 		Timestamp:  time.Now(),

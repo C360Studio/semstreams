@@ -290,8 +290,8 @@ func (c *PRWorkflowComponent) handleIssueEvent(ctx context.Context, data []byte)
 	// Write initial entity triples. Errors are best-effort: the triples that
 	// succeed are still useful and the graph is eventually consistent.
 	for pred, obj := range map[string]any{
-		"workflow.phase":             "qualifying",
-		"workflow.status":            "active",
+		"workflow.state.phase":       "qualifying",
+		"workflow.state.status":      "active",
 		"github.issue.number":        fmt.Sprintf("%d", event.Issue.Number),
 		"github.issue.title":         event.Issue.Title,
 		"workflow.tokens.total":      "0",
@@ -371,7 +371,7 @@ func (c *PRWorkflowComponent) handleQualifierComplete(ctx context.Context, event
 
 	for pred, obj := range map[string]string{
 		"workflow.qualifier.verdict": verdict.Verdict,
-		"workflow.phase":             verdict.Verdict, // phase mirrors verdict
+		"workflow.state.phase":       verdict.Verdict, // phase mirrors verdict
 	} {
 		if err := c.writeTriple(ctx, entityID, pred, obj); err != nil {
 			c.errors.Add(1)
@@ -404,9 +404,9 @@ func (c *PRWorkflowComponent) handleDeveloperComplete(ctx context.Context, event
 		c.errors.Add(1)
 		c.logger.Warn("Failed to accumulate tokens", "entity_id", entityID, "error", err)
 	}
-	if err := c.writeTriple(ctx, entityID, "workflow.phase", PhaseDevComplete); err != nil {
+	if err := c.writeTriple(ctx, entityID, "workflow.state.phase", PhaseDevComplete); err != nil {
 		c.errors.Add(1)
-		c.logger.Warn("Failed to write triple", "predicate", "workflow.phase", "error", err)
+		c.logger.Warn("Failed to write triple", "predicate", "workflow.state.phase", "error", err)
 	}
 }
 
@@ -440,9 +440,9 @@ func (c *PRWorkflowComponent) handleReviewerComplete(ctx context.Context, event 
 			c.logger.Warn("Failed to increment rejections", "entity_id", entityID, "error", err)
 		}
 	}
-	if err := c.writeTriple(ctx, entityID, "workflow.phase", phase); err != nil {
+	if err := c.writeTriple(ctx, entityID, "workflow.state.phase", phase); err != nil {
 		c.errors.Add(1)
-		c.logger.Warn("Failed to write triple", "predicate", "workflow.phase", "error", err)
+		c.logger.Warn("Failed to write triple", "predicate", "workflow.state.phase", "error", err)
 	}
 }
 
@@ -527,8 +527,8 @@ func (c *PRWorkflowComponent) getWorkflowState(ctx context.Context, entityID str
 	}
 
 	var entityState gtypes.EntityState
-	if err := json.Unmarshal(entry.Value(), &entityState); err != nil {
-		return state, nil
+	if err := gtypes.UnmarshalEntityState(entry.Value(), &entityState); err != nil {
+		return nil, fmt.Errorf("decode authoritative workflow entity %q: %w", entityID, err)
 	}
 
 	// Extract counters from triples

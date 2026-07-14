@@ -24,12 +24,13 @@ import (
 // reached an expression-rule path, or vice versa), or the author used a
 // name that doesn't match any known substitution.
 //
-// Pattern rationale: first character after the dot must be a word char
-// (letter/digit/underscore), then any run of word chars and dots lets us
-// match deep predicate paths like $entity.triple.agent.loop.role. We stop
-// at any other character so legitimate adjacent syntax (e.g. "$entity.id.")
-// doesn't over-match.
-var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller|message)\.\w[\w.]*`)
+// Pattern rationale: first character after the dot must be a lower-case
+// alphanumeric character, then dots and hyphens cover canonical predicate
+// paths such as $entity.triple.agent.action.executed-by. Underscores remain
+// accepted here because non-predicate namespaces (for example
+// $schedule.last_fired_at) still use them. We stop at any other character so
+// legitimate adjacent syntax (e.g. "$entity.id.") doesn't over-match.
+var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|schedule|caller|message)\.[a-z0-9][a-z0-9_.-]*`)
 
 // tripleLengthRe matches list-length suffix references on entity or
 // related triples (#149 / ADR-046 Phase 1 follow-up):
@@ -49,7 +50,7 @@ var unresolvedTemplateVarRe = regexp.MustCompile(`\$(?:entity|related|state|sche
 // the documented use case and a literal `.length` predicate is rare;
 // authors who need the literal can write the value into their template
 // directly. Worth documenting if it ever becomes an issue in practice.
-var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.length\b`)
+var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]+?)\.length\b`)
 
 // tripleTriplesRe matches list-enumeration suffix references on
 // entity or related triples (ADR-048 / PR 4 of the lifecycle bundle):
@@ -82,7 +83,7 @@ var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.
 // present) → "[]" (JSON empty array). Apps consuming the substituted
 // value in a prompt or property MUST parse it as JSON per the
 // canonical persona-prose template in ADR-048.
-var tripleTriplesRe = regexp.MustCompile(`\$(entity|related)\.triple\.([\w.]+?)\.triples\b`)
+var tripleTriplesRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]+?)\.triples\b`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing

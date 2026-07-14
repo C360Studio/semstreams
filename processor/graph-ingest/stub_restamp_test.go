@@ -38,7 +38,7 @@ func TestCreateWithTriples_ReStampsStub(t *testing.T) {
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: target, MessageType: realType},
 		Triples: []message.Triple{
-			{Subject: target, Predicate: "real.label", Object: "Born", Timestamp: time.Now(), Confidence: 1.0},
+			{Subject: target, Predicate: "entity.identity.label", Object: "Born", Timestamp: time.Now(), Confidence: 1.0},
 		},
 	}
 	data, err := json.Marshal(req)
@@ -51,7 +51,7 @@ func TestCreateWithTriples_ReStampsStub(t *testing.T) {
 	born := storedEntity(t, comp, target)
 	assert.False(t, born.IsStub(), "the stub envelope must be re-stamped to the real type")
 	assert.Equal(t, realType, born.MessageType)
-	assert.True(t, hasPredicate(born, "real.label"), "real triples merged onto the born entity")
+	assert.True(t, hasPredicate(born, "entity.identity.label"), "real triples merged onto the born entity")
 	assert.Equal(t, before+1, testutil.ToFloat64(comp.stubRestamps),
 		"a re-stamp ticks the distinct stub_restamps_total counter — a positive signal, not a rejection")
 }
@@ -74,7 +74,7 @@ func TestCreateWithTriples_ZeroTypedDoesNotRestampStub(t *testing.T) {
 	// create_with_triples with a ZERO MessageType (no real envelope).
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:  &graph.EntityState{ID: target}, // zero MessageType
-		Triples: []message.Triple{{Subject: target, Predicate: "real.label", Object: "x", Timestamp: time.Now(), Confidence: 1.0}},
+		Triples: []message.Triple{{Subject: target, Predicate: "entity.identity.label", Object: "x", Timestamp: time.Now(), Confidence: 1.0}},
 	}
 	data, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestCreateWithTriples_RealCollisionStillRejects(t *testing.T) {
 	mk := func() []byte {
 		req := graph.CreateEntityWithTriplesRequest{
 			Entity:  &graph.EntityState{ID: target, MessageType: realType},
-			Triples: []message.Triple{{Subject: target, Predicate: "real.label", Object: "v", Timestamp: time.Now(), Confidence: 1.0}},
+			Triples: []message.Triple{{Subject: target, Predicate: "entity.identity.label", Object: "v", Timestamp: time.Now(), Confidence: 1.0}},
 		}
 		data, _ := json.Marshal(req)
 		return data

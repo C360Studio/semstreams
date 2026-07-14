@@ -224,7 +224,7 @@ func TestIndexingProfile_Graphable_IndexingProfilerWins(t *testing.T) {
 func TestIndexingProfile_Graphable_NoProfilerFallsToFloor(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	// Payload returns "" from IndexingProfile() => treated as absent.
-	payload := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("k", "v")}}
+	payload := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("test.fixture.value", "v")}}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
 
 	entity, err := comp.extractEntityFromMessage(msg)
@@ -325,7 +325,7 @@ func TestReconcileIndexingProfile_DedupesToFirst(t *testing.T) {
 	es := &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()}
 	es.Triples = []message.Triple{
 		{Subject: es.ID, Predicate: vocabulary.EntityIndexingProfile, Object: vocabulary.IndexingProfileContent},
-		userTriple("k", "v"),
+		userTriple("test.fixture.value", "v"),
 		{Subject: es.ID, Predicate: vocabulary.EntityIndexingProfile, Object: vocabulary.IndexingProfileTrace},
 	}
 	comp.reconcileIndexingProfile(es)
@@ -373,7 +373,7 @@ func TestIndexingProfile_FloorMetric_FiresExactlyOnFloor(t *testing.T) {
 	// (c) Re-arrival of the floor-stamped entity (001) → profile already present
 	//     → keep-first, no floor → metric unchanged (immutability is not a default).
 	before = testutil.ToFloat64(counter)
-	payload := &testGraphablePayload{id: "c360.platform.metrictest.sys.widget.001", triples: []message.Triple{userTriple("k", "v2")}}
+	payload := &testGraphablePayload{id: "c360.platform.metrictest.sys.widget.001", triples: []message.Triple{userTriple("test.fixture.value", "v2")}}
 	entity, err := comp.extractEntityFromMessage(message.NewBaseMessage(mt, payload, "test"))
 	require.NoError(t, err)
 	require.NoError(t, comp.MergeEntity(ctx, entity))

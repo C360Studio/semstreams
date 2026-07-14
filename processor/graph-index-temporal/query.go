@@ -35,6 +35,9 @@ type TemporalResult struct {
 
 // handleQueryRangeNATS handles temporal range queries via NATS request/reply
 func (c *Component) handleQueryRangeNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.ensureBootstrapReady(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -67,21 +70,27 @@ func (c *Component) handleQueryRangeNATS(ctx context.Context, data []byte) ([]by
 	for _, prefix := range prefixes {
 		matched, err := natsclient.FilteredKeys(ctx, c.temporalBucket, prefix)
 		if err != nil {
-			return json.Marshal([]TemporalResult{})
+			return nil, errs.WrapTransient(err, "Component", "handleQueryRangeNATS", "list temporal index keys")
 		}
 		keys = append(keys, matched...)
 	}
 
-	results := c.collectTemporalResults(ctx, keys, startTime, endTime, limit)
+	results, err := c.collectTemporalResults(ctx, keys, startTime, endTime, limit)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "Component", "handleQueryRangeNATS", "fetch temporal index buckets")
+	}
 	return json.Marshal(results)
 }
 
 // collectTemporalResults fetches time buckets and filters events within the query range.
-func (c *Component) collectTemporalResults(ctx context.Context, keys []string, startTime, endTime time.Time, limit int) []TemporalResult {
+func (c *Component) collectTemporalResults(ctx context.Context, keys []string, startTime, endTime time.Time, limit int) ([]TemporalResult, error) {
 	results := make([]TemporalResult, 0)
 	seen := make(map[string]bool)
 
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(results) >= limit {
 			break
 		}
@@ -99,7 +108,10 @@ func (c *Component) collectTemporalResults(ctx context.Context, keys []string, s
 
 		entry, err := c.temporalBucket.Get(ctx, key)
 		if err != nil {
-			continue
+			if natsclient.IsKVNotFoundError(err) {
+				continue
+			}
+			return nil, err
 		}
 
 		var temporalData struct {
@@ -110,7 +122,7 @@ func (c *Component) collectTemporalResults(ctx context.Context, keys []string, s
 			} `json:"events"`
 		}
 		if err := json.Unmarshal(entry.Value(), &temporalData); err != nil {
-			continue
+			return nil, err
 		}
 
 		for _, event := range temporalData.Events {
@@ -131,7 +143,7 @@ func (c *Component) collectTemporalResults(ctx context.Context, keys []string, s
 			}
 		}
 	}
-	return results
+	return results, nil
 }
 
 // parseTimeBucketKey parses a time bucket key in format "YYYY.MM.DD.HH"

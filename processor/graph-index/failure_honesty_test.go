@@ -60,6 +60,20 @@ func TestDeleteFromIndexes_Failure_MarksFailed(t *testing.T) {
 	assert.Equal(t, int64(1), comp.failedCount.Load(), "failed delete must withhold readiness")
 }
 
+func TestPredicateValueFilter_BackendFailureIsNotPartialSuccess(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	entityBucket := newMockKVBucket()
+	entityBucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+		return nil, errors.New("entity backend unavailable")
+	}
+	comp.entityStatesBucket = entityBucket
+
+	entities, err := comp.filterEntitiesByPredicateValue(context.Background(),
+		[]string{"acme.ops.robotics.gcs.drone.001"}, "robotics.status.armed", "true", 10)
+	require.Error(t, err)
+	assert.Nil(t, entities, "backend failure must not return a successful subset")
+}
+
 // TestProcessEntityUpdate_WriteFailure_WithholdsReadiness covers the P1b failure-honesty
 // contract (gh#474): a required index write that ultimately fails must (1) propagate an
 // error, (2) mark the entity failed so readiness is withheld, (3) NOT store the no-op

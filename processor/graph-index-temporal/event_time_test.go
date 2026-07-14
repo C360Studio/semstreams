@@ -250,20 +250,25 @@ func TestProcessEntityUpdate_AddFailure_DoesNotRemoveFromPriorBucket(t *testing.
 		"on add failure the entity must remain queryable in its prior bucket (no remove-before-add)")
 }
 
-func TestHandleEntityDelete_RemovesFromBucketAndReverse(t *testing.T) {
-	c, tb, rb := newEventTimeTestComponent()
-	ctx := context.Background()
-	id := "acme.ops.robotics.gcs.drone.001"
+func TestEntityTombstone_RemovesFromBucketAndReverse(t *testing.T) {
+	for _, op := range []jetstream.KeyValueOp{jetstream.KeyValueDelete, jetstream.KeyValuePurge} {
+		t.Run(op.String(), func(t *testing.T) {
+			c, tb, rb := newEventTimeTestComponent()
+			ctx := context.Background()
+			id := "acme.ops.robotics.gcs.drone.001"
 
-	state := graph.EntityState{ID: id, Triples: []message.Triple{observedTriple(id, "2026-01-07T14:30:00Z")}}
-	c.processEntityUpdate(ctx, entityEntry(t, state))
-	require.Contains(t, bucketEntities(t, tb, "2026.01.07.14"), id)
+			state := graph.EntityState{ID: id, Triples: []message.Triple{observedTriple(id, "2026-01-07T14:30:00Z")}}
+			c.processEntityUpdate(ctx, entityEntry(t, state))
+			require.Contains(t, bucketEntities(t, tb, "2026.01.07.14"), id)
 
-	c.handleEntityDelete(ctx, id)
+			c.applyEntityWatchEntry(ctx, &bootstrapEntry{key: id, revision: 8, op: op})
 
-	assert.NotContains(t, bucketEntities(t, tb, "2026.01.07.14"), id, "deleted entity must be gone from its bucket")
-	_, err := rb.Get(ctx, id)
-	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "reverse entry should be removed")
+			assert.NotContains(t, bucketEntities(t, tb, "2026.01.07.14"), id,
+				"%s entity must be gone from its bucket", op)
+			_, err := rb.Get(ctx, id)
+			assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "%s reverse entry should be removed", op)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

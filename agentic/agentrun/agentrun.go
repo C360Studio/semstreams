@@ -33,6 +33,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // agentRunTransitions is the declared phase graph for an AgentRun (ADR-053 D2).
@@ -57,20 +58,33 @@ const (
 	PhasePredicate = "agent.run.phase"
 
 	// predicateAuditSource carries the transition source (rule|operator|framework).
-	predicateAuditSource = "agent.run.last_transition_source"
+	predicateAuditSource = "agent.run.last-transition-source"
 
 	// predicateAuditAt carries the RFC3339Nano timestamp of the last transition.
-	predicateAuditAt = "agent.run.last_transition_at"
+	predicateAuditAt = "agent.run.last-transition-at"
 
 	// predicateAuditFrom carries the phase the entity transitioned out of.
-	predicateAuditFrom = "agent.run.last_transition_from"
+	predicateAuditFrom = "agent.run.last-transition-from"
 
 	// predicateAuditNote carries an optional free-text note on the transition.
-	predicateAuditNote = "agent.run.last_transition_note"
+	predicateAuditNote = "agent.run.last-transition-note"
 
 	// predicateParentRunEntityID carries the parent run's full entity ID, if any.
-	predicateParentRunEntityID = "agent.run.parent_entity_id"
+	predicateParentRunEntityID = "agent.run.parent-entity-id"
 )
+
+func init() {
+	for _, predicate := range []string{
+		PhasePredicate,
+		predicateAuditSource,
+		predicateAuditAt,
+		predicateAuditFrom,
+		predicateAuditNote,
+		predicateParentRunEntityID,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
 // WorkflowName is the registered workflow type name for agent-run entries.
 // Matches what AgentRun.Workflow() returns.
@@ -102,7 +116,7 @@ type AgentRun struct {
 	PhaseField string `json:"phase" lifecycle:"phase,predicate=agent.run.phase"`
 
 	// ParentRunEntityID is the parent run's full entity ID, or empty for root runs.
-	ParentRunEntityID string `json:"parent_run_entity_id,omitempty" lifecycle:"predicate=agent.run.parent_entity_id"`
+	ParentRunEntityID string `json:"parent_run_entity_id,omitempty" lifecycle:"predicate=agent.run.parent-entity-id"`
 }
 
 // EntityID returns the full 6-part federated entity ID.

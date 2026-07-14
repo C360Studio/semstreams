@@ -66,27 +66,27 @@ func hasPredicate(es *graph.EntityState, predicate string) bool {
 func TestPartitionTriplesBySubject(t *testing.T) {
 	primary := flParentID
 	triples := []message.Triple{
-		{Subject: primary, Predicate: "own.a", Object: 1},
-		{Subject: flChildID, Predicate: "foreign.b", Object: 2},
-		{Subject: "", Predicate: "empty.subject.files.onto.primary", Object: 3},
-		{Subject: primary, Predicate: "own.c", Object: 4},
-		{Subject: "c360.platform.test.sys.widget.003", Predicate: "foreign.d", Object: 5},
+		{Subject: primary, Predicate: "test.own.a", Object: 1},
+		{Subject: flChildID, Predicate: "test.foreign.b", Object: 2},
+		{Subject: "", Predicate: "test.subject.empty-primary", Object: 3},
+		{Subject: primary, Predicate: "test.own.c", Object: 4},
+		{Subject: "c360.platform.test.sys.widget.003", Predicate: "test.foreign.d", Object: 5},
 	}
 
 	own, foreign := partitionTriplesBySubject(primary, triples)
 
 	require.Len(t, own, 3, "own = subject==entityID plus the empty-subject (historical primary filing)")
 	require.Len(t, foreign, 2, "foreign = every triple naming a different subject")
-	assert.True(t, hasPredicateInTriples(own, "empty.subject.files.onto.primary"),
+	assert.True(t, hasPredicateInTriples(own, "test.subject.empty-primary"),
 		"an empty Subject must stay on the primary (preserves pre-ADR filing)")
-	assert.True(t, hasPredicateInTriples(foreign, "foreign.b"))
-	assert.True(t, hasPredicateInTriples(foreign, "foreign.d"))
+	assert.True(t, hasPredicateInTriples(foreign, "test.foreign.b"))
+	assert.True(t, hasPredicateInTriples(foreign, "test.foreign.d"))
 }
 
 func TestPartitionTriplesBySubject_AllOwn(t *testing.T) {
 	own, foreign := partitionTriplesBySubject(flParentID, []message.Triple{
-		{Subject: flParentID, Predicate: "a"},
-		{Subject: flParentID, Predicate: "b"},
+		{Subject: flParentID, Predicate: "test.own.a"},
+		{Subject: flParentID, Predicate: "test.own.b"},
 	})
 	assert.Len(t, own, 2)
 	assert.Empty(t, foreign, "a single-Subject Graphable produces no foreign edges")
@@ -142,7 +142,7 @@ func TestStorageRefExtraction_ConsumerLiftsRefOntoEntity(t *testing.T) {
 func TestStorageRefExtraction_NonStorablePayloadLeavesRefNil(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	// testGraphablePayload (indexing_profile_test.go) is Graphable but NOT Storable.
-	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{userTriple("k", "v")}}
+	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{userTriple("test.fixture.value", "v")}}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
 
 	entity, err := comp.extractEntityFromMessage(msg)
@@ -163,8 +163,8 @@ func TestIngestEntity_RegroupsForeignSubjectEdgeOntoChild(t *testing.T) {
 		MessageType: testWidgetMessageType(),
 		Version:     1,
 		Triples: []message.Triple{
-			{Subject: flParentID, Predicate: "rel.hosts", Object: flChildID, Timestamp: time.Now()},
-			{Subject: flChildID, Predicate: "rel.isHostedBy", Object: flParentID, Timestamp: time.Now()},
+			{Subject: flParentID, Predicate: "graph.rel.hosts", Object: flChildID, Timestamp: time.Now()},
+			{Subject: flChildID, Predicate: "graph.rel.is-hosted-by", Object: flParentID, Timestamp: time.Now()},
 		},
 	}
 
@@ -173,15 +173,15 @@ func TestIngestEntity_RegroupsForeignSubjectEdgeOntoChild(t *testing.T) {
 	// Parent keeps only its own fact (+ the framework profile stamp); the inverse
 	// edge must NOT be misfiled onto it.
 	parent := storedEntity(t, comp, flParentID)
-	assert.True(t, hasPredicate(parent, "rel.hosts"), "parent keeps its own forward edge")
-	assert.False(t, hasPredicate(parent, "rel.isHostedBy"),
+	assert.True(t, hasPredicate(parent, "graph.rel.hosts"), "parent keeps its own forward edge")
+	assert.False(t, hasPredicate(parent, "graph.rel.is-hosted-by"),
 		"the child-subject inverse edge must not stay misfiled on the parent")
 
 	// The inverse edge lands on the CHILD entity, under the correct subject.
 	child := storedEntity(t, comp, flChildID)
-	require.True(t, hasPredicate(child, "rel.isHostedBy"), "the inverse edge must be regrouped onto its own subject")
+	require.True(t, hasPredicate(child, "graph.rel.is-hosted-by"), "the inverse edge must be regrouped onto its own subject")
 	for _, tr := range child.Triples {
-		if tr.Predicate == "rel.isHostedBy" {
+		if tr.Predicate == "graph.rel.is-hosted-by" {
 			assert.Equal(t, flChildID, tr.Subject, "the regrouped edge keeps its child Subject")
 		}
 	}
@@ -195,12 +195,12 @@ func TestIngestEntity_SingleSubjectNoForeignEntityCreated(t *testing.T) {
 		ID:          flParentID,
 		MessageType: testWidgetMessageType(),
 		Version:     1,
-		Triples:     []message.Triple{{Subject: flParentID, Predicate: "rel.hosts", Object: "x", Timestamp: time.Now()}},
+		Triples:     []message.Triple{{Subject: flParentID, Predicate: "graph.rel.hosts", Object: "x", Timestamp: time.Now()}},
 	}
 	comp.ingestEntity(ctx, entity)
 
 	parent := storedEntity(t, comp, flParentID)
-	assert.True(t, hasPredicate(parent, "rel.hosts"))
+	assert.True(t, hasPredicate(parent, "graph.rel.hosts"))
 	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(parent),
 		"a single-Subject entity still gets the floor profile and is otherwise unchanged")
 

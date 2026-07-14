@@ -44,6 +44,7 @@ type CronScheduler struct {
 	tracker  *ScheduleTracker
 	metrics  *cronMetrics
 	logger   *slog.Logger
+	ready    func() bool
 
 	mu      sync.Mutex
 	entries map[string]*cronEntry
@@ -111,6 +112,10 @@ type CronSchedulerConfig struct {
 	// Logger is optional. Defaults to slog.Default() when nil so the
 	// scheduler always has something to log to.
 	Logger *slog.Logger
+
+	// Ready is an optional fail-closed dispatch gate. Production binds it to
+	// the Processor's authoritative graph-state guard; tests may omit it.
+	Ready func() bool
 }
 
 // NewCronScheduler builds a scheduler that will dispatch actions through
@@ -133,6 +138,7 @@ func NewCronScheduler(cfg CronSchedulerConfig) (*CronScheduler, error) {
 		// parser is therefore unused.
 		cron:     cronlib.New(),
 		executor: cfg.Executor,
+		ready:    cfg.Ready,
 		tracker:  cfg.Tracker,
 		metrics:  cfg.Metrics,
 		logger:   logger,
@@ -367,6 +373,9 @@ func (s *CronScheduler) RegisteredCount() int {
 // hot-reload, slow actions, and overlapping ticks; the deferred recover
 // keeps a panicking action from killing the scheduler goroutine.
 func (s *CronScheduler) fire(ruleID string) {
+	if s.ready != nil && !s.ready() {
+		return
+	}
 	s.mu.Lock()
 	entry, ok := s.entries[ruleID]
 	parentCtx := s.parentCtx

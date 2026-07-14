@@ -219,7 +219,7 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 		}
 	})
 
-	t.Run("accepts condition on unregistered field (opacity is opt-in)", func(t *testing.T) {
+	t.Run("rejects condition on unregistered graph predicate", func(t *testing.T) {
 		err := processor.ValidateConfigUpdate(map[string]any{
 			"rules": map[string]any{
 				"unregistered_match": map[string]any{
@@ -234,8 +234,11 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 				},
 			},
 		})
-		if err != nil {
-			t.Errorf("unregistered fields must default to rule-matchable: %v", err)
+		if err == nil {
+			t.Fatal("unregistered graph predicate unexpectedly accepted")
+		}
+		if !strings.Contains(err.Error(), "not declared") {
+			t.Fatalf("error %q should identify the missing declaration", err)
 		}
 	})
 }
@@ -311,7 +314,7 @@ func TestValidateActionLists_RunScopeOnlyCheckedForPublishAgent(t *testing.T) {
 		Actions: []Action{
 			{
 				Type:      ActionTypeAddTriple,
-				Predicate: "some.predicate",
+				Predicate: "some.test.predicate",
 				Object:    "val",
 				RunScope:  "invalid-but-not-publish-agent",
 			},
@@ -376,5 +379,39 @@ func TestValidateActionLists_FilesystemPolicyInvalidRejects(t *testing.T) {
 				t.Errorf("error for %q must mention 'filesystem_policy', got: %v", policy, err)
 			}
 		})
+	}
+}
+
+func TestValidateDefinitionRejectsNoncanonicalActionPredicate(t *testing.T) {
+	t.Parallel()
+
+	def := Definition{
+		ID: "invalid-action-predicate",
+		OnEnter: []Action{{
+			Type:      ActionTypeAddTriple,
+			Predicate: "workflow.state.next_phase",
+		}},
+	}
+	err := ValidateDefinition(def)
+	if err == nil {
+		t.Fatal("ValidateDefinition unexpectedly accepted a noncanonical action predicate")
+	}
+	if !strings.Contains(err.Error(), "segment_character") {
+		t.Fatalf("validation error %q does not identify the structural reason", err)
+	}
+}
+
+func TestValidateDefinitionAcceptsCanonicalActionPredicate(t *testing.T) {
+	t.Parallel()
+
+	def := Definition{
+		ID: "canonical-action-predicate",
+		OnEnter: []Action{{
+			Type:      ActionTypeAddTriple,
+			Predicate: "workflow.state.next-phase",
+		}},
+	}
+	if err := ValidateDefinition(def); err != nil {
+		t.Fatalf("ValidateDefinition rejected canonical predicate: %v", err)
 	}
 }

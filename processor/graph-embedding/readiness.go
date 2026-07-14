@@ -66,6 +66,21 @@ func (c *Component) handleEmbeddingStatusNATS(ctx context.Context, _ []byte) ([]
 // from the ENTITY_STATES stream LastSeq at query time, and the completions-based stuck
 // detector for the degraded state.
 func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatusResponse {
+	if c.resetState.Load() != nil {
+		return graph.IndexStatusResponse{
+			Ready: false, State: graph.IndexStateResetRequired,
+			Code: graph.ErrorCodeGraphStateResetRequired, Reason: c.graphStateResetReason(),
+		}
+	}
+	if c.watchUnavailable.Load() {
+		return graph.IndexStatusResponse{
+			Ready: false, State: graph.IndexStateDegraded,
+			Code: graph.ErrorCodeIndexNotReady, Reason: "entity_state_watcher_unavailable",
+		}
+	}
+	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
+		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
+	}
 	// A status call before Start wired the watcher (early boot / unit tests) reports
 	// building rather than panicking. Unreachable in production: setupQueryHandlers
 	// runs after both watermark and entityStatesBucket are set in Start.

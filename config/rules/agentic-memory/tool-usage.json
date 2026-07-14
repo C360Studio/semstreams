@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "tool_calls",
+      "field": "$message.tool_calls",
       "operator": "length_gt",
       "value": 0,
       "required": true

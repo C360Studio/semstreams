@@ -28,9 +28,10 @@ namespace, not aliasing, equivalence, ownership, or write authority.
 ### Requirement: Vocabulary declaration and namespace authority are explicit and separate from syntax
 
 Every declared vocabulary predicate MUST satisfy the canonical syntax. A namespace delegation MUST name
-either one exact domain or one exact `domain.category` pair. A valid but undeclared predicate MAY be accepted
-only when its producer holds the matching delegation. Registration or delegation MUST NOT make malformed
-syntax valid, and neither mechanism grants ownership of facts on a particular entity.
+either one exact domain or one exact `domain.category` pair. A vocabulary package, configuration, rule pack,
+schema, or generated tool MAY expose a valid undeclared predicate only when that artifact is bound to the matching
+delegation. Delegation is an authoring boundary, not a runtime bearer credential. Registration or delegation MUST
+NOT make malformed syntax valid, and neither mechanism grants ownership of facts on a particular entity.
 
 Agent and generated-tool authoring surfaces MUST expose declared predicates or delegated namespaces rather
 than accept an unrestricted predicate string.
@@ -47,6 +48,14 @@ than accept an unrestricted predicate string.
 - **WHEN** it writes a syntactically valid predicate in that namespace through an authorized lane
 - **THEN** predicate declaration policy accepts the name
 - **AND** ordinary graph ownership rules still decide whether the fact mutation is authorized
+
+#### Scenario: an anonymous mutation does not invent runtime namespace authority
+
+- **GIVEN** a mutation envelope has no authenticated producer principal
+- **WHEN** the authoritative persistence seam receives its final candidate
+- **THEN** the seam enforces canonical predicate syntax
+- **AND** it does not infer namespace authority from source, message type, context, subject, or other caller data
+- **AND** endpoint authentication and ordinary graph ownership remain separate controls
 
 ### Requirement: Canonical predicate enforcement is unconditional
 
@@ -96,11 +105,12 @@ index replay reach the authoritative watermark.
 
 ### Requirement: Every authoritative replay consumer withholds readiness on incompatible state
 
-Every component that replays ENTITY_STATES or serves a derived graph view MUST validate each replayed entity
-with the canonical predicate parser independently of component startup order. On any violation, graph-index
-MUST mark the entity failed, MUST NOT advertise ready, and MUST return the typed reset/reingest requirement
-from predicate, incoming, outgoing, traversal, and clustering paths. No partial or briefly ready view is
-permitted while another component's preflight is pending.
+Every component that interprets ENTITY_STATES or serves a derived graph view MUST use the shared canonical decoder
+independently of component startup order. On any unreadable entity or predicate violation, projection owners MUST
+enter sticky reset-required state, MUST NOT advance readiness across the poisoned revision, and MUST return the
+typed reset/reingest requirement. Action/evaluation consumers MUST emit no derived output. Predicate, incoming,
+outgoing, traversal, clustering, spatial, temporal, and embedding paths MUST NOT serve partial or briefly ready
+views while another component's preflight is pending.
 
 #### Scenario: invalid preexisting state never becomes query-ready
 

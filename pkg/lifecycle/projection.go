@@ -39,7 +39,7 @@ import (
 //
 // Triples whose predicate isn't declared in the schema are
 // silently ignored. The entity may have triples from other writers
-// (e.g. a processor stamping `mission.command`); they round-trip
+// (e.g. a processor stamping `mission.control.command`); they round-trip
 // through graph-ingest's delta semantics and never reach the
 // projection — Manager.Transition's AddTriples only carries the
 // declared deltas.

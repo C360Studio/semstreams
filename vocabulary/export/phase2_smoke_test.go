@@ -42,12 +42,12 @@ import (
 // domain-specific vocabulary file (per the existing pattern); the
 // test inlines it because the binding IS the demonstration.
 func registerPhase2SmokePredicates() {
-	vocabulary.Register("smoke.platform.hasDeployment", vocabulary.WithIRI(sosa.SSNHasDeployment))
+	vocabulary.Register("smoke.platform.has-deployment", vocabulary.WithIRI(sosa.SSNHasDeployment))
 	vocabulary.Register("smoke.platform.hosts", vocabulary.WithIRI(sosa.Hosts))
-	vocabulary.Register("smoke.sensor.madeObservation", vocabulary.WithIRI(sosa.MadeObservation))
-	vocabulary.Register("smoke.observation.resultTime", vocabulary.WithIRI(sosa.ResultTime))
+	vocabulary.Register("smoke.sensor.made-observation", vocabulary.WithIRI(sosa.MadeObservation))
+	vocabulary.Register("smoke.observation.result-time", vocabulary.WithIRI(sosa.ResultTime))
 	vocabulary.Register("smoke.observation.uom", vocabulary.WithIRI(swe.UoM))
-	vocabulary.Register("smoke.observation.observedProperty", vocabulary.WithIRI(oms.ObservedProperty))
+	vocabulary.Register("smoke.observation.observed-property", vocabulary.WithIRI(oms.ObservedProperty))
 }
 
 func TestPhase2_SensorObservationExportsAllFourPrefixes(t *testing.T) {
@@ -61,12 +61,12 @@ func TestPhase2_SensorObservationExportsAllFourPrefixes(t *testing.T) {
 		deployment  = "acme.ops.robotics.gcs.drone.001/deployment/mission-7"
 	)
 	triples := []message.Triple{
-		{Subject: platform, Predicate: "smoke.platform.hasDeployment", Object: deployment},
+		{Subject: platform, Predicate: "smoke.platform.has-deployment", Object: deployment},
 		{Subject: platform, Predicate: "smoke.platform.hosts", Object: sensor},
-		{Subject: sensor, Predicate: "smoke.sensor.madeObservation", Object: observation},
-		{Subject: observation, Predicate: "smoke.observation.resultTime", Object: "2026-05-15T12:00:00Z"},
+		{Subject: sensor, Predicate: "smoke.sensor.made-observation", Object: observation},
+		{Subject: observation, Predicate: "smoke.observation.result-time", Object: "2026-05-15T12:00:00Z"},
 		{Subject: observation, Predicate: "smoke.observation.uom", Object: "%"},
-		{Subject: observation, Predicate: "smoke.observation.observedProperty", Object: "http://example.org/battery-level"},
+		{Subject: observation, Predicate: "smoke.observation.observed-property", Object: "http://example.org/battery-level"},
 	}
 
 	out, err := export.SerializeToString(triples, export.Turtle)

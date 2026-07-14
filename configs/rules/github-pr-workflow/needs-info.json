@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "workflow.phase",
+      "field": "workflow.state.phase",
       "operator": "eq",
       "value": "needs_info"
     }
@@ -19,7 +19,7 @@
   "on_enter": [
     {
       "type": "update_triple",
-      "predicate": "workflow.phase",
+      "predicate": "workflow.state.phase",
       "object": "awaiting_info"
     }
   ]

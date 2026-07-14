@@ -361,19 +361,19 @@ func TestEntitySerialization_SpecialCharacters(t *testing.T) {
 		Triples: []message.Triple{
 			{
 				Subject:   "c360.platform.test.sys.type.001",
-				Predicate: "test.property.with.dots",
+				Predicate: "test.property.quoted-value",
 				Object:    "value with spaces and \"quotes\"",
 				Timestamp: time.Now(),
 			},
 			{
 				Subject:   "c360.platform.test.sys.type.001",
-				Predicate: "test.unicode",
+				Predicate: "test.value.unicode",
 				Object:    "Unicode: 你好世界 🌍",
 				Timestamp: time.Now(),
 			},
 			{
 				Subject:   "c360.platform.test.sys.type.001",
-				Predicate: "test.newlines",
+				Predicate: "test.value.newlines",
 				Object:    "line1\nline2\nline3",
 				Timestamp: time.Now(),
 			},

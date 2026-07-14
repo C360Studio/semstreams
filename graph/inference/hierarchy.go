@@ -56,8 +56,8 @@ type HierarchyInference struct {
 	edgesFailed       atomic.Int64
 }
 
-// EntityManager provides entity existence checks and creation.
-// Typically implemented by datamanager.Manager.
+// EntityManager provides entity existence checks and creation. Production
+// implementations route creation through graph-ingest.
 type EntityManager interface {
 	ExistsEntity(ctx context.Context, id string) (bool, error)
 	CreateEntity(ctx context.Context, entity *gtypes.EntityState) (*gtypes.EntityState, error)

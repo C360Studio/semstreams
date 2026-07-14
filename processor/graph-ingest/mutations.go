@@ -151,6 +151,7 @@ func (c *Component) meteredMutation(subject string, h mutationHandler) mutationH
 	return func(ctx context.Context, data []byte) ([]byte, error) {
 		resp, err := h(ctx, data)
 		if err != nil {
+			c.recordPredicateContractRejections(subject, err)
 			reason := graph.ErrorCodeInternal
 			var ce *errs.ClassifiedError
 			if errors.As(err, &ce) && ce.Code != "" {
@@ -170,6 +171,26 @@ func (c *Component) meteredMutation(subject string, h mutationHandler) mutationH
 			}
 		}
 		return resp, err
+	}
+}
+
+// recordPredicateContractRejections records each distinct structural reason in
+// one rejected candidate exactly once. Predicate strings and entity IDs are
+// deliberately excluded from labels; lane and reason are bounded sets.
+func (c *Component) recordPredicateContractRejections(lane string, err error) {
+	if c.predicateContractRejections == nil {
+		return
+	}
+	var contractErr *graph.EntityPredicateContractError
+	if !errors.As(err, &contractErr) {
+		return
+	}
+	reasons := make(map[vocabulary.PredicateValidationReason]struct{}, len(contractErr.Violations))
+	for _, violation := range contractErr.Violations {
+		reasons[violation.Reason] = struct{}{}
+	}
+	for reason := range reasons {
+		c.predicateContractRejections.WithLabelValues(lane, string(reason)).Inc()
 	}
 }
 
@@ -284,7 +305,7 @@ func (c *Component) handleTripleRemove(ctx context.Context, data []byte) ([]byte
 	// missing entity is an idempotent no-op success on the handler side, so a
 	// non-nil error here is a genuine internal failure (transient).
 	if err := c.RemoveTriple(ctx, req.Subject, req.Predicate); err != nil {
-		return nil, rejectInternal(err)
+		return nil, rejectFromError(err)
 	}
 
 	// Get revision after successful mutation for feedback loop prevention
@@ -352,7 +373,7 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity already exists: %s", req.Entity.ID))
 		}
-		return nil, rejectInternal(err)
+		return nil, rejectFromError(err)
 	}
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -407,7 +428,7 @@ func (c *Component) restampStubOnCreate(ctx context.Context, entity *graph.Entit
 		return false, nil
 	}
 	if merr := c.MergeEntity(ctx, entity); merr != nil {
-		return false, rejectInternal(merr)
+		return false, rejectFromError(merr)
 	}
 	if c.stubRestamps != nil {
 		c.stubRestamps.Inc()
@@ -447,6 +468,9 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	if len(req.Triples) > 0 {
 		req.Entity.Triples = req.Triples
 	}
+	if err := validateMutationPredicates(req.Entity.Triples, nil); err != nil {
+		return nil, rejectFromError(err)
+	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): the mutation API
 	// is a graph write API, not a bypass — split off any foreign-subject edge
@@ -476,7 +500,7 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 
 	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
 		if !errors.Is(err, natsclient.ErrKVKeyExists) {
-			return nil, rejectInternal(err)
+			return nil, rejectFromError(err)
 		}
 		// gh#435: the ID may exist only as a referential-integrity stub — a
 		// placeholder minted when something referenced it before its real birth.
@@ -560,7 +584,7 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity not found: %s (concurrent modification or delete)", req.Entity.ID))
 		}
-		return nil, rejectInternal(err)
+		return nil, rejectFromError(err)
 	}
 
 	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -688,6 +712,9 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 			Confidence: 1.0,
 		})
 	}
+	if err := validateMutationPredicates(req.AddTriples, req.RemoveTriples); err != nil {
+		return nil, rejectFromError(err)
+	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): split off any
 	// foreign-subject edge from the AddTriples delta so it is classified + routed
@@ -755,7 +782,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		}
 
 		var currentState graph.EntityState
-		if err := json.Unmarshal(current, &currentState); err != nil {
+		if err := graph.UnmarshalEntityState(current, &currentState); err != nil {
 			return nil, retry.NonRetryable(
 				fmt.Errorf("unmarshal current entity: %w", err))
 		}
@@ -784,8 +811,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		if len(req.AddTriples) > 0 {
 			// MergeTriples = replace-by-(subject,predicate): a predicate
 			// present in AddTriples fully replaces its prior values
-			// (upsert), matching the DataManager UpdateEntityWithTriples
-			// contract (graph/datamanager/manager.go) — gh#244. This is
+			// (upsert), matching the graph mutation contract — gh#244. This is
 			// NOT incremental append; a caller that wants to preserve
 			// existing values of a predicate and add more uses
 			// triple.add / triple.add_batch. Replace-by-predicate also
@@ -801,7 +827,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		newEntity.Triples = merged
 		preserveStoredEntityMetadata(&newEntity, &currentState)
 
-		return json.Marshal(&newEntity)
+		return graph.MarshalEntityState(&newEntity)
 	})
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
@@ -809,7 +835,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return nil, rejectInternal(err)
+		return nil, rejectFromError(err)
 	}
 
 	// Primary update committed — invalidate the entity-query cache so a
@@ -922,7 +948,7 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 				fmt.Errorf("revision mismatch: concurrent modification of %s (expected revision %d)",
 					req.Entity.ID, req.ExpectedRevision))
 		}
-		return nil, rejectInternal(err)
+		return nil, rejectFromError(err)
 	}
 	// CAS-path cache invalidation is owned by updateEntityAtRevision (it Deletes
 	// the cache entry after a successful CAS commit), so no invalidate is needed
@@ -1001,7 +1027,7 @@ func (c *Component) fetchEntityState(ctx context.Context, entityID string) (*gra
 		return nil, 0, natsclient.ErrKVKeyNotFound
 	}
 	var state graph.EntityState
-	if err := json.Unmarshal(entry.Value, &state); err != nil {
+	if err := graph.UnmarshalEntityState(entry.Value, &state); err != nil {
 		return nil, 0, fmt.Errorf("unmarshal entity state: %w", err)
 	}
 	return &state, entry.Revision, nil
@@ -1020,6 +1046,22 @@ func predicatesOf(triples []message.Triple) []string {
 		}
 	}
 	return out
+}
+
+// validateMutationPredicates preflights every predicate carried by one mutation
+// request before projection splitting or persistence. Remove-only predicates
+// are represented as synthetic triples so the shared validator returns the
+// same deterministic all-violations error as final EntityState validation.
+func validateMutationPredicates(add []message.Triple, remove []string) error {
+	triples := make([]message.Triple, 0, len(add)+len(remove))
+	triples = append(triples, add...)
+	for _, predicate := range remove {
+		triples = append(triples, message.Triple{Predicate: predicate})
+	}
+	if err := graph.ValidateEntityPredicates(&graph.EntityState{Triples: triples}); err != nil {
+		return errs.WrapInvalid(err, "Component", "validateMutationPredicates", "invalid predicate contract")
+	}
+	return nil
 }
 
 // dedupePredicates merges two predicate slices and returns a deduped result,
@@ -1103,6 +1145,10 @@ func rejectInternal(err error) error {
 // advertise a malformed-triple as retryable, or a context cancellation as a hard
 // 400 — wrong now that the class rides the wire (ADR-060).
 func rejectFromError(err error) error {
+	var stateErr *graph.StateContractError
+	if errors.As(err, &stateErr) {
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, err)
+	}
 	if errs.IsInvalid(err) {
 		return rejectInvalid(graph.ErrorCodeInvalidRequest, err)
 	}

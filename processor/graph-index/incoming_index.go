@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // incomingIndexMarker is the fixed, content-free value stored at every
@@ -46,6 +47,12 @@ func incomingIndexKey(targetID, sourceID, predicate string) string {
 // "targetID.sourceID.predicate".
 func incomingIndexPrefix(targetID string) string {
 	return targetID + "."
+}
+
+// incomingIndexSourceFilter enumerates every assertion owned by sourceID across
+// all targets: target6.source6.hex(predicate).
+func incomingIndexSourceFilter(sourceID string) string {
+	return strings.Repeat("*.", 6) + sourceID + ".*"
 }
 
 // incomingEntryFromKey reconstructs a graph.IncomingEntry from a composite
@@ -107,6 +114,13 @@ func validateIncomingKeyInputs(targetID, sourceID, predicate string, logger *slo
 		logger.Debug("incoming index: empty predicate would produce trailing-dot key, skipping",
 			slog.String("target_id", targetID),
 			slog.String("source_id", sourceID))
+		return false
+	}
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		logger.Debug("incoming index: invalid predicate, skipping",
+			slog.String("target_id", targetID),
+			slog.String("source_id", sourceID),
+			slog.Any("error", err))
 		return false
 	}
 	return true

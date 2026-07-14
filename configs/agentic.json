@@ -221,13 +221,13 @@
             "enabled": true,
             "conditions": [
               {
-                "field": "tool_name",
+                "field": "$message.tool_name",
                 "operator": "ne",
                 "value": "",
                 "required": true
               },
               {
-                "field": "call_id",
+                "field": "$message.call_id",
                 "operator": "ne",
                 "value": "",
                 "required": true

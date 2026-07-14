@@ -1702,7 +1702,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	if published && e.tripleMutator != nil {
 		spawnedTriple := message.Triple{
 			Subject:    entityID,
-			Predicate:  "rule.spawned_task",
+			Predicate:  "rule.task.spawned",
 			Object:     taskID,
 			Source:     "rule_engine",
 			Timestamp:  time.Now(),
@@ -1889,6 +1889,9 @@ func (e *ActionExecutor) executeUpdateKV(ctx context.Context, action Action, ec 
 	bucket := ec.SubstituteVariables(action.Bucket)
 	key := ec.SubstituteVariables(action.Key)
 	payload := substitutePayloadVariables(action.Payload, ec)
+	if gtypes.IsFrameworkOwnedBucket(bucket) {
+		return fmt.Errorf("update_kv cannot write framework-owned graph bucket %q; use graph mutation APIs", bucket)
+	}
 
 	if e.logger != nil {
 		e.logger.Debug("Executing KV write",

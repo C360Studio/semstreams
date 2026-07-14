@@ -33,6 +33,11 @@ type Generator struct {
 	// KV stores
 	entityKV *natsclient.KVStore
 	oasfKV   *natsclient.KVStore
+
+	// readiness is the component-owned, graph-wide ENTITY_STATES contract gate.
+	// It is checked before reads and again immediately before durable output.
+	readiness   func() error
+	beginOutput func() (func(), error)
 }
 
 // NewGenerator creates a new OASF generator.
@@ -108,6 +113,9 @@ func (g *Generator) processEntityBatch(entityIDs []string) {
 	}
 
 	for _, entityID := range entityIDs {
+		if g.readiness != nil && g.readiness() != nil {
+			return
+		}
 		if ctx.Err() != nil {
 			g.logger.Debug("Generation cancelled",
 				slog.Int("remaining_entities", len(entityIDs)))
@@ -124,6 +132,12 @@ func (g *Generator) processEntityBatch(entityIDs []string) {
 
 // GenerateForEntity generates an OASF record for a specific entity.
 func (g *Generator) GenerateForEntity(ctx context.Context, entityID string) error {
+	if g.readiness != nil {
+		if err := g.readiness(); err != nil {
+			return err
+		}
+	}
+
 	// Fetch entity triples from KV store
 	triples, err := g.fetchEntityTriples(ctx, entityID)
 	if err != nil {
@@ -189,7 +203,7 @@ func (g *Generator) fetchEntityTriples(ctx context.Context, entityID string) ([]
 	// rather than zero values from a silently-stripped JSON decode.
 	// Audit finding 2026-05-08 (Finding 4); closed in this commit.
 	var entityState graph.EntityState
-	if err := json.Unmarshal(entry.Value, &entityState); err != nil {
+	if err := graph.UnmarshalEntityState(entry.Value, &entityState); err != nil {
 		return nil, errs.Wrap(err, "Generator", "fetchEntityTriples", "unmarshal entity state")
 	}
 
@@ -198,6 +212,18 @@ func (g *Generator) fetchEntityTriples(ctx context.Context, entityID string) ([]
 
 // storeAndPublish stores the OASF record and publishes a generation event.
 func (g *Generator) storeAndPublish(ctx context.Context, entityID string, record *OASFRecord) error {
+	if g.beginOutput != nil {
+		release, err := g.beginOutput()
+		if err != nil {
+			return err
+		}
+		defer release()
+	} else if g.readiness != nil {
+		if err := g.readiness(); err != nil {
+			return err
+		}
+	}
+
 	if g.oasfKV == nil {
 		return errs.WrapFatal(errs.ErrNotStarted, "Generator", "storeAndPublish", "OASF KV not initialized")
 	}

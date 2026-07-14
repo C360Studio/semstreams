@@ -36,13 +36,13 @@ const (
 
 	// Maintenance-specific predicates
 	PredicateMaintenanceTechnician = "maintenance.work.technician"
-	PredicateMaintenanceDate       = "maintenance.work.completion_date"
+	PredicateMaintenanceDate       = "maintenance.work.completion-date"
 	PredicateMaintenanceStatus     = "maintenance.work.status"
 
 	// Observation-specific predicates
 	PredicateObservationObserver   = "observation.record.observer"
 	PredicateObservationSeverity   = "observation.record.severity"
-	PredicateObservationObservedAt = "observation.record.observed_at"
+	PredicateObservationObservedAt = "observation.record.observed-at"
 
 	// Sensor document predicates (for rich-text sensor descriptions)
 	PredicateSensorLocation = "sensor.document.location"

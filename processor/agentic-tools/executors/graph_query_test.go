@@ -3,9 +3,11 @@ package executors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 )
 
 // mockKVGetter implements KVGetter for testing
@@ -239,7 +241,7 @@ func TestGraphQueryExecutor_UnknownTool(t *testing.T) {
 	}
 }
 
-func TestGraphQueryExecutor_NonJSONContent(t *testing.T) {
+func TestGraphQueryExecutor_NonJSONAuthoritativeStateRequiresReset(t *testing.T) {
 	kv := newMockKVGetter()
 	executor := NewGraphQueryExecutor(kv)
 
@@ -255,16 +257,14 @@ func TestGraphQueryExecutor_NonJSONContent(t *testing.T) {
 	}
 
 	result, err := executor.Execute(context.Background(), call)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected unreadable authoritative state to fail closed")
 	}
-
-	// Should still return the content even if not JSON
-	if result.Content != "This is plain text, not JSON" {
-		t.Errorf("unexpected content: %s", result.Content)
+	var contractErr *graph.StateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("error = %T %v, want graph state contract error", err, err)
 	}
-
-	if result.Error != "" {
-		t.Errorf("unexpected error: %s", result.Error)
+	if result.Error == "" {
+		t.Error("tool result must explain the reset-required failure")
 	}
 }

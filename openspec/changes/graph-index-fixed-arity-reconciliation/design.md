@@ -1,5 +1,10 @@
 ## Context
 
+This design is a spike specification, not current production behavior. The production graph-index keeps the
+PR #524 hash/catalog representation and shipped delete semantics until the real-NATS benchmark completes and a
+superseding ADR explicitly authorizes a cutover. Experimental filter/reconciliation helpers MUST NOT be wired into
+production update or delete paths before those gates pass.
+
 PR #524's physical hardening is valuable: one membership per key, O(E) write volume, no shared-list CAS,
 per-entity ordered reconciliation, exact watermarks, explicit empty OUTGOING projections, typed readiness,
 and bounded repair. Its predicate encoding rationale assumed graph-ingest accepts any non-empty predicate and
@@ -115,6 +120,9 @@ B wins, the catalog is retired after cutover.
 
 ### 6. Reconcile stored owner rows against desired projection
 
+This section is conditional future behavior. It remains unactivated while tasks 2.1-3.4 and the superseding ADR are
+open.
+
 For each entity update, the index owner enumerates that entity's currently stored rows using its proven
 owner filter, computes the desired projection from current ENTITY_STATES, deletes stale rows, and puts missing
 rows. Results from filtered listing are deduplicated before diffing. The `[A] -> []` transition is required
@@ -155,7 +163,8 @@ results. Any required reconciliation or replay failure keeps reads not-ready.
 2. Build the real-NATS fixed-position filter test/benchmark without changing production keys.
 3. Run Candidate A/B comparison after the predicate grammar and owned producer corpus are clean.
 4. Record the winner and precise ADR-065/068/073 supersession in a new ADR.
-5. Implement owner reconciliation and the selected catalog/key behavior.
+5. Only after the benchmark result and superseding ADR, implement owner reconciliation and the selected catalog/key
+   behavior.
 6. Delete/recreate selected buckets, reingest canonical state, and verify query fixtures/readiness.
 7. Correct issues/docs and run race, contract, structural, semantic, and affected product e2e gates.
 

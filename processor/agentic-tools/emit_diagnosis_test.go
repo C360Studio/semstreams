@@ -146,7 +146,7 @@ func TestEmitDiagnosisExecutor_HappyPath(t *testing.T) {
 
 	// executed_by back-link must point to the ops loop entity.
 	wantLoopEntity := "acme.test.agent.agentic-loop.execution.loop-ops-abc"
-	assertTriple("agent.action.executed_by", wantLoopEntity)
+	assertTriple("agent.action.executed-by", wantLoopEntity)
 
 	// Every triple must share the same diagnosis entity as subject (not the
 	// loop entity) — verifies the entity ID shape is correct.
@@ -612,7 +612,7 @@ func TestEmitDiagnosisExecutor_LoopEntityBacklink(t *testing.T) {
 
 	wantLoopEntity := fmt.Sprintf("c360.ops.agent.agentic-loop.execution.my-ops-loop")
 	for _, tr := range pub.triples {
-		if tr.Predicate == "agent.action.executed_by" {
+		if tr.Predicate == "agent.action.executed-by" {
 			if tr.Object != wantLoopEntity {
 				t.Errorf("executed_by object = %q, want %q", tr.Object, wantLoopEntity)
 			}

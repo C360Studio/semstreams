@@ -188,7 +188,7 @@ func (w *natsOwnedFactWriter) ReadOwnedPredicates(ctx context.Context, entityID 
 		return nil, fmt.Errorf("request %s: %w", ownedFactQuerySubject, err)
 	}
 	var entity graph.EntityState
-	if err := json.Unmarshal(respData, &entity); err != nil {
+	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {
 		return nil, fmt.Errorf("unmarshal entity query: %w", err)
 	}
 	return ownedPredicates(entity.Triples, ownedPrefix), nil

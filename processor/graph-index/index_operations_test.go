@@ -188,7 +188,8 @@ func TestUpdateIncomingIndex_EmptyPredicate_ReturnsError(t *testing.T) {
 	err := comp.UpdateIncomingIndex(ctx, "target", "source", "")
 
 	assert.Error(t, err, "should reject empty predicate")
-	assert.Contains(t, err.Error(), "predicate cannot be empty")
+	assert.Contains(t, err.Error(), "invalid predicate")
+	assert.Contains(t, err.Error(), "empty")
 }
 
 func TestUpdateAliasIndex_EmptyAlias_ReturnsError(t *testing.T) {
@@ -228,7 +229,8 @@ func TestUpdatePredicateIndex_EmptyPredicate_ReturnsError(t *testing.T) {
 	err := comp.UpdatePredicateIndex(ctx, "entity", "")
 
 	assert.Error(t, err, "should reject empty predicate")
-	assert.Contains(t, err.Error(), "predicate cannot be empty")
+	assert.Contains(t, err.Error(), "invalid predicate")
+	assert.Contains(t, err.Error(), "empty")
 }
 
 // ====================================================================================
@@ -262,7 +264,8 @@ func TestDeleteFromPredicateIndex_EmptyPredicate_ReturnsError(t *testing.T) {
 	err := comp.DeleteFromPredicateIndex(ctx, "entity", "")
 
 	assert.Error(t, err, "should reject empty predicate")
-	assert.Contains(t, err.Error(), "predicate cannot be empty")
+	assert.Contains(t, err.Error(), "invalid predicate")
+	assert.Contains(t, err.Error(), "empty")
 }
 
 func TestDeleteFromAliasIndex_EmptyAlias_ReturnsError(t *testing.T) {
@@ -453,7 +456,7 @@ func TestProcessEntityUpdate_RelationshipDetection(t *testing.T) {
 			name: "string literal is not relationship",
 			triple: message.Triple{
 				Subject:   "c360.platform.robotics.mav1.drone.001",
-				Predicate: "robotics.description",
+				Predicate: "robotics.asset.description",
 				Object:    "A quadcopter drone",
 			},
 			isRelationship: false,

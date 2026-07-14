@@ -23,11 +23,11 @@ func csapiSystem() Contract {
 			Mode: ownership.ModeReplaceOwned,
 			Predicates: []string{
 				"sensorml.process.type", "sensorml.process.uid", "sensorml.process.label",
-				"sensorml.process.description", "sensorml.process.position", "sensorml.component.isHostedBy",
+				"sensorml.process.description", "sensorml.process.position", "sensorml.component.is-hosted-by",
 			},
 		}},
 		ForeignEdges: []ForeignEdge{{
-			Predicate: "sensorml.component.isHostedBy", Mode: ownership.EdgeNoBirthStub, TargetPattern: sysPat,
+			Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeNoBirthStub, TargetPattern: sysPat,
 		}},
 		IndexingProfile: "control",
 	}
@@ -96,7 +96,7 @@ func TestContract_Derive_Aggregate(t *testing.T) {
 		EntityPattern: "c360.semconnect.systems.csapi.deployment.*",
 		Groups: []PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{"cs-api.deployment.parent", "cs-api.deployment.deployedSystems"},
+			Predicates: []string{"cs-api.deployment.parent", "cs-api.deployment.deployed-systems"},
 		}},
 	}
 	reg, err := Derive("cs-api", csapiSystem(), deployment)
@@ -111,8 +111,8 @@ func TestContract_Derive_Aggregate(t *testing.T) {
 func TestContract_Derive_CrossContractSelfOverlap(t *testing.T) {
 	// Two contracts of the SAME owner claiming the SAME cell in owning mode — a
 	// config bug Derive must catch (cross-owner overlap is RegisterOwner's job).
-	a := Contract{Name: "a", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"dup.predicate"}}}}
-	b := Contract{Name: "b", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"dup.predicate"}}}}
+	a := Contract{Name: "a", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"duplicate.value.predicate"}}}}
+	b := Contract{Name: "b", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"duplicate.value.predicate"}}}}
 	_, err := Derive("cs-api", a, b)
 	if !errors.Is(err, ownership.ErrOwnershipOverlap) {
 		t.Errorf("two same-owner contracts on one cell must self-overlap, got %v", err)
@@ -140,15 +140,15 @@ func TestDerive_DuplicateContractName(t *testing.T) {
 // INTERSECTING patterns, is a contradiction the per-contract check can't see but
 // Derive's aggregate validation must reject.
 func TestDerive_CrossContractModeContradiction(t *testing.T) {
-	owned := Contract{Name: "owned", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"shared.p"}}}}
-	appended := Contract{Name: "appended", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.p"}}}}
+	owned := Contract{Name: "owned", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"shared.value.p"}}}}
+	appended := Contract{Name: "appended", EntityPattern: sysPat, Groups: []PredicateGroup{{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"}}}}
 	if _, err := Derive("cs-api", owned, appended); !errors.Is(err, ownership.ErrInvalidClaim) {
 		t.Errorf("owned+append of the same predicate over intersecting patterns must error, got %v", err)
 	}
 
 	// Disjoint patterns: the same predicate may be owned on one entity type and
 	// appended on another — legitimate, no error.
-	appendedElsewhere := Contract{Name: "appended", EntityPattern: "c360.semconnect.systems.csapi.deployment.*", Groups: []PredicateGroup{{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.p"}}}}
+	appendedElsewhere := Contract{Name: "appended", EntityPattern: "c360.semconnect.systems.csapi.deployment.*", Groups: []PredicateGroup{{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"}}}}
 	if _, err := Derive("cs-api", owned, appendedElsewhere); err != nil {
 		t.Errorf("owned + append on DISJOINT patterns must be allowed, got %v", err)
 	}

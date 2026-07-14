@@ -41,6 +41,7 @@ import (
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
 const (
@@ -68,6 +69,10 @@ func main() {
 }
 
 func run() error {
+	// Match the production composition root: authoring validation must see all
+	// first-party semantic names before any checked-in config is loaded.
+	builtins.Register()
+
 	printBanner()
 
 	cliCfg, shouldExit, err := parseCLI()

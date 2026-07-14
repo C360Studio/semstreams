@@ -51,8 +51,10 @@ empty segments, control characters, and unbounded names are rejected.
 
 Every registered predicate must be syntactically valid, but not every product predicate must be compiled
 into SemStreams. Product startup may register vocabulary packages or declare an exact domain or
-`domain.category` namespace. Agent tools receive an allowlisted vocabulary/namespace view; they do not mint
-unrestricted strings.
+`domain.category` namespace. Namespace delegation is declaration-time authoring governance, not a bearer
+credential. Agent tools receive an allowlisted vocabulary/namespace view; they do not mint unrestricted strings.
+ENTITY_STATES persistence enforces syntax but does not infer namespace authority from caller-controlled triple or
+message fields. Runtime namespace authorization requires a future principal-bearing mutation envelope.
 
 ### 3. Validate declarative surfaces before runtime traffic
 
@@ -91,11 +93,15 @@ lockstep with the breaking SemStreams version. On startup, the new binary scans 
 graph-index replay. Any noncanonical predicate blocks readiness with a diagnostic requiring export if needed,
 bucket reset, and reingest from canonical sources.
 
-Startup ordering is not trusted for correctness. Every component that replays ENTITY_STATES or serves a
-derived graph view validates replayed entities with the canonical parser. graph-index marks any violating
-entity failed, never advertises ready, and makes predicate/incoming/outgoing queries, traversal, and clustering
-return the typed reset/reingest requirement. No consumer may briefly serve a partial index while graph-ingest
-preflight runs independently.
+Startup ordering is not trusted for correctness. Every component that interprets ENTITY_STATES uses the shared
+canonical decoder. Projection owners enter sticky reset-required state, never advance readiness across poisoned
+state, and return the typed reset/reingest requirement. Action/evaluation consumers emit no derived output.
+graph-index makes predicate/incoming/outgoing queries, traversal, and clustering return the same fatal code. No
+consumer may briefly serve a partial view while another component's preflight runs independently.
+
+Watchers classify the event before decoding: CREATE/PUT values use the canonical decoder, DEL and PURGE are
+equivalent valid tombstones that drive cleanup and replay completion, and transport failure follows ordinary
+degraded/not-ready recovery without latching stored-state poison.
 
 SemStreams does not rewrite malformed beta state in place. The operator deletes/recreates the incompatible
 graph and derived-index buckets, then the ordinary authoritative ingest and graph-index replay paths rebuild

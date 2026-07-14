@@ -14,11 +14,11 @@ import (
 // field that projection should ignore.
 type fixtureMission struct {
 	ID         string    `json:"entity_id" lifecycle:"id"`
-	PhaseF     string    `json:"phase" lifecycle:"phase,predicate=mission.phase"`
-	OwnerOrgID string    `json:"owner_org_id,omitempty" lifecycle:"operator_writable,predicate=mission.owner_org_id"`
-	Note       string    `json:"note,omitempty" lifecycle:"operator_writable,predicate=mission.note"`
-	DroneID    string    `json:"drone_id,omitempty" lifecycle:"reference,predicate=mission.assigned_drone"`
-	LastAt     time.Time `json:"last_at,omitempty" lifecycle:"readonly,predicate=mission.last_transition_at"`
+	PhaseF     string    `json:"phase" lifecycle:"phase,predicate=mission.lifecycle.phase"`
+	OwnerOrgID string    `json:"owner_org_id,omitempty" lifecycle:"operator_writable,predicate=mission.identity.owner-org-id"`
+	Note       string    `json:"note,omitempty" lifecycle:"operator_writable,predicate=mission.annotation.note"`
+	DroneID    string    `json:"drone_id,omitempty" lifecycle:"reference,predicate=mission.assignment.drone"`
+	LastAt     time.Time `json:"last_at,omitempty" lifecycle:"readonly,predicate=mission.transition.at"`
 	Untagged   string    `json:"untagged,omitempty"`
 }
 
@@ -37,17 +37,17 @@ func TestParseSchemaType_RecognizesPredicateAndReference(t *testing.T) {
 	if sm.IDField == nil {
 		t.Fatal("IDField missing")
 	}
-	if sm.PhaseField == nil || sm.PhaseField.Predicate != "mission.phase" {
+	if sm.PhaseField == nil || sm.PhaseField.Predicate != "mission.lifecycle.phase" {
 		t.Fatalf("PhaseField predicate wrong: %+v", sm.PhaseField)
 	}
-	if _, ok := sm.FieldsByPredicate["mission.owner_org_id"]; !ok {
+	if _, ok := sm.FieldsByPredicate["mission.identity.owner-org-id"]; !ok {
 		t.Fatal("owner_org_id missing from FieldsByPredicate")
 	}
-	ref := sm.FieldsByPredicate["mission.assigned_drone"]
+	ref := sm.FieldsByPredicate["mission.assignment.drone"]
 	if ref == nil || !ref.IsReference || !ref.ReadOnly {
 		t.Fatalf("reference field shape wrong: %+v", ref)
 	}
-	at := sm.FieldsByPredicate["mission.last_transition_at"]
+	at := sm.FieldsByPredicate["mission.transition.at"]
 	if at == nil || !at.ReadOnly {
 		t.Fatalf("audit field shape wrong: %+v", at)
 	}
@@ -57,7 +57,7 @@ func TestParseSchemaType_RejectsOperatorWritableWithoutPredicate(t *testing.T) {
 	t.Parallel()
 	type bad struct {
 		ID    string `json:"id" lifecycle:"id"`
-		Phase string `json:"phase" lifecycle:"phase,predicate=p.phase"`
+		Phase string `json:"phase" lifecycle:"phase,predicate=fixture.lifecycle.phase"`
 		Owner string `json:"owner" lifecycle:"operator_writable"`
 	}
 	if _, err := parseSchemaType(reflect.TypeOf(bad{})); err == nil {
@@ -69,12 +69,23 @@ func TestParseSchemaType_RejectsDuplicatePredicate(t *testing.T) {
 	t.Parallel()
 	type bad struct {
 		ID    string `json:"id" lifecycle:"id"`
-		Phase string `json:"phase" lifecycle:"phase,predicate=p.phase"`
-		A     string `json:"a" lifecycle:"operator_writable,predicate=p.x"`
-		B     string `json:"b" lifecycle:"operator_writable,predicate=p.x"`
+		Phase string `json:"phase" lifecycle:"phase,predicate=fixture.lifecycle.phase"`
+		A     string `json:"a" lifecycle:"operator_writable,predicate=fixture.value.x"`
+		B     string `json:"b" lifecycle:"operator_writable,predicate=fixture.value.x"`
 	}
 	if _, err := parseSchemaType(reflect.TypeOf(bad{})); err == nil {
 		t.Fatal("expected error for duplicate predicate, got nil")
+	}
+}
+
+func TestParseSchemaTypeRejectsNoncanonicalTagPredicate(t *testing.T) {
+	t.Parallel()
+	type bad struct {
+		ID    string `json:"id" lifecycle:"id"`
+		Phase string `json:"phase" lifecycle:"phase,predicate=mission.phase"`
+	}
+	if _, err := parseSchemaType(reflect.TypeOf(bad{})); err == nil {
+		t.Fatal("expected noncanonical lifecycle tag predicate to be rejected")
 	}
 }
 
@@ -86,10 +97,10 @@ func TestProjectTriples_PopulatesScalarAndTime(t *testing.T) {
 	}
 	now := time.Date(2026, 5, 28, 16, 0, 0, 0, time.UTC)
 	triples := []message.Triple{
-		{Subject: "x", Predicate: "mission.phase", Object: "flying"},
-		{Subject: "x", Predicate: "mission.owner_org_id", Object: "acme"},
-		{Subject: "x", Predicate: "mission.last_transition_at", Object: now.Format(time.RFC3339Nano)},
-		{Subject: "x", Predicate: "mission.assigned_drone", Object: "c360.x.fleet.x.drone.001"},
+		{Subject: "x", Predicate: "mission.lifecycle.phase", Object: "flying"},
+		{Subject: "x", Predicate: "mission.identity.owner-org-id", Object: "acme"},
+		{Subject: "x", Predicate: "mission.transition.at", Object: now.Format(time.RFC3339Nano)},
+		{Subject: "x", Predicate: "mission.assignment.drone", Object: "c360.x.fleet.x.drone.001"},
 		{Subject: "x", Predicate: "some.other.predicate", Object: "ignored"},
 	}
 	target := &fixtureMission{}
@@ -132,16 +143,16 @@ func TestProjectStructToTriples_SkipsReadonlyAndID(t *testing.T) {
 	for _, tr := range emitted {
 		gotPreds[tr.Predicate] = true
 	}
-	if !gotPreds["mission.phase"] {
-		t.Error("mission.phase missing from initial triples")
+	if !gotPreds["mission.lifecycle.phase"] {
+		t.Error("mission.lifecycle.phase missing from initial triples")
 	}
-	if !gotPreds["mission.owner_org_id"] {
-		t.Error("mission.owner_org_id missing from initial triples")
+	if !gotPreds["mission.identity.owner-org-id"] {
+		t.Error("mission.identity.owner-org-id missing from initial triples")
 	}
-	if gotPreds["mission.assigned_drone"] {
+	if gotPreds["mission.assignment.drone"] {
 		t.Error("reference field should not be emitted from struct projection")
 	}
-	if gotPreds["mission.last_transition_at"] {
+	if gotPreds["mission.transition.at"] {
 		t.Error("readonly audit field should not be emitted from struct projection")
 	}
 }
@@ -163,10 +174,10 @@ func TestProjectPatchToTriples_RejectsNonOperatorWritable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(adds) != 1 || adds[0].Predicate != "mission.owner_org_id" || adds[0].Object != "acme" {
+	if len(adds) != 1 || adds[0].Predicate != "mission.identity.owner-org-id" || adds[0].Object != "acme" {
 		t.Errorf("adds wrong: %+v", adds)
 	}
-	if len(removes) != 1 || removes[0] != "mission.note" {
+	if len(removes) != 1 || removes[0] != "mission.annotation.note" {
 		t.Errorf("removes wrong: %+v", removes)
 	}
 }

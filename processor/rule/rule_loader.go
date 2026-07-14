@@ -120,6 +120,11 @@ func (rp *Processor) loadRules() error {
 	}
 
 	for _, def := range allDefinitions {
+		// Validate every artifact, including disabled rules, before any skip or
+		// persistence path can make an undeclared predicate look acceptable.
+		if err := ValidateDefinition(def); err != nil {
+			return fmt.Errorf("rule authoring validation failed for %s: %w", def.ID, err)
+		}
 		// Skip disabled rules
 		if !def.Enabled {
 			rp.logger.Debug("Skipping disabled rule", "rule_id", def.ID)

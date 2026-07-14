@@ -2,6 +2,7 @@
 package graphindex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
@@ -148,6 +150,10 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 // retries rather than acting on the partial keyset a format cutover / cold replay is
 // still materialising (old aggregate keys are inert, new keys incomplete).
 func (c *Component) ensureQueryReady(ctx context.Context) error {
+	if c.resetState.Load() != nil {
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+			errors.New("graph state reset required: export if needed, clear graph/index buckets, and reingest canonical sources"))
+	}
 	// A known-incomplete index — a required write/delete failed and has not yet been
 	// repaired — is NEVER authoritative, even after bootstrap (gh#474 P1b / Codex #2).
 	// Check this first so the sticky bootstrap flag can't mask a later failure.
@@ -291,8 +297,8 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
-	if req.Predicate == "" {
-		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicate"))
+	if _, err := vocabulary.ParsePredicate(req.Predicate); err != nil {
+		return nil, invalidPredicateQueryError(err)
 	}
 
 	entities, err := c.queryPredicateEntities(ctx, req.Predicate, req.Value, req.Limit)
@@ -322,7 +328,10 @@ func (c *Component) queryPredicateEntities(ctx context.Context, predicate string
 	if value != nil && c.entityStatesBucket != nil {
 		// filterEntitiesByPredicateValue handles limit internally so we avoid
 		// iterating the full list twice.
-		entities = c.filterEntitiesByPredicateValue(ctx, entities, predicate, *value, limit)
+		entities, err = c.filterEntitiesByPredicateValue(ctx, entities, predicate, *value, limit)
+		if err != nil {
+			return nil, err
+		}
 	} else if limit > 0 && len(entities) > limit {
 		entities = entities[:limit]
 	}
@@ -334,29 +343,26 @@ func (c *Component) queryPredicateEntities(ctx context.Context, predicate string
 // contains a triple with the given predicate whose Object matches the specified value.
 // limit is applied early — iteration stops once enough matches are collected.
 // ctx cancellation is also checked on each iteration to allow cooperative cancellation.
-func (c *Component) filterEntitiesByPredicateValue(ctx context.Context, entityIDs []string, predicate string, value string, limit int) []string {
+func (c *Component) filterEntitiesByPredicateValue(ctx context.Context, entityIDs []string, predicate string, value string, limit int) ([]string, error) {
 	var matched []string
 
 	for _, entityID := range entityIDs {
 		// Respect context cancellation between iterations.
-		if ctx.Err() != nil {
-			break
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		entry, err := c.entityStatesBucket.Get(ctx, entityID)
 		if err != nil {
-			c.logger.Debug("value filter: skip entity on fetch",
-				slog.String("entity_id", entityID),
-				slog.Any("error", err))
-			continue
+			if natsclient.IsKVNotFoundError(err) {
+				continue
+			}
+			return nil, fmt.Errorf("value filter: fetch entity %s: %w", entityID, err)
 		}
 
 		var state graph.EntityState
-		if err := json.Unmarshal(entry.Value(), &state); err != nil {
-			c.logger.Debug("value filter: skip entity on unmarshal",
-				slog.String("entity_id", entityID),
-				slog.Any("error", err))
-			continue
+		if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+			return nil, err
 		}
 
 		for _, triple := range state.Triples {
@@ -372,7 +378,7 @@ func (c *Component) filterEntitiesByPredicateValue(ctx context.Context, entityID
 		}
 	}
 
-	return matched
+	return matched, nil
 }
 
 // normalizeToString converts a triple Object value to a string for comparison.
@@ -396,7 +402,8 @@ func normalizeToString(v any) string {
 
 // handleQueryPredicateListNATS handles predicate list query requests via NATS request/reply.
 // Returns predicates with their entity counts — every predicate, or, when
-// the request carries a Prefix, only those sharing that dotted namespace
+// the request carries a Namespace, only those sharing that exact domain or
+// domain.category namespace
 // (ADR-065: a deliberate, safe namespace query against PREDICATE_CATALOG's
 // unhashed keys — unlike a prefix query against PREDICATE_INDEX's hashed
 // membership keys, this can't corrupt which entities carry which
@@ -413,15 +420,20 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byt
 
 	var req graph.PredicateListQuery
 	if len(data) > 0 {
-		if err := json.Unmarshal(data, &req); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
 			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 		}
 	}
 
 	var predicates []graph.PredicateSummary
 	var err error
-	if req.Prefix != "" {
-		predicates, err = c.listPredicatesByNamespace(ctx, req.Prefix)
+	if req.Namespace != "" {
+		if _, parseErr := vocabulary.ParsePredicateNamespace(req.Namespace); parseErr != nil {
+			return nil, invalidPredicateQueryError(parseErr)
+		}
+		predicates, err = c.listPredicatesByNamespace(ctx, req.Namespace)
 	} else {
 		predicates, err = c.listAllPredicates(ctx)
 	}
@@ -537,8 +549,8 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
-	if req.Predicate == "" {
-		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicate"))
+	if _, err := vocabulary.ParsePredicate(req.Predicate); err != nil {
+		return nil, invalidPredicateQueryError(err)
 	}
 
 	// Default sample limit
@@ -588,6 +600,11 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 	if len(req.Predicates) == 0 {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicates"))
 	}
+	for _, predicate := range req.Predicates {
+		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+			return nil, invalidPredicateQueryError(err)
+		}
+	}
 
 	operator := req.Operator
 	if operator != "AND" && operator != "OR" {
@@ -632,6 +649,11 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 		Operator: operator,
 		Matched:  len(result),
 	}))
+}
+
+func invalidPredicateQueryError(err error) error {
+	return errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
+		fmt.Errorf("invalid predicate query: %w", err))
 }
 
 // intersectSets returns the intersection of all entity sets.

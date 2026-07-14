@@ -176,8 +176,9 @@ default false, observe-and-warn (PR-3) → config-gated reject (PR-5), reject
 classified `ErrorInvalid` so ADR-060's class-on-the-wire stops it being retried as
 transient; the owner-lease arc did exactly this on this seam and the same ~11
 callers without breaking them. **Precondition:** all graph writes flow through the
-mutation/projection API — the raw `KV.Put` bypass (semdragon) and the dead-but-
-latent `graph/datamanager` direct writer must be closed first.
+mutation/projection API. The dead `graph/datamanager` direct writer was removed by
+ADR-074; sister-product raw `KV.Put` bypasses must still be closed before retention
+enforcement.
 
 ### 6. Roots: the axis is TRIGGERED-DEATH vs NEVER-DIE (not run vs permanent).
 The earlier "run vs permanent" binary was over-fit to the agentic products; the
@@ -244,8 +245,9 @@ satellites; **write-side rate-matched to the reaper** (semboids births-outrun-GC
   all triple verbs** (not "reuse what exists" — the write modes carry no retention
   meaning today and graph-ingest reads them nowhere). A breaking tightening of the
   write contract.
-- Preconditions: close the raw-`KV.Put` (semdragon) and latent `graph/datamanager`
-  bypasses; make `ContentStorable`/ObjectStore the required blob path.
+- Preconditions: close sister-product raw-`KV.Put` bypasses; the latent
+  `graph/datamanager` bypass was removed by ADR-074. Make
+  `ContentStorable`/ObjectStore the required blob path.
 - ADR-068's mechanism (reverse-per-owner knowledge, tombstone, purge) is still
   unbuilt; the orphan-sweep backstop remains gated behind D0's consistency problem.
 

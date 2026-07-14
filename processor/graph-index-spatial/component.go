@@ -183,6 +183,10 @@ type Component struct {
 	bytesProcessed    int64
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
+	resetState        atomic.Pointer[graph.StateContractError]
+	watchUnavailable  atomic.Bool
+	bootstrapStarted  atomic.Bool
+	bootstrapComplete atomic.Bool
 
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
@@ -311,13 +315,21 @@ func (c *Component) Health() component.HealthStatus {
 
 	if c.running {
 		status = "running"
+		if c.resetState.Load() != nil {
+			status = graph.IndexStateResetRequired
+			lastErr = graph.ErrorCodeGraphStateResetRequired + ": " + string(c.graphStateResetReason())
+		} else if c.watchUnavailable.Load() {
+			status = graph.IndexStateDegraded
+			lastErr = graph.ErrorCodeIndexNotReady + ": ENTITY_STATES watcher unavailable"
+		}
 		if errorCount > 0 {
 			lastErr = "errors occurred during processing"
 		}
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running && errorCount == 0,
+		Healthy: c.running && errorCount == 0 && c.resetState.Load() == nil &&
+			!c.watchUnavailable.Load(),
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
 		LastError:  lastErr,
@@ -471,6 +483,12 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize lifecycle reporter early for dependency waiting visibility
 	c.initLifecycleReporter(ctx)
 
+	// Queries must fail closed from the moment they are exposed until the
+	// WatchAll bootstrap has been validated and fully projected.
+	c.watchUnavailable.Store(false)
+	c.bootstrapComplete.Store(false)
+	c.bootstrapStarted.Store(true)
+
 	// Set up query handlers
 	if err := c.setupQueryHandlers(ctx); err != nil {
 		cancel()
@@ -578,6 +596,7 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 // watchEntityStates watches the ENTITY_STATES KV bucket and indexes entities with spatial data
 func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyValue) {
 	defer c.wg.Done()
+	c.bootstrapStarted.Store(true)
 
 	watcher, err := bucket.WatchAll(ctx)
 	if err != nil {
@@ -590,6 +609,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 		c.logger.Error("failed to start entity watcher",
 			slog.String("bucket", graph.BucketEntityStates),
 			slog.Any("error", err))
+		c.watchUnavailable.Store(true)
 		return
 	}
 	// NOTE: watcher.Stop() is called explicitly before each return, not via defer.
@@ -598,6 +618,11 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 
 	c.logger.Info("entity watcher started", slog.String("bucket", graph.BucketEntityStates))
 
+	// WatchAll delivers the current snapshot followed by nil, then continues with
+	// live updates. Build the private projection incrementally in constant space,
+	// but keep every query gated until nil proves the complete snapshot valid.
+	// The same watcher remains active, eliminating a list-then-watch gap.
+	validating := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -606,24 +631,67 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 			return
 		case entry, ok := <-watcher.Updates():
 			if !ok {
-				// Channel closed, watcher stopped externally
+				// A KeyWatcher closes only after Stop or connection loss. Context
+				// cancellation is handled above; every other closure fails closed.
 				watcher.Stop()
+				if ctx.Err() == nil {
+					c.watchUnavailable.Store(true)
+				}
 				return
 			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete
+				if !validating {
+					continue
+				}
+				validating = false
+				if c.resetState.Load() != nil {
+					c.logger.Error("entity watcher bootstrap rejected",
+						slog.String("reason", string(c.graphStateResetReason())))
+					continue
+				}
+				c.bootstrapComplete.Store(true)
 				c.logger.Debug("entity watcher initial sync complete")
 				continue
 			}
 
-			if entry.Operation() == jetstream.KeyValueDelete {
-				c.handleEntityDelete(ctx, entry.Key())
+			if validating {
+				if !graph.IsKVTombstone(entry.Operation()) {
+					c.validateEntityStateEntry(entry)
+				}
+				if c.resetState.Load() == nil {
+					c.applyEntityWatchEntry(ctx, entry)
+				}
 				continue
 			}
-
-			c.processEntityUpdate(ctx, entry)
+			if c.resetState.Load() == nil {
+				c.applyEntityWatchEntry(ctx, entry)
+			}
 		}
 	}
+}
+
+func (c *Component) validateEntityStateEntry(entry jetstream.KeyValueEntry) {
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var stateErr *graph.StateContractError
+		if errors.As(err, &stateErr) {
+			c.latchGraphStateReset(stateErr.Reason)
+			return
+		}
+		c.latchGraphStateReset(graph.GraphStateReasonUnreadableEntity)
+	}
+}
+
+func (c *Component) applyEntityWatchEntry(ctx context.Context, entry jetstream.KeyValueEntry) {
+	if graph.IsKVTombstone(entry.Operation()) {
+		c.handleEntityDelete(ctx, entry.Key())
+		return
+	}
+	c.processEntityUpdate(ctx, entry)
+}
+
+func (c *Component) latchGraphStateReset(reason graph.StateResetReason) {
+	c.resetState.CompareAndSwap(nil, &graph.StateContractError{Reason: reason})
 }
 
 // processEntityUpdate indexes an entity's spatial data if it has coordinates
@@ -634,7 +702,11 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 	}
 
 	var state graph.EntityState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var stateErr *graph.StateContractError
+		if errors.As(err, &stateErr) {
+			c.latchGraphStateReset(stateErr.Reason)
+		}
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entry.Key()),
 			slog.Any("error", err))
@@ -686,19 +758,50 @@ func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.Key
 	c.lastActivity.Store(time.Now())
 }
 
+func (c *Component) graphStateResetReason() graph.StateResetReason {
+	if state := c.resetState.Load(); state != nil {
+		return state.Reason
+	}
+	return graph.GraphStateReasonUnreadableEntity
+}
+
+func (c *Component) graphStateResetError() error {
+	state := c.resetState.Load()
+	if state == nil {
+		state = &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity}
+	}
+	return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+		state)
+}
+
+func (c *Component) ensureBootstrapReady() error {
+	if c.resetState.Load() != nil {
+		return c.graphStateResetError()
+	}
+	if c.watchUnavailable.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("spatial index not ready: ENTITY_STATES watcher is unavailable"))
+	}
+	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("spatial index not ready: ENTITY_STATES bootstrap is still validating"))
+	}
+	return nil
+}
+
 // extractGeoCoordinates extracts latitude, longitude, and altitude from entity triples
 func (c *Component) extractGeoCoordinates(triples []message.Triple) (lat, lon, alt *float64) {
 	for _, triple := range triples {
 		switch triple.Predicate {
-		case "geo.location.latitude", "latitude":
+		case "geo.location.latitude":
 			if latVal, ok := triple.Object.(float64); ok {
 				lat = &latVal
 			}
-		case "geo.location.longitude", "longitude":
+		case "geo.location.longitude":
 			if lonVal, ok := triple.Object.(float64); ok {
 				lon = &lonVal
 			}
-		case "geo.location.altitude", "altitude":
+		case "geo.location.altitude":
 			if altVal, ok := triple.Object.(float64); ok {
 				alt = &altVal
 			}

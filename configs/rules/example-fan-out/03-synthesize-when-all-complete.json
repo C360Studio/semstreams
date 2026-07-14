@@ -2,7 +2,7 @@
   "id": "synthesize_when_all_gathers_complete",
   "type": "expression",
   "name": "Synthesize When All Gathers Complete",
-  "description": "Fires on the parent coordinator loop entity when the gather.completed_child counter has accumulated as many triples as the source subtopics list. Join half of the ADR-046 Phase 1 fan-out pattern: each investigator completion stamps a triple via rule 02; rule 03 matches via length_eq once the count equals the expected. Expected count is resolved dynamically from $entity.triple.coordinator.decision.subtopics.length (#149) so the pack works for any decomposer fan-out width (N=1 degenerate-serial, N=4 typical, N=10 deep) without per-width forking. The substitution stringifies the integer; length_eq's coerceToInt handles the string-encoded form transparently. The synthesizer receives the sibling loop IDs inlined into its prompt via $entity.triple.gather.completed_child.triples (ADR-048 PR 4) — no graph-query tool needed, persona prose teaches the JSON parse pattern. (publish_agent.properties → TaskMessage.Metadata → ToolCall.Metadata is now available as of gh#354 for threading domain context to a spawned agent's tools; this pack keeps the inlined-prompt form because the synthesizer parses the IDs directly out of the prompt rather than from a tool's metadata.)",
+  "description": "Fires on the parent coordinator loop entity when the gather.child.completed counter has accumulated as many triples as the source subtopics list. Join half of the ADR-046 Phase 1 fan-out pattern: each investigator completion stamps a triple via rule 02; rule 03 matches via length_eq once the count equals the expected. Expected count is resolved dynamically from $entity.triple.coordinator.decision.subtopics.length (#149) so the pack works for any decomposer fan-out width (N=1 degenerate-serial, N=4 typical, N=10 deep) without per-width forking. The substitution stringifies the integer; length_eq's coerceToInt handles the string-encoded form transparently. The synthesizer receives the sibling loop IDs inlined into its prompt via $entity.triple.gather.child.completed.triples (ADR-048 PR 4) — no graph-query tool needed, persona prose teaches the JSON parse pattern. (publish_agent.properties → TaskMessage.Metadata → ToolCall.Metadata is now available as of gh#354 for threading domain context to a spawned agent's tools; this pack keeps the inlined-prompt form because the synthesizer parses the IDs directly out of the prompt rather than from a tool's metadata.)",
   "enabled": true,
   "cooldown": "5s",
   "conditions": [
@@ -12,7 +12,7 @@
       "value": "coordinator"
     },
     {
-      "field": "gather.completed_child",
+      "field": "gather.child.completed",
       "operator": "length_eq",
       "value": "$entity.triple.coordinator.decision.subtopics.length"
     }
@@ -25,7 +25,7 @@
       "role": "synthesizer",
       "model": "general",
       "tools": ["read_loop_result"],
-      "prompt": "All investigators have reported. The sibling investigator loop IDs are inlined here as a JSON array: $entity.triple.gather.completed_child.triples — parse it as JSON, then iterate each ID and call read_loop_result on each to fetch that investigator's findings. Produce a structured synthesis with: 1) one-paragraph summary, 2) per-subtopic key findings, 3) confidence assessment, 4) gaps."
+      "prompt": "All investigators have reported. The sibling investigator loop IDs are inlined here as a JSON array: $entity.triple.gather.child.completed.triples — parse it as JSON, then iterate each ID and call read_loop_result on each to fetch that investigator's findings. Produce a structured synthesis with: 1) one-paragraph summary, 2) per-subtopic key findings, 3) confidence assessment, 4) gaps."
     }
   ]
 }

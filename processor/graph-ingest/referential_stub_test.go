@@ -80,13 +80,13 @@ func TestReferentialStub_RealMergeStillDetectsTrueBirth(t *testing.T) {
 	realType := message.Type{Domain: "test", Category: "real", Version: "v1"}
 	require.NoError(t, comp.MergeEntity(ctx, &graph.EntityState{
 		ID: target, MessageType: realType, Version: 1,
-		Triples: []message.Triple{{Subject: target, Predicate: "real.label", Object: "Born", Timestamp: time.Now(), Confidence: 1.0}},
+		Triples: []message.Triple{{Subject: target, Predicate: "entity.identity.label", Object: "Born", Timestamp: time.Now(), Confidence: 1.0}},
 	}))
 
 	born := storedEntity(t, comp, target)
 	assert.Equal(t, realType, born.MessageType, "real merge overwrites the stub's MessageType")
 	assert.Greater(t, born.Version, uint64(1), "real merge increments Version past the stub's 1")
-	assert.True(t, hasPredicate(born, "real.label"))
+	assert.True(t, hasPredicate(born, "entity.identity.label"))
 	assert.True(t, hasPredicate(born, vocabulary.EntityIndexingProfile),
 		"merging a real producer onto the profile-less stub is the true birth → profile stamped")
 }

@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "tool_results",
+      "field": "$message.tool_results",
       "operator": "length_gt",
       "value": 0,
       "required": true
@@ -33,7 +33,7 @@
   "while_true": [
     {
       "type": "add_triple",
-      "predicate": "agentic.tool.file_operation",
+      "predicate": "agentic.tool.file-operation",
       "object": "$entity.id",
       "ttl": "720h",
       "properties": {

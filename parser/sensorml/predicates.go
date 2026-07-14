@@ -27,15 +27,15 @@ const (
 	PredHosts = "sensorml.system.hosts"
 
 	// PredIsHostedBy is the inverse of PredHosts.
-	PredIsHostedBy = "sensorml.component.isHostedBy"
+	PredIsHostedBy = "sensorml.component.is-hosted-by"
 
 	// PredHasSubSystem maps an AggregateProcess to its child
 	// processes (ssn:hasSubSystem).
-	PredHasSubSystem = "sensorml.process.hasSubSystem"
+	PredHasSubSystem = "sensorml.process.has-sub-system"
 
 	// PredUsedProcedure maps a PhysicalComponent / SimpleProcess
 	// to the method reference (sosa:usedProcedure).
-	PredUsedProcedure = "sensorml.process.usedProcedure"
+	PredUsedProcedure = "sensorml.process.used-procedure"
 
 	// PredAttachedTo records the SensorML attachedTo reference —
 	// "I am physically mounted on this thing". Maps to
@@ -45,7 +45,7 @@ const (
 	// link. Operators modeling explicit deployment contexts
 	// should introduce a separate predicate targeting
 	// ssn:hasDeployment when that capability lands.
-	PredAttachedTo = "sensorml.process.attachedTo"
+	PredAttachedTo = "sensorml.process.attached-to"
 
 	// PredIdentifierValue carries a flat identifier value
 	// (typically a serial number, registration ID, or callsign).

@@ -1,6 +1,7 @@
 package vocabulary
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -284,8 +285,10 @@ func WithWeight(weight float64) Option {
 //	    WithRange("0-100"),
 //	    WithIRI("http://schema.org/batteryLevel"))
 func Register(name string, opts ...Option) {
-	// Parse domain and category from name
-	domain, category := parseDomainCategory(name)
+	parts, err := ParsePredicate(name)
+	if err != nil {
+		panic(fmt.Sprintf("register predicate %q: %v", name, err))
+	}
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -295,12 +298,15 @@ func Register(name string, opts ...Option) {
 	// the previously-declared value instead of silently dropping it (gh#410).
 	meta := predicateRegistry[name]
 	meta.Name = name
-	meta.Domain = domain
-	meta.Category = category
+	meta.Domain = parts.Domain
+	meta.Category = parts.Category
 
 	// Apply functional options (each overrides the field it sets).
 	for _, opt := range opts {
 		opt(&meta)
+	}
+	if err := validatePredicateMetadataLocked(meta); err != nil {
+		panic(fmt.Sprintf("register predicate %q: %v", name, err))
 	}
 
 	predicateRegistry[name] = meta
@@ -345,10 +351,65 @@ func parseDomainCategory(name string) (domain, category string) {
 // New code should use Register() with functional options.
 // Allows overriding framework defaults.
 func RegisterPredicate(meta PredicateMetadata) {
+	parts, err := ParsePredicate(meta.Name)
+	if err != nil {
+		panic(fmt.Sprintf("register predicate %q: %v", meta.Name, err))
+	}
+	if meta.Domain != "" && meta.Domain != parts.Domain {
+		panic(fmt.Sprintf("register predicate %q: metadata domain %q does not match predicate domain %q",
+			meta.Name, meta.Domain, parts.Domain))
+	}
+	if meta.Category != "" && meta.Category != parts.Category {
+		panic(fmt.Sprintf("register predicate %q: metadata category %q does not match predicate category %q",
+			meta.Name, meta.Category, parts.Category))
+	}
+	meta.Domain = parts.Domain
+	meta.Category = parts.Category
+
 	registryMu.Lock()
 	defer registryMu.Unlock()
+	if err := validatePredicateMetadataLocked(meta); err != nil {
+		panic(fmt.Sprintf("register predicate %q: %v", meta.Name, err))
+	}
 
 	predicateRegistry[meta.Name] = meta
+}
+
+// validatePredicateMetadataLocked validates relationships between metadata
+// fields. The caller holds registryMu so an already-declared inverse can be
+// checked without racing another registration.
+func validatePredicateMetadataLocked(meta PredicateMetadata) error {
+	if meta.InverseOf != "" {
+		if _, err := ParsePredicate(meta.InverseOf); err != nil {
+			return fmt.Errorf("inverse predicate %q: %w", meta.InverseOf, err)
+		}
+	}
+	if meta.IsSymmetric && meta.InverseOf != "" {
+		return fmt.Errorf("symmetric predicate cannot also declare inverse %q", meta.InverseOf)
+	}
+	if meta.IsAlias {
+		if !validAliasType(meta.AliasType) {
+			return fmt.Errorf("invalid alias type %q", meta.AliasType)
+		}
+	} else if meta.AliasType != "" || meta.AliasPriority != 0 {
+		return fmt.Errorf("alias metadata requires IsAlias=true")
+	}
+
+	if inverse, ok := predicateRegistry[meta.InverseOf]; meta.InverseOf != "" && ok &&
+		inverse.InverseOf != "" && inverse.InverseOf != meta.Name {
+		return fmt.Errorf("inverse predicate %q points to %q, not %q",
+			meta.InverseOf, inverse.InverseOf, meta.Name)
+	}
+	return nil
+}
+
+func validAliasType(aliasType AliasType) bool {
+	switch aliasType {
+	case AliasTypeIdentity, AliasTypeLabel, AliasTypeAlternate, AliasTypeExternal, AliasTypeCommunication:
+		return true
+	default:
+		return false
+	}
 }
 
 // GetPredicateMetadata retrieves metadata for a predicate from the registry.

@@ -3,6 +3,7 @@ package graphingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
 )
 
@@ -77,7 +79,7 @@ func (f *fakeClassifier) OwnerOf(_ context.Context, _, predicate string) (owner,
 // routing — the edges still flow through AddTriples below (observe-only).
 func TestForeignEdgeSeam_MetersUnclaimedOnly(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	fake := &fakeClassifier{unclaimed: map[string]bool{"unclaimed.edge": true}}
+	fake := &fakeClassifier{unclaimed: map[string]bool{"test.edge.unclaimed": true}}
 	comp.claimReader = fake
 
 	mt := message.Type{Domain: "test", Category: "fixture", Version: "v1"}
@@ -87,25 +89,25 @@ func TestForeignEdgeSeam_MetersUnclaimedOnly(t *testing.T) {
 		MessageType: mt,
 		Version:     1,
 		Triples: []message.Triple{
-			{Subject: flParentID, Predicate: "own.p", Object: "x"},                // own — never foreign
-			{Subject: flChildID, Predicate: "claimed.edge", Object: flParentID},   // foreign, claimed
-			{Subject: flChildID, Predicate: "unclaimed.edge", Object: flParentID}, // foreign, unclaimed
+			{Subject: flParentID, Predicate: "test.own.fact", Object: "x"},             // own — never foreign
+			{Subject: flChildID, Predicate: "test.edge.claimed", Object: flParentID},   // foreign, claimed
+			{Subject: flChildID, Predicate: "test.edge.unclaimed", Object: flParentID}, // foreign, unclaimed
 		},
 	}
 
-	beforeUnclaimed := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "unclaimed.edge"))
-	beforeClaimed := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "claimed.edge"))
+	beforeUnclaimed := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "test.edge.unclaimed"))
+	beforeClaimed := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "test.edge.claimed"))
 
 	comp.ingestEntity(context.Background(), entity)
 
-	assert.InDelta(t, beforeUnclaimed+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "unclaimed.edge")), 0.0001,
+	assert.InDelta(t, beforeUnclaimed+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "test.edge.unclaimed")), 0.0001,
 		"an unclaimed foreign edge must increment foreign_edge_unclaimed_total")
-	assert.InDelta(t, beforeClaimed, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "claimed.edge")), 0.0001,
+	assert.InDelta(t, beforeClaimed, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(label, "test.edge.claimed")), 0.0001,
 		"a claimed foreign edge must NOT be metered")
 	assert.Equal(t, label, fake.gotProducer, "producer key = MessageType.Key()")
-	assert.ElementsMatch(t, []string{"claimed.edge", "unclaimed.edge"}, fake.gotPreds,
+	assert.ElementsMatch(t, []string{"test.edge.claimed", "test.edge.unclaimed"}, fake.gotPreds,
 		"only foreign-subject predicates reach the classifier; the own-subject triple does not")
-	assert.NotContains(t, fake.gotPreds, "own.p")
+	assert.NotContains(t, fake.gotPreds, "test.own.fact")
 }
 
 // No claim reader wired (resourceless/unmigrated deploy): the seam is a pure
@@ -120,7 +122,7 @@ func TestForeignEdgeSeam_GracefulSkipWhenNoReader(t *testing.T) {
 		ID:          flParentID,
 		MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 		Version:     1,
-		Triples:     []message.Triple{{Subject: flChildID, Predicate: "x.edge", Object: flParentID}},
+		Triples:     []message.Triple{{Subject: flChildID, Predicate: "test.edge.unclaimed", Object: flParentID}},
 	}
 	comp.ingestEntity(context.Background(), entity) // must not panic
 
@@ -136,19 +138,19 @@ func TestForeignEdgeSeam_GracefulSkipWhenNoReader(t *testing.T) {
 // raw producer key so a Producer-empty claim could match.
 func TestForeignEdgeSeam_InvalidMessageTypeLabel(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	fake := &fakeClassifier{unclaimed: map[string]bool{"x.edge": true}}
+	fake := &fakeClassifier{unclaimed: map[string]bool{"test.edge.unclaimed": true}}
 	comp.claimReader = fake
 
 	entity := &graph.EntityState{
 		ID:          flParentID,
 		MessageType: message.Type{}, // zero / invalid
 		Version:     1,
-		Triples:     []message.Triple{{Subject: flChildID, Predicate: "x.edge", Object: flParentID}},
+		Triples:     []message.Triple{{Subject: flChildID, Predicate: "test.edge.unclaimed", Object: flParentID}},
 	}
-	before := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues("_invalid", "x.edge"))
+	before := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues("_invalid", "test.edge.unclaimed"))
 	comp.ingestEntity(context.Background(), entity)
 
-	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues("_invalid", "x.edge")), 0.0001,
+	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues("_invalid", "test.edge.unclaimed")), 0.0001,
 		"an invalid MessageType must meter under the bounded _invalid label")
 	assert.Equal(t, message.Type{}.Key(), fake.gotProducer,
 		"the classifier still receives the raw producer key, so a Producer-empty claim can match")
@@ -166,7 +168,7 @@ func TestForeignEdgeSeam_ClassifierErrorFailsOpen(t *testing.T) {
 		ID:          flParentID,
 		MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
 		Version:     1,
-		Triples:     []message.Triple{{Subject: flChildID, Predicate: "x.edge", Object: flParentID}},
+		Triples:     []message.Triple{{Subject: flChildID, Predicate: "test.edge.unclaimed", Object: flParentID}},
 	}
 	comp.ingestEntity(context.Background(), entity) // must not panic
 
@@ -190,20 +192,20 @@ func (e errForTest) Error() string { return string(e) }
 // Entity.ID (the bug cs-api's singleSubject guard works around today).
 func TestSharedSeam_CreateWithTriples_PartitionsClassifiesRoutesForeign(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	fake := &fakeClassifier{unclaimed: map[string]bool{"child.isHostedBy": true}}
+	fake := &fakeClassifier{unclaimed: map[string]bool{"test.edge.is-hosted-by": true}}
 	comp.claimReader = fake
 
 	mt := message.Type{Domain: "test", Category: "fixture", Version: "v1"}
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: flParentID, MessageType: mt},
 		Triples: []message.Triple{
-			{Subject: flParentID, Predicate: "system.label", Object: "Parent"},      // own
-			{Subject: flChildID, Predicate: "child.isHostedBy", Object: flParentID}, // foreign
+			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},       // own
+			{Subject: flChildID, Predicate: "test.edge.is-hosted-by", Object: flParentID}, // foreign
 		},
 	}
 	data, _ := json.Marshal(req)
 
-	before := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "child.isHostedBy"))
+	before := testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "test.edge.is-hosted-by"))
 
 	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
 	require.NoError(t, err)
@@ -212,12 +214,12 @@ func TestSharedSeam_CreateWithTriples_PartitionsClassifiesRoutesForeign(t *testi
 
 	// The primary stores ONLY its own triple — the foreign edge is not misfiled.
 	parent := storedEntity(t, comp, flParentID)
-	assert.True(t, hasPredicate(parent, "system.label"))
-	assert.False(t, hasPredicate(parent, "child.isHostedBy"),
+	assert.True(t, hasPredicate(parent, "test.system.label"))
+	assert.False(t, hasPredicate(parent, "test.edge.is-hosted-by"),
 		"foreign edge must NOT be misfiled onto the primary entity")
 
 	// The foreign edge was classified at the shared seam (metric fired)…
-	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "child.isHostedBy")), 0.0001,
+	assert.InDelta(t, before+1, testutil.ToFloat64(comp.foreignEdgeUnclaimed.WithLabelValues(mt.Key(), "test.edge.is-hosted-by")), 0.0001,
 		"the mutation-lane foreign edge must be classified by the shared seam")
 	assert.Equal(t, mt.Key(), fake.gotProducer)
 	// …and routing was attempted (edge goes into toAppend, not dropped).
@@ -239,8 +241,8 @@ func TestSharedSeam_CreateWithTriples_SingleSubjectUnchanged(t *testing.T) {
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: flParentID, MessageType: mt},
 		Triples: []message.Triple{
-			{Subject: flParentID, Predicate: "system.label", Object: "Parent"},
-			{Subject: flParentID, Predicate: "system.uid", Object: "u-1"},
+			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},
+			{Subject: flParentID, Predicate: "test.system.uid", Object: "u-1"},
 		},
 	}
 	data, _ := json.Marshal(req)
@@ -251,7 +253,57 @@ func TestSharedSeam_CreateWithTriples_SingleSubjectUnchanged(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respData, &resp))
 
 	parent := storedEntity(t, comp, flParentID)
-	assert.True(t, hasPredicate(parent, "system.label"))
-	assert.True(t, hasPredicate(parent, "system.uid"))
+	assert.True(t, hasPredicate(parent, "test.system.label"))
+	assert.True(t, hasPredicate(parent, "test.system.uid"))
 	assert.Nil(t, fake.gotPreds, "a single-subject batch must never reach the classifier")
+}
+
+func TestSharedSeam_CreateWithTriples_InvalidForeignPredicateCommitsNothing(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	req := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          flParentID,
+			MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
+		},
+		Triples: []message.Triple{
+			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},
+			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID},
+		},
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	resp, err := comp.handleEntityCreateWithTriples(context.Background(), data)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.True(t, errs.IsInvalid(err), "a malformed predicate is terminal invalid input")
+
+	_, getErr := comp.entityBucket.Get(context.Background(), flParentID)
+	assert.True(t, errors.Is(getErr, natsclient.ErrKVKeyNotFound),
+		"whole-projection preflight must reject before the primary entity commits")
+}
+
+func TestSharedSeam_UpdateWithTriples_InvalidForeignPredicateCommitsNothing(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	req := graph.UpdateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{
+			ID:          flParentID,
+			MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
+		},
+		AddTriples: []message.Triple{
+			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},
+			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID},
+		},
+	}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	resp, err := comp.handleEntityUpdateWithTriples(context.Background(), data)
+	require.Error(t, err)
+	assert.Nil(t, resp)
+	assert.True(t, errs.IsInvalid(err), "preflight must win over the missing-entity lookup")
+
+	_, getErr := comp.entityBucket.Get(context.Background(), flParentID)
+	assert.True(t, errors.Is(getErr, natsclient.ErrKVKeyNotFound),
+		"an invalid update must not create or partially mutate the primary entity")
 }

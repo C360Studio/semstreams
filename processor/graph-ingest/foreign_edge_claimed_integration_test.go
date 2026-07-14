@@ -91,8 +91,8 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_RoutesNoBirthStub(t *testing.
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: isHostedBy, Object: systemID, Timestamp: time.Now(), Confidence: 1},   // foreign
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
+			{Subject: componentID, Predicate: isHostedBy, Object: systemID, Timestamp: time.Now(), Confidence: 1},        // foreign
 		},
 	}
 	data, err := json.Marshal(req)
@@ -147,8 +147,8 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_StrictDropsAbsentTarget(t *te
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: strictEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},   // foreign, Strict, absent target
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
+			{Subject: componentID, Predicate: strictEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},        // foreign, Strict, absent target
 		},
 	}
 	data, err := json.Marshal(req)
@@ -193,7 +193,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t 
 	// Pre-create the parent so update_with_triples has an existing entity (must-exist on the primary).
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 		ID: systemID, MessageType: producerMT, Version: 1, UpdatedAt: time.Now(),
-		Triples: []message.Triple{{Subject: systemID, Predicate: "system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}},
+		Triples: []message.Triple{{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}},
 	}))
 
 	unclaimedBefore := testutil.ToFloat64(c.foreignEdgeUnclaimed.WithLabelValues(producerType, isHostedBy))
@@ -201,7 +201,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		AddTriples: []message.Triple{
-			{Subject: systemID, Predicate: "system.note", Object: "n", Timestamp: time.Now(), Confidence: 1},      // own
+			{Subject: systemID, Predicate: "test.system.note", Object: "n", Timestamp: time.Now(), Confidence: 1}, // own
 			{Subject: componentID, Predicate: isHostedBy, Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign
 		},
 	}
@@ -247,8 +247,8 @@ func TestIntegration_SharedSeam_ProducerEmptyClaim_RoutesAnyProducer(t *testing.
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID}, // empty MessageType, like cs-api ingestTriples
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: anyEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},      // foreign
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
+			{Subject: componentID, Predicate: anyEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},           // foreign
 		},
 	}
 	data, err := json.Marshal(req)

@@ -20,15 +20,16 @@ retention-manifest work.
 and semstreams-reviewer independently reading the actual diff, not the
 design doc — found one real bug the three design-stage rounds couldn't
 have caught because it only exists at the code level: `listPredicatesByNamespace`
-passed a caller-supplied `Prefix` straight into `KeysByPrefix` with no
+passed caller-supplied namespace text straight into `KeysByPrefix` with no
 trailing-dot normalization. Both reviewers independently spun up a real
 NATS/JetStream container to confirm empirically, not just reason about it:
 `KeysByPrefix(ctx, "agent.run")` (no trailing dot) returns zero matches
 even when `agent.run.phase` exists, taking the full client-side timeout to
 do so, while `KeysByPrefix(ctx, "agent.run.")` correctly matches — the
-exact silent-prefix-matching footgun this whole ADR exists to eliminate,
-reintroduced on the one new externally-facing prefix field. Fixed by
-normalizing in `listPredicatesByNamespace` before the call. Also fixed:
+exact silent-prefix-matching footgun this whole ADR exists to eliminate.
+The current external field is `namespace`; it accepts one exact domain or
+`domain.category` namespace, and `listPredicatesByNamespace` appends the
+storage delimiter internally. Also fixed:
 `attack_test.go`'s new predicate query used raw `Request` against a
 classified handler (inconsistent with the sibling `RequestClassified`
 migration in the same PR); catalog-write failures were logged at Debug
@@ -88,11 +89,11 @@ for two reasons: (1) it's the hash→name recovery source for
 membership bucket, `KeysByPrefix` on *this* bucket is safe — it can only
 return a superset of predicate names sharing a dotted namespace, never
 corrupt entity-membership correctness, because it carries no membership
-data. `graph.index.query.predicateList` gains an optional `prefix`
-request field that uses exactly this: a genuine, deliberate,
-namespace-style predicate query (NATS-KV-wildcard "SQL-`LIKE`-prefix"
-semantics, intentionally preserved here rather than given up wholesale —
-see Wildcard-semantics tradeoff below). Note the catalog does not, by
+data. `graph.index.query.predicateList` has an optional `namespace`
+request field that uses exactly this. The value is one exact domain or
+`domain.category`, not an arbitrary textual prefix; the handler turns it
+into the corresponding NATS namespace filter after canonical validation.
+Note the catalog does not, by
 itself, avoid a full-corpus scan for the *unfiltered* `predicateList`
 call's per-predicate counts — see the single-scan design in the read-path
 table below for how that's actually avoided.
@@ -141,7 +142,6 @@ not a monolithic blob:
 - `graph/clustering/storage.go:206`, `processor/graph-clustering/query.go:304`
   — community detection, keys `<level>.<communityID>`.
 - `processor/graph-index-temporal/query.go:68` — temporal index.
-- `graph/datamanager/batch_ops.go:92,119` — batch operations.
 - Inside `graph-index` itself: `processor/graph-ingest/query.go:150-209`
   (`handleQueryPrefixNATS`) — entity-ID prefix lookup with sort + cursor
   pagination, the direct precedent for prefix-filtered enumeration at this
@@ -296,7 +296,7 @@ opaque hash there.
   read wants an exact single-predicate match, not a namespace scan — not
   something inherent to prefix-matching on dotted predicate strings in
   general. **This ADR wires up catalog prefix-querying** (not deferred —
-  see the `prefix` field on `graph.index.query.predicateList` in the
+  see the `namespace` field on `graph.index.query.predicateList` in the
   Read-path changes table below), specifically because `CountVirtualEdges`'s
   migration is a concrete, immediate, real caller: it wants exactly "every
   `inferred.semantic.*` predicate," which is a namespace query, not N
@@ -311,7 +311,7 @@ All four NATS handlers in `processor/graph-index/query.go`:
 | Handler | Today | Proposed |
 |---|---|---|
 | `queryPredicateEntities` (→`handleQueryPredicateNATS`) | `predicateBucket.Get(predicate)` → unmarshal `.Entities` | `predicateBucket.KeysByPrefix(sha256Hex(predicate)+".")` → strip prefix per key |
-| `handleQueryPredicateListNATS` | `Keys()` (all predicate keys) then `Get` each | Request gains an optional `prefix` field (new — wires up the namespace-query door left open in the Wildcard-semantics tradeoff section, requested explicitly rather than left theoretical). Unfiltered (no `prefix`): **one** `Keys()` over the whole membership bucket, group by first token (the hash) to get counts; `Keys()` on `PREDICATE_CATALOG` + forward-hash each name to join hash→name — **not** a per-predicate fan-out, see below. Filtered (`prefix` set): `PREDICATE_CATALOG.KeysByPrefix(prefix)` for the (now namespace-bounded, small) matching names, then a per-name `KeysByPrefix` against the membership bucket for each — a fan-out is fine here because the namespace filter already bounds the result set, unlike the unfiltered case. |
+| `handleQueryPredicateListNATS` | `Keys()` (all predicate keys) then `Get` each | Request has an optional `namespace` field containing one exact domain or `domain.category`. Unfiltered (no `namespace`): **one** `Keys()` over the whole membership bucket, group by first token (the hash) to get counts; `Keys()` on `PREDICATE_CATALOG` + forward-hash each name to join hash→name — **not** a per-predicate fan-out, see below. Filtered (`namespace` set): validate the namespace, then use `PREDICATE_CATALOG.KeysByPrefix(namespace + ".")` for the bounded matching names and a per-name `KeysByPrefix` against the membership bucket. The fan-out is acceptable here because namespace validation bounds the intent, unlike the unfiltered case. |
 | `handleQueryPredicateStatsNATS` | `Get(predicate)` → count + slice sample | `KeysByPrefix` → `len(keys)` for count, sorted-first-N for sample |
 | `handleQueryPredicateCompoundNATS` | `Get` per predicate → build set from `.Entities` | `KeysByPrefix` per predicate → build set from stripped keys |
 
@@ -463,7 +463,7 @@ compatibility shim. This is that guidance for this specific change:
   will see opaque hashed keys instead of readable predicate-named keys
   after this deploys. If any sem* team has such tooling, it needs to move
   to `graph.index.query.predicate*` (which now also supports namespace
-  queries via the new `prefix` field on `predicateList` — see Decision).
+  queries via the `namespace` field on `predicateList` — see Decision).
 - **Operationally**: after this version deploys, `PREDICATE_INDEX` rebuilds
   from `ENTITY_STATES` via the existing KV-watch replay on next boot (same
   mechanism as any restart) — no manual migration step. Old blob-format
@@ -525,7 +525,7 @@ compatibility shim. This is that guidance for this specific change:
 - The "fixed 7-token key" framing (and the GH #433 `*.<entityID>` bonus
   filter it enables) assumes entity IDs are always exactly 6 dot-tokens
   with no embedded dots per token — true today (`entityIDRegex`,
-  `graph/datamanager/manager.go:35-36`) and this design's read/write paths
+  `processor/graph-ingest/component.go`) and this design's read/write paths
   don't actually depend on that arity (they strip the fixed hash prefix
   and take everything after as the entity ID, whatever its length), so
   this assumption affects only the advertised GH #433 bonus, not this

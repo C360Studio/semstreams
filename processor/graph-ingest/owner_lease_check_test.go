@@ -27,7 +27,7 @@ import (
 
 const (
 	leaseEntityID    = "c360.platform.test.sys.widget.001"
-	leasePred        = "mission.phase"
+	leasePred        = "mission.state.phase"
 	leaseOwner       = "mission-planner"
 	leaseIncarnation = "deadbeef01234567"
 )
@@ -170,7 +170,7 @@ func TestCheckOwnerLease_ReaderError_FailOpen(t *testing.T) {
 func TestOwnerLease_CreateWithTriples_StaleToken_MetricAndCommits(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
 	req := graph.CreateEntityWithTriplesRequest{
@@ -203,7 +203,7 @@ func TestOwnerLease_CreateWithTriples_StaleToken_MetricAndCommits(t *testing.T) 
 func TestOwnerLease_UpdateWithTriples_StaleToken_MetricAndCommits(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.upd1"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
@@ -241,7 +241,7 @@ func TestOwnerLease_UpdateWithTriples_StaleToken_MetricAndCommits(t *testing.T) 
 func TestOwnerLease_UpdateWithTriplesCAS_StaleToken_MetricAndCommits(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.cas1"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
@@ -282,7 +282,7 @@ func TestOwnerLease_UpdateWithTriplesCAS_StaleToken_MetricAndCommits(t *testing.
 func TestOwnerLease_EmptyToken_AllLanes_NoMetric(t *testing.T) {
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
 	label := mt.Key()
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 
 	// create_with_triples
 	{
@@ -435,7 +435,7 @@ func TestCheckOwnerLease_EnforceOn_EmptyTokenAndNilReader_NoViolation(t *testing
 func TestCheckOwnerLease_EnforceOn_MismatchThenReaderError_HonorsEarlierMismatch(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.config.EnforceOwnerLease = true
-	const predA, predB = "a.pred", "b.pred"
+	const predA, predB = "test.lease.first", "test.lease.second"
 	comp.claimReader = &fakeClassifier{owners: map[string]fakeOwnerEntry{
 		predA: {owner: leaseOwner, incarnation: leaseIncarnation}, // confirmed mismatch vs stale token
 		predB: {err: assertErr},                                   // reader blip on the next predicate
@@ -457,7 +457,7 @@ func TestOwnerLease_CreateWithTriples_EnforceOn_Rejects(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.config.EnforceOwnerLease = true
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.crtrej"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
@@ -486,7 +486,7 @@ func TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.config.EnforceOwnerLease = true
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.updrej"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
@@ -529,7 +529,7 @@ func TestOwnerLease_UpdateWithTriplesCAS_EnforceOn_Rejects(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.config.EnforceOwnerLease = true
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.casrej"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 
@@ -565,7 +565,7 @@ func TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	comp.config.EnforceOwnerLease = true
 	mt := message.Type{Domain: "test", Category: "lease", Version: "v1"}
-	pred := "mission.phase"
+	pred := "mission.state.phase"
 	eid := "c360.test.lease.sys.w.metrej"
 	comp.claimReader = leaseFake(pred, leaseOwner, leaseIncarnation)
 

@@ -86,3 +86,81 @@ func TestGetEntityConnections_PropagatesIncomingReadinessError(t *testing.T) {
 	require.True(t, errors.As(err, &classified))
 	assert.Equal(t, graph.ErrorCodeIndexNotReady, classified.Code)
 }
+
+func TestGetEntityRejectsPredicatePoisonWithoutCachingPartialState(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer func() { _ = tc.Terminate() }()
+
+	ctx := context.Background()
+	client, err := NewClient(ctx, tc.Client, DefaultConfig())
+	require.NoError(t, err)
+	qc := client.(*natsClient)
+	require.NoError(t, qc.ensureBuckets(ctx))
+
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	_, err = qc.entityBucket.Put(ctx, entityID, poisoned)
+	require.NoError(t, err)
+
+	entity, err := qc.GetEntity(ctx, entityID)
+	require.Error(t, err)
+	assert.Nil(t, entity)
+	var contractErr *graph.StateContractError
+	require.ErrorAs(t, err, &contractErr)
+	assert.Equal(t, graph.GraphStateReasonNoncanonicalPredicate, contractErr.Reason)
+	_, cached := qc.cache.Get(entityID)
+	assert.False(t, cached, "poisoned state must not enter the entity query cache")
+}
+
+func TestDirectQueryClient_LivePoisonInvalidatesCachedViews(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer func() { _ = tc.Terminate() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := NewClient(ctx, tc.Client, DefaultConfig())
+	require.NoError(t, err)
+	qc := client.(*natsClient)
+	require.NoError(t, qc.ensureBuckets(ctx))
+
+	validID := "acme.ops.robotics.gcs.drone.001"
+	validRev, err := qc.entityBucket.Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return qc.entityObservedRev.Load() >= validRev }, time.Second, 10*time.Millisecond)
+	entity, err := qc.GetEntity(ctx, validID)
+	require.NoError(t, err)
+	require.Equal(t, validID, entity.ID)
+	_, cached := qc.cache.Get(validID)
+	require.True(t, cached)
+
+	poisonID := "acme.ops.robotics.gcs.drone.002"
+	_, err = qc.entityBucket.Put(ctx, poisonID, []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return qc.entityStatePoison.Load() != nil }, time.Second, 10*time.Millisecond)
+
+	entity, err = qc.GetEntity(ctx, validID)
+	require.Error(t, err)
+	assert.Nil(t, entity, "a cached valid entity must not escape after poison is observed elsewhere")
+	_, cached = qc.cache.Get(validID)
+	assert.False(t, cached, "poison discovery clears every cached graph view")
+}
+
+func TestGetEntitiesBatch_DoesNotReturnPartialSuccess(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer func() { _ = tc.Terminate() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := NewClient(ctx, tc.Client, DefaultConfig())
+	require.NoError(t, err)
+	qc := client.(*natsClient)
+	require.NoError(t, qc.ensureBuckets(ctx))
+
+	validID := "acme.ops.robotics.gcs.drone.001"
+	_, err = qc.entityBucket.Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
+	require.NoError(t, err)
+
+	entities, err := qc.GetEntitiesBatch(ctx, []string{validID, "acme.ops.robotics.gcs.drone.999"})
+	require.Error(t, err)
+	assert.Nil(t, entities, "a missing/unreadable member must fail the batch instead of returning a subset")
+}

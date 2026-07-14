@@ -14,25 +14,25 @@
     "claim_predicate": {
       "type": "string",
       "description": "Triple predicate carrying the durable in-flight claim (the dedup record committed before dispatch).",
-      "default": "gateddag.claim",
+      "default": "gateddag.unit.claim",
       "category": "advanced"
     },
     "completed_predicate": {
       "type": "string",
       "description": "Triple predicate marking a unit complete.",
-      "default": "gateddag.completed",
+      "default": "gateddag.unit.completed",
       "category": "advanced"
     },
     "depends_on_predicate": {
       "type": "string",
       "description": "Triple predicate carrying a unit's prerequisite unit IDs (multi-valued; one triple per edge).",
-      "default": "gateddag.depends_on",
+      "default": "gateddag.unit.depends-on",
       "category": "advanced"
     },
     "dirtied_predicate": {
       "type": "string",
       "description": "Triple predicate marking a unit reset/dirtied (re-derives Ready over any stale terminal marker).",
-      "default": "gateddag.dirtied",
+      "default": "gateddag.unit.dirtied",
       "category": "advanced"
     },
     "dispatch_dedupe_window": {
@@ -61,7 +61,7 @@
     "failed_predicate": {
       "type": "string",
       "description": "Triple predicate marking a unit failed.",
-      "default": "gateddag.failed",
+      "default": "gateddag.unit.failed",
       "category": "advanced"
     },
     "failure_policy": {

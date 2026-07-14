@@ -406,7 +406,7 @@ func TestCreateRuleFromDefinition_Expression(t *testing.T) {
 		Name:    "Factory Test Rule",
 		Enabled: true,
 		Conditions: []expression.ConditionExpression{
-			{Field: "test.field", Operator: "eq", Value: "expected"},
+			{Field: "test.entity.field", Operator: "eq", Value: "expected"},
 		},
 	}
 
@@ -425,7 +425,7 @@ func TestCreateRuleFromDefinition_UnknownType(t *testing.T) {
 		ID:   "unknown-type",
 		Type: "nonexistent_rule_type",
 		Conditions: []expression.ConditionExpression{
-			{Field: "test", Operator: "eq", Value: "x"},
+			{Field: "$message.test", Operator: "eq", Value: "x"},
 		},
 	}
 

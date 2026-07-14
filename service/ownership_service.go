@@ -160,7 +160,8 @@ func WireOwnership(
 // the shutdown-cancellable context that governs the lifecycle Manager-internal
 // ownership heartbeater (spawned eagerly in Phase A by AttachOwnership inside
 // WireOwnership — see manager.go) and a single cleanup func that, on shutdown,
-// SIGNALS (cancel) then JOINS (WaitOwnership) it, in that order.
+// SIGNALS (cancel) then JOINS the Manager's heartbeat and graph-state guard via
+// WaitOwnership, in that order.
 //
 // Why a shared helper and not a Service: per ADR-058 the lifecycle Manager is
 // deliberately NOT wrapped as a service.Service — the heartbeater stays
@@ -175,9 +176,8 @@ func WireOwnership(
 // hand-rolled hbCancel/WaitOwnership defers lived, so LIFO still runs cancel+join
 // BEFORE the earlier-registered NATS Close defer (the gh#279 join, ADR-056 PR-4).
 //
-// With no registry attached (resourceless/unmigrated deploy, or a nil-client
-// Manager), WaitOwnership is a no-op (manager.go) so the cleanup returns
-// immediately — R3 symmetric independence.
+// With no registry attached, WaitOwnership still joins a graph-state guard if a
+// lifecycle watcher started one; otherwise it returns immediately.
 func WireOwnershipShutdown(ctx context.Context, lcm *lifecycle.Manager) (context.Context, func()) {
 	hbCtx, hbCancel := context.WithCancel(ctx)
 	return hbCtx, func() {

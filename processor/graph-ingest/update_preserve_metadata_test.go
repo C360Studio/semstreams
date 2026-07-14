@@ -28,7 +28,7 @@ func bornEntity(t *testing.T, comp *Component, id string) (message.Type, *messag
 			Version:     1,
 			StorageRef:  sref,
 		},
-		Triples: []message.Triple{{Subject: id, Predicate: "harness.phase", Object: "active", Confidence: 1.0}},
+		Triples: []message.Triple{{Subject: id, Predicate: "lifecycle.state.phase", Object: "active", Confidence: 1.0}},
 	}
 	data, err := json.Marshal(createReq)
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestUpdateWithTriples_BareEntityPreservesEnvelope_NonCAS(t *testing.T) {
 	// UpdateWithRetry merge path.
 	applyUpdate(t, comp, graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: id},
-		AddTriples: []message.Triple{{Subject: id, Predicate: "harness.phase", Object: "done", Confidence: 1.0}},
+		AddTriples: []message.Triple{{Subject: id, Predicate: "lifecycle.state.phase", Object: "done", Confidence: 1.0}},
 	})
 
 	es := storedEntity(t, comp, id)
@@ -68,7 +68,7 @@ func TestUpdateWithTriples_BareEntityPreservesEnvelope_NonCAS(t *testing.T) {
 	assert.Equal(t, sref.Key, es.StorageRef.Key)
 	assert.EqualValues(t, 1, es.Version, "Version must not reset to 0 on a bare-entity update")
 	// The triple delta still applied (replace-by-predicate).
-	phase, _ := es.GetPropertyValue("harness.phase")
+	phase, _ := es.GetPropertyValue("lifecycle.state.phase")
 	assert.Equal(t, "done", phase)
 }
 
@@ -81,7 +81,7 @@ func TestUpdateWithTriples_BareEntityPreservesEnvelope_CAS(t *testing.T) {
 	// Bare update on the CAS-on-condition path (ExpectedRevision > 0).
 	applyUpdate(t, comp, graph.UpdateEntityWithTriplesRequest{
 		Entity:           &graph.EntityState{ID: id},
-		AddTriples:       []message.Triple{{Subject: id, Predicate: "harness.phase", Object: "done", Confidence: 1.0}},
+		AddTriples:       []message.Triple{{Subject: id, Predicate: "lifecycle.state.phase", Object: "done", Confidence: 1.0}},
 		ExpectedRevision: rev,
 	})
 
@@ -104,7 +104,7 @@ func TestUpdateWithTriples_ExplicitMetadataStillWins(t *testing.T) {
 	newType := message.Type{Domain: "lifecycle", Category: "harness", Version: "v2"}
 	applyUpdate(t, comp, graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: id, MessageType: newType, Version: 7},
-		AddTriples: []message.Triple{{Subject: id, Predicate: "harness.phase", Object: "done", Confidence: 1.0}},
+		AddTriples: []message.Triple{{Subject: id, Predicate: "lifecycle.state.phase", Object: "done", Confidence: 1.0}},
 	})
 
 	es := storedEntity(t, comp, id)

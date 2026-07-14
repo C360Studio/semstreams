@@ -22,11 +22,12 @@ import (
 
 // Mock KV bucket for testing
 type mockKVBucket struct {
-	mu         sync.Mutex
-	data       map[string][]byte
-	putFunc    func(ctx context.Context, key string, value []byte) (uint64, error)
-	getFunc    func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
-	deleteFunc func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
+	mu               sync.Mutex
+	data             map[string][]byte
+	putFunc          func(ctx context.Context, key string, value []byte) (uint64, error)
+	getFunc          func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	deleteFunc       func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
+	listFilteredFunc func(ctx context.Context, filters ...string) (jetstream.KeyLister, error)
 }
 
 func newMockKVBucket() *mockKVBucket {
@@ -138,11 +139,14 @@ func (m *mockKVBucket) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt)
 // matching here is what makes a future regression of that bug fail a
 // test instead of passing one.
 func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	if m.listFilteredFunc != nil {
+		return m.listFilteredFunc(ctx, filters...)
+	}
 	m.mu.Lock()
 	var matched []string
 	for k := range m.data {
 		for _, filter := range filters {
-			if natsPrefixTokenMatch(k, filter) {
+			if natsSubjectFilterMatch(k, filter) {
 				matched = append(matched, k)
 				break
 			}
@@ -158,21 +162,27 @@ func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) 
 // trailing dot) is treated as a literal, non-wildcard subject, which in
 // practice never matches a real key.
 func natsPrefixTokenMatch(key, filter string) bool {
-	if !strings.HasSuffix(filter, ".>") {
-		return key == filter // malformed/literal filter: exact match only, never a real key
-	}
-	prefixTokens := strings.Split(strings.TrimSuffix(filter, ">"), ".")
-	prefixTokens = prefixTokens[:len(prefixTokens)-1] // drop the trailing empty token from the "." split
+	return natsSubjectFilterMatch(key, filter)
+}
+
+// natsSubjectFilterMatch covers the fixed-position wildcard subset used by
+// owner reconciliation: * matches exactly one token and a terminal > matches
+// one or more remaining tokens.
+func natsSubjectFilterMatch(key, filter string) bool {
+	filterTokens := strings.Split(filter, ".")
 	keyTokens := strings.Split(key, ".")
-	if len(keyTokens) <= len(prefixTokens) {
-		return false // ">" requires at least one token beyond the literal prefix
-	}
-	for i, pt := range prefixTokens {
-		if keyTokens[i] != pt {
+	for i, token := range filterTokens {
+		if token == ">" {
+			return i == len(filterTokens)-1 && len(keyTokens) > i
+		}
+		if i >= len(keyTokens) {
+			return false
+		}
+		if token != "*" && keyTokens[i] != token {
 			return false
 		}
 	}
-	return true
+	return len(keyTokens) == len(filterTokens)
 }
 
 func (m *mockKVBucket) History(ctx context.Context, key string, opts ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
@@ -955,7 +965,7 @@ func TestComponent_DeleteFromIncomingIndex_ValidData(t *testing.T) {
 	sourceID := "c360.platform.robotics.mav1.drone.001"
 
 	// Add entry first
-	require.NoError(t, comp.UpdateIncomingIndex(ctx, targetID, sourceID, "predicate"))
+	require.NoError(t, comp.UpdateIncomingIndex(ctx, targetID, sourceID, "test.edge.predicate"))
 
 	// Delete
 	err := comp.DeleteFromIncomingIndex(ctx, targetID, sourceID)

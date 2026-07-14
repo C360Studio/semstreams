@@ -2,12 +2,12 @@ package lifecycle
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -80,6 +80,43 @@ type Manager struct {
 	// started exactly once — in AttachOwnership — and runs until the ctx
 	// passed there is cancelled.
 	ownershipWG sync.WaitGroup
+
+	// graphStatePoison is sticky for the Manager lifetime. Once any
+	// authoritative ENTITY_STATES value violates the running graph contract,
+	// lifecycle projections and writes remain blocked until operator reset,
+	// canonical reingest, and process restart.
+	graphStatePoison atomic.Pointer[graphStatePoisonLatch]
+
+	// One process-lifetime WatchAll owns authoritative graph-contract
+	// validation. Workflow subscribers use pattern watches and wait for this
+	// guard's clean bootstrap and revision watermark instead of multiplying
+	// full-graph scans.
+	graphStateGuardMu        sync.Mutex
+	graphStateGuardStarted   bool
+	graphStateGuardCtx       context.Context
+	graphStateGuardCancel    context.CancelFunc
+	graphStateGuardReady     chan struct{}
+	graphStateGuardDone      chan struct{}
+	graphStateGuardReadyOnce sync.Once
+	graphStateGuardDoneOnce  sync.Once
+	graphStateGuardResult    atomic.Pointer[graphStateGuardResult]
+	graphStateGuardDegraded  atomic.Pointer[graphStateGuardTransportFailure]
+	graphStateGuardRevision  atomic.Uint64
+	graphStateProgressMu     sync.Mutex
+	graphStateProgress       chan struct{}
+	graphStateGuardWG        sync.WaitGroup
+}
+
+type graphStatePoisonLatch struct {
+	reason graph.StateResetReason
+}
+
+type graphStateGuardResult struct {
+	clean bool
+}
+
+type graphStateGuardTransportFailure struct {
+	err error
 }
 
 // registration holds the per-workflow-type state Manager needs at
@@ -100,11 +137,17 @@ func NewManager(client *natsclient.Client, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	guardCtx, guardCancel := context.WithCancel(context.Background())
 	return &Manager{
-		natsClient:    client,
-		logger:        logger,
-		emitter:       newGraphEmitterNATS(client, 5*time.Second),
-		registrations: make(map[string]*registration),
+		natsClient:            client,
+		logger:                logger,
+		emitter:               newGraphEmitterNATS(client, 5*time.Second),
+		registrations:         make(map[string]*registration),
+		graphStateGuardCtx:    guardCtx,
+		graphStateGuardCancel: guardCancel,
+		graphStateGuardReady:  make(chan struct{}),
+		graphStateGuardDone:   make(chan struct{}),
+		graphStateProgress:    make(chan struct{}),
 	}
 }
 
@@ -115,11 +158,17 @@ func newManagerForTest(logger *slog.Logger, emitter graphEmitter, bucket jetstre
 	if logger == nil {
 		logger = slog.Default()
 	}
+	guardCtx, guardCancel := context.WithCancel(context.Background())
 	return &Manager{
-		logger:             logger,
-		emitter:            emitter,
-		entityStatesBucket: bucket,
-		registrations:      make(map[string]*registration),
+		logger:                logger,
+		emitter:               emitter,
+		entityStatesBucket:    bucket,
+		registrations:         make(map[string]*registration),
+		graphStateGuardCtx:    guardCtx,
+		graphStateGuardCancel: guardCancel,
+		graphStateGuardReady:  make(chan struct{}),
+		graphStateGuardDone:   make(chan struct{}),
+		graphStateProgress:    make(chan struct{}),
 	}
 }
 
@@ -261,15 +310,22 @@ func (m *Manager) AttachOwnership(ctx context.Context, reg *ownership.Registry) 
 	}()
 }
 
-// WaitOwnership blocks until the heartbeat goroutine spawned by AttachOwnership
-// exits. Callers should cancel the ctx passed to AttachOwnership first (to signal
-// the goroutine), then call WaitOwnership to join it. This closes the gh#279 join
-// gap — without this, the goroutine may still be running when the NATS client
-// closes, causing a benign-but-noisy "connection closed" error.
+// WaitOwnership joins all Manager-owned process-lifetime observers: the
+// heartbeat spawned by AttachOwnership and the authoritative ENTITY_STATES
+// graph-contract guard (when started). Callers should cancel the application
+// shutdown context first; this method also cancels the guard defensively so no
+// KV watcher remains when the NATS client closes.
 //
-// No-op when AttachOwnership was never called or was called with a nil registry.
+// No-op when neither observer was started.
 func (m *Manager) WaitOwnership() {
+	// The lifecycle Manager is not a service, so the existing composition-root
+	// shutdown join is also the process-lifetime boundary for its shared graph
+	// guard. Cancel before joining so the watcher exits before NATS closes.
+	if m.graphStateGuardCancel != nil {
+		m.graphStateGuardCancel()
+	}
 	m.ownershipWG.Wait()
+	m.graphStateGuardWG.Wait()
 }
 
 // lookupByWorkflow finds the registration for the given workflow type.
@@ -341,6 +397,9 @@ func (m *Manager) ensureBucket(ctx context.Context) (jetstream.KeyValue, error) 
 // KV revision. Returns ErrEntityNotFound when the entity has no
 // triples at all (never created).
 func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.EntityState, uint64, error) {
+	if err := m.graphStateContractError("getEntity"); err != nil {
+		return nil, 0, err
+	}
 	bucket, err := m.ensureBucket(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -353,10 +412,35 @@ func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.Entity
 		return nil, 0, fmt.Errorf("lifecycle: KV get for %q: %w", entityID, err)
 	}
 	var state graph.EntityState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
-		return nil, 0, fmt.Errorf("lifecycle: unmarshal entity %q: %w", entityID, err)
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		m.latchGraphStatePoison(err)
+		return nil, 0, m.graphStateContractError("getEntity")
 	}
 	return &state, entry.Revision(), nil
+}
+
+func (m *Manager) latchGraphStatePoison(err error) bool {
+	var contractErr *graph.StateContractError
+	if !errors.As(err, &contractErr) {
+		return false
+	}
+	if m.graphStatePoison.CompareAndSwap(nil, &graphStatePoisonLatch{reason: contractErr.Reason}) {
+		m.logger.Error("authoritative graph state requires reset; lifecycle access is blocked",
+			slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+			slog.String("reason", string(contractErr.Reason)))
+		m.publishGraphStateGuardReady(false)
+		m.graphStateGuardDoneOnce.Do(func() { close(m.graphStateGuardDone) })
+	}
+	return true
+}
+
+func (m *Manager) graphStateContractError(operation string) error {
+	poison := m.graphStatePoison.Load()
+	if poison == nil {
+		return nil
+	}
+	return errs.WrapFatal(&graph.StateContractError{Reason: poison.reason}, "lifecycle.Manager", operation,
+		"authoritative graph state requires operator reset and canonical reingest")
 }
 
 // Get reads the entity at entityID for the given workflow and
@@ -434,7 +518,7 @@ func (m *Manager) GetRaw(ctx context.Context, entityID string) (*graph.EntitySta
 // Create attaches lifecycle to the entity at initial.EntityID() —
 // the "add lifecycle dimension" semantics per ADR-049 Q5. The
 // entity MAY already exist with non-lifecycle triples (e.g. a
-// processor stamping `mission.command` before any lifecycle action
+// processor stamping `mission.control.command` before any lifecycle action
 // fires); Create coexists with those triples without clobbering.
 //
 // Returns ErrAlreadyExists if the entity already has a triple for

@@ -77,7 +77,7 @@ func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
 		{Subject: entityID, Predicate: "agent.todo.content", Object: "Write code", Timestamp: now, Confidence: 1.0},
 		{Subject: entityID, Predicate: "agent.todo.status", Object: "pending", Timestamp: now, Confidence: 1.0},
 		{Subject: entityID, Predicate: "agent.todo.position", Object: 0, Timestamp: now, Confidence: 1.0},
-		{Subject: entityID, Predicate: "agent.todo.updated_at", Object: now.Format(time.RFC3339), Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "agent.todo.updated-at", Object: now.Format(time.RFC3339), Timestamp: now, Confidence: 1.0},
 	}
 
 	written, failed, err := c.AddTriples(ctx, triples)
@@ -298,7 +298,7 @@ func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
 	req := graph.AddTripleRequest{
 		Triple: message.Triple{
 			Subject:    subject,
-			Predicate:  "evidence.note",
+			Predicate:  "evidence.note.value",
 			Object:     "should-not-land",
 			Confidence: 1.0,
 		},
@@ -327,7 +327,7 @@ func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
 	const subject = "c360.test.absent.batch.entity.001"
 	req := graph.AddTriplesBatchRequest{
 		Triples: []message.Triple{
-			{Subject: subject, Predicate: "evidence.note", Object: "should-not-land", Confidence: 1.0},
+			{Subject: subject, Predicate: "evidence.note.value", Object: "should-not-land", Confidence: 1.0},
 		},
 	}
 	reqBytes, err := json.Marshal(req)

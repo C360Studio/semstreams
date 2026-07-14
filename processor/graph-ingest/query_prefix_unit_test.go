@@ -22,7 +22,7 @@ func storePrefixEntity(t *testing.T, comp *Component, id string) {
 		Triples: []message.Triple{
 			{
 				Subject:   id,
-				Predicate: "test.attr",
+				Predicate: "test.entity.attribute",
 				Object:    "val",
 				Timestamp: time.Now(),
 			},

@@ -1,5 +1,9 @@
 ## Why
 
+**Status:** Proposed spike and decision work only. No production key format, delete behavior, or owner
+reconciliation changes are authorized until the real-NATS profiles pass and a superseding ADR selects the design.
+Any helper or test code landed alongside predicate enforcement remains inactive experimental scaffolding.
+
 PR #524 fixed O(N²) and lost-update behavior by sharding graph indexes into deterministic composite keys. It
 was designed against a production corpus whose predicates violated SemStreams' intended three-part contract.
 Restoring that contract removes ADR-065's principal raw-key prefix-collision example and may restore direct
@@ -24,8 +28,9 @@ tombstones, or another on-disk predicate format.
   `domain.category.property.entityID` representation.
 - Record the representation decision in a superseding ADR before implementation. No permanent dual-format
   index is permitted.
-- Reconcile an entity's stored owned memberships against its complete desired projection on update and
-  deletion, preserving PR #524's ordered execution, failure honesty, and readiness model.
+- If selected after the benchmark and ADR gate, reconcile an entity's stored owned memberships against its complete
+  desired projection on update and deletion, preserving PR #524's ordered execution, failure honesty, and readiness
+  model.
 - Correct retention scope: manifests or tombstone payloads are evidence-driven exceptions for stores that
   cannot meet filtered-enumeration requirements, not the default for every composite key.
 - Define exact predicate identity lookup separately from namespace-prefix enumeration in graph-query.

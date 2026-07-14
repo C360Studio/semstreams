@@ -91,11 +91,14 @@ type SearchResult struct {
 }
 
 // handleQuerySimilarNATS handles similar entity query requests via NATS request/reply
-func (c *Component) handleQuerySimilarNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQuerySimilarNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.ensureBootstrapReady(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	// Create context with timeout for KV operations
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 30*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -154,11 +157,14 @@ func (c *Component) handleQuerySimilarNATS(_ context.Context, data []byte) ([]by
 }
 
 // handleQuerySearchNATS handles text search query requests via NATS request/reply
-func (c *Component) handleQuerySearchNATS(_ context.Context, data []byte) ([]byte, error) {
+func (c *Component) handleQuerySearchNATS(requestCtx context.Context, data []byte) ([]byte, error) {
+	if err := c.ensureBootstrapReady(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(requestCtx, 30*time.Second)
 	defer cancel()
 
 	// Parse request
@@ -270,6 +276,10 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 	var scores []scored
 
 	for _, entityID := range entityIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, errs.WrapTransient(err, "findSimilarEntities", "helper", "scan embeddings")
+		}
+
 		// Skip the source entity
 		if entityID == excludeID {
 			continue
@@ -282,7 +292,12 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 		}
 
 		record, err := c.storage.GetEmbedding(ctx, entityID)
-		if err != nil || record == nil {
+		if err != nil {
+			return nil, errs.Wrap(err, "findSimilarEntities", "helper", "get candidate embedding")
+		}
+		// GetEmbedding returns nil,nil only for a proven key-not-found race
+		// between ListGeneratedEntityIDs and this point read.
+		if record == nil {
 			continue
 		}
 		if record.Status != embedding.StatusGenerated || len(record.Vector) == 0 {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -189,6 +190,9 @@ func (e *GraphQueryExecutor) queryEntity(ctx context.Context, call agentic.ToolC
 			ErrorKind: agentic.ToolErrorNetwork,
 		}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntity", "get entity from KV")
 	}
+	if err := validateAuthoritativeEntity(entry.Value()); err != nil {
+		return graphStateToolFailure(call.ID, err)
+	}
 
 	// Return the entity data as content
 	// The value is stored as JSON, so we can return it directly
@@ -268,6 +272,9 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 				ErrorKind: agentic.ToolErrorNetwork,
 			}, errs.WrapTransient(err, "GraphQueryExecutor", "queryEntities", "get entity from KV")
 		}
+		if validateErr := validateAuthoritativeEntity(entry.Value()); validateErr != nil {
+			return graphStateToolFailure(call.ID, validateErr)
+		}
 		results[entityID] = json.RawMessage(entry.Value())
 	}
 
@@ -338,13 +345,13 @@ func (e *GraphQueryExecutor) queryRelationships(ctx context.Context, call agenti
 	}
 
 	// Parse entity data to extract relationships
-	var entityData map[string]any
-	if err := json.Unmarshal(entry.Value(), &entityData); err != nil {
+	entityData, err := decodeAuthoritativeEntityData(entry.Value())
+	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("failed to parse entity data: %v", err),
 			ErrorKind: agentic.ToolErrorInternal,
-		}, nil
+		}, err
 	}
 
 	// Extract relationships from entity data
@@ -418,28 +425,27 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 				continue
 			}
 
+			entityData, decodeErr := decodeAuthoritativeEntityData(entry.Value())
+			if decodeErr != nil {
+				return graphStateToolFailure(call.ID, decodeErr)
+			}
+
 			// Store in neighbors (skip source entity)
 			if id != entityID {
 				// Apply type filter if specified
 				if filterType != "" {
-					var entityData map[string]any
-					if err := json.Unmarshal(entry.Value(), &entityData); err == nil {
-						if entityType, ok := entityData["type"].(string); ok && entityType != filterType {
-							continue
-						}
+					if entityType, ok := entityData["type"].(string); ok && entityType != filterType {
+						continue
 					}
 				}
 				neighbors[id] = json.RawMessage(entry.Value())
 			}
 
 			// Find connected entities for next hop
-			var entityData map[string]any
-			if err := json.Unmarshal(entry.Value(), &entityData); err == nil {
-				for _, rel := range extractRelationships(id, entityData, "both", "") {
-					if relMap, ok := rel.(map[string]any); ok {
-						if target, ok := relMap["target"].(string); ok && !visited[target] {
-							nextFrontier = append(nextFrontier, target)
-						}
+			for _, rel := range extractRelationships(id, entityData, "both", "") {
+				if relMap, ok := rel.(map[string]any); ok {
+					if target, ok := relMap["target"].(string); ok && !visited[target] {
+						nextFrontier = append(nextFrontier, target)
 					}
 				}
 			}
@@ -475,6 +481,30 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 			"depth":          depth,
 		},
 	}, nil
+}
+
+func validateAuthoritativeEntity(data []byte) error {
+	var entity graph.EntityState
+	return graph.UnmarshalEntityState(data, &entity)
+}
+
+func decodeAuthoritativeEntityData(data []byte) (map[string]any, error) {
+	if err := validateAuthoritativeEntity(data); err != nil {
+		return nil, err
+	}
+	var entityData map[string]any
+	if err := json.Unmarshal(data, &entityData); err != nil {
+		return nil, err
+	}
+	return entityData, nil
+}
+
+func graphStateToolFailure(callID string, err error) (agentic.ToolResult, error) {
+	return agentic.ToolResult{
+		CallID:    callID,
+		Error:     fmt.Sprintf("graph state reset required: %v", err),
+		ErrorKind: agentic.ToolErrorInternal,
+	}, err
 }
 
 // queryByType queries entities by type (placeholder - requires index)

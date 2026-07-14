@@ -25,13 +25,13 @@ func seedPredicates(t *testing.T, comp *Component, byPredicate map[string][]stri
 
 // TestListAllPredicates_NoCrossContamination is the regression test for
 // the bug this ADR exists to fix: a raw dot-prefix design would let
-// "agent.run" silently absorb "agent.run.phase"'s members. The
+// a namespace scan silently absorb neighboring predicate identities. The
 // hash-keyed design must keep them fully separate.
 func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
-		"agent.run":       {"c360.a.b.c.d.e1", "c360.a.b.c.d.e2"},
-		"agent.run.phase": {"c360.a.b.c.d.e3"},
+		"agent.run.identity": {"c360.a.b.c.d.e1", "c360.a.b.c.d.e2"},
+		"agent.run.phase":    {"c360.a.b.c.d.e3"},
 	})
 
 	predicates, err := comp.listAllPredicates(context.Background())
@@ -42,7 +42,7 @@ func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 		byName[p.Predicate] = p.EntityCount
 	}
 
-	assert.Equal(t, 2, byName["agent.run"], "agent.run must report exactly its own 2 entities, not agent.run.phase's too")
+	assert.Equal(t, 2, byName["agent.run.identity"], "exact predicate identity must not absorb a namespace neighbor")
 	assert.Equal(t, 1, byName["agent.run.phase"], "agent.run.phase must report exactly its own 1 entity")
 }
 
@@ -87,26 +87,26 @@ func TestListPredicatesByNamespace_TrailingDotNormalization(t *testing.T) {
 func TestListPredicatesByNamespace_NoMatches(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
-		"agent.run": {"c360.a.b.c.d.e1"},
+		"agent.run.identity": {"c360.a.b.c.d.e1"},
 	})
 
-	predicates, err := comp.listPredicatesByNamespace(context.Background(), "inferred.semantic.")
+	predicates, err := comp.listPredicatesByNamespace(context.Background(), "inferred.semantic")
 	require.NoError(t, err)
 	assert.Empty(t, predicates)
 }
 
-// TestHandleQueryPredicateListNATS_PrefixField exercises the full NATS
-// handler (request parsing + prefix routing), not just the internal
+// TestHandleQueryPredicateListNATS_NamespaceField exercises the full NATS
+// handler (request parsing + namespace routing), not just the internal
 // helpers, so a regression in the request-parsing glue would also be
 // caught here.
-func TestHandleQueryPredicateListNATS_PrefixField(t *testing.T) {
+func TestHandleQueryPredicateListNATS_NamespaceField(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
 		"inferred.semantic.high": {"c360.a.b.c.d.e1"},
-		"agent.run":              {"c360.a.b.c.d.e2"},
+		"agent.run.identity":     {"c360.a.b.c.d.e2"},
 	})
 
-	reqJSON, err := json.Marshal(graph.PredicateListQuery{Prefix: "inferred.semantic"})
+	reqJSON, err := json.Marshal(graph.PredicateListQuery{Namespace: "inferred.semantic"})
 	require.NoError(t, err)
 
 	respData, err := comp.handleQueryPredicateListNATS(context.Background(), reqJSON)
@@ -122,7 +122,7 @@ func TestHandleQueryPredicateListNATS_PrefixField(t *testing.T) {
 func TestHandleQueryPredicateListNATS_EmptyBody_ListsAll(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
-		"agent.run":              {"c360.a.b.c.d.e1"},
+		"agent.run.identity":     {"c360.a.b.c.d.e1"},
 		"inferred.semantic.high": {"c360.a.b.c.d.e2"},
 	})
 
@@ -134,6 +134,23 @@ func TestHandleQueryPredicateListNATS_EmptyBody_ListsAll(t *testing.T) {
 	var resp graph.PredicateListQueryResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
 	assert.Len(t, resp.Data.Predicates, 2)
+}
+
+func TestPredicateQueriesRejectStoredIdentityAndNamespaceAmbiguity(t *testing.T) {
+	t.Parallel()
+	comp := createTestComponentWithMockKV(t)
+
+	_, err := comp.handleQueryPredicateNATS(context.Background(), []byte(`{"predicate":"agent.run"}`))
+	require.Error(t, err, "two-part namespace must not be accepted as an exact predicate")
+
+	_, err = comp.handleQueryPredicateListNATS(context.Background(), []byte(`{"namespace":"agent.run.phase"}`))
+	require.Error(t, err, "three-part predicate must not be accepted as a namespace")
+
+	_, err = comp.handleQueryPredicateListNATS(context.Background(), []byte(`{"prefix":"agent.run"}`))
+	require.Error(t, err, "removed prefix wire field must fail rather than silently list every predicate")
+
+	err = comp.UpdatePredicateIndex(context.Background(), "c360.a.b.c.d.e1", "agent.run")
+	require.Error(t, err, "index codec must not admit a noncanonical predicate")
 }
 
 func TestHandleQueryPredicateStatsNATS_CompositeKeys(t *testing.T) {

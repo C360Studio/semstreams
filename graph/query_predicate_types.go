@@ -16,12 +16,12 @@ type PredicateListData struct {
 }
 
 // PredicateListQuery is the request for graph.index.query.predicateList.
-// Prefix, when set, scopes the listing to predicate names sharing that
-// dotted namespace (e.g. "inferred.semantic." matches "inferred.semantic.high"
-// and any deeper nesting under it) — a deliberate, server-side-filtered
-// namespace query. Omitted or empty means "list every predicate" (ADR-065).
+// Namespace, when set, scopes the listing to one exact domain or
+// domain.category namespace (for example, "inferred.semantic" matches
+// "inferred.semantic.high"). Omitted or empty means "list every predicate"
+// (ADR-065).
 type PredicateListQuery struct {
-	Prefix string `json:"prefix,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // PredicateStatsData contains detailed statistics for a single predicate.

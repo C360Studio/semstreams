@@ -31,7 +31,7 @@
     },
     {
       "type": "add_triple",
-      "predicate": "research.has_evidence",
+      "predicate": "research.evidence.present",
       "object": "$entity.id"
     }
   ]

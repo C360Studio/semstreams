@@ -290,6 +290,9 @@ func (rcm *ConfigManager) SaveRule(ctx context.Context, ruleID string, ruleDef D
 	if rcm.kvStore == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "SaveRule", "kvStore not initialised")
 	}
+	if err := ValidateDefinition(ruleDef); err != nil {
+		return errs.WrapInvalid(err, "ConfigManager", "SaveRule", "validate rule authoring contract")
+	}
 	key := fmt.Sprintf("rules.%s", ruleID)
 	data, err := json.Marshal(ruleDef)
 	if err != nil {

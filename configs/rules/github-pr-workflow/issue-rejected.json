@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "workflow.phase",
+      "field": "workflow.state.phase",
       "operator": "in",
       "value": ["rejected", "not_a_bug", "wont_fix"]
     }
@@ -19,7 +19,7 @@
   "on_enter": [
     {
       "type": "update_triple",
-      "predicate": "workflow.status",
+      "predicate": "workflow.state.status",
       "object": "completed"
     },
     {

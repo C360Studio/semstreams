@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,6 +194,33 @@ func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {
 
 	if got := exec.callCount(); got != 2 {
 		t.Errorf("Execute call count = %d, want 2 (one per action)", got)
+	}
+}
+
+func TestCronScheduler_GraphGuardBlocksDispatch(t *testing.T) {
+	exec := &recordingExecutor{}
+	var ready atomic.Bool
+	s, err := NewCronScheduler(CronSchedulerConfig{
+		Executor: exec,
+		Logger:   slog.Default(),
+		Ready:    ready.Load,
+	})
+	if err != nil {
+		t.Fatalf("NewCronScheduler: %v", err)
+	}
+	rule := cronRuleForTest(t, nil)
+	if err := s.Register(rule); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	s.fire(rule.ID())
+	if got := exec.callCount(); got != 0 {
+		t.Fatalf("dispatches while graph guard blocked = %d, want zero", got)
+	}
+	ready.Store(true)
+	s.fire(rule.ID())
+	if got := exec.callCount(); got != len(rule.Actions()) {
+		t.Fatalf("dispatches after graph guard ready = %d, want %d", got, len(rule.Actions()))
 	}
 }
 

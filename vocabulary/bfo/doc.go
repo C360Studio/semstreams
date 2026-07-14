@@ -38,7 +38,7 @@
 //	// Map a physical asset to BFO Object
 //	triple := message.Triple{
 //	    Subject:   entityID,
-//	    Predicate: "rdf.type",
+//	    Predicate: "rdf.type.class",
 //	    Object:    bfo.Object,  // http://purl.obolibrary.org/obo/BFO_0000030
 //	}
 //

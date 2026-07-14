@@ -81,7 +81,7 @@ func TestExecuteAddTriple_SubjectEmptyDefaultsToEntityID(t *testing.T) {
 	// entity. Every pre-#147 rule must keep its behaviour.
 	action := Action{
 		Type:      ActionTypeAddTriple,
-		Predicate: "rule.spawned_task",
+		Predicate: "rule.task.spawned",
 		Object:    "task-001",
 	}
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robot.gcs.coordinator.7"}))
