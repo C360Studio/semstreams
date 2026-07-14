@@ -17,6 +17,7 @@ func init() {
 		"mission.transition.note",
 		"mission.transition.source",
 		"phaseonly.lifecycle.phase",
+		"sensor.lifecycle.phase",
 		"some.other.predicate",
 		"workflow.lifecycle.phase",
 		"x.y.z",

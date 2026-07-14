@@ -93,7 +93,7 @@ func TestIntegration_OwnedFactWriter_ReplaceShrinksPackage(t *testing.T) {
 	gi := startGraphIngestForOFW(t, natsClient)
 
 	const entityID = "acme.spec.openspec.run.change.001"
-	const prefix = "change.demo.task."
+	const prefix = "change.demo.task-"
 
 	// Seed a 3-task package plus a sibling predicate owned by lifecycle. Stamp
 	// a birth envelope so the replace is proven to PRESERVE it (never clobber).
@@ -102,10 +102,10 @@ func TestIntegration_OwnedFactWriter_ReplaceShrinksPackage(t *testing.T) {
 		ID:          entityID,
 		MessageType: birthType,
 		Triples: []message.Triple{
-			ownedTriple(entityID, "change.demo.task.1", "alpha"),
-			ownedTriple(entityID, "change.demo.task.2", "beta"),
-			ownedTriple(entityID, "change.demo.task.3", "gamma"),
-			ownedTriple(entityID, "status.phase", "planning"), // sibling, must survive
+			ownedTriple(entityID, "change.demo.task-1", "alpha"),
+			ownedTriple(entityID, "change.demo.task-2", "beta"),
+			ownedTriple(entityID, "change.demo.task-3", "gamma"),
+			ownedTriple(entityID, "lifecycle.status.phase", "planning"), // sibling, must survive
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -116,24 +116,24 @@ func TestIntegration_OwnedFactWriter_ReplaceShrinksPackage(t *testing.T) {
 	// A retry shrinks the package to a single, changed task.
 	owned, err := w.ReadOwnedPredicates(ctx, entityID, prefix)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"change.demo.task.1", "change.demo.task.2", "change.demo.task.3"}, owned,
+	assert.Equal(t, []string{"change.demo.task-1", "change.demo.task-2", "change.demo.task-3"}, owned,
 		"read-back must return exactly the owned-prefix predicates, sorted")
 
-	revised := []message.Triple{ownedTriple(entityID, "change.demo.task.1", "alpha-revised")}
+	revised := []message.Triple{ownedTriple(entityID, "change.demo.task-1", "alpha-revised")}
 	require.NoError(t, w.ReplaceTriples(ctx, entityID, revised, owned),
 		"clear the whole owned prefix, then write the revised package")
 
 	es := readEntityKV(t, natsClient, entityID)
-	assert.Equal(t, 1, predicatesPresent(es, "change.demo.task.1"), "task.1 present exactly once")
-	assert.Equal(t, 0, predicatesPresent(es, "change.demo.task.2"), "stale task.2 must be cleared")
-	assert.Equal(t, 0, predicatesPresent(es, "change.demo.task.3"), "stale task.3 must be cleared")
-	assert.Equal(t, 1, predicatesPresent(es, "status.phase"), "sibling owner's predicate must survive")
+	assert.Equal(t, 1, predicatesPresent(es, "change.demo.task-1"), "task-1 present exactly once")
+	assert.Equal(t, 0, predicatesPresent(es, "change.demo.task-2"), "stale task-2 must be cleared")
+	assert.Equal(t, 0, predicatesPresent(es, "change.demo.task-3"), "stale task-3 must be cleared")
+	assert.Equal(t, 1, predicatesPresent(es, "lifecycle.status.phase"), "sibling owner's predicate must survive")
 	assert.Equal(t, birthType, es.MessageType, "replace must PRESERVE the birth envelope, never re-stamp it")
 
 	// The surviving value is the revised one (replace-by-predicate, not append).
 	for _, tr := range es.Triples {
-		if tr.Predicate == "change.demo.task.1" {
-			assert.Equal(t, "alpha-revised", tr.Object, "task.1 must carry the revised value, not the stale one")
+		if tr.Predicate == "change.demo.task-1" {
+			assert.Equal(t, "alpha-revised", tr.Object, "task-1 must carry the revised value, not the stale one")
 		}
 	}
 }
@@ -150,8 +150,8 @@ func TestIntegration_OwnedFactWriter_ReadOwnedPredicatesPrefixScoped(t *testing.
 		ID: entityID,
 		Triples: []message.Triple{
 			ownedTriple(entityID, "change.demo.design", "d"),
-			ownedTriple(entityID, "change.demo.task.1", "a"),
-			ownedTriple(entityID, "change.other.task.1", "x"), // different slug
+			ownedTriple(entityID, "change.demo.task-1", "a"),
+			ownedTriple(entityID, "change.other.task-1", "x"), // different slug
 			ownedTriple(entityID, "core.identity.type", "run"),
 		},
 		Version:   1,
@@ -161,7 +161,7 @@ func TestIntegration_OwnedFactWriter_ReadOwnedPredicatesPrefixScoped(t *testing.
 	w := agentictools.NewNATSOwnedFactWriter(natsClient)
 	owned, err := w.ReadOwnedPredicates(ctx, entityID, "change.demo.")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"change.demo.design", "change.demo.task.1"}, owned,
+	assert.Equal(t, []string{"change.demo.design", "change.demo.task-1"}, owned,
 		"only the change.demo.* predicates, never change.other.* or core.*")
 }
 
@@ -176,7 +176,7 @@ func TestIntegration_OwnedFactWriter_ReplaceMustExist(t *testing.T) {
 	const missing = "acme.spec.openspec.run.change.404"
 	w := agentictools.NewNATSOwnedFactWriter(natsClient)
 	err := w.ReplaceTriples(ctx, missing,
-		[]message.Triple{ownedTriple(missing, "change.demo.task.1", "a")}, nil)
+		[]message.Triple{ownedTriple(missing, "change.demo.task-1", "a")}, nil)
 	require.Error(t, err, "replace on a non-existent entity must error (no auto-vivify)")
 	assert.Contains(t, err.Error(), gtypes.ErrorCodeEntityNotFound,
 		"the handler's entity_not_found code must surface to the caller")

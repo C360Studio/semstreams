@@ -83,7 +83,7 @@ func TestIntegration_EmbeddingFlow(t *testing.T) {
 			},
 			{
 				Subject:   entityID,
-				Predicate: "schema.description",
+				Predicate: "schema.text.description",
 				Object:    "Multi-rotor aerial vehicle for automated surveillance missions",
 				Source:    "test",
 				Timestamp: now,
@@ -317,7 +317,7 @@ func TestIntegration_EmbeddingDeduplication(t *testing.T) {
 		Triples: []message.Triple{
 			{
 				Subject:   entity2ID,
-				Predicate: "schema.description",
+				Predicate: "schema.text.description",
 				Object:    sameText,
 				Source:    "test",
 				Timestamp: now,
@@ -446,7 +446,7 @@ func TestIntegration_EmbeddingTextExtraction(t *testing.T) {
 			},
 			{
 				Subject:   entityWithTextID,
-				Predicate: "schema.content",
+				Predicate: "schema.text.content",
 				Object:    "This is test content",
 				Source:    "test",
 				Timestamp: now,

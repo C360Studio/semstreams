@@ -18,8 +18,8 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_PreservesPredicates(t *t
 
 	// Store relationships with predicates
 	relationships := []relationshipEntry{
-		{Predicate: "worksFor", ToEntityID: "entity-B"},
-		{Predicate: "memberOf", ToEntityID: "entity-C"},
+		{Predicate: "org.employment.works-for", ToEntityID: "entity-B"},
+		{Predicate: "org.membership.member-of", ToEntityID: "entity-C"},
 	}
 	data, err := json.Marshal(relationships)
 	if err != nil {
@@ -41,8 +41,8 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_PreservesPredicates(t *t
 	}
 
 	// Verify predicates are preserved
-	if result[0].Predicate != "worksFor" {
-		t.Errorf("expected predicate 'worksFor', got %s", result[0].Predicate)
+	if result[0].Predicate != "org.employment.works-for" {
+		t.Errorf("expected predicate 'org.employment.works-for', got %s", result[0].Predicate)
 	}
 	if result[0].ToEntityID != "entity-B" {
 		t.Errorf("expected ToEntityID 'entity-B', got %s", result[0].ToEntityID)
@@ -51,8 +51,8 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_PreservesPredicates(t *t
 		t.Errorf("expected FromEntityID 'entity-A', got %s", result[0].FromEntityID)
 	}
 
-	if result[1].Predicate != "memberOf" {
-		t.Errorf("expected predicate 'memberOf', got %s", result[1].Predicate)
+	if result[1].Predicate != "org.membership.member-of" {
+		t.Errorf("expected predicate 'org.membership.member-of', got %s", result[1].Predicate)
 	}
 	if result[1].ToEntityID != "entity-C" {
 		t.Errorf("expected ToEntityID 'entity-C', got %s", result[1].ToEntityID)
@@ -71,10 +71,10 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_PreservesPredicates(t *t
 	sourceA := "acme.ops.graph.test.entity.a"
 	sourceC := "acme.ops.graph.test.entity.c"
 
-	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceA+"."+graph.EncodePredicateToken("worksFor"), []byte{}); err != nil {
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceA+"."+graph.EncodePredicateToken("org.employment.works-for"), []byte{}); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
-	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceC+"."+graph.EncodePredicateToken("reports_to"), []byte{}); err != nil {
+	if _, err := incomingBucket.Put(context.Background(), targetID+"."+sourceC+"."+graph.EncodePredicateToken("org.reporting.reports-to"), []byte{}); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 
@@ -97,11 +97,11 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_PreservesPredicates(t *t
 			t.Errorf("expected ToEntityID %q, got %q", targetID, r.ToEntityID)
 		}
 	}
-	if bySource[sourceA] != "worksFor" {
-		t.Errorf("expected predicate 'worksFor' for source %s, got %q", sourceA, bySource[sourceA])
+	if bySource[sourceA] != "org.employment.works-for" {
+		t.Errorf("expected predicate 'org.employment.works-for' for source %s, got %q", sourceA, bySource[sourceA])
 	}
-	if bySource[sourceC] != "reports_to" {
-		t.Errorf("expected predicate 'reports_to' for source %s, got %q", sourceC, bySource[sourceC])
+	if bySource[sourceC] != "org.reporting.reports-to" {
+		t.Errorf("expected predicate 'org.reporting.reports-to' for source %s, got %q", sourceC, bySource[sourceC])
 	}
 }
 

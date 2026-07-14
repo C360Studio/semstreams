@@ -68,7 +68,7 @@ func bindClaimAndBootIngest(t *testing.T, ownerID string, contract projection.Co
 func TestIntegration_SharedSeam_ClaimedForeignEdge_RoutesNoBirthStub(t *testing.T) {
 	const (
 		producerType = "c360.csapi.system.v1"
-		isHostedBy   = "sensorml.component.isHostedBy"
+		isHostedBy   = "sensorml.component.is-hosted-by"
 		systemID     = "c360.csapi.facility.gateway.system.001"
 		componentID  = "c360.csapi.facility.gateway.component.001"
 	)
@@ -128,7 +128,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_RoutesNoBirthStub(t *testing.
 func TestIntegration_SharedSeam_ClaimedForeignEdge_StrictDropsAbsentTarget(t *testing.T) {
 	const (
 		producerType = "c360.csapi.strict.v1"
-		strictEdge   = "test.strict.hosted_by"
+		strictEdge   = "test.strict.hosted-by"
 		systemID     = "c360.csapi.strict.gateway.system.001"
 		componentID  = "c360.csapi.strict.gateway.component.001"
 	)
@@ -177,7 +177,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_StrictDropsAbsentTarget(t *te
 func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t *testing.T) {
 	const (
 		producerType = "c360.csapi.updatelane.v1"
-		isHostedBy   = "sensorml.component.isHostedBy"
+		isHostedBy   = "sensorml.component.is-hosted-by"
 		systemID     = "c360.csapi.updatelane.gateway.system.001"
 		componentID  = "c360.csapi.updatelane.gateway.component.001"
 	)
@@ -228,7 +228,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t 
 // a Producer-empty ForeignEdgeClaim and routed via NoBirthStub, NOT metered unclaimed.
 func TestIntegration_SharedSeam_ProducerEmptyClaim_RoutesAnyProducer(t *testing.T) {
 	const (
-		anyEdge      = "test.anyproducer.hosted_by"
+		anyEdge      = "test.anyproducer.hosted-by"
 		systemID     = "c360.csapi.anyprod.gateway.system.001"
 		componentID  = "c360.csapi.anyprod.gateway.component.001"
 		invalidLabel = "_invalid" // the bounded metric label for an invalid/zero MessageType

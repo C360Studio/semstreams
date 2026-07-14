@@ -47,11 +47,11 @@ import (
 // Predicate vocabulary — set explicitly on the executor config so the test and
 // the executor agree (the defaults are unexported).
 const (
-	pCompleted = "gateddag.completed"
-	pFailed    = "gateddag.failed"
-	pDirtied   = "gateddag.dirtied"
-	pDependsOn = "gateddag.depends_on"
-	pClaim     = "gateddag.claim"
+	pCompleted = "gateddag.unit.completed"
+	pFailed    = "gateddag.unit.failed"
+	pDirtied   = "gateddag.unit.dirtied"
+	pDependsOn = "gateddag.unit.depends-on"
+	pClaim     = "gateddag.unit.claim"
 )
 
 const fsBackstop = "250ms"

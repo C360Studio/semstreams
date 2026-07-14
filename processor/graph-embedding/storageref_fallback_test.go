@@ -84,8 +84,8 @@ func TestExtractTextForEmbedding_RecoversInlineContentForStorageRefEntity(t *tes
 		ID:         "c360.logistics.maintenance.work.completed.maint-001",
 		StorageRef: &message.StorageReference{StorageInstance: "objstore", Key: "k/maint-001"},
 		Triples: []message.Triple{
-			{Subject: "x", Predicate: "maintenance.title", Object: "Hydraulic pump service"},
-			{Subject: "x", Predicate: "maintenance.description", Object: "Replaced seals on hydraulic reservoir"},
+			{Subject: "x", Predicate: "maintenance.text.title", Object: "Hydraulic pump service"},
+			{Subject: "x", Predicate: "maintenance.text.description", Object: "Replaced seals on hydraulic reservoir"},
 		},
 	}
 	got := c.extractTextForEmbedding(es)

@@ -62,7 +62,7 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 			Type: "expression",
 			Name: "Alpha",
 			Conditions: []expression.ConditionExpression{
-				{Field: "test.field", Operator: "eq", Value: "alpha", Required: true},
+				{Field: "test.entity.field", Operator: "eq", Value: "alpha", Required: true},
 			},
 			Logic:   "and",
 			Enabled: true,
@@ -72,7 +72,7 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 			Type: "expression",
 			Name: "Beta",
 			Conditions: []expression.ConditionExpression{
-				{Field: "test.field", Operator: "eq", Value: "beta", Required: true},
+				{Field: "test.entity.field", Operator: "eq", Value: "beta", Required: true},
 			},
 			Logic:   "and",
 			Enabled: true,
@@ -202,7 +202,7 @@ func TestHotReload_ReconcileFromKV(t *testing.T) {
 		Name:    "Gamma",
 		Enabled: true,
 		Conditions: []expression.ConditionExpression{
-			{Field: "test.field", Operator: "eq", Value: "gamma", Required: true},
+			{Field: "test.entity.field", Operator: "eq", Value: "gamma", Required: true},
 		},
 		Logic: "and",
 	}))
@@ -255,7 +255,7 @@ func TestHotReload_WatcherPicksUpNewRule(t *testing.T) {
 		Name:    "Gamma",
 		Enabled: true,
 		Conditions: []expression.ConditionExpression{
-			{Field: "test.field", Operator: "eq", Value: "gamma", Required: true},
+			{Field: "test.entity.field", Operator: "eq", Value: "gamma", Required: true},
 		},
 		Logic: "and",
 	}))
@@ -332,7 +332,7 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 			Name:    id,
 			Enabled: true,
 			Conditions: []expression.ConditionExpression{
-				{Field: "test.field", Operator: "eq", Value: id, Required: true},
+				{Field: "test.entity.field", Operator: "eq", Value: id, Required: true},
 			},
 			Logic: "and",
 		}))
@@ -391,7 +391,7 @@ func TestHotReload_KVInitFailure(t *testing.T) {
 			Name:    "NilNats",
 			Enabled: true,
 			Conditions: []expression.ConditionExpression{
-				{Field: "test.field", Operator: "eq", Value: "nil_nats", Required: true},
+				{Field: "test.entity.field", Operator: "eq", Value: "nil_nats", Required: true},
 			},
 			Logic: "and",
 		},

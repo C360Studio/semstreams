@@ -767,7 +767,7 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 				AddTriples: []message.Triple{
 					{
 						Subject:    entityID,
-						Predicate:  fmt.Sprintf("test.concurrent.%d", idx),
+						Predicate:  fmt.Sprintf("test.concurrent.value-%d", idx),
 						Object:     idx,
 						Timestamp:  time.Now(),
 						Confidence: 1.0,
@@ -807,7 +807,7 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 		predicates[tr.Predicate] = true
 	}
 	for i := 0; i < N; i++ {
-		p := fmt.Sprintf("test.concurrent.%d", i)
+		p := fmt.Sprintf("test.concurrent.value-%d", i)
 		assert.True(t, predicates[p],
 			"concurrent triple %q must survive on the final entity (PR-B retry semantics)", p)
 	}
@@ -981,7 +981,7 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 			defer wg.Done()
 			req := graph.UpdateEntityWithTriplesRequest{
 				Entity:           seed,
-				AddTriples:       []message.Triple{{Subject: entityID, Predicate: fmt.Sprintf("test.race.%d", idx), Object: "via-cas", Timestamp: time.Now(), Confidence: 1.0}},
+				AddTriples:       []message.Triple{{Subject: entityID, Predicate: fmt.Sprintf("test.race.value-%d", idx), Object: "via-cas", Timestamp: time.Now(), Confidence: 1.0}},
 				ExpectedRevision: sharedRev,
 				RequestID:        fmt.Sprintf("req-race-%d", idx),
 			}

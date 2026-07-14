@@ -22,6 +22,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	droneStatusStatePredicate       = "drone.status.state"
+	missionStatusPhasePredicate     = "mission.status.phase"
+	sensorStatusCalibratedPredicate = "sensor.status.calibrated"
+)
+
+func init() {
+	for _, predicate := range []string{
+		droneStatusStatePredicate,
+		missionStatusPhasePredicate,
+		sensorStatusCalibratedPredicate,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
+
 // ruleComponentConfig builds the operator-facing component config for a rule
 // processor carrying a pack_id and projection contracts. The Config field is a
 // rule.Config JSON; the rule factory copies pack_id/projection_contracts off it
@@ -111,7 +127,7 @@ func droneStatusContract() projection.Contract {
 		EntityPattern: "acme.ops.robotics.gcs.drone.*",
 		Groups: []projection.PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{"drone.status.state"},
+			Predicates: []string{droneStatusStatePredicate},
 		}},
 	}
 }
@@ -137,7 +153,7 @@ func TestBindRulePackContracts_ClaimInEpochBeforeStart(t *testing.T) {
 	service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
 
 	owner, ok, err := ownerReg.OwnerOf(ctx,
-		"acme.ops.robotics.gcs.drone.001", "drone.status.state")
+		"acme.ops.robotics.gcs.drone.001", droneStatusStatePredicate)
 	require.NoError(t, err)
 	require.True(t, ok, "claim must be in the epoch after bind")
 	require.Equal(t, "rule-pack.drone-ops.v1", owner)
@@ -177,7 +193,7 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 
 	// The cell still belongs to pack-a; pack-b was rejected.
 	owner, ok, err := ownerReg.OwnerOf(ctx,
-		"acme.ops.robotics.gcs.drone.001", "drone.status.state")
+		"acme.ops.robotics.gcs.drone.001", droneStatusStatePredicate)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "rule-pack.pack-a", owner)
@@ -210,7 +226,7 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 		EntityPattern: "acme.ops.robotics.gcs.mission.*",
 		Groups: []projection.PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{"mission.status.phase"},
+			Predicates: []string{missionStatusPhasePredicate},
 		}},
 	}
 
@@ -226,12 +242,12 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 	require.True(t, hb.IsEnrolled("rule-pack.drone-ops.v1"))
 	require.True(t, hb.IsEnrolled("rule-pack.mission-ops.v1"))
 
-	dOwner, dOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.drone.001", "drone.status.state")
+	dOwner, dOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.drone.001", droneStatusStatePredicate)
 	require.NoError(t, err)
 	require.True(t, dOK)
 	require.Equal(t, "rule-pack.drone-ops.v1", dOwner)
 
-	mOwner, mOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.mission.alpha", "mission.status.phase")
+	mOwner, mOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.mission.alpha", missionStatusPhasePredicate)
 	require.NoError(t, err)
 	require.True(t, mOK)
 	require.Equal(t, "rule-pack.mission-ops.v1", mOwner)
@@ -302,7 +318,7 @@ func missionContract2() projection.Contract {
 		EntityPattern: "acme.ops.robotics.gcs.sensor.*",
 		Groups: []projection.PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{"sensor.status.calibrated"},
+			Predicates: []string{sensorStatusCalibratedPredicate},
 		}},
 	}
 }

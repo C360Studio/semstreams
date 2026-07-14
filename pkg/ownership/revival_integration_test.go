@@ -103,7 +103,7 @@ func TestIntegration_WatchRevival_NoQuiesceOnBenignBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureBuckets B: %v", err)
 	}
-	if err := regB.RegisterOwner(ctx, reg_("benign-bump-other", "c360.other.*.*.*.*", "other.predicate")); err != nil {
+	if err := regB.RegisterOwner(ctx, reg_("benign-bump-other", "c360.other.*.*.*.*", "test.value.p")); err != nil {
 		t.Fatalf("regB RegisterOwner: %v", err)
 	}
 

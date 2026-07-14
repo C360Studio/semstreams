@@ -235,7 +235,7 @@ func TestIntegration_TemporalIndexAccumulation(t *testing.T) {
 		state := graph.EntityState{
 			ID: entityID,
 			Triples: []message.Triple{
-				{Subject: entityID, Predicate: "test.value", Object: i, Source: "test", Timestamp: now},
+				{Subject: entityID, Predicate: "test.temporal.value", Object: i, Source: "test", Timestamp: now},
 			},
 			MessageType: message.Type{Domain: "test", Category: "entity", Version: "v1"},
 			Version:     1,

@@ -98,7 +98,7 @@ func TestIntegration_ManagerOwnership_DisjointOwnersCoexist(t *testing.T) {
 	other := lifecycle{}.fixtureWorkflow()
 	other.Name = "other"
 	other.EntityIDPattern = "*.*.lifecycle.gcs.sensor.*"
-	other.PhasePredicate = "sensor.phase"
+	other.PhasePredicate = "sensor.lifecycle.phase"
 	require.NoError(t, mgr.Register(other))
 
 	missionOwner, ok, err := reg.OwnerOf(ctx, ownershipTestEntity, "mission.lifecycle.phase")
@@ -106,7 +106,7 @@ func TestIntegration_ManagerOwnership_DisjointOwnersCoexist(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "fixture", missionOwner)
 
-	sensorOwner, ok, err := reg.OwnerOf(ctx, "c360.p.lifecycle.gcs.sensor.001", "sensor.phase")
+	sensorOwner, ok, err := reg.OwnerOf(ctx, "c360.p.lifecycle.gcs.sensor.001", "sensor.lifecycle.phase")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "other", sensorOwner)
