@@ -342,6 +342,18 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 		return getErr == nil
 	}, 3*time.Second, 25*time.Millisecond, "outgoing index should exist before deletion")
 
+	// Seed a populated INCOMING row that is physically target-prefixed by entityID
+	// but semantically owned by otherSourceID. PR524's legacy hard-delete can drive
+	// this cleanup with the physical target prefix "entityID.".
+	// Source-axis cleanup across arbitrary target prefixes is intentionally not
+	// asserted here; it remains behind graph-index-fixed-arity-reconciliation's
+	// benchmark and ADR decision.
+	otherSourceID := "c360.platform.robotics.mav1.sensor.002"
+	require.NoError(t, graphIndex.UpdateIncomingIndex(ctx, entityID, otherSourceID, "core.relationship.related"))
+	require.Eventually(t, func() bool {
+		return len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 1
+	}, 3*time.Second, 25*time.Millisecond, "incoming-as-target row should exist before deletion")
+
 	// Delete entity from ENTITY_STATES
 	err = entityBucket.Delete(ctx, entityID)
 	require.NoError(t, err)
@@ -351,32 +363,17 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 		if !natsclient.IsKVNotFoundError(outgoingErr) {
 			return false
 		}
-		keys, filterErr := graphIndex.incomingBucket.KeysByFilter(ctx, incomingIndexSourceFilter(entityID))
-		return filterErr == nil && len(keys) == 0
-	}, 3*time.Second, 25*time.Millisecond, "source-owned index rows were not retracted")
+		return len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 0
+	}, 3*time.Second, 25*time.Millisecond, "current target-prefix index rows were not retracted")
 
 	// Verify indexes were removed
 	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
 	assert.True(t, natsclient.IsKVNotFoundError(err), "outgoing index should be deleted, got: %v", err)
 
-	// Entity-owned cleanup: the delete path prefix-scans "entityID." and removes the
-	// deleted entity's own incoming-as-TARGET keyset. Nothing targets this entity, so
-	// that set is empty either way — this only proves the prefix-scan-delete runs without
-	// resurrecting a keyset, not that a populated one is cleaned.
-	ownIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
-	assert.Empty(t, ownIncoming, "the deleted entity's own incoming-as-target keyset should be gone")
-
-	// Source-owner cleanup uses a fixed-position filter across every target.
-	targetIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
-	staleReciprocal := false
-	for _, e := range targetIncoming {
-		if e.FromEntityID == entityID {
-			staleReciprocal = true
-			break
-		}
-	}
-	assert.False(t, staleReciprocal,
-		"deleting the source must retract its reciprocal edge on every target")
+	// Physical target-prefix cleanup: the delete path prefix-scans "entityID." and
+	// removes the populated incoming-as-TARGET keyset seeded above.
+	targetPrefixedIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
+	assert.Empty(t, targetPrefixedIncoming, "the physical entityID target-prefix keyset should be gone")
 }
 
 // TestIntegration_MultipleRelationships tests indexing entities with multiple relationships
