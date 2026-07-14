@@ -28,11 +28,11 @@ const (
 
 // CommunityStorageConfig configures community storage behavior
 type CommunityStorageConfig struct {
-	// CreateTriples enables creation of member_of triples during SaveCommunity
+	// CreateTriples enables creation of member-of triples during SaveCommunity
 	CreateTriples bool
 
 	// TriplePredicate specifies the predicate to use for community membership triples
-	// Default: "graph.community.member_of"
+	// Default: "graph.community.member-of"
 	TriplePredicate string
 }
 
@@ -68,7 +68,7 @@ func NewNATSCommunityStorage(kv jetstream.KeyValue) *NATSCommunityStorage {
 func NewNATSCommunityStorageWithConfig(kv jetstream.KeyValue, config CommunityStorageConfig) *NATSCommunityStorage {
 	// Apply default predicate if not specified
 	if config.CreateTriples && config.TriplePredicate == "" {
-		config.TriplePredicate = "graph.community.member_of"
+		config.TriplePredicate = "graph.community.member-of"
 	}
 
 	storage := &NATSCommunityStorage{
@@ -117,7 +117,7 @@ func (s *NATSCommunityStorage) SaveCommunity(ctx context.Context, community *Com
 		s.testStore[community.ID] = community
 	}
 
-	// Create member_of triples if enabled
+	// Create member-of triples if enabled
 	if s.config.CreateTriples {
 		triples := s.createCommunityTriples(community)
 		s.createdTriples = append(s.createdTriples, triples...)

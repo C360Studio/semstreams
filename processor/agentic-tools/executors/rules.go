@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // validRuleID matches kebab-case identifiers: lowercase alphanumeric with hyphens.
@@ -33,6 +35,7 @@ func NewRuleExecutor(manager RuleManager) *RuleExecutor {
 
 // ListTools returns the rule management tool definitions.
 func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
+	ruleSchema := ruleAuthoringSchema()
 	return []agentic.ToolDefinition{
 		{
 			Name:        "create_rule",
@@ -44,10 +47,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 						"type":        "string",
 						"description": "Unique rule identifier (e.g. 'escalate-budget-exceeded')",
 					},
-					"rule": map[string]any{
-						"type":        "object",
-						"description": "Full rule definition JSON matching the rule schema (type, name, conditions, logic, on_enter, etc.)",
-					},
+					"rule": ruleSchema,
 				},
 				"required": []string{"rule_id", "rule"},
 			},
@@ -62,10 +62,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 						"type":        "string",
 						"description": "ID of the rule to update",
 					},
-					"rule": map[string]any{
-						"type":        "object",
-						"description": "Updated rule definition JSON",
-					},
+					"rule": ruleSchema,
 				},
 				"required": []string{"rule_id", "rule"},
 			},
@@ -106,6 +103,57 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 				"required": []string{"rule_id"},
 			},
 		},
+	}
+}
+
+// ruleAuthoringSchema constrains the concrete predicate-bearing fields in an
+// agent-authored rule. Other action-specific properties remain open, but a tool
+// client cannot submit an arbitrary graph predicate through the JSON Schema.
+// SaveRule enforces the same registry again at the server boundary.
+func ruleAuthoringSchema() map[string]any {
+	actionPredicates := vocabulary.ListRegisteredPredicates()
+	sort.Strings(actionPredicates)
+	conditionPredicates := make([]string, 0, len(actionPredicates))
+	for _, predicate := range actionPredicates {
+		if !vocabulary.IsRuleOpaque(predicate) {
+			conditionPredicates = append(conditionPredicates, predicate)
+		}
+	}
+	condition := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"field": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "string", "enum": conditionPredicates},
+					map[string]any{"type": "string", "pattern": `^\$[A-Za-z][A-Za-z0-9_.-]*$`},
+				},
+			},
+		},
+		"required":             []string{"field"},
+		"additionalProperties": true,
+	}
+	action := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"predicate": map[string]any{"type": "string", "enum": actionPredicates},
+		},
+		"additionalProperties": true,
+	}
+	actionList := func() map[string]any {
+		return map[string]any{"type": "array", "items": action}
+	}
+	return map[string]any{
+		"type":        "object",
+		"description": "Full rule definition. Graph fields use declared predicates; message/state pseudo-fields begin with $.",
+		"properties": map[string]any{
+			"conditions":  map[string]any{"type": "array", "items": condition},
+			"on_enter":    actionList(),
+			"on_exit":     actionList(),
+			"while_true":  actionList(),
+			"on_recovery": actionList(),
+			"actions":     actionList(),
+		},
+		"additionalProperties": true,
 	}
 }
 

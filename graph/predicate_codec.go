@@ -5,16 +5,17 @@ import "encoding/hex"
 // EncodePredicateToken hex-encodes a predicate for use as a single key token in
 // the INCOMING / NAME / CONTEXT composite-key reverse indexes (gh#474 Codex P1a).
 //
-// graph-ingest accepts any non-empty predicate, including values that are not
-// NATS-KV-key-safe (spaces, unicode, wildcard tokens). A raw predicate token would
-// make those Puts fail while the hashed PREDICATE_INDEX and raw ENTITY_STATES /
-// OUTGOING paths succeed — silently desyncing the forward and reverse views.
+// Canonical predicates are validated before persistence and are NATS-key-safe,
+// but their three semantic segments contain two dots. Encoding the raw predicate
+// in a composite key would consume three physical tokens and change the fixed
+// token positions and arity used by INCOMING / NAME / CONTEXT filters.
 //
 // Hex (not a hash) is deliberate: it is reversible, so a reader reconstructs the
 // exact predicate from the key with no per-row value lookup — keeping INCOMING a
 // pure prefix key-scan on its hot path. Hex is a fixed-alphabet ([0-9a-f]),
-// dot-free encoding, so an encoded predicate is always exactly one KV-safe token
-// regardless of the dots or unsafe bytes in the original.
+// dot-free encoding, so an encoded predicate is always exactly one KV-safe token.
+// This is only a physical codec; it provides no compatibility path and does not
+// weaken canonical predicate validation.
 //
 // Shared here (not in the graph-index package) because graph-clustering and other
 // reverse-index readers reconstruct these keys and must decode with the identical

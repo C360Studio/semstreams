@@ -34,12 +34,12 @@ func TestOwnerClaim_Validate(t *testing.T) {
 }
 
 func TestForeignEdgeClaim_Validate(t *testing.T) {
-	good := fe("cs-api", "sensorml.component.isHostedBy", "c360.semconnect.systems.csapi.system.*", EdgeNoBirthStub)
+	good := fe("cs-api", "sensorml.component.is-hosted-by", "c360.semconnect.systems.csapi.system.*", EdgeNoBirthStub)
 	if err := good.Validate(); err != nil {
 		t.Fatalf("well-formed foreign-edge claim should validate: %v", err)
 	}
 	// Empty target pattern (match-any) is valid.
-	if err := fe("o", "p", "", EdgeConditional).Validate(); err != nil {
+	if err := fe("o", "test.edge.p", "", EdgeConditional).Validate(); err != nil {
 		t.Errorf("empty target pattern should be valid (match-any): %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 		{"empty owner", fe("", "p", "", EdgeConditional)},
 		{"empty predicate", fe("o", "", "", EdgeConditional)},
 		{"wildcard predicate", fe("o", "p.*", "", EdgeConditional)},
-		{"invalid mode", fe("o", "p", "", EdgeMode("bogus"))},
+		{"invalid mode", fe("o", "test.edge.p", "", EdgeMode("bogus"))},
 		{"bad target pattern", fe("o", "p", "a.b.c", EdgeConditional)},
 	}
 	for _, tt := range bad {
@@ -63,7 +63,7 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 }
 
 func TestCoordinationWaiver_Validate(t *testing.T) {
-	good := CoordinationWaiver{Owner: "a", With: "b", Predicates: []string{"p"}, Reason: "because"}
+	good := CoordinationWaiver{Owner: "a", With: "b", Predicates: []string{"test.value.p"}, Reason: "because"}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("well-formed waiver should validate: %v", err)
 	}
@@ -71,9 +71,9 @@ func TestCoordinationWaiver_Validate(t *testing.T) {
 		name string
 		w    CoordinationWaiver
 	}{
-		{"no with", CoordinationWaiver{Owner: "a", Predicates: []string{"p"}, Reason: "r"}},
+		{"no with", CoordinationWaiver{Owner: "a", Predicates: []string{"test.value.p"}, Reason: "r"}},
 		{"no predicates", CoordinationWaiver{Owner: "a", With: "b", Reason: "r"}},
-		{"no reason", CoordinationWaiver{Owner: "a", With: "b", Predicates: []string{"p"}}},
+		{"no reason", CoordinationWaiver{Owner: "a", With: "b", Predicates: []string{"test.value.p"}}},
 	}
 	for _, tt := range bad {
 		t.Run(tt.name, func(t *testing.T) {

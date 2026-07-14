@@ -299,7 +299,7 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 					Triples: []message.Triple{
 						{
 							Subject:   id,
-							Predicate: "test.predicate",
+							Predicate: "test.entity.predicate",
 							Object:    "test-value",
 							Timestamp: time.Now(),
 						},

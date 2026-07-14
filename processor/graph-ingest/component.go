@@ -48,6 +48,9 @@ var (
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
 
+	predicateContractRejectionsOnce sync.Once
+	predicateContractRejectionsVec  *prometheus.CounterVec
+
 	stubRestampsOnce    sync.Once
 	stubRestampsCounter prometheus.Counter
 
@@ -146,6 +149,23 @@ func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.C
 		}
 	})
 	return mutationRejectionsVec
+}
+
+func getPredicateContractRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	predicateContractRejectionsOnce.Do(func() {
+		predicateContractRejectionsVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "predicate_contract_rejections_total",
+			Help:      "Canonical predicate contract rejections, counted once per unique bounded reason in a rejected candidate",
+		}, []string{"lane", "reason"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "predicate_contract_rejections_total", predicateContractRejectionsVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(predicateContractRejectionsVec)
+		}
+	})
+	return predicateContractRejectionsVec
 }
 
 // getStubRestampsMetric returns the process-wide stub-restamp counter (gh#435):
@@ -529,10 +549,11 @@ type Component struct {
 	logger     *slog.Logger
 
 	// Domain resources
-	entityBucket *natsclient.KVStore            // KV operations with CAS support
-	entityCache  cache.Cache[graph.EntityState] // Read-through cache for query handlers
-	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
-	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
+	entityBucket      *natsclient.KVStore            // KV operations with CAS support
+	entityStateBucket jetstream.KeyValue             // raw bucket for the process-lifetime query contract guard
+	entityCache       cache.Cache[graph.EntityState] // Read-through cache for query handlers
+	suffixBucket      *natsclient.KVStore            // KV suffix index: suffix → fullID
+	suffixCache       cache.Cache[string]            // TTL cache for suffix resolution
 
 	// ADR-056 Decision-4 T2-seam + PR-3 owner-lease check: read-only view of
 	// registered ForeignEdgeClaims and owning OwnerClaims. nil when OWNER_CLAIMS
@@ -555,12 +576,21 @@ type Component struct {
 	hierarchyInference *inference.HierarchyInference
 
 	// Lifecycle state
-	mu          sync.RWMutex
-	running     bool
-	initialized bool
-	startTime   time.Time
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+	mu                      sync.RWMutex
+	running                 bool
+	initialized             bool
+	startTime               time.Time
+	wg                      sync.WaitGroup
+	cancel                  context.CancelFunc
+	entityStateWatcher      jetstream.KeyWatcher
+	entityStatePoison       atomic.Pointer[graph.StateContractError]
+	entityWatchLost         atomic.Bool
+	entityBootstrapStarted  atomic.Bool
+	entityBootstrapComplete atomic.Bool
+	entityQueryMu           sync.RWMutex
+	// beforeEntityQueryResponse is a deterministic test seam. Production leaves
+	// it nil; every successful query still passes through the final response gate.
+	beforeEntityQueryResponse func([]byte)
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -568,19 +598,21 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
 
-	// Prometheus metrics (for e2e test compatibility with datamanager metrics)
-	entitiesUpdated        prometheus.Counter
-	indexingProfileDefault *prometheus.CounterVec
-	mutationRejections     *prometheus.CounterVec
-	stubRestamps           prometheus.Counter
-	foreignEdgeUnclaimed   *prometheus.CounterVec
-	foreignEdgeDropped     *prometheus.CounterVec
-	ownerLeaseMismatch     *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
-	processingDuration     prometheus.Histogram   // gh#480 per-message apply time (processing half)
-	ingestLag              prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
-	redeliveriesDropped    prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
-	casRetries             prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
-	metricsRegistry        *metric.MetricsRegistry
+	// Prometheus metrics. The historical exported series name remains stable
+	// because dashboards and operator alerts consume it as an external contract.
+	entitiesUpdated             prometheus.Counter
+	indexingProfileDefault      *prometheus.CounterVec
+	mutationRejections          *prometheus.CounterVec
+	predicateContractRejections *prometheus.CounterVec
+	stubRestamps                prometheus.Counter
+	foreignEdgeUnclaimed        *prometheus.CounterVec
+	foreignEdgeDropped          *prometheus.CounterVec
+	ownerLeaseMismatch          *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
+	processingDuration          prometheus.Histogram   // gh#480 per-message apply time (processing half)
+	ingestLag                   prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
+	redeliveriesDropped         prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
+	casRetries                  prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
+	metricsRegistry             *metric.MetricsRegistry
 
 	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
 	// ingest by entity ID so same-entity updates stay ordered while different
@@ -640,23 +672,24 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Create component
 	comp := &Component{
-		name:                   "graph-ingest",
-		config:                 config,
-		decoder:                message.NewDecoder(deps.PayloadRegistry),
-		natsClient:             natsClient,
-		logger:                 logger,
-		entitiesUpdated:        getEntitiesUpdatedMetric(deps.MetricsRegistry),
-		indexingProfileDefault: getIndexingProfileDefaultMetric(deps.MetricsRegistry),
-		mutationRejections:     getMutationRejectionsMetric(deps.MetricsRegistry),
-		stubRestamps:           getStubRestampsMetric(deps.MetricsRegistry),
-		foreignEdgeUnclaimed:   getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
-		foreignEdgeDropped:     getForeignEdgeDroppedMetric(deps.MetricsRegistry),
-		ownerLeaseMismatch:     getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
-		processingDuration:     getProcessingDurationMetric(deps.MetricsRegistry),
-		ingestLag:              getIngestLagMetric(deps.MetricsRegistry),
-		redeliveriesDropped:    getRedeliveriesDroppedMetric(deps.MetricsRegistry),
-		casRetries:             getCasRetriesMetric(deps.MetricsRegistry),
-		metricsRegistry:        deps.MetricsRegistry,
+		name:                        "graph-ingest",
+		config:                      config,
+		decoder:                     message.NewDecoder(deps.PayloadRegistry),
+		natsClient:                  natsClient,
+		logger:                      logger,
+		entitiesUpdated:             getEntitiesUpdatedMetric(deps.MetricsRegistry),
+		indexingProfileDefault:      getIndexingProfileDefaultMetric(deps.MetricsRegistry),
+		mutationRejections:          getMutationRejectionsMetric(deps.MetricsRegistry),
+		predicateContractRejections: getPredicateContractRejectionsMetric(deps.MetricsRegistry),
+		stubRestamps:                getStubRestampsMetric(deps.MetricsRegistry),
+		foreignEdgeUnclaimed:        getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
+		foreignEdgeDropped:          getForeignEdgeDroppedMetric(deps.MetricsRegistry),
+		ownerLeaseMismatch:          getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
+		processingDuration:          getProcessingDurationMetric(deps.MetricsRegistry),
+		ingestLag:                   getIngestLagMetric(deps.MetricsRegistry),
+		redeliveriesDropped:         getRedeliveriesDroppedMetric(deps.MetricsRegistry),
+		casRetries:                  getCasRetriesMetric(deps.MetricsRegistry),
+		metricsRegistry:             deps.MetricsRegistry,
 	}
 
 	// Initialize last activity
@@ -748,13 +781,20 @@ func (c *Component) Health() component.HealthStatus {
 
 	if c.running {
 		status = "running"
-		if errorCount > 0 {
+		if state := c.entityStatePoison.Load(); state != nil {
+			status = graph.IndexStateResetRequired
+			lastErr = state.Error()
+		} else if c.entityWatchLost.Load() {
+			status = graph.IndexStateDegraded
+			lastErr = graph.ErrorCodeIndexNotReady + ": ENTITY_STATES contract watcher unavailable"
+		} else if errorCount > 0 {
 			lastErr = "errors occurred during processing"
 		}
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running && errorCount == 0,
+		Healthy: c.running && errorCount == 0 && c.entityStatePoison.Load() == nil &&
+			!c.entityWatchLost.Load() && (!c.entityBootstrapStarted.Load() || c.entityBootstrapComplete.Load()),
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
 		LastError:  lastErr,
@@ -884,6 +924,12 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Query safety is independent from graph-ingest's write role. Drain the
+	// authoritative snapshot synchronously and keep the same watcher live. A
+	// watcher transport failure degrades only queries; ingest writers still boot
+	// so operators can repair state through canonical writes before restart.
+	c.startEntityStateGuard(ctx, c.entityStateBucket)
+
 	// Initialize lifecycle reporter (throttled for high-throughput ingestion)
 	c.initLifecycleReporter(ctx)
 
@@ -948,6 +994,8 @@ func (c *Component) Stop(timeout time.Duration) error {
 	submitCancel := c.ingestSubmitCancel
 	poolCancel := c.ingestPoolCancel
 	consumeCancel := c.cancel
+	entityStateWatcher := c.entityStateWatcher
+	c.entityStateWatcher = nil
 	c.mu.Unlock()
 
 	// ADR-072 M3 shutdown ordering, BEFORE tearing down KV/NATS:
@@ -962,6 +1010,9 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 	if consumeCancel != nil {
 		consumeCancel()
+	}
+	if entityStateWatcher != nil {
+		_ = entityStateWatcher.Stop()
 	}
 	if pool != nil {
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
@@ -1024,6 +1075,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "KV bucket creation")
 	}
 	c.entityBucket = c.natsClient.NewKVStore(bucket)
+	c.entityStateBucket = bucket
 
 	// D1 guardrail (ADR-068): ENTITY_STATES is get-or-create, so another process
 	// could have won the race with a TTL/size cap (e.g. a stale graph-query TTL
@@ -1107,6 +1159,105 @@ func (c *Component) initStorage(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// startEntityStateGuard synchronously validates the current ENTITY_STATES
+// snapshot and then continues on the same WatchAll stream. It intentionally
+// does not fail graph-ingest startup on transport errors: this component is the
+// canonical writer and must remain available, while every query fails closed.
+func (c *Component) startEntityStateGuard(ctx context.Context, bucket jetstream.KeyValue) {
+	c.entityBootstrapStarted.Store(true)
+	watcher, err := bucket.WatchAll(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.markEntityWatchLost()
+			c.logger.Error("failed to start ENTITY_STATES query contract watcher", slog.Any("error", err))
+		}
+		return
+	}
+	c.entityStateWatcher = watcher
+
+	updates := watcher.Updates()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = watcher.Stop()
+			return
+		case entry, ok := <-updates:
+			if !ok {
+				_ = watcher.Stop()
+				if ctx.Err() == nil {
+					c.markEntityWatchLost()
+				}
+				return
+			}
+			if entry == nil {
+				c.entityBootstrapComplete.Store(true)
+				c.wg.Add(1)
+				go c.runEntityStateGuard(ctx, watcher, updates)
+				return
+			}
+			c.validateEntityStateGuardEntry(entry)
+		}
+	}
+}
+
+func (c *Component) runEntityStateGuard(
+	ctx context.Context,
+	watcher jetstream.KeyWatcher,
+	updates <-chan jetstream.KeyValueEntry,
+) {
+	defer c.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = watcher.Stop()
+			return
+		case entry, ok := <-updates:
+			if !ok {
+				_ = watcher.Stop()
+				if ctx.Err() == nil {
+					c.markEntityWatchLost()
+				}
+				return
+			}
+			if entry != nil {
+				c.validateEntityStateGuardEntry(entry)
+			}
+		}
+	}
+}
+
+func (c *Component) validateEntityStateGuardEntry(entry jetstream.KeyValueEntry) {
+	if graph.IsKVTombstone(entry.Operation()) {
+		return
+	}
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var contractErr *graph.StateContractError
+		if !errors.As(err, &contractErr) {
+			contractErr = &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity, Err: err}
+		}
+		latched := c.latchEntityStatePoison(contractErr)
+		if latched {
+			c.logger.Error("authoritative graph state requires reset; graph-ingest queries blocked",
+				slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+				slog.String("reason", string(contractErr.Reason)))
+		}
+	}
+}
+
+func (c *Component) latchEntityStatePoison(contractErr *graph.StateContractError) bool {
+	c.entityQueryMu.Lock()
+	latched := c.entityStatePoison.CompareAndSwap(nil, contractErr)
+	c.entityQueryMu.Unlock()
+	return latched
+}
+
+func (c *Component) markEntityWatchLost() {
+	c.entityQueryMu.Lock()
+	c.entityWatchLost.Store(true)
+	c.entityQueryMu.Unlock()
 }
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
@@ -1393,6 +1544,13 @@ func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityStat
 // path. Exposed as a method so the merge+regroup wire is testable end-to-end
 // without standing up the decoder.
 func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) error {
+	// Preflight the complete Graphable projection before splitting foreign
+	// subjects. This guarantees a malformed foreign edge cannot commit the
+	// primary entity first.
+	if err := graph.ValidateEntityPredicates(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate projected predicates")
+	}
+
 	// ADR-055 §5 T2 + ADR-056 Decision 4: a Graphable may legitimately emit
 	// cross-entity edges whose Subject != EntityID() (sensorml inverse isHostedBy,
 	// federation/objectstore pass-throughs); extractEntityFromMessage files every
@@ -2027,9 +2185,9 @@ func validateEntityID(id string) error {
 }
 
 // CreateEntity creates a new entity in the graph using upsert (Put)
-// semantics. Existing callers that need last-writer-wins behavior
-// (graph/datamanager edge ops) stay on this path. New atomic-create
-// callers (the NATS mutation handlers' POST 409 path) use
+// semantics. Existing callers that need last-writer-wins behavior stay
+// on this path. Atomic-create callers (the NATS mutation handlers' POST
+// 409 path) use
 // CreateEntityStrict, which fails fast with natsclient.ErrKVKeyExists
 // when the ID is already present.
 func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState) error {
@@ -2114,7 +2272,7 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 			// ADR-054: first write is entity birth — stamp the profile
 			// (explicit-if-declared via IndexingProfiler, else floor).
 			c.reconcileIndexingProfile(entity)
-			data, err := json.Marshal(entity)
+			data, err := graph.MarshalEntityState(entity)
 			if err == nil {
 				bytesWritten = len(data)
 			}
@@ -2124,7 +2282,7 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		// Hierarchy triples are NOT re-applied — they landed on the
 		// original create and would only produce duplicates here.
 		var existing graph.EntityState
-		if err := json.Unmarshal(current, &existing); err != nil {
+		if err := graph.UnmarshalEntityState(current, &existing); err != nil {
 			return nil, err // non-retryable
 		}
 		// gh#466: predicate-level merge (replace per (subject,predicate)), NOT raw
@@ -2157,7 +2315,7 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		c.reconcileIndexingProfile(&existing)
 		existing.Version++
 		existing.UpdatedAt = time.Now()
-		data, err := json.Marshal(&existing)
+		data, err := graph.MarshalEntityState(&existing)
 		if err == nil {
 			bytesWritten = len(data)
 		}
@@ -2241,7 +2399,7 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	c.reconcileIndexingProfile(entity)
 
 	// Serialize entity (now includes hierarchy triples if enabled)
-	data, err := json.Marshal(entity)
+	data, err := graph.MarshalEntityState(entity)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
@@ -2390,8 +2548,7 @@ func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, 
 
 	// Entity doesn't exist - create an envelope-bearing stub.
 	// Version is set to 1 to match the invariant held by every other
-	// EntityState write path (see component.go:872, messagemanager/
-	// processor.go:276, datamanager/manager.go:792). When the real entity
+	// canonical EntityState write path. When the real entity
 	// later arrives, the merge path increments Version to 2 and overwrites
 	// MessageType with the real producer's (component.go:1410).
 	now := time.Now()
@@ -2407,7 +2564,7 @@ func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, 
 		},
 	}
 
-	data, err := json.Marshal(stub)
+	data, err := graph.MarshalEntityState(stub)
 	if err != nil {
 		return fmt.Errorf("marshal stub entity: %w", err)
 	}
@@ -2451,7 +2608,7 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 	}
 
 	// Serialize entity
-	data, err := json.Marshal(entity)
+	data, err := graph.MarshalEntityState(entity)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "UpdateEntity", "entity serialization")
@@ -2490,8 +2647,7 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 //
 // Used by the mutation handlers' must-exist contract
 // (graph.mutation.entity.update / .update_with_triples). UpdateEntity
-// itself stays Put-based for callers (e.g. datamanager edge ops) that
-// want last-writer-wins.
+// itself stays Put-based for callers that want last-writer-wins.
 func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.EntityState, expectedRev uint64) error {
 	if entity == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateEntityAtRevision", "entity cannot be nil")
@@ -2505,7 +2661,7 @@ func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.En
 		return errs.Wrap(err, "Component", "updateEntityAtRevision", "context cancelled")
 	}
 
-	data, err := json.Marshal(entity)
+	data, err := graph.MarshalEntityState(entity)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "updateEntityAtRevision", "entity serialization")
@@ -2596,6 +2752,9 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 	if triple.Predicate == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriple", "triple predicate cannot be empty")
 	}
+	if _, err := vocabulary.ParsePredicate(triple.Predicate); err != nil {
+		return errs.WrapInvalid(err, "Component", "AddTriple", "validate triple predicate")
+	}
 
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -2608,7 +2767,7 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 
 		if len(current) > 0 {
 			// Deserialize existing entity
-			if err := json.Unmarshal(current, &entity); err != nil {
+			if err := graph.UnmarshalEntityState(current, &entity); err != nil {
 				return nil, err // Non-retryable
 			}
 		} else {
@@ -2623,7 +2782,7 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 		entity.Version++
 		entity.UpdatedAt = time.Now()
 
-		return json.Marshal(&entity)
+		return graph.MarshalEntityState(&entity)
 	})
 
 	if err != nil {
@@ -2659,15 +2818,15 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 		return 0, nil, nil
 	}
 
-	// Validate before any write. Reject the whole batch on the first
-	// malformed triple — partial validation would be surprising.
+	// Validate before any write. Subject errors retain their positional detail;
+	// predicate errors are returned as one deterministic all-violations result.
 	for i, t := range triples {
 		if t.Subject == "" {
 			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", i))
 		}
-		if t.Predicate == "" {
-			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] predicate cannot be empty", i))
-		}
+	}
+	if contractErr := graph.ValidateEntityPredicates(&graph.EntityState{Triples: triples}); contractErr != nil {
+		return 0, nil, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch predicates")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -2716,7 +2875,7 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			var entity graph.EntityState
 
 			if len(current) > 0 {
-				if err := json.Unmarshal(current, &entity); err != nil {
+				if err := graph.UnmarshalEntityState(current, &entity); err != nil {
 					return nil, err // Non-retryable
 				}
 			} else {
@@ -2730,7 +2889,7 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			entity.Version++
 			entity.UpdatedAt = time.Now()
 
-			return json.Marshal(&entity)
+			return graph.MarshalEntityState(&entity)
 		})
 
 		if casErr != nil {
@@ -2803,7 +2962,7 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 
 		// Deserialize existing entity
 		var entity graph.EntityState
-		if err := json.Unmarshal(current, &entity); err != nil {
+		if err := graph.UnmarshalEntityState(current, &entity); err != nil {
 			return nil, err // Non-retryable
 		}
 
@@ -2824,7 +2983,7 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 		entity.Version++
 		entity.UpdatedAt = time.Now()
 
-		return json.Marshal(&entity)
+		return graph.MarshalEntityState(&entity)
 	})
 
 	// Handle errors - ErrKVKeyNotFound means entity was deleted, which is fine

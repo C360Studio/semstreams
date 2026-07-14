@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph/geo/geojson"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -65,6 +66,9 @@ type boundsRequest struct {
 
 // handleQueryBoundsNATS handles spatial bounds queries via NATS request/reply
 func (c *Component) handleQueryBoundsNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.ensureBootstrapReady(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -88,11 +92,14 @@ func (c *Component) handleQueryBoundsNATS(ctx context.Context, data []byte) ([]b
 		var err error
 		keys, err = c.spatialBucket.Keys(ctx)
 		if err != nil {
-			return json.Marshal([]SpatialResult{})
+			return nil, errs.WrapTransient(err, "Component", "handleQueryBoundsNATS", "list spatial index keys")
 		}
 	}
 
-	results := c.collectSpatialResults(ctx, keys, req)
+	results, err := c.collectSpatialResults(ctx, keys, req)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "Component", "handleQueryBoundsNATS", "fetch spatial index cells")
+	}
 	return json.Marshal(results)
 }
 
@@ -106,15 +113,16 @@ type spatialCellData struct {
 }
 
 // collectSpatialResults fetches spatial cells concurrently and filters entities within bounds.
-func (c *Component) collectSpatialResults(ctx context.Context, keys []string, req boundsRequest) []SpatialResult {
+func (c *Component) collectSpatialResults(ctx context.Context, keys []string, req boundsRequest) ([]SpatialResult, error) {
 	if len(keys) == 0 {
-		return []SpatialResult{}
+		return []SpatialResult{}, nil
 	}
 
 	// Phase 1: Fetch all cells concurrently with bounded concurrency.
 	type fetchResult struct {
 		data spatialCellData
 		ok   bool
+		err  error
 	}
 	fetched := make([]fetchResult, len(keys))
 	sem := make(chan struct{}, spatialFetchConcurrency)
@@ -136,15 +144,28 @@ func (c *Component) collectSpatialResults(ctx context.Context, keys []string, re
 
 			entry, err := c.spatialBucket.Get(ctx, k)
 			if err != nil {
+				if !natsclient.IsKVNotFoundError(err) {
+					fetched[idx].err = err
+				}
 				return
 			}
 			var data spatialCellData
-			if json.Unmarshal(entry.Value(), &data) == nil {
-				fetched[idx] = fetchResult{data: data, ok: true}
+			if err := json.Unmarshal(entry.Value(), &data); err != nil {
+				fetched[idx].err = err
+				return
 			}
+			fetched[idx] = fetchResult{data: data, ok: true}
 		}(i, key)
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, fr := range fetched {
+		if fr.err != nil {
+			return nil, fr.err
+		}
+	}
 
 	// Phase 2: Filter entities within bounds (single-threaded, fast).
 	results := make([]SpatialResult, 0)
@@ -169,12 +190,12 @@ func (c *Component) collectSpatialResults(ctx context.Context, keys []string, re
 					Alt:  coords.Alt,
 				})
 				if len(results) >= req.Limit {
-					return results
+					return results, nil
 				}
 			}
 		}
 	}
-	return results
+	return results, nil
 }
 
 // geohashMultiplier returns the bin-size multiplier for the given precision level.
@@ -260,6 +281,9 @@ type polygonRequest struct {
 // per RFC 7946. Polygons spanning the antimeridian must be split
 // at ±180 by the caller; this handler does not auto-split.
 func (c *Component) handleQueryPolygonNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.ensureBootstrapReady(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -306,12 +330,15 @@ func (c *Component) handleQueryPolygonNATS(ctx context.Context, data []byte) ([]
 	} else {
 		ks, err := c.spatialBucket.Keys(ctx)
 		if err != nil {
-			return json.Marshal([]SpatialResult{})
+			return nil, errs.WrapTransient(err, "Component", "handleQueryPolygonNATS", "list spatial index keys")
 		}
 		keys = ks
 	}
 
-	results := c.collectSpatialResultsByPolygon(ctx, keys, poly, req.Limit)
+	results, err := c.collectSpatialResultsByPolygon(ctx, keys, poly, req.Limit)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "Component", "handleQueryPolygonNATS", "fetch spatial index cells")
+	}
 	return json.Marshal(results)
 }
 
@@ -321,14 +348,15 @@ func (c *Component) handleQueryPolygonNATS(ctx context.Context, data []byte) ([]
 // behind a filter callback because the filter shapes (rectangle vs
 // polygon) and limit-checking are mixed concerns and a callback
 // indirection would obscure the fast path.
-func (c *Component) collectSpatialResultsByPolygon(ctx context.Context, keys []string, poly geojson.Polygon, limit int) []SpatialResult {
+func (c *Component) collectSpatialResultsByPolygon(ctx context.Context, keys []string, poly geojson.Polygon, limit int) ([]SpatialResult, error) {
 	if len(keys) == 0 {
-		return []SpatialResult{}
+		return []SpatialResult{}, nil
 	}
 
 	type fetchResult struct {
 		data spatialCellData
 		ok   bool
+		err  error
 	}
 	fetched := make([]fetchResult, len(keys))
 	sem := make(chan struct{}, spatialFetchConcurrency)
@@ -350,23 +378,34 @@ func (c *Component) collectSpatialResultsByPolygon(ctx context.Context, keys []s
 
 			entry, err := c.spatialBucket.Get(ctx, k)
 			if err != nil {
+				if !natsclient.IsKVNotFoundError(err) {
+					fetched[idx].err = err
+				}
 				return
 			}
 			var data spatialCellData
-			if json.Unmarshal(entry.Value(), &data) == nil {
-				fetched[idx] = fetchResult{data: data, ok: true}
+			if err := json.Unmarshal(entry.Value(), &data); err != nil {
+				fetched[idx].err = err
+				return
 			}
+			fetched[idx] = fetchResult{data: data, ok: true}
 		}(i, key)
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	cells := make([]spatialCellData, 0, len(fetched))
 	for _, fr := range fetched {
+		if fr.err != nil {
+			return nil, fr.err
+		}
 		if fr.ok {
 			cells = append(cells, fr.data)
 		}
 	}
-	return filterEntitiesByPolygon(cells, poly, limit)
+	return filterEntitiesByPolygon(cells, poly, limit), nil
 }
 
 // filterEntitiesByPolygon iterates the entities across the given

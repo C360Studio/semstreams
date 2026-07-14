@@ -32,10 +32,10 @@ const (
 	PredStubMarker = "core.identity.stub"
 	// PredStubReferencedBy records the entity ID whose relationship triple
 	// caused this stub to be materialized.
-	PredStubReferencedBy = "core.identity.referenced_by"
+	PredStubReferencedBy = "core.identity.referenced-by"
 	// PredStubOwner records the stub's owner identity (the referencing entity's
 	// type key, or the framework referential producer for an untyped source).
-	PredStubOwner = "core.identity.stub_owner"
+	PredStubOwner = "core.identity.stub-owner"
 )
 
 // IsStub reports whether this entity is still a bare referential-integrity stub

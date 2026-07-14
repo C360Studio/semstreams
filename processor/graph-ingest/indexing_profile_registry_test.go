@@ -107,7 +107,7 @@ func TestIndexingProfile_AddTriple_DoesNotStamp(t *testing.T) {
 	profilesBefore := profileValues(esBefore)
 
 	// Now add a user triple via the triple.add path.
-	tr := message.Triple{Subject: id, Predicate: "evidence.note", Object: "v", Confidence: 1.0}
+	tr := message.Triple{Subject: id, Predicate: "evidence.note.value", Object: "v", Confidence: 1.0}
 	require.NoError(t, comp.AddTriple(ctx, tr))
 
 	esAfter := storedEntity(t, comp, id)

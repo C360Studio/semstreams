@@ -249,6 +249,10 @@ type Component struct {
 	// hop-2 worker's onTerminal callback. Non-nil once Start wires the watcher.
 	watermark            *revlag.Watermark
 	embeddingCompletions atomic.Uint64 // total terminal completions (stuck-detector)
+	resetState           atomic.Pointer[graph.StateContractError]
+	watchUnavailable     atomic.Bool
+	bootstrapStarted     atomic.Bool
+	bootstrapComplete    atomic.Bool
 
 	// Readiness stuck-detector state (ADR-066 §3), guarded by statusMu. Keyed off
 	// COMPLETIONS, not IndexedRevision: a slow single external-LLM call can pin
@@ -401,13 +405,21 @@ func (c *Component) Health() component.HealthStatus {
 
 	if c.running {
 		status = "running"
+		if c.resetState.Load() != nil {
+			status = graph.IndexStateResetRequired
+			lastErr = graph.ErrorCodeGraphStateResetRequired + ": " + c.graphStateResetReason()
+		} else if c.watchUnavailable.Load() {
+			status = graph.IndexStateDegraded
+			lastErr = graph.ErrorCodeIndexNotReady + ": ENTITY_STATES watcher unavailable"
+		}
 		if errorCount > 0 {
 			lastErr = "errors occurred during processing"
 		}
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running && errorCount == 0,
+		Healthy: c.running && errorCount == 0 && c.resetState.Load() == nil &&
+			!c.watchUnavailable.Load(),
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
 		LastError:  lastErr,
@@ -885,6 +897,11 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	}
 	c.entityStatesBucket = entityBucket
 
+	// From this point query handlers must fail closed until the same WatchAll
+	// watcher has validated its complete bootstrap snapshot.
+	c.watchUnavailable.Store(false)
+	c.bootstrapComplete.Store(false)
+	c.bootstrapStarted.Store(true)
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
 	return nil
@@ -897,6 +914,7 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 // watchEntityStates watches the ENTITY_STATES KV bucket and queues entities for embedding
 func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyValue) {
 	defer c.wg.Done()
+	c.bootstrapStarted.Store(true)
 
 	watcher, err := bucket.WatchAll(ctx)
 	if err != nil {
@@ -909,6 +927,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 		c.logger.Error("failed to start entity watcher",
 			slog.String("bucket", graph.BucketEntityStates),
 			slog.Any("error", err))
+		c.watchUnavailable.Store(true)
 		return
 	}
 	// NOTE: watcher.Stop() is called explicitly before each return, not via defer.
@@ -917,6 +936,10 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 
 	c.logger.Info("entity watcher started", slog.String("bucket", graph.BucketEntityStates))
 
+	// Build the private projection incrementally in constant space while queries
+	// remain gated. nil proves the complete snapshot valid. The same watcher stays
+	// attached for all later live updates, so there is no list/watch gap.
+	validating := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -925,41 +948,103 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 			return
 		case entry, ok := <-watcher.Updates():
 			if !ok {
-				// Channel closed, watcher stopped externally
 				watcher.Stop()
+				if ctx.Err() == nil {
+					c.watchUnavailable.Store(true)
+				}
 				return
 			}
 			if entry == nil {
-				// nil entry indicates initial state enumeration complete
+				if !validating {
+					continue
+				}
+				validating = false
+				if c.resetState.Load() != nil {
+					c.logger.Error("entity watcher bootstrap rejected",
+						slog.String("reason", c.graphStateResetReason()))
+					continue
+				}
+				c.bootstrapComplete.Store(true)
 				c.logger.Debug("entity watcher initial sync complete")
 				continue
 			}
 
-			// Record every delivered revision (update AND delete) as in-flight for
-			// the readiness watermark before dispatch (ADR-066 §3). observedHigh
-			// advances here; completion fires at the terminal (hop-1 skip or hop-2).
-			if c.watermark != nil {
-				c.watermark.Observe(entry.Revision(), entry.Key())
-			}
-
-			if entry.Operation() == jetstream.KeyValueDelete {
-				if c.entityCoalescer != nil {
-					c.entityCoalescer.Remove(entry.Key())
+			if validating {
+				if !graph.IsKVTombstone(entry.Operation()) {
+					c.validateEntityStateEntry(entry)
 				}
-				// A delete is terminal for embedding — nothing to generate. Its
-				// key-scoped completion also drains an earlier still-pending update
-				// the delete supersedes (ADR-066 §3).
-				c.completeEmbedding(entry.Key(), entry.Revision())
+				if c.resetState.Load() == nil {
+					c.applyEntityWatchEntry(ctx, entry)
+				}
 				continue
 			}
-
-			if c.entityCoalescer != nil {
-				c.entityCoalescer.Add(entry.Key())
-			} else {
-				c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
+			if c.resetState.Load() == nil {
+				c.applyEntityWatchEntry(ctx, entry)
 			}
 		}
 	}
+}
+
+func (c *Component) validateEntityStateEntry(entry jetstream.KeyValueEntry) {
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var stateErr *graph.StateContractError
+		if errors.As(err, &stateErr) {
+			c.latchGraphStateReset(stateErr.Reason)
+			return
+		}
+		c.latchGraphStateReset(graph.GraphStateReasonUnreadableEntity)
+	}
+}
+
+func (c *Component) applyEntityWatchEntry(ctx context.Context, entry jetstream.KeyValueEntry) {
+	// Record each valid delivered revision before dispatch. During bootstrap this
+	// advances only the private projection; queries remain gated until nil proves
+	// the complete snapshot valid.
+	if c.watermark != nil {
+		c.watermark.Observe(entry.Revision(), entry.Key())
+	}
+
+	if graph.IsKVTombstone(entry.Operation()) {
+		if c.entityCoalescer != nil {
+			c.entityCoalescer.Remove(entry.Key())
+		}
+		c.completeEmbedding(entry.Key(), entry.Revision())
+		return
+	}
+
+	if c.entityCoalescer != nil {
+		c.entityCoalescer.Add(entry.Key())
+	} else {
+		c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
+	}
+}
+
+func (c *Component) latchGraphStateReset(reason graph.StateResetReason) {
+	c.resetState.CompareAndSwap(nil, &graph.StateContractError{Reason: reason})
+}
+
+func (c *Component) graphStateResetReason() string {
+	if state := c.resetState.Load(); state != nil {
+		return string(state.Reason)
+	}
+	return string(graph.GraphStateReasonUnreadableEntity)
+}
+
+func (c *Component) ensureBootstrapReady() error {
+	if state := c.resetState.Load(); state != nil {
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+			state)
+	}
+	if c.watchUnavailable.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("embedding index not ready: ENTITY_STATES watcher is unavailable"))
+	}
+	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("embedding index not ready: ENTITY_STATES bootstrap is still validating"))
+	}
+	return nil
 }
 
 // processEntityBatch re-fetches each entity from KV and queues it for embedding.
@@ -1028,11 +1113,16 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 
 	// Parse entity state
 	var entityState graph.EntityState
-	if err := json.Unmarshal(data, &entityState); err != nil {
+	if err := graph.UnmarshalEntityState(data, &entityState); err != nil {
+		var stateErr *graph.StateContractError
+		if errors.As(err, &stateErr) {
+			c.latchGraphStateReset(stateErr.Reason)
+		}
 		c.logger.Warn("failed to unmarshal entity state",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		c.completeEmbedding(entityID, sourceRevision) // terminal: nothing to embed
+		// Do not complete this revision. Incompatible authoritative state is a
+		// sticky reset requirement, not a successful terminal skip.
 		return
 	}
 

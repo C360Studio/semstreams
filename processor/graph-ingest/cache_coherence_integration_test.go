@@ -50,12 +50,12 @@ func TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead(t *t
 	// Prime the cache: read once via the prefix path.
 	got := queryEntityViaPrefix(t, ctx, nc, id)
 	require.NotNil(t, got)
-	require.Nil(t, got.GetTriple("coh.marker"), "marker not present yet")
+	require.Nil(t, got.GetTriple("test.coherence.marker"), "marker not present yet")
 
 	// Commit a new predicate via update_with_triples (the executor's claim path).
 	updReq := graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: id},
-		AddTriples: []message.Triple{{Subject: id, Predicate: "coh.marker", Object: "v1", Timestamp: time.Now(), Confidence: 1.0}},
+		AddTriples: []message.Triple{{Subject: id, Predicate: "test.coherence.marker", Object: "v1", Timestamp: time.Now(), Confidence: 1.0}},
 	}
 	updData, err := json.Marshal(updReq)
 	require.NoError(t, err)
@@ -65,10 +65,10 @@ func TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead(t *t
 	// The very next prefix read MUST reflect the new marker (no stale cache).
 	got = queryEntityViaPrefix(t, ctx, nc, id)
 	require.NotNil(t, got)
-	require.NotNil(t, got.GetTriple("coh.marker"), "update_with_triples must be visible on the next prefix read (cache invalidated)")
+	require.NotNil(t, got.GetTriple("test.coherence.marker"), "update_with_triples must be visible on the next prefix read (cache invalidated)")
 
 	// Same contract for triple.add.
-	addReq := graph.AddTripleRequest{Triple: message.Triple{Subject: id, Predicate: "coh.added", Object: "v2", Timestamp: time.Now(), Confidence: 1.0}}
+	addReq := graph.AddTripleRequest{Triple: message.Triple{Subject: id, Predicate: "test.coherence.added", Object: "v2", Timestamp: time.Now(), Confidence: 1.0}}
 	addData, err := json.Marshal(addReq)
 	require.NoError(t, err)
 	_, err = nc.RequestClassified(ctx, "graph.mutation.triple.add", addData, 5*time.Second)
@@ -76,5 +76,5 @@ func TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead(t *t
 
 	got = queryEntityViaPrefix(t, ctx, nc, id)
 	require.NotNil(t, got)
-	require.NotNil(t, got.GetTriple("coh.added"), "triple.add must be visible on the next prefix read (cache invalidated)")
+	require.NotNil(t, got.GetTriple("test.coherence.added"), "triple.add must be visible on the next prefix read (cache invalidated)")
 }

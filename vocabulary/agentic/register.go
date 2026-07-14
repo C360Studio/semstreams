@@ -28,10 +28,50 @@ func Register() {
 	registerModelPredicates()
 	registerLoopPredicates()
 	registerStepPredicates()
+	registerCoordinatorPredicates()
+	registerOpsPredicates()
+	registerOpsConfigPredicates()
 	registerIdentityPredicates()
 	registerTodoPredicates()
 	registerScratchPredicates()
 	registerWebPredicates()
+}
+
+func registerCoordinatorPredicates() {
+	for _, predicate := range []string{
+		CoordinatorNextAction,
+		CoordinatorDecisionReason,
+		CoordinatorDecisionSAPCoerced,
+		CoordinatorDecisionSubtopics,
+		CoordinatorDecisionSynthetic,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
+
+func registerOpsPredicates() {
+	for _, predicate := range []string{
+		OpsDiagnosisFinding,
+		OpsDiagnosisRecommendation,
+		OpsDiagnosisConfidence,
+		OpsDiagnosisEvidence,
+		OpsDiagnosisObservedRole,
+		OpsDiagnosisSeverity,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
+
+func registerOpsConfigPredicates() {
+	for _, predicate := range []string{
+		OpsConfigAccuracy,
+		OpsConfigCostPerTask,
+		OpsConfigP95Latency,
+		OpsConfigActive,
+		OpsConfigParent,
+	} {
+		vocabulary.Register(predicate)
+	}
 }
 
 // registerScratchPredicates registers predicates for the scratchpad tool

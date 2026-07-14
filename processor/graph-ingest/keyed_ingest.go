@@ -145,14 +145,19 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 		return nil
 	}
 
-	// Apply. Today's semantics: a failed merge logs + counts + ack-drops (no guard
-	// stamp, so a redelivery re-attempts the apply).
+	// Apply. Structural contract violations are terminal for this immutable
+	// message; storage, timeout, and cancellation failures are retried.
 	start := time.Now()
 	ingestErr := c.ingestEntity(ctx, work.entity)
 	c.processingDuration.Observe(time.Since(start).Seconds())
 	if ingestErr != nil {
-		if ackErr := work.msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack after ingest error", slog.Any("error", ackErr))
+		c.recordPredicateContractRejections("graphable", ingestErr)
+		if errs.IsInvalid(ingestErr) {
+			if termErr := work.msg.Term(); termErr != nil {
+				c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
+			}
+		} else if nakErr := work.msg.Nak(); nakErr != nil {
+			c.logger.Error("Failed to Nak after transient ingest error", slog.Any("error", nakErr))
 		}
 		return ingestErr
 	}

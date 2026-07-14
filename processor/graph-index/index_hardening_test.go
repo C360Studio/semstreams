@@ -191,9 +191,9 @@ func TestNameIndex_WriteGuardRejectsMalformedKeyInputs(t *testing.T) {
 	logger := slog.Default()
 	valid := "acme.ops.robotics.gcs.drone.001"
 
-	assert.True(t, validateNameKeyInputs(valid, "pred", logger), "valid inputs pass")
-	assert.False(t, validateNameKeyInputs("not-a-valid-id", "pred", logger), "invalid entity ID rejected")
-	assert.False(t, validateNameKeyInputs("too.short", "pred", logger), "non-6-token entity ID rejected")
+	assert.True(t, validateNameKeyInputs(valid, "test.value.predicate", logger), "valid inputs pass")
+	assert.False(t, validateNameKeyInputs("not-a-valid-id", "test.value.predicate", logger), "invalid entity ID rejected")
+	assert.False(t, validateNameKeyInputs("too.short", "test.value.predicate", logger), "non-6-token entity ID rejected")
 	assert.False(t, validateNameKeyInputs(valid, "", logger), "empty predicate rejected")
 }
 
@@ -266,7 +266,7 @@ func TestContextIndex_ConcurrentWritersNoLostUpdate(t *testing.T) {
 			err := comp.UpdateContextIndex(ctx, entityID, []message.Triple{
 				{
 					Subject:   entityID,
-					Predicate: "inferred.parent",
+					Predicate: "inferred.hierarchy.parent",
 					Context:   "inference.hierarchy",
 				},
 			})
@@ -412,7 +412,7 @@ func TestNameIndex_ProductionWireByName(t *testing.T) {
 	// Three entities carrying the same normalized name under different predicates
 	// and priorities. One re-index of drone.001 verifies idempotent Put.
 	require.NoError(t, comp.UpdateNameIndex(ctx, "DroneAlpha", "acme.ops.robotics.gcs.drone.001", "dc.terms.title", 1))
-	require.NoError(t, comp.UpdateNameIndex(ctx, "dronealpha", "acme.ops.robotics.gcs.drone.002", "skos.core.prefLabel", 0))
+	require.NoError(t, comp.UpdateNameIndex(ctx, "dronealpha", "acme.ops.robotics.gcs.drone.002", "skos.core.pref-label", 0))
 	require.NoError(t, comp.UpdateNameIndex(ctx, "DRONEALPHA", "acme.ops.robotics.gcs.drone.003", "dc.terms.title", 1))
 	// Re-index drone.001 — idempotent Put must not create a duplicate entry.
 	require.NoError(t, comp.UpdateNameIndex(ctx, "DroneAlpha", "acme.ops.robotics.gcs.drone.001", "dc.terms.title", 1))
@@ -434,7 +434,7 @@ func TestNameIndex_ProductionWireByName(t *testing.T) {
 	assert.True(t, m1.ExactCase, "drone.001 carries the exact query string — must be flagged exact-case")
 
 	m2 := byID["acme.ops.robotics.gcs.drone.002"]
-	assert.Equal(t, "skos.core.prefLabel", m2.Predicate)
+	assert.Equal(t, "skos.core.pref-label", m2.Predicate)
 	assert.False(t, m2.ExactCase, "case-folded-only match must not be flagged exact-case")
 
 	m3 := byID["acme.ops.robotics.gcs.drone.003"]

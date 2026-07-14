@@ -66,6 +66,11 @@ tasks:
     cmds:
       - task --list
 
+  predicate:audit:
+    desc: Audit structured predicate candidates against the canonical three-part grammar
+    cmds:
+      - go run ./cmd/predicate-audit .
+
   # Observability shortcuts
   observe:up:
     desc: Start Prometheus + Grafana for local monitoring

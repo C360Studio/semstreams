@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // Workflow declares a workflow type to Manager.Register. All fields
@@ -52,7 +54,7 @@ type Workflow struct {
 	Transitions Transitions
 
 	// PhasePredicate is the triple predicate that carries the
-	// entity's current phase (e.g. "mission.phase"). Manager.Transition
+	// entity's current phase (e.g. "mission.lifecycle.phase"). Manager.Transition
 	// writes this predicate atomically with the audit predicates;
 	// projection reads it to populate the Participant struct's
 	// `lifecycle:"phase"` field. Required.
@@ -184,12 +186,37 @@ func (w *Workflow) validate() error {
 		return fmt.Errorf("%w: workflow %q PhasePredicate is required",
 			ErrInvalidWorkflow, w.Name)
 	}
+	if err := validateWorkflowPredicate(w.Name, "PhasePredicate", w.PhasePredicate); err != nil {
+		return err
+	}
 	if w.Schema == nil {
 		return fmt.Errorf("%w: workflow %q Schema is required",
 			ErrInvalidWorkflow, w.Name)
 	}
 	if err := w.Transitions.Validate(); err != nil {
 		return err
+	}
+	for _, declared := range []struct {
+		field     string
+		predicate string
+	}{
+		{"AuditPredicates.Source", w.AuditPredicates.Source},
+		{"AuditPredicates.At", w.AuditPredicates.At},
+		{"AuditPredicates.From", w.AuditPredicates.From},
+		{"AuditPredicates.Note", w.AuditPredicates.Note},
+	} {
+		if declared.predicate == "" {
+			continue
+		}
+		if err := validateWorkflowPredicate(w.Name, declared.field, declared.predicate); err != nil {
+			return err
+		}
+	}
+	for i, predicate := range w.OperatorWritablePredicates {
+		if err := validateWorkflowPredicate(w.Name,
+			fmt.Sprintf("OperatorWritablePredicates[%d]", i), predicate); err != nil {
+			return err
+		}
 	}
 	// Catch obvious duplicates in ChildWorkflows that would silently
 	// make the second registration shadow the first.
@@ -203,17 +230,33 @@ func (w *Workflow) validate() error {
 			return fmt.Errorf("%w: workflow %q ChildSpec for %q has empty LinkPredicate",
 				ErrInvalidWorkflow, w.Name, ch.Workflow)
 		}
+		if err := validateWorkflowPredicate(w.Name,
+			fmt.Sprintf("ChildWorkflows[%q].LinkPredicate", ch.Workflow), ch.LinkPredicate); err != nil {
+			return err
+		}
 		if seen[ch.LinkPredicate] {
 			return fmt.Errorf("%w: workflow %q has duplicate ChildSpec LinkPredicate %q",
 				ErrInvalidWorkflow, w.Name, ch.LinkPredicate)
 		}
 		seen[ch.LinkPredicate] = true
 	}
-	for _, ref := range w.ReferencePredicates {
+	for i, ref := range w.ReferencePredicates {
 		if ref.Predicate == "" {
 			return fmt.Errorf("%w: workflow %q has ReferenceSpec with empty Predicate",
 				ErrInvalidWorkflow, w.Name)
 		}
+		if err := validateWorkflowPredicate(w.Name,
+			fmt.Sprintf("ReferencePredicates[%d].Predicate", i), ref.Predicate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWorkflowPredicate(workflow, field, predicate string) error {
+	if err := vocabulary.RequireDeclaredPredicate(predicate); err != nil {
+		return fmt.Errorf("%w: workflow %q %s: %w",
+			ErrInvalidWorkflow, workflow, field, err)
 	}
 	return nil
 }

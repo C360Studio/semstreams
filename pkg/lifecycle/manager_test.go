@@ -121,9 +121,13 @@ func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) 
 // + manager_query.go exercise. We implement only the methods the
 // Manager calls; the rest panic if invoked.
 type fakeBucket struct {
-	mu      sync.Mutex
-	entries map[string]*fakeBucketEntry
-	nextRev uint64
+	mu              sync.Mutex
+	entries         map[string]*fakeBucketEntry
+	raw             map[string][]byte
+	history         map[string][]jetstream.KeyValueEntry
+	nextRev         uint64
+	watchFactory    func(string) (jetstream.KeyWatcher, error)
+	watchAllFactory func() (jetstream.KeyWatcher, error)
 }
 
 type fakeBucketEntry struct {
@@ -133,7 +137,11 @@ type fakeBucketEntry struct {
 }
 
 func newFakeBucket() *fakeBucket {
-	return &fakeBucket{entries: map[string]*fakeBucketEntry{}}
+	return &fakeBucket{
+		entries: map[string]*fakeBucketEntry{},
+		raw:     map[string][]byte{},
+		history: map[string][]jetstream.KeyValueEntry{},
+	}
 }
 
 func (b *fakeBucket) exists(id string) bool {
@@ -185,6 +193,9 @@ func (b *fakeBucket) remove(id string) bool {
 func (b *fakeBucket) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if data, ok := b.raw[key]; ok {
+		return &fakeKVEntry{key: key, value: data, revision: 1, created: time.Now()}, nil
+	}
 	e, ok := b.entries[key]
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
@@ -229,11 +240,17 @@ func (b *fakeBucket) Delete(context.Context, string, ...jetstream.KVDeleteOpt) e
 func (b *fakeBucket) Purge(context.Context, string, ...jetstream.KVDeleteOpt) error {
 	panic("fakeBucket.Purge not implemented")
 }
-func (b *fakeBucket) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	panic("fakeBucket.Watch not implemented")
+func (b *fakeBucket) Watch(_ context.Context, pattern string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	if b.watchFactory == nil {
+		panic("fakeBucket.Watch not implemented")
+	}
+	return b.watchFactory(pattern)
 }
 func (b *fakeBucket) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	panic("fakeBucket.WatchAll not implemented")
+	if b.watchAllFactory == nil {
+		panic("fakeBucket.WatchAll not implemented")
+	}
+	return b.watchAllFactory()
 }
 func (b *fakeBucket) WatchFiltered(context.Context, []string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	panic("fakeBucket.WatchFiltered not implemented")
@@ -247,8 +264,14 @@ func (b *fakeBucket) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream
 func (b *fakeBucket) ListKeysFiltered(context.Context, ...string) (jetstream.KeyLister, error) {
 	panic("fakeBucket.ListKeysFiltered not implemented")
 }
-func (b *fakeBucket) History(context.Context, string, ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
-	panic("fakeBucket.History not implemented")
+func (b *fakeBucket) History(_ context.Context, key string, _ ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entries, ok := b.history[key]
+	if !ok {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	return append([]jetstream.KeyValueEntry(nil), entries...), nil
 }
 func (b *fakeBucket) Bucket() string { return "ENTITY_STATES" }
 func (b *fakeBucket) PurgeDeletes(context.Context, ...jetstream.KVPurgeOpt) error {
@@ -289,17 +312,17 @@ func (lifecycle) fixtureWorkflow() Workflow {
 			"aborted":   {},
 			"failed":    {},
 		},
-		PhasePredicate: "mission.phase",
+		PhasePredicate: "mission.lifecycle.phase",
 		Schema:         reflect.TypeOf(fixtureMission{}),
 		OperatorWritablePredicates: []string{
-			"mission.owner_org_id",
-			"mission.note",
+			"mission.identity.owner-org-id",
+			"mission.annotation.note",
 		},
 		AuditPredicates: AuditSpec{
-			Source: "mission.last_transition_source",
-			At:     "mission.last_transition_at",
-			From:   "mission.last_transition_from",
-			Note:   "mission.last_transition_note",
+			Source: "mission.transition.source",
+			At:     "mission.transition.at",
+			From:   "mission.transition.from",
+			Note:   "mission.transition.note",
 		},
 	}
 }
@@ -407,12 +430,12 @@ func TestManager_GetReturnsNotLifecycleManagedForRawEntity(t *testing.T) {
 	ctx := context.Background()
 	id := "c360.platform1.lifecycle.gcs.mission.raw"
 	// Seed entity directly into the bucket WITHOUT a phase triple —
-	// simulates a processor stamping `mission.command` before any
+	// simulates a processor stamping `mission.control.command` before any
 	// lifecycle action fires.
 	bucket.put(id, &graph.EntityState{
 		ID: id,
 		Triples: []message.Triple{
-			{Subject: id, Predicate: "mission.command", Object: "launch"},
+			{Subject: id, Predicate: "mission.control.command", Object: "launch"},
 		},
 	})
 	_, err := mgr.Get(ctx, "fixture", id)
@@ -429,6 +452,35 @@ func TestManager_GetReturnsNotLifecycleManagedForRawEntity(t *testing.T) {
 	}
 	if got.Phase() != "planning" {
 		t.Errorf("phase wrong: %v", got.Phase())
+	}
+}
+
+func TestManagerGetRejectsPredicatePoisonWithoutProjection(t *testing.T) {
+	t.Parallel()
+
+	mgr, _, bucket := newTestManager(t)
+	entityID := "c360.platform1.lifecycle.gcs.mission.poisoned"
+	bucket.put(entityID, &graph.EntityState{
+		ID: entityID,
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "planning"},
+			{Subject: entityID, Predicate: "legacy.predicate", Object: "old"},
+		},
+	})
+
+	participant, err := mgr.Get(context.Background(), "fixture", entityID)
+	if err == nil {
+		t.Fatal("Get error = nil, want graph-state poison")
+	}
+	if participant != nil {
+		t.Fatalf("Get returned projected participant %#v from poisoned state", participant)
+	}
+	var contractErr *graph.StateContractError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("Get error = %T %v, want StateContractError", err, err)
+	}
+	if contractErr.Reason != graph.GraphStateReasonNoncanonicalPredicate {
+		t.Fatalf("contract reason = %q, want %q", contractErr.Reason, graph.GraphStateReasonNoncanonicalPredicate)
 	}
 }
 
@@ -497,12 +549,12 @@ func TestManager_TransitionReplacesPhaseTripleNotAppend(t *testing.T) {
 	stored := bucket.get(id)
 	var phaseTriples []message.Triple
 	for _, tr := range stored.Triples {
-		if tr.Predicate == "mission.phase" {
+		if tr.Predicate == "mission.lifecycle.phase" {
 			phaseTriples = append(phaseTriples, tr)
 		}
 	}
 	if len(phaseTriples) != 1 {
-		t.Fatalf("expected exactly 1 mission.phase triple after Create+2 Transitions (replace, not append), got %d: %+v", len(phaseTriples), phaseTriples)
+		t.Fatalf("expected exactly 1 mission.lifecycle.phase triple after Create+2 Transitions (replace, not append), got %d: %+v", len(phaseTriples), phaseTriples)
 	}
 	// The single triple must be the latest phase — so first-match
 	// (rule engine) and last-match (Manager) now agree.
@@ -571,12 +623,26 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 		Name:            "bad",
 		EntityIDPattern: "*.lifecycle.gcs.mission.*", // 5 segments
 		Transitions:     Transitions{"planning": {}},
-		PhasePredicate:  "x.phase",
+		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
 	}
 	err := bad.validate()
 	if err == nil {
 		t.Fatal("expected validate to reject 5-segment EntityIDPattern, got nil")
+	}
+}
+
+func TestWorkflowValidateRejectsNoncanonicalDeclaredPredicate(t *testing.T) {
+	t.Parallel()
+	bad := lifecycle{}.fixtureWorkflow()
+	bad.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}}
+
+	err := bad.validate()
+	if err == nil {
+		t.Fatal("expected validate to reject noncanonical reference predicate, got nil")
+	}
+	if !errors.Is(err, ErrInvalidWorkflow) {
+		t.Fatalf("expected ErrInvalidWorkflow, got %v", err)
 	}
 }
 
@@ -607,17 +673,17 @@ func TestWorkflow_ValidateDisjointness(t *testing.T) {
 			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: w.AuditPredicates.At}}
 		}, true},
 		{"reference collides with a scalar projection field", func(w *Workflow) {
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.owner_org_id"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.identity.owner-org-id"}}
 		}, true},
 		{"reference field matching its own ReferenceSpec is valid", func(w *Workflow) {
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assignment.drone"}}
 		}, false},
 		{"distinct child-link is fine", func(w *Workflow) {
-			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.subtask"}}
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.child.subtask"}}
 		}, false},
 		{"predicate declared as both child-link and reference", func(w *Workflow) {
-			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.subtask"}}
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.subtask"}}
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.child.subtask"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.child.subtask"}}
 		}, true},
 	}
 
@@ -667,7 +733,7 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 	for _, tr := range last.AddTriples {
 		gotPreds[tr.Predicate] = true
 	}
-	if _, ok := gotPreds["mission.owner_org_id"]; ok {
+	if _, ok := gotPreds["mission.identity.owner-org-id"]; ok {
 		t.Error("zero-value OwnerOrgID should not emit a delta against missing predicate baseline")
 	}
 }
@@ -743,7 +809,7 @@ func TestManager_DespawnWith_TransitionsThenReclaims(t *testing.T) {
 	sawTerminal := false
 	for _, r := range emitter.requests {
 		for _, tr := range r.AddTriples {
-			if tr.Predicate == "mission.phase" && tr.Object == "aborted" {
+			if tr.Predicate == "mission.lifecycle.phase" && tr.Object == "aborted" {
 				sawTerminal = true
 			}
 		}

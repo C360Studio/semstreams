@@ -36,7 +36,7 @@ func (fs *fullStack) stubByReference(t *testing.T, refID, targetUnitID string) {
 		ID:          refID,
 		MessageType: message.Type{Domain: "fs", Category: "holder", Version: "v1"},
 		Triples: []message.Triple{
-			{Subject: refID, Predicate: "fs.references", Object: targetUnitID, Timestamp: time.Now(), Confidence: 1.0},
+			{Subject: refID, Predicate: "fs.reference.target", Object: targetUnitID, Timestamp: time.Now(), Confidence: 1.0},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),

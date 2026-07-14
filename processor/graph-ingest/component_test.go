@@ -24,11 +24,12 @@ import (
 
 // Mock KV bucket for testing
 type mockKVBucket struct {
-	mu         sync.Mutex
-	data       map[string]mockKVData
-	putFunc    func(ctx context.Context, key string, value []byte) (uint64, error)
-	getFunc    func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
-	deleteFunc func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
+	mu              sync.Mutex
+	data            map[string]mockKVData
+	putFunc         func(ctx context.Context, key string, value []byte) (uint64, error)
+	getFunc         func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	deleteFunc      func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
+	watchAllFactory func() (jetstream.KeyWatcher, error)
 }
 
 // mockKVData stores value with revision for CAS testing
@@ -135,6 +136,9 @@ func (m *mockKVBucket) Watch(ctx context.Context, keys string, opts ...jetstream
 }
 
 func (m *mockKVBucket) WatchAll(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	if m.watchAllFactory != nil {
+		return m.watchAllFactory()
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -218,15 +222,21 @@ type mockKVEntry struct {
 	key      string
 	data     []byte
 	revision uint64
+	op       jetstream.KeyValueOp
 }
 
-func (m *mockKVEntry) Key() string                     { return m.key }
-func (m *mockKVEntry) Value() []byte                   { return m.data }
-func (m *mockKVEntry) Revision() uint64                { return m.revision }
-func (m *mockKVEntry) Created() time.Time              { return time.Now() }
-func (m *mockKVEntry) Delta() uint64                   { return 0 }
-func (m *mockKVEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
-func (m *mockKVEntry) Bucket() string                  { return "ENTITY_STATES" }
+func (m *mockKVEntry) Key() string        { return m.key }
+func (m *mockKVEntry) Value() []byte      { return m.data }
+func (m *mockKVEntry) Revision() uint64   { return m.revision }
+func (m *mockKVEntry) Created() time.Time { return time.Now() }
+func (m *mockKVEntry) Delta() uint64      { return 0 }
+func (m *mockKVEntry) Operation() jetstream.KeyValueOp {
+	if m.op == 0 {
+		return jetstream.KeyValuePut
+	}
+	return m.op
+}
+func (m *mockKVEntry) Bucket() string { return "ENTITY_STATES" }
 
 // ====================================================================================
 // Config Tests

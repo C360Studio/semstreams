@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -59,6 +58,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		EntityCache: cache.Config{
+			Enabled:         true,
 			Strategy:        cache.StrategyHybrid,
 			MaxSize:         1000,
 			TTL:             5 * time.Minute,
@@ -103,6 +103,7 @@ type natsClient struct {
 	natsClient *natsclient.Client
 	cache      cache.Cache[*gtypes.EntityState]
 	config     *Config
+	watchCtx   context.Context
 
 	// KV bucket handles
 	entityBucket   jetstream.KeyValue
@@ -117,6 +118,13 @@ type natsClient struct {
 	// Mutex for bucket initialization
 	initMu      sync.Mutex
 	initialized bool
+
+	// entityStatePoison is a process-lifetime fail-closed latch. A direct query
+	// client must not serve a cached or partial view after any authoritative
+	// ENTITY_STATES value violates the canonical graph-state contract.
+	entityStatePoison atomic.Pointer[gtypes.StateContractError]
+	entityWatchLost   atomic.Bool
+	entityObservedRev atomic.Uint64
 }
 
 // NewClient creates a new query client with the given NATS client and configuration
@@ -150,6 +158,7 @@ func NewClientWithMetrics(
 		natsClient: nc,
 		cache:      entityCache,
 		config:     config,
+		watchCtx:   ctx,
 	}
 
 	return client, nil
@@ -203,25 +212,115 @@ func (qc *natsClient) ensureBuckets(ctx context.Context) error {
 	}
 	qc.incomingBucket = incomingBucket
 
+	// Open the authoritative watcher only after every bucket handle has been
+	// acquired. A later initialization failure must not leak an abandoned
+	// watcher that can poison a retrying client. The same watcher is retained
+	// from synchronous bootstrap through live observation.
+	watcher, err := entityBucket.WatchAll(qc.watchCtx)
+	if err != nil {
+		return fmt.Errorf("failed to watch ENTITY_STATES: %w", err)
+	}
+	if err := qc.preflightEntityStates(watcher); err != nil {
+		_ = watcher.Stop()
+		return err
+	}
+	go qc.observeEntityStates(watcher)
+
 	qc.initialized = true
+	return nil
+}
+
+func (qc *natsClient) preflightEntityStates(watcher jetstream.KeyWatcher) error {
+	for {
+		select {
+		case <-qc.watchCtx.Done():
+			return fmt.Errorf("ENTITY_STATES preflight cancelled: %w", qc.watchCtx.Err())
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				return errors.New("ENTITY_STATES watcher closed during preflight")
+			}
+			if entry == nil {
+				return nil
+			}
+			qc.validateEntityStateEntry(entry)
+			qc.entityObservedRev.Store(entry.Revision())
+		}
+	}
+}
+
+func (qc *natsClient) observeEntityStates(watcher jetstream.KeyWatcher) {
+	defer func() { _ = watcher.Stop() }()
+	for {
+		select {
+		case <-qc.watchCtx.Done():
+			qc.entityWatchLost.Store(true)
+			_ = qc.cache.Clear()
+			return
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				qc.entityWatchLost.Store(true)
+				_ = qc.cache.Clear()
+				return
+			}
+			if entry == nil {
+				continue
+			}
+			// Invalidate first so a concurrent read cannot reuse a value superseded
+			// by this authoritative revision. Validation then permanently poisons
+			// the client if the new value is not canonical.
+			_, _ = qc.cache.Delete(entry.Key())
+			qc.validateEntityStateEntry(entry)
+			qc.entityObservedRev.Store(entry.Revision())
+		}
+	}
+}
+
+func (qc *natsClient) validateEntityStateEntry(entry jetstream.KeyValueEntry) {
+	if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
+		return
+	}
+	var state gtypes.EntityState
+	if err := gtypes.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var contractErr *gtypes.StateContractError
+		if errors.As(err, &contractErr) {
+			qc.entityStatePoison.CompareAndSwap(nil, contractErr)
+			_ = qc.cache.Clear()
+		}
+	}
+}
+
+func (qc *natsClient) entityStateContractError(operation string) error {
+	if contractErr := qc.entityStatePoison.Load(); contractErr != nil {
+		return errs.WrapFatal(contractErr, "graph.query", operation,
+			"authoritative ENTITY_STATES requires reset and canonical reingest")
+	}
+	if qc.entityWatchLost.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
+			errors.New("authoritative ENTITY_STATES watcher is unavailable"))
+	}
 	return nil
 }
 
 // GetEntity retrieves a specific entity by ID
 func (qc *natsClient) GetEntity(ctx context.Context, entityID string) (*gtypes.EntityState, error) {
 	atomic.AddInt64(&qc.queryCount, 1)
+	if err := qc.ensureBuckets(ctx); err != nil {
+		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
+	}
+	if err := qc.entityStateContractError("GetEntity"); err != nil {
+		return nil, err
+	}
 
 	// Check cache first
 	if cached, exists := qc.cache.Get(entityID); exists {
+		if err := qc.entityStateContractError("GetEntity"); err != nil {
+			return nil, err
+		}
 		atomic.AddInt64(&qc.cacheHits, 1)
 		return cached, nil
 	}
 
 	atomic.AddInt64(&qc.cacheMisses, 1)
-
-	if err := qc.ensureBuckets(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
-	}
 
 	// Get from bucket
 	entry, err := qc.entityBucket.Get(ctx, entityID)
@@ -231,12 +330,22 @@ func (qc *natsClient) GetEntity(ctx context.Context, entityID string) (*gtypes.E
 
 	// Unmarshal
 	var state gtypes.EntityState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+	if err := gtypes.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var contractErr *gtypes.StateContractError
+		if errors.As(err, &contractErr) {
+			qc.entityStatePoison.CompareAndSwap(nil, contractErr)
+			_ = qc.cache.Clear()
+		}
 		return nil, fmt.Errorf("failed to unmarshal entity state: %w", err)
+	}
+	if err := qc.entityStateContractError("GetEntity"); err != nil {
+		return nil, err
 	}
 
 	// Update cache
-	qc.cache.Set(entityID, &state)
+	if _, err := qc.cache.Set(entityID, &state); err != nil {
+		return nil, fmt.Errorf("failed to cache entity: %w", err)
+	}
 
 	return &state, nil
 }
@@ -260,9 +369,7 @@ func (qc *natsClient) GetEntitiesBatch(ctx context.Context, entityIDs []string) 
 	for _, entityID := range entityIDs {
 		entity, err := qc.GetEntity(ctx, entityID)
 		if err != nil {
-			// Log but continue with other entities
-			log.Printf("Warning: failed to get entity %s: %v", entityID, err)
-			continue
+			return nil, fmt.Errorf("failed to get entity %s: %w", entityID, err)
 		}
 		entities = append(entities, entity)
 	}
@@ -274,6 +381,9 @@ func (qc *natsClient) GetEntitiesBatch(ctx context.Context, entityIDs []string) 
 func (qc *natsClient) ListEntities(ctx context.Context) ([]string, error) {
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
+	}
+	if err := qc.entityStateContractError("ListEntities"); err != nil {
+		return nil, err
 	}
 
 	// Get all keys from bucket
@@ -342,6 +452,9 @@ func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]
 	}
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
+	}
+	if err := qc.entityStateContractError("GetIncomingEdges"); err != nil {
+		return nil, err
 	}
 
 	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty).
@@ -424,10 +537,12 @@ func (qc *natsClient) GetEntityConnections(ctx context.Context, entityID string)
 	for _, triple := range sourceEntity.Triples {
 		if triple.IsRelationship() {
 			if targetID, ok := triple.Object.(string); ok && !seenIDs[targetID] {
-				if targetEntity, err := qc.GetEntity(ctx, targetID); err == nil {
-					connectedEntities = append(connectedEntities, targetEntity)
-					seenIDs[targetID] = true
+				targetEntity, getErr := qc.GetEntity(ctx, targetID)
+				if getErr != nil {
+					return nil, fmt.Errorf("failed to get outgoing entity %s: %w", targetID, getErr)
 				}
+				connectedEntities = append(connectedEntities, targetEntity)
+				seenIDs[targetID] = true
 			}
 		}
 	}
@@ -439,10 +554,12 @@ func (qc *natsClient) GetEntityConnections(ctx context.Context, entityID string)
 	}
 	for _, incomingID := range incomingEntityIDs {
 		if !seenIDs[incomingID] {
-			if incomingEntity, err := qc.GetEntity(ctx, incomingID); err == nil {
-				connectedEntities = append(connectedEntities, incomingEntity)
-				seenIDs[incomingID] = true
+			incomingEntity, getErr := qc.GetEntity(ctx, incomingID)
+			if getErr != nil {
+				return nil, fmt.Errorf("failed to get incoming entity %s: %w", incomingID, getErr)
 			}
+			connectedEntities = append(connectedEntities, incomingEntity)
+			seenIDs[incomingID] = true
 		}
 	}
 
@@ -491,7 +608,7 @@ func (qc *natsClient) QueryEntities(ctx context.Context, criteria map[string]any
 	for _, key := range keys {
 		entity, err := qc.GetEntity(ctx, key)
 		if err != nil {
-			continue // Skip entities that can't be loaded
+			return nil, fmt.Errorf("failed to load entity %s: %w", key, err)
 		}
 
 		if qc.entityMatchesCriteria(entity, criteria) {
@@ -507,11 +624,16 @@ func (qc *natsClient) GetEntitiesInRegion(ctx context.Context, geohash string) (
 	if err := qc.ensureBuckets(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
 	}
+	if err := qc.entityStateContractError("GetEntitiesInRegion"); err != nil {
+		return nil, err
+	}
 
 	entry, err := qc.spatialBucket.Get(ctx, geohash)
 	if err != nil {
-		// No entities in this geohash region
-		return []*gtypes.EntityState{}, nil
+		if natsclient.IsKVNotFoundError(err) {
+			return []*gtypes.EntityState{}, nil
+		}
+		return nil, fmt.Errorf("failed to get spatial index entry %s: %w", geohash, err)
 	}
 
 	var spatialData map[string]map[string]any
@@ -522,9 +644,11 @@ func (qc *natsClient) GetEntitiesInRegion(ctx context.Context, geohash string) (
 	var entities []*gtypes.EntityState
 	if entitiesData, exists := spatialData["entities"]; exists {
 		for entityID := range entitiesData {
-			if entity, err := qc.GetEntity(ctx, entityID); err == nil {
-				entities = append(entities, entity)
+			entity, getErr := qc.GetEntity(ctx, entityID)
+			if getErr != nil {
+				return nil, fmt.Errorf("failed to load spatial entity %s: %w", entityID, getErr)
 			}
+			entities = append(entities, entity)
 		}
 	}
 

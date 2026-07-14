@@ -43,7 +43,7 @@ func TestRegistered_SortedDeterministic(t *testing.T) {
 		return Contract{
 			Name:          name,
 			EntityPattern: "c360.semconnect.systems.csapi." + typeSeg + ".*",
-			Groups:        []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"p"}}},
+			Groups:        []PredicateGroup{{Mode: ownership.ModeReplaceOwned, Predicates: []string{"test.value.p"}}},
 		}
 	}
 	for _, c := range []Contract{mk("z", "ztype"), mk("a", "atype"), mk("m", "mtype")} {

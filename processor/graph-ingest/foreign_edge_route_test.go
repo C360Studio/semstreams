@@ -47,7 +47,7 @@ func countPredicate(es *graph.EntityState, predicate string) int {
 
 var routeMT = message.Type{Domain: "test", Category: "fixture", Version: "v1"}
 
-const routeEdgePred = "child.isHostedBy"
+const routeEdgePred = "test.edge.is-hosted-by"
 
 func routeEdge() message.Triple {
 	return message.Triple{Subject: flChildID, Predicate: routeEdgePred, Object: flParentID}

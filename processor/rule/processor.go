@@ -120,6 +120,21 @@ type Processor struct {
 	lastEvaluationTime time.Time // Last time rules were evaluated
 	mu                 sync.RWMutex
 
+	// graphStateResetRequired is sticky for the lifetime of the process. Once
+	// any ENTITY_STATES value violates the authoritative graph-state contract,
+	// rule evaluation must stop rather than derive output from a partial view.
+	graphStateResetRequired  atomic.Bool
+	graphStateGuardRequired  atomic.Bool
+	graphStateGuardReady     atomic.Bool
+	graphStateGuardDegraded  atomic.Bool
+	graphStateGuardReadyCh   chan struct{}
+	graphStateGuardDone      chan struct{}
+	graphStateGuardReadyOnce sync.Once
+	graphStateGuardDoneOnce  sync.Once
+	graphStateGuardRevision  atomic.Uint64
+	graphStateProgressMu     sync.Mutex
+	graphStateProgress       chan struct{}
+
 	// Active subscriptions flag
 	isSubscribed bool
 
@@ -243,19 +258,22 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 			Description: "Processes messages through configurable rules and generates alerts",
 			Version:     "1.0.0",
 		},
-		natsClient:       natsClient,
-		rules:            make(map[string]Rule),
-		ruleDefinitions:  make(map[string]Definition),
-		ruleConfigs:      make(map[string]map[string]any),
-		matchCounters:    make(map[string]*atomic.Int64),
-		cronRules:        make(map[string]*CronRule),
-		messageCache:     msgCache,
-		config:           config,
-		metricsRegistry:  metricsRegistry,
-		entityWatchers:   make([]jetstream.KeyWatcher, 0),
-		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
-		ownRevisions:     make(map[ruleRevKey]map[uint64]time.Time),
-		revisionTTL:      defaultRevisionTTL,
+		natsClient:             natsClient,
+		rules:                  make(map[string]Rule),
+		ruleDefinitions:        make(map[string]Definition),
+		ruleConfigs:            make(map[string]map[string]any),
+		matchCounters:          make(map[string]*atomic.Int64),
+		cronRules:              make(map[string]*CronRule),
+		messageCache:           msgCache,
+		config:                 config,
+		metricsRegistry:        metricsRegistry,
+		entityWatchers:         make([]jetstream.KeyWatcher, 0),
+		entityWatcherMap:       make(map[string]jetstream.KeyWatcher),
+		graphStateGuardReadyCh: make(chan struct{}),
+		graphStateGuardDone:    make(chan struct{}),
+		graphStateProgress:     make(chan struct{}),
+		ownRevisions:           make(map[ruleRevKey]map[uint64]time.Time),
+		revisionTTL:            defaultRevisionTTL,
 		health: component.HealthStatus{
 			Healthy:    true,
 			LastCheck:  time.Now(),
@@ -731,6 +749,7 @@ func (rp *Processor) initializeCronScheduler() error {
 		Tracker:  rp.scheduleTracker,
 		Metrics:  getCronMetrics(rp.metricsRegistry),
 		Logger:   rp.logger,
+		Ready:    rp.graphRuleEvaluationReady,
 	})
 	if err != nil {
 		return fmt.Errorf("create cron scheduler: %w", err)

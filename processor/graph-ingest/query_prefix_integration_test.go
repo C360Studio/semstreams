@@ -57,7 +57,7 @@ func seedPrefixEntity(t *testing.T, ctx context.Context, c *Component, id string
 	entity := &graph.EntityState{
 		ID: id,
 		Triples: []message.Triple{
-			{Subject: id, Predicate: "test.attr", Object: "val", Timestamp: time.Now()},
+			{Subject: id, Predicate: "test.entity.attribute", Object: "val", Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),

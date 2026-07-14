@@ -92,7 +92,7 @@ func ownerToken(ownerID, incarnation string) string { return ownerID + "#" + inc
 const (
 	intOwnerID   = "mission-planner"
 	intEntityPat = "*.*.test.sys.w.*"
-	intPred      = "mission.phase"
+	intPred      = "mission.state.phase"
 )
 
 var intMT = message.Type{Domain: "test", Category: "integration", Version: "v1"}

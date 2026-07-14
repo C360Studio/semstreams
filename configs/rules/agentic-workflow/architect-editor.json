@@ -9,12 +9,12 @@
   },
   "conditions": [
     {
-      "field": "role",
+      "field": "$message.role",
       "operator": "eq",
       "value": "architect"
     },
     {
-      "field": "outcome",
+      "field": "$message.outcome",
       "operator": "eq",
       "value": "success"
     }

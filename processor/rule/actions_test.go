@@ -2263,7 +2263,7 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 	require.Len(t, mockMut.addedTriples, 1,
 		"publish_agent should add a rule.spawned_task triple")
 	assert.Equal(t, entityID, mockMut.addedTriples[0].Subject)
-	assert.Equal(t, "rule.spawned_task", mockMut.addedTriples[0].Predicate)
+	assert.Equal(t, "rule.task.spawned", mockMut.addedTriples[0].Predicate)
 	assert.Equal(t, task.TaskID, mockMut.addedTriples[0].Object)
 
 	// The triple write is tracked against the originating rule so the
@@ -2661,6 +2661,23 @@ func TestAction_UpdateKV_MissingBucket(t *testing.T) {
 	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "plan.001"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bucket is required")
+}
+
+func TestAction_UpdateKV_RejectsFrameworkGraphBucketAfterSubstitution(t *testing.T) {
+	t.Parallel()
+
+	executor := &ActionExecutor{kvWriter: &mockKVWriter{}}
+	action := Action{
+		Type:    ActionTypeUpdateKV,
+		Bucket:  "$message.bucket",
+		Key:     "entity",
+		Payload: map[string]any{"triples": []any{}},
+	}
+	ctx := &ExecutionContext{MessageData: map[string]any{"bucket": gtypes.BucketEntityStates}}
+
+	err := executor.executeUpdateKV(context.Background(), action, ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "framework-owned graph bucket")
 }
 
 func TestAction_UpdateKV_MissingKey(t *testing.T) {
@@ -3169,7 +3186,7 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 		Triples: []message.Triple{
 			{
 				Subject:   loopEntityID,
-				Predicate: "agent.run",
+				Predicate: "agent.loop.run",
 				Object:    "root-loop-uuid",
 			},
 		},
@@ -3256,7 +3273,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	entity := &gtypes.EntityState{
 		ID: chainEntityID,
 		Triples: []message.Triple{
-			{Subject: chainEntityID, Predicate: "agent.run", Object: "root-loop-uuid"},
+			{Subject: chainEntityID, Predicate: "agent.loop.run", Object: "root-loop-uuid"},
 		},
 	}
 
@@ -3335,7 +3352,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 	var agentRunTriple *message.Triple
 	for i := range mutator.addedTriples {
 		if mutator.addedTriples[i].Subject == loopEntityID &&
-			mutator.addedTriples[i].Predicate == "agent.run" {
+			mutator.addedTriples[i].Predicate == "agent.loop.run" {
 			agentRunTriple = &mutator.addedTriples[i]
 			break
 		}
@@ -3437,7 +3454,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
-			{Subject: loopEntityID, Predicate: "agent.run", Object: "existing-run-id"},
+			{Subject: loopEntityID, Predicate: "agent.loop.run", Object: "existing-run-id"},
 		},
 	}
 

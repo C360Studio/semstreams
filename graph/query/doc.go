@@ -136,7 +136,7 @@
 //
 // Related packages:
 //   - [github.com/c360studio/semstreams/graph]: EntityState type
-//   - [github.com/c360studio/semstreams/graph/datamanager]: Entity persistence
+//   - [github.com/c360studio/semstreams/processor/graph-ingest]: Entity persistence
 //   - [github.com/c360studio/semstreams/pkg/cache]: Cache implementation
 //   - [github.com/c360studio/semstreams/natsclient]: NATS KV operations
 package query

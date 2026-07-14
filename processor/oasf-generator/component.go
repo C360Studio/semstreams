@@ -3,12 +3,15 @@ package oasfgenerator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -38,8 +41,24 @@ type Component struct {
 	startTime time.Time
 	mu        sync.RWMutex
 
-	// KV watcher
-	kvWatcher jetstream.KeyWatcher
+	// ENTITY_STATES has two distinct watch responsibilities. contractWatcher is
+	// always graph-wide and owns fail-closed validation; kvWatcher applies the
+	// configured pattern only to selecting entities for OASF generation.
+	contractWatcher             jetstream.KeyWatcher
+	kvWatcher                   jetstream.KeyWatcher
+	graphStatePoison            atomic.Pointer[graph.StateContractError]
+	entityWatchLost             atomic.Bool
+	bootstrapStarted            atomic.Bool
+	bootstrapComplete           atomic.Bool
+	outputMu                    sync.RWMutex
+	contractRevision            atomic.Uint64
+	guardProgressMu             sync.Mutex
+	guardProgressCh             chan struct{}
+	selectionRevisionComparable bool
+	// Test seams are nil in production. They expose the selection barrier and
+	// final queue boundary without weakening either contract.
+	beforeSelectionBarrier func(uint64)
+	queueGeneration        func(string)
 
 	// Metrics tracking
 	recordsGenerated int64
@@ -93,6 +112,8 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 func (c *Component) Initialize() error {
 	// Create generator (depends on mapper and NATS client)
 	c.generator = NewGenerator(c.mapper, c.natsClient, c.config, c.logger)
+	c.generator.readiness = c.outputReadinessError
+	c.generator.beginOutput = c.beginOutput
 	return nil
 }
 
@@ -125,7 +146,7 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "initialize generator")
 	}
 
-	// Start KV watcher
+	// Start the graph-wide contract guard and configured selection watcher.
 	if err := c.startKVWatcher(c.ctx); err != nil {
 		c.cancel()
 		return errs.Wrap(err, "Component", "Start", "start KV watcher")
@@ -144,39 +165,252 @@ func (c *Component) Start(ctx context.Context) error {
 
 // startKVWatcher starts watching the entity KV bucket for changes.
 func (c *Component) startKVWatcher(ctx context.Context) error {
-	// Get the entity KV bucket
-	kv, err := c.natsClient.GetKeyValueBucket(ctx, c.config.EntityKVBucket)
+	// Get the configured selection bucket. ENTITY_STATES remains the
+	// authoritative graph-wide contract source even when a deployment selects
+	// generation work from a legacy/custom bucket.
+	selectionKV, err := c.natsClient.GetKeyValueBucket(ctx, c.config.EntityKVBucket)
 	if err != nil {
 		return errs.Wrap(err, "Component", "startKVWatcher", "get entity KV bucket")
 	}
+	contractKV := selectionKV
+	if c.config.EntityKVBucket != graph.BucketEntityStates {
+		contractKV, err = c.natsClient.GetKeyValueBucket(ctx, graph.BucketEntityStates)
+		if err != nil {
+			return errs.Wrap(err, "Component", "startKVWatcher", "get authoritative ENTITY_STATES bucket")
+		}
+	}
 
-	// Create watcher with pattern
+	return c.startEntityWatches(ctx, contractKV, selectionKV,
+		c.config.EntityKVBucket == graph.BucketEntityStates)
+}
+
+// startEntityWatches first drains a graph-wide WatchAll snapshot through the
+// canonical decoder, then leaves that same watcher live. Only after a clean
+// sentinel does it start the configured pattern watcher that selects work.
+// This keeps validation independent of selection without buffering entity IDs.
+func (c *Component) startEntityWatches(
+	ctx context.Context,
+	contractKV, selectionKV jetstream.KeyValue,
+	revisionsComparable bool,
+) error {
+	c.bootstrapStarted.Store(true)
+	c.selectionRevisionComparable = revisionsComparable
+	c.guardProgressMu.Lock()
+	if c.guardProgressCh == nil {
+		c.guardProgressCh = make(chan struct{})
+	}
+	c.guardProgressMu.Unlock()
+	watcher, err := contractKV.WatchAll(ctx)
+	if err != nil {
+		c.markEntityWatchLost()
+		return nil
+	}
+	c.contractWatcher = watcher
+
+	if err := c.drainContractBootstrap(ctx, watcher); err != nil {
+		_ = watcher.Stop()
+		c.contractWatcher = nil
+		if ctx.Err() != nil {
+			return err
+		}
+		return nil
+	}
+	go c.contractWatchLoop(ctx, watcher)
+
+	// A poisoned authoritative snapshot remains watched, but no selector is
+	// needed: output is process-lifetime blocked until reset and restart.
+	if c.graphStatePoison.Load() != nil {
+		return nil
+	}
+	if !revisionsComparable {
+		c.logger.Warn("OASF selection bucket differs from authoritative ENTITY_STATES; using bootstrap-only contract gate because revisions are incomparable",
+			slog.String("selection_bucket", selectionKV.Bucket()),
+			slog.String("contract_bucket", contractKV.Bucket()))
+	}
+
+	// Create watcher with pattern.
 	pattern := c.config.WatchPattern
 	if pattern == "" {
 		pattern = ">"
 	}
 
-	watcher, err := kv.Watch(ctx, pattern, jetstream.IgnoreDeletes())
+	selectionWatcher, err := selectionKV.Watch(ctx, pattern, jetstream.IgnoreDeletes())
 	if err != nil {
 		return errs.Wrap(err, "Component", "startKVWatcher", "create KV watcher")
 	}
-	c.kvWatcher = watcher
+	c.kvWatcher = selectionWatcher
 
 	// Start background goroutine to process updates
-	go c.watchLoop(ctx)
+	go c.watchLoop(ctx, selectionWatcher)
 
 	return nil
 }
 
-// watchLoop processes KV updates in a background goroutine.
-func (c *Component) watchLoop(ctx context.Context) {
+func (c *Component) drainContractBootstrap(ctx context.Context, watcher jetstream.KeyWatcher) error {
+	updates := watcher.Updates()
+	for {
+		select {
+		case <-ctx.Done():
+			return errs.Wrap(ctx.Err(), "Component", "drainContractBootstrap", "context cancelled")
+		case entry, ok := <-updates:
+			if !ok {
+				c.markEntityWatchLost()
+				return errs.Wrap(errors.New("ENTITY_STATES contract watcher closed during bootstrap"),
+					"Component", "drainContractBootstrap", "watch transport")
+			}
+			if entry == nil {
+				c.bootstrapComplete.Store(true)
+				return nil
+			}
+			c.observeContractEntry(entry)
+		}
+	}
+}
+
+func (c *Component) contractWatchLoop(ctx context.Context, watcher jetstream.KeyWatcher) {
+	updates := watcher.Updates()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case entry, ok := <-c.kvWatcher.Updates():
+		case entry, ok := <-updates:
 			if !ok {
-				// Watcher closed
+				if ctx.Err() == nil {
+					c.markEntityWatchLost()
+				}
+				return
+			}
+			if entry != nil {
+				c.observeContractEntry(entry)
+			}
+		}
+	}
+}
+
+func (c *Component) observeContractEntry(entry jetstream.KeyValueEntry) {
+	c.validateContractEntry(entry)
+	for {
+		observed := c.contractRevision.Load()
+		if entry.Revision() <= observed || c.contractRevision.CompareAndSwap(observed, entry.Revision()) {
+			break
+		}
+	}
+	c.signalGuardProgress()
+}
+
+func (c *Component) validateContractEntry(entry jetstream.KeyValueEntry) {
+	if graph.IsKVTombstone(entry.Operation()) {
+		return
+	}
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		var contractErr *graph.StateContractError
+		if !errors.As(err, &contractErr) {
+			contractErr = &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity, Err: err}
+		}
+		c.outputMu.Lock()
+		latched := c.graphStatePoison.CompareAndSwap(nil, contractErr)
+		c.outputMu.Unlock()
+		if latched {
+			c.logger.Error("authoritative graph state requires reset; OASF output blocked",
+				slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+				slog.String("reason", string(contractErr.Reason)))
+		}
+	}
+}
+
+func (c *Component) beginOutput() (func(), error) {
+	c.outputMu.RLock()
+	if err := c.outputReadinessError(); err != nil {
+		c.outputMu.RUnlock()
+		return nil, err
+	}
+	return c.outputMu.RUnlock, nil
+}
+
+func (c *Component) markEntityWatchLost() {
+	c.outputMu.Lock()
+	c.entityWatchLost.Store(true)
+	c.outputMu.Unlock()
+	c.signalGuardProgress()
+}
+
+func (c *Component) signalGuardProgress() {
+	c.guardProgressMu.Lock()
+	if c.guardProgressCh != nil {
+		close(c.guardProgressCh)
+	}
+	c.guardProgressCh = make(chan struct{})
+	c.guardProgressMu.Unlock()
+}
+
+func (c *Component) guardProgress() <-chan struct{} {
+	c.guardProgressMu.Lock()
+	if c.guardProgressCh == nil {
+		c.guardProgressCh = make(chan struct{})
+	}
+	progress := c.guardProgressCh
+	c.guardProgressMu.Unlock()
+	return progress
+}
+
+// waitForContractRevision closes the same-bucket selection/validation race.
+// Custom selection buckets deliberately receive bootstrap-only semantics: their
+// revision space cannot be compared with authoritative ENTITY_STATES.
+func (c *Component) waitForContractRevision(ctx context.Context, revision uint64) error {
+	if !c.selectionRevisionComparable {
+		return c.outputReadinessError()
+	}
+	if c.beforeSelectionBarrier != nil {
+		c.beforeSelectionBarrier(revision)
+	}
+	for {
+		if err := c.outputReadinessError(); err != nil {
+			return err
+		}
+		if c.contractRevision.Load() >= revision {
+			return nil
+		}
+		progress := c.guardProgress()
+		if c.contractRevision.Load() >= revision {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady, ctx.Err())
+		case <-progress:
+		}
+	}
+}
+
+func (c *Component) outputReadinessError() error {
+	if contractErr := c.graphStatePoison.Load(); contractErr != nil {
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, contractErr)
+	}
+	if c.entityWatchLost.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("OASF output not ready: ENTITY_STATES contract watcher unavailable"))
+	}
+	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("OASF output not ready: ENTITY_STATES bootstrap validating"))
+	}
+	return nil
+}
+
+// watchLoop processes KV updates in a background goroutine.
+
+func (c *Component) watchLoop(ctx context.Context, watcher jetstream.KeyWatcher) {
+	updates := watcher.Updates()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry, ok := <-updates:
+			if !ok {
+				if ctx.Err() == nil {
+					c.markEntityWatchLost()
+				}
 				return
 			}
 			if entry == nil {
@@ -184,13 +418,23 @@ func (c *Component) watchLoop(ctx context.Context) {
 				continue
 			}
 
-			c.handleEntityChange(entry)
+			c.handleEntityChange(ctx, entry)
 		}
 	}
 }
 
 // handleEntityChange processes a single entity change from KV.
-func (c *Component) handleEntityChange(entry jetstream.KeyValueEntry) {
+func (c *Component) handleEntityChange(ctx context.Context, entry jetstream.KeyValueEntry) {
+	if err := c.waitForContractRevision(ctx, entry.Revision()); err != nil {
+		return
+	}
+	// Decode at the selection seam too. The graph-wide watcher is authoritative,
+	// but this closes the delivery race where a selected poison reaches this
+	// watcher first.
+	c.validateContractEntry(entry)
+	if c.outputReadinessError() != nil {
+		return
+	}
 	c.mu.Lock()
 	c.lastActivity = time.Now()
 	c.mu.Unlock()
@@ -204,7 +448,11 @@ func (c *Component) handleEntityChange(entry jetstream.KeyValueEntry) {
 		slog.String("entity_id", entityID))
 
 	// Queue for generation (with debouncing)
-	c.generator.QueueGeneration(entityID)
+	if c.queueGeneration != nil {
+		c.queueGeneration(entityID)
+	} else {
+		c.generator.QueueGeneration(entityID)
+	}
 }
 
 // Stop gracefully stops the component.
@@ -221,13 +469,7 @@ func (c *Component) Stop(_ time.Duration) error {
 		c.cancel()
 	}
 
-	// Stop KV watcher
-	if c.kvWatcher != nil {
-		if err := c.kvWatcher.Stop(); err != nil {
-			c.logger.Warn("Failed to stop KV watcher", slog.Any("error", err))
-		}
-		c.kvWatcher = nil
-	}
+	c.stopWatchers()
 
 	// Stop generator
 	if c.generator != nil {
@@ -238,6 +480,21 @@ func (c *Component) Stop(_ time.Duration) error {
 	c.logger.Info("OASF generator stopped")
 
 	return nil
+}
+
+func (c *Component) stopWatchers() {
+	if c.kvWatcher != nil {
+		if err := c.kvWatcher.Stop(); err != nil {
+			c.logger.Warn("Failed to stop selection watcher", slog.Any("error", err))
+		}
+		c.kvWatcher = nil
+	}
+	if c.contractWatcher != nil {
+		if err := c.contractWatcher.Stop(); err != nil {
+			c.logger.Warn("Failed to stop contract watcher", slog.Any("error", err))
+		}
+		c.contractWatcher = nil
+	}
 }
 
 // Discoverable interface implementation
@@ -315,10 +572,15 @@ func (c *Component) Health() component.HealthStatus {
 	status := "stopped"
 	if c.running {
 		status = "running"
+		if c.graphStatePoison.Load() != nil {
+			status = graph.IndexStateResetRequired
+		} else if c.entityWatchLost.Load() {
+			status = graph.IndexStateDegraded
+		}
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running,
+		Healthy:    c.running && c.graphStatePoison.Load() == nil && !c.entityWatchLost.Load() && c.bootstrapComplete.Load(),
 		LastCheck:  time.Now(),
 		ErrorCount: int(c.errors),
 		Uptime:     time.Since(c.startTime),

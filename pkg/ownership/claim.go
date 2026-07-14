@@ -3,6 +3,8 @@ package ownership
 import (
 	"fmt"
 	"strings"
+
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // idArity is the fixed segment count of a 6-part federated entity ID
@@ -120,6 +122,9 @@ func (c OwnerClaim) Validate() error {
 		if strings.ContainsAny(p, "*>") {
 			return fmt.Errorf("%w: predicate %q must be an exact string (no wildcards)", ErrInvalidClaim, p)
 		}
+		if err := vocabulary.RequireDeclaredPredicate(p); err != nil {
+			return fmt.Errorf("%w: claim by %q declares undeclared or invalid predicate: %w", ErrInvalidClaim, c.Owner, err)
+		}
 	}
 	if !c.Mode.valid() {
 		return fmt.Errorf("%w: claim by %q has invalid write mode %q", ErrInvalidClaim, c.Owner, c.Mode)
@@ -164,6 +169,9 @@ func (f ForeignEdgeClaim) Validate() error {
 	if strings.ContainsAny(f.Predicate, "*>") {
 		return fmt.Errorf("%w: foreign-edge predicate %q must be exact (no wildcards)", ErrInvalidClaim, f.Predicate)
 	}
+	if err := vocabulary.RequireDeclaredPredicate(f.Predicate); err != nil {
+		return fmt.Errorf("%w: foreign-edge claim by %q declares undeclared or invalid predicate: %w", ErrInvalidClaim, f.Owner, err)
+	}
 	if !f.Mode.valid() {
 		return fmt.Errorf("%w: foreign-edge claim by %q has invalid edge mode %q", ErrInvalidClaim, f.Owner, f.Mode)
 	}
@@ -206,6 +214,12 @@ func (w CoordinationWaiver) Validate() error {
 	}
 	if len(w.Predicates) == 0 {
 		return fmt.Errorf("%w: waiver between %q and %q covers no predicates", ErrInvalidClaim, w.Owner, w.With)
+	}
+	for _, predicate := range w.Predicates {
+		if err := vocabulary.RequireDeclaredPredicate(predicate); err != nil {
+			return fmt.Errorf("%w: waiver between %q and %q declares undeclared or invalid predicate: %w",
+				ErrInvalidClaim, w.Owner, w.With, err)
+		}
 	}
 	if strings.TrimSpace(w.Reason) == "" {
 		return fmt.Errorf("%w: waiver between %q and %q has no reason", ErrInvalidClaim, w.Owner, w.With)

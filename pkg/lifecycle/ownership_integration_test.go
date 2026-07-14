@@ -42,7 +42,7 @@ func TestIntegration_ManagerOwnership_FirstConsumerEndToEnd(t *testing.T) {
 	require.NoError(t, mgrA.Register(lifecycle{}.fixtureWorkflow()))
 
 	// The phase cell is now owned in the shared epoch.
-	owner, ok, err := reg.OwnerOf(ctx, ownershipTestEntity, "mission.phase")
+	owner, ok, err := reg.OwnerOf(ctx, ownershipTestEntity, "mission.lifecycle.phase")
 	require.NoError(t, err)
 	require.True(t, ok, "phase cell must be owned after registration")
 	require.Equal(t, "fixture", owner, "owner id is the workflow Name")
@@ -66,7 +66,7 @@ func TestIntegration_ManagerOwnership_FirstConsumerEndToEnd(t *testing.T) {
 	require.NoError(t, err, "rival workflow must still register locally")
 	// …and the incumbent keeps the contested cell — the rival's claim never
 	// entered the epoch.
-	owner, ok, err = regB.OwnerOf(ctx, ownershipTestEntity, "mission.phase")
+	owner, ok, err = regB.OwnerOf(ctx, ownershipTestEntity, "mission.lifecycle.phase")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "fixture", owner, "the incumbent owner must keep the contested cell")
@@ -98,15 +98,15 @@ func TestIntegration_ManagerOwnership_DisjointOwnersCoexist(t *testing.T) {
 	other := lifecycle{}.fixtureWorkflow()
 	other.Name = "other"
 	other.EntityIDPattern = "*.*.lifecycle.gcs.sensor.*"
-	other.PhasePredicate = "sensor.phase"
+	other.PhasePredicate = "sensor.lifecycle.phase"
 	require.NoError(t, mgr.Register(other))
 
-	missionOwner, ok, err := reg.OwnerOf(ctx, ownershipTestEntity, "mission.phase")
+	missionOwner, ok, err := reg.OwnerOf(ctx, ownershipTestEntity, "mission.lifecycle.phase")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "fixture", missionOwner)
 
-	sensorOwner, ok, err := reg.OwnerOf(ctx, "c360.p.lifecycle.gcs.sensor.001", "sensor.phase")
+	sensorOwner, ok, err := reg.OwnerOf(ctx, "c360.p.lifecycle.gcs.sensor.001", "sensor.lifecycle.phase")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "other", sensorOwner)

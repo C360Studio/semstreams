@@ -6,12 +6,12 @@
   "enabled": true,
   "conditions": [
     {
-      "field": "loop.role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "research_pipeline"
     },
     {
-      "field": "research.requested",
+      "field": "research.request.received",
       "operator": "eq",
       "value": "true"
     }
@@ -20,7 +20,7 @@
   "on_enter": [
     {
       "type": "publish",
-      "subject": "component.nl_classify.$entity.triple.research.loop_id"
+      "subject": "component.nl_classify.$entity.triple.research.loop.id"
     }
   ]
 }

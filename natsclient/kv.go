@@ -437,12 +437,23 @@ func (kv *KVStore) Keys(ctx context.Context) ([]string, error) {
 // Uses JetStream KV's native key filtering for efficient server-side filtering.
 // The prefix is automatically converted to a NATS wildcard pattern (prefix + ">").
 func (kv *KVStore) KeysByPrefix(ctx context.Context, prefix string) ([]string, error) {
-	ctx, cancel := kv.applyTimeout(ctx)
-	defer cancel()
-
 	// Convert prefix to NATS wildcard pattern
 	// "entity.sensor." becomes "entity.sensor.>" to match all keys with that prefix
-	pattern := prefix + ">"
+	return kv.KeysByFilter(ctx, prefix+">")
+}
+
+// KeysByFilter returns all keys matching an exact NATS subject filter. Unlike
+// KeysByPrefix, this supports fixed-position wildcards such as
+// "*.org.platform.domain.system.type.instance".
+//
+// A filtered key listing is a correctness boundary for derived-index
+// reconciliation. The NATS KeyLister closes its channel when ctx is cancelled,
+// but it does not expose a terminal error. Callers must therefore reject the
+// collected slice when the context expires; returning it as success would turn a
+// partial owner snapshot into authoritative truth.
+func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, error) {
+	ctx, cancel := kv.applyTimeout(ctx)
+	defer cancel()
 
 	lister, err := kv.bucket.ListKeysFiltered(ctx, pattern)
 	if err != nil {
@@ -450,15 +461,13 @@ func (kv *KVStore) KeysByPrefix(ctx context.Context, prefix string) ([]string, e
 		if err == jetstream.ErrNoKeysFound {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("kv keys by prefix %q: %w", prefix, err)
+		return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, err)
 	}
 
-	// Collect keys from the channel
-	var keys []string
-	for key := range lister.Keys() {
-		keys = append(keys, key)
+	keys, err := collectFilteredKeys(ctx, lister)
+	if err != nil {
+		return nil, fmt.Errorf("kv keys by filter %q: %w", pattern, err)
 	}
-
 	return keys, nil
 }
 
@@ -475,12 +484,35 @@ func FilteredKeys(ctx context.Context, kv jetstream.KeyValue, pattern string) ([
 		return nil, fmt.Errorf("kv filtered keys %q: %w", pattern, err)
 	}
 
-	var keys []string
-	for key := range lister.Keys() {
-		keys = append(keys, key)
+	keys, err := collectFilteredKeys(ctx, lister)
+	if err != nil {
+		return nil, fmt.Errorf("kv filtered keys %q: %w", pattern, err)
 	}
-
 	return keys, nil
+}
+
+// collectFilteredKeys drains a NATS KeyLister without ever returning a partial
+// result as success. KeyLister has no terminal Error method: cancellation is
+// represented by channel closure, so ctx must be checked both while draining and
+// after closure.
+func collectFilteredKeys(ctx context.Context, lister jetstream.KeyLister) ([]string, error) {
+	defer func() { _ = lister.Stop() }()
+
+	var keys []string
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case key, ok := <-lister.Keys():
+			if !ok {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return keys, nil
+			}
+			keys = append(keys, key)
+		}
+	}
 }
 
 // Watch creates a watcher for key changes

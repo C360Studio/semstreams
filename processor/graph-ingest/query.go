@@ -57,6 +57,9 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 
 // handleQueryEntityNATS handles single entity query requests via NATS request/reply
 func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.checkEntityQueryReady(); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operation
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -93,11 +96,17 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 			fmt.Errorf("internal error: %w", err))
 	}
 
-	return entry.Value, nil
+	if err := c.validateEntityQueryValue(entry.Value); err != nil {
+		return nil, err
+	}
+	return c.finalizeEntityQueryResponse(entry.Value, nil)
 }
 
 // handleQueryBatchNATS handles batch entity query requests via NATS request/reply
 func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.checkEntityQueryReady(); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operations
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -112,16 +121,20 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 
 	// Handle empty IDs (return empty entities)
 	if len(req.IDs) == 0 {
-		return []byte(`{"entities":[]}`), nil
+		return c.finalizeEntityQueryResponse([]byte(`{"entities":[]}`), nil)
 	}
 
 	// Fetch entities with bounded concurrency and cache
-	entities := c.fetchEntitiesConcurrent(ctx, req.IDs, defaultMaxConcurrent)
+	entities, err := c.fetchEntitiesConcurrent(ctx, req.IDs, defaultMaxConcurrent)
+	if err != nil {
+		return nil, c.classifyEntityQueryError(err)
+	}
 
 	// Return entities wrapped in a struct for consistency with loadEntities expectations
-	return json.Marshal(map[string]any{
+	response, err := json.Marshal(map[string]any{
 		"entities": entities,
 	})
+	return c.finalizeEntityQueryResponse(response, err)
 }
 
 // maxPrefixResponseBytes is the soft ceiling for the marshalled response body.
@@ -149,6 +162,9 @@ const maxPrefixResponseBytes = 800 * 1024
 //     i.e. non-deterministic) but is required for cursor correctness and is
 //     safe because callers have always treated the result as a set.
 func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.checkEntityQueryReady(); err != nil {
+		return nil, err
+	}
 	// Create context with timeout for KV operation
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -186,6 +202,9 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 	if req.Prefix != "" && len(keys) == 0 {
 		if _, getErr := c.entityBucket.Get(ctx, req.Prefix); getErr == nil {
 			keys = []string{req.Prefix}
+		} else if !natsclient.IsKVNotFoundError(getErr) {
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal,
+				fmt.Errorf("failed to check exact entity key: %w", getErr))
 		}
 	}
 
@@ -215,7 +234,10 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 	}
 
 	// Fetch full entities with bounded concurrency and cache.
-	entities := c.fetchEntitiesConcurrent(ctx, pageKeys, defaultMaxConcurrent)
+	entities, err := c.fetchEntitiesConcurrent(ctx, pageKeys, defaultMaxConcurrent)
+	if err != nil {
+		return nil, c.classifyEntityQueryError(err)
+	}
 
 	// fetchEntitiesConcurrent returns cache-hits-then-misses order, NOT sorted.
 	// Re-sort by ID so the page is a deterministic sorted prefix of pageKeys and
@@ -257,7 +279,8 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 		NextCursor: nextCursor,
 	}
 
-	return json.Marshal(resp)
+	response, err := json.Marshal(resp)
+	return c.finalizeEntityQueryResponse(response, err)
 }
 
 // applyPrefixByteLimit trims an entity slice to fit within byteLimit bytes
@@ -307,6 +330,9 @@ func applyPrefixByteLimit(entities []graph.EntityState, byteLimit int) ([]graph.
 // This enables NL queries to use partial entity IDs like "temp-sensor-001" which
 // get resolved to full 6-part IDs like "c360.logistics.environmental.sensor.temperature.temp-sensor-001".
 func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]byte, error) {
+	if err := c.checkEntityQueryReady(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -328,23 +354,32 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 	if c.suffixCache != nil {
 		if fullID, ok := c.suffixCache.Get(req.Suffix); ok {
 			c.logger.Debug("suffix query cache hit", "suffix", req.Suffix, "matched", fullID)
-			return json.Marshal(map[string]string{"id": fullID})
+			response, marshalErr := json.Marshal(map[string]string{"id": fullID})
+			return c.finalizeEntityQueryResponse(response, marshalErr)
 		}
 	}
 
 	// Tier 2: Check KV suffix index (O(1) KV get)
 	if c.suffixBucket != nil {
-		if matchedID := c.lookupSuffixIndex(ctx, req.Suffix); matchedID != "" {
+		matchedID, err := c.lookupSuffixIndex(ctx, req.Suffix)
+		if err != nil {
+			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, err)
+		}
+		if matchedID != "" {
 			// Populate cache on hit
 			if c.suffixCache != nil {
 				c.suffixCache.Set(req.Suffix, matchedID) //nolint:errcheck
 			}
-			return json.Marshal(map[string]string{"id": matchedID})
+			response, marshalErr := json.Marshal(map[string]string{"id": matchedID})
+			return c.finalizeEntityQueryResponse(response, marshalErr)
 		}
 	}
 
 	// Tier 3: Fallback full scan (migration period — index may be incomplete)
-	matchedID := c.suffixFallbackScan(ctx, req.Suffix)
+	matchedID, err := c.suffixFallbackScan(ctx, req.Suffix)
+	if err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, err)
+	}
 
 	// If found via scan, populate index + cache for next time
 	if matchedID != "" {
@@ -354,33 +389,100 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 		}
 	}
 
-	return json.Marshal(map[string]string{"id": matchedID})
+	response, err := json.Marshal(map[string]string{"id": matchedID})
+	return c.finalizeEntityQueryResponse(response, err)
+}
+
+func (c *Component) ensureEntityQueriesReady() error {
+	if state := c.entityStatePoison.Load(); state != nil {
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, state)
+	}
+	if c.entityWatchLost.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("graph-ingest query not ready: ENTITY_STATES contract watcher unavailable"))
+	}
+	if c.entityBootstrapStarted.Load() && !c.entityBootstrapComplete.Load() {
+		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+			errors.New("graph-ingest query not ready: ENTITY_STATES bootstrap validating"))
+	}
+	return nil
+}
+
+func (c *Component) checkEntityQueryReady() error {
+	c.entityQueryMu.RLock()
+	defer c.entityQueryMu.RUnlock()
+	return c.ensureEntityQueriesReady()
+}
+
+// finalizeEntityQueryResponse is the commit point for successful query output.
+// A query-discovered poison takes entityQueryMu exclusively before latching;
+// concurrent queries only commit responses under the read side after rechecking.
+func (c *Component) finalizeEntityQueryResponse(data []byte, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	if c.beforeEntityQueryResponse != nil {
+		c.beforeEntityQueryResponse(data)
+	}
+	c.entityQueryMu.RLock()
+	defer c.entityQueryMu.RUnlock()
+	if err := c.ensureEntityQueriesReady(); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (c *Component) validateEntityQueryValue(data []byte) error {
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(data, &state); err != nil {
+		var contractErr *graph.StateContractError
+		if errors.As(err, &contractErr) {
+			c.latchEntityStatePoison(contractErr)
+		}
+		return c.classifyEntityQueryError(err)
+	}
+	return c.ensureEntityQueriesReady()
+}
+
+func (c *Component) classifyEntityQueryError(err error) error {
+	var contractErr *graph.StateContractError
+	if errors.As(err, &contractErr) {
+		c.latchEntityStatePoison(contractErr)
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, contractErr)
+	}
+	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, err)
 }
 
 // lookupSuffixIndex checks the KV suffix index for a matching entity ID.
-func (c *Component) lookupSuffixIndex(ctx context.Context, suffix string) string {
+func (c *Component) lookupSuffixIndex(ctx context.Context, suffix string) (string, error) {
 	entry, err := c.suffixBucket.Get(ctx, suffix)
 	if err != nil {
-		return ""
+		if natsclient.IsKVNotFoundError(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read suffix index: %w", err)
 	}
 
 	var indexEntry struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(entry.Value, &indexEntry); err != nil {
-		return ""
+		return "", fmt.Errorf("decode suffix index: %w", err)
 	}
 
 	c.logger.Debug("suffix query index hit", "suffix", suffix, "matched", indexEntry.ID)
-	return indexEntry.ID
+	return indexEntry.ID, nil
 }
 
 // suffixFallbackScan performs a full key scan for suffix matching.
 // This is the fallback path during migration when the suffix index may be incomplete.
-func (c *Component) suffixFallbackScan(ctx context.Context, suffix string) string {
+func (c *Component) suffixFallbackScan(ctx context.Context, suffix string) (string, error) {
 	keys, err := c.entityBucket.Keys(ctx)
-	if err != nil || keys == nil {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("scan entity keys for suffix: %w", err)
+	}
+	if keys == nil {
+		return "", nil
 	}
 
 	c.logger.Debug("suffix query fallback scan", "suffix", suffix, "key_count", len(keys))
@@ -389,19 +491,19 @@ func (c *Component) suffixFallbackScan(ctx context.Context, suffix string) strin
 	for _, key := range keys {
 		if strings.HasSuffix(key, suffixWithDot) || key == suffix {
 			c.logger.Debug("suffix query matched via scan", "suffix", suffix, "matched", key)
-			return key
+			return key, nil
 		}
 	}
 
-	return ""
+	return "", nil
 }
 
 // fetchEntitiesConcurrent fetches entities by IDs using bounded concurrency with cache.
 // Cache hits skip KV entirely; cache misses are fetched with bounded concurrency.
 // Returns entities in non-deterministic order (callers process as sets).
-func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, maxConcurrent int) []graph.EntityState {
+func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, maxConcurrent int) ([]graph.EntityState, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrent
@@ -425,11 +527,12 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 	// Phase 2: Fetch cache misses with bounded concurrency
 	if len(missIDs) == 0 {
-		return cached
+		return cached, nil
 	}
 
 	type fetchResult struct {
 		entity graph.EntityState
+		err    error
 		ok     bool
 	}
 
@@ -461,12 +564,16 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 			entry, err := c.entityBucket.Get(ctx, entityID)
 			if err != nil {
-				return // Skip not found / errors (partial success)
+				if !natsclient.IsKVNotFoundError(err) {
+					results[idx].err = err
+				}
+				return
 			}
 
 			var entity graph.EntityState
-			if err := json.Unmarshal(entry.Value, &entity); err != nil {
-				return // Skip unmarshal errors
+			if err := graph.UnmarshalEntityState(entry.Value, &entity); err != nil {
+				results[idx].err = err
+				return
 			}
 
 			// Populate cache
@@ -479,15 +586,21 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 	}
 
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// Phase 3: Merge cached + fetched results
 	entities := make([]graph.EntityState, 0, len(cached)+len(missIDs))
 	entities = append(entities, cached...)
 	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
 		if r.ok {
 			entities = append(entities, r.entity)
 		}
 	}
 
-	return entities
+	return entities, nil
 }

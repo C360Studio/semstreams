@@ -14,6 +14,7 @@ import (
 	"reflect"
 
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // Workflow is the registered workflow type name.
@@ -30,14 +31,30 @@ const EntityIDPattern = "*.*.lifecycle.gcs.mission.*"
 // `mission.phase`; UpdateFromOperator writes `mission.owner_org_id`
 // and `mission.note`; the audit predicates carry source attribution.
 const (
-	PredicatePhase       = "mission.phase"
-	PredicateOwnerOrgID  = "mission.owner_org_id"
-	PredicateNote        = "mission.note"
-	PredicateAuditSource = "mission.last_transition_source"
-	PredicateAuditAt     = "mission.last_transition_at"
-	PredicateAuditFrom   = "mission.last_transition_from"
-	PredicateAuditNote   = "mission.last_transition_note"
+	PredicatePhase       = "mission.state.phase"
+	PredicateOwnerOrgID  = "mission.owner.org-id"
+	PredicateNote        = "mission.state.note"
+	PredicateAuditSource = "mission.transition.source"
+	PredicateAuditAt     = "mission.transition.at"
+	PredicateAuditFrom   = "mission.transition.from"
+	PredicateAuditNote   = "mission.transition.note"
+	PredicateCommand     = "mission.command.requested"
 )
+
+func init() {
+	for _, predicate := range []string{
+		PredicatePhase,
+		PredicateOwnerOrgID,
+		PredicateNote,
+		PredicateAuditSource,
+		PredicateAuditAt,
+		PredicateAuditFrom,
+		PredicateAuditNote,
+		PredicateCommand,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
 // Phases of a mission.
 const (
@@ -73,9 +90,9 @@ var Transitions = lifecycle.Transitions{
 // Participant is a typed VIEW over triples, not a private blob.
 type State struct {
 	EntityIDField string `json:"entity_id" lifecycle:"id"`
-	PhaseField    string `json:"phase" lifecycle:"phase,predicate=mission.phase"`
-	OwnerOrgID    string `json:"owner_org_id,omitempty" lifecycle:"operator_writable,predicate=mission.owner_org_id"`
-	Note          string `json:"note,omitempty" lifecycle:"operator_writable,predicate=mission.note"`
+	PhaseField    string `json:"phase" lifecycle:"phase,predicate=mission.state.phase"`
+	OwnerOrgID    string `json:"owner_org_id,omitempty" lifecycle:"operator_writable,predicate=mission.owner.org-id"`
+	Note          string `json:"note,omitempty" lifecycle:"operator_writable,predicate=mission.state.note"`
 }
 
 // New returns a freshly-initialized State. Apps don't call this on

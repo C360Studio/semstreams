@@ -580,7 +580,7 @@ func TestOpsQuery_StepPredicatesRegistered(t *testing.T) {
 			t.Errorf("step predicate %q too short", p)
 		}
 	}
-	if agvocab.LoopHasStep != "agent.loop.has_step" {
-		t.Errorf("LoopHasStep = %q, want agent.loop.has_step", agvocab.LoopHasStep)
+	if agvocab.LoopHasStep != "agent.loop.has-step" {
+		t.Errorf("LoopHasStep = %q, want agent.loop.has-step", agvocab.LoopHasStep)
 	}
 }

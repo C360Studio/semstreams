@@ -39,6 +39,7 @@ import (
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
 // Build information constants
@@ -67,6 +68,10 @@ func main() {
 }
 
 func run() error {
+	// Register first-party semantic names before config/rule/workflow
+	// validation. Import side effects are not an authoring contract.
+	builtins.Register()
+
 	// 1. Print banner
 	printBanner()
 

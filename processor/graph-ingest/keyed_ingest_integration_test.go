@@ -73,7 +73,7 @@ func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T)
 	payload := &mergeTestGraphable{
 		entityID: entityID,
 		triples: []message.Triple{
-			{Subject: entityID, Predicate: "wire.status", Object: "ok", Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: "wire.state.status", Object: "ok", Timestamp: now, Confidence: 1.0},
 		},
 	}
 	baseMsg := message.NewBaseMessage(payload.Schema(), payload, "test-source")
@@ -95,7 +95,7 @@ func TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool(t *testing.T)
 	require.NotNil(t, stored)
 	found := false
 	for _, tr := range stored.Triples {
-		if tr.Predicate == "wire.status" && tr.Object == "ok" {
+		if tr.Predicate == "wire.state.status" && tr.Object == "ok" {
 			found = true
 		}
 	}
@@ -205,7 +205,7 @@ func TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered(t *testing.T) {
 		payload := &mergeTestGraphable{
 			entityID: entityID,
 			triples: []message.Triple{
-				{Subject: entityID, Predicate: "order.seq", Object: i, Timestamp: now, Confidence: 1.0},
+				{Subject: entityID, Predicate: "order.sequence.value", Object: i, Timestamp: now, Confidence: 1.0},
 			},
 		}
 		baseMsg := message.NewBaseMessage(payload.Schema(), payload, "test-source")
@@ -214,14 +214,14 @@ func TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered(t *testing.T) {
 		require.NoError(t, testClient.Client.PublishToStream(ctx, "entity."+entityID, data))
 	}
 
-	// The single-valued order.seq predicate must converge to the LAST update.
+	// The single-valued order.sequence.value predicate must converge to the LAST update.
 	orderSeq := func() (float64, bool) {
 		stored, _, err := c.fetchEntityState(ctx, entityID)
 		if err != nil || stored == nil {
 			return 0, false
 		}
 		for _, tr := range stored.Triples {
-			if tr.Predicate == "order.seq" {
+			if tr.Predicate == "order.sequence.value" {
 				if f, ok := tr.Object.(float64); ok { // JSON round-trips numbers as float64
 					return f, true
 				}
@@ -237,5 +237,5 @@ func TestIntegration_KeyedIngest_SameEntityUpdatesStayOrdered(t *testing.T) {
 	// Belt-and-suspenders: it settled on exactly the last value, not an earlier one.
 	v, ok := orderSeq()
 	require.True(t, ok)
-	assert.Equal(t, float64(updates), v, "final order.seq must be the last-submitted update (no reorder)")
+	assert.Equal(t, float64(updates), v, "final order.sequence.value must be the last-submitted update (no reorder)")
 }

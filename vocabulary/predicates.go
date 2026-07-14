@@ -146,13 +146,13 @@ const (
 	NetworkProtocolPort = "network.protocol.port"
 
 	// NetworkTrafficBytesIn is int64, bytes received
-	NetworkTrafficBytesIn = "network.traffic.bytes.in"
+	NetworkTrafficBytesIn = "network.traffic.bytes-in"
 	// NetworkTrafficBytesOut is int64, bytes sent
-	NetworkTrafficBytesOut = "network.traffic.bytes.out"
+	NetworkTrafficBytesOut = "network.traffic.bytes-out"
 	// NetworkTrafficPacketsIn is int64, packets received
-	NetworkTrafficPacketsIn = "network.traffic.packets.in"
+	NetworkTrafficPacketsIn = "network.traffic.packets-in"
 	// NetworkTrafficPacketsOut is int64, packets sent
-	NetworkTrafficPacketsOut = "network.traffic.packets.out"
+	NetworkTrafficPacketsOut = "network.traffic.packets-out"
 )
 
 // Quality Domain Predicates
@@ -207,11 +207,11 @@ const (
 
 	// GraphRelTriggeredBy represents event causation
 	// Example: An alert triggered by a threshold, action triggered by event
-	GraphRelTriggeredBy = "graph.rel.triggered_by"
+	GraphRelTriggeredBy = "graph.rel.triggered-by"
 
 	// GraphRelDependsOn represents dependency relationships
 	// Example: Specifications depend on other specs, modules depend on libraries
-	GraphRelDependsOn = "graph.rel.depends_on"
+	GraphRelDependsOn = "graph.rel.depends-on"
 
 	// GraphRelImplements represents implementation relationships
 	// Example: Code implements specifications, components implement interfaces
@@ -227,11 +227,11 @@ const (
 
 	// GraphRelBlockedBy represents blocking relationships
 	// Example: An issue blocked by another issue, work blocked by dependencies
-	GraphRelBlockedBy = "graph.rel.blocked_by"
+	GraphRelBlockedBy = "graph.rel.blocked-by"
 
 	// GraphRelRelatedTo represents general association relationships
 	// Example: Related documents, related entities without specific semantics
-	GraphRelRelatedTo = "graph.rel.related_to"
+	GraphRelRelatedTo = "graph.rel.related-to"
 )
 
 // Hierarchy Domain Predicates
@@ -455,21 +455,9 @@ const (
 	RoleMetadata PredicateRole = "metadata"
 )
 
-// IsValidPredicate checks if a predicate follows the three-level dotted notation
-// and matches the expected format: domain.category.property
+// IsValidPredicate reports whether predicate satisfies the canonical lower-kebab
+// domain.category.property contract. ParsePredicate returns the typed reason.
 func IsValidPredicate(predicate string) bool {
-	if predicate == "" {
-		return false
-	}
-
-	// Count dots to ensure three-level structure
-	dotCount := 0
-	for _, char := range predicate {
-		if char == '.' {
-			dotCount++
-		}
-	}
-
-	// Must have exactly 2 dots for three levels
-	return dotCount == 2
+	_, err := ParsePredicate(predicate)
+	return err == nil
 }

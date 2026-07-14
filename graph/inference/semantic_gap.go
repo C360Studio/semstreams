@@ -265,7 +265,7 @@ func (d *SemanticGapDetector) createAnomaly(gap semanticGap) *StructuralAnomaly 
 	}
 
 	// Generate suggested predicate based on entity types if possible
-	predicate := "inferred.related_to"
+	predicate := "inferred.semantic.related-to"
 
 	return &StructuralAnomaly{
 		ID:         uuid.New().String(),

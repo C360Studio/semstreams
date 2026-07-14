@@ -29,12 +29,12 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 	}{
 		{
 			name:     "Pattern A — N triples with scalar Objects → JSON array of N strings",
-			template: "$entity.triple.gather.completed_child.triples",
+			template: "$entity.triple.gather.child.completed.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "gather.completed_child", Object: "loop_a"},
-					{Predicate: "gather.completed_child", Object: "loop_b"},
-					{Predicate: "gather.completed_child", Object: "loop_c"},
+					{Predicate: "gather.child.completed", Object: "loop_a"},
+					{Predicate: "gather.child.completed", Object: "loop_b"},
+					{Predicate: "gather.child.completed", Object: "loop_c"},
 				},
 			},
 			want: `["loop_a","loop_b","loop_c"]`,
@@ -81,10 +81,10 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 		},
 		{
 			name:     "Single Pattern A triple → JSON array of one element",
-			template: "$entity.triple.gather.completed_child.triples",
+			template: "$entity.triple.gather.child.completed.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "gather.completed_child", Object: "only_child"},
+					{Predicate: "gather.child.completed", Object: "only_child"},
 				},
 			},
 			want: `["only_child"]`,
@@ -194,4 +194,16 @@ func TestTripleTriplesSubstitution_MultipleTokensInOneTemplate(t *testing.T) {
 	prompt := "Sibling IDs: $entity.triple.first.triples. Subtopics: $entity.triple.second.triples."
 	got := ec.SubstituteVariables(prompt)
 	assert.Equal(t, `Sibling IDs: ["a","b"]. Subtopics: ["x"].`, got)
+}
+
+func TestTripleTriplesSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
+	t.Parallel()
+
+	ec := &ExecutionContext{Entity: &gtypes.EntityState{Triples: []message.Triple{
+		{Predicate: "gather.child.completed", Object: "child-a"},
+		{Predicate: "gather.child.completed", Object: "child-b"},
+	}}}
+
+	got := ec.SubstituteVariables("$entity.triple.gather.child.completed.triples")
+	assert.Equal(t, `["child-a","child-b"]`, got)
 }

@@ -187,6 +187,9 @@ func GetRuleSchemas() map[string]Schema {
 
 // CreateRuleFromDefinition creates a rule using the appropriate factory
 func CreateRuleFromDefinition(def Definition, deps Dependencies) (Rule, error) {
+	if err := ValidateDefinition(def); err != nil {
+		return nil, fmt.Errorf("rule authoring validation failed: %w", err)
+	}
 	factory, exists := GetRuleFactory(def.Type)
 	if !exists {
 		return nil, fmt.Errorf("no factory registered for rule type: %s", def.Type)

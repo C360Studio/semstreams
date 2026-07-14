@@ -46,3 +46,39 @@ const (
 	// Operational buckets
 	BucketComponentStatus = "COMPONENT_STATUS"
 )
+
+// FrameworkOwnedBuckets returns the authoritative and derived graph buckets
+// whose writes are owned by graph components. Generic KV writers must not
+// mutate these buckets.
+func FrameworkOwnedBuckets() []string {
+	return []string{
+		BucketEntityStates,
+		BucketPredicateIndex,
+		BucketIncomingIndex,
+		BucketOutgoingIndex,
+		BucketAliasIndex,
+		BucketNameIndex,
+		BucketPredicateCatalog,
+		BucketSpatialIndex,
+		BucketTemporalIndex,
+		BucketTemporalIndexReverse,
+		BucketContextIndex,
+		BucketEmbeddingsCache,
+		BucketEmbeddingIndex,
+		BucketEmbeddingDedup,
+		BucketCommunityIndex,
+		BucketAnomalyIndex,
+		BucketStructuralIndex,
+	}
+}
+
+// IsFrameworkOwnedBucket reports whether a bucket's writes belong exclusively
+// to an authoritative or derived graph component.
+func IsFrameworkOwnedBucket(bucket string) bool {
+	for _, owned := range FrameworkOwnedBuckets() {
+		if bucket == owned {
+			return true
+		}
+	}
+	return false
+}

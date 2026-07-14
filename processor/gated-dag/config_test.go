@@ -45,6 +45,7 @@ func TestConfig_Validate(t *testing.T) {
 		{"bad failure policy", func(c *Config) { c.FailurePolicy = "panic" }, "failure_policy"},
 		{"predicate collision", func(c *Config) { c.ClaimPredicate = c.CompletedPredicate }, "must be distinct"},
 		{"empty predicate", func(c *Config) { c.DirtiedPredicate = "" }, "must not be empty"},
+		{"noncanonical predicate", func(c *Config) { c.DirtiedPredicate = "gateddag.unit.dirtied_marker" }, "segment_character"},
 		{"missing dispatch stream", func(c *Config) { c.DispatchStream = "" }, "dispatch_stream is required"},
 		{"bad dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "nope" }, "dispatch_stream_max_age"},
 		{"nonpositive dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "0s" }, "dispatch_stream_max_age"},

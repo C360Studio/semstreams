@@ -3,16 +3,18 @@ package gateddagexec
 import (
 	"fmt"
 	"time"
+
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // Default predicate vocabulary. Consumers may override any of these; the
 // framework defaults give a working out-of-the-box configuration.
 const (
-	defaultCompletedPredicate = "gateddag.completed"
-	defaultFailedPredicate    = "gateddag.failed"
-	defaultDirtiedPredicate   = "gateddag.dirtied"
-	defaultDependsOnPredicate = "gateddag.depends_on"
-	defaultClaimPredicate     = "gateddag.claim"
+	defaultCompletedPredicate = "gateddag.unit.completed"
+	defaultFailedPredicate    = "gateddag.unit.failed"
+	defaultDirtiedPredicate   = "gateddag.unit.dirtied"
+	defaultDependsOnPredicate = "gateddag.unit.depends-on"
+	defaultClaimPredicate     = "gateddag.unit.claim"
 
 	defaultWorkers              = 4
 	defaultQueueSize            = 256
@@ -31,6 +33,19 @@ const (
 	// failed (in-flight units still finish). A blunt circuit-breaker.
 	FailurePolicyStopOnFirstFailure = "stop_on_first_failure"
 )
+
+func init() {
+	for _, predicate := range []string{
+		defaultCompletedPredicate,
+		defaultFailedPredicate,
+		defaultDirtiedPredicate,
+		defaultDependsOnPredicate,
+		defaultClaimPredicate,
+		PredicateFanOutPhase,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
 // Config parameterizes the gated-DAG executor. The zero value is NOT valid —
 // NewComponent applies DefaultConfig for unset fields then calls Validate.
@@ -269,6 +284,9 @@ func (c Config) Validate() error {
 	for name, val := range preds {
 		if val == "" {
 			return fmt.Errorf("%s must not be empty", name)
+		}
+		if err := vocabulary.RequireDeclaredPredicate(val); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
 		}
 		if other, dup := seen[val]; dup {
 			return fmt.Errorf("predicate %q is used by both %s and %s; they must be distinct", val, other, name)

@@ -881,11 +881,11 @@ func extractLatLonFromTriples(entity *gtypes.EntityState) (float64, float64) {
 	var lat, lon float64
 	for _, triple := range entity.Triples {
 		switch triple.Predicate {
-		case "geo.location.latitude", "latitude":
+		case "geo.location.latitude":
 			if v, ok := triple.Object.(float64); ok {
 				lat = v
 			}
-		case "geo.location.longitude", "longitude":
+		case "geo.location.longitude":
 			if v, ok := triple.Object.(float64); ok {
 				lon = v
 			}

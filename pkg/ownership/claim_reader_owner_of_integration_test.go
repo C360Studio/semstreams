@@ -66,7 +66,7 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	}
 
 	// --- Case 3: predicate NOT in the claim → ok=false (unclaimed). ---
-	owner, inc, ok, err = cr.OwnerOf(ctx, inPatternEntity, "other.predicate")
+	owner, inc, ok, err = cr.OwnerOf(ctx, inPatternEntity, "test.value.p")
 	if err != nil {
 		t.Fatalf("OwnerOf(unclaimed predicate): unexpected error: %v", err)
 	}
@@ -93,12 +93,12 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	if err := reg.RegisterOwner(ctx, Registration{
 		Owner: "evidence-writer",
 		Claims: []OwnerClaim{
-			oc("evidence-writer", sysPat, ModeAppendEvidence, "web.backlink"),
+			oc("evidence-writer", sysPat, ModeAppendEvidence, "web.relation.backlink"),
 		},
 	}); err != nil {
 		t.Fatalf("RegisterOwner(append-evidence): %v", err)
 	}
-	owner, inc, ok, err = cr.OwnerOf(ctx, inPatternEntity, "web.backlink")
+	owner, inc, ok, err = cr.OwnerOf(ctx, inPatternEntity, "web.relation.backlink")
 	if err != nil {
 		t.Fatalf("OwnerOf(append-evidence): unexpected error: %v", err)
 	}

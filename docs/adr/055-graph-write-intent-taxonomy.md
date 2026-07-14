@@ -199,8 +199,8 @@ This matters: the 7 conjurors reach the footgun via
 `graph.mutation.triple.add_batch` → `AddTriples` (`decide.go:723`,
 `write_todos.go:440`, `triplepub.go:99`, `scratchpad.go:217`, `emit_diagnosis.go:199`),
 NOT the singular `AddTriple` — deleting only `:1417` would ship the footgun live
-on the batch path. (`graph/datamanager.Manager.AddTriple`, `edge_ops.go:16`, is a
-distinct GetEntity-first implementation already must-exist-shaped; do not conflate.)
+on the batch path. The former parallel data-manager writer was removed during the
+ADR-074 beta cutover, so graph-ingest is now the only production mutation seam.
 
 **This converts envelope-less producers into fail-fast errors** while
 append-to-existing survives (renamed `evidence.append` for intent). But the
@@ -415,16 +415,10 @@ create-or-fail lane (§6) and is exempt.
   (`sensorml.Asset` is currently unwired — no `MarshalJSON`, no payload registration
   — so the regression is latent-on-wiring, not live-on-main; that is why the guard
   must regroup rather than reject before the ADR-044 Phase 5 bridge lands.)
-  **Sibling consumer — `graph/messagemanager` (DEAD, reclassified 2026-06-12).**
-  `Manager.ProcessMessage` (`graph/messagemanager/processor.go:274`) is a second
-  Graphable→EntityState consumer that files all `triples` under one `actualEntityID`
-  with the same single-key misfiling (it ALREADY lifts `StorageRef` via the
-  `Storable` assertion `:200-204`). The Wave-0 caller audit found it has **zero
-  non-test importers in semstreams** — it is dead/legacy, not a live ingest path.
-  Reclassified from "must regroup" to **removal candidate**: do NOT fix
-  speculatively (per `feedback_framework_vs_product_boundary` — unwired ≠ broken).
-  If a sister product wires it, it carries the same T2 defect, but that is its
-  call to make.
+  **Sibling consumer — `graph/messagemanager` (removed 2026-07-14).** The Wave-0
+  caller audit found zero production importers. ADR-074's clean beta cutover removed
+  it together with its `graph/datamanager` dependency, leaving graph-ingest as the
+  sole Graphable→ENTITY_STATES path.
 - **StorageRef extraction (two halves).** Consumer side: `extractEntityFromMessage`
   must type-assert `ContentStorable` and set `StorageRef` (MergeEntity merges it on
   the existing branch, `:1008-1009`). Producer side: the canonical pilot
@@ -537,8 +531,8 @@ must-exist last, so `main` is never broken in between.
     load-bearing must-exist change.
   - In-process `Component.AddTriple` caller audit (§3) — **[DONE — SAFE, #267]** no
     caller relies on auto-vivify ordering; hierarchy inverse-edge writes degrade
-    Warn-only (locked by a regression test). `DirectRelationshipApplier` +
-    `graph/messagemanager` confirmed dead (zero production wiring).
+    Warn-only (locked by a regression test). The unwired direct relationship
+    applier and legacy parallel Graphable writer were removed from the production path.
   - **ADR-054 Phase 1** (IndexingProfiler, lenient) — **[SHIPPED #254 + Phase 2a #255]**
     so birth envelopes carry the profile.
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,8 +125,31 @@ func (m *mockKVBucket) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt)
 }
 
 func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
-	return nil, errors.New("not implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	matched := make([]string, 0)
+	for key := range m.data {
+		for _, filter := range filters {
+			prefix := strings.TrimSuffix(filter, ">")
+			if strings.HasPrefix(key, prefix) {
+				matched = append(matched, key)
+				break
+			}
+		}
+	}
+	ch := make(chan string, len(matched))
+	for _, key := range matched {
+		ch <- key
+	}
+	close(ch)
+	return &mockKeyLister{ch: ch}, nil
 }
+
+type mockKeyLister struct{ ch chan string }
+
+func (l *mockKeyLister) Keys() <-chan string                    { return l.ch }
+func (l *mockKeyLister) Status() <-chan jetstream.KeyValueEntry { return nil }
+func (l *mockKeyLister) Stop() error                            { return nil }
 
 func (m *mockKVBucket) History(ctx context.Context, key string, opts ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
 	return nil, errors.New("not implemented")

@@ -22,7 +22,26 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary"
 )
+
+const (
+	temperaturePredicate = "sensor.measurement.temperature"
+	pressurePredicate    = "sensor.measurement.pressure"
+	humidityPredicate    = "sensor.measurement.humidity"
+	vibrationPredicate   = "sensor.measurement.vibration"
+)
+
+func init() {
+	for _, predicate := range []string{
+		temperaturePredicate,
+		pressurePredicate,
+		humidityPredicate,
+		vibrationPredicate,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
 // TestEntityWatcher_RuleTriggerDebouncing verifies that rapid entity updates
 // are debounced and rules are evaluated once against the final stable state.
@@ -63,7 +82,7 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		Name: "Temperature Threshold (Debounced)",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "temperature",
+				Field:    temperaturePredicate,
 				Operator: "gt",
 				Value:    75.0,
 				Required: true,
@@ -287,7 +306,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Name: "Temperature Threshold",
 			Conditions: []expression.ConditionExpression{
 				{
-					Field:    "temperature",
+					Field:    temperaturePredicate,
 					Operator: "gt",
 					Value:    70.0,
 					Required: true,
@@ -305,7 +324,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Name: "Pressure Threshold",
 			Conditions: []expression.ConditionExpression{
 				{
-					Field:    "pressure",
+					Field:    pressurePredicate,
 					Operator: "gt",
 					Value:    100.0,
 					Required: true,
@@ -323,7 +342,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Name: "Humidity Threshold",
 			Conditions: []expression.ConditionExpression{
 				{
-					Field:    "humidity",
+					Field:    humidityPredicate,
 					Operator: "gt",
 					Value:    80.0,
 					Required: true,
@@ -341,7 +360,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Name: "Vibration Threshold",
 			Conditions: []expression.ConditionExpression{
 				{
-					Field:    "vibration",
+					Field:    vibrationPredicate,
 					Operator: "gt",
 					Value:    50.0,
 					Required: true,
@@ -412,13 +431,13 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 		var state *gtypes.EntityState
 		switch sensorType {
 		case "temperature":
-			state = createEntityStateWithTriple(entityID, "temperature", 75.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, temperaturePredicate, 75.0+float64(i%10))
 		case "pressure":
-			state = createEntityStateWithTriple(entityID, "pressure", 105.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, pressurePredicate, 105.0+float64(i%10))
 		case "humidity":
-			state = createEntityStateWithTriple(entityID, "humidity", 85.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, humidityPredicate, 85.0+float64(i%10))
 		case "vibration":
-			state = createEntityStateWithTriple(entityID, "vibration", 55.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, vibrationPredicate, 55.0+float64(i%10))
 		}
 
 		stateJSON, err := json.Marshal(state)
@@ -526,7 +545,7 @@ func createEntityStateForDebounce(entityID string, temperature float64) *gtypes.
 		Triples: []message.Triple{
 			{
 				Subject:   entityID,
-				Predicate: "temperature",
+				Predicate: temperaturePredicate,
 				Object:    temperature,
 			},
 		},

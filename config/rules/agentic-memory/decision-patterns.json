@@ -10,7 +10,7 @@
   },
   "conditions": [
     {
-      "field": "response.content",
+      "field": "$message.response.content",
       "operator": "regex",
       "value": "(decided to|chose|will (use|implement|create)|going to|selected|opted for)",
       "required": true

@@ -201,7 +201,12 @@ func DefaultConfig() Config {
 			Enabled:                 true,
 			MaxIntermediateHops:     2,
 			MinExpectedTransitivity: 3,
-			TransitivePredicates:    []string{"member_of", "part_of", "located_in", "belongs_to"},
+			TransitivePredicates: []string{
+				"hierarchy.type.member",
+				"hierarchy.system.member",
+				"hierarchy.domain.member",
+				"graph.rel.contains",
+			},
 		},
 		Review: ReviewConfig{
 			Enabled:              false, // Requires LLM setup

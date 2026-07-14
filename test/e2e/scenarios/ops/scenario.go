@@ -376,7 +376,7 @@ func (s *Scenario) seedSyntheticLoops(ctx context.Context, result *scenarios.Res
 		if seed.outcome == agentic.OutcomeFailed {
 			triples = append(triples, message.Triple{
 				Subject:   seed.entityID,
-				Predicate: "agent.step.error_category",
+				Predicate: "agent.step.error-category",
 				Object:    "network",
 				Source:    "e2e-ops-seed",
 				Timestamp: now,
@@ -389,7 +389,7 @@ func (s *Scenario) seedSyntheticLoops(ctx context.Context, result *scenarios.Res
 			Version:     1,
 			UpdatedAt:   now,
 		}
-		entityData, err := json.Marshal(entityState)
+		entityData, err := graph.MarshalEntityState(&entityState)
 		if err != nil {
 			return fmt.Errorf("marshal entity state %s: %w", seed.entityID, err)
 		}

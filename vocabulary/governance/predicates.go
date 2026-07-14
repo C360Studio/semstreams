@@ -41,5 +41,5 @@ const (
 	// the nearest-neighbor example. Rule-opaque: telemetry only,
 	// and rules that match on corpus IDs break silently when the
 	// corpus is reshuffled (Phase 4 multi-tenancy).
-	InjectionTopMatchID = "governance.injection.top_match_id"
+	InjectionTopMatchID = "governance.injection.top-match-id"
 )

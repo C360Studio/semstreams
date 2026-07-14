@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary/rulepacks"
 )
 
 // getTestNATSClient creates a NATS client for integration tests
@@ -260,7 +261,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 		"name": "Dynamic Battery Rule",
 		"conditions": []any{
 			map[string]any{
-				"field":    "battery.level",
+				"field":    "$message.battery.level",
 				"operator": "lt",
 				"value":    30.0,
 				"required": true,
@@ -295,7 +296,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 		"name": "Updated Dynamic Rule",
 		"conditions": []any{
 			map[string]any{
-				"field":    "battery.level",
+				"field":    "$message.battery.level",
 				"operator": "lt",
 				"value":    15.0, // Changed threshold
 				"required": true,
@@ -337,7 +338,7 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 		Name: "JSON DSL Test Rule",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "battery.level",
+				Field:    "$message.battery.level",
 				Operator: "lte",
 				Value:    20.0,
 				Required: true,
@@ -428,7 +429,7 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 		Name: "Metrics Test Rule",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "battery.level",
+				Field:    "$message.battery.level",
 				Operator: "lt",
 				Value:    50.0,
 				Required: true,
@@ -661,7 +662,7 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 		Name: "Graph Integration Rule",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "battery.level",
+				Field:    "$message.battery.level",
 				Operator: "lt",
 				Value:    15.0,
 				Required: true,
@@ -768,7 +769,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	_, err = planKV.Put(ctx, "my-plan", initialPlan)
 	require.NoError(t, err)
 
-	// Define a rule: when workflow.plan.status transitions from "created" to "drafting",
+	// Define a rule: when workflow.state.status transitions from "created" to "drafting",
 	// merge {status: "drafting"} into PLAN_STATES/my-plan
 	ruleDef := rule.Definition{
 		ID:   "plan-created-to-drafting",
@@ -776,7 +777,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 		Name: "Plan Created to Drafting Transition",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "workflow.plan.status",
+				Field:    rulepacks.WorkflowStateStatus,
 				Operator: "transition",
 				Value:    "drafting",
 				From:     []any{"created", "rejected"},
@@ -842,8 +843,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	entityCreated := gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "workflow.plan.status", Object: "created", Source: "test", Timestamp: time.Now()},
-			{Subject: entityID, Predicate: "workflow.plan.slug", Object: "my-plan", Source: "test", Timestamp: time.Now()},
+			{Subject: entityID, Predicate: rulepacks.WorkflowStateStatus, Object: "created", Source: "test", Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -870,8 +870,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	entityDrafting := gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "workflow.plan.status", Object: "drafting", Source: "test", Timestamp: time.Now()},
-			{Subject: entityID, Predicate: "workflow.plan.slug", Object: "my-plan", Source: "test", Timestamp: time.Now()},
+			{Subject: entityID, Predicate: rulepacks.WorkflowStateStatus, Object: "drafting", Source: "test", Timestamp: time.Now()},
 		},
 		Version:   2,
 		UpdatedAt: time.Now(),

@@ -51,7 +51,7 @@ var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:
 // vocabulary/agentic/predicates.go so it's grep-discoverable from
 // the framework side.
 var rulesStampedPredicates = map[string]string{
-	"gather.completed_child": "example-fan-out/02 stamps this on the parent loop entity when each child investigator completes; the counter the join rule matches against",
+	"gather.child.completed": "example-fan-out/02 stamps this on the parent loop entity when each child investigator completes; the counter the join rule matches against",
 	// Add justified entries here as new reference packs land. Empty
 	// justification (or absent entry) causes the test to fail.
 }

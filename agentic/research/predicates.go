@@ -1,5 +1,7 @@
 package research
 
+import "github.com/c360studio/semstreams/vocabulary"
+
 // Predicate constants for triples emitted by the research_graph chain.
 // Every predicate lives under the research.* namespace so graph
 // queries can filter chain triples cleanly without colliding with
@@ -21,39 +23,39 @@ const (
 	// subject = research-loop entity ID; object = the topic string.
 	// R0 of the rule chain watches for this triple to kick off the
 	// chain.
-	PredicateResearchRequested = "research.requested"
+	PredicateResearchRequested = "research.request.received"
 
 	// PredicateResearchTopic carries the topic verbatim. Distinct from
 	// PredicateResearchRequested because the latter doubles as the
 	// chain-kickoff trigger; this predicate is the durable record of
 	// what the parent actually asked for.
-	PredicateResearchTopic = "research.topic"
+	PredicateResearchTopic = "research.request.topic"
 
 	// PredicateResearchHint stamps a single hint key/value pair. One
 	// triple per hint, with the key encoded in the Object field as
 	// "<key>=<value>". Multi-triple is preferred over JSON-stringified
 	// hint maps so graph queries can filter on specific hint keys.
-	PredicateResearchHint = "research.hint"
+	PredicateResearchHint = "research.request.hint"
 
 	// PredicateResearchBudgetTokens carries the resolved per-call token
 	// budget (after defaulting). Stored as string per Triple.Object
 	// shape; consumers parse to int.
-	PredicateResearchBudgetTokens = "research.budget_tokens"
+	PredicateResearchBudgetTokens = "research.request.budget-tokens"
 
 	// PredicateResearchMaxIterations carries the resolved refine-loop
 	// cap (after defaulting).
-	PredicateResearchMaxIterations = "research.max_iterations"
+	PredicateResearchMaxIterations = "research.request.max-iterations"
 
 	// PredicateResearchParentLoop links the research-pipeline loop
 	// back to its parent loop entity ID. Stamped by the research_graph
 	// tool from call.LoopID so the continuation rule can route the
 	// SearchResult back to the right caller.
-	PredicateResearchParentLoop = "research.parent_loop"
+	PredicateResearchParentLoop = "research.parent.loop"
 
 	// PredicateLoopRole stamps the loop entity's role. Same convention
 	// as other agentic loops; lets ops dashboards filter
 	// research-pipeline loops without parsing intent payloads.
-	PredicateLoopRole = "loop.role"
+	PredicateLoopRole = "agent.loop.role"
 
 	// PredicateResearchLoopID stamps the raw research-pipeline loop ID
 	// (e.g. "rg_abc12345") on the loop entity as a dedicated triple
@@ -63,14 +65,14 @@ const (
 	// substitution layer doesn't expose a "last-segment" accessor and
 	// the rules need the raw form for routing. Cheap one-extra-triple
 	// per chain instead of an engine feature.
-	PredicateResearchLoopID = "research.loop_id"
+	PredicateResearchLoopID = "research.loop.id"
 
 	// PredicateResearchParentRole stamps the parent loop's role so the
 	// continuation rule (R6) can route the SearchResult back to the
 	// correct caller without re-fetching the parent LoopEntity from
 	// AGENT_LOOPS. Empty when the research_graph tool was invoked from
 	// outside an agent loop (rare).
-	PredicateResearchParentRole = "research.parent_role"
+	PredicateResearchParentRole = "research.parent.role"
 
 	// Per-stage completion predicates emitted by the rule chain's five
 	// components after each stage finishes. R0-R6 trigger on the
@@ -92,7 +94,7 @@ const (
 	// PredicateResearchClassifyCandidateCount is the number of candidate
 	// entities the classifier surfaced. Stored as a string per Triple.Object
 	// shape; consumers parse to int.
-	PredicateResearchClassifyCandidateCount = "research.classify.candidate_count"
+	PredicateResearchClassifyCandidateCount = "research.classify.candidate-count"
 
 	// PredicateResearchClassifyDegraded marks "true" when the classifier
 	// fell back to a degraded path (e.g., semantic-fallback fired).
@@ -115,7 +117,7 @@ const (
 	// PredicateResearchExecuteEvidenceCount is the number of evidence
 	// items the execute stage assembled (post-dedup, post-budget). Stored
 	// as a string; consumers parse to int.
-	PredicateResearchExecuteEvidenceCount = "research.execute.evidence_count"
+	PredicateResearchExecuteEvidenceCount = "research.execute.evidence-count"
 
 	// PredicateResearchAssessComplete marks assess_sufficiency completion.
 	// Stamped together with PredicateResearchAssessSufficient.
@@ -131,7 +133,7 @@ const (
 	// completion — the chain's terminal stage. R6 (continuation)
 	// triggers on this predicate's appearance and routes the
 	// SearchResult back to the parent loop via publish_agent.
-	PredicateResearchSearchResultComplete = "research.search_result.complete"
+	PredicateResearchSearchResultComplete = "research.search-result.complete"
 
 	// PredicateResearchSearchResultRef is the KV key where the
 	// SearchResult envelope lives (search_result.complete.<loopID> in
@@ -139,8 +141,43 @@ const (
 	// so the parent's next iteration can read_loop_result on the
 	// SearchResult without it riding in the rule payload (per ADR-028:
 	// rules carry references, not content).
-	PredicateResearchSearchResultRef = "research.search_result.ref"
+	PredicateResearchSearchResultRef = "research.search-result.ref"
+
+	// PredicateResearchEvidencePresent is the rule-authored evidence marker.
+	PredicateResearchEvidencePresent = "research.evidence.present"
+
+	// PredicateResearchStateStatus is the rule-authored terminal/degraded status.
+	PredicateResearchStateStatus = "research.state.status"
 )
+
+func init() {
+	for _, predicate := range []string{
+		PredicateResearchRequested,
+		PredicateResearchTopic,
+		PredicateResearchHint,
+		PredicateResearchBudgetTokens,
+		PredicateResearchMaxIterations,
+		PredicateResearchParentLoop,
+		PredicateLoopRole,
+		PredicateResearchLoopID,
+		PredicateResearchParentRole,
+		PredicateResearchClassifyComplete,
+		PredicateResearchClassifyCandidateCount,
+		PredicateResearchClassifyDegraded,
+		PredicateResearchRouteComplete,
+		PredicateResearchRouteAction,
+		PredicateResearchExecuteComplete,
+		PredicateResearchExecuteEvidenceCount,
+		PredicateResearchAssessComplete,
+		PredicateResearchAssessSufficient,
+		PredicateResearchSearchResultComplete,
+		PredicateResearchSearchResultRef,
+		PredicateResearchEvidencePresent,
+		PredicateResearchStateStatus,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
 // TripleSource is the Source field on triples emitted by the
 // research_graph tool. Mirrors the decide / write_todos convention so

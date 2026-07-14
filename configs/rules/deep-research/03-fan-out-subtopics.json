@@ -11,7 +11,7 @@
       "value": "research-coordinator"
     },
     {
-      "field": "coordinator.decision.next_action",
+      "field": "coordinator.decision.next-action",
       "operator": "eq",
       "value": "fan_out"
     }

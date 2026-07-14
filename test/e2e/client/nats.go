@@ -867,7 +867,7 @@ func (c *NATSValidationClient) CountVirtualEdges(ctx context.Context) (*VirtualE
 	}
 	c.mu.Unlock()
 
-	reqJSON, err := json.Marshal(graph.PredicateListQuery{Prefix: "inferred.semantic."})
+	reqJSON, err := json.Marshal(graph.PredicateListQuery{Namespace: "inferred.semantic"})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal predicateList request: %w", err)
 	}

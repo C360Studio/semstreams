@@ -47,14 +47,14 @@
 //	// Map a drone to an intelligent software agent
 //	triple := message.Triple{
 //	    Subject:   droneID,
-//	    Predicate: "rdf.type",
+//	    Predicate: "rdf.type.class",
 //	    Object:    cco.IntelligentSoftwareAgent,
 //	}
 //
 //	// Map a mission plan document
 //	triple := message.Triple{
 //	    Subject:   planID,
-//	    Predicate: "rdf.type",
+//	    Predicate: "rdf.type.class",
 //	    Object:    cco.PlanSpecification,
 //	}
 //

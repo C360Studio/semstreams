@@ -131,8 +131,8 @@ go test -race ./examples/processors/iot_sensor/...
 
 ```go
 // Instead of generic "value" + "unit" triples:
-Predicate: fmt.Sprintf("sensor.measurement.%s", s.Unit)
-// Produces: sensor.measurement.celsius, sensor.measurement.percent, etc.
+Predicate: measurementPredicateByUnit[s.Unit]
+// Produces only registered predicates such as sensor.measurement.celsius.
 ```
 
 ### Entity References

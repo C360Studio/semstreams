@@ -20,7 +20,11 @@ import "strconv"
 // two structs change together.
 type IndexStatusResponse struct {
 	Ready bool   `json:"ready"` // target>0 && indexed_revision>=target_revision
-	State string `json:"state"` // "building" | "ready" | "degraded"
+	State string `json:"state"` // "building" | "ready" | "degraded" | "reset_required"
+	// Code and Reason carry bounded operator-actionable fatal readiness state.
+	// They are empty during ordinary building/ready/degraded operation.
+	Code   string `json:"code,omitempty"`
+	Reason string `json:"reason,omitempty"`
 	// IndexedRevision is the low-water-of-pending watermark: every delivered
 	// ENTITY_STATES revision <= this has been applied and nothing <= it is still
 	// in flight. A consumer that knows its own target revision can gate on
@@ -40,9 +44,10 @@ type IndexStatusResponse struct {
 
 // Index readiness states. Mirrors pkg/fusion.IndexState string values.
 const (
-	IndexStateBuilding = "building"
-	IndexStateReady    = "ready"
-	IndexStateDegraded = "degraded"
+	IndexStateBuilding      = "building"
+	IndexStateReady         = "ready"
+	IndexStateDegraded      = "degraded"
+	IndexStateResetRequired = "reset_required"
 )
 
 // ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066)

@@ -295,6 +295,54 @@ func TestOlderDeleteCannotClearFailedNewerAuthoritativeState(t *testing.T) {
 	require.Equal(t, int64(1), comp.failedCount.Load(), "older tombstone cleared newer failure marker")
 }
 
+func TestAuthoritativeWatcherTreatsDeleteAndPurgeAsTerminalCleanup(t *testing.T) {
+	for _, op := range []jetstream.KeyValueOp{jetstream.KeyValueDelete, jetstream.KeyValuePurge} {
+		t.Run(op.String(), func(t *testing.T) {
+			comp := createTestComponentWithMockKV(t)
+			comp.watermark = revlag.New()
+			entityID := "acme.ops.robotics.gcs.drone.099"
+			targetID := "acme.ops.robotics.gcs.mission.099"
+			require.NoError(t, comp.UpdateOutgoingIndex(context.Background(), entityID, targetID, "core.relationship.related"))
+
+			states := newMockKVBucket()
+			states.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+				return nil, jetstream.ErrKeyNotFound
+			}
+			comp.entityStatesBucket = states
+			watcher := &orderedTestWatcher{updates: make(chan jetstream.KeyValueEntry, 2)}
+			watcher.updates <- &orderedTestEntry{key: entityID, revision: 7, op: op}
+			watcher.updates <- nil
+			close(watcher.updates)
+			comp.wg.Add(1)
+			comp.watchEntityStates(context.Background(), &orderedWatchBucket{mockKVBucket: states, watcher: watcher})
+
+			outgoing := outgoingMock(comp)
+			outgoing.mu.Lock()
+			_, exists := outgoing.data[entityID]
+			outgoing.mu.Unlock()
+			require.False(t, exists, "%s did not drive owner cleanup", op)
+			require.Equal(t, uint64(7), comp.watermark.Indexed(), "%s did not complete revision watermark", op)
+			require.True(t, comp.initialEnumerationComplete.Load())
+		})
+	}
+}
+
+type orderedTestWatcher struct {
+	updates chan jetstream.KeyValueEntry
+}
+
+func (w *orderedTestWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
+func (w *orderedTestWatcher) Stop() error                             { return nil }
+
+type orderedWatchBucket struct {
+	*mockKVBucket
+	watcher jetstream.KeyWatcher
+}
+
+func (b *orderedWatchBucket) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	return b.watcher, nil
+}
+
 func TestKeyedDispatcher_AllowsDifferentEntitiesToRunConcurrently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

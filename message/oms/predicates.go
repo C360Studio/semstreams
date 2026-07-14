@@ -16,28 +16,28 @@ const (
 	// PredHasFeatureOfInterest binds the observation to the
 	// SOSA FeatureOfInterest it is about. Maps to
 	// sosa:hasFeatureOfInterest.
-	PredHasFeatureOfInterest = "oms.observation.hasFeatureOfInterest"
+	PredHasFeatureOfInterest = "oms.observation.has-feature-of-interest"
 
 	// PredObservedProperty binds the observation to the SOSA
 	// ObservableProperty it measured. Maps to
 	// sosa:observedProperty.
-	PredObservedProperty = "oms.observation.observedProperty"
+	PredObservedProperty = "oms.observation.observed-property"
 
 	// PredUsedProcedure binds the observation to the SOSA
 	// Procedure that produced it. Maps to sosa:usedProcedure.
-	PredUsedProcedure = "oms.observation.usedProcedure"
+	PredUsedProcedure = "oms.observation.used-procedure"
 
 	// PredResultTime carries the ISO 8601 resultTime. Maps to
 	// sosa:resultTime.
-	PredResultTime = "oms.observation.resultTime"
+	PredResultTime = "oms.observation.result-time"
 
 	// PredPhenomenonTime carries the ISO 8601 phenomenonTime.
 	// Maps to sosa:phenomenonTime.
-	PredPhenomenonTime = "oms.observation.phenomenonTime"
+	PredPhenomenonTime = "oms.observation.phenomenon-time"
 
 	// PredHasSimpleResult carries the simple literal Result.
 	// Maps to sosa:hasSimpleResult.
-	PredHasSimpleResult = "oms.observation.hasSimpleResult"
+	PredHasSimpleResult = "oms.observation.has-simple-result"
 )
 
 // init registers every dotted predicate this package emits with

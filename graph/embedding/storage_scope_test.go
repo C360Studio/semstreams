@@ -20,6 +20,7 @@ func TestFindSimilarFromCache_ScopeFilter(t *testing.T) {
 		cacheReady: make(chan struct{}),
 	}
 	close(s.cacheReady) // mark the cache warm
+	s.cacheWatchHealthy = true
 
 	query := []float32{1, 1, 1}
 

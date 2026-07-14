@@ -179,3 +179,14 @@ func TestTripleLengthSubstitution_NotInterferingWithOrdinarySubstitution(t *test
 	got := ec.SubstituteVariables("role=$entity.triple.agent.role count=$entity.triple.subtopics.length")
 	assert.Equal(t, "role=coordinator count=3", got)
 }
+
+func TestTripleLengthSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
+	t.Parallel()
+
+	ec := &ExecutionContext{Entity: &gtypes.EntityState{Triples: []message.Triple{
+		{Predicate: "coordinator.decision.next-actions", Object: []string{"review", "merge"}},
+	}}}
+
+	got := ec.SubstituteVariables("$entity.triple.coordinator.decision.next-actions.length")
+	assert.Equal(t, "2", got)
+}

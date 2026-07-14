@@ -421,6 +421,8 @@ type Component struct {
 	bytesProcessed    int64
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
+	graphStatePoison  atomic.Pointer[graph.StateContractError]
+	entityWatchLost   atomic.Bool
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
@@ -570,13 +572,20 @@ func (c *Component) Health() component.HealthStatus {
 
 	if c.running {
 		status = "running"
+		if c.graphStatePoison.Load() != nil {
+			status = graph.IndexStateResetRequired
+			lastErr = graph.ErrorCodeGraphStateResetRequired
+		} else if c.entityWatchLost.Load() {
+			status = graph.IndexStateDegraded
+			lastErr = graph.ErrorCodeIndexNotReady
+		}
 		if errorCount > 0 {
 			lastErr = "errors occurred during processing"
 		}
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running && errorCount == 0,
+		Healthy:    c.running && errorCount == 0 && c.graphStatePoison.Load() == nil && !c.entityWatchLost.Load(),
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
 		LastError:  lastErr,
@@ -698,12 +707,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Create community storage for the detector
 	c.storage = clustering.NewNATSCommunityStorage(communityBucket)
 
-	// Set up query handlers
-	if err := c.setupQueryHandlers(ctx); err != nil {
-		cancel()
-		return errs.Wrap(err, "Component", "Start", "setup query handlers")
-	}
-
 	// Initialize lifecycle reporter and wait for dependencies
 	c.initLifecycleReporter(ctx)
 
@@ -712,11 +715,30 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Create graph provider and detector
+	// Establish the authoritative-state contract watch before exposing query
+	// handlers. WatchAll's bootstrap sentinel gives us an atomic
+	// bootstrap-then-live boundary: pre-existing poison is latched before the
+	// first query can observe stale COMMUNITY_INDEX data, and later poison has
+	// no list/watch race.
+	if err := c.startEntityContractWatch(ctx); err != nil {
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "entity-state contract watch")
+	}
+
+	// Set up query handlers only after authoritative state has been checked.
+	if err := c.setupQueryHandlers(ctx); err != nil {
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "setup query handlers")
+	}
+
+	// Create graph provider and detector. A poisoned bootstrap still starts the
+	// query surface so it can return the typed reset requirement, but no
+	// detector/enhancement/action worker may run against incompatible state.
 	c.initProviderAndDetector()
+	poisoned := c.graphStatePoison.Load() != nil
 
 	// Initialize structural analysis if enabled
-	if c.config.EnableStructural {
+	if !poisoned && c.config.EnableStructural {
 		if err := c.initStructural(ctx); err != nil {
 			c.logger.Warn("failed to initialize structural analysis, continuing without it",
 				slog.Any("error", err))
@@ -724,7 +746,7 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Initialize anomaly detection if enabled (requires structural)
-	if c.config.EnableAnomalyDetection && c.structuralStorage != nil {
+	if !poisoned && c.config.EnableAnomalyDetection && c.structuralStorage != nil {
 		if err := c.initAnomalyDetection(ctx); err != nil {
 			c.logger.Warn("failed to initialize anomaly detection, continuing without it",
 				slog.Any("error", err))
@@ -732,7 +754,7 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Start LLM enhancement worker if enabled
-	if c.config.EnableLLM {
+	if !poisoned && c.config.EnableLLM {
 		if err := c.startEnhancementWorker(ctx, c.graphProvider); err != nil {
 			c.logger.Warn("failed to start enhancement worker, continuing without LLM",
 				slog.Any("error", err))
@@ -740,7 +762,7 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Start review worker if enabled (for anomaly approval workflow)
-	if c.config.AnomalyConfig.Review.Enabled && c.anomalyStorage != nil {
+	if !poisoned && c.config.AnomalyConfig.Review.Enabled && c.anomalyStorage != nil {
 		if err := c.startReviewWorker(ctx); err != nil {
 			c.logger.Warn("failed to start review worker, continuing without anomaly review",
 				slog.Any("error", err))
@@ -752,8 +774,10 @@ func (c *Component) Start(ctx context.Context) error {
 	c.startTime = time.Now()
 
 	// Start detection loop goroutine
-	c.wg.Add(1)
-	go c.runDetectionLoop(ctx)
+	if !poisoned {
+		c.wg.Add(1)
+		go c.runDetectionLoop(ctx)
+	}
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-clustering"),
@@ -1026,6 +1050,7 @@ func (c *Component) handleDetectionError(ctx context.Context, err error, operati
 		c.logger.Debug(operation + " interrupted by shutdown")
 		return true
 	}
+	c.latchGraphStatePoison(err)
 	c.logger.Error(operation+" failed", slog.Any("error", err))
 	atomic.AddInt64(&c.errors, 1)
 	if c.lifecycleReporter != nil {
@@ -1034,6 +1059,94 @@ func (c *Component) handleDetectionError(ctx context.Context, err error, operati
 		}
 	}
 	return false
+}
+
+func (c *Component) latchGraphStatePoison(err error) bool {
+	var contractErr *graph.StateContractError
+	if !errors.As(err, &contractErr) {
+		return false
+	}
+	if c.graphStatePoison.CompareAndSwap(nil, contractErr) {
+		c.logger.Error("authoritative graph state requires reset; clustering outputs are blocked",
+			slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+			slog.String("reason", string(contractErr.Reason)))
+	}
+	return true
+}
+
+func (c *Component) graphStateContractError(operation string) error {
+	contractErr := c.graphStatePoison.Load()
+	if contractErr == nil {
+		if c.entityWatchLost.Load() {
+			return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+				errors.New("authoritative ENTITY_STATES watcher is unavailable"))
+		}
+		return nil
+	}
+	return errs.WrapFatal(contractErr, "Component", operation,
+		"authoritative graph state requires operator reset and canonical reingest")
+}
+
+// startEntityContractWatch validates the current ENTITY_STATES snapshot and
+// keeps watching live writes. Contract poison is sticky for the process
+// lifetime: a later valid write cannot prove that previously derived community
+// output is sound.
+func (c *Component) startEntityContractWatch(ctx context.Context) error {
+	watcher, err := c.entityBucket.WatchAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	updates := watcher.Updates()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = watcher.Stop()
+			return ctx.Err()
+		case entry, ok := <-updates:
+			if !ok {
+				_ = watcher.Stop()
+				return errors.New("ENTITY_STATES contract watch closed during bootstrap")
+			}
+			if entry == nil {
+				c.wg.Add(1)
+				go c.runEntityContractWatch(ctx, watcher, updates)
+				return nil
+			}
+			c.observeEntityContractEntry(entry)
+		}
+	}
+}
+
+func (c *Component) runEntityContractWatch(ctx context.Context, watcher jetstream.KeyWatcher, updates <-chan jetstream.KeyValueEntry) {
+	defer c.wg.Done()
+	defer watcher.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry, ok := <-updates:
+			if !ok {
+				if ctx.Err() == nil {
+					c.entityWatchLost.Store(true)
+				}
+				return
+			}
+			if entry != nil {
+				c.observeEntityContractEntry(entry)
+			}
+		}
+	}
+}
+
+func (c *Component) observeEntityContractEntry(entry jetstream.KeyValueEntry) {
+	if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
+		return
+	}
+	var state graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
+		c.latchGraphStatePoison(err)
+	}
 }
 
 // runStructuralAndAnomalyDetection runs structural computation and anomaly detection if enabled.
@@ -1071,6 +1184,11 @@ func (c *Component) runStructuralAndAnomalyDetection(ctx context.Context) bool {
 func (c *Component) runCommunityDetection(ctx context.Context) {
 	if ctx.Err() != nil {
 		c.logger.Debug("skipping detection - shutdown in progress")
+		return
+	}
+	if err := c.graphStateContractError("runCommunityDetection"); err != nil {
+		c.logger.Debug("skipping detection because authoritative graph state is unavailable",
+			slog.Any("error", err))
 		return
 	}
 
@@ -1572,9 +1690,8 @@ func (q *kvEntityQuerier) GetEntities(ctx context.Context, ids []string) ([]*gra
 		}
 
 		var entity graph.EntityState
-		if err := json.Unmarshal(entry.Value(), &entity); err != nil {
-			q.logger.Warn("failed to unmarshal entity", slog.String("id", id), slog.Any("error", err))
-			continue
+		if err := graph.UnmarshalEntityState(entry.Value(), &entity); err != nil {
+			return nil, errs.WrapFatal(err, "kvEntityQuerier", "GetEntities", "decode authoritative entity")
 		}
 
 		// ADR-054 Phase 1 (lenient): observe the entity's indexing profile but

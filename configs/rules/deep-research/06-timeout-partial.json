@@ -33,7 +33,7 @@
     },
     {
       "type": "add_triple",
-      "predicate": "research.status",
+      "predicate": "research.state.status",
       "object": "partial"
     }
   ]

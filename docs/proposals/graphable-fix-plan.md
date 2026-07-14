@@ -286,9 +286,8 @@ the in-process bypass imposes no blocker on the closing move.**
   wiring; production structural inference uses `MutationRelationshipApplier` (the NATS
   `graph.mutation.*` path, subject to the flip at the consumer, not an in-process
   bypass).
-- `graph/messagemanager.ProcessMessage` (a second Graphable→EntityState consumer with
-  the same T2 single-key misfiling) has ZERO non-test importers — dead/legacy.
-  Reclassified as a removal candidate, NOT a regroup target.
+- The second legacy Graphable-to-ENTITY_STATES writer had zero non-test importers
+  and was removed during the ADR-074 beta cutover. It is not a regroup target.
 
 **Wave 1 — pilots (parallel, prove the patterns):** B3 (lane-ii replace pilot),
 B2 (lane-i ContentStorable pilot, consumes T1/T2/StorageRef).

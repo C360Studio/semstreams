@@ -32,6 +32,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Test EntityCache configuration
 	assert.Equal(t, cache.StrategyHybrid, config.EntityCache.Strategy)
+	assert.True(t, config.EntityCache.Enabled)
 	assert.Equal(t, 1000, config.EntityCache.MaxSize)
 	assert.Equal(t, 5*time.Minute, config.EntityCache.TTL)
 	assert.Equal(t, 1*time.Minute, config.EntityCache.CleanupInterval)

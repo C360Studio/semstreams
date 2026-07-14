@@ -56,24 +56,24 @@ func TestDeriveOwnerRegistration_SplitsByModeAndExcludesUnauthored(t *testing.T)
 	if casClaim == nil {
 		t.Fatal("expected a cas-transition claim for the phase predicate")
 	}
-	if got := casClaim.Predicates; !slices.Equal(got, []string{"mission.phase"}) {
-		t.Errorf("cas claim predicates = %v, want [mission.phase]", got)
+	if got := casClaim.Predicates; !slices.Equal(got, []string{"mission.lifecycle.phase"}) {
+		t.Errorf("cas claim predicates = %v, want [mission.lifecycle.phase]", got)
 	}
 
 	if replaceClaim == nil {
 		t.Fatal("expected a replace-owned claim for audit + writable fields")
 	}
 	// Audit predicates (4) + writable projected fields (owner_org_id, note).
-	// EXCLUDED: mission.phase (claim 1), mission.assigned_drone (reference),
+	// EXCLUDED: mission.lifecycle.phase (claim 1), mission.assignment.drone (reference),
 	// and the bare readonly LastAt predicate (it equals AuditPredicates.At, so
 	// it survives only via the audit add, not the field — and is not duplicated).
 	want := []string{
-		"mission.last_transition_at",
-		"mission.last_transition_from",
-		"mission.last_transition_note",
-		"mission.last_transition_source",
-		"mission.note",
-		"mission.owner_org_id",
+		"mission.annotation.note",
+		"mission.identity.owner-org-id",
+		"mission.transition.at",
+		"mission.transition.from",
+		"mission.transition.note",
+		"mission.transition.source",
 	}
 	if got := replaceClaim.Predicates; !slices.Equal(got, want) {
 		t.Errorf("replace claim predicates =\n  %v\nwant (sorted)\n  %v", got, want)
@@ -81,8 +81,8 @@ func TestDeriveOwnerRegistration_SplitsByModeAndExcludesUnauthored(t *testing.T)
 
 	// The reference predicate must NOT be claimed — the Manager never authors it.
 	for _, c := range regn.Claims {
-		if slices.Contains(c.Predicates, "mission.assigned_drone") {
-			t.Errorf("reference predicate mission.assigned_drone must not be claimed (mode %q)", c.Mode)
+		if slices.Contains(c.Predicates, "mission.assignment.drone") {
+			t.Errorf("reference predicate mission.assignment.drone must not be claimed (mode %q)", c.Mode)
 		}
 	}
 }
@@ -96,7 +96,7 @@ func TestDeriveOwnerRegistration_PhaseOnlyWorkflowYieldsSingleClaim(t *testing.T
 		Name:            "phaseonly",
 		EntityIDPattern: "*.*.lifecycle.gcs.phaseonly.*",
 		Transitions:     Transitions{"a": {"b"}, "b": {}},
-		PhasePredicate:  "phaseonly.phase",
+		PhasePredicate:  "phaseonly.lifecycle.phase",
 		Schema:          reflect.TypeOf(phaseOnlyState{}),
 	}
 	meta, err := parseSchemaType(w.Schema)
@@ -118,7 +118,7 @@ func TestDeriveOwnerRegistration_PhaseOnlyWorkflowYieldsSingleClaim(t *testing.T
 
 type phaseOnlyState struct {
 	ID     string `json:"entity_id" lifecycle:"id"`
-	PhaseF string `json:"phase" lifecycle:"phase,predicate=phaseonly.phase"`
+	PhaseF string `json:"phase" lifecycle:"phase,predicate=phaseonly.lifecycle.phase"`
 }
 
 func (s *phaseOnlyState) EntityID() string       { return s.ID }

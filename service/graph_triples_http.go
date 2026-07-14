@@ -208,10 +208,8 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 		}
 
 		var entity graph.EntityState
-		if err := json.Unmarshal(entry.Value, &entity); err != nil {
-			m.logger.Debug("graph triples: skipping entity with invalid JSON",
-				slog.String("key", key), slog.Any("error", err))
-			continue
+		if err := graph.UnmarshalEntityState(entry.Value, &entity); err != nil {
+			return nil, fmt.Errorf("decode authoritative entity %q: %w", key, err)
 		}
 
 		for _, t := range entity.Triples {

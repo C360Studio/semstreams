@@ -567,7 +567,7 @@ func (d *LPADetector) InferRelationshipsFromCommunities(
 				triples = append(triples,
 					InferredTriple{
 						Subject:     entityA,
-						Predicate:   "inferred.clustered_with",
+						Predicate:   "inferred.cluster.clustered-with",
 						Object:      entityB,
 						Source:      "lpa_community_detection",
 						Confidence:  confidence,
@@ -577,7 +577,7 @@ func (d *LPADetector) InferRelationshipsFromCommunities(
 					},
 					InferredTriple{
 						Subject:     entityB,
-						Predicate:   "inferred.clustered_with",
+						Predicate:   "inferred.cluster.clustered-with",
 						Object:      entityA,
 						Source:      "lpa_community_detection",
 						Confidence:  confidence,

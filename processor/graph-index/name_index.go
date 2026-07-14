@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // nameQueryMaxHydration bounds how many NAME_INDEX memberships graph.query.byName will
@@ -66,12 +67,44 @@ func nameCompositePrefix(name string) string {
 	return nameIndexKey(name) + "."
 }
 
+// nameIndexEntityFilter enumerates every name membership owned by entityID:
+// hash(name).entity6.hex(predicate).
+func nameIndexEntityFilter(entityID string) string {
+	return "*." + entityID + ".*"
+}
+
 // nameCompositeValue is the JSON value stored at each NAME_INDEX composite key.
 // The original-case name and predicate priority are NOT recoverable from the
 // hashed prefix alone, so they ride in the value.
 type nameCompositeValue struct {
 	Name     string `json:"name"`     // original-case name as stored on the entity
 	Priority int    `json:"priority"` // label-predicate salience (lower = higher)
+}
+
+type nameIndexWrite struct {
+	name      string
+	predicate string
+	priority  int
+}
+
+func (c *Component) reconcileNameIndex(ctx context.Context, entityID string, writes []nameIndexWrite) error {
+	desired := make(map[string][]byte, len(writes))
+	for _, write := range writes {
+		if write.name == "" || !validateNameKeyInputs(entityID, write.predicate, c.logger) {
+			return errs.WrapInvalid(errs.ErrInvalidData, "Component", "reconcileNameIndex",
+				"name membership contains an invalid name, entity ID, or predicate")
+		}
+		value, err := json.Marshal(nameCompositeValue{Name: write.name, Priority: write.priority})
+		if err != nil {
+			return errs.Wrap(err, "Component", "reconcileNameIndex", "marshal value")
+		}
+		desired[nameCompositeKey(nameIndexKey(write.name), entityID, write.predicate)] = value
+	}
+
+	// Overwrite retained keys because original-case spelling or priority lives in
+	// the value and may change while the normalized composite key remains stable.
+	return c.reconcileOwnedRows(ctx, "name", c.nameBucket,
+		nameIndexEntityFilter(entityID), desired, true)
 }
 
 // nameEntryFromKey extracts entityID and predicate from a NAME_INDEX composite
@@ -117,6 +150,11 @@ func validateNameKeyInputs(entityID, predicate string, logger *slog.Logger) bool
 			slog.String("entity_id", entityID))
 		return false
 	}
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		logger.Debug("name index: invalid predicate, skipping",
+			slog.String("entity_id", entityID), slog.Any("error", err))
+		return false
+	}
 	return true
 }
 
@@ -142,7 +180,8 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 	// ID or empty predicate rather than store a key the reader would reject or
 	// mis-split. Symmetric with INCOMING (validateIncomingKeyInputs) and CONTEXT.
 	if !validateNameKeyInputs(entityID, predicate, c.logger) {
-		return nil
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateNameIndex",
+			"invalid entity ID or predicate")
 	}
 
 	nameHash := nameIndexKey(name)

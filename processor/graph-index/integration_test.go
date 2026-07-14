@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,84 @@ func readContextEntityIDs(ctx context.Context, t *testing.T, kv *natsclient.KVSt
 		ids = append(ids, strings.Join(parts[:6], "."))
 	}
 	return ids
+}
+
+// TestIntegration_PreexistingPredicatePoisonIsSticky proves the beta cutover
+// contract at the real KV watch boundary. A noncanonical value that exists
+// before Start must poison readiness during replay, and a later canonical
+// update must not hide that process-lifetime reset requirement.
+func TestIntegration_PreexistingPredicatePoisonIsSticky(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketEntityStates,
+		Description: "Test incompatible entity state replay",
+	})
+	require.NoError(t, err)
+
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	targetID := "acme.ops.robotics.gcs.mission.001"
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	_, err = entityBucket.Put(ctx, entityID, poisoned)
+	require.NoError(t, err)
+
+	configJSON, err := json.Marshal(DefaultConfig())
+	require.NoError(t, err)
+	created, err := CreateGraphIndex(configJSON, component.Dependencies{NATSClient: nc})
+	require.NoError(t, err)
+	indexComponent := created.(*Component)
+	require.NoError(t, indexComponent.Initialize())
+	require.NoError(t, indexComponent.Start(ctx))
+	defer indexComponent.Stop(5 * time.Second)
+
+	require.Eventually(t, func() bool {
+		status := indexComponent.computeIndexStatus(ctx)
+		return !status.Ready &&
+			status.State == graph.IndexStateResetRequired &&
+			status.Code == graph.ErrorCodeGraphStateResetRequired &&
+			status.Reason == string(graph.GraphStateReasonNoncanonicalPredicate)
+	}, 5*time.Second, 25*time.Millisecond, "preexisting poison never latched reset-required")
+
+	canonical := graph.EntityState{
+		ID: entityID,
+		Triples: []message.Triple{{
+			Subject:   entityID,
+			Predicate: "robotics.assigned.mission",
+			Object:    targetID,
+			Source:    "test",
+			Timestamp: time.Now(),
+		}},
+	}
+	canonicalData, err := graph.MarshalEntityState(&canonical)
+	require.NoError(t, err)
+	_, err = entityBucket.Put(ctx, entityID, canonicalData)
+	require.NoError(t, err)
+
+	// Prove the later revision was actually delivered and processed; merely
+	// checking the sticky flag without this synchronization could pass before
+	// the update reaches the component.
+	require.Eventually(t, func() bool {
+		_, getErr := indexComponent.outgoingBucket.Get(ctx, entityID)
+		return getErr == nil
+	}, 5*time.Second, 25*time.Millisecond, "later canonical update was not indexed")
+
+	status := indexComponent.computeIndexStatus(ctx)
+	require.False(t, status.Ready)
+	require.Equal(t, graph.IndexStateResetRequired, status.State)
+	require.Equal(t, graph.ErrorCodeGraphStateResetRequired, status.Code)
+	require.Equal(t, string(graph.GraphStateReasonNoncanonicalPredicate), status.Reason)
+
+	queryErr := indexComponent.ensureQueryReady(ctx)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, queryErr, &classified)
+	require.Equal(t, errs.ErrorFatal, classified.Class)
+	require.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
 }
 
 // TestIntegration_KVWatchToIndexFlow tests the full KV watch -> index update flow
@@ -257,48 +336,44 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 	_, err = entityBucket.Put(ctx, entityID, stateData)
 	require.NoError(t, err)
 
-	// Wait for indexing
-	time.Sleep(500 * time.Millisecond)
+	// Synchronize on the concrete projection rather than a fixed sleep.
+	require.Eventually(t, func() bool {
+		_, getErr := graphIndex.outgoingBucket.Get(ctx, entityID)
+		return getErr == nil
+	}, 3*time.Second, 25*time.Millisecond, "outgoing index should exist before deletion")
 
-	// Verify indexes exist
-	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
-	require.NoError(t, err, "outgoing index should exist before deletion")
+	// Seed a populated INCOMING row that is physically target-prefixed by entityID
+	// but semantically owned by otherSourceID. PR524's legacy hard-delete can drive
+	// this cleanup with the physical target prefix "entityID.".
+	// Source-axis cleanup across arbitrary target prefixes is intentionally not
+	// asserted here; it remains behind graph-index-fixed-arity-reconciliation's
+	// benchmark and ADR decision.
+	otherSourceID := "c360.platform.robotics.mav1.sensor.002"
+	require.NoError(t, graphIndex.UpdateIncomingIndex(ctx, entityID, otherSourceID, "core.relationship.related"))
+	require.Eventually(t, func() bool {
+		return len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 1
+	}, 3*time.Second, 25*time.Millisecond, "incoming-as-target row should exist before deletion")
 
 	// Delete entity from ENTITY_STATES
 	err = entityBucket.Delete(ctx, entityID)
 	require.NoError(t, err)
 
-	// Wait for deletion to process
-	time.Sleep(500 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, outgoingErr := graphIndex.outgoingBucket.Get(ctx, entityID)
+		if !natsclient.IsKVNotFoundError(outgoingErr) {
+			return false
+		}
+		return len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 0
+	}, 3*time.Second, 25*time.Millisecond, "current target-prefix index rows were not retracted")
 
 	// Verify indexes were removed
 	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
 	assert.True(t, natsclient.IsKVNotFoundError(err), "outgoing index should be deleted, got: %v", err)
 
-	// Entity-owned cleanup: the delete path prefix-scans "entityID." and removes the
-	// deleted entity's own incoming-as-TARGET keyset. Nothing targets this entity, so
-	// that set is empty either way — this only proves the prefix-scan-delete runs without
-	// resurrecting a keyset, not that a populated one is cleaned.
-	ownIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
-	assert.Empty(t, ownIncoming, "the deleted entity's own incoming-as-target keyset should be gone")
-
-	// Reciprocal cleanup is NOT implemented (gh#433, subsumed by the ADR-073 retention
-	// epic): the deleted entity is a SOURCE, so its edge lives on the TARGET's incoming
-	// index at "targetID.entityID.predicate" — a mid-key sourceID token a bare-key
-	// tombstone cannot reach. Characterization assertion documenting the current gap;
-	// FLIP to assert.NotContains / require empty once gh#433 (composite reciprocal
-	// cleanup driven by a durable reverse projection) lands.
-	targetIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)
-	staleReciprocal := false
-	for _, e := range targetIncoming {
-		if e.FromEntityID == entityID {
-			staleReciprocal = true
-			break
-		}
-	}
-	assert.True(t, staleReciprocal,
-		"gh#433: deleting the source leaves a stale reciprocal edge on the target's incoming index "+
-			"(reciprocal cleanup unimplemented) — flip this assertion when gh#433 lands")
+	// Physical target-prefix cleanup: the delete path prefix-scans "entityID." and
+	// removes the populated incoming-as-TARGET keyset seeded above.
+	targetPrefixedIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
+	assert.Empty(t, targetPrefixedIncoming, "the physical entityID target-prefix keyset should be gone")
 }
 
 // TestIntegration_MultipleRelationships tests indexing entities with multiple relationships

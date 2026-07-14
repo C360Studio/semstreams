@@ -296,6 +296,11 @@ type Component struct {
 	failedEntities sync.Map
 	failedCount    atomic.Int64
 
+	// resetState is a sticky poison state for unreadable or noncanonical
+	// authoritative ENTITY_STATES. Repair retries must never clear it; only an
+	// operator reset followed by process restart creates a clean component.
+	resetState atomic.Pointer[graph.StateContractError]
+
 	// Alias predicates from vocabulary (cached at startup for performance)
 	aliasPredicates map[string]int
 
@@ -823,7 +828,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				c.watermark.Observe(entry.Revision(), entry.Key())
 			}
 
-			if entry.Operation() == jetstream.KeyValueDelete {
+			if graph.IsKVTombstone(entry.Operation()) {
 				if c.entityCoalescer != nil {
 					c.entityCoalescer.Remove(entry.Key())
 				}
@@ -1089,14 +1094,14 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	}
 
 	var state graph.EntityState
-	if err := json.Unmarshal(data, &state); err != nil {
-		// Permanent parse failure — retrying can't help and it drives no writes, so it
-		// is not an index-write failure. Report processed and return nil (the revision
-		// is legitimately covered).
-		c.logger.Warn("failed to unmarshal entity state",
-			slog.String("entity", entityID),
-			slog.Any("error", err))
-		return nil
+	if err := graph.UnmarshalEntityState(data, &state); err != nil {
+		var stateErr *graph.StateContractError
+		if errors.As(err, &stateErr) {
+			c.markGraphStateResetRequired(string(stateErr.Reason))
+		} else {
+			c.markGraphStateResetRequired(string(graph.GraphStateReasonUnreadableEntity))
+		}
+		return fmt.Errorf("ENTITY_STATES %q is incompatible; graph reset and canonical reingest required: %w", entityID, err)
 	}
 
 	// Determine entity ID: use state.ID if set, otherwise entityID arg, otherwise first triple subject
@@ -1121,12 +1126,8 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	incomingByTarget := make(map[string][]graph.IncomingEntry)
 	// Collect alias/name writes to perform (with the rest) in the retryable write phase.
 	type aliasWrite struct{ alias string }
-	type nameWrite struct {
-		name, predicate string
-		priority        int
-	}
 	var aliasWrites []aliasWrite
-	var nameWrites []nameWrite
+	var nameWrites []nameIndexWrite
 
 	// Index each triple
 	for _, triple := range state.Triples {
@@ -1156,7 +1157,7 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 		// Display-name (label) predicates → NAME_INDEX for graph.query.byName (gh#376).
 		if priority, isName := c.namePredicates[triple.Predicate]; isName {
 			if name, ok := triple.Object.(string); ok && name != "" {
-				nameWrites = append(nameWrites, nameWrite{name: name, predicate: triple.Predicate, priority: priority})
+				nameWrites = append(nameWrites, nameIndexWrite{name: name, predicate: triple.Predicate, priority: priority})
 			}
 		}
 	}
@@ -1477,8 +1478,8 @@ func (c *Component) UpdateIncomingIndex(ctx context.Context, targetID, sourceID,
 	if sourceID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateIncomingIndex", "source ID cannot be empty")
 	}
-	if predicate == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateIncomingIndex", "predicate cannot be empty")
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return errs.WrapInvalid(err, "Component", "UpdateIncomingIndex", "invalid predicate")
 	}
 
 	// Check context - nil check first to prevent panic
@@ -1518,8 +1519,11 @@ func (c *Component) updateIncomingIndexBatch(ctx context.Context, targetID strin
 	failures := 0
 	for _, entry := range newEntries {
 		if !validateIncomingKeyInputs(targetID, entry.FromEntityID, entry.Predicate, c.logger) {
-			continue
+			return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateIncomingIndexBatch",
+				"incoming membership contains an invalid target, source, or predicate")
 		}
+	}
+	for _, entry := range newEntries {
 		key := incomingIndexKey(targetID, entry.FromEntityID, entry.Predicate)
 		if _, err := c.incomingBucket.Put(ctx, key, incomingIndexMarker); err != nil {
 			atomic.AddInt64(&c.errors, 1)
@@ -1606,8 +1610,8 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdatePredicateIndex", "entity ID cannot be empty")
 	}
-	if predicate == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdatePredicateIndex", "predicate cannot be empty")
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return errs.WrapInvalid(err, "Component", "UpdatePredicateIndex", "invalid predicate")
 	}
 
 	// Check context - nil check first to prevent panic
@@ -1676,9 +1680,9 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 // appears as the sourceID middle-token) is the pre-existing gh#433 gap — unchanged
 // here (design.md D3).
 //
-// CONTEXT is entity-prefixed and cleaned immediately below. NAME, ALIAS, and
-// PREDICATE cannot be enumerated from a bare entityID tombstone with their current
-// key shapes/former values, so their reciprocal cleanup remains the gh#433 gap.
+// CONTEXT is entity-prefixed and cleaned immediately below. The shipped path does
+// not activate fixed-position wildcard reconciliation for NAME or PREDICATE; that
+// work remains a benchmarked design spike. ALIAS still has no owner-key axis.
 func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromIndexes", "entity ID cannot be empty")
@@ -1783,8 +1787,8 @@ func (c *Component) DeleteFromPredicateIndex(ctx context.Context, entityID, pred
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromPredicateIndex", "entity ID cannot be empty")
 	}
-	if predicate == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "DeleteFromPredicateIndex", "predicate cannot be empty")
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return errs.WrapInvalid(err, "Component", "DeleteFromPredicateIndex", "invalid predicate")
 	}
 
 	// Check context - nil check first to prevent panic
@@ -1927,7 +1931,8 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 			continue
 		}
 		if !validateContextKeyInputs(entityID, t.Predicate, c.logger) {
-			continue
+			return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex",
+				"context membership contains an invalid entity ID or predicate")
 		}
 		key := contextIndexKey(entityID, contextHashHex(t.Context), t.Predicate)
 		value, marshalErr := json.Marshal(contextIndexValue{Context: t.Context})
@@ -1940,10 +1945,10 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 		desired[key] = value
 	}
 
-	// Reconcile against what the entity currently owns: prefix-scan "entityID.",
-	// RETRACT superseded keys, then Put the desired set (P1f — this is why per-key
-	// Puts alone leaked; the entity prefix makes the retraction findable). Failures
-	// are aggregated and returned so the caller can withhold readiness (P1b).
+	// CONTEXT_INDEX already has entityID in the leading key position, so its
+	// shipped prefix reconciliation remains the production path. The generic
+	// filtered-owner candidate stays in the fixed-arity spike until the
+	// registered real-NATS benchmark selects it.
 	existing, listErr := c.contextBucket.KeysByPrefix(ctx, contextIndexEntityPrefix(entityID))
 	if listErr != nil {
 		atomic.AddInt64(&c.errors, 1)
@@ -1953,7 +1958,7 @@ func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, tri
 	var failures int
 	for _, key := range existing {
 		if _, keep := desired[key]; keep {
-			continue // still current — leave it (idempotent)
+			continue
 		}
 		if delErr := c.contextBucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
 			atomic.AddInt64(&c.errors, 1)

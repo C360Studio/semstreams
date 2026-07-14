@@ -92,20 +92,20 @@ func TestRegistry_Idempotent(t *testing.T) {
 	r, _, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "p.a")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "test.value.a")); err != nil {
 		t.Fatal(err)
 	}
 	// Re-register the SAME owner with a different predicate set → replaces, no overlap.
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "p.b")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "test.value.b")); err != nil {
 		t.Fatalf("re-registration of same owner should succeed: %v", err)
 	}
 
-	if _, ok, _ := r.OwnerOf(ctx, entity, "p.a"); ok {
-		t.Error("p.a should no longer be owned after re-registration replaced it")
+	if _, ok, _ := r.OwnerOf(ctx, entity, "test.value.a"); ok {
+		t.Error("test.value.a should no longer be owned after re-registration replaced it")
 	}
-	owner, ok, err := r.OwnerOf(ctx, entity, "p.b")
+	owner, ok, err := r.OwnerOf(ctx, entity, "test.value.b")
 	if err != nil || !ok || owner != "cs-api" {
-		t.Errorf("OwnerOf(p.b) = %q,%v,%v want cs-api,true,nil", owner, ok, err)
+		t.Errorf("OwnerOf(test.value.b) = %q,%v,%v want cs-api,true,nil", owner, ok, err)
 	}
 }
 
@@ -147,7 +147,7 @@ func TestRegistry_OwnerOf(t *testing.T) {
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
 	// Empty registry: nothing owned.
-	if _, ok, err := r.OwnerOf(ctx, entity, "p"); ok || err != nil {
+	if _, ok, err := r.OwnerOf(ctx, entity, "test.value.p"); ok || err != nil {
 		t.Errorf("empty registry OwnerOf should be false,nil; got ok=%v err=%v", ok, err)
 	}
 
@@ -168,7 +168,7 @@ func TestRegistry_OwnerOf(t *testing.T) {
 // and an unclaimed foreign edge reports ok=false (the seam rejects it).
 func TestRegistry_ForeignEdgeClaimFor(t *testing.T) {
 	r, _, ctx := newTestRegistry(t)
-	const isHostedBy = "sensorml.component.isHostedBy"
+	const isHostedBy = "sensorml.component.is-hosted-by"
 	if err := r.RegisterOwner(ctx, Registration{
 		Owner: "sensorml-producer",
 		ForeignEdges: []ForeignEdgeClaim{{
@@ -198,7 +198,7 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "p")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "test.value.p")); err != nil {
 		t.Fatal(err)
 	}
 	// owner-a "crashes": its heartbeat key disappears.
@@ -208,7 +208,7 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 
 	// owner-b claims the SAME cell. Without compaction this overlaps owner-a;
 	// with compaction owner-a is evicted first and owner-b succeeds.
-	if err := r.RegisterOwner(ctx, reg("owner-b", sysPat, "p")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("owner-b", sysPat, "test.value.p")); err != nil {
 		t.Fatalf("owner-b should claim the freed cell after owner-a compaction: %v", err)
 	}
 
@@ -216,7 +216,7 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 	if _, ok := ep.Owners["owner-a"]; ok {
 		t.Error("owner-a should have been compacted out of the epoch")
 	}
-	owner, ok, _ := r.OwnerOf(ctx, entity, "p")
+	owner, ok, _ := r.OwnerOf(ctx, entity, "test.value.p")
 	if !ok || owner != "owner-b" {
 		t.Errorf("cell should now be owned by owner-b, got %q,%v", owner, ok)
 	}
@@ -233,7 +233,7 @@ func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "p")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "test.value.p")); err != nil {
 		t.Fatal(err)
 	}
 	// owner-a's presence key ages out (TTL expiry, sans wait)...
@@ -247,7 +247,7 @@ func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
 
 	// owner-b registers on a DISJOINT cell, triggering a compaction sweep.
 	// owner-a's presence is live again → it must survive.
-	if err := r.RegisterOwner(ctx, reg("owner-b", depPat, "p")); err != nil {
+	if err := r.RegisterOwner(ctx, reg("owner-b", depPat, "test.value.p")); err != nil {
 		t.Fatalf("register owner-b: %v", err)
 	}
 
@@ -255,7 +255,7 @@ func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
 	if _, ok := ep.Owners["owner-a"]; !ok {
 		t.Error("heartbeated owner-a must NOT be compacted out of the epoch")
 	}
-	owner, ok, _ := r.OwnerOf(ctx, entity, "p")
+	owner, ok, _ := r.OwnerOf(ctx, entity, "test.value.p")
 	if !ok || owner != "owner-a" {
 		t.Errorf("owner-a should still own its cell, got %q,%v", owner, ok)
 	}
@@ -276,7 +276,7 @@ func TestRegistry_ConcurrentDisjoint(t *testing.T) {
 			defer wg.Done()
 			owner := fmt.Sprintf("owner-%d", i)
 			pattern := fmt.Sprintf("c360.semconnect.systems.csapi.type%d.*", i)
-			errs[i] = r.RegisterOwner(ctx, reg(owner, pattern, "p"))
+			errs[i] = r.RegisterOwner(ctx, reg(owner, pattern, "test.value.p"))
 		}(i)
 	}
 	wg.Wait()

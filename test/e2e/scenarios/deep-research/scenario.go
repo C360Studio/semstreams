@@ -308,7 +308,7 @@ func (s *Scenario) verifyCoordinatorFired(ctx context.Context, result *scenarios
 				if s, ok := t.Object.(string); ok {
 					role = s
 				}
-			case "coordinator.decision.next_action":
+			case "coordinator.decision.next-action":
 				if s, ok := t.Object.(string); ok {
 					nextAction = s
 				}
@@ -332,7 +332,7 @@ func (s *Scenario) verifyCoordinatorFired(ctx context.Context, result *scenarios
 		return fmt.Errorf("no research-coordinator loop found in ENTITY_STATES — rule 07 (spawn-coordinator) did not fire or the coordinator loop never completed")
 	}
 	if len(fanOutIDs) == 0 {
-		return fmt.Errorf("research-coordinator completed but no coordinator.decision.next_action=fan_out triple appeared — decide tool likely did not publish (check mock LLM WithRoleToolCallSequence or agentic-tools decide registration)")
+		return fmt.Errorf("research-coordinator completed but no coordinator.decision.next-action=fan_out triple appeared — decide tool likely did not publish (check mock LLM WithRoleToolCallSequence or agentic-tools decide registration)")
 	}
 	return nil
 }

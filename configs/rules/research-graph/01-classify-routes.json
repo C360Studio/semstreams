@@ -6,7 +6,7 @@
   "enabled": true,
   "conditions": [
     {
-      "field": "loop.role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "research_pipeline"
     },
@@ -20,7 +20,7 @@
   "on_enter": [
     {
       "type": "publish",
-      "subject": "component.route_search.$entity.triple.research.loop_id"
+      "subject": "component.route_search.$entity.triple.research.loop.id"
     }
   ]
 }

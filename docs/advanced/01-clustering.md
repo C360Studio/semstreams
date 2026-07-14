@@ -11,7 +11,7 @@ Community detection groups entities that are more connected to each other than t
 │                    Community Detection Pipeline                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  Entity Changes (MessageManager → DataManager)                      │
+│  Canonical ENTITY_STATES Changes (shared decoder)                   │
 │         │                                                           │
 │         ▼                                                           │
 │  Entity Count Threshold Reached                                     │

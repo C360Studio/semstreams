@@ -6,7 +6,7 @@
   "enabled": true,
   "conditions": [
     {
-      "field": "loop.role",
+      "field": "agent.loop.role",
       "operator": "eq",
       "value": "research_pipeline"
     },
@@ -21,7 +21,7 @@
     {
       "id": "assess_synthesize_when_sufficient",
       "type": "publish",
-      "subject": "component.synthesize_answer.$entity.triple.research.loop_id",
+      "subject": "component.synthesize_answer.$entity.triple.research.loop.id",
       "when": [
         {
           "field": "research.assess.sufficient",
@@ -33,7 +33,7 @@
     {
       "id": "assess_synthesize_when_refine_capped",
       "type": "publish",
-      "subject": "component.synthesize_answer.$entity.triple.research.loop_id",
+      "subject": "component.synthesize_answer.$entity.triple.research.loop.id",
       "when": [
         {
           "field": "research.assess.sufficient",
@@ -76,7 +76,7 @@
     {
       "id": "assess_refine_redispatch",
       "type": "publish",
-      "subject": "component.execute_subqueries.$entity.triple.research.loop_id",
+      "subject": "component.execute_subqueries.$entity.triple.research.loop.id",
       "when": [
         {
           "field": "research.assess.sufficient",

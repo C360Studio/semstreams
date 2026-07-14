@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // contextHashHex returns the fixed-width, dot-free hex token used as the
@@ -52,6 +53,10 @@ func contextIndexEntityPrefix(entityID string) string {
 	return entityID + "."
 }
 
+func contextIndexEntityFilter(entityID string) string {
+	return contextIndexEntityPrefix(entityID) + ">"
+}
+
 // contextIndexValue is the JSON value stored at each CONTEXT_INDEX composite key.
 // The raw context value is not recoverable from the sha256 key token, so it rides
 // here (a property shared with NAME_INDEX's name hash).
@@ -90,6 +95,11 @@ func validateContextKeyInputs(entityID, predicate string, logger *slog.Logger) b
 	if predicate == "" {
 		logger.Debug("context index: empty predicate, skipping",
 			slog.String("entity_id", entityID))
+		return false
+	}
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		logger.Debug("context index: invalid predicate, skipping",
+			slog.String("entity_id", entityID), slog.Any("error", err))
 		return false
 	}
 	return true

@@ -2,12 +2,13 @@ package agentic
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agentic "github.com/c360studio/semstreams/vocabulary/agentic"
@@ -45,28 +46,11 @@ func DefaultAGNTCYConfig() *AGNTCYConfig {
 // testAgentEntityID is the ID of the test agent entity for AGNTCY tests.
 const testAgentEntityID = "e2e.test.agntcy.semstreams.agent.test-agent-001"
 
-// TestAgentEntity represents the agent entity with capability predicates
-// used for OASF generation testing.
-type TestAgentEntity struct {
-	ID         string          `json:"id"`
-	Type       string          `json:"type"`
-	Properties map[string]any  `json:"properties"`
-	Triples    []client.Triple `json:"triples"`
-	Version    int             `json:"version"`
-	UpdatedAt  string          `json:"updated_at"`
-}
-
 // createTestAgentEntity creates a test agent entity with capability predicates.
-func createTestAgentEntity() *TestAgentEntity {
-	now := time.Now().UTC().Format(time.RFC3339)
-	return &TestAgentEntity{
-		ID:   testAgentEntityID,
-		Type: "agent",
-		Properties: map[string]any{
-			"name":        "E2E Test Agent",
-			"description": "Agent for AGNTCY integration testing",
-		},
-		Triples: []client.Triple{
+func createTestAgentEntity() *graph.EntityState {
+	return &graph.EntityState{
+		ID: testAgentEntityID,
+		Triples: []message.Triple{
 			// Capability predicates
 			{
 				Subject:   testAgentEntityID,
@@ -128,7 +112,7 @@ func createTestAgentEntity() *TestAgentEntity {
 			},
 		},
 		Version:   1,
-		UpdatedAt: now,
+		UpdatedAt: time.Now().UTC(),
 	}
 }
 
@@ -154,7 +138,7 @@ func (s *Scenario) verifyOASFGeneration(ctx context.Context, result *scenarios.R
 
 	// Create test agent entity with capability predicates
 	testEntity := createTestAgentEntity()
-	entityData, err := json.Marshal(testEntity)
+	entityData, err := graph.MarshalEntityState(testEntity)
 	if err != nil {
 		return fmt.Errorf("failed to marshal test entity: %w", err)
 	}

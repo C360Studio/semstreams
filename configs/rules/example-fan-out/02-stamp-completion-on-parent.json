@@ -21,7 +21,7 @@
     {
       "type": "add_triple",
       "subject": "$entity.triple.agent.loop.parent",
-      "predicate": "gather.completed_child",
+      "predicate": "gather.child.completed",
       "object": "$entity.triple.agent.loop.task"
     }
   ]

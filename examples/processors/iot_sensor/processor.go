@@ -150,6 +150,9 @@ func (p *Processor) Process(input map[string]any) (*SensorReading, error) {
 		OrgID:        p.config.OrgID,
 		Platform:     p.config.Platform,
 	}
+	if err := reading.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid sensor reading: %w", err)
+	}
 
 	return reading, nil
 }

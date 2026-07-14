@@ -134,7 +134,7 @@ func buildCoordinatorWithSubtopics(t *testing.T, n int) ([]string, *gtypes.Entit
 	entity := &gtypes.EntityState{
 		Triples: []message.Triple{
 			{Predicate: "agent.loop.role", Object: "coordinator"},
-			{Predicate: "coordinator.decision.next_action", Object: "fan_out"},
+			{Predicate: "coordinator.decision.next-action", Object: "fan_out"},
 			{Predicate: "coordinator.decision.subtopics", Object: string(subtopicsJSON)},
 		},
 	}
@@ -239,7 +239,7 @@ func phase2StampCompletions(
 	for _, tr := range mutator.addedTriples {
 		assert.Equal(t, coordinatorEntityID, tr.Subject,
 			"every counter triple must land on the COORDINATOR entity (proves the #147 subject override is wired)")
-		assert.Equal(t, "gather.completed_child", tr.Predicate)
+		assert.Equal(t, "gather.child.completed", tr.Predicate)
 		gotObjects[fmt.Sprintf("%v", tr.Object)] = struct{}{}
 	}
 	assert.Len(t, gotObjects, n,
@@ -300,7 +300,7 @@ func phase3FireJoin(
 	task := extractTask(t, publisher.published[0].data)
 	expected := make(map[string]struct{}, len(coordinator.Triples))
 	for _, tr := range coordinator.Triples {
-		if tr.Predicate == "gather.completed_child" {
+		if tr.Predicate == "gather.child.completed" {
 			expected[fmt.Sprintf("%v", tr.Object)] = struct{}{}
 		}
 	}
@@ -353,7 +353,7 @@ func TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin(t *testing.
 	}
 	for i := 0; i < n-1; i++ {
 		triples = append(triples, message.Triple{
-			Predicate: "gather.completed_child",
+			Predicate: "gather.child.completed",
 			Object:    fmt.Sprintf("task-%d", i),
 		})
 	}

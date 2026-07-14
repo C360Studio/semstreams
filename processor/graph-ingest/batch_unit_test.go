@@ -48,7 +48,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "x", Timestamp: now, Confidence: 1.0},
 			},
 			wantInvalid:   true,
-			wantSubstring: "predicate cannot be empty",
+			wantSubstring: `"" (empty)`,
 		},
 		{
 			name: "valid first, malformed second — whole batch rejected",
@@ -66,7 +66,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "y", Timestamp: now, Confidence: 1.0},
 			},
 			wantInvalid:   true,
-			wantSubstring: "predicate cannot be empty",
+			wantSubstring: `"" (empty)`,
 		},
 	}
 

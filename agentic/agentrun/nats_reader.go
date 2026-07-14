@@ -123,7 +123,7 @@ func (r *NATSLoopTripleReader) getStringTriple(ctx context.Context, entityID, pr
 	}
 
 	var state graph.EntityState
-	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
 		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: unmarshal entity %q: %w", entityID, err)
 	}
 

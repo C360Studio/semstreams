@@ -163,7 +163,7 @@
 //
 //	config := clustering.CommunityStorageConfig{
 //	    CreateTriples:   true,
-//	    TriplePredicate: "graph.community.member_of",
+//	    TriplePredicate: "graph.community.member-of",
 //	}
 //	storage := clustering.NewNATSCommunityStorageWithConfig(kv, config)
 //

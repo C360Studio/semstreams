@@ -23,6 +23,14 @@ const degradedStuckAfter = 30 * time.Second
 // ENTITY_STATES stream LastSeq read at query time, and the §4 stuck-watermark
 // detector for the degraded state.
 func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusResponse {
+	if c.resetState.Load() != nil {
+		return graph.IndexStatusResponse{
+			Ready:  false,
+			State:  graph.IndexStateResetRequired,
+			Code:   graph.ErrorCodeGraphStateResetRequired,
+			Reason: c.graphStateResetReason(),
+		}
+	}
 	// A status call before Start wired the watcher (early boot / unit tests that do
 	// not start it) falls back to the legacy sticky signal rather than panicking.
 	// This MUST NOT become reachable in production: setupQueryHandlers (which
@@ -84,6 +92,17 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		status.State = graph.IndexStateDegraded
 	}
 	return status
+}
+
+func (c *Component) markGraphStateResetRequired(reason string) {
+	c.resetState.CompareAndSwap(nil, &graph.StateContractError{Reason: graph.StateResetReason(reason)})
+}
+
+func (c *Component) graphStateResetReason() string {
+	if state := c.resetState.Load(); state != nil {
+		return string(state.Reason)
+	}
+	return "incompatible_entity_state"
 }
 
 // trackReadinessProgress updates the wall-clock stuck-watermark detector and returns

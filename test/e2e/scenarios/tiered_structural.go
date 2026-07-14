@@ -311,18 +311,18 @@ func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, res
 		return fmt.Errorf("referential stub %s was not created within timeout — fourth path (ensureReferencedEntityExists) did not fire", danglingID)
 	}
 
-	// 3. Assert the envelope-bearing stub markers (ADR-056 4b): the core.identity.stub
-	//    marker and core.identity.referenced_by = the referrer that named it.
+	// 3. Assert the envelope-bearing stub markers (ADR-056 4b) through the
+	//    canonical graph constants shared with the producer.
 	hasMarker, hasReferencedBy, hasStubOwner := false, false, false
 	var referencedByValue, stubOwnerValue any
 	for _, t := range stub.Triples {
 		switch t.Predicate {
-		case "core.identity.stub":
+		case graph.PredStubMarker:
 			hasMarker = true
-		case "core.identity.referenced_by":
+		case graph.PredStubReferencedBy:
 			hasReferencedBy = true
 			referencedByValue = t.Object
-		case "core.identity.stub_owner":
+		case graph.PredStubOwner:
 			hasStubOwner = true
 			stubOwnerValue = t.Object
 		}
@@ -343,16 +343,18 @@ func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, res
 	}
 
 	if !hasMarker || !hasReferencedBy || !hasStubOwner {
-		return fmt.Errorf("referential stub %s missing required markers: core.identity.stub=%v, core.identity.referenced_by=%v, core.identity.stub_owner=%v",
-			danglingID, hasMarker, hasReferencedBy, hasStubOwner)
+		return fmt.Errorf("referential stub %s missing required markers: %s=%v, %s=%v, %s=%v",
+			danglingID, graph.PredStubMarker, hasMarker, graph.PredStubReferencedBy, hasReferencedBy,
+			graph.PredStubOwner, hasStubOwner)
 	}
 	if got := fmt.Sprintf("%v", referencedByValue); got != referrerID {
-		return fmt.Errorf("referential stub %s core.identity.referenced_by = %q, want %q", danglingID, got, referrerID)
+		return fmt.Errorf("referential stub %s %s = %q, want %q", danglingID, graph.PredStubReferencedBy, got, referrerID)
 	}
 	// Envelope-bearing stub must record a non-empty owner — the ADR-055
 	// "no ownerless births" property the must-exist flip relies on.
 	if owner, ok := stubOwnerValue.(string); !ok || owner == "" {
-		return fmt.Errorf("referential stub %s core.identity.stub_owner is empty — an envelope-bearing stub must record an owner", danglingID)
+		return fmt.Errorf("referential stub %s %s is empty — an envelope-bearing stub must record an owner",
+			danglingID, graph.PredStubOwner)
 	}
 
 	result.Metrics["referential_stub_valid"] = 1

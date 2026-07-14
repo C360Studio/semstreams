@@ -314,7 +314,7 @@ func TestIntegration_SpatialIndexAccumulation(t *testing.T) {
 				{Subject: entity.id, Predicate: "geo.location.latitude", Object: entity.lat, Source: "test", Timestamp: now},
 				{Subject: entity.id, Predicate: "geo.location.longitude", Object: entity.lon, Source: "test", Timestamp: now},
 				{Subject: entity.id, Predicate: "geo.location.altitude", Object: entity.alt, Source: "test", Timestamp: now},
-				{Subject: entity.id, Predicate: "test.index", Object: i, Source: "test", Timestamp: now},
+				{Subject: entity.id, Predicate: "test.spatial.index", Object: i, Source: "test", Timestamp: now},
 			},
 			MessageType: message.Type{Domain: "test", Category: "entity", Version: "v1"},
 			Version:     1,

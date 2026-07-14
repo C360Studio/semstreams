@@ -150,7 +150,7 @@ func TestIntegration_ClusteringFlow(t *testing.T) {
 		// Write outgoing edge for source entity
 		outgoingData := []relationshipEntry{
 			{
-				Predicate:  "rel.connected_to",
+				Predicate:  "relation.network.connected-to",
 				ToEntityID: edge.to,
 			},
 		}
@@ -163,7 +163,7 @@ func TestIntegration_ClusteringFlow(t *testing.T) {
 		// Write incoming edge for target entity
 		incomingData := []relationshipEntry{
 			{
-				Predicate:    "rel.connected_to",
+				Predicate:    "relation.network.connected-to",
 				FromEntityID: edge.from,
 			},
 		}
@@ -344,14 +344,14 @@ func TestIntegration_ClusteringHierarchy(t *testing.T) {
 
 			// Outgoing edge
 			outgoingData := []relationshipEntry{
-				{Predicate: "rel.connected_to", ToEntityID: to},
+				{Predicate: "relation.network.connected-to", ToEntityID: to},
 			}
 			outgoingJSON, _ := json.Marshal(outgoingData)
 			outgoingBucket.Put(ctx, from, outgoingJSON)
 
 			// Incoming edge
 			incomingData := []relationshipEntry{
-				{Predicate: "rel.connected_to", FromEntityID: from},
+				{Predicate: "relation.network.connected-to", FromEntityID: from},
 			}
 			incomingJSON, _ := json.Marshal(incomingData)
 			incomingBucket.Put(ctx, to, incomingJSON)
@@ -361,13 +361,13 @@ func TestIntegration_ClusteringHierarchy(t *testing.T) {
 		from := group[len(group)-1]
 		to := group[0]
 		outgoingData := []relationshipEntry{
-			{Predicate: "rel.connected_to", ToEntityID: to},
+			{Predicate: "relation.network.connected-to", ToEntityID: to},
 		}
 		outgoingJSON, _ := json.Marshal(outgoingData)
 		outgoingBucket.Put(ctx, from, outgoingJSON)
 
 		incomingData := []relationshipEntry{
-			{Predicate: "rel.connected_to", FromEntityID: from},
+			{Predicate: "relation.network.connected-to", FromEntityID: from},
 		}
 		incomingJSON, _ := json.Marshal(incomingData)
 		incomingBucket.Put(ctx, to, incomingJSON)
@@ -516,7 +516,7 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 
 	// Outgoing edge
 	outgoingData := []relationshipEntry{
-		{Predicate: "rel.connected_to", ToEntityID: to},
+		{Predicate: "relation.network.connected-to", ToEntityID: to},
 	}
 	outgoingJSON, err := json.Marshal(outgoingData)
 	require.NoError(t, err)
@@ -525,7 +525,7 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 
 	// Incoming edge
 	incomingData := []relationshipEntry{
-		{Predicate: "rel.connected_to", FromEntityID: from},
+		{Predicate: "relation.network.connected-to", FromEntityID: from},
 	}
 	incomingJSON, err := json.Marshal(incomingData)
 	require.NoError(t, err)
@@ -987,11 +987,11 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 	}
 
 	for _, edge := range edges {
-		outgoingData := []relationshipEntry{{Predicate: "rel.connected_to", ToEntityID: edge.to}}
+		outgoingData := []relationshipEntry{{Predicate: "relation.network.connected-to", ToEntityID: edge.to}}
 		outgoingJSON, _ := json.Marshal(outgoingData)
 		outgoingBucket.Put(ctx, edge.from, outgoingJSON)
 
-		incomingData := []relationshipEntry{{Predicate: "rel.connected_to", FromEntityID: edge.from}}
+		incomingData := []relationshipEntry{{Predicate: "relation.network.connected-to", FromEntityID: edge.from}}
 		incomingJSON, _ := json.Marshal(incomingData)
 		incomingBucket.Put(ctx, edge.to, incomingJSON)
 	}
@@ -1132,11 +1132,11 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	}
 
 	for _, edge := range edges {
-		outgoingData := []relationshipEntry{{Predicate: "rel.connected_to", ToEntityID: edge.to}}
+		outgoingData := []relationshipEntry{{Predicate: "relation.network.connected-to", ToEntityID: edge.to}}
 		outgoingJSON, _ := json.Marshal(outgoingData)
 		outgoingBucket.Put(ctx, edge.from, outgoingJSON)
 
-		incomingData := []relationshipEntry{{Predicate: "rel.connected_to", FromEntityID: edge.from}}
+		incomingData := []relationshipEntry{{Predicate: "relation.network.connected-to", FromEntityID: edge.from}}
 		incomingJSON, _ := json.Marshal(incomingData)
 		incomingBucket.Put(ctx, edge.to, incomingJSON)
 	}
@@ -1322,7 +1322,7 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 		state := graph.EntityState{
 			ID: entityID,
 			Triples: []message.Triple{
-				{Subject: entityID, Predicate: "entity.type", Object: "sensor.temperature"},
+				{Subject: entityID, Predicate: "entity.type.class", Object: "sensor.temperature"},
 			},
 			MessageType: message.Type{Domain: "test", Category: "sensor", Version: "v1"},
 			Version:     1,
@@ -1337,7 +1337,7 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 	containerState := graph.EntityState{
 		ID: containerID,
 		Triples: []message.Triple{
-			{Subject: containerID, Predicate: "entity.type", Object: "hierarchy.container"},
+			{Subject: containerID, Predicate: "entity.type.class", Object: "hierarchy.container"},
 		},
 		MessageType: message.Type{Domain: "test", Category: "container", Version: "v1"},
 		Version:     1,

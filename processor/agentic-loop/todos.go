@@ -100,7 +100,7 @@ func (r *natsTodoReader) ReadTodos(ctx context.Context, loopEntityID string) ([]
 // sees success-path bytes.
 func parseQueryEntityTodos(respData []byte) ([]TodoState, error) {
 	var entity graph.EntityState
-	if err := json.Unmarshal(respData, &entity); err != nil {
+	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {
 		return nil, fmt.Errorf("unmarshal entity: %w", err)
 	}
 

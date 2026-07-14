@@ -117,7 +117,7 @@ const (
 	// Example: 1 (Natural Language Processing), 14 (Tool Interaction).
 	// DataType: int (wire uint32)
 	// IRI: none — references the OASF taxonomy via the integer class ID
-	CapabilityOASFClass = "agent.capability.oasf_class"
+	CapabilityOASFClass = "agent.capability.oasf-class"
 )
 
 // Delegation Predicates
@@ -155,13 +155,13 @@ const (
 	// Example: "2024-01-15T09:00:00Z"
 	// DataType: time.Time
 	// IRI: agent-ontology:validFrom
-	DelegationValidFrom = "agent.delegation.valid_from"
+	DelegationValidFrom = "agent.delegation.valid-from"
 
 	// DelegationValidUntil is when the delegation expires.
 	// Example: "2024-12-31T23:59:59Z"
 	// DataType: time.Time
 	// IRI: agent-ontology:validUntil
-	DelegationValidUntil = "agent.delegation.valid_until"
+	DelegationValidUntil = "agent.delegation.valid-until"
 
 	// DelegationChain is a multi-level delegation chain.
 	// Example: entity ID of the delegation chain
@@ -237,7 +237,7 @@ const (
 	// Example: "100/minute", "1000/hour"
 	// DataType: string
 	// IRI: agent-ontology:RateLimit
-	ExecutionRateLimit = "agent.execution.rate_limit"
+	ExecutionRateLimit = "agent.execution.rate-limit"
 
 	// ExecutionBudget is a cost or resource budget.
 	// Example: "tokens=100000", "cost_usd=10.00"
@@ -269,7 +269,7 @@ const (
 	// ActionExecutedBy is the agent that executed the action.
 	// Example: entity ID of the executing agent
 	// DataType: string (entity ID)
-	ActionExecutedBy = "agent.action.executed_by"
+	ActionExecutedBy = "agent.action.executed-by"
 
 	// ActionProduced is an artifact produced by the action.
 	// Example: entity ID of the produced artifact
@@ -352,7 +352,7 @@ const (
 	// IdentityDisplayName is the human-readable name for the agent.
 	// Example: "Code Review Agent"
 	// DataType: string
-	IdentityDisplayName = "agent.identity.display_name"
+	IdentityDisplayName = "agent.identity.display-name"
 
 	// IdentityRole is the agent's role in the system.
 	// Example: "architect", "editor", "reviewer"
@@ -378,32 +378,32 @@ const (
 	// ModelMaxTokens is the context window size in tokens.
 	// Example: 200000
 	// DataType: int
-	ModelMaxTokens = "agent.model.max_tokens"
+	ModelMaxTokens = "agent.model.max-tokens"
 
 	// ModelSupportsTools indicates whether the endpoint supports tool calling.
 	// Example: true
 	// DataType: bool
-	ModelSupportsTools = "agent.model.supports_tools"
+	ModelSupportsTools = "agent.model.supports-tools"
 
 	// ModelInputPrice is the cost per 1M input tokens in USD.
 	// Example: 3.00
 	// DataType: float64
-	ModelInputPrice = "agent.model.input_price"
+	ModelInputPrice = "agent.model.input-price"
 
 	// ModelOutputPrice is the cost per 1M output tokens in USD.
 	// Example: 15.00
 	// DataType: float64
-	ModelOutputPrice = "agent.model.output_price"
+	ModelOutputPrice = "agent.model.output-price"
 
 	// ModelEndpointURL is the API endpoint URL for the model.
 	// Example: "https://api.anthropic.com/v1"
 	// DataType: string
-	ModelEndpointURL = "agent.model.endpoint_url"
+	ModelEndpointURL = "agent.model.endpoint-url"
 
 	// ModelRateLimit is the requests per minute limit for the endpoint.
 	// Example: 60
 	// DataType: int
-	ModelRateLimit = "agent.model.rate_limit"
+	ModelRateLimit = "agent.model.rate-limit"
 )
 
 // Loop Predicates
@@ -424,7 +424,7 @@ const (
 	// LoopModelUsed is an entity reference to the model endpoint entity used.
 	// Example: entity ID of the model endpoint
 	// DataType: string (entity ID)
-	LoopModelUsed = "agent.loop.model_used"
+	LoopModelUsed = "agent.loop.model-used"
 
 	// LoopIterations is the number of LLM iterations executed in this loop.
 	// Example: 12
@@ -434,17 +434,17 @@ const (
 	// LoopTokensIn is the total input tokens consumed across all iterations.
 	// Example: 48320
 	// DataType: int
-	LoopTokensIn = "agent.loop.tokens_in"
+	LoopTokensIn = "agent.loop.tokens-in"
 
 	// LoopTokensOut is the total output tokens consumed across all iterations.
 	// Example: 8192
 	// DataType: int
-	LoopTokensOut = "agent.loop.tokens_out"
+	LoopTokensOut = "agent.loop.tokens-out"
 
 	// LoopCostUSD is the computed cost in USD for this loop execution.
 	// Example: 0.2754
 	// DataType: float64
-	LoopCostUSD = "agent.loop.cost_usd"
+	LoopCostUSD = "agent.loop.cost-usd"
 
 	// LoopTask is the task ID this loop execution served.
 	// Example: "task-abc123"
@@ -467,7 +467,7 @@ const (
 	// namespace; reply_to adds no new $-prefix token.
 	// Example: "org.platform.agent.agentic-loop.execution.<askingLoopID>"
 	// DataType: string (6-part entity ID)
-	LoopReplyTo = "agent.loop.reply_to"
+	LoopReplyTo = "agent.loop.reply-to"
 
 	// LoopRun is the bare run loop-id this loop belongs to (ADR-053 D7).
 	// Stamped at spawn time by LoopExecutionEntity.Triples() when TaskMessage.RunID is non-empty.
@@ -475,7 +475,7 @@ const (
 	// no existing $-regex matches agent.run.* (audited at ADR-053 implementation).
 	// Example: "loop-uuid-of-the-root-coordinator"
 	// DataType: string (bare loop UUID, NOT a 6-part entity ID)
-	LoopRun = "agent.run"
+	LoopRun = "agent.loop.run"
 
 	// LoopRunEntityID is the FULL 6-part chain.execution entity ID of the run
 	// this loop belongs to (ADR-053). Stamped at spawn alongside LoopRun.
@@ -488,7 +488,7 @@ const (
 	// For computed run-state, prefer a Go agentrun.MilestoneHandler instead.
 	// Example: "org.platform.agent.chain.execution.<runID>"
 	// DataType: string (6-part federated entity ID)
-	LoopRunEntityID = "agent.run.entity_id"
+	LoopRunEntityID = "agent.run.entity-id"
 
 	// LoopWorkflow is the workflow slug this loop belongs to.
 	// Example: "code-review", "feature-implementation"
@@ -498,12 +498,12 @@ const (
 	// LoopWorkflowStep is the step within the workflow for this loop.
 	// Example: "draft", "review", "revise"
 	// DataType: string
-	LoopWorkflowStep = "agent.loop.workflow_step"
+	LoopWorkflowStep = "agent.loop.workflow-step"
 
 	// LoopEndedAt is the terminal timestamp for this loop (completion, failure, or cancellation).
 	// Example: "2026-03-13T14:22:00Z"
 	// DataType: time.Time
-	LoopEndedAt = "agent.loop.ended_at"
+	LoopEndedAt = "agent.loop.ended-at"
 
 	// LoopUser is the user ID who initiated this loop.
 	// Example: "user-xyz789"
@@ -514,7 +514,7 @@ const (
 	// Multi-valued: one triple per step.
 	// Example: entity ID of a trajectory step
 	// DataType: string (entity ID)
-	LoopHasStep = "agent.loop.has_step"
+	LoopHasStep = "agent.loop.has-step"
 
 	// LoopDescription is the user task prompt that initiated this loop, stored
 	// as text so BM25/NL search can find loops by topic. The `.description`
@@ -530,7 +530,7 @@ const (
 	// agent.web.observed_by back-link. See the Web Predicates block.
 	// Example: entity ID of a web.observation entity
 	// DataType: string (entity ID)
-	LoopObservedWeb = "agent.loop.observed_web"
+	LoopObservedWeb = "agent.loop.observed-web"
 
 	// LoopFetchedWeb is an entity reference to a web observation entity
 	// (agent.web.observation) the loop pulled via http_request. Multi-valued:
@@ -538,7 +538,7 @@ const (
 	// agent.web.fetched_by back-link. See the Web Predicates block.
 	// Example: entity ID of a web.observation entity
 	// DataType: string (entity ID)
-	LoopFetchedWeb = "agent.loop.fetched_web"
+	LoopFetchedWeb = "agent.loop.fetched-web"
 )
 
 // Step Predicates
@@ -571,12 +571,12 @@ const (
 	// StepDuration is the execution time of this step in milliseconds.
 	// Example: 1234
 	// DataType: int64
-	StepDuration = "agent.step.duration_ms"
+	StepDuration = "agent.step.duration-ms"
 
 	// StepToolName is the tool function name for tool_call steps.
 	// Example: "web_search", "graph_query", "http_request"
 	// DataType: string
-	StepToolName = "agent.step.tool_name"
+	StepToolName = "agent.step.tool-name"
 
 	// StepModel is the model name for model_call steps.
 	// Example: "claude-sonnet", "gpt-4o"
@@ -586,12 +586,12 @@ const (
 	// StepTokensIn is the input tokens consumed by a model_call step.
 	// Example: 4832
 	// DataType: int
-	StepTokensIn = "agent.step.tokens_in"
+	StepTokensIn = "agent.step.tokens-in"
 
 	// StepTokensOut is the output tokens produced by a model_call step.
 	// Example: 819
 	// DataType: int
-	StepTokensOut = "agent.step.tokens_out"
+	StepTokensOut = "agent.step.tokens-out"
 
 	// StepCapability is the role or purpose of this step.
 	// For model_call steps: the task role (e.g., "coding", "planning", "reviewing", "reasoning").
@@ -613,13 +613,13 @@ const (
 	// Only set on context_compaction steps.
 	// Example: 12000
 	// DataType: int
-	StepTokensEvicted = "agent.step.tokens_evicted"
+	StepTokensEvicted = "agent.step.tokens-evicted"
 
 	// StepTokensSummarized is the number of tokens in the compaction summary.
 	// Only set on context_compaction steps.
 	// Example: 800
 	// DataType: int
-	StepTokensSummarized = "agent.step.tokens_summarized"
+	StepTokensSummarized = "agent.step.tokens-summarized"
 
 	// StepUtilization is the context utilization ratio (0.0-1.0) at compaction trigger.
 	// Only set on context_compaction steps.
@@ -630,20 +630,20 @@ const (
 	// StepToolStatus is the terminal status of a tool_call step.
 	// Example: "success", "failed"
 	// DataType: string
-	StepToolStatus = "agent.step.tool_status"
+	StepToolStatus = "agent.step.tool-status"
 
 	// StepErrorMessage is the raw error text for a failed tool_call step.
 	// Omitted on success.
 	// Example: "entity not found: acme.foo.bar"
 	// DataType: string
-	StepErrorMessage = "agent.step.error_message"
+	StepErrorMessage = "agent.step.error-message"
 
 	// StepErrorCategory is the typed error category for a failed tool_call step.
 	// Values: "timeout", "not_found", "invalid_args", "permission", "network",
 	// "external", "internal", "unknown". Derived from ToolResult.ErrorKind.
 	// Example: "invalid_args"
 	// DataType: string
-	StepErrorCategory = "agent.step.error_category"
+	StepErrorCategory = "agent.step.error-category"
 )
 
 // Coordinator Predicates
@@ -666,7 +666,7 @@ const (
 	// "fan_out", "synthesize", "retry", "done".
 	// Example: "fan_out"
 	// DataType: string
-	CoordinatorNextAction = "coordinator.decision.next_action"
+	CoordinatorNextAction = "coordinator.decision.next-action"
 
 	// CoordinatorDecisionReason is a short natural-language justification
 	// the coordinator supplied alongside its action choice. Small enough
@@ -692,7 +692,7 @@ const (
 	// can act on the signal rather than raise MaxIterations.
 	// Example: "fan-out|fan_out"
 	// DataType: string
-	CoordinatorDecisionSAPCoerced = "coordinator.decision.sap_coerced"
+	CoordinatorDecisionSAPCoerced = "coordinator.decision.sap-coerced"
 
 	// CoordinatorDecisionSubtopics carries the list of subtopics from a
 	// coordinator's fan-out decision as a JSON-encoded []string. ADR-046
@@ -769,7 +769,7 @@ const (
 	// Optional — omitted when the finding is not role-specific.
 	// Example: "researcher"
 	// DataType: string
-	OpsDiagnosisObservedRole = "ops.diagnosis.observed_role"
+	OpsDiagnosisObservedRole = "ops.diagnosis.observed-role"
 
 	// OpsDiagnosisSeverity is the urgency classification of the finding.
 	// Values: "info" | "warn" | "critical". Defaults to "info" when the
@@ -829,7 +829,7 @@ const (
 	// ("status=in_progress AND updated_at < now-30m").
 	// Example: "2026-05-09T14:22:00Z"
 	// DataType: time.Time
-	TodoUpdatedAt = "agent.todo.updated_at"
+	TodoUpdatedAt = "agent.todo.updated-at"
 )
 
 // Scratch Predicates (ADR-036 §Future candidates — agent.scratch.*)
@@ -873,7 +873,7 @@ const (
 	// needed; sort by created_at) and for age-based rules.
 	// Example: "2026-05-12T09:15:00Z"
 	// DataType: time.Time
-	ScratchCreatedAt = "agent.scratch.created_at"
+	ScratchCreatedAt = "agent.scratch.created-at"
 
 	// ScratchChars is the character count of ScratchText. Rule-matchable
 	// structural fact so operators / ops-agent can predicate on size
@@ -943,19 +943,19 @@ const (
 	// the loop's role/workflow instead.
 	// Example: "NATS JetStream KV bucket history retention"
 	// DataType: string
-	WebSourceQuery = "agent.web.source_query"
+	WebSourceQuery = "agent.web.source-query"
 
 	// WebObservedAt is the wall-clock timestamp the web_search call saw
 	// this URL. Rule-matchable for age-based predicates.
 	// Example: "2026-05-11T14:22:00Z"
 	// DataType: time.Time
-	WebObservedAt = "agent.web.observed_at"
+	WebObservedAt = "agent.web.observed-at"
 
 	// WebFetchedAt is the wall-clock timestamp the http_request call pulled
 	// this URL's body. Rule-matchable.
 	// Example: "2026-05-11T14:22:30Z"
 	// DataType: time.Time
-	WebFetchedAt = "agent.web.fetched_at"
+	WebFetchedAt = "agent.web.fetched-at"
 
 	// WebObservedBy is the loop entity ID that observed this URL via
 	// web_search. Multi-valued across loops (different loops can converge
@@ -963,20 +963,20 @@ const (
 	// walks.
 	// Example: entity ID of the observing loop
 	// DataType: string (entity ID)
-	WebObservedBy = "agent.web.observed_by"
+	WebObservedBy = "agent.web.observed-by"
 
 	// WebFetchedBy is the loop entity ID that pulled this URL via
 	// http_request. Multi-valued across loops. Rule-matchable.
 	// Example: entity ID of the fetching loop
 	// DataType: string (entity ID)
-	WebFetchedBy = "agent.web.fetched_by"
+	WebFetchedBy = "agent.web.fetched-by"
 
 	// WebContentType is the HTTP Content-Type header value from an
 	// http_request fetch. Effectively an enum for rule purposes (route
 	// HTML vs JSON vs binary), so rule-matchable.
 	// Example: "text/html; charset=utf-8"
 	// DataType: string
-	WebContentType = "agent.web.content_type"
+	WebContentType = "agent.web.content-type"
 
 	// WebStatusCode is the HTTP response status code from an http_request
 	// fetch. Only emitted for 2xx/3xx (the tool surfaces ≥400 as an error
@@ -984,7 +984,7 @@ const (
 	// style rules.
 	// Example: 200
 	// DataType: int
-	WebStatusCode = "agent.web.status_code"
+	WebStatusCode = "agent.web.status-code"
 
 	// WebTruncated indicates whether the http_request body exceeded the
 	// executor's httpMaxTextSize cap and was truncated when written to
@@ -1011,12 +1011,12 @@ const (
 	// OpsConfigCostPerTask is the average cost per task for a configuration
 	// variant. Reserved for Phase 3 Pareto-frontier tracking.
 	// DataType: float64
-	OpsConfigCostPerTask = "ops.config.cost_per_task"
+	OpsConfigCostPerTask = "ops.config.cost-per-task"
 
 	// OpsConfigP95Latency is the p95 latency in milliseconds for a
 	// configuration variant. Reserved for Phase 3 Pareto-frontier tracking.
 	// DataType: float64
-	OpsConfigP95Latency = "ops.config.p95_latency"
+	OpsConfigP95Latency = "ops.config.p95-latency"
 
 	// OpsConfigActive indicates whether a configuration variant is currently
 	// active. Reserved for Phase 3 live-rollback tracking.

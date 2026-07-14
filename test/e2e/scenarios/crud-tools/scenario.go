@@ -460,7 +460,7 @@ func (s *Scenario) seedFireEveryNRule(ctx context.Context, result *scenarios.Res
 		Enabled:          true,
 		FireEveryNEvents: fireEveryNWindowN,
 		Conditions: []expression.ConditionExpression{
-			{Field: "entity.type", Operator: "eq", Value: fireEveryNEntityType},
+			{Field: "entity.identity.type", Operator: "eq", Value: fireEveryNEntityType},
 		},
 		Logic: "and",
 	}
@@ -529,7 +529,7 @@ func (s *Scenario) captureFireEveryNBaseline(ctx context.Context) float64 {
 }
 
 // injectProbeEntities writes 9 EntityState records to ENTITY_STATES KV.
-// Each entity has a triple with predicate "entity.type" = fireEveryNEntityType
+// Each entity has a triple with predicate "entity.identity.type" = fireEveryNEntityType
 // so the sampling-gate rule's condition matches. Returns the injected keys for
 // cleanup.
 func (s *Scenario) injectProbeEntities(ctx context.Context, result *scenarios.Result) ([]string, error) {
@@ -541,7 +541,7 @@ func (s *Scenario) injectProbeEntities(ctx context.Context, result *scenarios.Re
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
-					Predicate: "entity.type",
+					Predicate: "entity.identity.type",
 					Object:    fireEveryNEntityType,
 					Source:    "e2e-fire-every-n-seed",
 					Timestamp: time.Now(),
@@ -551,7 +551,7 @@ func (s *Scenario) injectProbeEntities(ctx context.Context, result *scenarios.Re
 			Version:     1,
 			UpdatedAt:   time.Now(),
 		}
-		entityJSON, err := json.Marshal(entityState)
+		entityJSON, err := graph.MarshalEntityState(&entityState)
 		if err != nil {
 			return keys, fmt.Errorf("marshal probe entity %d: %w", i, err)
 		}

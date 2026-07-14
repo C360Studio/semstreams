@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +43,7 @@ func (m *mockRuleManager) ListRules(_ context.Context) (map[string]rule.Definiti
 }
 
 func TestRuleExecutor_ListTools(t *testing.T) {
+	vocabulary.Register("agentic-test.rule.allowed")
 	e := NewRuleExecutor(newMockRuleManager())
 	tools := e.ListTools()
 	assert.Len(t, tools, 5)
@@ -56,6 +58,23 @@ func TestRuleExecutor_ListTools(t *testing.T) {
 	assert.True(t, names["delete_rule"], "should have delete_rule")
 	assert.True(t, names["list_rules"], "should have list_rules")
 	assert.True(t, names["get_rule"], "should have get_rule")
+	for _, tool := range tools[:2] {
+		properties := tool.Parameters["properties"].(map[string]any)
+		ruleSchema := properties["rule"].(map[string]any)
+		ruleProperties := ruleSchema["properties"].(map[string]any)
+		conditions := ruleProperties["conditions"].(map[string]any)
+		condition := conditions["items"].(map[string]any)
+		conditionProperties := condition["properties"].(map[string]any)
+		field := conditionProperties["field"].(map[string]any)
+		conditionCatalog := field["anyOf"].([]any)[0].(map[string]any)["enum"].([]string)
+		assert.Contains(t, conditionCatalog, "agentic-test.rule.allowed")
+
+		onEnter := ruleProperties["on_enter"].(map[string]any)
+		action := onEnter["items"].(map[string]any)
+		actionProperties := action["properties"].(map[string]any)
+		actionCatalog := actionProperties["predicate"].(map[string]any)["enum"].([]string)
+		assert.Contains(t, actionCatalog, "agentic-test.rule.allowed")
+	}
 	// NOTE: approval policy is config-driven (Config.ApprovalRequired),
 	// not a property of the tool definition. See approval_filter_test.go.
 }

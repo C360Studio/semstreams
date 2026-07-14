@@ -81,7 +81,7 @@ func TestReconstructTodos_EmptyAndIrrelevant(t *testing.T) {
 	now := time.Now()
 	mixed := []message.Triple{
 		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.LoopOutcome, Object: "success", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: "rule.spawned_task", Object: "x", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: "rule.task.spawned", Object: "x", Timestamp: now},
 	}
 	if got := ReconstructTodos(mixed); got != nil {
 		t.Errorf("non-todo triples → got %v, want nil", got)

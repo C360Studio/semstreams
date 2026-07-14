@@ -52,7 +52,7 @@ func TestIntegration_FactoryValidation(t *testing.T) {
 				Name: "Valid Test Rule",
 				Conditions: []expression.ConditionExpression{
 					{
-						Field:    "value",
+						Field:    "$message.value",
 						Operator: "gt",
 						Value:    50.0,
 						Required: true,
@@ -103,7 +103,7 @@ func TestIntegration_FactoryCreate(t *testing.T) {
 		Name: "Factory Test Rule",
 		Conditions: []expression.ConditionExpression{
 			{
-				Field:    "battery.level",
+				Field:    "$message.battery.level",
 				Operator: "lte",
 				Value:    20.0,
 				Required: true,
