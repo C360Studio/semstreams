@@ -162,7 +162,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 		// any header on the success path, NOT change the success
 		// body bytes. Closes the Phase 1 reviewer R1 lock at this
 		// handler.
-		entityID := "test.org.platform.domain.system.entity.success-fixture"
+		entityID := "test.platform.domain.system.entity.success-fixture"
 		seedEntity(t, ctx, c, entityID, []byte(`{"id":"`+entityID+`","triples":[]}`))
 
 		req, _ := json.Marshal(map[string]string{"id": entityID})

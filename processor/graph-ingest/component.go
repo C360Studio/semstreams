@@ -48,8 +48,10 @@ var (
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
 
-	predicateContractRejectionsOnce sync.Once
-	predicateContractRejectionsVec  *prometheus.CounterVec
+	predicateContractRejectionsOnce   sync.Once
+	predicateContractRejectionsVec    *prometheus.CounterVec
+	entityStateContractRejectionsOnce sync.Once
+	entityStateContractRejectionsVec  *prometheus.CounterVec
 
 	stubRestampsOnce    sync.Once
 	stubRestampsCounter prometheus.Counter
@@ -161,6 +163,23 @@ func getPredicateContractRejectionsMetric(registry *metric.MetricsRegistry) *pro
 		}
 	})
 	return predicateContractRejectionsVec
+}
+
+func getEntityStateContractRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	entityStateContractRejectionsOnce.Do(func() {
+		entityStateContractRejectionsVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "entity_state_contract_rejections_total",
+			Help:      "Canonical entity-state identity contract rejections by bounded ingest lane, field, and reason",
+		}, []string{"lane", "field", "reason"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "entity_state_contract_rejections_total", entityStateContractRejectionsVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(entityStateContractRejectionsVec)
+		}
+	})
+	return entityStateContractRejectionsVec
 }
 
 // getStubRestampsMetric returns the process-wide stub-restamp counter (gh#435):
@@ -595,19 +614,20 @@ type Component struct {
 
 	// Prometheus metrics. The historical exported series name remains stable
 	// because dashboards and operator alerts consume it as an external contract.
-	entitiesUpdated             prometheus.Counter
-	indexingProfileDefault      *prometheus.CounterVec
-	mutationRejections          *prometheus.CounterVec
-	predicateContractRejections *prometheus.CounterVec
-	stubRestamps                prometheus.Counter
-	foreignEdgeUnclaimed        *prometheus.CounterVec
-	foreignEdgeDropped          *prometheus.CounterVec
-	ownerLeaseMismatch          *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
-	processingDuration          prometheus.Histogram   // gh#480 per-message apply time (processing half)
-	ingestLag                   prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
-	redeliveriesDropped         prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
-	casRetries                  prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
-	metricsRegistry             *metric.MetricsRegistry
+	entitiesUpdated               prometheus.Counter
+	indexingProfileDefault        *prometheus.CounterVec
+	mutationRejections            *prometheus.CounterVec
+	predicateContractRejections   *prometheus.CounterVec
+	entityStateContractRejections *prometheus.CounterVec
+	stubRestamps                  prometheus.Counter
+	foreignEdgeUnclaimed          *prometheus.CounterVec
+	foreignEdgeDropped            *prometheus.CounterVec
+	ownerLeaseMismatch            *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
+	processingDuration            prometheus.Histogram   // gh#480 per-message apply time (processing half)
+	ingestLag                     prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
+	redeliveriesDropped           prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
+	casRetries                    prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
+	metricsRegistry               *metric.MetricsRegistry
 
 	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
 	// ingest by entity ID so same-entity updates stay ordered while different
@@ -667,24 +687,25 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Create component
 	comp := &Component{
-		name:                        "graph-ingest",
-		config:                      config,
-		decoder:                     message.NewDecoder(deps.PayloadRegistry),
-		natsClient:                  natsClient,
-		logger:                      logger,
-		entitiesUpdated:             getEntitiesUpdatedMetric(deps.MetricsRegistry),
-		indexingProfileDefault:      getIndexingProfileDefaultMetric(deps.MetricsRegistry),
-		mutationRejections:          getMutationRejectionsMetric(deps.MetricsRegistry),
-		predicateContractRejections: getPredicateContractRejectionsMetric(deps.MetricsRegistry),
-		stubRestamps:                getStubRestampsMetric(deps.MetricsRegistry),
-		foreignEdgeUnclaimed:        getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
-		foreignEdgeDropped:          getForeignEdgeDroppedMetric(deps.MetricsRegistry),
-		ownerLeaseMismatch:          getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
-		processingDuration:          getProcessingDurationMetric(deps.MetricsRegistry),
-		ingestLag:                   getIngestLagMetric(deps.MetricsRegistry),
-		redeliveriesDropped:         getRedeliveriesDroppedMetric(deps.MetricsRegistry),
-		casRetries:                  getCasRetriesMetric(deps.MetricsRegistry),
-		metricsRegistry:             deps.MetricsRegistry,
+		name:                          "graph-ingest",
+		config:                        config,
+		decoder:                       message.NewDecoder(deps.PayloadRegistry),
+		natsClient:                    natsClient,
+		logger:                        logger,
+		entitiesUpdated:               getEntitiesUpdatedMetric(deps.MetricsRegistry),
+		indexingProfileDefault:        getIndexingProfileDefaultMetric(deps.MetricsRegistry),
+		mutationRejections:            getMutationRejectionsMetric(deps.MetricsRegistry),
+		predicateContractRejections:   getPredicateContractRejectionsMetric(deps.MetricsRegistry),
+		entityStateContractRejections: getEntityStateContractRejectionsMetric(deps.MetricsRegistry),
+		stubRestamps:                  getStubRestampsMetric(deps.MetricsRegistry),
+		foreignEdgeUnclaimed:          getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
+		foreignEdgeDropped:            getForeignEdgeDroppedMetric(deps.MetricsRegistry),
+		ownerLeaseMismatch:            getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
+		processingDuration:            getProcessingDurationMetric(deps.MetricsRegistry),
+		ingestLag:                     getIngestLagMetric(deps.MetricsRegistry),
+		redeliveriesDropped:           getRedeliveriesDroppedMetric(deps.MetricsRegistry),
+		casRetries:                    getCasRetriesMetric(deps.MetricsRegistry),
+		metricsRegistry:               deps.MetricsRegistry,
 	}
 
 	// Initialize last activity
@@ -1585,7 +1606,11 @@ func (c *Component) prepareFactProjection(entity *graph.EntityState) error {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "ingestEntity", "entity cannot be nil")
 	}
 	if err := validateEntityID(entity.ID); err != nil {
-		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate envelope entity ID")
+		return errs.WrapInvalid(&graph.EntityStateContractError{
+			Field:       graph.EntityStateContractFieldID,
+			TripleIndex: -1,
+			Err:         err,
+		}, "Component", "ingestEntity", "validate envelope entity ID")
 	}
 
 	// Graphable projection convenience: an omitted subject means the envelope

@@ -570,7 +570,7 @@ func TestIntegration_BinaryStorable(t *testing.T) {
 
 	// Create a BinaryStorable implementation
 	binaryDoc := &testBinaryDocument{
-		id:          "binary-doc-001",
+		id:          "acme.ops.docs.objectstore.binary.001",
 		title:       "Video Tutorial",
 		description: "How to use the system",
 		videoData:   []byte("fake video data - would be MP4 bytes"),
@@ -587,7 +587,7 @@ func TestIntegration_BinaryStorable(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify text fields
-	assert.Equal(t, "binary-doc-001", storedContent.EntityID)
+	assert.Equal(t, "acme.ops.docs.objectstore.binary.001", storedContent.EntityID)
 	assert.Equal(t, "Video Tutorial", storedContent.Fields["title"])
 	assert.Equal(t, "How to use the system", storedContent.Fields["description"])
 
@@ -638,7 +638,7 @@ func TestIntegration_BinaryStorable_LargeContent(t *testing.T) {
 	}
 
 	binaryDoc := &testBinaryDocument{
-		id:          "large-binary-001",
+		id:          "acme.ops.docs.objectstore.binary.large-001",
 		title:       "Large File",
 		description: "Testing large binary storage",
 		videoData:   largeData,

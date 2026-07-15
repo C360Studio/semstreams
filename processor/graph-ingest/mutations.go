@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -191,6 +192,87 @@ func (c *Component) recordPredicateContractRejections(lane string, err error) {
 	}
 	for reason := range reasons {
 		c.predicateContractRejections.WithLabelValues(lane, string(reason)).Inc()
+	}
+}
+
+const (
+	entityStateReasonObjectType = "object_type"
+	contractReasonUnknown       = "unknown"
+	contractFieldPredicate      = "predicate"
+)
+
+// recordEntityStateContractRejection records the first identity-bearing field
+// rejected by the authoritative entity-state contract. All labels are closed,
+// bounded sets; rejected entity bytes and error strings never become labels.
+func (c *Component) recordEntityStateContractRejection(lane string, err error) {
+	if c.entityStateContractRejections == nil {
+		return
+	}
+	field, reason, _, ok := entityStateContractRejectionLabels(err)
+	if !ok {
+		return
+	}
+	c.entityStateContractRejections.WithLabelValues(lane, field, reason).Inc()
+}
+
+func entityStateContractRejectionLabels(err error) (field, reason string, tripleIndex int, ok bool) {
+	var contractErr *graph.EntityStateContractError
+	if !errors.As(err, &contractErr) {
+		return "", "", -1, false
+	}
+	switch contractErr.Field {
+	case graph.EntityStateContractFieldID, graph.EntityStateContractFieldSubject, graph.EntityStateContractFieldReference:
+		field = string(contractErr.Field)
+	default:
+		return "", "", -1, false
+	}
+
+	reason = entityIDContractReason(contractErr.Err)
+	if reason == contractReasonUnknown && contractErr.Field == graph.EntityStateContractFieldReference {
+		// The only non-ClassifiedError reference failure is an explicit @id
+		// object whose dynamic type is not string.
+		reason = entityStateReasonObjectType
+	}
+	return field, reason, contractErr.TripleIndex, true
+}
+
+func entityIDContractReason(err error) string {
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) {
+		return contractReasonUnknown
+	}
+	reason, _ := classified.Detail[semtypes.EntityIDDetailReason].(string)
+	switch reason {
+	case semtypes.EntityIDReasonEmpty,
+		semtypes.EntityIDReasonBytes,
+		semtypes.EntityIDReasonArity,
+		semtypes.EntityIDReasonEmptySegment,
+		semtypes.EntityIDReasonFirstByte,
+		semtypes.EntityIDReasonAlphabet:
+		return reason
+	default:
+		return contractReasonUnknown
+	}
+}
+
+func predicateContractReason(err error) (string, bool) {
+	var contractErr *graph.EntityPredicateContractError
+	if !errors.As(err, &contractErr) || len(contractErr.Violations) == 0 {
+		return "", false
+	}
+	reason := contractErr.Violations[0].Reason
+	switch reason {
+	case vocabulary.PredicateReasonEmpty,
+		vocabulary.PredicateReasonLength,
+		vocabulary.PredicateReasonArity,
+		vocabulary.PredicateReasonSegmentEmpty,
+		vocabulary.PredicateReasonSegmentLength,
+		vocabulary.PredicateReasonSegmentStart,
+		vocabulary.PredicateReasonSegmentCharacter,
+		vocabulary.PredicateReasonSegmentHyphen:
+		return string(reason), true
+	default:
+		return contractReasonUnknown, true
 	}
 }
 

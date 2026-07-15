@@ -167,7 +167,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Update entity state in KV bucket (simulating graph processor update)
-	entityID := "c360.platform1.test.drone.drone1"
+	entityID := "c360.platform1.test.system.drone.drone1"
 	entityState := gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
@@ -563,9 +563,9 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	// Create entity that matches initial pattern
 	entity1 := gtypes.EntityState{
-		ID: "c360.platform1.test.drone.d001",
+		ID: "c360.platform1.test.system.drone.d001",
 		Triples: []message.Triple{
-			{Subject: "c360.platform1.test.drone.d001", Predicate: "robotics.battery.level", Object: 25.0},
+			{Subject: "c360.platform1.test.system.drone.d001", Predicate: "robotics.battery.level", Object: 25.0},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -597,9 +597,9 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	// Create entity that matches the new pattern
 	entity2 := gtypes.EntityState{
-		ID: "c360.platform2.test.drone.d002",
+		ID: "c360.platform2.test.system.drone.d002",
 		Triples: []message.Triple{
-			{Subject: "c360.platform2.test.drone.d002", Predicate: "robotics.battery.level", Object: 30.0},
+			{Subject: "c360.platform2.test.system.drone.d002", Predicate: "robotics.battery.level", Object: 30.0},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -835,7 +835,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond) // Wait for watchers
 
-	entityID := "c360.test.workflow.plan.plan1"
+	entityID := "c360.test.workflow.system.plan.plan1"
 
 	// --- Step 1: Put entity with status "created" ---
 	// This seeds the transition tracker's previous value. The transition condition

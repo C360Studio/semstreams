@@ -2,6 +2,7 @@ package graph
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,6 +10,25 @@ import (
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
+
+func TestPredicateValidationErrorSupportsWrappedCauses(t *testing.T) {
+	t.Parallel()
+
+	want := &vocabulary.PredicateValidationError{Reason: vocabulary.PredicateReasonArity}
+	got, err := predicateViolationFromError("bad.two", fmt.Errorf("wrapped parser error: %w", want))
+	if err != nil || got.Reason != want.Reason || got.Predicate != "bad.two" {
+		t.Fatalf("predicateViolationFromError() = %#v, %v; want wrapped typed cause", got, err)
+	}
+}
+
+func TestPredicateValidationErrorFailsClosedOnUnexpectedCause(t *testing.T) {
+	t.Parallel()
+
+	got, err := predicateViolationFromError("bad.two", errors.New("unexpected parser failure"))
+	if err == nil {
+		t.Fatalf("predicateViolationFromError() = %#v, nil; want fail-closed error", got)
+	}
+}
 
 func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 	t.Parallel()

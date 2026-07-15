@@ -96,14 +96,11 @@ func ValidateEntityPredicates(entity *EntityState) error {
 	unique := make(map[InvalidEntityPredicate]struct{})
 	for _, triple := range entity.Triples {
 		if _, err := vocabulary.ParsePredicate(triple.Predicate); err != nil {
-			validationErr, ok := err.(*vocabulary.PredicateValidationError)
-			if !ok {
-				continue
+			violation, classificationErr := predicateViolationFromError(triple.Predicate, err)
+			if classificationErr != nil {
+				return classificationErr
 			}
-			unique[InvalidEntityPredicate{
-				Predicate: triple.Predicate,
-				Reason:    validationErr.Reason,
-			}] = struct{}{}
+			unique[violation] = struct{}{}
 		}
 	}
 	if len(unique) == 0 {
@@ -121,6 +118,14 @@ func ValidateEntityPredicates(entity *EntityState) error {
 		return violations[i].Predicate < violations[j].Predicate
 	})
 	return &EntityPredicateContractError{Violations: violations}
+}
+
+func predicateViolationFromError(predicate string, err error) (InvalidEntityPredicate, error) {
+	var validationErr *vocabulary.PredicateValidationError
+	if !errors.As(err, &validationErr) {
+		return InvalidEntityPredicate{}, fmt.Errorf("predicate validator returned unexpected error: %w", err)
+	}
+	return InvalidEntityPredicate{Predicate: predicate, Reason: validationErr.Reason}, nil
 }
 
 // ValidateEntityStateContract validates one complete final EntityState
