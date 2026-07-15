@@ -54,7 +54,9 @@ func contextIndexEntityPrefix(entityID string) string {
 }
 
 func contextIndexEntityFilter(entityID string) string {
-	return contextIndexEntityPrefix(entityID) + ">"
+	// Exact-arity benchmark filter only. Production update and delete paths use
+	// contextIndexEntityPrefix with KeysByPrefix and remain unchanged.
+	return entityID + ".*.*"
 }
 
 // contextIndexValue is the JSON value stored at each CONTEXT_INDEX composite key.

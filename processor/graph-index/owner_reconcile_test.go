@@ -9,6 +9,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -178,6 +179,121 @@ func TestOwnerReconcileSpike_FilterFailureIsTransient(t *testing.T) {
 		predicateIndexEntityFilter(entityID), nil, false)
 	require.Error(t, err)
 	assert.True(t, errs.IsTransient(err))
+}
+
+func TestOwnerReconcileSpike_InvalidContractInputHasNoBucketIO(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		ownerFilter string
+		desired     map[string][]byte
+		wantCode    string
+		wantReason  string
+	}{
+		{
+			name:        "invalid owner filter",
+			ownerFilter: "owner..>",
+			desired:     map[string][]byte{"valid.key": {}},
+			wantCode:    natsclient.ErrorCodeKVFilterInvalid,
+			wantReason:  natsclient.KVReasonEmptyToken,
+		},
+		{
+			name:        "invalid desired key",
+			ownerFilter: "valid.*",
+			desired: map[string][]byte{
+				"valid.key": {},
+				"bad:key":   {},
+			},
+			wantCode:   natsclient.ErrorCodeKVKeyInvalid,
+			wantReason: natsclient.KVReasonAlphabet,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			comp := createTestComponentWithMockKV(t)
+			mock := predicateMock(comp)
+			var lists, puts, deletes atomic.Int64
+			mock.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+				lists.Add(1)
+				return newMockKeyLister(nil), nil
+			}
+			mock.putFunc = func(context.Context, string, []byte) (uint64, error) {
+				puts.Add(1)
+				return 1, nil
+			}
+			mock.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
+				deletes.Add(1)
+				return nil
+			}
+
+			err := comp.reconcileOwnedRows(
+				context.Background(), "predicate", comp.predicateBucket, tt.ownerFilter, tt.desired, false,
+			)
+			require.Error(t, err)
+			var classified *errs.ClassifiedError
+			require.ErrorAs(t, err, &classified)
+			assert.Equal(t, tt.wantCode, classified.Code)
+			assert.Equal(t, tt.wantReason, classified.Detail[natsclient.KVDetailReason])
+			assert.Zero(t, lists.Load(), "validation must precede lister creation")
+			assert.Zero(t, puts.Load(), "validation must precede writes")
+			assert.Zero(t, deletes.Load(), "validation must precede deletes")
+		})
+	}
+}
+
+func TestPredicateReconcile_InvalidCatalogKeyHasNoBucketIO(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	membership := predicateMock(comp)
+	catalog := predicateCatalogMock(comp)
+	var membershipLists, membershipPuts, membershipDeletes atomic.Int64
+	var catalogLists, catalogPuts, catalogDeletes atomic.Int64
+	membership.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		membershipLists.Add(1)
+		return newMockKeyLister(nil), nil
+	}
+	membership.putFunc = func(context.Context, string, []byte) (uint64, error) {
+		membershipPuts.Add(1)
+		return 1, nil
+	}
+	membership.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
+		membershipDeletes.Add(1)
+		return nil
+	}
+	catalog.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		catalogLists.Add(1)
+		return newMockKeyLister(nil), nil
+	}
+	catalog.putFunc = func(context.Context, string, []byte) (uint64, error) {
+		catalogPuts.Add(1)
+		return 1, nil
+	}
+	catalog.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
+		catalogDeletes.Add(1)
+		return nil
+	}
+
+	err := comp.reconcilePredicateIndexRows(context.Background(), "acme.ops.robotics.gcs.drone.001", []predicateReconcileRow{
+		{predicate: "robotics.status.armed", catalogKey: "bad:key"},
+	})
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, natsclient.ErrorCodeKVKeyInvalid, classified.Code)
+	assert.Equal(t, natsclient.KVReasonAlphabet, classified.Detail[natsclient.KVDetailReason])
+	assert.Zero(t, membershipLists.Load())
+	assert.Zero(t, membershipPuts.Load())
+	assert.Zero(t, membershipDeletes.Load())
+	assert.Zero(t, catalogLists.Load())
+	assert.Zero(t, catalogPuts.Load())
+	assert.Zero(t, catalogDeletes.Load())
+
+	// The catalog writer independently preserves the same pre-Put guarantee.
+	err = comp.updatePredicateCatalog(context.Background(), "bad:key")
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, natsclient.ErrorCodeKVKeyInvalid, classified.Code)
+	assert.Zero(t, catalogPuts.Load())
 }
 
 func snapshotMockKeys(mock *mockKVBucket) []string {

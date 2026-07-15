@@ -114,6 +114,31 @@ proof. If an in-scope current layout lacks a governed maximum or approved entity
 activation remains blocked. ALIAS audit failure is recorded for its separate change and does not block unrelated
 stores. The missing total entity-ID bound is not only a reason for raw Candidate B to lose.
 
+#### Reviewer-approved key-contract proof checkpoint
+
+Let `E` be total entity-ID bytes and `P` predicate bytes. The proof pins `P <= 194`, with the maximum canonical
+predicate encoding to a 388-byte untagged hex token, and records these complete-key formulas:
+
+| Layout | Maximum key bytes |
+|---|---:|
+| PREDICATE | `65 + E` |
+| PREDICATE_CATALOG | `P <= 194` |
+| NAME / CONTEXT | `E + 454` |
+| INCOMING | `2E + 390` |
+| OUTGOING | `E` |
+| raw PREDICATE candidate | `E + 195` |
+
+A 1,025-byte six-part entity fixture whose six tokens are individually valid fails the complete key/filter budget.
+This proves that representative entities cannot replace the missing total `E` bound; production activation remains
+blocked on the separately governed entity-ID bound or entity-axis codec. ALIAS remains an unbounded raw-key audit
+handed to its separate owner and does not block unrelated stores.
+
+The benchmark-only reconciliation helper preflights complete owner filters and desired keys through the shared
+validators. Invalid input returns the stable classified code/reason before lister creation, Put, or Delete. Real-NATS
+tests prove exact owner filters for PREDICATE, NAME, CONTEXT, and source-owned INCOMING plus exact forward filters for
+PREDICATE, NAME, and target-prefixed INCOMING against shorter, longer, reversed-axis, and wrong-owner controls. This
+checkpoint wires no production activation, reader, writer, configuration, or lifecycle call site.
+
 ### 3. Prove fixed-position enumeration on real NATS
 
 The spike uses the production NATS client and JetStream server, not only mocks. It verifies literal filter

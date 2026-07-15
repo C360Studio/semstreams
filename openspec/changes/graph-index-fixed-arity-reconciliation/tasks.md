@@ -11,13 +11,16 @@
 - [x] 0.4 Record the archived `nats-kv-keys` baseline and helper availability: literal validators, stable errors, and
       budgets. The `x1_` opaque codec is available only for a separately authorized new or changed axis; it does not
       re-encode current axes, and the shipped untagged predicate hex remains unchanged
-- [ ] 0.5 Make every graph-index benchmark, proof, and activation path call the shared literal key/filter validators
-      and return their stable classified errors before NATS I/O; current graph-index helpers do not yet do so
-- [ ] 0.6 Prove worst-case current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys and filters
+- [x] 0.5 Make benchmark/proof builders and the inactive reconciliation helper call the shared literal key/filter
+      validators and return stable classified errors before NATS I/O; zero-I/O tests cover lister, Put, and Delete
+- [ ] 0.5a Apply the same preflight contract to any future production activation call sites before wiring them; this
+      checkpoint activates no production reader, writer, configuration, or lifecycle path
+- [x] 0.6 Prove worst-case current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys and filters
       against shared budgets. If entity IDs prevent proof, require a separately approved total entity-ID byte bound or
       entity-axis physical-codec change before current-layout activation. Audit ALIAS's raw exact key separately; hand
       any missing alias identity bound or raw/opaque/owner-discovery decision to the owning ALIAS change without
-      blocking unrelated current-layout reconciliation
+      blocking unrelated current-layout reconciliation. The 1,025-byte six-valid-token fixture proves the missing
+      total entity bound and blocks activation; it is not a passing maximum
 
 ## 1. PR #524 Store and Query Contract
 
@@ -26,7 +29,9 @@
       lifecycle behavior, reset rule, and readiness consequence
 - [ ] 1.2 Encode literal filter strings through the shared NATS KV validators and pin the complete PR #524 ownership
       matrix plus maximum token/key/filter formulas in table-driven tests, including ALIAS, PREDICATE_CATALOG, every
-      current layout, and the raw PREDICATE candidate
+      current layout, and the raw PREDICATE candidate. Physical layouts, filters, and formulas are pinned, but the
+      table-driven test does not yet encode the complete semantic owner, overwrite, lifecycle, reset, and readiness
+      matrix required by tasks 1.1-1.2
 - [ ] 1.3 Define and test the INCOMING source-ownership contract, including source fact replacement, source
       removal/tombstone, target retirement, and authorized cascade behavior, without production wiring
 - [ ] 1.4 Pin shipped production behavior: OUTGOING and CONTEXT reconcile; PREDICATE, NAME, ALIAS, and source-owned
@@ -42,15 +47,18 @@
 - [ ] 2.1 Freeze and version the 5k CI and 21k full datasets, environment, numeric/resource-headroom budgets,
       convergence watermark, maximum memberships per owner, maximum-supported-worker candidate, and benchmark-only
       manifest baseline
-- [ ] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-keys`, then prove
+- [x] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-keys`, then prove
       maximum current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys/filters against the
       shared token, key, filter, byte, and arity budgets and real NATS, including malformed shorter and longer keys;
       representative corpus success MUST NOT substitute for governed maxima. Audit ALIAS's current raw exact key in
-      the matrix, but hand an unbounded result to the separate ALIAS owner rather than blocking unrelated stores
+      the matrix, but hand an unbounded result to the separate ALIAS owner rather than blocking unrelated stores. The
+      current entity contract fails the complete budget proof, so production activation remains blocked
 - [ ] 2.3 Test concurrent Put/Delete, duplicate observation and exact-key deduplication, cancellation, empty buckets,
-      error classification, and convergence to a declared final ENTITY_STATES revision
-- [ ] 2.4 Prove `[A] -> [B] -> []` stale deletion, desired insertion, and stable-key value overwrite for every
-      membership store in isolated reconciliation tests without activating production paths
+      error classification, and convergence to a declared final ENTITY_STATES revision. Cancellation, stable error
+      classification, and duplicate-result deduplication are proven; concurrency, empty-bucket recreation, and final
+      revision convergence remain
+- [x] 2.4 Prove `[A] -> [B] -> []` stale deletion and desired insertion for PREDICATE, NAME, CONTEXT, and source-owned
+      INCOMING, plus NAME stable-key value overwrite, in isolated tests without activating production paths
 - [ ] 2.5 Run five warmups and 30 measured repetitions, then full replay and sustained churn at representative one-
       and four-worker shapes, a 16-worker stress shape, and the maximum-supported-worker candidate
 - [ ] 2.6 Record latency, ingest throughput, queue growth, catch-up time, key/byte volume, client allocations, server
