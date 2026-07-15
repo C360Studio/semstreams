@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/nats-io/nats.go"
 )
 
@@ -217,6 +218,15 @@ func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, 
 // legacy "error: " body-prefix fallback in ClassifyReply. Correct
 // classification lets the caller decide whether to retry.
 func (c *Component) handleQueryPrefix(ctx context.Context, data []byte) ([]byte, error) {
+	var req graph.PrefixQueryRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryPrefix", "parse request")
+	}
+	if req.Prefix != "" {
+		if err := semtypes.ValidateEntityIDPrefix(req.Prefix); err != nil {
+			return nil, err
+		}
+	}
 	// Forward to graph-ingest
 	subject := c.router.Route("entityPrefix")
 	if subject == "" {
@@ -369,6 +379,11 @@ func (c *Component) handleQueryHierarchyStats(ctx context.Context, data []byte) 
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryHierarchyStats", "parse request")
+	}
+	if req.Prefix != "" {
+		if err := semtypes.ValidateEntityIDPrefix(req.Prefix); err != nil {
+			return nil, err
+		}
 	}
 
 	// Get all entity IDs with prefix from graph-ingest.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 const prefixQueryTimeout = 30 * time.Second
@@ -32,6 +33,9 @@ const prefixQuerySubject = "graph.query.prefix"
 //
 // For a multi-page accumulate, use QueryPrefixAll (bounded by a caller cap).
 func (qc *natsClient) QueryPrefix(ctx context.Context, req graph.PrefixQueryRequest) (graph.PrefixQueryResponse, error) {
+	if err := validatePrefix(req.Prefix); err != nil {
+		return graph.PrefixQueryResponse{}, err
+	}
 	reqData, err := json.Marshal(req)
 	if err != nil {
 		return graph.PrefixQueryResponse{}, err
@@ -86,6 +90,9 @@ func pagePrefixAll(
 	if maxEntities <= 0 {
 		return nil, false, fmt.Errorf("QueryPrefixAll: maxEntities must be > 0 (got %d); there is no unbounded mode", maxEntities)
 	}
+	if err := validatePrefix(req.Prefix); err != nil {
+		return nil, false, err
+	}
 
 	req.Cursor = "" // always start from the beginning of the prefix
 	var all []graph.EntityState
@@ -118,4 +125,13 @@ func pagePrefixAll(
 		}
 		req.Cursor = page.NextCursor
 	}
+}
+
+// validatePrefix preserves the public empty-prefix match-all contract while
+// enforcing the canonical literal entity-ID prefix grammar for scoped queries.
+func validatePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	return semtypes.ValidateEntityIDPrefix(prefix)
 }

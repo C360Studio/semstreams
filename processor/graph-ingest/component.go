@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/retry"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -75,11 +75,6 @@ var (
 	casRetriesOnce    sync.Once
 	casRetriesCounter prometheus.Counter
 )
-
-// entityIDRegex validates entity ID format: org.platform.domain.system.type.instance
-// Example: c360.ops.robotics.gcs.drone.001 or c360.logistics.environmental.sensor.humidity.humid-sensor-001
-// Each part must start with alphanumeric and can contain alphanumeric, hyphens, or underscores
-var entityIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
 func getEntitiesUpdatedMetric(registry *metric.MetricsRegistry) prometheus.Counter {
 	metricsOnce.Do(func() {
@@ -2165,23 +2160,7 @@ func indexingProfileMetricLabel(mt message.Type) string {
 
 // validateEntityID validates that an entity ID follows the expected format
 func validateEntityID(id string) error {
-	if id == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "validateEntityID", "entity ID cannot be empty")
-	}
-
-	if len(id) > 255 {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "validateEntityID", "entity ID too long (max 255 chars)")
-	}
-
-	if !entityIDRegex.MatchString(id) {
-		parts := strings.Split(id, ".")
-		msg := fmt.Sprintf(
-			"invalid entity ID format: expected 6 ASCII alphanumeric parts (org.platform.domain.system.type.instance), got %d parts or non-ASCII characters",
-			len(parts))
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "validateEntityID", msg)
-	}
-
-	return nil
+	return semtypes.ValidateEntityID(id)
 }
 
 // CreateEntity creates a new entity in the graph using upsert (Put)

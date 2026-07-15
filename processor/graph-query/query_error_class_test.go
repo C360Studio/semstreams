@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // newComponentForHandlerTest builds a minimal Component with router wired
@@ -68,6 +70,24 @@ func TestHandleQueryEntity_PassthroughPropagatesClassifiedError(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryPrefix — error-class fidelity (gh#304 primary fix)
 // ─────────────────────────────────────────────────────────────────────────────
+
+func TestHandleQueryPrefix_InvalidPrefixHasNoDownstreamRequest(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockNATSClient()
+	var requests atomic.Int64
+	mock.requestClassifiedFunc = func(context.Context, string, []byte, time.Duration) ([]byte, error) {
+		requests.Add(1)
+		return nil, nil
+	}
+	comp := newComponentForHandlerTest(t, mock)
+	_, err := comp.handleQueryPrefix(context.Background(), []byte(`{"prefix":"acme.*"}`))
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+	assert.Zero(t, requests.Load())
+}
 
 // TestHandleQueryPrefix_TransientHandlerErrorSurfacesAsError is the primary
 // regression lock for gh#304. A graph-ingest handler returning a transient

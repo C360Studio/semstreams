@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/fusion"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // Public graph query subjects the retrieval client maps onto. These are the
@@ -110,6 +111,9 @@ func (c *Client) resolveByName(ctx context.Context, query string, limit int) ([]
 // resolvePrefix resolves an ID prefix to entity IDs via graph.query.prefix. Only
 // the first page is taken — resolve seeds are bounded by limit, not exhaustive.
 func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]string, error) {
+	if err := validatePrefix(query); err != nil {
+		return nil, err
+	}
 	raw, err := c.request(ctx, subjectPrefix, graph.PrefixQueryRequest{Prefix: query, Limit: limit})
 	if err != nil {
 		return nil, err
@@ -132,6 +136,9 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 // pre-scope wire shape (every existing caller, and every symbol/prefix path,
 // sends none).
 func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]string, error) {
+	if err := validateScope(scope); err != nil {
+		return nil, err
+	}
 	body := map[string]any{"query": query, "limit": limit}
 	if len(scope) > 0 {
 		body["scope"] = scope
@@ -155,6 +162,26 @@ func (c *Client) resolveSemantic(ctx context.Context, query string, scope []stri
 		}
 	}
 	return ids, nil
+}
+
+func validatePrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	return semtypes.ValidateEntityIDPrefix(prefix)
+}
+
+func validateScope(scope []string) error {
+	for _, prefix := range scope {
+		// An explicit empty member is the documented match-all scope.
+		if prefix == "" {
+			continue
+		}
+		if err := semtypes.ValidateEntityIDPrefix(prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Entity returns an entity by ID, or (nil, nil) if absent. The graph-ingest

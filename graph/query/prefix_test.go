@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +55,51 @@ func TestPagePrefixAll_RejectsNonPositiveMax(t *testing.T) {
 		require.Error(t, err, "maxEntities=%d must error", max)
 		assert.Contains(t, err.Error(), "no unbounded mode")
 	}
+}
+
+func TestQueryPrefix_InvalidPrefixFailsBeforeNATS(t *testing.T) {
+	t.Parallel()
+
+	client := &natsClient{}
+	var err error
+	require.NotPanics(t, func() {
+		_, err = client.QueryPrefix(context.Background(), graph.PrefixQueryRequest{Prefix: "acme.*"})
+	})
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.True(t, errors.As(err, &classified))
+	assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+}
+
+func TestPagePrefixAll_InvalidPrefixFailsBeforeFetch(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	fetch := func(context.Context, graph.PrefixQueryRequest) (graph.PrefixQueryResponse, error) {
+		requests++
+		return graph.PrefixQueryResponse{}, nil
+	}
+	_, _, err := pagePrefixAll(
+		context.Background(),
+		graph.PrefixQueryRequest{Prefix: "acme.*"},
+		10,
+		fetch,
+	)
+	require.Error(t, err)
+	assert.Zero(t, requests, "invalid prefix must fail before the first request")
+}
+
+func TestPagePrefixAll_EmptyPrefixRemainsMatchAll(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	fetch := func(context.Context, graph.PrefixQueryRequest) (graph.PrefixQueryResponse, error) {
+		requests++
+		return graph.PrefixQueryResponse{}, nil
+	}
+	_, _, err := pagePrefixAll(context.Background(), graph.PrefixQueryRequest{}, 10, fetch)
+	require.NoError(t, err)
+	assert.Equal(t, 1, requests)
 }
 
 func TestPagePrefixAll_SinglePageExhausted(t *testing.T) {

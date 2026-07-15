@@ -23,7 +23,7 @@ type EntityType = types.EntityType
 // Follows the pattern: org.platform.domain.system.type.instance for federated entity management.
 type EntityID = types.EntityID
 
-// ParseEntityID creates EntityID from dotted string format.
-// Expects exactly 6 parts: org.platform.domain.system.type.instance
-// Returns an error if the format is invalid.
-var ParseEntityID = types.ParseEntityID
+// ParseEntityID delegates canonical parsing to pkg/types.
+func ParseEntityID(value string) (EntityID, error) {
+	return types.ParseEntityID(value)
+}

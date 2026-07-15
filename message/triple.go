@@ -3,8 +3,9 @@
 package message
 
 import (
-	"strings"
 	"time"
+
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // Triple represents a semantic statement about an entity following the Subject-Predicate-Object pattern.
@@ -136,36 +137,7 @@ func (t Triple) IsRelationship() bool {
 // This prevents false positives from strings that happen to have 5 dots (e.g., JSON
 // with file extensions like ".go", ".md") and ensures the ID is safe as a NATS KV key.
 func IsValidEntityID(s string) bool {
-	if s == "" {
-		return false
-	}
-
-	parts := strings.Split(s, ".")
-	// Require exactly 6 parts for canonical format
-	if len(parts) != 6 {
-		return false
-	}
-
-	// Each part must be non-empty and contain only valid identifier characters.
-	// Valid: a-z, A-Z, 0-9, hyphen, underscore
-	for _, part := range parts {
-		if part == "" {
-			return false
-		}
-		for _, c := range part {
-			if !isEntityIDChar(c) {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-// isEntityIDChar returns true if c is valid in an entity ID part:
-// alphanumeric, hyphen, or underscore.
-func isEntityIDChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+	return semtypes.IsValidEntityID(s)
 }
 
 // IsExpired returns true if the triple has an expiration time that has passed.

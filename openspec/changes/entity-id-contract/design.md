@@ -192,6 +192,35 @@ zero-violation or explicitly recorded as non-participating with evidence.
 Those coordinated sister gates block the v1 release and archive of this change, not local framework graph-index
 activation after its named local prerequisites have passed.
 
+## Implementation checkpoint: first reviewed slice
+
+The first reviewer-approved implementation slice establishes the canonical `pkg/types` literal, pattern, and prefix
+APIs, stable error constants, byte-exact grammar, and boolean/parser delegation. Graph-ingest's existing private
+literal gate now delegates to that authority. This is not yet proof that every authoritative persistence or replay
+lane reaches the gate.
+
+Pattern enforcement is currently routed through lifecycle workflow/reference validation and ownership
+owner/foreign-edge claims. Prefix enforcement is currently routed through the public graph query client,
+graph-ingest prefix handler, graph-query forwarding boundary, graph-embedding scope, and FusionNATS prefix/scope
+resolution. Their documented empty-match-all cases are preserved outside the non-empty prefix validator. Projection,
+rule-watch, gateway, schema, tool, other fusion-engine, and reference-design surfaces remain subject to the complete
+inventory and migration tasks.
+
+ObjectStore now validates `ContentStorable.EntityID()` before binary/content extraction, object-name generation,
+operation metrics, or NATS I/O for both binary and non-binary content. The previous invalid-input log that exposed
+the raw ID was removed. This closes only the `StoreContent` preflight requirement; it does not close retention or
+reclamation policy.
+
+The graph-index unit matrix now uses `E = 256` to prove the current maximum formulas and shared-validator acceptance.
+Inactive PREDICATE, NAME, and both INCOMING entity axes also reject a 257-byte ID before lister, Put, or Delete I/O.
+Production CONTEXT/OUTGOING semantic preflight, malformed complete-axis controls, and real-NATS maximum key/filter
+operations and match sets remain open, so production fixed-arity reconciliation remains blocked.
+
+The reviewed slice passed `task lint`, `go test -race ./...`, and `go test ./test/contract/...`; task 6.4 records the
+green breaking e2e evidence. This checkpoint does not claim completion of the full local inventory/corpus, schema
+generation, poison replay/readiness, reset/reingest, sister-repository migration, documentation, or real-NATS
+integration.
+
 ## Risks / Trade-offs
 
 - **A valid beta identifier may become invalid.** Leading `_`/`-`, over-256-byte, wildcard-like, Unicode, or malformed

@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // setupQueryHandlers sets up NATS request/reply subscriptions for query handlers
@@ -177,6 +178,11 @@ func (c *Component) handleQuerySearchNATS(requestCtx context.Context, data []byt
 	if req.Query == "" {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "handleQuerySearchNATS", "handler", "empty query")
 	}
+	// Reject malformed scope before invoking the embedder. GenerateQuery may be
+	// a paid remote call; invalid requests must not consume that resource.
+	if err := validateEntityIDScope(req.Scope); err != nil {
+		return nil, err
+	}
 
 	// Apply defaults
 	limit := req.Limit
@@ -243,6 +249,9 @@ func (c *Component) handleQuerySearchNATS(requestCtx context.Context, data []byt
 // no-op for essentially every warm-production query. An empty/nil scope keeps a
 // nil predicate so unscoped queries are unchanged.
 func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, queryVector []float32, scope []string, limit int) ([]SimilarEntity, error) {
+	if err := validateEntityIDScope(scope); err != nil {
+		return nil, err
+	}
 	if c.storage == nil {
 		return nil, errs.WrapFatal(errs.ErrInvalidConfig, "findSimilarEntities", "helper", "storage not initialized")
 	}
@@ -329,4 +338,18 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 	}
 
 	return results, nil
+}
+
+func validateEntityIDScope(scope []string) error {
+	for _, prefix := range scope {
+		// graph.MatchesAnyIDPrefix documents an empty element as explicit
+		// match-all, so preserve it instead of feeding it to the non-empty API.
+		if prefix == "" {
+			continue
+		}
+		if err := semtypes.ValidateEntityIDPrefix(prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }

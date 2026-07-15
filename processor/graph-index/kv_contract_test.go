@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,8 +17,8 @@ import (
 func TestGraphIndexKVContractMatrix(t *testing.T) {
 	t.Parallel()
 
-	entityID := "acme.ops.robotics.gcs.drone.001"
-	targetID := "acme.ops.robotics.gcs.truck.001"
+	entityID := maximumEntityIDForContract()
+	targetID := maximumEntityIDForContract()
 	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
 	maxPredicate := strings.Join([]string{maxSegment, maxSegment, maxSegment}, ".")
 	maxPredicateToken := graph.EncodePredicateToken(maxPredicate)
@@ -28,6 +28,8 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 	require.Equal(t, 194, len(maxPredicate))
 	require.Len(t, maxPredicateToken, 388)
 	require.Len(t, targetID, entityBytes)
+	require.Equal(t, semtypes.MaxEntityIDBytes, entityBytes)
+	require.NoError(t, semtypes.ValidateEntityID(entityID))
 	_, err := vocabulary.ParsePredicate(maxPredicate)
 	require.NoError(t, err)
 
@@ -184,128 +186,45 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 		maxSegment + "." + maxSegment + ".*.*.*.*.*.*.*",
 		maxSegment + ".*.*.*.*.*.*.*.*",
 	}, rawPredicateCandidateForwardFilters(maxPredicate))
+	assert.Len(t, predicateIndexKey(maxPredicate, entityID), 321)
+	assert.Len(t, nameCompositeKey(nameHash, entityID, maxPredicate), 710)
+	assert.Len(t, contextIndexKey(entityID, contextHash, maxPredicate), 710)
+	assert.Len(t, incomingIndexKey(targetID, entityID, maxPredicate), 902)
+	assert.Len(t, entityID, 256)
+	assert.Len(t, rawPredicateCandidateKey(maxPredicate, entityID), 451)
 }
 
-func TestGraphIndexKVContract_UnresolvedEntityAndAliasMaximaFailBudgets(t *testing.T) {
+func TestGraphIndexKVContract_EntityBoundaryAndAliasAudit(t *testing.T) {
 	t.Parallel()
 
-	longSegment := strings.Repeat("e", natsclient.MaxKVLiteralTokenBytes+1)
-	oversizedEntity := strings.Join([]string{longSegment, "p", "d", "s", "t", "i"}, ".")
-	require.True(t, message.IsValidEntityID(oversizedEntity), "fixture must preserve the current six-part contract")
+	valid := maximumEntityIDForContract()
+	invalid := valid + "x"
+	require.Len(t, valid, 256)
+	require.Len(t, invalid, 257)
+	require.NoError(t, semtypes.ValidateEntityID(valid))
+	assertStableEntityIDContractFailure(t, invalid, semtypes.EntityIDReasonBytes)
 
-	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
-	maxPredicate := strings.Join([]string{maxSegment, maxSegment, maxSegment}, ".")
-	otherEntity := "acme.ops.robotics.gcs.mission.001"
-
-	tests := []struct {
-		name         string
-		key          string
-		filter       string
-		keyReason    string
-		filterReason string
-	}{
-		{
-			name:         "predicate current hash",
-			key:          predicateIndexKey(maxPredicate, oversizedEntity),
-			filter:       predicateIndexEntityFilter(oversizedEntity),
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "name",
-			key:          nameCompositeKey(nameIndexKey("Alpha"), oversizedEntity, maxPredicate),
-			filter:       nameIndexEntityFilter(oversizedEntity),
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "context",
-			key:          contextIndexKey(oversizedEntity, contextHashHex("source.alpha"), maxPredicate),
-			filter:       contextIndexEntityFilter(oversizedEntity),
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "incoming",
-			key:          incomingIndexKey(otherEntity, oversizedEntity, maxPredicate),
-			filter:       incomingIndexSourceFilter(oversizedEntity),
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "outgoing",
-			key:          oversizedEntity,
-			filter:       oversizedEntity,
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "predicate raw candidate",
-			key:          rawPredicateCandidateKey(maxPredicate, oversizedEntity),
-			filter:       rawPredicateCandidateOwnerFilter(oversizedEntity),
-			keyReason:    natsclient.KVReasonTokenBytes,
-			filterReason: natsclient.KVReasonTokenBytes,
-		},
-		{
-			name:         "alias current raw audit",
-			key:          strings.Repeat("a", natsclient.MaxKVLiteralKeyBytes+1),
-			filter:       strings.Repeat("a", natsclient.MaxKVWildcardFilterBytes+1),
-			keyReason:    natsclient.KVReasonBytes,
-			filterReason: natsclient.KVReasonBytes,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertStableKVContractFailure(
-				t, natsclient.ValidateKVLiteralKey, tt.key,
-				natsclient.ErrorCodeKVKeyInvalid, tt.keyReason,
-			)
-			assertStableKVContractFailure(
-				t, natsclient.ValidateKVWildcardFilter, tt.filter,
-				natsclient.ErrorCodeKVFilterInvalid, tt.filterReason,
-			)
-		})
-	}
+	assertStableKVContractFailure(t, natsclient.ValidateKVLiteralKey,
+		strings.Repeat("a", natsclient.MaxKVLiteralKeyBytes+1),
+		natsclient.ErrorCodeKVKeyInvalid, natsclient.KVReasonBytes)
+	assertStableKVContractFailure(t, natsclient.ValidateKVWildcardFilter,
+		strings.Repeat("a", natsclient.MaxKVWildcardFilterBytes+1),
+		natsclient.ErrorCodeKVFilterInvalid, natsclient.KVReasonBytes)
 }
 
-func TestGraphIndexKVContract_IndividuallyValidEntityTokensFailWholeBudgets(t *testing.T) {
-	t.Parallel()
+func maximumEntityIDForContract() string {
+	return "a.a.a.a.a." + strings.Repeat("e", 246)
+}
 
-	segment := strings.Repeat("e", 170)
-	entityID := strings.Join([]string{segment, segment, segment, segment, segment, segment}, ".")
-	require.Len(t, entityID, 1025)
-	require.True(t, message.IsValidEntityID(entityID), "current entity contract does not bound total bytes")
-	for _, token := range strings.Split(entityID, ".") {
-		require.NoError(t, natsclient.ValidateKVLiteralToken(token), "each entity token must be independently valid")
-	}
-
-	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
-	maxPredicate := strings.Join([]string{maxSegment, maxSegment, maxSegment}, ".")
-	tests := []struct {
-		name   string
-		key    string
-		filter string
-	}{
-		{name: "predicate", key: predicateIndexKey(maxPredicate, entityID), filter: predicateIndexEntityFilter(entityID)},
-		{name: "name", key: nameCompositeKey(nameIndexKey("Alpha"), entityID, maxPredicate),
-			filter: nameIndexEntityFilter(entityID)},
-		{name: "context", key: contextIndexKey(entityID, contextHashHex("source.alpha"), maxPredicate),
-			filter: contextIndexEntityFilter(entityID)},
-		{name: "incoming", key: incomingIndexKey(entityID, entityID, maxPredicate),
-			filter: incomingIndexSourceFilter(entityID)},
-		{name: "outgoing", key: entityID, filter: entityID},
-		{name: "predicate raw candidate", key: rawPredicateCandidateKey(maxPredicate, entityID),
-			filter: rawPredicateCandidateOwnerFilter(entityID)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertStableKVContractFailure(t, natsclient.ValidateKVLiteralKey, tt.key,
-				natsclient.ErrorCodeKVKeyInvalid, natsclient.KVReasonBytes)
-			assertStableKVContractFailure(t, natsclient.ValidateKVWildcardFilter, tt.filter,
-				natsclient.ErrorCodeKVFilterInvalid, natsclient.KVReasonBytes)
-		})
+func assertStableEntityIDContractFailure(t *testing.T, value, reason string) {
+	t.Helper()
+	for iteration := 0; iteration < 2; iteration++ {
+		err := semtypes.ValidateEntityID(value)
+		require.Error(t, err)
+		var classified *errs.ClassifiedError
+		require.ErrorAs(t, err, &classified)
+		assert.Equal(t, semtypes.ErrorCodeEntityIDInvalid, classified.Code)
+		assert.Equal(t, reason, classified.Detail[semtypes.EntityIDDetailReason])
 	}
 }
 

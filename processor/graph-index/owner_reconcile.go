@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -112,6 +113,9 @@ func (c *Component) reconcilePredicateIndexRows(
 	entityID string,
 	rows []predicateReconcileRow,
 ) error {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return err
+	}
 	desired := make(map[string][]byte, len(rows))
 	orderedRows := append([]predicateReconcileRow(nil), rows...)
 	for _, row := range orderedRows {
@@ -153,8 +157,14 @@ func (c *Component) reconcileIncomingIndex(
 	sourceID string,
 	incomingByTarget map[string][]graph.IncomingEntry,
 ) error {
+	if err := semtypes.ValidateEntityID(sourceID); err != nil {
+		return err
+	}
 	desired := make(map[string][]byte)
 	for targetID, entries := range incomingByTarget {
+		if err := semtypes.ValidateEntityID(targetID); err != nil {
+			return err
+		}
 		for _, entry := range entries {
 			if !validateIncomingKeyInputs(targetID, sourceID, entry.Predicate, c.logger) {
 				return errs.WrapInvalid(errs.ErrInvalidData, "Component", "reconcileIncomingIndex",

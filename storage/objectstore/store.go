@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/storage"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -384,10 +385,14 @@ func (s *Store) Close() error {
 //  3. Store as JSON in ObjectStore
 //  4. Return StorageReference for embedding in messages
 func (s *Store) StoreContent(ctx context.Context, cs message.ContentStorable) (*message.StorageReference, error) {
+	entityID := cs.EntityID()
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	s.metrics.recordWriteOp("store_content")
 
-	entityID := cs.EntityID()
 	binaryRefs := make(map[string]BinaryRef)
 
 	// If implements BinaryStorable, store binary content first

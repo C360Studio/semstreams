@@ -24,12 +24,13 @@ import (
 
 // Mock KV bucket for testing
 type mockKVBucket struct {
-	mu              sync.Mutex
-	data            map[string]mockKVData
-	putFunc         func(ctx context.Context, key string, value []byte) (uint64, error)
-	getFunc         func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
-	deleteFunc      func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
-	watchAllFactory func() (jetstream.KeyWatcher, error)
+	mu               sync.Mutex
+	data             map[string]mockKVData
+	putFunc          func(ctx context.Context, key string, value []byte) (uint64, error)
+	getFunc          func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	deleteFunc       func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
+	listFilteredFunc func(ctx context.Context, filters ...string) (jetstream.KeyLister, error)
+	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
 // mockKVData stores value with revision for CAS testing
@@ -159,6 +160,9 @@ func (m *mockKVBucket) ListKeys(ctx context.Context, opts ...jetstream.WatchOpt)
 }
 
 func (m *mockKVBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	if m.listFilteredFunc != nil {
+		return m.listFilteredFunc(ctx, filters...)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1070,6 +1074,12 @@ func createTestComponent(t *testing.T) *Component {
 // createTestComponentWithMockKV creates a test component with mock KV bucket
 func createTestComponentWithMockKV(t *testing.T) *Component {
 	t.Helper()
+	component, _ := createTestComponentWithMockKVBucket(t)
+	return component
+}
+
+func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucket) {
+	t.Helper()
 
 	mockBucket := newMockKVBucket()
 
@@ -1093,5 +1103,5 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	// Create KVStore wrapper for all KV operations
 	component.entityBucket = natsClient.NewKVStore(mockBucket)
 
-	return component
+	return component, mockBucket
 }

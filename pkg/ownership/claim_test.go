@@ -19,6 +19,8 @@ func TestOwnerClaim_Validate(t *testing.T) {
 		{"empty owner", oc("", "a.b.c.d.e.f", ModeReplaceOwned, "p")},
 		{"5-part pattern", oc("o", "a.b.c.d.e", ModeReplaceOwned, "p")},
 		{"bare star pattern", oc("o", "*", ModeReplaceOwned, "p")},
+		{"partial wildcard pattern", oc("o", "a.b.c.d.e.foo*", ModeReplaceOwned, "sensorml.process.label")},
+		{"leading underscore pattern", oc("o", "a.b.c.d.e._bad", ModeReplaceOwned, "sensorml.process.label")},
 		{"no predicates", oc("o", "a.b.c.d.e.f", ModeReplaceOwned)},
 		{"empty predicate", oc("o", "a.b.c.d.e.f", ModeReplaceOwned, "")},
 		{"wildcard predicate", oc("o", "a.b.c.d.e.f", ModeReplaceOwned, "agent.*")},
@@ -52,6 +54,7 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 		{"wildcard predicate", fe("o", "p.*", "", EdgeConditional)},
 		{"invalid mode", fe("o", "test.edge.p", "", EdgeMode("bogus"))},
 		{"bad target pattern", fe("o", "p", "a.b.c", EdgeConditional)},
+		{"partial wildcard target pattern", fe("o", "sensorml.component.is-hosted-by", "a.b.c.d.e.foo*", EdgeConditional)},
 	}
 	for _, tt := range bad {
 		t.Run(tt.name, func(t *testing.T) {

@@ -19,8 +19,9 @@
       against shared budgets. If entity IDs prevent proof, require a separately approved total entity-ID byte bound or
       entity-axis physical-codec change before current-layout activation. Audit ALIAS's raw exact key separately; hand
       any missing alias identity bound or raw/opaque/owner-discovery decision to the owning ALIAS change without
-      blocking unrelated current-layout reconciliation. The 1,025-byte six-valid-token fixture proves the missing
-      total entity bound and blocks activation; it is not a passing maximum
+      blocking unrelated current-layout reconciliation. The reviewed `entity-id-contract` slice now fixes `E = 256`
+      and proves unit-level maxima of 321/710/902/256/451 bytes through the shared validators; real-NATS maxima and the
+      remaining local entity-contract gates in task 0.7 still block activation
 - [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4,
       including the canonical `E <= 256` API, local zero-violation literal/pattern/prefix corpus, ObjectStore zero-I/O
       guard, invalid-state replay/readiness proof, maximum graph-index key/filter conformance, and breaking e2e. This
@@ -52,12 +53,13 @@
 - [ ] 2.1 Freeze and version the 5k CI and 21k full datasets, environment, numeric/resource-headroom budgets,
       convergence watermark, maximum memberships per owner, maximum-supported-worker candidate, and benchmark-only
       manifest baseline
-- [x] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-keys`, then prove
-      maximum current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys/filters against the
-      shared token, key, filter, byte, and arity budgets and real NATS, including malformed shorter and longer keys;
-      representative corpus success MUST NOT substitute for governed maxima. Audit ALIAS's current raw exact key in
-      the matrix, but hand an unbounded result to the separate ALIAS owner rather than blocking unrelated stores. The
-      current entity contract fails the complete budget proof, so production activation remains blocked
+- [x] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-keys`; prove unit-level
+      maximum current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys/filters at `E = 256`
+      against shared token, key, filter, byte, and arity budgets. Audit ALIAS's current raw exact key in the matrix and
+      hand its unbounded result to the separate ALIAS owner rather than blocking unrelated stores
+- [ ] 2.2a Prove those governed maxima and exact match sets in real NATS with Put/Get/Delete/ListKeysFiltered/Watch,
+      including malformed shorter/longer, neighboring-owner, and reversed-axis controls; representative corpus
+      success MUST NOT substitute for governed maxima
 - [ ] 2.3 Test concurrent Put/Delete, duplicate observation and exact-key deduplication, cancellation, empty buckets,
       error classification, and convergence to a declared final ENTITY_STATES revision. Cancellation, stable error
       classification, and duplicate-result deduplication are proven; concurrency, empty-bucket recreation, and final

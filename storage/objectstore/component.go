@@ -788,7 +788,6 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) {
 			storageRef, err := c.store.StoreContent(ctx, cs)
 			if err != nil {
 				c.logger.Error("Failed to store ContentStorable",
-					slog.String("entity_id", cs.EntityID()),
 					slog.String("error", err.Error()))
 				return
 			}

@@ -11,6 +11,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/fusion"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeRequester records the last request and returns a canned reply, or routes
@@ -154,6 +157,33 @@ func TestResolve_Prefix(t *testing.T) {
 	}
 }
 
+func TestResolve_InvalidPrefixFailsBeforeNATS(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRequester{}
+	c := New(fake, time.Second)
+	_, err := c.Resolve(context.Background(), fusion.ResolveQuery{
+		Query: "acme.*",
+		Mode:  fusion.ResolveModePrefix,
+		Limit: 10,
+	})
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.True(t, errors.As(err, &classified))
+	assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+	assert.Empty(t, fake.lastSubject, "invalid prefix must fail before a NATS request")
+}
+
+func TestResolve_EmptyPrefixRemainsMatchAll(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRequester{resp: mustJSON(t, graph.PrefixQueryResponse{})}
+	c := New(fake, time.Second)
+	_, err := c.Resolve(context.Background(), fusion.ResolveQuery{Mode: fusion.ResolveModePrefix, Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, subjectPrefix, fake.lastSubject)
+}
+
 func TestResolve_Semantic(t *testing.T) {
 	resp := map[string]any{"results": []map[string]any{
 		{"entity_id": "a.b.c.d.e.1", "similarity": 0.9},
@@ -206,6 +236,39 @@ func TestResolve_Semantic_ScopeInBody(t *testing.T) {
 	if !ok || len(got) != 1 || got[0] != scope[0] {
 		t.Errorf("scope in body = %v, want [%q]", body["scope"], scope[0])
 	}
+}
+
+func TestResolve_SemanticInvalidScopeFailsBeforeNATS(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRequester{}
+	c := New(fake, time.Second)
+	_, err := c.Resolve(context.Background(), fusion.ResolveQuery{
+		Query: "find a widget",
+		Mode:  fusion.ResolveModeNL,
+		Scope: []string{"acme.*"},
+		Limit: 10,
+	})
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.True(t, errors.As(err, &classified))
+	assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+	assert.Empty(t, fake.lastSubject, "invalid scope must fail before a NATS request")
+}
+
+func TestResolve_SemanticEmptyScopeEntryRemainsMatchAll(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRequester{resp: mustJSON(t, map[string]any{"results": []map[string]any{}})}
+	c := New(fake, time.Second)
+	_, err := c.Resolve(context.Background(), fusion.ResolveQuery{
+		Query: "find a widget",
+		Mode:  fusion.ResolveModeNL,
+		Scope: []string{""},
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, subjectSemantic, fake.lastSubject)
 }
 
 func TestResolve_Symbol_CarriesNoScope(t *testing.T) {
