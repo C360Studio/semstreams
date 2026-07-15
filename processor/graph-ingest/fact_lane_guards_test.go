@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -90,6 +91,62 @@ func TestPartitionTriplesBySubject_AllOwn(t *testing.T) {
 	})
 	assert.Len(t, own, 2)
 	assert.Empty(t, foreign, "a single-Subject Graphable produces no foreign edges")
+}
+
+func TestIngestEntity_FillsOnlyEmptyFactProjectionSubject(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	entity := &graph.EntityState{
+		ID: flParentID,
+		Triples: []message.Triple{
+			{Subject: "", Predicate: "test.subject.omitted", Object: "filled"},
+			{Subject: flParentID, Predicate: "test.subject.explicit", Object: "unchanged"},
+		},
+	}
+
+	require.NoError(t, comp.ingestEntity(context.Background(), entity))
+	stored := storedEntity(t, comp, flParentID)
+	require.Len(t, stored.Triples, 3) // two facts plus the indexing-profile floor
+	for _, triple := range stored.Triples {
+		if triple.Predicate == "test.subject.omitted" || triple.Predicate == "test.subject.explicit" {
+			assert.Equal(t, flParentID, triple.Subject)
+		}
+	}
+}
+
+func TestIngestEntity_DoesNotRepairNonEmptyFactProjectionSubject(t *testing.T) {
+	comp, bucket := createTestComponentWithMockKVBucket(t)
+	getCalls := 0
+	bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+		getCalls++
+		return nil, jetstream.ErrKeyNotFound
+	}
+	entity := &graph.EntityState{
+		ID: flParentID,
+		Triples: []message.Triple{{
+			Subject: "malformed", Predicate: "test.subject.explicit", Object: "unchanged",
+		}},
+	}
+
+	require.Error(t, comp.ingestEntity(context.Background(), entity))
+	assert.Equal(t, 0, getCalls, "malformed projected state must fail before KV probing")
+	assert.Equal(t, "malformed", entity.Triples[0].Subject, "non-empty subject bytes must not be repaired")
+}
+
+func TestIngestEntity_DoesNotFillFromInvalidEnvelopeIdentity(t *testing.T) {
+	comp, bucket := createTestComponentWithMockKVBucket(t)
+	getCalls := 0
+	bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+		getCalls++
+		return nil, jetstream.ErrKeyNotFound
+	}
+	entity := &graph.EntityState{
+		ID:      "malformed",
+		Triples: []message.Triple{{Subject: "", Predicate: "test.subject.omitted"}},
+	}
+
+	require.Error(t, comp.ingestEntity(context.Background(), entity))
+	assert.Equal(t, 0, getCalls, "invalid envelope must fail before KV probing")
+	assert.Empty(t, entity.Triples[0].Subject, "fill requires an already-canonical envelope ID")
 }
 
 func TestDistinctSubjects_SortedAndDeduped(t *testing.T) {

@@ -2,11 +2,37 @@ package graphingest
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type keyedIngestTestMsg struct {
+	ack  atomic.Bool
+	nak  atomic.Bool
+	term atomic.Bool
+}
+
+func (*keyedIngestTestMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (*keyedIngestTestMsg) Data() []byte                              { return nil }
+func (*keyedIngestTestMsg) Headers() nats.Header                      { return nil }
+func (*keyedIngestTestMsg) Subject() string                           { return "entity.test" }
+func (*keyedIngestTestMsg) Reply() string                             { return "" }
+func (m *keyedIngestTestMsg) Ack() error                              { m.ack.Store(true); return nil }
+func (*keyedIngestTestMsg) DoubleAck(context.Context) error           { return nil }
+func (m *keyedIngestTestMsg) Nak() error                              { m.nak.Store(true); return nil }
+func (m *keyedIngestTestMsg) NakWithDelay(time.Duration) error        { m.nak.Store(true); return nil }
+func (*keyedIngestTestMsg) InProgress() error                         { return nil }
+func (m *keyedIngestTestMsg) Term() error                             { m.term.Store(true); return nil }
+func (m *keyedIngestTestMsg) TermWithReason(string) error             { m.term.Store(true); return nil }
 
 // --- laneGuard (in-memory guard tier, ADR-072) ---
 
@@ -114,4 +140,58 @@ func TestIngestGuardStale_PerStreamIndependence(t *testing.T) {
 	stale, err := c.ingestGuardStale(ctx, 0, fromB)
 	require.NoError(t, err)
 	assert.False(t, stale, "a low seq from stream B is not silenced by stream A's high seq")
+}
+
+func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
+	validID := "acme.ops.test.system.widget.001"
+	tests := []struct {
+		name   string
+		entity *graph.EntityState
+	}{
+		{name: "invalid envelope", entity: &graph.EntityState{ID: "bad"}},
+		{name: "invalid subject", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: "test.state.value"}}}},
+		{name: "invalid explicit reference", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: validID, Predicate: "test.state.value", Object: 42, Datatype: message.EntityReferenceDatatype}}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			component, _ := createTestComponentWithMockKVBucket(t)
+			guardBucket := newMockKVBucket()
+			var guardGets atomic.Int32
+			guardBucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+				guardGets.Add(1)
+				return nil, jetstream.ErrKeyNotFound
+			}
+			component.ingestGuardBucket = component.natsClient.NewKVStore(guardBucket)
+			component.ingestGuardMem = []*laneGuard{newLaneGuard(16)}
+			msg := &keyedIngestTestMsg{}
+			work := ingestWork{entity: tt.entity, msg: msg, entityID: tt.entity.ID, stream: "ENTITY", seq: 1}
+
+			err := component.processIngest(context.Background(), 0, work)
+			require.Error(t, err)
+			require.True(t, errs.IsInvalid(err), "structural failure must be nonretryable")
+			require.Equal(t, int32(0), guardGets.Load(), "invalid candidate reached durable guard Get")
+			require.True(t, msg.term.Load(), "immutable invalid message must Term")
+			require.False(t, msg.nak.Load(), "immutable invalid message must not redeliver")
+			require.False(t, msg.ack.Load(), "terminal rejection is not an ack path")
+		})
+	}
+}
+
+func TestProcessIngest_FillsEmptyFactSubjectBeforeStaleGuard(t *testing.T) {
+	component, _ := createTestComponentWithMockKVBucket(t)
+	component.ingestGuardMem = []*laneGuard{newLaneGuard(16)}
+	validID := "acme.ops.test.system.widget.001"
+	component.ingestGuardMem[0].set(guardKey(validID, "ENTITY"), 1)
+	entity := &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "", Predicate: "test.state.value"}}}
+	msg := &keyedIngestTestMsg{}
+
+	err := component.processIngest(context.Background(), 0, ingestWork{
+		entity: entity, msg: msg, entityID: validID, stream: "ENTITY", seq: 1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, validID, entity.Triples[0].Subject, "fact projection fill must precede stale-drop guard")
+	require.True(t, msg.ack.Load())
+	require.False(t, msg.term.Load())
+	require.False(t, msg.nak.Load())
 }

@@ -8,6 +8,12 @@ import (
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
+// EntityReferenceDatatype marks a triple object as an explicit entity
+// reference. Complete EntityState validation requires marked objects to be
+// canonical entity-ID strings; unmarked canonical-ID-shaped strings retain
+// their existing structural relationship behavior.
+const EntityReferenceDatatype = "@id"
+
 // Triple represents a semantic statement about an entity following the Subject-Predicate-Object pattern.
 // This enables RDF-like knowledge graphs while maintaining simplicity for Go developers.
 //
@@ -123,12 +129,20 @@ type TripleGenerator interface {
 
 // IsRelationship checks if this triple represents a relationship between entities
 // rather than a property with a literal value.
-// Returns true if Object is a valid EntityID (4-part dotted notation).
+// Returns true if Object is a valid canonical EntityID.
 func (t Triple) IsRelationship() bool {
-	if str, ok := t.Object.(string); ok {
-		return IsValidEntityID(str)
+	object, ok := t.Object.(string)
+	if !ok {
+		return false
 	}
-	return false
+	switch t.Datatype {
+	case "", EntityReferenceDatatype:
+		return IsValidEntityID(object)
+	default:
+		// An explicit non-reference datatype makes the object a literal even
+		// when its text happens to have canonical entity-ID shape.
+		return false
+	}
 }
 
 // IsValidEntityID checks if a string conforms to the canonical 6-part EntityID format.

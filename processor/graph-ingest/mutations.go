@@ -468,6 +468,9 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	if len(req.Triples) > 0 {
 		req.Entity.Triples = req.Triples
 	}
+	if err := validateMutationEntityState(req.Entity, nil); err != nil {
+		return nil, rejectFromError(err)
+	}
 	if err := validateMutationPredicates(req.Entity.Triples, nil); err != nil {
 		return nil, rejectFromError(err)
 	}
@@ -562,6 +565,9 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 	}
 	if req.Entity == nil {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
+	}
+	if err := validateMutationEntityState(req.Entity, nil); err != nil {
+		return nil, rejectFromError(err)
 	}
 
 	_, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -711,6 +717,9 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 			Timestamp:  time.Now(),
 			Confidence: 1.0,
 		})
+	}
+	if err := validateMutationEntityState(req.Entity, req.AddTriples); err != nil {
+		return nil, rejectFromError(err)
 	}
 	if err := validateMutationPredicates(req.AddTriples, req.RemoveTriples); err != nil {
 		return nil, rejectFromError(err)
@@ -990,6 +999,9 @@ func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte
 	if req.EntityID == "" {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity_id cannot be empty"))
 	}
+	if err := validateEntityID(req.EntityID); err != nil {
+		return nil, rejectFromError(err)
+	}
 
 	existed, err := c.entityExists(ctx, req.EntityID)
 	if err != nil {
@@ -1060,6 +1072,24 @@ func validateMutationPredicates(add []message.Triple, remove []string) error {
 	}
 	if err := graph.ValidateEntityPredicates(&graph.EntityState{Triples: triples}); err != nil {
 		return errs.WrapInvalid(err, "Component", "validateMutationPredicates", "invalid predicate contract")
+	}
+	return nil
+}
+
+// validateMutationEntityState rejects malformed request identity before an
+// owner-lease lookup, existence read, CAS retry, or write. It does not fill
+// omitted subjects: that convenience belongs exclusively to Graphable fact
+// projection.
+func validateMutationEntityState(entity *graph.EntityState, additional []message.Triple) error {
+	if entity == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "validateMutationEntityState", "entity cannot be nil")
+	}
+	candidate := *entity
+	candidate.Triples = make([]message.Triple, 0, len(entity.Triples)+len(additional))
+	candidate.Triples = append(candidate.Triples, entity.Triples...)
+	candidate.Triples = append(candidate.Triples, additional...)
+	if err := graph.ValidateEntityStateContract(&candidate); err != nil {
+		return errs.WrapInvalid(err, "Component", "validateMutationEntityState", "invalid entity state contract")
 	}
 	return nil
 }

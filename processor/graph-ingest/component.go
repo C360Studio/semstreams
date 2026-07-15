@@ -1539,11 +1539,8 @@ func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityStat
 // path. Exposed as a method so the merge+regroup wire is testable end-to-end
 // without standing up the decoder.
 func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) error {
-	// Preflight the complete Graphable projection before splitting foreign
-	// subjects. This guarantees a malformed foreign edge cannot commit the
-	// primary entity first.
-	if err := graph.ValidateEntityPredicates(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate projected predicates")
+	if err := c.prepareFactProjection(entity); err != nil {
+		return err
 	}
 
 	// ADR-055 §5 T2 + ADR-056 Decision 4: a Graphable may legitimately emit
@@ -1576,6 +1573,53 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
 	return nil
+}
+
+// prepareFactProjection applies the Graphable lane's single projection
+// convenience and validates the complete candidate. processIngest calls this
+// before its redelivery guard so malformed identity cannot become a guard key
+// or trigger guard I/O; ingestEntity calls it as the reusable direct-entry
+// safety net. The operation is idempotent.
+func (c *Component) prepareFactProjection(entity *graph.EntityState) error {
+	if entity == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "ingestEntity", "entity cannot be nil")
+	}
+	if err := validateEntityID(entity.ID); err != nil {
+		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate envelope entity ID")
+	}
+
+	// Graphable projection convenience: an omitted subject means the envelope
+	// entity. Fill only this fact-arrival lane, before the authoritative seam;
+	// mutation, direct persistence, and replay receive no such fill.
+	entity.Triples = fillFactProjectionSubjects(entity.ID, entity.Triples)
+
+	// Preflight the complete Graphable projection before splitting foreign
+	// subjects. This guarantees a malformed foreign edge cannot commit the
+	// primary entity first.
+	if err := graph.ValidateEntityStateContract(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate projected entity state")
+	}
+	return nil
+}
+
+// fillFactProjectionSubjects returns triples with each omitted Subject filled
+// from the exact Graphable envelope ID. It copies only when a fill is needed
+// and never repairs or rewrites non-empty subject bytes.
+func fillFactProjectionSubjects(entityID string, triples []message.Triple) []message.Triple {
+	var filled []message.Triple
+	for index := range triples {
+		if triples[index].Subject != "" {
+			continue
+		}
+		if filled == nil {
+			filled = append([]message.Triple(nil), triples...)
+		}
+		filled[index].Subject = entityID
+	}
+	if filled != nil {
+		return filled
+	}
+	return triples
 }
 
 // normalizeProjection is the SHARED projection-normalization seam (ADR-056
@@ -2200,6 +2244,9 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
 	}
+	if err := graph.ValidateEntityStateContract(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "MergeEntity", "validate entity state contract")
+	}
 	if err := ctx.Err(); err != nil {
 		return errs.Wrap(err, "Component", "MergeEntity", "context cancelled")
 	}
@@ -2349,6 +2396,9 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	// Validate entity ID format
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
+	}
+	if err := graph.ValidateEntityStateContract(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
 	}
 
 	// Check context
@@ -2580,6 +2630,9 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
 	}
+	if err := graph.ValidateEntityStateContract(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "UpdateEntity", "validate entity state contract")
+	}
 
 	// Check context
 	if err := ctx.Err(); err != nil {
@@ -2634,6 +2687,9 @@ func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.En
 
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
+	}
+	if err := graph.ValidateEntityStateContract(entity); err != nil {
+		return errs.WrapInvalid(err, "Component", "updateEntityAtRevision", "validate entity state contract")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -2725,14 +2781,10 @@ func (c *Component) invalidateEntityCacheEntry(id string) {
 
 // AddTriple adds a triple to an entity using CAS for concurrency safety
 func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error {
-	if triple.Subject == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriple", "triple subject cannot be empty")
-	}
-	if triple.Predicate == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriple", "triple predicate cannot be empty")
-	}
-	if _, err := vocabulary.ParsePredicate(triple.Predicate); err != nil {
-		return errs.WrapInvalid(err, "Component", "AddTriple", "validate triple predicate")
+	if err := graph.ValidateEntityStateContract(&graph.EntityState{
+		ID: triple.Subject, Triples: []message.Triple{triple},
+	}); err != nil {
+		return errs.WrapInvalid(err, "Component", "AddTriple", "validate triple contract")
 	}
 
 	// Check context
@@ -2797,15 +2849,22 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 		return 0, nil, nil
 	}
 
-	// Validate before any write. Subject errors retain their positional detail;
-	// predicate errors are returned as one deterministic all-violations result.
-	for i, t := range triples {
-		if t.Subject == "" {
-			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", i))
+	// Preserve the established positional diagnostic for an omitted mutation
+	// subject. The authoritative candidate validator below remains acceptance
+	// authority for all subject syntax, references, and predicates.
+	for index := range triples {
+		if triples[index].Subject == "" {
+			return 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", index))
 		}
 	}
-	if contractErr := graph.ValidateEntityPredicates(&graph.EntityState{Triples: triples}); contractErr != nil {
-		return 0, nil, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch predicates")
+
+	// Validate the whole batch before any CAS read. The first subject supplies
+	// the synthetic candidate root; every subject/reference/predicate is still
+	// validated independently by the authoritative contract.
+	if contractErr := graph.ValidateEntityStateContract(&graph.EntityState{
+		ID: triples[0].Subject, Triples: triples,
+	}); contractErr != nil {
+		return 0, nil, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch contract")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -2910,11 +2969,11 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 
 // RemoveTriple removes a triple from an entity using CAS for concurrency safety
 func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string) error {
-	if subject == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "RemoveTriple", "subject cannot be empty")
+	if err := validateEntityID(subject); err != nil {
+		return errs.WrapInvalid(err, "Component", "RemoveTriple", "validate subject")
 	}
-	if predicate == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "RemoveTriple", "predicate cannot be empty")
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return errs.WrapInvalid(err, "Component", "RemoveTriple", "validate predicate")
 	}
 
 	// Check context

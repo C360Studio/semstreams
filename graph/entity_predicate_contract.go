@@ -2,13 +2,62 @@ package graph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
+
+// EntityStateContractField identifies the first identity-bearing field that
+// makes a complete EntityState candidate noncanonical.
+type EntityStateContractField string
+
+const (
+	// EntityStateContractFieldID is the EntityState.ID root key.
+	EntityStateContractFieldID EntityStateContractField = "id"
+	// EntityStateContractFieldSubject is a persisted Triple.Subject.
+	EntityStateContractFieldSubject EntityStateContractField = "subject"
+	// EntityStateContractFieldReference is an explicitly marked @id object.
+	EntityStateContractFieldReference EntityStateContractField = "reference"
+)
+
+var errEntityReferenceObjectType = errors.New("explicit entity reference object must be a string")
+
+// EntityStateContractError reports the first noncanonical identity-bearing
+// field in a complete EntityState. TripleIndex is -1 for the root ID.
+//
+// Precedence is root ID, subjects in slice order, explicit references in slice
+// order, then the existing deterministic predicate contract. This keeps error
+// classification stable without echoing rejected identity bytes.
+type EntityStateContractError struct {
+	Field       EntityStateContractField
+	TripleIndex int
+	Err         error
+}
+
+// Error implements error without exposing the rejected identity.
+func (e *EntityStateContractError) Error() string {
+	if e == nil {
+		return "entity state contract violation"
+	}
+	if e.TripleIndex < 0 {
+		return fmt.Sprintf("entity state contract violation: %s", e.Field)
+	}
+	return fmt.Sprintf("entity state contract violation: triple[%d] %s", e.TripleIndex, e.Field)
+}
+
+// Unwrap exposes the canonical entity-ID or object-type cause.
+func (e *EntityStateContractError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 // InvalidEntityPredicate identifies one unique noncanonical predicate in an
 // EntityState candidate. Predicate values are included for diagnostics; Reason
@@ -74,11 +123,52 @@ func ValidateEntityPredicates(entity *EntityState) error {
 	return &EntityPredicateContractError{Violations: violations}
 }
 
+// ValidateEntityStateContract validates one complete final EntityState
+// candidate. It never fills or rewrites fields; the Graphable fact lane owns
+// its one allowed empty-subject projection convenience before this seam.
+func ValidateEntityStateContract(entity *EntityState) error {
+	if entity == nil {
+		return &EntityStateContractError{
+			Field: EntityStateContractFieldID, TripleIndex: -1, Err: errs.ErrInvalidData,
+		}
+	}
+	if err := semtypes.ValidateEntityID(entity.ID); err != nil {
+		return &EntityStateContractError{
+			Field: EntityStateContractFieldID, TripleIndex: -1, Err: err,
+		}
+	}
+	for index := range entity.Triples {
+		if err := semtypes.ValidateEntityID(entity.Triples[index].Subject); err != nil {
+			return &EntityStateContractError{
+				Field: EntityStateContractFieldSubject, TripleIndex: index, Err: err,
+			}
+		}
+	}
+	for index := range entity.Triples {
+		triple := &entity.Triples[index]
+		if triple.Datatype != message.EntityReferenceDatatype {
+			continue
+		}
+		object, ok := triple.Object.(string)
+		if !ok {
+			return &EntityStateContractError{
+				Field: EntityStateContractFieldReference, TripleIndex: index, Err: errEntityReferenceObjectType,
+			}
+		}
+		if err := semtypes.ValidateEntityID(object); err != nil {
+			return &EntityStateContractError{
+				Field: EntityStateContractFieldReference, TripleIndex: index, Err: err,
+			}
+		}
+	}
+	return ValidateEntityPredicates(entity)
+}
+
 // MarshalEntityState is the authoritative in-process ENTITY_STATES persistence
 // seam. It validates the complete final candidate before serialization.
 func MarshalEntityState(entity *EntityState) ([]byte, error) {
-	if err := ValidateEntityPredicates(entity); err != nil {
-		return nil, errs.WrapInvalid(err, "graph", "MarshalEntityState", "validate predicate contract")
+	if err := ValidateEntityStateContract(entity); err != nil {
+		return nil, errs.WrapInvalid(err, "graph", "MarshalEntityState", "validate entity state contract")
 	}
 	return json.Marshal(entity)
 }
@@ -92,9 +182,14 @@ func UnmarshalEntityState(data []byte, entity *EntityState) error {
 			Err:    err,
 		}, "graph", "UnmarshalEntityState", "decode authoritative entity state")
 	}
-	if err := ValidateEntityPredicates(entity); err != nil {
+	if err := ValidateEntityStateContract(entity); err != nil {
+		reason := GraphStateReasonNoncanonicalEntityID
+		var predicateErr *EntityPredicateContractError
+		if errors.As(err, &predicateErr) {
+			reason = GraphStateReasonNoncanonicalPredicate
+		}
 		return errs.WrapFatal(&StateContractError{
-			Reason: GraphStateReasonNoncanonicalPredicate,
+			Reason: reason,
 			Err:    err,
 		}, "graph", "UnmarshalEntityState", "decode authoritative entity state")
 	}

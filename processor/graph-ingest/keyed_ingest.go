@@ -122,6 +122,18 @@ func (c *Component) teardownIngestPool() {
 // stamps the guard (durable first, then in-memory) and acks — the ADR-072
 // two-tier guard, updated AFTER side effects and BEFORE ack.
 func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork) error {
+	// Validate and prepare the complete Graphable candidate before its identity
+	// participates in the idempotency guard. Structural failures are terminal
+	// for this immutable stream message and must not create a guard key/Get or a
+	// redelivery loop.
+	if validationErr := c.prepareFactProjection(work.entity); validationErr != nil {
+		c.recordPredicateContractRejections("graphable", validationErr)
+		if termErr := work.msg.Term(); termErr != nil {
+			c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
+		}
+		return validationErr
+	}
+
 	// Redelivery guard (ADR-072 B1/B2/B3): drop a stale re-delivery whose stream
 	// sequence is not newer than the last already applied to this entity from the
 	// same stream.

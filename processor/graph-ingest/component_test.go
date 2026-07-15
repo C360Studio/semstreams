@@ -27,6 +27,7 @@ type mockKVBucket struct {
 	mu               sync.Mutex
 	data             map[string]mockKVData
 	putFunc          func(ctx context.Context, key string, value []byte) (uint64, error)
+	createFunc       func(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error)
 	getFunc          func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
 	deleteFunc       func(ctx context.Context, key string, opts ...jetstream.KVDeleteOpt) error
 	listFilteredFunc func(ctx context.Context, filters ...string) (jetstream.KeyLister, error)
@@ -100,6 +101,9 @@ func (m *mockKVBucket) PutString(ctx context.Context, key string, value string) 
 }
 
 func (m *mockKVBucket) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	if m.createFunc != nil {
+		return m.createFunc(ctx, key, value, opts...)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
