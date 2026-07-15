@@ -8,7 +8,7 @@ import (
 )
 
 // NewTestRegistry builds a *payloadregistry.Registry populated with
-// all first-party payloads via Register(reg). Convenience for tests
+// the framework-core payloads via Register(reg). Convenience for tests
 // that need to wire deps.PayloadRegistry on a component under test.
 //
 // The testing.TB argument forces this to compile only in test files —

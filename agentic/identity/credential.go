@@ -101,9 +101,6 @@ const (
 var (
 	// ContextVC is the standard W3C VC context.
 	ContextVC = "https://www.w3.org/2018/credentials/v1"
-
-	// ContextAgntcy is the AGNTCY-specific context.
-	ContextAgntcy = "https://agntcy.org/credentials/v1"
 )
 
 // NewVerifiableCredential creates a new verifiable credential.
@@ -119,7 +116,7 @@ func NewVerifiableCredential(id, issuer string, credType string, subject any) (*
 	}
 
 	return &VerifiableCredential{
-		Context:           []string{ContextVC, ContextAgntcy},
+		Context:           []string{ContextVC},
 		ID:                id,
 		Type:              types,
 		Issuer:            issuer,

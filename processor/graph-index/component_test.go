@@ -220,7 +220,7 @@ type mockKVEntry struct {
 	data []byte
 }
 
-func (m *mockKVEntry) Key() string                     { return "test-key" }
+func (m *mockKVEntry) Key() string                     { return "c360.platform.robotics.mav1.drone.001" }
 func (m *mockKVEntry) Value() []byte                   { return m.data }
 func (m *mockKVEntry) Revision() uint64                { return 1 }
 func (m *mockKVEntry) Created() time.Time              { return time.Now() }

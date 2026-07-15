@@ -86,12 +86,9 @@ Ingesting graph entities from external sources (semsource, other sem* services):
 
 - [Federation](concepts/16-federation.md) - Ingestion patterns, entity namespacing, flow configuration
 
-## External Integrations
+## Optional Framework Adapters
 
-Optional bridges for connecting SemStreams to external systems:
-
-| Integration | Purpose | Documentation |
-|-------------|---------|---------------|
-| **AGNTCY** | Agent discovery, A2A protocol, OTEL export | [Concepts Guide](concepts/20-agntcy-integration.md) |
-
-These integrations are optional components that can be enabled based on deployment needs. See individual guides for configuration and deployment patterns.
+Optional adapters are selected explicitly and must satisfy the ownership and admission rules in
+[ADR-075](adr/075-framework-package-admission-and-composition.md). OpenTelemetry is currently the only optional
+framework adapter. Product protocols and standards are composed by their owning product binaries rather than by the
+SemStreams production binary.

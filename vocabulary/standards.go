@@ -457,10 +457,3 @@ const (
 	// Used for: AliasTypeCommunication
 	FoafAccountName = "http://xmlns.com/foaf/0.1/accountName"
 )
-
-// SOSA / SSN constants formerly defined here were promoted to the
-// vocabulary/sosa sub-package on 2026-05-15 as part of ADR-044
-// Phase 2. Import github.com/c360studio/semstreams/vocabulary/sosa
-// and use sosa.Observes, sosa.HasSimpleResult, sosa.SSNHasDeployment
-// directly. The sub-package also registers the sosa:/ssn: prefixes
-// with vocabulary/export automatically on import.

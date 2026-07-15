@@ -33,9 +33,6 @@ type Scenario struct {
 
 	// Configuration
 	config *Config
-
-	// AGNTCY integration configuration
-	agntcyConfig *AGNTCYConfig
 }
 
 // Config holds configuration for the agentic scenario.
@@ -160,17 +157,6 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"verify-streaming-metrics", s.verifyStreamingMetrics},
 		{"verify-tool-call-governance", s.verifyToolCallGovernance},
 		{"validate-results", s.validateResults},
-		// AGNTCY integration stages (optional, skip if not configured)
-		{"verify-oasf-generation", s.verifyOASFGeneration},
-		{"verify-directory-bridge", s.verifyDirectoryBridge},
-		{"verify-a2a-adapter", s.verifyA2AAdapter},
-		{"verify-a2a-task-lifecycle", s.verifyA2ATaskLifecycle},
-		{"verify-otel-export", s.verifyOTELExport},
-		// Opt-in: only runs when AGNTCY_HUB_AUTH env is set. Publishes
-		// to a real AGNTCY-conformant directory (default
-		// prod.api.ads.outshift.io:443). Default CI skips cleanly.
-		// See verifyAGNTCYHubPublish godoc for required env vars.
-		{"verify-agntcy-hub-publish", s.verifyAGNTCYHubPublish},
 	}
 
 	for _, stage := range stages {
@@ -196,9 +182,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 
 // Teardown cleans up after the scenario.
 func (s *Scenario) Teardown(ctx context.Context) error {
-	// Clean up AGNTCY test resources
-	_ = s.cleanupAGNTCY(ctx)
-
+	_ = ctx
 	return nil
 }
 
@@ -210,7 +194,7 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	}
 
 	// Check for required agentic components
-	required := []string{"agentic-loop", "agentic-model"}
+	required := requiredComponents()
 	found := make(map[string]bool)
 
 	for _, comp := range components {
@@ -232,7 +216,7 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	result.Details["agentic_components"] = found
 
 	if len(missing) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Missing agentic components: %v (may not be configured)", missing))
+		return fmt.Errorf("missing required components: %v", missing)
 	}
 
 	if len(unhealthy) > 0 {
@@ -240,6 +224,10 @@ func (s *Scenario) verifyComponents(ctx context.Context, result *scenarios.Resul
 	}
 
 	return nil
+}
+
+func requiredComponents() []string {
+	return []string{"agentic-loop", "agentic-model", "rule"}
 }
 
 // captureBaseline captures metrics baseline before task injection.
@@ -251,19 +239,17 @@ func (s *Scenario) captureBaseline(ctx context.Context, result *scenarios.Result
 	}
 
 	result.Details["baseline_snapshot"] = snapshot
+	result.Details["baseline_loops_completed"] = sumSnapshotMetric(
+		snapshot,
+		"semstreams_agentic_loop_loops_completed_total",
+	)
 	return nil
 }
 
 // injectTask publishes a direct agent task for testing
 func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) error {
 	// Inject a direct task to test agentic loop
-	task := agentic.TaskMessage{
-		LoopID: fmt.Sprintf("e2e-loop-%d", time.Now().UnixNano()),
-		TaskID: fmt.Sprintf("e2e-agentic-%d", time.Now().UnixNano()),
-		Role:   "general",
-		Model:  "mock",
-		Prompt: "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
-	}
+	task := newTestTask(time.Now())
 
 	taskMsg := message.NewBaseMessage(task.Schema(), &task, "e2e-test")
 	taskData, err := json.Marshal(taskMsg)
@@ -282,37 +268,81 @@ func (s *Scenario) injectTask(ctx context.Context, result *scenarios.Result) err
 	return nil
 }
 
+func newTestTask(now time.Time) agentic.TaskMessage {
+	return agentic.TaskMessage{
+		LoopID: fmt.Sprintf("e2e-loop-%d", now.UnixNano()),
+		TaskID: fmt.Sprintf("e2e-agentic-%d", now.UnixNano()),
+		Role:   "general",
+		Model:  "mock",
+		Prompt: "Analyze the temperature sensor temp-sensor-001. Respond with a brief assessment including valid JSON in your response.",
+		Tools: []agentic.ToolDefinition{{
+			Name:        "query_entity",
+			Description: "Query the test temperature sensor by its entity ID.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"entity_id": map[string]any{"type": "string"},
+				},
+				"required": []string{"entity_id"},
+			},
+		}},
+		ToolChoice: &agentic.ToolChoice{Mode: "function", FunctionName: "query_entity"},
+	}
+}
+
 // waitForCompletion waits for agent loop completion
 func (s *Scenario) waitForCompletion(ctx context.Context, result *scenarios.Result) error {
 	timeout := s.config.CompleteTimeout
 	deadline := time.Now().Add(timeout)
+	loopID, ok := result.Details["loop_id"].(string)
+	if !ok || loopID == "" {
+		return fmt.Errorf("loop_id not found in result details")
+	}
 
-	var loopsCompleted float64
+	baseline, _ := result.Details["baseline_loops_completed"].(float64)
+	loopsCompleted := baseline
+	lastTrajectoryError := "not queried"
 
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
-			// Check agent loop completion via metrics
+			traj, err := s.nats.GetTrajectory(ctx, loopID)
+			if err == nil {
+				lastTrajectoryError = ""
+				if traj.Outcome == "complete" && traj.EndTime != nil {
+					result.Details["completion_method"] = "target_trajectory"
+					return nil
+				}
+				if traj.Outcome != "" && traj.EndTime != nil {
+					return fmt.Errorf("target loop %s ended with outcome %q", loopID, traj.Outcome)
+				}
+			} else {
+				lastTrajectoryError = err.Error()
+			}
+
+			// Retain the aggregate metric only as timeout diagnostics. It must
+			// never satisfy completion because unrelated loops share it.
 			loops, err := s.metrics.SumMetricsByName(ctx, "semstreams_agentic_loop_loops_completed_total")
 			if err == nil && loops > loopsCompleted {
 				loopsCompleted = loops
 				result.Metrics["loops_completed"] = loopsCompleted
-			}
-
-			// Success: at least one agent loop completed
-			if loopsCompleted >= 1 {
-				result.Details["completion_method"] = "metrics"
-				return nil
 			}
 		}
 	}
 
 	// Timeout - provide diagnostic info
 	result.Details["timeout_loops_completed"] = loopsCompleted
+	result.Details["timeout_trajectory_error"] = lastTrajectoryError
 
-	return fmt.Errorf("timeout waiting for agent loop completion after %v (loops_completed=%v)", timeout, loopsCompleted)
+	return fmt.Errorf(
+		"timeout waiting for target loop %s after %v (loops_completed=%v, trajectory_error=%q)",
+		loopID,
+		timeout,
+		loopsCompleted,
+		lastTrajectoryError,
+	)
 }
 
 // validateTrajectory retrieves and validates the trajectory via NATS query handler.
@@ -348,7 +378,7 @@ func (s *Scenario) validateTrajectory(ctx context.Context, result *scenarios.Res
 		return fmt.Errorf("trajectory has no model_call steps")
 	}
 	if !hasToolCall {
-		result.Warnings = append(result.Warnings, "trajectory has no tool_call steps")
+		return fmt.Errorf("trajectory has no tool_call steps")
 	}
 
 	// Validate completion
@@ -370,6 +400,20 @@ func (s *Scenario) validateTrajectory(ctx context.Context, result *scenarios.Res
 	result.Details["trajectory_outcome"] = traj.Outcome
 
 	return nil
+}
+
+func sumSnapshotMetric(snapshot *client.MetricsSnapshot, metricName string) float64 {
+	if snapshot == nil {
+		return 0
+	}
+
+	var sum float64
+	for _, metric := range snapshot.Metrics {
+		if metric.Name == metricName {
+			sum += metric.Value
+		}
+	}
+	return sum
 }
 
 // verifyGraphTriples verifies that the graph writer emitted triples for the loop
@@ -597,10 +641,9 @@ func (s *Scenario) verifyToolCallGovernance(ctx context.Context, result *scenari
 
 // validateResults validates the scenario results
 func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) error {
-	// Validate agent loops completed
-	loopsCompleted, ok := result.Metrics["loops_completed"].(float64)
-	if !ok || loopsCompleted < 1 {
-		return fmt.Errorf("expected at least 1 agent loop completion, got %v", loopsCompleted)
+	completionMethod, _ := result.Details["completion_method"].(string)
+	if completionMethod != "target_trajectory" {
+		return fmt.Errorf("target loop completion was not verified, method=%q", completionMethod)
 	}
 
 	result.Details["validation_passed"] = true

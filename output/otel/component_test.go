@@ -3,6 +3,7 @@ package otel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -355,6 +356,121 @@ func TestComponentSetExporter(t *testing.T) {
 	}
 }
 
+func TestExportCountersAdvanceOnlyAfterExporterAcceptsBatch(t *testing.T) {
+	cfg := DefaultConfig()
+	rawConfig, _ := json.Marshal(cfg)
+	created, err := NewComponent(rawConfig, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent: %v", err)
+	}
+	c := created.(*Component)
+	if err := c.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	exporter := &MockExporter{ExportMetricsErr: errors.New("collector unavailable")}
+	c.SetExporter(exporter)
+	c.metricMapper.RecordCounter("attempt", "", "1", 1, nil)
+	c.exportData(context.Background())
+	if c.metricsExported != 0 {
+		t.Fatalf("metrics_exported = %d after rejected batch, want 0", c.metricsExported)
+	}
+
+	exporter.ExportMetricsErr = nil
+	c.metricMapper.RecordCounter("accepted", "", "1", 1, nil)
+	c.exportData(context.Background())
+	if c.metricsExported != 1 {
+		t.Fatalf("metrics_exported = %d after accepted batch, want 1", c.metricsExported)
+	}
+}
+
+func TestExportDataBoundsEachFlushWithExportTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ExportTraces = false
+	cfg.ExportTimeout = "20ms"
+	rawConfig, _ := json.Marshal(cfg)
+	created, err := NewComponent(rawConfig, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent: %v", err)
+	}
+	c := created.(*Component)
+	if err := c.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	exporter := newHangingExporter()
+	defer close(exporter.release)
+	c.SetExporter(exporter)
+	c.metricMapper.RecordCounter("bounded", "", "1", 1, nil)
+
+	done := make(chan struct{})
+	go func() {
+		c.exportData(context.Background())
+		close(done)
+	}()
+
+	call := <-exporter.started
+	if !call.hasDeadline {
+		t.Fatal("periodic export context has no deadline")
+	}
+	if call.initiallyCanceled {
+		t.Fatal("periodic export context was already canceled")
+	}
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("hanging exporter exceeded export_timeout")
+	}
+	if c.metricsExported != 0 {
+		t.Fatalf("metrics_exported = %d after timed-out batch, want 0", c.metricsExported)
+	}
+	if c.errors != 1 {
+		t.Fatalf("errors = %d after timed-out batch, want 1", c.errors)
+	}
+}
+
+func TestExportLoopFinalFlushUsesFreshBoundedContext(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ExportTraces = false
+	cfg.ExportTimeout = "20ms"
+	rawConfig, _ := json.Marshal(cfg)
+	created, err := NewComponent(rawConfig, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent: %v", err)
+	}
+	c := created.(*Component)
+	if err := c.Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	exporter := newHangingExporter()
+	defer close(exporter.release)
+	c.SetExporter(exporter)
+	c.metricMapper.RecordCounter("shutdown", "", "1", 1, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		c.exportLoop(ctx)
+		close(done)
+	}()
+
+	call := <-exporter.started
+	if !call.hasDeadline {
+		t.Fatal("shutdown flush context has no deadline")
+	}
+	if call.initiallyCanceled {
+		t.Fatal("shutdown flush reused the canceled component context")
+	}
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("final flush exceeded export_timeout")
+	}
+}
+
 func TestComponentGetSpanCollector(t *testing.T) {
 	cfg := DefaultConfig()
 	rawConfig, _ := json.Marshal(cfg)
@@ -444,6 +560,44 @@ type MockExporter struct {
 
 	shutdownCalled bool
 }
+
+type exportCall struct {
+	hasDeadline       bool
+	initiallyCanceled bool
+}
+
+type hangingExporter struct {
+	started chan exportCall
+	release chan struct{}
+}
+
+func newHangingExporter() *hangingExporter {
+	return &hangingExporter{
+		started: make(chan exportCall, 1),
+		release: make(chan struct{}),
+	}
+}
+
+func (e *hangingExporter) ExportSpans(ctx context.Context, _ []*SpanData) error {
+	return e.block(ctx)
+}
+
+func (e *hangingExporter) ExportMetrics(ctx context.Context, _ []*MetricData) error {
+	return e.block(ctx)
+}
+
+func (e *hangingExporter) block(ctx context.Context) error {
+	_, hasDeadline := ctx.Deadline()
+	e.started <- exportCall{hasDeadline: hasDeadline, initiallyCanceled: ctx.Err() != nil}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.release:
+		return nil
+	}
+}
+
+func (e *hangingExporter) Shutdown(context.Context) error { return nil }
 
 func (m *MockExporter) ExportSpans(_ context.Context, spans []*SpanData) error {
 	m.mu.Lock()

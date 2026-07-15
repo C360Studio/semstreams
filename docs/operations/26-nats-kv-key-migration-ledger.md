@@ -73,8 +73,8 @@ Migration state has five allowed values:
   owner-specific; rule persistence contract; unassessed; pending.
 - Agent loop, tool, research-graph, and memory stores: fixed prefixes plus loop/run/entity IDs; agentic processors;
   loop/run/entity bounds; owner-specific; agentic persistence contracts; unassessed; pending.
-- Directory bridge and completion watchers: `>` or fixed lifecycle filters; owning component; exact declared filter
-  grammar; none; component contract; unassessed; assigned.
+- Completion watchers: configured bucket plus `WatchAll`; `pkg/dispatch`; declared all-keys filter and bucket
+  authority; none unless key bytes change; dispatch persistence contract; unassessed; assigned.
 - Message-logger KV diagnostics: operator-supplied key/filter; service diagnostics; authorization plus filter grammar;
   none; diagnostics API contract; unassessed; pending.
 - ObjectStore names and keys: ObjectStore API rather than KV key suffixes; storage/objectstore; outside this
@@ -94,13 +94,6 @@ allowed values as the boundary inventory.
 - `processor/agentic-governance/violation.go:ViolationHandler.storeViolation`: `violation:<violation.ID>` with a
   literal colon; agentic governance audit; replacement-free physical layout and ID bound; byte change and migration
   required because `:` is not accepted by NATS KV; governance persistence contract; nonconforming; pending.
-- `processor/oasf-generator/generator.go:Generator.fetchEntityTriples`: raw `entityID` Get; OASF generator input;
-  six-part entity byte bound; follows ENTITY_STATES owner; entity-ID contract; unassessed; pending.
-- `processor/oasf-generator/generator.go:Generator.storeAndPublish`: raw `entityID` Put; OASF record output; six-part
-  entity byte bound; possible OASF_RECORDS rebuild; OASF persistence contract; unassessed; pending.
-- `processor/oasf-generator/component.go:Component.startEntityWatches`: graph-wide `WatchAll` plus configurable raw
-  `Config.WatchPattern`; OASF selection; wildcard grammar and selected-bucket semantics; no rebuild unless bytes
-  change; OASF persistence contract; unassessed; pending.
 - `flowstore/manager.go`: raw `flow.ID` Create/Put/Get/Delete, raw Keys, and caller Watch pattern; flow store; flow-ID
   bound plus filter grammar; possible flow bucket rebuild; flow identity contract; unassessed; pending.
 - `flowtemplate/manager.go`: raw template ID Create/Put/Get/Delete and Keys; flow templates; template-ID bound;
@@ -164,9 +157,10 @@ allowed values as the boundary inventory.
   pending.
 - `pkg/dispatch/completion_watcher.go`: configured bucket plus WatchAll; dispatch completion; bucket authority and
   all-keys filter declaration; none unless bytes change; dispatch persistence contract; unassessed; assigned.
-- `processor/agentic-tools/executors/register_graph_query.go` and `register_research_graph.go`: raw entity/loop IDs
-  through KVStore Get/Put; agentic tools; entity/loop bounds; follows owning bucket migration; agentic tool contracts;
-  unassessed; pending.
+- `processor/agentic-tools/executors/register_graph_query.go` and
+  `frameworkcapabilities/graphresearch/register_tool.go`: raw entity/loop IDs through KVStore Get/Put; graph query
+  and graph-research tools; entity/loop bounds; follows owning bucket migration; agentic tool contracts; unassessed;
+  pending.
 - `processor/agentic-tools/loop_result.go:normalizeLoopID`: drops every prefix through the final dot before building
   `COMPLETE_<bareID>` for KV Get; agentic loop-result tool; decide whether full and prefixed loop IDs are semantically
   equivalent and bound accepted prefix shapes; no stored-byte change if equivalence is governed, otherwise caller
@@ -174,8 +168,6 @@ allowed values as the boundary inventory.
 - `processor/research-graph-{assess,classify,execute,route,synthesize}` adapters: fixed phase prefixes plus raw loop IDs
   through KVStore Get/Put; research graph; loop-ID bound and prefix arity; owner-specific migration; research-graph
   persistence contract; unassessed; pending.
-- `output/directory-bridge/component.go`: configured OASF bucket with raw `>` Watch; directory bridge; declared
-  all-keys filter; none; directory-bridge contract; unassessed; assigned.
 - `service/message_logger_http.go` and `message_logger_kv_watch.go`: operator-selected bucket, raw Keys/Get, and
   operator-supplied Watch filter; diagnostics; authorization and wildcard grammar; none; diagnostics API contract;
   unassessed; pending.
@@ -201,7 +193,28 @@ KV field. The covered production source families are:
 - `graph/query`, `graph/embedding`, `graph/clustering`, `graph/structural`, and `graph/inference`;
 - graph ingest, index, query, clustering, embedding, spatial, and temporal processors;
 - rule, agentic-loop, agentic-tools, agentic-dispatch, and research-graph processors;
-- directory-bridge and service message-logger paths.
+- service message-logger paths.
+
+## Transferred SemTeams obligations
+
+ADR-075 removes OASF projection and AGNTCY directory registration from the SemStreams framework composition and
+transfers that product bundle to SemTeams. Consequently, the deleted `processor/oasf-generator` and
+`output/directory-bridge` paths are not current SemStreams production call sites and do not remain as framework rows
+in this ledger.
+
+The underlying obligations transfer with ownership rather than disappearing. Before SemTeams releases its owned
+bundle, its owner notice and release gate must inventory and prove:
+
+- the raw entity-ID Get from `ENTITY_STATES` and its six-part entity bound;
+- the OASF record output key layout, collision model, and any required clean rebuild of the owned record bucket;
+- every entity watch or configurable selection filter, including wildcard grammar and selected-bucket authority; and
+- the directory registration watch over the owned OASF bucket, including an explicit all-keys filter declaration.
+
+SemTeams must apply the same migration rule below: classify existing data, validate complete keys and filters before
+I/O, authorize rebuilds when bytes or acceptance change, and prove invalid input has no observable I/O side effect.
+Downstream owner validation is a pre-v1 release gate recorded in the
+[framework package boundary clean-break inventory](27-framework-package-boundary-clean-break.md), not a reason to
+retain deleted product packages in SemStreams.
 
 `graph.EncodePredicateToken` is a reversible untagged hexadecimal graph codec. Its bytes remain unchanged. NAME,
 CONTEXT, and PREDICATE hash helpers are deliberate layout-specific hashes, not reversible opaque codecs. Located

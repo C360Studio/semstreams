@@ -2,6 +2,9 @@
 
 ## Status
 
+**Partially superseded by ADR-075 — 2026-07-15.** Generic HTTP and GeoJSON primitives remain framework-owned. OMS,
+SensorML, SWE Common, CS API, and associated vocabulary move to SemConnect-owned composition.
+
 **Proposed — 2026-05-14.** Tag scope: no breaking change. Doc-only ADR;
 implementation phased and deferred. Independent of PR #77 (ADR-043
 detonation corpus) and PR #76 (ADR-042 OASF scaffold) — different

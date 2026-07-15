@@ -15,11 +15,10 @@ tasks:
     cmds:
       - echo "[RESEARCH-GRAPH] Starting research-graph tier E2E test..."
       - docker compose -f docker/compose/research-graph.yml up -d --wait --build
+      - defer: docker compose -f docker/compose/research-graph.yml down -v --timeout 15
       - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
       - echo "[RESEARCH-GRAPH] Running research-graph scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario research-graph --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
-        ignore_error: true
-      - docker compose -f docker/compose/research-graph.yml down -v --timeout 15
+      - cd cmd/e2e && ./e2e --scenario research-graph --base-url http://localhost:48080 --output-dir ./test/e2e/results --metrics-url http://localhost:49090
 
   up:
     desc: Start research-graph tier services without running tests

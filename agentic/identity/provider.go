@@ -54,14 +54,11 @@ func (o *CreateIdentityOptions) Validate() error {
 
 // ProviderConfig holds configuration for identity providers.
 type ProviderConfig struct {
-	// ProviderType identifies the provider ("local", "agntcy").
+	// ProviderType identifies the provider. The core implementation is "local".
 	ProviderType string `json:"provider_type"`
 
-	// IssuerDID is the DID used for issuing credentials (for AGNTCY provider).
+	// IssuerDID is the DID used for issuing credentials.
 	IssuerDID string `json:"issuer_did,omitempty"`
-
-	// AgntcyURL is the AGNTCY service URL (for AGNTCY provider).
-	AgntcyURL string `json:"agntcy_url,omitempty"`
 
 	// KeyStorePath is the path to store private keys (for local provider).
 	KeyStorePath string `json:"key_store_path,omitempty"`
@@ -75,8 +72,6 @@ var DefaultProviderFactory ProviderFactory = func(config ProviderConfig) (Provid
 	switch config.ProviderType {
 	case "local", "":
 		return NewLocalProvider(config)
-	case "agntcy":
-		return NewAgntcyProvider(config)
 	default:
 		return nil, ErrUnknownProviderType
 	}

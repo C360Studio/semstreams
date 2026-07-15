@@ -13,11 +13,16 @@ component/port flow model.
 SemStreams is a **framework, not a product**. It owns primitives and contracts;
 it does not own any product's domain semantics. If a capability is only meaningful
 to one consumer's problem (a game mechanic, a COP fusion rule, a spec-review UI),
-it belongs in that product, not here. The test for "does this belong in
-SemStreams" is: *would two or more `sem*` products reuse it, and is it expressed
-as a substrate primitive rather than one product's mental model?* (See the
-`/framework-vs-product-boundary` discipline: unwired-in-the-framework ≠ broken —
-classify the gap before building.)
+it belongs in that product, not here.
+
+A package is admitted only when it is substrate-shaped and either (1) two or more
+independent products reuse its contract or (2) it is required to make SemStreams'
+defining graph, KV, rule, lifecycle, storage, or agentic substrate usable. The
+second path requires recorded evidence of a framework-level usability or
+correctness gap, a product-neutral contract, and no product vocabulary or policy.
+Standards interest, sponsor interest, an in-repo example, or first-party authorship
+is not sufficient. See ADR-075. Unwired-in-the-framework does not mean broken;
+classify ownership before building.
 
 ## Product Boundary
 
@@ -31,23 +36,31 @@ classify the gap before building.)
   `publish_agent`, `for_each`, gated-DAG); the **agentic substrate**
   (loop/tools/model/dispatch/memory/governance primitives — NOT product agent
   personas); **deterministic fusion** (`pkg/fusion`, ADR-062); the **payload
-  registry**; the vocabulary registry; and shared runtime services (schema
-  generation, health, metrics).
+  registry**; the vocabulary registry; the atomic **graph-research capability**
+  (classifier/query, bounded research stages, fusion, ObjectStore evidence, and
+  result retrieval; ADR-045/075); and shared runtime services (schema generation,
+  health, metrics).
 - **Products own their domain semantics and compose SemStreams primitives.**
   SemStreams supports them as substrate; it must not absorb their behavior:
   - **SemSource** — source discovery/parsing, binary/media by-reference, source
     provenance, and source-graph publishing.
   - **SemOps** — COP product semantics, feed fusion, tactical UI, product-level
     graph ownership.
-  - **SemConnect** — the OGC Connected Systems API bridge.
+  - **SemConnect** — the OGC Connected Systems API bridge, including OMS,
+    SensorML, SWE Common, CS API, and associated vocabulary contracts.
+  - **SemDev** — GitHub webhook, forge tools, and development-workflow policy.
   - **SemTeams / SemSpec** — multi-agent team coordination and spec-driven
     development orchestration (agent personas, review surfaces, product workflows).
+    SemTeams also owns OASF projection and AGNTCY directory registration policy.
   - **SemDragon** — game mechanics, trust, and quest semantics (the product whose
     agents do dev work).
 - **Cross-repo contracts** (a mutation-API shape, a payload envelope, a readiness
   signal, a vocabulary predicate) are the one place the boundary is shared. They
   are recorded as ADRs (decisions) and specified as specs (current truth), never
   left implicit.
+- Production binaries compose core, retained framework capabilities, optional
+  adapters, and product extensions explicitly. Examples and product adapters are
+  not imported by framework-core registration merely because they are first party.
 
 ## How we spec (OpenSpec) — the role split
 

@@ -2,9 +2,11 @@
 
 - [ ] 1.1 Inventory every local entity-ID literal, constructor, parser, validator, pattern, schema, config field,
       graph-state seed, KV key/filter builder, and direct split/match implementation; classify each as literal,
-      declaration pattern, query prefix, unrelated test glob, or malformed. Explicitly include federation entity and
-      RETRACT IDs, OMS Observation, SensorML `NewAsset`, `StoredMessage.Validate`, gated-DAG config/schema, lifecycle
-      OpenAPI source/generated OAS, rule expression helpers, graph/fusion/embedding scopes, and gateway prefix inputs
+      declaration pattern, query prefix, unrelated test glob, or malformed. Use the ADR-075 selected framework
+      composition: exclude deleted `federation` and moved OMS/SensorML sources from the local corpus, and track their
+      owner-side audit in the boundary handoff. Explicitly include `StoredMessage.Validate`, gated-DAG config/schema,
+      lifecycle OpenAPI source/generated OAS, rule expression helpers, graph/fusion/embedding scopes, graph-research
+      sources, and gateway prefix inputs
 - [x] 1.2 Write failing table tests in `pkg/types` for exact six-part arity, non-empty segments, ASCII alphanumeric
       first bytes, allowed `A-Z a-z 0-9 _ -` remaining bytes, leading `_`/`-`, Unicode, whitespace, slash, `*`, `>`,
       embedded wildcards, and empty segments
@@ -75,9 +77,10 @@
 - [x] 3.3b Record projection-contract pattern coverage as satisfied transitively: `projection.Contract.Validate`
       derives ownership claims, whose owner and foreign-edge target patterns use the shared pattern API before bind
 - [ ] 3.4 Update all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and direct
-      split/match helpers. Explicitly cover federation entity/RETRACT IDs, OMS Observation, SensorML `NewAsset`,
-      `StoredMessage.Validate`, gated-DAG `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS, and
-      rule expression helpers; remove duplicate regexes, alphabets, arity-only checks, magic limits, and validators
+      split/match helpers in the selected framework composition. Explicitly cover `StoredMessage.Validate`, gated-DAG
+      `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS, graph-research sources, and rule expression
+      helpers; remove duplicate regexes, alphabets, arity-only checks, magic limits, and validators. Do not retain
+      moved OMS/SensorML or deleted federation code to satisfy this task
 - [ ] 3.5 Check in the deterministic local literal/pattern/prefix source corpus report and exact breaking source/config
       change list; reach zero unexplained violations without creating a runtime alias or transformation ledger
 - [ ] 3.6 Add invalid-input side-effect tests proving no NATS call, retry, callback, watcher/lister creation, raw-ID
@@ -135,8 +138,8 @@
 ## 6. Quality, Documentation, and Release Gates
 
 - [ ] 6.1 Run focused `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rule, query,
-      agentic, gateway, federation, OMS, SensorML, gated-DAG, ObjectStore, and export unit suites while implementing
-      each failing-test slice
+      agentic, graph-research, gateway, gated-DAG, ObjectStore, and export unit suites while implementing each
+      failing-test slice. SemConnect owns the moved OMS/SensorML contract proof
 - [x] 6.2 Run `task lint`, `go test -race ./...`, and `go test ./test/contract/...` for the first reviewed
       implementation slice
 - [ ] 6.2a Run `task schema:generate` and verify no schema/spec drift after schema-facing source updates are complete.
@@ -152,7 +155,7 @@
 - [ ] 6.4a After all local enforcement, constructors, schemas, and fixtures are complete, rerun every affected e2e tier,
       at minimum core, structural, agentic, and semantic ingest-to-ENTITY_STATES-to-index-to-query; the first-slice
       evidence in 6.4 does not substitute for this final BREAKING gate
-- [ ] 6.5 Update SemStreams-local `pkg/types` and `message` API docs, entity-ID/federation concepts, lifecycle/ownership
+- [ ] 6.5 Update SemStreams-local `pkg/types` and `message` API docs, entity-ID concepts, lifecycle/ownership
       pattern docs, query-prefix and scope docs, schemas/OpenAPI, examples, contributor guidance, and graph-index
       dependency documentation with the literal/pattern/prefix and explicit `@id` reference distinctions
 - [ ] 6.5a Before v1 release and archive, update every owned product/reference document, generated schema, example, and

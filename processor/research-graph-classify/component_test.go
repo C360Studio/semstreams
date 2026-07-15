@@ -15,7 +15,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -172,7 +172,7 @@ func TestComponent_HandleMessage_HappyPath(t *testing.T) {
 	// *research.ClassifierOutput — proves the registry wiring is
 	// consistent with what R1's reader will use
 	// (feedback_production_decoder_round_trip_required).
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(loops.classifyEnvelope)
 	if err != nil {
 		t.Fatalf("decode classify envelope: %v", err)
@@ -299,7 +299,7 @@ func TestComponent_EnvelopeShape_DecodesViaProductionRegistry(t *testing.T) {
 
 	c.handleMessage(context.Background(), "component.nl_classify.rg_x", nil)
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(loops.classifyEnvelope)
 	if err != nil {
 		t.Fatalf("envelope decode failed: %v\nwire: %s", err, loops.classifyEnvelope)
@@ -316,6 +316,15 @@ func TestComponent_EnvelopeShape_DecodesViaProductionRegistry(t *testing.T) {
 	if string(loops.snapshotEnvelope) != string(loops.classifyEnvelope) {
 		t.Errorf("snapshot vs classify envelope diverged")
 	}
+}
+
+func newResearchDecoder(t *testing.T) *message.Decoder {
+	t.Helper()
+	registry := payloadregistry.New()
+	if err := research.RegisterPayloads(registry); err != nil {
+		t.Fatalf("register research payloads: %v", err)
+	}
+	return message.NewDecoder(registry)
 }
 
 // TestComponent_HandleMessage_StampsOrchestrationTriples locks the

@@ -44,7 +44,6 @@ services:
     command: ["--scenario", "research-graph"]
     ports:
       - "48180:8080"  # Mock LLM (4xxxx range)
-      - "48181:8081"  # Mock AGNTCY (directory + OTEL — unused but exposed for consistency)
     networks:
       - semstreams-research-graph-net
     healthcheck:

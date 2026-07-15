@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// AgentIdentity represents the complete identity of an agent in the AGNTCY ecosystem.
+// AgentIdentity represents the local DID and credentials of an agent.
 // It combines a DID with associated credentials and metadata.
 type AgentIdentity struct {
 	// DID is the decentralized identifier for this agent.

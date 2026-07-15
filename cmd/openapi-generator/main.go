@@ -13,6 +13,8 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
+	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
+	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	"github.com/c360studio/semstreams/service"
 )
 
@@ -21,6 +23,8 @@ func main() {
 	registryPkg := flag.String("registry", "./componentregistry", "Package containing RegisterAll()")
 	outDir := flag.String("out", "./schemas", "Output directory for schemas")
 	openapiOut := flag.String("openapi", "./specs/openapi.v3.yaml", "Output path for OpenAPI spec")
+	includeGraphResearch := flag.Bool("graph-research", false, "Include the graph-research framework capability")
+	includeOTEL := flag.Bool("otel", false, "Include the optional OpenTelemetry adapter")
 	flag.Parse()
 
 	log.Printf("OpenAPI Generator")
@@ -34,6 +38,16 @@ func main() {
 	// Register all components
 	if err := componentregistry.Register(registry); err != nil {
 		log.Fatalf("Failed to register components: %v", err)
+	}
+	if *includeGraphResearch {
+		if err := graphresearch.RegisterComponents(registry); err != nil {
+			log.Fatalf("Failed to register graph research: %v", err)
+		}
+	}
+	if *includeOTEL {
+		if err := optionalotel.Register(registry); err != nil {
+			log.Fatalf("Failed to register OpenTelemetry: %v", err)
+		}
 	}
 
 	// Get all registered factories

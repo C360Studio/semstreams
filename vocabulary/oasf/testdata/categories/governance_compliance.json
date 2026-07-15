@@ -1,9 +1,0 @@
-{
-  "uid": 13,
-  "caption": "Governance & Compliance",
-  "category": true,
-  "extends": "base_skill",
-  "name": "governance_compliance",
-  "attributes": {}
-}
-

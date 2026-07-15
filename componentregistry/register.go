@@ -1,5 +1,6 @@
-// Package componentregistry provides component registration for SemStreams framework.
-// This package registers both protocol-level and semantic-level components.
+// Package componentregistry registers the SemStreams core component set.
+// Optional capabilities and product adapters deliberately live in separate
+// import roots so importing this package cannot pull them into a core binary.
 package componentregistry
 
 import (
@@ -9,16 +10,11 @@ import (
 	graphgateway "github.com/c360studio/semstreams/gateway/graph-gateway"
 	gatewayhttp "github.com/c360studio/semstreams/gateway/http"
 	lifecyclegateway "github.com/c360studio/semstreams/gateway/lifecycle-gateway"
-	a2ainput "github.com/c360studio/semstreams/input/a2a"
 	fileinput "github.com/c360studio/semstreams/input/file"
-	githubwebhook "github.com/c360studio/semstreams/input/github-webhook"
-	slimbridgeinput "github.com/c360studio/semstreams/input/slim"
 	"github.com/c360studio/semstreams/input/udp"
 	websocketinput "github.com/c360studio/semstreams/input/websocket"
-	directorybridge "github.com/c360studio/semstreams/output/directory-bridge"
 	"github.com/c360studio/semstreams/output/file"
 	"github.com/c360studio/semstreams/output/httppost"
-	otelexporter "github.com/c360studio/semstreams/output/otel"
 	"github.com/c360studio/semstreams/output/websocket"
 	pkgerrs "github.com/c360studio/semstreams/pkg/errs"
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
@@ -37,12 +33,6 @@ import (
 	jsonfilter "github.com/c360studio/semstreams/processor/json_filter"
 	jsongeneric "github.com/c360studio/semstreams/processor/json_generic"
 	jsonmap "github.com/c360studio/semstreams/processor/json_map"
-	oasfgenerator "github.com/c360studio/semstreams/processor/oasf-generator"
-	researchassess "github.com/c360studio/semstreams/processor/research-graph-assess"
-	researchclassify "github.com/c360studio/semstreams/processor/research-graph-classify"
-	researchexecute "github.com/c360studio/semstreams/processor/research-graph-execute"
-	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
-	researchsynthesize "github.com/c360studio/semstreams/processor/research-graph-synthesize"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/storage/objectstore"
 )
@@ -52,7 +42,7 @@ import (
 //
 // Protocol Layer (network/data agnostic):
 //   - UDP input (network protocol)
-//   - WebSocket input (federation)
+//   - WebSocket input
 //   - JSONGeneric processor (Plain JSON wrapper)
 //   - JSONFilter processor (field-based filtering)
 //   - JSONMap processor (field transformation)
@@ -85,13 +75,6 @@ import (
 //   - agentic-tools (tool execution dispatcher)
 //   - agentic-loop (state machine orchestrator with trajectory capture)
 //
-// AGNTCY Integration Layer - Internet of Agents interoperability:
-//   - oasf-generator (generates OASF records from agent capabilities)
-//   - directory-bridge (registers agents with AGNTCY directories)
-//   - slim-bridge (receives messages from SLIM groups via MLS)
-//   - a2a-adapter (receives A2A task requests from external agents)
-//   - otel-exporter (exports agent telemetry to OpenTelemetry collectors)
-//
 // Note: Domain-specific and example components (IoT sensor, document, MAVLink,
 // robotics, etc.) are registered by their respective binaries under cmd/examples/
 // or in separate modules like streamkit-robotics, not in this core registry.
@@ -111,11 +94,7 @@ func Register(registry *component.Registry) error {
 		return err
 	}
 
-	if err := registerAgenticLayer(registry); err != nil {
-		return err
-	}
-
-	return registerDomainLayer(registry)
+	return registerAgenticLayer(registry)
 }
 
 // registerProtocolLayer registers protocol-layer components (inputs, processors, outputs, gateways).
@@ -127,10 +106,6 @@ func registerProtocolLayer(registry *component.Registry) error {
 
 	if err := websocketinput.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "WebSocket input component registration")
-	}
-
-	if err := githubwebhook.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "GitHub webhook input component registration")
 	}
 
 	if err := fileinput.Register(registry); err != nil {
@@ -204,26 +179,6 @@ func registerSemanticLayer(registry *component.Registry) error {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "graph-query component registration")
 	}
 
-	// Research graph chain (ADR-045 Phase 1): five components wired
-	// in chain order — classify → route → execute → assess →
-	// synthesize. PR 6 wires the seven rules + reference flow that
-	// connect them.
-	if err := researchclassify.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-classify component registration")
-	}
-	if err := researchroute.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-route component registration")
-	}
-	if err := researchexecute.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-execute component registration")
-	}
-	if err := researchassess.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-assess component registration")
-	}
-	if err := researchsynthesize.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "research-graph-synthesize component registration")
-	}
-
 	// Statistical/Semantic tier components (enabled via config)
 	if err := graphembedding.Register(registry); err != nil {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "graph-embedding component registration")
@@ -278,33 +233,5 @@ func registerAgenticLayer(registry *component.Registry) error {
 		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "agentic-loop component registration")
 	}
 
-	// AGNTCY integration components
-	if err := oasfgenerator.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "oasf-generator component registration")
-	}
-
-	if err := directorybridge.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "directory-bridge component registration")
-	}
-
-	if err := slimbridgeinput.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "slim-bridge component registration")
-	}
-
-	if err := a2ainput.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "a2a-adapter component registration")
-	}
-
-	if err := otelexporter.Register(registry); err != nil {
-		return pkgerrs.WrapInvalid(err, "ComponentRegistry", "Register", "otel-exporter component registration")
-	}
-
-	return nil
-}
-
-// registerDomainLayer is a no-op placeholder. Domain/example components are
-// registered by their respective binaries (see cmd/examples/) to avoid
-// pulling example dependencies into downstream consumers like semdragons/semspec.
-func registerDomainLayer(_ *component.Registry) error {
 	return nil
 }

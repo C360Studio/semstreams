@@ -12,6 +12,11 @@
   "nats": {
     "urls": ["nats://localhost:4222"]
   },
+  "streams": {
+    "ENTITY": {
+      "subjects": ["entity.>"]
+    }
+  },
   "model_registry": {
     "endpoints": {
       "mock": {
@@ -85,53 +90,6 @@
     }
   },
   "components": {
-    "file_sensors": {
-      "type": "input",
-      "name": "file_input",
-      "enabled": true,
-      "config": {
-        "ports": {
-          "inputs": [],
-          "outputs": [
-            {
-              "name": "file_out",
-              "subject": "raw.sensor.file",
-              "type": "jetstream"
-            }
-          ]
-        },
-        "path": "/data/testdata/semantic/sensors.jsonl",
-        "format": "jsonl",
-        "interval": "10ms",
-        "loop": false
-      }
-    },
-    "iot_sensor": {
-      "type": "processor",
-      "name": "iot_sensor",
-      "enabled": true,
-      "config": {
-        "ports": {
-          "inputs": [
-            {
-              "name": "sensor_in",
-              "subject": "raw.sensor.>",
-              "type": "jetstream"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "sensor_out",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1"
-            }
-          ]
-        },
-        "org_id": "c360",
-        "platform": "logistics"
-      }
-    },
     "graph-ingest": {
       "type": "processor",
       "name": "graph-ingest",
@@ -140,11 +98,10 @@
         "ports": {
           "inputs": [
             {
-              "name": "sensor_in",
-              "subject": "sensor.processed.entity",
+              "name": "entity_stream",
+              "subject": "entity.>",
               "type": "jetstream",
-              "interface": "iot.sensor.v1",
-              "description": "Sensor entity events from IoT processor"
+              "description": "Semantic entity events"
             }
           ],
           "outputs": [
@@ -167,12 +124,6 @@
         "entity_watch_patterns": ["c360.>"],
         "ports": {
           "inputs": [
-            {
-              "name": "rule_sensor_in",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "description": "Sensor entity events"
-            },
             {
               "name": "rule_toolcall_proposed_in",
               "subject": "agent.toolcall.proposed.>",
@@ -246,122 +197,8 @@
               "tier": 0,
               "purpose": "e2e-coverage"
             }
-          },
-          {
-            "id": "temperature-anomaly-agent",
-            "type": "expression",
-            "name": "Temperature Anomaly Agent Trigger",
-            "description": "Triggers an agent when temperature exceeds threshold to analyze sensor data",
-            "enabled": true,
-            "conditions": [
-              {
-                "field": "sensor.measurement.fahrenheit",
-                "operator": "gte",
-                "value": 45.0,
-                "required": true
-              },
-              {
-                "field": "sensor.classification.type",
-                "operator": "eq",
-                "value": "temperature",
-                "required": true
-              }
-            ],
-            "logic": "and",
-            "cooldown": "30s",
-            "on_enter": [
-              {
-                "type": "publish_agent",
-                "subject": "agent.task.temp_anomaly",
-                "role": "general",
-                "model": "mock",
-                "tools": ["query_entity"],
-                "prompt": "Temperature anomaly detected. Sensor: {{.EntityID}}, Reading: {{.Properties.sensor.measurement.fahrenheit}}F. Use query_entity tool to get full sensor details, then provide assessment and recommendations."
-              },
-              {
-                "type": "publish",
-                "subject": "alerts.temperature.anomaly"
-              }
-            ],
-            "on_exit": [],
-            "metadata": {
-              "severity": "warning",
-              "category": "environmental",
-              "tier": 0
-            }
           }
         ]
-      }
-    },
-    "workflow-processor": {
-      "type": "processor",
-      "name": "workflow-processor",
-      "enabled": true,
-      "config": {
-        "definitions_bucket": "WORKFLOW_DEFINITIONS",
-        "executions_bucket": "WORKFLOW_EXECUTIONS",
-        "stream_name": "WORKFLOW",
-        "default_timeout": "60s",
-        "default_max_iterations": 3,
-        "request_timeout": "30s",
-        "ports": {
-          "inputs": [
-            {
-              "name": "workflow.trigger",
-              "type": "jetstream",
-              "subject": "workflow.trigger.>",
-              "stream_name": "WORKFLOW",
-              "required": true,
-              "description": "Workflow trigger events"
-            },
-            {
-              "name": "workflow.step.complete",
-              "type": "jetstream",
-              "subject": "workflow.step.complete.>",
-              "stream_name": "WORKFLOW",
-              "required": true,
-              "description": "Step completion events from external sources"
-            },
-            {
-              "name": "workflow.step.result",
-              "type": "jetstream",
-              "subject": "workflow.step.result.>",
-              "stream_name": "WORKFLOW",
-              "required": true,
-              "description": "Async step results from any executor (agentic, HTTP, custom)"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "workflow.events",
-              "type": "jetstream",
-              "subject": "workflow.events",
-              "stream_name": "WORKFLOW",
-              "description": "Workflow lifecycle events"
-            },
-            {
-              "name": "agent.task",
-              "type": "jetstream",
-              "subject": "agent.task.*",
-              "stream_name": "AGENT",
-              "description": "Agent task spawning"
-            }
-          ],
-          "kv_write": [
-            {
-              "name": "definitions",
-              "type": "kv-write",
-              "bucket": "WORKFLOW_DEFINITIONS",
-              "description": "Workflow definition storage"
-            },
-            {
-              "name": "executions",
-              "type": "kv-write",
-              "bucket": "WORKFLOW_EXECUTIONS",
-              "description": "Workflow execution state storage"
-            }
-          ]
-        }
       }
     },
     "agentic-loop": {
@@ -522,150 +359,6 @@
               "description": "Entity state KV for graph queries"
             }
           ]
-        }
-      }
-    },
-    "oasf-generator": {
-      "type": "processor",
-      "name": "oasf-generator",
-      "enabled": true,
-      "config": {
-        "entity_kv_bucket": "ENTITY_STATES",
-        "oasf_kv_bucket": "OASF_RECORDS",
-        "watch_pattern": ">",
-        "generation_debounce": "500ms",
-        "default_agent_version": "1.0.0",
-        "default_authors": ["SemStreams"],
-        "include_extensions": true,
-        "ports": {
-          "inputs": [
-            {
-              "name": "entity_changes",
-              "subject": "entity.state.>",
-              "type": "kv-watch",
-              "required": true,
-              "description": "Watch for agent entity state changes"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "oasf_records",
-              "subject": "oasf.record.generated.*",
-              "type": "jetstream",
-              "stream_name": "OASF",
-              "required": true,
-              "description": "Generated OASF records"
-            }
-          ],
-          "kv_write": [
-            {
-              "name": "oasf_kv",
-              "type": "kv-write",
-              "bucket": "OASF_RECORDS",
-              "description": "OASF record storage"
-            }
-          ]
-        }
-      }
-    },
-    "directory-bridge": {
-      "type": "output",
-      "name": "directory-bridge",
-      "enabled": true,
-      "config": {
-        "directory_url": "http://mock-llm:8081",
-        "heartbeat_interval": "30s",
-        "registration_ttl": "5m",
-        "identity_provider": "local",
-        "oasf_kv_bucket": "OASF_RECORDS",
-        "retry_count": 3,
-        "retry_delay": "1s",
-        "ports": {
-          "inputs": [
-            {
-              "name": "oasf_records",
-              "subject": "oasf.record.generated.>",
-              "type": "kv-watch",
-              "required": true,
-              "description": "Watch for generated OASF records"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "registration_events",
-              "subject": "directory.registration.*",
-              "type": "jetstream",
-              "stream_name": "DIRECTORY",
-              "required": false,
-              "description": "Registration events"
-            }
-          ]
-        }
-      }
-    },
-    "a2a-adapter": {
-      "type": "input",
-      "name": "a2a-adapter",
-      "enabled": true,
-      "config": {
-        "transport": "http",
-        "listen_address": ":8282",
-        "agent_card_path": "/.well-known/agent.json",
-        "request_timeout": "30s",
-        "max_concurrent_tasks": 10,
-        "enable_authentication": false,
-        "oasf_bucket": "OASF_RECORDS",
-        "ports": {
-          "inputs": [],
-          "outputs": [
-            {
-              "name": "task_messages",
-              "subject": "agent.task.a2a.*",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Task messages to agent dispatch"
-            }
-          ]
-        }
-      }
-    },
-    "otel-exporter": {
-      "type": "output",
-      "name": "otel-exporter",
-      "enabled": true,
-      "config": {
-        "endpoint": "http://mock-llm:8081",
-        "protocol": "http",
-        "service_name": "semstreams-agentic",
-        "service_version": "1.0.0",
-        "export_traces": true,
-        "export_metrics": true,
-        "export_logs": false,
-        "batch_timeout": "2s",
-        "max_batch_size": 100,
-        "insecure": true,
-        "sampling_rate": 1.0,
-        "ports": {
-          "inputs": [
-            {
-              "name": "agent_events",
-              "subject": "agent.>",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Agent lifecycle events for span collection"
-            },
-            {
-              "name": "tool_events",
-              "subject": "tool.result.>",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "required": false,
-              "description": "Tool results for tool span creation"
-            }
-          ],
-          "outputs": []
         }
       }
     }

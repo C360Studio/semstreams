@@ -1,4 +1,4 @@
-// Package identity provides DID-based cryptographic identity for AGNTCY integration.
+// Package identity provides local DID-based cryptographic identity primitives.
 package identity
 
 import (
@@ -9,7 +9,7 @@ import (
 // DID represents a Decentralized Identifier as specified by W3C DID Core.
 // See: https://www.w3.org/TR/did-core/
 type DID struct {
-	// Method identifies the DID method (e.g., "web", "key", "agntcy").
+	// Method identifies the DID method (for example, "web" or "key").
 	Method string `json:"method"`
 
 	// ID is the method-specific identifier.
@@ -26,9 +26,6 @@ const (
 
 	// MethodWeb is the did:web method using DNS domain names.
 	MethodWeb = "web"
-
-	// MethodAgntcy is the AGNTCY-specific DID method.
-	MethodAgntcy = "agntcy"
 )
 
 // ParseDID parses a DID string into a DID struct.
@@ -167,13 +164,5 @@ func NewWebDID(domain string, paths ...string) *DID {
 	return &DID{
 		Method: MethodWeb,
 		ID:     id,
-	}
-}
-
-// NewAgntcyDID creates a new did:agntcy DID.
-func NewAgntcyDID(agentID string) *DID {
-	return &DID{
-		Method: MethodAgntcy,
-		ID:     agentID,
 	}
 }

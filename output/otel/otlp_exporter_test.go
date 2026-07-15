@@ -60,7 +60,7 @@ func (cs *captureServer) getRequests() []capturedRequest {
 
 func TestOTLPExporter_ExportSpans(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	now := time.Now()
 	spans := []*SpanData{
@@ -136,7 +136,7 @@ func TestOTLPExporter_ExportSpans(t *testing.T) {
 
 func TestOTLPExporter_ExportSpans_WithParentAndEvents(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	now := time.Now()
 	spans := []*SpanData{
@@ -197,7 +197,7 @@ func TestOTLPExporter_ExportSpans_WithParentAndEvents(t *testing.T) {
 
 func TestOTLPExporter_ExportSpans_Empty(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	if err := exp.ExportSpans(context.Background(), nil); err != nil {
 		t.Fatalf("ExportSpans with empty slice failed: %v", err)
@@ -214,7 +214,7 @@ func TestOTLPExporter_ExportSpans_Non2xxError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 	err := exp.ExportSpans(context.Background(), []*SpanData{
 		{
 			TraceID: "aabb", SpanID: "ccdd",
@@ -230,7 +230,7 @@ func TestOTLPExporter_ExportSpans_Non2xxError(t *testing.T) {
 
 func TestOTLPExporter_ExportMetrics_Counter(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	metrics := []*MetricData{
 		{
@@ -279,7 +279,7 @@ func TestOTLPExporter_ExportMetrics_Counter(t *testing.T) {
 
 func TestOTLPExporter_ExportMetrics_Gauge(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	metrics := []*MetricData{
 		{
@@ -313,7 +313,7 @@ func TestOTLPExporter_ExportMetrics_Gauge(t *testing.T) {
 
 func TestOTLPExporter_ExportMetrics_Empty(t *testing.T) {
 	srv, cs := newCaptureServer(t)
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 
 	if err := exp.ExportMetrics(context.Background(), nil); err != nil {
 		t.Fatalf("ExportMetrics with nil failed: %v", err)
@@ -329,7 +329,7 @@ func TestOTLPExporter_ExportMetrics_Non2xxError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewOTLPExporter(srv.URL, true, nil, nil)
+	exp := NewOTLPExporter(srv.URL, nil, nil)
 	err := exp.ExportMetrics(context.Background(), []*MetricData{
 		{
 			Name: "test", Type: MetricTypeGauge,
@@ -352,7 +352,7 @@ func TestOTLPExporter_CustomHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	exp := NewOTLPExporter(srv.URL, true, map[string]string{
+	exp := NewOTLPExporter(srv.URL, map[string]string{
 		"X-Auth-Token": "secret-token",
 	}, nil)
 
@@ -368,7 +368,7 @@ func TestOTLPExporter_CustomHeaders(t *testing.T) {
 // ---- Shutdown ----
 
 func TestOTLPExporter_Shutdown(t *testing.T) {
-	exp := NewOTLPExporter("http://localhost:4318", true, nil, nil)
+	exp := NewOTLPExporter("http://localhost:4318", nil, nil)
 	if err := exp.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown failed: %v", err)
 	}

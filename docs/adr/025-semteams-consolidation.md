@@ -2,6 +2,9 @@
 
 ## Status
 
+**Partially superseded by ADR-075 — 2026-07-15.** Generic agentic primitives remain framework-owned. GitHub
+executors and ambient builtin registration move to SemDev-owned explicit composition.
+
 **Accepted — Phase 1 shipped; Phase 2 REVERTED (2026-06-12).** Phase 1
 (framework primitives: approval filter, tool governance hooks) landed in
 the alpha series and stands. **Phase 2 (the personalization layer) was
