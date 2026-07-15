@@ -40,8 +40,7 @@ func listDependencies(t *testing.T, packagePath string) string {
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}
-	cmd := exec.Command("go", "list", "-deps", "./test/fixtures/corecomposition")
-	cmd.Args[len(cmd.Args)-1] = packagePath
+	cmd := exec.Command("go", "list", "-deps", packagePath)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOCACHE="+t.TempDir())
 	output, err := cmd.CombinedOutput()

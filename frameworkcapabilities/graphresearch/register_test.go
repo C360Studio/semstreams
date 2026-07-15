@@ -83,6 +83,110 @@ func TestValidateConfigRejectsMismatchedLoopsBuckets(t *testing.T) {
 	assertValidationErrorContains(t, cfg, "common loops_bucket")
 }
 
+func TestValidateConfigAccumulatesRulesAcrossProcessorInstances(t *testing.T) {
+	cfg := completeConfig(t)
+	ruleProcessor := cfg.Components["rule-processor"]
+	var ruleConfig struct {
+		RuleFiles []string `json:"rules_files"`
+	}
+	if err := json.Unmarshal(ruleProcessor.Config, &ruleConfig); err != nil {
+		t.Fatal(err)
+	}
+	if len(ruleConfig.RuleFiles) < 2 {
+		t.Fatalf("test requires multiple research rules, got %d", len(ruleConfig.RuleFiles))
+	}
+
+	delete(cfg.Components, "rule-processor")
+	cfg.Components["research-rules-a"] = enabledComponent("rule-processor", map[string]any{
+		"rules_files": ruleConfig.RuleFiles[:1],
+	})
+	cfg.Components["product-rules"] = enabledComponent("rule-processor", map[string]any{
+		"rules_files": []string{"/etc/semstreams/product/telemetry-retention.json"},
+	})
+	cfg.Components["research-rules-b"] = enabledComponent("rule-processor", map[string]any{
+		"rules_files": ruleConfig.RuleFiles[1:],
+	})
+
+	for iteration := range 200 {
+		if err := ValidateConfig(cfg); err != nil {
+			t.Fatalf("ValidateConfig iteration %d rejected rules composed across processors: %v", iteration, err)
+		}
+	}
+}
+
+func TestValidateConfigAllowsOmittedStageConfig(t *testing.T) {
+	cfg := completeConfig(t)
+	stage := cfg.Components[stageFactories[0]]
+	stage.Config = nil
+	cfg.Components[stageFactories[0]] = stage
+
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("ValidateConfig rejected default stage config: %v", err)
+	}
+}
+
+func TestValidateConfigAllowsOmittedRuleProcessorConfig(t *testing.T) {
+	cfg := completeConfig(t)
+	cfg.Components["product-rules"] = types.ComponentConfig{
+		Name:    "rule-processor",
+		Type:    types.ComponentTypeProcessor,
+		Enabled: true,
+	}
+
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("ValidateConfig rejected default rule-processor config: %v", err)
+	}
+}
+
+func TestValidateConfigAllowsOmittedAgenticToolsConfig(t *testing.T) {
+	cfg := completeConfig(t)
+	tools := cfg.Components["agentic-tools"]
+	tools.Config = nil
+	cfg.Components["agentic-tools"] = tools
+
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("ValidateConfig rejected default agentic-tools config: %v", err)
+	}
+}
+
+func TestValidateConfigRejectsDuplicateCanonicalRuleBasenames(t *testing.T) {
+	dir := t.TempDir()
+	duplicate := filepath.Join(dir, requiredRuleFiles[0])
+	if err := os.WriteFile(duplicate, []byte(`{"id":"stale_or_counterfeit"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := completeConfig(t)
+	cfg.Components["stale-product-rules"] = enabledComponent("rule-processor", map[string]any{
+		"rules_files": []string{duplicate},
+	})
+	for iteration := range 200 {
+		err := ValidateConfig(cfg)
+		want := "duplicate canonical rule " + requiredRuleFiles[0]
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("ValidateConfig iteration %d error = %v, want substring %q", iteration, err, want)
+		}
+	}
+}
+
+func TestValidateConfigRejectsMalformedNonEmptyComponentConfig(t *testing.T) {
+	t.Run("stage", func(t *testing.T) {
+		cfg := completeConfig(t)
+		stage := cfg.Components[stageFactories[0]]
+		stage.Config = json.RawMessage(`{`)
+		cfg.Components[stageFactories[0]] = stage
+		assertValidationErrorContains(t, cfg, "read "+stageFactories[0]+" loops_bucket")
+	})
+
+	t.Run("rule processor", func(t *testing.T) {
+		cfg := completeConfig(t)
+		rules := cfg.Components["rule-processor"]
+		rules.Config = json.RawMessage(`{`)
+		cfg.Components["rule-processor"] = rules
+		assertValidationErrorContains(t, cfg, "graph research requires readable rule-processor config")
+	})
+}
+
 func TestLoopsBucketReturnsValidatedCompositionBucket(t *testing.T) {
 	cfg := completeConfig(t)
 	cfg.Components["agentic-tools"] = enabledComponent("agentic-tools", map[string]any{

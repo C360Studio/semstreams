@@ -1,5 +1,13 @@
 # ADR-044 Framework Primitives — Reference
 
+## Status
+
+**Historical beta evidence — superseded 2026-07-15.** This document records the former ADR-044 package split; it is
+not the authoritative current framework boundary. The product-specific package paths named below were removed from
+SemStreams by [ADR-075](../adr/075-framework-package-admission-and-composition.md). See the
+[framework package boundary clean-break inventory](27-framework-package-boundary-clean-break.md) for current
+ownership and downstream obligations.
+
 Reference for every framework-side primitive shipped under
 [ADR-044](../adr/044-ogc-connected-systems-framework-split.md)
 Phases 2-6. This document is the authoritative pointer the

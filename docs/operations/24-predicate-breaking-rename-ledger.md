@@ -42,7 +42,6 @@ an old identity. Existing beta graph state is reset and reingested as described 
 | Previous identity | Canonical identity |
 |---|---|
 | `agent.action.executed_by` | `agent.action.executed-by` |
-| `agent.capability.oasf_class` | `agent.capability.oasf-class` |
 | `agent.delegation.valid_from` | `agent.delegation.valid-from` |
 | `agent.delegation.valid_until` | `agent.delegation.valid-until` |
 | `agent.execution.rate_limit` | `agent.execution.rate-limit` |
@@ -93,6 +92,10 @@ an old identity. Existing beta graph state is reset and reingested as described 
 | `ops.config.cost_per_task` | `ops.config.cost-per-task` |
 | `ops.config.p95_latency` | `ops.config.p95-latency` |
 | `ops.diagnosis.observed_role` | `ops.diagnosis.observed-role` |
+
+The former `agent.capability.oasf_class` has no canonical SemStreams replacement. Its briefly renamed
+`agent.capability.oasf-class` form was also removed by ADR-075's clean transfer of OASF taxonomy and projection
+ownership to SemTeams; see the [framework package boundary inventory](27-framework-package-boundary-clean-break.md).
 
 ## Research Runtime and Reference Rules
 

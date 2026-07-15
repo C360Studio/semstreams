@@ -13,9 +13,9 @@ import (
 // defaultPrefixes maps short prefix names to their namespace IRIs.
 // Only prefixes that are actually used in output are emitted.
 //
-// The baseline set ships with the package; vocabulary sub-packages
-// (e.g. vocabulary/sosa, vocabulary/swe, vocabulary/oms) extend it
-// from init() via Register. Read access is mutex-guarded because
+// The baseline set ships with the package; optional downstream
+// vocabulary packages can extend it from init() via Register. Read
+// access is mutex-guarded because
 // downstream code may register additional namespaces from init in
 // any package import order, and exporters snapshot the map at
 // newPrefixMap time.
@@ -43,11 +43,10 @@ var (
 // different namespace returns an error so collisions surface loudly
 // rather than silently shadowing.
 //
-// Intended use is from a package init() in a vocabulary sub-package
-// (e.g. vocabulary/sosa), so registrations land before any exporter
-// runs. The function is safe to call at runtime as well, but mid-
-// export registrations will only affect prefix maps constructed
-// after the call returns.
+// Intended use is from a package init() in a downstream vocabulary
+// package, so registrations land before any exporter runs. The function
+// is safe to call at runtime as well, but mid-export registrations will
+// only affect prefix maps constructed after the call returns.
 func Register(prefix, namespace string) error {
 	if prefix == "" {
 		return fmt.Errorf("vocabulary/export: prefix must not be empty")

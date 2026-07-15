@@ -181,13 +181,16 @@ func ValidateConfig(cfg *config.Config) error {
 		enabled[componentConfig.Name] = true
 		configured[componentConfig.Name] = append(configured[componentConfig.Name], componentConfig.Config)
 		if componentConfig.Name == "rule-processor" {
+			if len(componentConfig.Config) == 0 {
+				continue
+			}
 			var ruleConfig struct {
 				RuleFiles []string `json:"rules_files"`
 			}
 			if err := json.Unmarshal(componentConfig.Config, &ruleConfig); err != nil {
 				return fmt.Errorf("graph research requires readable rule-processor config: %w", err)
 			}
-			ruleFiles = ruleConfig.RuleFiles
+			ruleFiles = append(ruleFiles, ruleConfig.RuleFiles...)
 		}
 	}
 
@@ -211,6 +214,9 @@ func ValidateConfig(cfg *config.Config) error {
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("partial graph research composition; missing %s", strings.Join(missing, ", "))
+	}
+	if err := validateCanonicalRuleUniqueness(ruleFiles); err != nil {
+		return fmt.Errorf("partial graph research composition: %w", err)
 	}
 	if err := validateModelRegistry(cfg.ModelRegistry); err != nil {
 		return fmt.Errorf("partial graph research composition: %w", err)
@@ -287,6 +293,9 @@ func validateModelRegistry(registry *model.Registry) error {
 
 func validateToolAllowlist(configs []json.RawMessage) error {
 	for _, raw := range configs {
+		if len(raw) == 0 {
+			continue
+		}
 		var toolConfig struct {
 			AllowedTools []string `json:"allowed_tools"`
 		}
@@ -306,6 +315,21 @@ func validateToolAllowlist(configs []json.RawMessage) error {
 	return nil
 }
 
+func validateCanonicalRuleUniqueness(configuredFiles []string) error {
+	for _, name := range requiredRuleFiles {
+		matches := 0
+		for _, configured := range configuredFiles {
+			if strings.HasSuffix(configured, name) {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return fmt.Errorf("duplicate canonical rule %s configured %d times", name, matches)
+		}
+	}
+	return nil
+}
+
 func validateLoopsBuckets(configs map[string][]json.RawMessage) error {
 	names := append([]string{"agentic-loop", "agentic-tools"}, stageFactories...)
 	var common string
@@ -314,8 +338,10 @@ func validateLoopsBuckets(configs map[string][]json.RawMessage) error {
 			var bucketConfig struct {
 				LoopsBucket string `json:"loops_bucket"`
 			}
-			if err := json.Unmarshal(raw, &bucketConfig); err != nil {
-				return fmt.Errorf("read %s loops_bucket: %w", name, err)
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, &bucketConfig); err != nil {
+					return fmt.Errorf("read %s loops_bucket: %w", name, err)
+				}
 			}
 			bucket := bucketConfig.LoopsBucket
 			if bucket == "" {
