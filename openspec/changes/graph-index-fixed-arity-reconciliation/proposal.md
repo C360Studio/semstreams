@@ -7,7 +7,7 @@ inactive experimental scaffolding until its applicable gate passes.
 
 PR #524 fixed O(N²) and lost-update behavior by sharding graph indexes into deterministic composite keys. It
 was designed against a production corpus whose predicates violated SemStreams' intended three-part contract.
-Restoring that contract removes ADR-065's principal raw-key prefix-collision example and may restore direct
+PR #532 restored that contract, removing ADR-065's principal raw-key prefix-collision example and potentially restoring
 namespace lookup and membership-key observability without a catalog join.
 
 PR #524 did not complete replacement semantics for every sharded membership. Production still appends NAME,
@@ -19,8 +19,10 @@ hardening gap and records what a later retention change may rely on; it does not
 ## What Changes
 
 - Correct and archive the merged `graph-index-hardening` change as shipped current truth before layering a
-  new graph-index delta. Its archived account must state that reverse-key codecs can encode unsafe predicates
-  while raw PREDICATE_CATALOG insertion can fail and hold readiness; it must not backdate the future contract.
+  new graph-index delta. Its archived account must retain PR #524's untagged hex layout and record the historical
+  failure split: before PR #532, codecs and hashed membership could represent a noncanonical predicate while raw
+  PREDICATE_CATALOG insertion failed and held readiness. Current graph-ingest and graph-index replay reject
+  noncanonical predicates before membership, catalog, or reverse-index I/O; the codec is not acceptance authority.
 - Declare every index row's physical token layout, semantic owner, read filter, owner-reconciliation capability,
   and delete/retirement behavior, including explicit variable-arity/non-filterable declarations where applicable.
 - Prove public query replacement semantics for NAME, PREDICATE, and INCOMING plus physical current-projection
@@ -73,16 +75,21 @@ reader, format coexistence, or in-place migration is added.
 
 ## Dependencies
 
-- The standalone `nats-kv-key-contract` change MUST land and archive first. This change consumes its exported
-  literal-token, literal-key, and wildcard-filter validators, opaque-codec contract, stable errors, and versioned
-  budgets in graph-index's new/changed proof and activation paths; it does not require the prerequisite to change
-  existing KV wrapper behavior or define a graph-local variant of NATS key syntax.
-- Every current PR #524 layout and constructed filter MUST fit that contract before current-layout activation. Because
-  six-part entity IDs currently have no governed total-length bound, a separate approved entity-ID bound or physical
-  codec contract is an explicit blocking dependency if worst-case current layouts cannot be proven. This change does
-  not silently choose that semantic bound or codec.
-- PR #532 has enforced the canonical predicate grammar. Remaining sister-product migration tasks are release
-  gates, but do not block this framework-local spike.
+- The archived `nats-kv-keys` baseline is a strict prerequisite. Graph-index's new/changed proof and activation paths
+  consume its literal-key/filter validators, stable errors, and budgets before I/O; they do not change existing KV
+  wrappers or define graph-local NATS syntax. The `x1_` opaque codec is available only to a separately authorized new
+  or changed axis. It does not authorize re-encoding current axes, and current untagged predicate hex remains.
+- Every in-scope current PR #524 layout and constructed filter MUST fit that contract before current-layout activation.
+  Because six-part entity IDs currently have no governed total-length bound, a separate approved entity-ID bound or
+  entity-axis physical-codec contract is an explicit blocking dependency if worst-case in-scope layouts cannot be
+  proven. This change does not silently choose that semantic bound or codec.
+- ALIAS remains frozen current behavior and separately owned. Its raw exact key stays in the inventory and maximum
+  audit, but an unresolved ALIAS identity bound, codec, or owner-discovery decision blocks only ALIAS-specific changes,
+  readiness claims, or migration—not other stores' current-layout reconciliation.
+- PR #532 enforces the framework grammar. Predicate-contract-enforcement task 4.6, the local SemStreams/reference
+  portion of 5.1, and tasks 5.2-5.3 are required before framework current-layout activation. Sister audits and
+  migrations plus predicate archive task 5.7 remain coordinated v1 release gates and prerequisites to any raw-key
+  cutover; they do not block benchmark-only work or framework reconciliation after local clean-state evidence passes.
 - The merged `graph-index-hardening` change must be corrected and archived before this change modifies
   production index behavior or seeds the new baseline `graph-index` specification. That governance work does
   not block benchmark-only code.

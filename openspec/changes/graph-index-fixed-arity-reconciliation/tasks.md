@@ -1,16 +1,23 @@
 ## 0. Governance Prerequisites
 
-- [ ] 0.1 Correct `graph-index-hardening` to record shipped codec/catalog behavior without backdating the
-      canonical predicate contract
-- [ ] 0.2 Complete or explicitly re-scope and archive `graph-index-hardening` before this change modifies
+- [x] 0.1 Correct `graph-index-hardening` to record shipped codec/catalog behavior without backdating the canonical
+      predicate contract; architect review approved the current-truth correction
+- [x] 0.2 Complete or explicitly re-scope and archive `graph-index-hardening` before this change modifies
       production index behavior; benchmark-only work may proceed independently
-- [ ] 0.3 Record PR #532 as the framework grammar prerequisite and keep remaining owned-producer migrations as
-      release gates before any raw-key cutover
-- [ ] 0.4 Complete and archive `nats-kv-key-contract`; consume its exported validators, stable errors, opaque-codec
-      contract, and budgets before any fixed-position filter proof or raw-key decision
-- [ ] 0.5 Prove worst-case current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, OUTGOING, and ALIAS keys and
-      filters against the shared budgets; if unbounded entity IDs or aliases prevent proof, make the separately
-      approved semantic-bound or physical-codec change an activation dependency without choosing it here
+- [x] 0.3 Record PR #532 as the framework grammar prerequisite. Require predicate-contract-enforcement 4.6, the local
+      SemStreams/reference portion of 5.1, and 5.2-5.3 before framework current-layout activation. Keep sister audits
+      and migrations plus predicate archive 5.7 as coordinated v1 release gates and prerequisites to any raw cutover,
+      not to benchmark-only work or framework reconciliation after its local clean-state evidence passes
+- [x] 0.4 Record the archived `nats-kv-keys` baseline and helper availability: literal validators, stable errors, and
+      budgets. The `x1_` opaque codec is available only for a separately authorized new or changed axis; it does not
+      re-encode current axes, and the shipped untagged predicate hex remains unchanged
+- [ ] 0.5 Make every graph-index benchmark, proof, and activation path call the shared literal key/filter validators
+      and return their stable classified errors before NATS I/O; current graph-index helpers do not yet do so
+- [ ] 0.6 Prove worst-case current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys and filters
+      against shared budgets. If entity IDs prevent proof, require a separately approved total entity-ID byte bound or
+      entity-axis physical-codec change before current-layout activation. Audit ALIAS's raw exact key separately; hand
+      any missing alias identity bound or raw/opaque/owner-discovery decision to the owning ALIAS change without
+      blocking unrelated current-layout reconciliation
 
 ## 1. PR #524 Store and Query Contract
 
@@ -35,10 +42,11 @@
 - [ ] 2.1 Freeze and version the 5k CI and 21k full datasets, environment, numeric/resource-headroom budgets,
       convergence watermark, maximum memberships per owner, maximum-supported-worker candidate, and benchmark-only
       manifest baseline
-- [ ] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-key-contract`, then
-      prove maximum current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, OUTGOING, and ALIAS keys/filters
-      against the shared token, key, filter, byte, and arity budgets and real NATS, including malformed shorter and
-      longer keys; representative corpus success MUST NOT substitute for governed maxima
+- [ ] 2.2 Construct and validate literal exact-arity forward and owner filters through `nats-kv-keys`, then prove
+      maximum current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys/filters against the
+      shared token, key, filter, byte, and arity budgets and real NATS, including malformed shorter and longer keys;
+      representative corpus success MUST NOT substitute for governed maxima. Audit ALIAS's current raw exact key in
+      the matrix, but hand an unbounded result to the separate ALIAS owner rather than blocking unrelated stores
 - [ ] 2.3 Test concurrent Put/Delete, duplicate observation and exact-key deduplication, cancellation, empty buckets,
       error classification, and convergence to a declared final ENTITY_STATES revision
 - [ ] 2.4 Prove `[A] -> [B] -> []` stale deletion, desired insertion, and stable-key value overwrite for every
@@ -54,7 +62,8 @@
 
 - [ ] 3.1 Write and approve the owner-discovery and INCOMING-ownership ADR, selecting mechanisms per store from the
       complete correctness and resource evidence; block activation on every failed filter mechanism and unresolved
-      current-layout entity-ID/alias bound or physical-codec dependency
+      current-layout entity-ID bound or entity-axis physical-codec dependency. Record ALIAS risk for its separate
+      owning change without making it a gate for unrelated current-layout reconciliation
 - [ ] 3.2 For each failed query-visible owner filter, first complete its approved dependent bounded replacement
       mechanism. Then recreate PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX, and INCOMING_INDEX behind typed
       not-ready responses after atomically starting a rebuild generation that resets sticky

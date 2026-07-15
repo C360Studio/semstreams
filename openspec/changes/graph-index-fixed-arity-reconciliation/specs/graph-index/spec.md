@@ -84,10 +84,12 @@ prerequisite MUST NOT be treated as authorization to change existing KV wrapper 
 
 The proof MUST cover worst-case formulas for every current PR #524 key, token, and filter: PREDICATE,
 PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, OUTGOING, and ALIAS. Representative corpus success MUST NOT substitute for
-a governed maximum. Because current layouts embed one or two six-part entity IDs and entity IDs lack a governed total
-length, current-layout activation MUST remain blocked until every current key/filter fits or a separately approved
-entity-ID bound or physical-codec contract supplies the missing bound. Graph-index MUST NOT invent that semantic bound
-or codec. ALIAS's raw exact key may span tokens; its eventual layout remains a separate graph-index decision.
+a governed maximum for an in-scope store. Because in-scope current layouts embed one or two six-part entity IDs and
+entity IDs lack a governed total length, current-layout activation MUST remain blocked until those keys/filters fit or
+a separately approved entity-ID bound or entity-axis physical-codec contract supplies the missing bound. Graph-index
+MUST NOT invent that semantic bound or codec. ALIAS's raw exact key may span tokens; its audit result MUST be handed to
+the separate ALIAS owner. An unresolved ALIAS bound or codec blocks ALIAS-specific changes, readiness claims, or
+migration, not unrelated stores' current-layout reconciliation.
 
 The versioned decision profile MUST include a 5,000-hot-member CI guard with a 3-second operation limit and a
 21,000-entity full profile with a full INCOMING hub, one all-entity predicate, and 5,000-member NAME/CONTEXT
@@ -183,11 +185,14 @@ target-prefix hard-delete behavior MUST be removed rather than preserved as a co
 Current-layout replacement and INCOMING lifecycle behavior MUST remain unchanged until each affected store either
 passes the registered owner-filter profile and is selected by the owner-discovery/INCOMING-ownership ADR or has an
 approved and implemented dependent bounded replacement mechanism. Each selected mechanism MUST be covered by the
-same readiness contract before activation. Every current layout and filter MUST also pass the baseline key budgets;
-an unresolved entity-ID or ALIAS bound/codec dependency blocks activation. Once those current-layout prerequisites
-pass, the correctness changes MUST NOT wait for the optional raw-key decision. Physical PREDICATE key/catalog and
-bucket cutover behavior MUST remain unchanged until the separate representation benchmark and ADR select a format.
-Benchmark helpers and tests MAY exercise fixed-position reconciliation before either decision.
+same readiness contract before activation. Every affected in-scope layout and filter MUST also pass the baseline key
+budgets;
+an unresolved in-scope entity-ID bound or entity-axis physical-codec dependency blocks activation. ALIAS remains
+frozen current behavior and separately owned; its unresolved bound or codec does not block unrelated stores. Once
+those current-layout prerequisites pass, the correctness changes MUST NOT wait for the optional raw-key decision.
+Physical PREDICATE key/catalog and bucket cutover behavior MUST remain unchanged until the separate representation
+benchmark and ADR select a format. Benchmark helpers and tests MAY exercise fixed-position reconciliation before
+either decision.
 
 #### Scenario: an unbounded current entity axis blocks activation
 
