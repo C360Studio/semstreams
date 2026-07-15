@@ -1,0 +1,222 @@
+## Context
+
+Entity IDs are both semantic identities and raw NATS KV keys. Their six positions are already framework-wide, but
+validation is split across `pkg/types`, `message`, and graph-ingest. The current split is observably inconsistent:
+
+- `pkg/types.ParseEntityID` accepts any non-empty text in six segments;
+- `pkg/types.EntityID.IsValid` checks only non-empty struct fields;
+- `message.IsValidEntityID` accepts ASCII alphanumeric, `_`, and `-` in every position but has no total bound;
+- graph-ingest requires an ASCII alphanumeric first byte and caps the full ID at 255 bytes through a private regex;
+- pattern consumers commonly check only six-part arity and then pass the value to a watcher or glob matcher.
+
+The shared NATS KV contract now limits a literal key or wildcard filter to 1,024 bytes and 64 tokens, but it
+deliberately left existing semantic axes unchanged. Graph-index's current worst key is INCOMING, whose maximum is
+`2E + 390`, where `E` is serialized entity-ID bytes. A representative corpus cannot prove that formula safe while
+`E` is unbounded.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- establish one exact identity grammar plus distinct exact pattern and query-prefix grammars;
+- make `pkg/types` the semantic authority while preserving delegating `message` APIs for callers;
+- reject malformed values before authoritative state or derived-key I/O;
+- make maximum complete graph-index keys and owner filters provable;
+- migrate beta producers and persisted state without permanent compatibility machinery.
+
+**Non-Goals:**
+
+- invent a new identifier shape, normalization scheme, codec, or semantic equivalence;
+- add per-position business meaning beyond the existing six named fields;
+- implement graph-index reconciliation, retention, or predicate-layout decisions;
+- support legacy invalid IDs after the breaking cutover.
+
+## Decisions
+
+### 1. Canonical literals are six exact ASCII segments bounded as one serialized key
+
+The canonical serialized form is:
+
+```text
+org.platform.domain.system.type.instance
+```
+
+It has exactly six non-empty segments separated by five literal `.` bytes. For each segment:
+
+- byte zero is one of `A-Z`, `a-z`, or `0-9`;
+- subsequent bytes are one of `A-Z`, `a-z`, `0-9`, `_`, or `-`.
+
+The serialized form is at most 256 bytes, measured on the original input including dots. There is deliberately no
+independent segment maximum. For example, with five one-byte segments and five separators, the remaining segment
+may contain 246 bytes and the resulting 256-byte ID is valid. A 247-byte segment in that same shape fails only
+because the complete key is 257 bytes.
+
+Validation is byte-exact and non-mutating. It does not trim, case-fold, normalize Unicode, escape, encode, or replace
+characters. Since the accepted alphabet is ASCII, every non-ASCII byte sequence is invalid. Literal `*`, `>`, slash,
+whitespace, control bytes, leading `_`/`-`, empty segments, and any arity other than six are invalid.
+
+### 2. `pkg/types` is the single parser and validator authority
+
+`pkg/types` owns the exported 256-byte constant plus the coded error-returning `ValidateEntityID(string) error` and
+`ParseEntityID(string) (EntityID, error)` surfaces. Parsing performs the complete grammar and size check before
+constructing the six-field `EntityID`. `pkg/types.IsValidEntityID`, `message.IsValidEntityID`, and
+`EntityID.IsValid` are boolean conveniences over the same authority: they return false for every canonical error but
+do not promise a coded error because their signatures return no error. `EntityID.IsValid` validates `EntityID.Key()`
+so hand-constructed structs cannot bypass segment syntax or the total bound.
+
+The existing `message.ParseEntityID` and `message.IsValidEntityID` surfaces remain source-compatible delegators to
+`pkg/types`; they contain no regex, alphabet helper, size constant, or alternate parsing rule. This is API
+delegation, not a compatibility mode: all entry points accept and reject exactly the same bytes.
+
+`ValidateEntityID` and `ParseEntityID` retain the repository's typed invalid classification and pin this exported
+contract:
+
+```text
+ErrorCodeEntityIDInvalid        = "entity_id_invalid"
+EntityIDReasonEmpty             = "empty"
+EntityIDReasonBytes             = "bytes"
+EntityIDReasonArity             = "arity"
+EntityIDReasonEmptySegment      = "empty_segment"
+EntityIDReasonFirstByte         = "first_byte"
+EntityIDReasonAlphabet          = "alphabet"
+EntityIDDetailReason            = "reason"
+EntityIDDetailMeasuredBytes     = "measured_bytes"
+EntityIDDetailAllowedBytes      = "allowed_bytes"
+EntityIDDetailMeasuredParts     = "measured_parts"
+EntityIDDetailAllowedParts      = "allowed_parts"
+EntityIDDetailSegmentIndex      = "segment_index"
+```
+
+Fault precedence is whole-input empty, whole-input byte limit, arity, empty segment, invalid first byte, then invalid
+alphabet, with segment faults reported at the first left-to-right position. Details are non-sensitive measurements
+and limits only and never echo the full rejected ID. Callers of coded surfaces branch on the exported code/reason
+constants rather than parsing prose; boolean helpers are tested only for true/false parity.
+
+Graph-ingest deletes `entityIDRegex`, its `regexp` dependency, and the private 255-byte branch. Its local seam, if
+retained for call-site context, delegates to the `pkg/types` parser. Every final ENTITY_STATES candidate is checked
+at the authoritative persistence boundary; earlier handler checks are optional diagnostics, not separate authority.
+
+### 3. Patterns are a separate six-token language
+
+An entity-ID pattern is not an entity ID and is never accepted by the literal parser. The pattern serializer accepts
+exactly six non-empty dot-separated tokens and at most 256 total bytes. Each token is either:
+
+- exactly `*`; or
+- one canonical literal segment using the same initial and remaining ASCII rules as an ID segment.
+
+No `>` token, embedded wildcard, partial glob, empty token, Unicode, or literal token beginning with `_`/`-` is
+accepted. A six-literal-token pattern is valid only when the same bytes are also a canonical entity ID. Pattern
+validation lives beside the literal contract in `pkg/types` as `ValidateEntityIDPattern(string) error`, with distinct
+code `ErrorCodeEntityIDPatternInvalid = "entity_id_pattern_invalid"`, so callers cannot confuse declaration syntax
+with stored identity. It reuses applicable canonical reason/detail constants rather than introducing a parallel
+exported reason taxonomy.
+
+Lifecycle, ownership, projection, rules, graph watchers, gateways, and configuration/schema registration validate
+patterns before registration or watcher creation. Glob intersection and match algorithms consume only prevalidated
+patterns; they do not redefine syntax.
+
+### 4. Query prefixes are a third bounded language
+
+An entity-ID query prefix is neither a literal identity nor a wildcard declaration pattern. A non-empty prefix has
+one through six dot-separated tokens. Every token is a canonical literal entity-ID segment; `*`, `>`, partial
+wildcards, empty/trailing positions, Unicode, and invalid initial bytes are rejected. The complete prefix is at most
+256 bytes.
+
+Empty is accepted only by a public surface whose existing contract explicitly defines empty as match-all, such as
+`graph.query.prefix`, `graph.MatchesAnyIDPrefix`, or an absent/empty semantic-search `Scope`. A required scoped input
+cannot silently reinterpret empty as global access. Prefix validation occurs before a prefix becomes a KV filter,
+embedding scope, fusion scope, GraphQL/gateway request, or other query operation. The validator shares the literal
+segment grammar but has its own non-empty coded API, `ValidateEntityIDPrefix(string) error`, and distinct code
+`ErrorCodeEntityIDPrefixInvalid = "entity_id_prefix_invalid"`. Surfaces that promise empty means match-all handle
+empty before calling the non-empty validator. Prefix failures reuse applicable canonical reason/detail constants;
+this change does not add prefix-only exported reasons.
+
+### 5. The 256-byte semantic bound completes the graph-index storage proof
+
+Let `E` be maximum serialized entity-ID bytes. This change fixes `E <= 256`. Using the already-reviewed predicate
+bound and current untagged predicate-hex layouts from `graph-index-fixed-arity-reconciliation`, complete current keys
+remain:
+
+| Layout | Maximum key bytes at `E = 256` |
+|---|---:|
+| PREDICATE | `65 + E = 321` |
+| NAME / CONTEXT | `E + 454 = 710` |
+| INCOMING | `2E + 390 = 902` |
+| OUTGOING | `E = 256` |
+| raw PREDICATE candidate | `E + 195 = 451` |
+
+INCOMING is the maximum at 902 bytes, leaving 122 bytes beneath the project 1,024-byte key/filter contract. Its
+layout has 13 tokens, also beneath the 64-token contract. Owner and forward filters replace one or more literal
+positions with one-byte complete-token `*`, so none exceeds the corresponding maximum literal layout. Tests still
+construct every maximum key and filter and pass it through the shared NATS validators; arithmetic does not replace
+real-NATS conformance.
+
+Graph-index benchmark scaffolding may consume the contract for proof, but production fixed-arity reconciliation
+MUST remain inactive until the named local contract/API, corpus, ObjectStore zero-I/O, replay/readiness, key-budget,
+and breaking e2e tasks in this change pass, and the dependent graph-index activation gates pass. It does not wait for
+this change to archive or for coordinated sister-repository migrations. This change does not select raw versus
+hashed PREDICATE representation.
+
+### 6. Enforcement is unconditional and the beta cutover is clean
+
+The contract applies to literal constructors, parsers, Graphable subjects, triple entity references when classified
+as such, mutation requests, ENTITY_STATES persistence/replay, derived-index key construction, ownership/projection
+declarations, lifecycle registrations, rule watch patterns, query-prefix/scope inputs, schemas, tools, and reference
+configurations.
+
+ObjectStore's `StoreContent` path validates `ContentStorable.EntityID()` before generating or writing any binary or
+content object name. This closes the pre-graph-ingest orphan path but does not select ObjectStore retention,
+reachability, reference-counting, or reclamation policy.
+
+Invalid new input fails before graph or NATS I/O. Invalid persisted ENTITY_STATES observed during startup/replay is
+graph-state poison: authoritative and derived graph consumers withhold readiness and report an operator-actionable
+reset/reingest requirement. A later valid event does not make a poisoned process ready. After optional export,
+operators delete incompatible graph/index buckets, restart, and reingest canonical sources; ordinary replay
+watermarks then govern readiness.
+
+There is no runtime flag, legacy validator, alias/rename table, lossy sanitizer, dual read/write path, or in-place
+state rewriter. A checked-in audit/rename ledger is release evidence only and is never loaded by the runtime.
+
+### 7. Migration is corpus-driven across the framework and owned sisters
+
+The implementation begins with a deterministic corpus audit over Go constructors/constants, configs, schemas,
+fixtures, generated tools, reference deployments, and persisted-ID seed data. It reports literal IDs, declaration
+patterns, and query prefixes separately and identifies source location plus failure reason. The same audit contract
+runs in participating owned sister repositories.
+
+SemStreams local violations are migrated with the parser change. SemSource, SemOps, SemConnect, SemTeams, SemSpec,
+SemDragon, SemLink, and any additional discovered producer coordinate their source/config changes against the same
+SemStreams version. The breaking release is not complete until participating owned repos and reference designs are
+zero-violation or explicitly recorded as non-participating with evidence.
+
+Those coordinated sister gates block the v1 release and archive of this change, not local framework graph-index
+activation after its named local prerequisites have passed.
+
+## Risks / Trade-offs
+
+- **A valid beta identifier may become invalid.** Leading `_`/`-`, over-256-byte, wildcard-like, Unicode, or malformed
+  values require source repair and clean reingest. This is intentional before v1.
+- **A single large segment remains legal.** The total bound protects storage while avoiding arbitrary semantic limits
+  on one position. Consumers must not assume balanced or short segments.
+- **Prefix and pattern semantics can be confused.** Separate APIs and tests pin literal, six-position wildcard, and
+  one-to-six-position query-prefix behavior, including which surfaces promise empty as match-all.
+- **ObjectStore can persist before graph-ingest.** `StoreContent` rejects an invalid entity ID before binary or
+  content-object I/O; broader ObjectStore lifecycle policy remains separately governed.
+- **Delegating APIs can look like duplicate authority.** Tests pin identical results across `pkg/types`, `message`,
+  graph-ingest, and pattern registration; only `pkg/types` owns grammar code.
+- **Reset/reingest is operationally disruptive.** It avoids ambiguous identity rewriting and permanent compatibility
+  complexity. Release docs require export guidance and a preflight audit before upgrade.
+
+## Validation Strategy
+
+Use TDD at each boundary: first pin failing literal/pattern/prefix tables and fuzz properties, then migrate delegators,
+authoritative persistence, and ObjectStore preflight, then run corpus and sister contracts. Prove 255/256/257-byte
+boundaries, a legal 246-byte segment, leading-character failures, every allowed remaining byte, Unicode/wildcard
+rejection, exact round-trip, and literal/pattern separation.
+
+Storage proof includes shared-validator unit tests, invalid-input no-I/O tests, and pinned real-NATS Put/Get/Delete,
+ListKeysFiltered, and Watch match sets at maximum shapes. Cutover proof seeds invalid persisted IDs, verifies sticky
+not-ready behavior, resets, reingests, and checks exact query results. ObjectStore proof records zero binary and
+content-object writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway
+inputs before any NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites,
+real-NATS integration, and every affected e2e tier before the BREAKING release lands.

@@ -21,6 +21,11 @@
       any missing alias identity bound or raw/opaque/owner-discovery decision to the owning ALIAS change without
       blocking unrelated current-layout reconciliation. The 1,025-byte six-valid-token fixture proves the missing
       total entity bound and blocks activation; it is not a passing maximum
+- [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4,
+      including the canonical `E <= 256` API, local zero-violation literal/pattern/prefix corpus, ObjectStore zero-I/O
+      guard, invalid-state replay/readiness proof, maximum graph-index key/filter conformance, and breaking e2e. This
+      blocks production current-layout reconciliation but does not require the entity-ID change to archive or its
+      sister-repository migration gates to complete; those remain coordinated v1 release/archive gates
 
 ## 1. PR #524 Store and Query Contract
 
