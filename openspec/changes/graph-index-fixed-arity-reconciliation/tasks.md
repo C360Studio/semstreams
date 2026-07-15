@@ -4,29 +4,27 @@
       predicate contract; architect review approved the current-truth correction
 - [x] 0.2 Complete or explicitly re-scope and archive `graph-index-hardening` before this change modifies
       production index behavior; benchmark-only work may proceed independently
-- [x] 0.3 Record PR #532 as the framework grammar prerequisite. Require predicate-contract-enforcement 4.6, the local
-      SemStreams/reference portion of 5.1, and 5.2-5.3 before framework current-layout activation. Keep sister audits
-      and migrations plus predicate archive 5.7 as coordinated v1 release gates and prerequisites to any raw cutover,
-      not to benchmark-only work or framework reconciliation after its local clean-state evidence passes
+- [x] 0.3 Record PR #532 as the framework grammar prerequisite. Require its local zero-violation source/configuration/
+      fixture gates before framework current-layout activation. Keep every owned-reference update, clean NATS
+      wipe/reseed, product e2e, and predicate archive gate as coordinated pre-v1 release requirements without adding
+      persisted-state migration, compatibility readers, or rollback
 - [x] 0.4 Record the archived `nats-kv-keys` baseline and helper availability: literal validators, stable errors, and
       budgets. The `x1_` opaque codec is available only for a separately authorized new or changed axis; it does not
       re-encode current axes, and the shipped untagged predicate hex remains unchanged
 - [x] 0.5 Make benchmark/proof builders and the inactive reconciliation helper call the shared literal key/filter
       validators and return stable classified errors before NATS I/O; zero-I/O tests cover lister, Put, and Delete
-- [ ] 0.5a Apply the same preflight contract to any future production activation call sites before wiring them; this
+- [ ] 0.5a Apply the same preflight contract to any future framework activation call sites before wiring them; this
       checkpoint activates no production reader, writer, configuration, or lifecycle path
 - [x] 0.6 Prove worst-case current PREDICATE, PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, and OUTGOING keys and filters
-      against shared budgets. If entity IDs prevent proof, require a separately approved total entity-ID byte bound or
-      entity-axis physical-codec change before current-layout activation. Audit ALIAS's raw exact key separately; hand
-      any missing alias identity bound or raw/opaque/owner-discovery decision to the owning ALIAS change without
-      blocking unrelated current-layout reconciliation. The reviewed `entity-id-contract` slice now fixes `E = 256`
-      and proves unit-level maxima of 321/710/902/256/451 bytes through the shared validators; real-NATS maxima and the
-      remaining local entity-contract gates in task 0.7 still block activation
+      against shared budgets using canonical `E = 256`; unit maxima are 321/710/902/256/451 bytes through the shared
+      validators. Audit ALIAS's representative raw key separately and hand its missing identity bound or raw/opaque/
+      owner-discovery decision to the owning ALIAS change without blocking unrelated reconciliation. Real-NATS maxima
+      and the remaining local entity-contract gates in task 0.7 still block activation
 - [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4,
-      including the canonical `E <= 256` API, local zero-violation literal/pattern/prefix corpus, ObjectStore zero-I/O
-      guard, invalid-state replay/readiness proof, maximum graph-index key/filter conformance, and breaking e2e. This
-      blocks production current-layout reconciliation but does not require the entity-ID change to archive or its
-      sister-repository migration gates to complete; those remain coordinated v1 release/archive gates
+      including the canonical `E <= 256` API, local zero-violation source corpus, ObjectStore zero-I/O guard, malformed
+      current-write/direct-NATS fail-fast proof, clean local NATS wipe/reseed, maximum key/filter conformance, and
+      breaking e2e. This blocks framework current-layout reconciliation but does not require the entity-ID change to
+      archive. Owned-reference updates and fresh-state product e2e remain coordinated pre-v1 release/archive gates
 
 ## 1. PR #524 Store and Query Contract
 
@@ -40,7 +38,7 @@
       matrix required by tasks 1.1-1.2
 - [ ] 1.3 Define and test the INCOMING source-ownership contract, including source fact replacement, source
       removal/tombstone, target retirement, and authorized cascade behavior, without production wiring
-- [ ] 1.4 Pin shipped production behavior: OUTGOING and CONTEXT reconcile; PREDICATE, NAME, ALIAS, and source-owned
+- [ ] 1.4 Pin shipped framework behavior: OUTGOING and CONTEXT reconcile; PREDICATE, NAME, ALIAS, and source-owned
       INCOMING remain additive; target-prefixed INCOMING deletion remains legacy behavior
 - [ ] 1.5 Record ALIAS, spatial/geohash, embedding, blob/ObjectStore, cascade, and global GC as separately specified
       work outside this change
@@ -76,15 +74,14 @@
 ## 3. Current-Layout Reconciliation Decision and Implementation
 
 - [ ] 3.1 Write and approve the owner-discovery and INCOMING-ownership ADR, selecting mechanisms per store from the
-      complete correctness and resource evidence; block activation on every failed filter mechanism and unresolved
-      current-layout entity-ID bound or entity-axis physical-codec dependency. Record ALIAS risk for its separate
-      owning change without making it a gate for unrelated current-layout reconciliation
+      complete correctness and resource evidence; block activation on every failed filter mechanism or incomplete
+      maximum real-NATS key/filter proof. Record ALIAS risk for its separate owning change without making it a gate
+      for unrelated current-layout reconciliation
 - [ ] 3.2 For each failed query-visible owner filter, first complete its approved dependent bounded replacement
-      mechanism. Then recreate PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX, and INCOMING_INDEX behind typed
-      not-ready responses after atomically starting a rebuild generation that resets sticky
-      readiness/watermark/enumeration state; rebuild from canonical ENTITY_STATES, activate filtered reconciliation
-      only for passing stores and the approved alternate mechanism for each failed store, preserve CONTEXT
-      replacement, and remove rejected helpers
+      mechanism. After the announced pre-v1 wipe/reseed, initialize PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX,
+      and INCOMING_INDEX with readiness false before canonical reseed; remain not-ready until initial replay reaches
+      the authoritative watermark, then activate passing filtered reconciliation and each approved alternate
+      mechanism. Leave generation-based maintenance rebuild to `bounded-storage-operability` tasks 5.1-5.4
 - [ ] 3.3 Preserve keyed ordering, execution-time current-state reads, bounded repair, exact status watermarks, and
       failure-held readiness; enforce the benchmark-selected maximum worker count in configuration
 - [ ] 3.4 Replace source-owned INCOMING rows on source fact changes/removal and remove target-prefix deletion only
@@ -113,8 +110,9 @@
       otherwise record watch behavior as a non-public operational property
 - [ ] 4.6 Write and approve the ADR-065 representation decision independently of the already-approved current-layout
       reconciliation decision
-- [ ] 4.7 If raw wins, delete/recreate only selected derived buckets, rebuild from canonical ENTITY_STATES behind a
-      typed not-ready watermark, remove every old-format reader, and retire PREDICATE_CATALOG
+- [ ] 4.7 If raw wins, include the selected derived buckets in the announced pre-v1 incompatible-NATS wipe, initialize
+      them from freshly reseeded canonical ENTITY_STATES behind a typed not-ready watermark, remove every old-format
+      reader, and retire PREDICATE_CATALOG; add no in-place migration or persisted-state preservation path
 - [ ] 4.8 If hash+catalog remains, remove raw-candidate scaffolding and avoid an unnecessary storage cutover
 - [ ] 4.9 Prove exact, namespace, list, stats, compound, traversal, restart, repair, and limited-result parity for the
       selected representation; prove clustering parity after its next independently completed detection cycle

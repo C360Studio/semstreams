@@ -22,7 +22,7 @@ deliberately left existing semantic axes unchanged. Graph-index's current worst 
 - make `pkg/types` the semantic authority while preserving delegating `message` APIs for callers;
 - reject malformed values before authoritative state or derived-key I/O;
 - make maximum complete graph-index keys and owner filters provable;
-- migrate beta producers and persisted state without permanent compatibility machinery.
+- update every owned beta producer/source/configuration/fixture, then wipe and reseed incompatible NATS state.
 
 **Non-Goals:**
 
@@ -151,11 +151,10 @@ positions with one-byte complete-token `*`, so none exceeds the corresponding ma
 construct every maximum key and filter and pass it through the shared NATS validators; arithmetic does not replace
 real-NATS conformance.
 
-Graph-index benchmark scaffolding may consume the contract for proof, but production fixed-arity reconciliation
-MUST remain inactive until the named local contract/API, corpus, ObjectStore zero-I/O, replay/readiness, key-budget,
-and breaking e2e tasks in this change pass, and the dependent graph-index activation gates pass. It does not wait for
-this change to archive or for coordinated sister-repository migrations. This change does not select raw versus
-hashed PREDICATE representation.
+Graph-index benchmark scaffolding may consume the contract for proof, but framework fixed-arity reconciliation MUST
+remain inactive until the named local contract/API, corpus, ObjectStore zero-I/O, clean wipe/reseed, key-budget, and
+breaking e2e tasks in this change pass, and the dependent graph-index activation gates pass. It does not wait for
+this change to archive. This change does not select raw versus hashed PREDICATE representation.
 
 ### 6. Enforcement is unconditional and the beta cutover is clean
 
@@ -168,29 +167,28 @@ ObjectStore's `StoreContent` path validates `ContentStorable.EntityID()` before 
 content object name. This closes the pre-graph-ingest orphan path but does not select ObjectStore retention,
 reachability, reference-counting, or reclamation policy.
 
-Invalid new input fails before graph or NATS I/O. Invalid persisted ENTITY_STATES observed during startup/replay is
-graph-state poison: authoritative and derived graph consumers withhold readiness and report an operator-actionable
-reset/reingest requirement. A later valid event does not make a poisoned process ready. After optional export,
-operators delete incompatible graph/index buckets, restart, and reingest canonical sources; ordinary replay
-watermarks then govern readiness.
+Malformed current writes and malformed data injected directly into NATS fail at the authoritative decoder before
+state or projection I/O. That fail-fast contract is not an old-state migration path. Before the breaking pre-v1
+binary/configuration is used, operators wipe every incompatible NATS resource, restart, and reseed only from updated
+canonical owned sources.
 
-There is no runtime flag, legacy validator, alias/rename table, lossy sanitizer, dual read/write path, or in-place
-state rewriter. A checked-in audit/rename ledger is release evidence only and is never loaded by the runtime.
+There is no runtime flag, legacy validator, alias/rename table, lossy sanitizer, compatibility reader, dual
+read/write path, beta persisted-state migration exporter/inspector, or in-place state rewriter. The cutover has no
+persisted-state preservation or rollback obligation.
 
-### 7. Migration is corpus-driven across the framework and owned sisters
+### 7. The pre-v1 clean break is source-driven across every owned reference
 
-The implementation begins with a deterministic corpus audit over Go constructors/constants, configs, schemas,
-fixtures, generated tools, reference deployments, and persisted-ID seed data. It reports literal IDs, declaration
-patterns, and query prefixes separately and identifies source location plus failure reason. The same audit contract
-runs in participating owned sister repositories.
+The implementation begins with a deterministic source corpus over Go constructors/constants, configs, schemas,
+fixtures, generated tools, and owned reference deployments. It reports literal IDs, declaration patterns, and query
+prefixes separately and identifies source location plus failure reason. It does not inspect persisted beta state.
 
-SemStreams local violations are migrated with the parser change. SemSource, SemOps, SemConnect, SemTeams, SemSpec,
-SemDragon, SemLink, and any additional discovered producer coordinate their source/config changes against the same
-SemStreams version. The breaking release is not complete until participating owned repos and reference designs are
-zero-violation or explicitly recorded as non-participating with evidence.
+SemStreams, SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, and every additional owned producer
+update source/configuration/fixtures against the same SemStreams version. The exact breaking release procedure wipes
+all incompatible NATS state, reseeds the updated references, and reruns their product e2e. There is no participation
+ledger because every reference design is owned and required before v1.
 
-Those coordinated sister gates block the v1 release and archive of this change, not local framework graph-index
-activation after its named local prerequisites have passed.
+Those coordinated owned-reference gates block the v1 release and archive of this change, not local framework
+graph-index activation after its named clean pre-v1 prerequisites have passed.
 
 ## Implementation checkpoint: first reviewed slice
 
@@ -204,7 +202,7 @@ owner/foreign-edge claims. Prefix enforcement is currently routed through the pu
 graph-ingest prefix handler, graph-query forwarding boundary, graph-embedding scope, and FusionNATS prefix/scope
 resolution. Their documented empty-match-all cases are preserved outside the non-empty prefix validator. Projection,
 rule-watch, gateway, schema, tool, other fusion-engine, and reference-design surfaces remain subject to the complete
-inventory and migration tasks.
+inventory and source-update tasks.
 
 ObjectStore now validates `ContentStorable.EntityID()` before binary/content extraction, object-name generation,
 operation metrics, or NATS I/O for both binary and non-binary content. The previous invalid-input log that exposed
@@ -218,8 +216,8 @@ operations and match sets remain open, so production fixed-arity reconciliation 
 
 The reviewed slice passed `task lint`, `go test -race ./...`, and `go test ./test/contract/...`; task 6.4 records the
 green breaking e2e evidence. This checkpoint does not claim completion of the full local inventory/corpus, schema
-generation, poison replay/readiness, reset/reingest, sister-repository migration, documentation, or real-NATS
-integration.
+generation, owned-reference source/configuration/fixture updates, clean wipe/reseed proof, documentation, or
+real-NATS integration.
 
 ## Risks / Trade-offs
 
@@ -233,19 +231,22 @@ integration.
   content-object I/O; broader ObjectStore lifecycle policy remains separately governed.
 - **Delegating APIs can look like duplicate authority.** Tests pin identical results across `pkg/types`, `message`,
   graph-ingest, and pattern registration; only `pkg/types` owns grammar code.
-- **Reset/reingest is operationally disruptive.** It avoids ambiguous identity rewriting and permanent compatibility
-  complexity. Release docs require export guidance and a preflight audit before upgrade.
+- **Wipe/reseed is operationally disruptive.** It is acceptable because no product is in production and every
+  reference design is owned. Release docs name the exact NATS resources, reseed commands, and e2e gates; they do not
+  promise export, old-state inspection, or rollback.
 
 ## Validation Strategy
 
 Use TDD at each boundary: first pin failing literal/pattern/prefix tables and fuzz properties, then migrate delegators,
-authoritative persistence, and ObjectStore preflight, then run corpus and sister contracts. Prove 255/256/257-byte
+authoritative persistence, and ObjectStore preflight, then run local and owned-reference source corpora. Prove
+255/256/257-byte
 boundaries, a legal 246-byte segment, leading-character failures, every allowed remaining byte, Unicode/wildcard
 rejection, exact round-trip, and literal/pattern separation.
 
 Storage proof includes shared-validator unit tests, invalid-input no-I/O tests, and pinned real-NATS Put/Get/Delete,
-ListKeysFiltered, and Watch match sets at maximum shapes. Cutover proof seeds invalid persisted IDs, verifies sticky
-not-ready behavior, resets, reingests, and checks exact query results. ObjectStore proof records zero binary and
-content-object writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway
-inputs before any NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites,
-real-NATS integration, and every affected e2e tier before the BREAKING release lands.
+ListKeysFiltered, and Watch match sets at maximum shapes. Cutover proof updates owned source/configuration/fixtures,
+wipes incompatible NATS state, reseeds canonical data, and checks exact fresh-state query results. Direct malformed
+NATS data is separately rejected without partial output. ObjectStore proof records zero binary and content-object
+writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway inputs before any
+NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites, real-NATS
+integration, and every affected product e2e tier before the BREAKING release lands.

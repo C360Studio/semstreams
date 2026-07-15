@@ -1,6 +1,6 @@
 ## Context
 
-This design is a spike specification, not current production behavior. The production graph-index keeps PR #524's
+This design is a spike specification, not current deployed-product behavior. The shipped graph-index keeps PR #524's
 shipped update/delete behavior until each store's owner-filter proof and ownership ADR authorize current-layout
 reconciliation. It keeps the hash/catalog PREDICATE representation until the separate representation benchmark and
 ADR authorize a cutover. Experimental helpers MUST NOT be wired into production before their applicable gate.
@@ -98,7 +98,7 @@ pins both the filter string and the real-NATS match set so an accidentally broad
 a fixed-arity proof. Every key/filter newly constructed by this spike's benchmark or later activation implementation
 must pass the shared NATS KV key contract before I/O. The prerequisite itself does not alter current wrapper behavior.
 The implementation matrix also records value overwrite policy, source removal, target retirement, bucket reset, and
-readiness effects before production work starts.
+readiness effects before framework activation starts.
 
 The current raw alias value used as the ALIAS key may contain dots and therefore span multiple physical tokens;
 “exact alias” means an exact full-key lookup, not a one-token alias promise. Whether an eventual ALIAS layout
@@ -110,9 +110,9 @@ The matrix MUST also prove maximum token, key, filter-byte, and arity formulas f
 not only raw Candidate B. Current PREDICATE, NAME, CONTEXT, OUTGOING, and INCOMING all embed one or two six-part
 entity IDs; NAME, CONTEXT, and INCOMING also carry the up-to-388-byte existing predicate hex token. ALIAS's raw exact
 key is audited even though ALIAS reconciliation remains out of scope. A representative corpus is not a maximum-bound
-proof. If an in-scope current layout lacks a governed maximum or approved entity-axis physical codec, current-layout
-activation remains blocked. ALIAS audit failure is recorded for its separate change and does not block unrelated
-stores. The missing total entity-ID bound is not only a reason for raw Candidate B to lose.
+proof. The canonical `E = 256` contract resolves the entity semantic bound and the unit matrix proves every bounded
+entity-bearing layout; pinned real-NATS maximum key/filter exact-match conformance still blocks activation. ALIAS audit
+failure is recorded for its separate change and does not block unrelated stores.
 
 #### Reviewer-approved key-contract proof checkpoint
 
@@ -128,16 +128,14 @@ predicate encoding to a 388-byte untagged hex token, and records these complete-
 | OUTGOING | `E` |
 | raw PREDICATE candidate | `E + 195` |
 
-A 1,025-byte six-part entity fixture whose six tokens are individually valid fails the complete key/filter budget.
-This proves that representative entities cannot replace the missing total `E` bound; production activation remains
-blocked on the separately governed entity-ID bound or entity-axis codec. ALIAS remains an unbounded raw-key audit
-handed to its separate owner and does not block unrelated stores.
+At canonical `E = 256`, the unit matrix proves PREDICATE 321, NAME/CONTEXT 710, INCOMING 902, OUTGOING 256, and raw
+PREDICATE 451 bytes through the shared validators. ALIAS remains a representative unbounded raw-key audit handed to
+its separate owner and does not block unrelated stores.
 
 The benchmark-only reconciliation helper preflights complete owner filters and desired keys through the shared
-validators. Invalid input returns the stable classified code/reason before lister creation, Put, or Delete. Real-NATS
-tests prove exact owner filters for PREDICATE, NAME, CONTEXT, and source-owned INCOMING plus exact forward filters for
-PREDICATE, NAME, and target-prefixed INCOMING against shorter, longer, reversed-axis, and wrong-owner controls. This
-checkpoint wires no production activation, reader, writer, configuration, or lifecycle call site.
+validators. Invalid input returns the stable classified code/reason before lister creation, Put, or Delete. Pinned
+real-NATS maximum key/filter and exact-match proof for all bounded layouts remains open. This checkpoint wires no
+framework activation, reader, writer, configuration, or lifecycle call site.
 
 ### 3. Prove fixed-position enumeration on real NATS
 
@@ -187,10 +185,9 @@ Candidate B's literal filters are:
 - `domain` namespace: `domain.*.*.*.*.*.*.*.*`;
 - entity owner: `*.*.*.<six literal entity tokens>`.
 
-Candidate B cannot win until the maximum 194-byte canonical predicate and maximum supported entity ID pass the
-literal-token, literal-key, arity, and byte budgets established by `nats-kv-keys`, including real-NATS
-conformance for the complete key. Six-part entity IDs currently lack a total-length contract; if the bound cannot be
-proven without expanding that contract, Candidate B fails this change.
+Candidate B cannot win until the maximum 194-byte canonical predicate and canonical `E = 256` entity ID pass the
+literal-token, literal-key, arity, and byte budgets established by `nats-kv-keys`, including pinned real-NATS
+conformance for the complete 451-byte maximum key.
 
 The benchmark compares correctness, O(E) writes, key bytes, server/client resource use, exact and namespace
 query latency, leading-wildcard cleanup, failure modes, and operational inspection. Watch behavior is compared
@@ -200,8 +197,8 @@ handler/recovery budgets and required public-query benefit follow. Hash+catalog 
 requirements. Before measurement, each eligible public operation receives a numeric or mechanically decidable
 material-improvement threshold. Raw keys win only when their worst-case key is bounded and they cross one of those
 thresholds for a required query or proven consumer. The result is recorded in a new superseding ADR. There is no
-permanent dual-write option; a selected raw format cuts over by bucket recreation and clean replay with query
-readiness withheld.
+permanent dual-write option; a selected raw format cuts over through the announced incompatible-NATS wipe and
+canonical reseed, with query readiness withheld until initial replay reaches the authoritative watermark.
 
 ### 5. Keep storage codecs independent per axis
 
@@ -219,12 +216,11 @@ wins, the catalog is retired after cutover.
 ### 6. Reconcile stored owner rows against desired projection
 
 This section is conditional future behavior per store. Current-layout reconciliation may activate after every
-current layout/filter passes the shared key budgets, that store's exact owner filter passes the frozen profile, and
-the owner-discovery/INCOMING-ownership ADR is approved. A missing in-scope entity-ID bound or required entity-axis
-physical codec is a blocking dependent contract. ALIAS remains frozen and separately owned; its unresolved bound or
-codec does not block unrelated stores. Activation MUST NOT wait for the optional raw PREDICATE representation decision
-once those current-layout prerequisites pass. Physical PREDICATE key/catalog changes remain inactive until their
-separate representation benchmark and ADR pass.
+current layout/filter passes the `E = 256` shared unit budgets and pinned real-NATS maximum/exact-match proof, that
+store's exact owner filter passes the frozen profile, and the owner-discovery/INCOMING-ownership ADR is approved.
+ALIAS remains frozen and separately owned; its unresolved bound or codec does not block unrelated stores. Activation
+MUST NOT wait for the optional raw PREDICATE representation decision once those current-layout prerequisites pass.
+Physical PREDICATE key/catalog changes remain inactive until their separate representation benchmark and ADR pass.
 
 For each entity update, the index owner enumerates that entity's currently stored rows using its proven
 owner filter, computes the desired projection from current ENTITY_STATES, deletes stale rows, and puts missing
@@ -260,17 +256,21 @@ Membership-watch behavior is decision evidence only unless an existing consumer 
 semantic contract is Put when a membership is added and Delete/Purge when it is removed. No event is promised for
 an entity-value change while the membership identity remains unchanged.
 
-### 9. Make current-layout activation and later cutover clean
+### 9. Make the pre-v1 activation a clean fresh-state cutover
 
-Current-layout reconciliation activation leaves query handlers available but returning typed not-ready responses,
-deletes/recreates PREDICATE, PREDICATE_CATALOG, NAME, and INCOMING, and rebuilds them from already-canonical
-authoritative ENTITY_STATES. This removes stale rows owned by entities deleted before activation. A later raw-key
-cutover recreates only the representation-affected derived buckets through the same contract. Neither operation
-resets ENTITY_STATES. Before any bucket is cleared, an atomic rebuild-generation transition clears sticky
-readiness plus watermark/enumeration state. A prior generation can never authorize reads from cleared or partial
-buckets. Readiness exposes the new generation's exact rebuild watermark; no reader recognizes old keys or abandoned
-formats. Graph-index query fixtures must match canonical expected results, and clustering is checked only after its
-own next detection cycle. Any required reconciliation or replay failure keeps reads not-ready.
+No deployed product state must be preserved. The breaking release announces the selected layouts, updates every
+owned source/configuration/fixture, wipes all incompatible authoritative and derived NATS graph resources, restarts,
+and reseeds canonical sources. Current-layout reconciliation initializes PREDICATE, PREDICATE_CATALOG, NAME, and
+INCOMING behind typed not-ready responses and rebuilds them only from the freshly reseeded ENTITY_STATES. If raw keys
+win, their selected representation is included in the same clean release procedure rather than an online format
+migration.
+
+Graph-index starts with readiness false before canonical reseed and keeps affected queries typed not-ready until
+initial replay reaches the authoritative watermark. Generation-based maintenance rebuild remains owned by
+`bounded-storage-operability` tasks 5.1-5.4. No reader recognizes old keys or abandoned formats, and there is no beta
+state exporter, inspector, preservation promise, compatibility reader, dual writer, or rollback path. Graph-index
+query fixtures must match canonical fresh-state results, and clustering is checked only after its own next detection
+cycle. Any required initial replay failure keeps reads not-ready.
 
 ## Risks / Trade-offs
 
@@ -279,34 +279,32 @@ own next detection cycle. Any required reconciliation or replay failure keeps re
 - **Raw keys couple storage to grammar:** allow them only after canonical source cutover and unconditional
   enforcement are real.
 - **Hash/catalog can drift:** make catalog a required repaired projection or retire it with raw keys.
-- **Another on-disk cutover adds upgrade risk:** use one bucket reset/replay, no steady-state dual format,
-  and query parity evidence.
+- **The clean cutover discards beta state:** this is acceptable before v1 because every reference design is owned;
+  publish the exact wipe/reseed commands and prove product e2e without adding a dual format or rollback path.
 - **Target cleanup can erase valid evidence:** model INCOMING ownership by source, not physical prefix.
 
 ## Cutover Plan
 
 1. Consume the archived `nats-kv-keys` baseline, then correct/complete/archive `graph-index-hardening` and seed the
    baseline graph-index spec.
-2. Prove every in-scope current layout/filter fits the shared budgets. If unbounded entity IDs prevent proof, complete
-   the separately approved total entity-ID bound or entity-axis physical-codec dependency. Audit ALIAS independently
-   and hand an unbounded result to its separate owner without blocking other stores.
+2. Use canonical `E = 256` to prove every bounded in-scope current layout/filter fits the shared budgets, then complete
+   pinned real-NATS maximum key/filter exact-match conformance. Audit ALIAS independently and hand its unbounded result
+   to the separate owner without blocking other stores.
 3. Prove current-layout exact owner filters through the shared validators without changing production behavior.
-4. Complete predicate-contract clean-state tasks 4.6, local SemStreams/reference 5.1, and 5.2-5.3; approve the
-   owner-discovery and INCOMING-ownership ADR; activate filtered reconciliation only for passing stores,
-   first complete an approved dependent bounded mechanism for each failed query-visible store, then recreate the
-   affected derived buckets behind readiness and activate the selected per-store replacement mechanisms.
+4. Complete the predicate and entity-ID clean-source/configuration/fixture gates; approve the owner-discovery and
+   INCOMING-ownership ADR; update every owned reference, wipe incompatible NATS state, restart, and reseed canonical
+   sources. Activate filtered reconciliation only for passing stores, first completing an approved dependent bounded
+   mechanism for each failed query-visible store.
 5. Prove public query, readiness, restart, repair, and lifecycle semantics on the rebuilt shipped representation.
 6. Independently benchmark hash+catalog against raw PREDICATE keys after the predicate corpus is clean.
 7. Retain hash+catalog unless raw has a bounded key and materially improves a required surface; record the ADR-065
    decision.
-8. Only if raw wins and sister audits/migrations plus predicate archive task 5.7 are complete, recreate selected
-   derived buckets and rebuild from canonical ENTITY_STATES behind readiness.
+8. Only if raw wins and every owned-reference update, fresh-state product e2e, and predicate archive gate is complete,
+   include the selected raw buckets in the announced clean wipe/reseed and initialize them behind readiness.
 9. Remove every rejected candidate helper/reader, publish the retention evidence handoff, and run the full gates.
 
 ## Open Questions
 
 - Can one filtered-list consumer serve multiple owner filters efficiently, or is per-request setup material?
 - Does any current consumer require predicate membership watches, or only exact/namespace request-response?
-- What separately governed entity-ID bound or physical codec will make every in-scope current layout safe before
-  activation, and does that same decision make the optional raw nine-token candidate eligible?
 - What ALIAS identity bound and raw/opaque/owner-discovery decision will its separate owning change select?

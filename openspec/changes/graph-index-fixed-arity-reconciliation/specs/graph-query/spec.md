@@ -88,19 +88,19 @@ not graph-index catalog semantics.
 ### Requirement: Physical representation does not change query meaning
 
 Exact, namespace, compound, stats, list, incoming, traversal, and by-name responses MUST preserve their documented
-semantics across a selected derived-index cutover. Query handlers MUST remain available but return typed not-ready
-responses until the current rebuild generation reaches its authoritative watermark.
+semantics after the selected fresh-state cutover. Query handlers MUST remain available but return typed not-ready
+responses until initial canonical replay reaches its authoritative watermark.
 
 #### Scenario: cutover never serves mixed-format truth
 
-- **GIVEN** the approved representation requires derived-bucket recreation
-- **WHEN** rebuild is incomplete
+- **GIVEN** the approved representation is selected and incompatible NATS state was wiped
+- **WHEN** canonical reseed and initial replay are incomplete
 - **THEN** affected queries return not-ready rather than partial results
-- **AND** once ready they match the canonical pre-cutover fixtures without reading abandoned keys
+- **AND** once ready they match canonical fresh-state fixtures without reading abandoned keys or preserved beta state
 
 #### Scenario: clustering consumes reconciled truth on its own cycle
 
-- **GIVEN** graph-index reaches its rebuild watermark
+- **GIVEN** graph-index reaches its initial authoritative replay watermark
 - **WHEN** graph-clustering completes its next independently tracked detection cycle
 - **THEN** clustering results consume the reconciled selected representation
 - **AND** graph-index readiness alone is not treated as clustering-cycle completion

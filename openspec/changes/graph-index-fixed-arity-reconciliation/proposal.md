@@ -6,14 +6,15 @@ a separate representation benchmark and ADR gate. Helper code landed alongside p
 inactive experimental scaffolding until its applicable gate passes.
 
 PR #524 fixed O(N²) and lost-update behavior by sharding graph indexes into deterministic composite keys. It
-was designed against a production corpus whose predicates violated SemStreams' intended three-part contract.
+was designed against a reference corpus whose predicates violated SemStreams' intended three-part contract.
 PR #532 restored that contract, removing ADR-065's principal raw-key prefix-collision example and potentially restoring
 namespace lookup and membership-key observability without a catalog join.
 
-PR #524 did not complete replacement semantics for every sharded membership. Production still appends NAME,
+PR #524 did not complete replacement semantics for every sharded membership. The shipped framework path still
+appends NAME,
 PREDICATE, and source-owned INCOMING rows, so transitions such as `[A] -> [B] -> []` can leave stale query-visible
 memberships. The fixed token positions may let one entity enumerate those rows with exact-position NATS filters,
-but performance and concurrency behavior are unproven at production shape. This change closes that specific
+but performance and concurrency behavior are unproven at declared scale. This change closes that specific
 hardening gap and records what a later retention change may rely on; it does not implement general retention.
 
 ## What Changes
@@ -39,19 +40,19 @@ hardening gap and records what a later retention change may rely on; it does not
 - After each store's owner filter and ownership ADR pass, reconcile its stored owned memberships against the
   complete desired projection on semantic-owner update or removal, preserving PR #524's ordered execution,
   failure honesty, and readiness model.
-- When current-layout reconciliation activates, recreate and rebuild the affected PREDICATE,
-  PREDICATE_CATALOG, NAME, and INCOMING buckets behind typed not-ready responses so pre-release orphan rows cannot
-  survive as ready query truth.
+- When current-layout reconciliation activates after the clean pre-v1 reset, initialize the affected PREDICATE,
+  PREDICATE_CATALOG, NAME, and INCOMING buckets behind typed not-ready responses and rebuild from freshly reseeded
+  canonical ENTITY_STATES.
 - Produce a measured owner-discovery result that the separate retention epic can consume without making
   retention or ObjectStore policy part of this change.
 - Define exact predicate identity lookup separately from namespace-prefix enumeration in graph-query.
 - Make limited query results deterministic by sorting the complete candidate set before applying limits.
 
-**BREAKING:** current-layout reconciliation resets the affected derived-index buckets once and rebuilds them from
-already-canonical authoritative ENTITY_STATES behind readiness. If the later benchmark selects raw PREDICATE_INDEX
-keys, that selected derived-index bucket changes format through the same reset/rebuild contract. ENTITY_STATES is
-never reset. The benchmark-selected graph-index worker maximum becomes a validated configuration bound. No dual
-reader, format coexistence, or in-place migration is added.
+**BREAKING:** no product is in production. The pre-v1 release announces the selected layouts, updates every owned
+source/configuration/fixture, wipes all incompatible NATS state including authoritative and derived graph resources,
+restarts, reseeds canonical sources, and reruns affected product e2e. The selected graph-index worker maximum becomes
+a validated configuration bound. This change provides no export, persisted-state audit/preservation, compatibility
+reader, format coexistence, online/in-place migration, or rollback contract.
 
 ## Non-goals
 
@@ -80,16 +81,15 @@ reader, format coexistence, or in-place migration is added.
   wrappers or define graph-local NATS syntax. The `x1_` opaque codec is available only to a separately authorized new
   or changed axis. It does not authorize re-encoding current axes, and current untagged predicate hex remains.
 - Every in-scope current PR #524 layout and constructed filter MUST fit that contract before current-layout activation.
-  Because six-part entity IDs currently have no governed total-length bound, a separate approved entity-ID bound or
-  entity-axis physical-codec contract is an explicit blocking dependency if worst-case in-scope layouts cannot be
-  proven. This change does not silently choose that semantic bound or codec.
+  The canonical `E = 256` entity-ID contract resolves the semantic bound and proves unit maxima; activation remains
+  blocked until the maximum complete keys/filters and exact match sets pass pinned real-NATS conformance.
 - ALIAS remains frozen current behavior and separately owned. Its raw exact key stays in the inventory and maximum
   audit, but an unresolved ALIAS identity bound, codec, or owner-discovery decision blocks only ALIAS-specific changes,
   readiness claims, or migration—not other stores' current-layout reconciliation.
-- PR #532 enforces the framework grammar. Predicate-contract-enforcement task 4.6, the local SemStreams/reference
-  portion of 5.1, and tasks 5.2-5.3 are required before framework current-layout activation. Sister audits and
-  migrations plus predicate archive task 5.7 remain coordinated v1 release gates and prerequisites to any raw-key
-  cutover; they do not block benchmark-only work or framework reconciliation after local clean-state evidence passes.
+- PR #532 enforces the framework grammar. Its local clean-source gates are required before framework current-layout
+  activation. Every owned-reference source/configuration/fixture update, clean NATS wipe/reseed, product e2e, and
+  predicate archive gate remains required before v1 or any raw-key release; no persisted beta-state migration is
+  required or supported.
 - The merged `graph-index-hardening` change must be corrected and archived before this change modifies
   production index behavior or seeds the new baseline `graph-index` specification. That governance work does
   not block benchmark-only code.
@@ -98,8 +98,8 @@ reader, format coexistence, or in-place migration is added.
 
 - **Framework code:** graph-index key codecs, catalog, reconciliation, query handlers, graph-query clients,
   graph-clustering readers, shared NATS KV key-contract helpers, readiness/rebuild integration, metrics, and tests.
-- **Stored data:** only selected derived-index buckets are deleted/recreated and replayed from canonical
-  ENTITY_STATES; this change does not reset authoritative entity state and adds no compatibility reader or
+- **Stored data:** the pre-v1 cutover wipes all incompatible authoritative and derived NATS graph state and reseeds
+  from canonical owned sources; this change adds no compatibility reader, state-preservation obligation, or
   steady-state dual format.
 - **Operators:** documented key shapes, benchmark evidence, resource budgets for wildcard enumeration,
   an enforced graph-index worker maximum, maintenance cutover, and honest not-ready behavior.

@@ -199,34 +199,35 @@ NOT select ObjectStore retention, reachability, reference-counting, or reclamati
 - **THEN** this contract makes no reclamation or ownership decision
 - **AND** the separately governed ObjectStore lifecycle remains authoritative
 
-### Requirement: The beta cutover resets and reingests incompatible persisted identities
+### Requirement: The pre-v1 beta cutover is a clean owned-source break
 
-The breaking beta release MUST audit and migrate SemStreams, participating owned sister repositories, schemas,
-tools, configurations, reference deployments, and exact query fixtures to the canonical contract. A checked-in
-rename ledger MAY document source changes but MUST NOT be loaded as a runtime alias or transformation table.
+The breaking beta release MUST announce the exact entity-ID contract change and update SemStreams plus every owned
+reference repository's source, schemas, tools, configurations, fixtures, and exact query expectations to zero
+violations. Before the new binary/configuration is used, the release procedure MUST wipe all incompatible NATS state,
+restart, reseed from the updated canonical owned sources, and rerun affected product e2e.
 
-Participating sister-repository migration MUST remain a coordinated v1 release and archive gate. It MUST NOT block
-local framework graph-index reconciliation after the entity contract's named local implementation, corpus,
-ObjectStore, replay/readiness, storage-proof, and breaking e2e evidence has passed.
+This change MUST NOT require or provide persisted-state export, preservation, old-state audit, online/in-place
+migration, compatibility readers, alias/rename ledgers, permissive dual contracts, or rollback to beta state. These
+owned-reference source updates and fresh-state product proofs remain coordinated v1 release and archive gates; they
+MUST NOT block local framework graph-index work after its named clean pre-v1 prerequisites pass.
 
-If persisted ENTITY_STATES contains a noncanonical entity ID, authoritative and derived graph consumers MUST remain
-not-ready with a typed reset/reingest requirement. They MUST NOT rewrite malformed state in place, serve a partial
-view, or become ready after a later valid event. Operators MUST export if needed, clear incompatible graph and
-derived-index buckets, restart, and reingest from canonical sources.
+Malformed current writes or entity data injected directly into NATS MUST still fail through the canonical typed
+contract before state or derived output. This fail-fast behavior MUST NOT be presented as support for upgrading old
+persisted state.
 
-#### Scenario: invalid beta state poisons readiness
+#### Scenario: the owned reference fleet cuts over from clean state
 
-- **GIVEN** ENTITY_STATES contains an entity whose stored identity violates the canonical contract
-- **WHEN** graph components start or replay in any order
-- **THEN** graph and query readiness remains reset-required
-- **AND** no compatibility reader or partial derived result exposes the invalid identity
+- **GIVEN** every owned source, configuration, schema, tool, fixture, and expected query is canonical
+- **WHEN** the breaking release wipes incompatible NATS resources, restarts, and reseeds those sources
+- **THEN** every newly persisted identity satisfies the canonical contract
+- **AND** affected product e2e passes without reading or translating beta state
 
-#### Scenario: clean reingest starts a new readiness lifetime
+#### Scenario: directly injected malformed current data fails closed
 
-- **GIVEN** the operator exported if needed and cleared incompatible graph/index buckets
-- **WHEN** the process restarts and canonical sources are reingested
-- **THEN** every persisted identity satisfies the canonical contract
-- **AND** ordinary replay watermarks, not a legacy alias or rewrite, determine readiness
+- **GIVEN** a malformed entity record is written directly to an authoritative NATS input after the clean cutover
+- **WHEN** an authoritative decoder observes it
+- **THEN** the decoder returns the canonical typed structural error before state or projection I/O
+- **AND** no compatibility reader, sanitizer, or partial derived result exposes the malformed identity
 
 ### Requirement: The entity-ID bound gates graph-index fixed-arity activation
 
@@ -238,9 +239,9 @@ shared validators and pinned real-NATS conformance before fixed-arity owner reco
 This dependency MUST NOT authorize entity-ID encoding, predicate-layout selection, or graph-index activation before
 its separate correctness, performance, readiness, and ADR gates pass.
 
-Graph-index production activation MUST depend on the completed local entity-ID contract/API, local zero-violation
-corpus, ObjectStore zero-I/O, invalid-state replay/readiness, key/filter proof, and breaking e2e evidence. It MUST NOT
-depend on this change being archived or on sister-repository migration completion.
+Graph-index framework activation MUST depend on the completed local entity-ID contract/API, local zero-violation
+source corpus, ObjectStore zero-I/O, clean wipe/reseed proof, key/filter proof, and breaking e2e evidence. It MUST NOT
+depend on this change being archived.
 
 #### Scenario: the worst current key fits the shared storage contract
 

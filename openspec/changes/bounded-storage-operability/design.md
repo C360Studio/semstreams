@@ -100,8 +100,9 @@ backoff; permanent policy rejection is terminated and reported through a typed r
 
 Get-or-create is insufficient. Startup and config reconciliation inspect existing stream, KV, and NATS
 ObjectStore backing-stream configuration. Editable drift is repaired; incompatible or unsafe drift blocks
-production readiness with an exact migration command. Enforcement begins in report-only mode, followed by
-startup validation, then write admission.
+production readiness with an exact migration command. Post-v1 enforcement begins with a versioned report-only
+preflight, followed by operator-approved maintenance, startup validation, and finally write admission. No destructive
+step or stricter rejection policy runs before its declared backup, restore, migration, and validation proof passes.
 
 ### 7. Rebuild derived indexes instead of making them semantic retention authorities
 
@@ -109,6 +110,29 @@ Indexes remain rebuildable projections of `ENTITY_STATES`. Maintenance mode stop
 the selected derived buckets, replays current entity state, and exposes a readiness watermark. Query and
 clustering readers fail closed until the generation is complete. This reclaims stale projection debris
 without deciding whether an entity is dead.
+
+### 8. Own post-v1 retained-state upgrades with a versioned manifest
+
+After v1, persisted resources are a production contract rather than disposable beta state. Every breaking storage
+or enforcement upgrade begins with a versioned report-only manifest/schema declaring:
+
+- source and target SemStreams binary/configuration versions;
+- the authoritative retained-resource inventory and expected data shapes;
+- backup/export scope plus restore validation;
+- ordered migration, rebuild, and enforcement steps;
+- readiness and data/query validation gates for each irreversible boundary;
+- the last compatible binary/configuration rollback point and the conditions that make rollback unsafe; and
+- the owner and removal deadline for any temporary migration-only compatibility mechanism.
+
+The storage doctor renders observed configuration/data-shape drift against that manifest and makes no changes in
+report-only mode. An operator approves the exact maintenance plan before mutation. Rollback is allowed only to the
+manifest's last proven compatible binary/configuration while its retained resources remain readable there. Once an
+irreversible format or deletion step crosses that point, the plan switches to forward recovery instead of pretending
+an old binary can safely read new state.
+
+Temporary compatibility may bridge one declared maintenance sequence only. It cannot relax canonical validation,
+become a permissive dual contract, or remain past its removal deadline. No release may ship an indefinite legacy
+reader or dual writer.
 
 ## Risks / Trade-offs
 
@@ -124,17 +148,26 @@ without deciding whether an entity is dead.
   block strict production enforcement only when the selected policy requires them.
 - **Maintenance rebuild pauses topology-dependent queries** -> make readiness visible and provide a
   preflight estimate; generation swaps remain a post-v1 optimization.
+- **A post-v1 migration can strand retained state** -> require versioned inventory, verified backup/restore,
+  ordered readiness/validation gates, and real-NATS upgrade/rollback evidence before destructive enforcement.
+- **Temporary compatibility can become permanent cruft** -> scope it to one manifest, assign an owner and removal
+  deadline, prohibit permissive dual contracts, and block release while an expired bridge remains.
 
 ## Migration Plan
 
-1. Add inventory, metrics, and a doctor report without changing admission behavior.
-2. Classify existing streams and store instances; flag unbounded resources, mixed lifetime classes,
-   dangling references, and configuration drift.
-3. Add streaming writes, honest acknowledgement, per-object limits, and bounded in-flight bytes.
-4. Create separate store instances/buckets, migrate durable current references without expiring them, and
-   verify every reference before removing legacy objects.
-5. Enable soft admission and hard ceilings after a clean preflight; keep rollback as report-only mode.
-6. Add the maintenance index rebuild and run the relevant real-NATS and semantic e2e tiers.
+1. Add inventory, metrics, and a versioned doctor/preflight report without changing admission behavior.
+2. Classify retained streams, KV, indexes, and store instances; report configuration and data-shape drift, unbounded
+   resources, mixed lifetime classes, dangling references, and the source/target version pair.
+3. Generate the operator-approved manifest with backup/export scope, restore proof, ordered migration/rebuild steps,
+   readiness and validation gates, safe rollback point, and removal deadline for temporary compatibility.
+4. Add streaming writes, honest acknowledgement, per-object limits, and bounded in-flight bytes.
+5. Create separate store instances/buckets, migrate durable current references without expiring them, verify every
+   reference, and remove old objects only after the declared validation gate.
+6. Add the maintenance index rebuild and prove the supported real-NATS upgrade plus safe rollback path.
+7. Enable startup validation, soft admission, and hard ceilings in stages only after the report-only preflight,
+   backup/restore check, migration, readiness, and validation gates are clean.
+8. Run relevant semantic/product e2e, remove temporary migration bridges by their deadline, and reject release with
+   an indefinite legacy reader or dual writer.
 
 ## Open Questions
 

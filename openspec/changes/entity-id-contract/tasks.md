@@ -55,7 +55,7 @@
 - [ ] 2.6b Route and test `graph.MatchesAnyIDPrefix`, any fusion engine path beyond FusionNATS, gateways, and every
       additional prefix/scope boundary discovered by task 1.1
 
-## 3. Authoritative Enforcement and Local Migration
+## 3. Authoritative Enforcement and Local Source Cutover
 
 - [ ] 3.1 Add failing tests that exercise every ENTITY_STATES create, update, merge, batch, CAS, Graphable,
       foreign-edge, inference, rule, direct-adapter, and repair lane with invalid entity subjects/references; require
@@ -67,12 +67,12 @@
       `OwnerClaim.Pattern` and `ForeignEdgeClaim.TargetPattern` through the shared pattern API
 - [ ] 3.3a Route projection contracts, rule-watch, gateway, schema, tool, and reference-configuration patterns through
       the shared API before registration, validation, or watcher creation
-- [ ] 3.4 Migrate all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and direct
+- [ ] 3.4 Update all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and direct
       split/match helpers. Explicitly cover federation entity/RETRACT IDs, OMS Observation, SensorML `NewAsset`,
       `StoredMessage.Validate`, gated-DAG `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS, and
       rule expression helpers; remove duplicate regexes, alphabets, arity-only checks, magic limits, and validators
-- [ ] 3.5 Check in the deterministic local literal/pattern/prefix corpus report and reviewed breaking rename ledger;
-      reach zero unexplained violations without loading the ledger at runtime
+- [ ] 3.5 Check in the deterministic local literal/pattern/prefix source corpus report and exact breaking source/config
+      change list; reach zero unexplained violations without creating a runtime alias or transformation ledger
 - [ ] 3.6 Add invalid-input side-effect tests proving no NATS call, retry, callback, watcher/lister creation, raw-ID
       log field, or operation metric occurs before rejection
 - [x] 3.6a Prove the implemented prefix/scope boundaries reject before downstream request, lister, storage, or paid
@@ -98,25 +98,27 @@
       graph-index path, covering watcher, Get, and any additional I/O before activation
 - [ ] 4.4 Run pinned real-NATS Put/Get/Delete/ListKeysFiltered/Watch conformance for maximum valid shapes and exact
       match sets, including shorter, longer, neighboring-owner, and reversed-axis controls
-- [ ] 4.5 Keep production fixed-arity reconciliation inactive until local tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4
+- [ ] 4.5 Keep framework fixed-arity reconciliation inactive until local tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4
       pass plus the dependent graph-index ADR/performance/correctness gates. Record the evidence handoff there; do not
-      require this change to archive or sister tasks 5.4-5.5 to complete for framework reconciliation
+      require this change to archive or owned-reference release tasks 5.4-5.5 to complete for local reconciliation
 
-## 5. Clean Beta Cutover and Sister Migrations
+## 5. Clean Pre-v1 Cutover and Owned Reference Updates
 
-- [ ] 5.1 Add an offline preflight command/report that distinguishes invalid literal IDs, declaration patterns, and
-      query prefixes and prints source/location or persisted-key evidence plus export/reset/reingest guidance
-- [ ] 5.2 Seed invalid preexisting ENTITY_STATES in real NATS and prove graph-ingest, graph-index, query, traversal,
-      clustering, spatial, temporal, embedding, lifecycle, rule, and other replay consumers remain sticky not-ready
-      and emit no partial derived output
-- [ ] 5.3 Prove optional export, clean graph/index bucket reset, process restart, canonical-source reingest, replay
-      watermark recovery, and exact query-result parity with no legacy identity remaining
+- [ ] 5.1 Publish the exact pre-v1 breaking contract and runbook: required owned source/configuration/fixture updates,
+      complete incompatible NATS resource wipe, restart, canonical reseed, and affected product e2e; provide no
+      export, persisted-state audit/preservation, in-place migration, or rollback procedure
+- [ ] 5.2 Reach zero violations in SemStreams local source, configuration, schemas, tools, fixtures, and reference seed
+      data; inject malformed current writes/direct NATS data and prove typed fail-fast rejection without partial state
+      or projection output
+- [ ] 5.3 Wipe all incompatible local NATS state, restart, reseed from canonical owned sources, and prove fresh-state
+      replay watermark recovery plus exact query-result parity with no beta reader, writer, or state dependency
 - [ ] 5.4 Run the shared corpus audit in SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, owned
-      reference deployments, and any additional discovered producer; publish a coordinated participation ledger
-- [ ] 5.5 Migrate participating owned sister literals/patterns, configs, schemas, tools, and contract fixtures to a
-      SemStreams version containing the new contract; require zero violations before the breaking release
-- [ ] 5.6 Verify by source and binary/config audit that no permissive flag, alias/rename table, legacy validator,
-      sanitizer, dual reader/writer, or in-process persisted-state rewriter remains
+      reference deployments, and every additional discovered owned producer; require all to participate
+- [ ] 5.5 Update every owned-reference literal/pattern, configuration, schema, tool, fixture, and seed to a SemStreams
+      version containing the new contract; wipe its incompatible NATS state, reseed it, and require product e2e green
+- [ ] 5.6 Verify by source and binary/config audit that no permissive flag, alias/rename ledger, legacy validator,
+      sanitizer, compatibility reader, dual reader/writer, beta persisted-state migration exporter/inspector, rollback
+      path, or in-process persisted-state rewriter remains
 
 ## 6. Quality, Documentation, and Release Gates
 
@@ -125,10 +127,10 @@
       each failing-test slice
 - [x] 6.2 Run `task lint`, `go test -race ./...`, and `go test ./test/contract/...` for the first reviewed
       implementation slice
-- [ ] 6.2a Run `task schema:generate` and verify no schema/spec drift after schema-facing migration is complete. The
-      first-slice run produced zero schema/spec drift, but this remains open until that migration is complete
-- [ ] 6.3 Run the repository's real-NATS integration suite with `-race`, including canonical replay, invalid poison,
-      reset/reingest, maximum key/filter, and concurrent watcher/list behavior
+- [ ] 6.2a Run `task schema:generate` and verify no schema/spec drift after schema-facing source updates are complete.
+      The first-slice run produced zero schema/spec drift, but this remains open until those updates are complete
+- [ ] 6.3 Run the repository's real-NATS integration suite with `-race`, including canonical replay, malformed current
+      direct-NATS injection, fresh wipe/reseed, maximum key/filter, and concurrent watcher/list behavior
 - [x] 6.4 Run every affected e2e tier before the BREAKING commit lands, at minimum core, structural, agentic, and
       semantic ingest-to-ENTITY_STATES-to-index-to-query paths. Green evidence before commit: `task e2e:core` 2/2;
       `task e2e:structural` 37/37; `task e2e:agentic` scenario success with 3 loops; `task e2e:semantic` 46/46 in
@@ -136,8 +138,9 @@
 - [ ] 6.5 Update `pkg/types` API docs, entity-ID/federation concepts, lifecycle/ownership pattern docs, query-prefix
       and scope docs, schemas/OpenAPI, examples, contributor guidance, and graph-index dependency documentation with
       the literal/pattern/prefix distinction
-- [ ] 6.6 Publish BREAKING changelog and release notes for gh#531 with the grammar, 256-byte boundary, audit command,
-      sister compatibility matrix, optional export, mandatory reset/reingest, rollback, and readiness diagnostics
-- [ ] 6.7 Strict-validate and review this OpenSpec change, then archive it only after implementation, local and sister
-      coordinated v1 release gates, real-NATS proof, and relevant e2e evidence are complete; archive is not a
+- [ ] 6.6 Publish BREAKING changelog and release notes for gh#531 with the grammar, 256-byte boundary, source audit,
+      owned-reference update checklist, exact NATS wipe/reseed commands, and product e2e evidence; promise no beta
+      persisted-state migration export/preservation contract, compatibility reader, online migration, or rollback
+- [ ] 6.7 Strict-validate and review this OpenSpec change, then archive it only after implementation, all owned
+      reference v1 release gates, real-NATS proof, and relevant e2e evidence are complete; archive is not a
       prerequisite to local framework graph-index reconciliation after task 4.5's named local evidence passes

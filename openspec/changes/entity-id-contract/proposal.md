@@ -35,13 +35,15 @@ activation or v1, without carrying a permissive mode or malformed persisted iden
   accepted only on public surfaces that already promise empty means match-all.
 - Validate `ContentStorable.EntityID()` before ObjectStore derives or writes any content or binary object name, so
   an invalid entity cannot leave an orphan before graph-ingest rejects it.
-- Audit and migrate all local producers, schemas, configurations, tests, and owned sister repositories to the same
+- Audit and update all local and owned-reference producers, schemas, configurations, tests, and fixtures to the same
   literal, pattern, and prefix contract.
 - Gate graph-index fixed-arity reconciliation on the implemented bound and complete-key/filter conformance proof.
 
-**BREAKING:** a beta deployment with persisted entity IDs that violate this contract must export if needed, reset
-incompatible graph and derived-index state, and reingest from canonical sources. There is no compatibility mode,
-alias table, normalization shim, dual reader/writer, or in-place rewrite.
+**BREAKING:** no SemStreams product is in production, and every reference design is owned. The pre-v1 cutover
+announces the exact contract break, updates every owned source/configuration/fixture, wipes all incompatible NATS
+state, reseeds from canonical owned sources, and reruns affected product e2e. It does not export, preserve, inspect,
+rewrite, or roll back old beta state. There is no compatibility reader, alias ledger, normalization shim, dual
+reader/writer, or online/in-place migration.
 
 ## Non-goals
 
@@ -56,7 +58,8 @@ alias table, normalization shim, dual reader/writer, or in-place rewrite.
   change.
 - Selecting ObjectStore retention, reachability, reference counting, or reclamation policy; only entity-ID
   validation before entity-derived object-name I/O is in scope.
-- Preserving invalid beta state through runtime aliases, permissive configuration, or an online migration.
+- Preserving, exporting, auditing, or rolling back invalid beta state through runtime aliases, permissive
+  configuration, compatibility readers, or an online/in-place migration.
 
 ## Capabilities
 
@@ -70,24 +73,25 @@ alias table, normalization shim, dual reader/writer, or in-place rewrite.
 - The archived `nats-kv-keys` contract supplies the 1,024-byte literal-key/filter and 64-token limits plus shared
   pre-I/O validation. This change selects the narrower semantic limit `E <= 256`; it does not change the NATS
   contract or claim that 256 is a server maximum.
-- `graph-index-fixed-arity-reconciliation` depends before production activation on this change's completed local
-  contract/API, local corpus, ObjectStore zero-I/O, invalid-state replay, key-budget, and breaking e2e tasks. It does
-  not wait for this change to archive or for sister-repository migrations. With `E = 256`, its maximum current
+- `graph-index-fixed-arity-reconciliation` depends before framework activation on this change's completed local
+  contract/API, local zero-violation corpus, ObjectStore zero-I/O, clean pre-v1 wipe/reseed, key-budget, and breaking
+  e2e tasks. It does not wait for this change to archive. With `E = 256`, its maximum current
   INCOMING key is `2E + 390 = 902` bytes, below 1,024. The graph-index change still owns real-NATS filter performance,
   reconciliation correctness, and its activation ADR.
 - Predicate-contract enforcement remains independent: predicates and entity IDs have different grammars, semantic
-  positions, and migration ledgers even though both participate in complete graph-index keys.
+  positions, and source/configuration inventories even though both participate in complete graph-index keys.
 
 ## Impact
 
 - **Framework code:** `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rules,
   ObjectStore, agentic ID constructors, query/export helpers, schemas, fixtures, and every other literal, pattern,
   or prefix consumer.
-- **Stored data:** invalid beta ENTITY_STATES keys and their derived indexes require clean reset and source reingest;
-  valid exact bytes are preserved.
+- **Stored data:** the pre-v1 cutover wipes all incompatible NATS state and reseeds it from canonical owned sources;
+  this change provides no old-state preservation contract.
 - **Consumers:** SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, reference deployments, and any
   other product that produces entity IDs or declares entity-ID patterns.
-- **Operations:** corpus-audit output, a breaking upgrade ledger, reset/reingest runbook, and readiness refusal for
-  incompatible persisted identities.
+- **Operations:** an exact breaking announcement, owned source/configuration/fixture checklist, NATS wipe/reseed
+  runbook, and recorded fresh-state product e2e.
 - **Delivery:** closes the entity-axis contract tracked by gh#531 and unblocks the separate graph-index activation
-  proof once its named local prerequisites pass. Sister migration remains a coordinated v1 release and archive gate.
+  proof once its named local prerequisites pass. Every owned reference design remains a coordinated v1 release and
+  archive gate.

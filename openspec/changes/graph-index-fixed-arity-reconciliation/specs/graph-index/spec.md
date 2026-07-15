@@ -84,12 +84,11 @@ prerequisite MUST NOT be treated as authorization to change existing KV wrapper 
 
 The proof MUST cover worst-case formulas for every current PR #524 key, token, and filter: PREDICATE,
 PREDICATE_CATALOG, NAME, CONTEXT, INCOMING, OUTGOING, and ALIAS. Representative corpus success MUST NOT substitute for
-a governed maximum for an in-scope store. Because in-scope current layouts embed one or two six-part entity IDs and
-entity IDs lack a governed total length, current-layout activation MUST remain blocked until those keys/filters fit or
-a separately approved entity-ID bound or entity-axis physical-codec contract supplies the missing bound. Graph-index
-MUST NOT invent that semantic bound or codec. ALIAS's raw exact key may span tokens; its audit result MUST be handed to
-the separate ALIAS owner. An unresolved ALIAS bound or codec blocks ALIAS-specific changes, readiness claims, or
-migration, not unrelated stores' current-layout reconciliation.
+a governed maximum for an in-scope store. The canonical entity-ID contract fixes `E = 256` and the unit matrix proves
+bounded entity-bearing maxima of PREDICATE 321, NAME/CONTEXT 710, INCOMING 902, OUTGOING 256, and raw PREDICATE 451
+bytes. Current-layout activation MUST remain blocked until maximum complete keys/filters and exact match sets pass
+pinned real-NATS conformance. ALIAS's representative raw key is not a governed maximum; its result remains owned by
+the separate ALIAS change and does not block unrelated stores.
 
 The versioned decision profile MUST include a 5,000-hot-member CI guard with a 3-second operation limit and a
 21,000-entity full profile with a full INCOMING hub, one all-entity predicate, and 5,000-member NAME/CONTEXT
@@ -125,15 +124,16 @@ each eligible public operation MUST receive a numeric or mechanically decidable 
 Raw keys MAY replace hash plus catalog only when their worst-case key is bounded and they cross one of those
 thresholds for a required public query or proven consumer.
 
-The selected result MUST be recorded in a superseding ADR. SemStreams MUST NOT operate a permanent
-dual-format predicate index. Any cutover MUST delete/recreate only selected derived-index buckets and rebuild them
-from already-canonical authoritative ENTITY_STATES while reads remain not-ready. It MUST NOT reset ENTITY_STATES.
-No reader may recognize the old key format.
+The selected result MUST be recorded in a superseding ADR. SemStreams MUST NOT operate a permanent dual-format
+predicate index. The pre-v1 cutover MUST announce the selected format, update every owned source/configuration/
+fixture, wipe all incompatible authoritative and derived NATS graph state, restart, and reseed canonical sources.
+Fresh derived buckets MUST initialize behind typed not-ready responses. No reader may recognize the old key format,
+and this change MUST NOT provide export, old-state inspection/preservation, in-place migration, or rollback.
 
 #### Scenario: a key-format cutover never serves mixed partial truth
 
 - **GIVEN** the decision selects a new PREDICATE_INDEX representation
-- **WHEN** bucket recreation and clean replay perform the cutover
+- **WHEN** the clean wipe/reseed and fresh derived initialization perform the cutover
 - **THEN** query readiness remains false until the selected representation reaches its authoritative watermark
 - **AND** predicate queries never combine partial old and new formats
 
@@ -180,35 +180,34 @@ target-prefix hard-delete behavior MUST be removed rather than preserved as a co
 - **THEN** every row owned by that source is retracted through the selected bounded source-owned mechanism
 - **AND** unrelated source assertions to the same targets remain
 
-### Requirement: Production activation follows independent decision gates
+### Requirement: Framework activation follows independent decision gates
 
 Current-layout replacement and INCOMING lifecycle behavior MUST remain unchanged until each affected store either
 passes the registered owner-filter profile and is selected by the owner-discovery/INCOMING-ownership ADR or has an
 approved and implemented dependent bounded replacement mechanism. Each selected mechanism MUST be covered by the
-same readiness contract before activation. Every affected in-scope layout and filter MUST also pass the baseline key
-budgets;
-an unresolved in-scope entity-ID bound or entity-axis physical-codec dependency blocks activation. ALIAS remains
+same readiness contract before activation. Every affected in-scope layout and filter MUST pass the `E = 256` unit
+budgets plus maximum real-NATS key/filter and exact-match proof. ALIAS remains
 frozen current behavior and separately owned; its unresolved bound or codec does not block unrelated stores. Once
 those current-layout prerequisites pass, the correctness changes MUST NOT wait for the optional raw-key decision.
 Physical PREDICATE key/catalog and bucket cutover behavior MUST remain unchanged until the separate representation
 benchmark and ADR select a format. Benchmark helpers and tests MAY exercise fixed-position reconciliation before
 either decision.
 
-#### Scenario: an unbounded current entity axis blocks activation
+#### Scenario: unit maxima do not replace real-NATS proof
 
-- **GIVEN** canonical six-part entity IDs have no governed total-length bound
-- **WHEN** worst-case current PREDICATE, NAME, CONTEXT, INCOMING, or OUTGOING keys and filters are evaluated
-- **THEN** representative data passing the budget does not authorize current-layout activation
-- **AND** activation waits for a separately approved entity-ID bound or physical codec without choosing it here
+- **GIVEN** canonical six-part entity IDs are bounded at 256 bytes and every entity-bearing unit maximum fits
+- **WHEN** current-layout activation is evaluated
+- **THEN** unit arithmetic and representative data do not authorize activation
+- **AND** activation waits for pinned real-NATS maximum key/filter exact-match conformance
 
-When current-layout reconciliation activates, PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX, and INCOMING_INDEX
-MUST be recreated and rebuilt from canonical ENTITY_STATES behind typed not-ready responses. This reset MUST remove
-orphan rows owned by entities deleted before activation; ENTITY_STATES MUST remain untouched.
+When current-layout reconciliation activates, the pre-v1 release MUST first wipe incompatible authoritative and
+derived NATS graph resources and reseed canonical owned sources. PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX, and
+INCOMING_INDEX MUST initialize from the freshly reseeded ENTITY_STATES behind typed not-ready responses. This is a
+fresh-state release contract, not an upgrade path for preserved beta state.
 
-Before any affected bucket is cleared, graph-index MUST atomically begin a new rebuild generation that clears sticky
-readiness, resets watermark/enumeration state, and makes every affected query return typed not-ready. Readiness MUST
-remain false until that generation reaches the authoritative replay watermark. A prior generation's ready state
-MUST NOT authorize reads from cleared or partially rebuilt buckets.
+Graph-index MUST start with readiness false before canonical reseed and keep affected queries typed not-ready until
+initial replay reaches the authoritative watermark. Generation-based maintenance rebuild is outside this pre-v1
+cutover and remains owned by `bounded-storage-operability` tasks 5.1-5.4.
 
 #### Scenario: a spike cannot silently activate reconciliation
 
@@ -217,26 +216,26 @@ MUST NOT authorize reads from cleared or partially rebuilt buckets.
 - **THEN** production entity updates and deletes retain the documented shipped behavior
 - **AND** no configuration flag or implicit default can activate the candidate path
 
-#### Scenario: current-layout activation removes historical orphan rows
+#### Scenario: current-layout activation starts from canonical fresh state
 
-- **GIVEN** an old additive index row is owned by an entity no longer present in ENTITY_STATES
-- **WHEN** current-layout reconciliation activates
-- **THEN** the affected derived buckets are recreated before rebuild and readiness
-- **AND** the orphan row cannot survive as ready query truth
+- **GIVEN** owned sources/configurations/fixtures are canonical and incompatible NATS graph resources were wiped
+- **WHEN** current-layout reconciliation starts after canonical reseed
+- **THEN** the affected derived buckets initialize before readiness
+- **AND** no beta authoritative or derived state is read, translated, or preserved
 
-#### Scenario: rebuild generation has no stale-ready window
+#### Scenario: fresh start has no premature-ready window
 
-- **GIVEN** graph-index was ready in generation N
-- **WHEN** generation N+1 begins for derived-bucket recreation
-- **THEN** sticky readiness and watermark state reset before the first bucket is cleared
-- **AND** affected queries remain not-ready through the final replay watermark
+- **GIVEN** incompatible NATS state was wiped and graph-index starts before canonical reseed
+- **WHEN** initial authoritative replay is incomplete
+- **THEN** graph-index readiness remains false
+- **AND** affected queries remain not-ready until the initial authoritative watermark is reached
 
 ### Requirement: Raw predicate keys fit a complete supported key budget
 
 The raw fixed-nine-token candidate MUST NOT be selected until its worst-case key, using the maximum canonical
 predicate and maximum supported six-part entity ID, passes the baseline `nats-kv-keys` literal-token, literal-key,
-arity, and byte budgets and its real-NATS boundary proof. If the entity-ID length bound cannot be established without
-expanding the entity-ID contract, the raw candidate MUST fail this change.
+arity, and byte budgets and its real-NATS boundary proof. The canonical `E = 256` bound proves a 451-byte unit maximum;
+selection remains blocked until pinned real-NATS maximum-key conformance passes.
 
 #### Scenario: maximum supported key is measured before selection
 
