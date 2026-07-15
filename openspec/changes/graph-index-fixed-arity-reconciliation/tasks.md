@@ -20,11 +20,14 @@
       validators. Audit ALIAS's representative raw key separately and hand its missing identity bound or raw/opaque/
       owner-discovery decision to the owning ALIAS change without blocking unrelated reconciliation. Real-NATS maxima
       and the remaining local entity-contract gates in task 0.7 still block activation
-- [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4, 5.1-5.3, 5.6, and 6.1-6.4,
-      including the canonical `E <= 256` API, local zero-violation source corpus, ObjectStore zero-I/O guard, malformed
-      current-write/direct-NATS fail-fast proof, clean local NATS wipe/reseed, maximum key/filter conformance, and
-      breaking e2e. This blocks framework current-layout reconciliation but does not require the entity-ID change to
-      archive. Owned-reference updates and fresh-state product e2e remain coordinated pre-v1 release/archive gates
+- [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4 (including authoritative
+      write task 3.2 and independent replay/direct-poison task 3.2a), local tasks 5.1, 5.2-5.3 and 5.6, and tasks
+      6.1-6.4a (including final 6.2b and 6.4a reruns). Evidence includes the canonical `E <= 256` API, explicit final
+      entity/triple-subject and `@id` reference validation, local zero-violation source corpus, ObjectStore zero-I/O
+      guard, malformed current-write/direct-NATS fail-fast proof, clean local NATS wipe/reseed, maximum key/filter
+      conformance, and final breaking e2e. This blocks framework current-layout reconciliation but does not require the
+      entity-ID change to archive. Owned-product tasks 5.1a, 5.4-5.5 and 6.5a remain coordinated pre-v1 release/archive
+      gates
 
 ## 1. PR #524 Store and Query Contract
 

@@ -96,6 +96,21 @@ Graph-ingest deletes `entityIDRegex`, its `regexp` dependency, and the private 2
 retained for call-site context, delegates to the `pkg/types` parser. Every final ENTITY_STATES candidate is checked
 at the authoritative persistence boundary; earlier handler checks are optional diagnostics, not separate authority.
 
+That complete-candidate check validates the `EntityState.ID` and every persisted `Triple.Subject` as canonical
+explicit literals. The Graphable fact-arrival lane has one narrowly defined projection convenience: before the
+authoritative seam, it may replace an empty projected `Triple.Subject` with the envelope `EntityState.ID`. This is not
+identity-byte normalization: it copies an already-governed identity into an omitted projection field and never trims,
+rewrites, or repairs a non-empty subject. Mutation requests, direct persistence callers, and replay decoders do not
+receive this fill. `MarshalEntityState` and `UnmarshalEntityState` reject any empty or malformed subject that remains.
+
+Entity-reference intent uses the smallest explicit marker already supported by the triple shape. `message` exposes
+`EntityReferenceDatatype = "@id"`, aligned with the JSON-LD resource identifier keyword. A string object that is
+already a canonical entity ID remains structurally recognized as a relationship for current behavior. When
+`Triple.Datatype == message.EntityReferenceDatatype`, the object must be a string and must pass canonical entity-ID
+validation; an explicitly marked non-string or malformed string is a candidate error rather than a literal. No
+vocabulary-global relationship registry or dot-count/six-dot heuristic participates in classification. Other datatype
+values retain their literal datatype meaning.
+
 ### 3. Patterns are a separate six-token language
 
 An entity-ID pattern is not an entity ID and is never accepted by the literal parser. The pattern serializer accepts
@@ -162,6 +177,11 @@ The contract applies to literal constructors, parsers, Graphable subjects, tripl
 as such, mutation requests, ENTITY_STATES persistence/replay, derived-index key construction, ownership/projection
 declarations, lifecycle registrations, rule watch patterns, query-prefix/scope inputs, schemas, tools, and reference
 configurations.
+
+Graphable projection normalization may supply only an omitted triple subject from the envelope identity before final
+candidate validation. All mutation/direct candidates must provide explicit canonical subjects, and replay must accept
+only already-canonical stored candidates. Explicit `@id` objects are always reference-validated; canonical-ID-shaped
+string objects preserve the existing structural relationship behavior.
 
 ObjectStore's `StoreContent` path validates `ContentStorable.EntityID()` before generating or writing any binary or
 content object name. This closes the pre-graph-ingest orphan path but does not select ObjectStore retention,
@@ -250,3 +270,8 @@ NATS data is separately rejected without partial output. ObjectStore proof recor
 writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway inputs before any
 NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites, real-NATS
 integration, and every affected product e2e tier before the BREAKING release lands.
+
+Authoritative-state tests separately prove Graphable empty-subject fill before marshal, rejection of the same empty
+subject on mutation/direct/replay candidates, canonical validation of every explicit subject, current structural
+recognition of canonical-ID-shaped strings, and strict string-plus-canonical validation for `@id` objects. Direct NATS
+poison tests exercise replay failure independently of writer-side checks.

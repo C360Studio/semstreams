@@ -163,6 +163,20 @@ classified entity references, mutation requests, final ENTITY_STATES candidates,
 derived-index key builders, schemas, tools, and reference configurations. Every lifecycle, ownership, projection,
 rule-watch, gateway, and other entity-pattern declaration MUST use the canonical pattern contract before activation.
 
+The authoritative final-candidate marshal seam and every independent authoritative replay decoder MUST validate the
+`EntityState.ID` and every persisted `Triple.Subject` as canonical explicit entity IDs. The Graphable fact-arrival lane
+MAY replace an empty projected triple subject with the envelope `EntityState.ID` before final-candidate validation.
+That fill is projection semantics, not identity normalization: it MUST copy the exact envelope ID and MUST NOT alter a
+non-empty subject. Mutation requests, direct persistence callers, and replay decoders MUST NOT receive this fill, and
+marshal or replay MUST reject every remaining empty or malformed subject.
+
+The repository MUST expose the stable marker `message.EntityReferenceDatatype = "@id"`. A string object that already
+has canonical entity-ID shape MUST remain structurally recognized as an entity relationship for current behavior.
+When `Triple.Datatype` equals `message.EntityReferenceDatatype`, its object MUST be a string and MUST pass canonical
+entity-ID validation. An explicitly marked non-string or malformed string MUST fail the complete candidate. Reference
+classification MUST NOT depend on the global vocabulary registry or on dot-count/six-dot guessing. Other datatype
+values retain their literal datatype semantics.
+
 Invalid new input MUST fail with a typed non-retryable structural error before graph or NATS I/O. SemStreams MUST NOT
 expose a permissive mode, legacy validator, normalization shim, alias table, or dual literal/pattern interpretation.
 
@@ -172,6 +186,34 @@ expose a permissive mode, legacy validator, normalization shim, alias table, or 
 - **WHEN** graph-ingest reaches the authoritative final-candidate persistence seam
 - **THEN** the candidate is rejected before ENTITY_STATES or required projection I/O
 - **AND** no partial graph mutation is visible
+
+#### Scenario: Graphable omission is filled before the authoritative seam
+
+- **GIVEN** a Graphable with a canonical envelope entity ID and one projected triple whose subject is empty
+- **WHEN** the fact-arrival projection is normalized before final-candidate validation
+- **THEN** the triple subject is filled with the exact envelope entity-ID bytes
+- **AND** the authoritative candidate contains an explicit canonical subject without rewriting any non-empty identity
+
+#### Scenario: mutation and replay do not inherit fact-lane subject fill
+
+- **GIVEN** a mutation, direct persistence candidate, or stored replay record with an empty or malformed triple subject
+- **WHEN** authoritative marshal or replay validation runs
+- **THEN** the candidate is rejected through the canonical typed contract
+- **AND** no envelope-derived subject is supplied and no state or projection I/O follows
+
+#### Scenario: an explicitly marked reference cannot degrade into a literal
+
+- **GIVEN** a triple whose datatype is `message.EntityReferenceDatatype` with value `"@id"`
+- **WHEN** its object is non-string or a malformed entity-ID string
+- **THEN** complete-candidate validation rejects the triple
+- **AND** it is not reclassified as a literal by vocabulary lookup or dot-count guessing
+
+#### Scenario: existing canonical string references remain relationships
+
+- **GIVEN** an unmarked string object whose exact bytes are a canonical entity ID
+- **WHEN** relationship classification runs
+- **THEN** it remains structurally recognized as an entity reference
+- **AND** existing graph traversal and referential-integrity behavior is preserved
 
 #### Scenario: configuration cannot disable the contract
 

@@ -87,9 +87,10 @@ reader, format coexistence, online/in-place migration, or rollback contract.
   audit, but an unresolved ALIAS identity bound, codec, or owner-discovery decision blocks only ALIAS-specific changes,
   readiness claims, or migration—not other stores' current-layout reconciliation.
 - PR #532 enforces the framework grammar. Its local clean-source gates are required before framework current-layout
-  activation. Every owned-reference source/configuration/fixture update, clean NATS wipe/reseed, product e2e, and
-  predicate archive gate remains required before v1 or any raw-key release; no persisted beta-state migration is
-  required or supported.
+  activation. The entity-ID dependency includes authoritative final-state ID/subject validation, explicit `@id`
+  reference validation, independent replay/direct-NATS poison failure, and the final local quality/e2e reruns. Every
+  owned-reference source/configuration/fixture update, clean NATS wipe/reseed, product e2e, and predicate archive gate
+  remains required before v1 or any raw-key release; no persisted beta-state migration is required or supported.
 - The merged `graph-index-hardening` change must be corrected and archived before this change modifies
   production index behavior or seeds the new baseline `graph-index` specification. That governance work does
   not block benchmark-only code.

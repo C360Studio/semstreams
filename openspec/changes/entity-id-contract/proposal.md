@@ -27,6 +27,14 @@ activation or v1, without carrying a permissive mode or malformed persisted iden
   is empty input, byte limit, arity, empty segment, first byte, then segment alphabet.
 - Delete graph-ingest's private entity-ID regular expression and 255-byte check; all authoritative ingest paths use
   the shared 256-byte contract.
+- Validate the complete final `EntityState` at the authoritative marshal seam and again at independent replay decode:
+  the state ID and every persisted triple subject are canonical explicit literals. The Graphable fact lane may fill an
+  empty projected triple subject from its envelope `EntityState.ID` before that seam; mutation, direct persistence,
+  and replay inputs receive no such fill and any remaining empty or malformed subject is rejected.
+- Define explicit entity references through the repository constant `message.EntityReferenceDatatype = "@id"`.
+  Canonical-ID-shaped string objects retain their current structural relationship behavior. An object explicitly
+  marked `@id` must be a string and must be a canonical entity ID, so malformed intended references cannot silently
+  become literals. Reference classification does not consult the vocabulary registry or infer intent from dot count.
 - Define entity-ID patterns separately: exactly six tokens, each either the complete token `*` or a canonical
   literal entity-ID segment, with a maximum serialized length of 256 bytes. Patterns are not entity IDs and `>` is
   not valid pattern syntax.
@@ -50,6 +58,8 @@ reader/writer, or online/in-place migration.
 - Changing the six semantic positions or treating a query prefix as a stored, optional, variable-arity, or
   hierarchical-short identity.
 - Lowercasing, trimming, Unicode-normalizing, escaping, hashing, or otherwise rewriting identity bytes.
+- Treating the Graphable fact lane's empty-subject fill as identity normalization. It supplies an omitted projection
+  field from the already-validated envelope identity and never changes non-empty subject bytes.
 - Adding a per-segment size limit; the 256-byte serialized-key maximum is the only size bound below the shared NATS
   key contract.
 - Treating an entity-ID pattern as a stored identity or accepting NATS `>`/embedded wildcard syntax as an entity
