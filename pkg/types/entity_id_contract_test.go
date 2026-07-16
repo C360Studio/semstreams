@@ -109,9 +109,9 @@ func TestParseEntityIDAndStructValidationShareAuthority(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, parsed.String())
 	assert.True(t, parsed.IsValid())
-	assert.False(t, (EntityID{Org: "-bad", Platform: "p", Domain: "d", System: "s", Type: "t", Instance: "i"}).IsValid())
+	assert.False(t, (EntityID{Org: "-bad", Platform: "p", Domain: "d", System: "s", Type: "t", Instance: "i"}).IsValid()) // entity-id-audit:classify intentional-malformed "-bad.p.d.s.t.i" line=112 column=19 surface=go-constructor:EntityID entity_id_invalid:first_byte constructor rejection fixture
 
-	_, err = ParseEntityID("a.b.c.d.e")
+	_, err = ParseEntityID("a.b.c.d.e") // entity-id-audit:classify intentional-malformed "a.b.c.d.e" line=114 column=25 surface=go-call:ParseEntityID entity_id_invalid:arity parser rejection fixture
 	assertEntityIDContractError(t, err, ErrorCodeEntityIDInvalid, EntityIDReasonArity, nil)
 }
 
@@ -147,7 +147,7 @@ func TestValidateEntityIDPattern(t *testing.T) {
 			assertEntityIDContractError(t, err, ErrorCodeEntityIDPatternInvalid, tt.wantReason, nil)
 		})
 	}
-	assert.Error(t, ValidateEntityID("acme.*.robotics.gcs.drone.*"))
+	assert.Error(t, ValidateEntityID("acme.*.robotics.gcs.drone.*")) // entity-id-audit:classify intentional-malformed "acme.*.robotics.gcs.drone.*" line=150 column=35 surface=go-call:ValidateEntityID entity_id_invalid:first_byte concrete ID rejects pattern fixture
 }
 
 func TestMatchEntityIDPattern(t *testing.T) {

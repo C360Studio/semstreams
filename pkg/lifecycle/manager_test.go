@@ -318,7 +318,7 @@ func (lifecycle) fixtureWorkflow() Workflow {
 			"mission.identity.owner-org-id",
 			"mission.annotation.note",
 		},
-		AuditPredicates: AuditSpec{
+		AuditPredicates: AuditSpec{ // predicate-audit:unrelated {"column":20,"surface":"go-field:AuditPredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
 			Source: "mission.transition.source",
 			At:     "mission.transition.at",
 			From:   "mission.transition.from",
@@ -464,7 +464,7 @@ func TestManagerGetRejectsPredicatePoisonWithoutProjection(t *testing.T) {
 		ID: entityID,
 		Triples: []message.Triple{
 			{Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "planning"},
-			{Subject: entityID, Predicate: "legacy.predicate", Object: "old"},
+			{Subject: entityID, Predicate: "legacy.predicate", Object: "old"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 		},
 	})
 
@@ -621,7 +621,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // 5 segments
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=624 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -635,7 +635,8 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 func TestWorkflowValidateRejectsNoncanonicalDeclaredPredicate(t *testing.T) {
 	t.Parallel()
 	bad := lifecycle{}.fixtureWorkflow()
-	bad.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}}
+	bad.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}} // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
+	// predicate-audit:invalid {"location":"line:638:column:56","kind":"stored-predicate","value":"mission.assigned_drone","reason":"arity"}
 
 	err := bad.validate()
 	if err == nil {
@@ -667,23 +668,23 @@ func TestWorkflow_ValidateDisjointness(t *testing.T) {
 	}{
 		{"valid fixture (no many-valued predicates)", func(_ *Workflow) {}, false},
 		{"child-link collides with phase predicate", func(w *Workflow) {
-			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: w.PhasePredicate}}
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.lifecycle.phase"}}
 		}, true},
 		{"child-link collides with an audit predicate", func(w *Workflow) {
-			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: w.AuditPredicates.At}}
+			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.transition.at"}}
 		}, true},
 		{"reference collides with a scalar projection field", func(w *Workflow) {
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.identity.owner-org-id"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.identity.owner-org-id"}} // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
 		}, true},
 		{"reference field matching its own ReferenceSpec is valid", func(w *Workflow) {
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assignment.drone"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assignment.drone"}} // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
 		}, false},
 		{"distinct child-link is fine", func(w *Workflow) {
 			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.child.subtask"}}
 		}, false},
 		{"predicate declared as both child-link and reference", func(w *Workflow) {
 			w.ChildWorkflows = []ChildSpec{{Workflow: "child", LinkPredicate: "mission.child.subtask"}}
-			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.child.subtask"}}
+			w.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.child.subtask"}} // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
 		}, true},
 	}
 

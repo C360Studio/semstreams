@@ -17,6 +17,7 @@ package ownership
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -94,7 +95,7 @@ func TestOwnerClaim_StampPreservesSiblingFields(t *testing.T) {
 	original := OwnerClaim{
 		Owner:      "rule-pack.test",
 		Pattern:    "acme.ops.*.*.*.* ",
-		Predicates: []string{"status.phase"},
+		Predicates: []string{semantictest.Predicate(t, "test", "status", "phase")},
 		Mode:       ModeReplaceOwned,
 	}
 	// Fix the pattern — must be a valid 6-part glob.

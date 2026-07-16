@@ -25,23 +25,23 @@ func TestParsePredicate(t *testing.T) {
 				Property: "entity-id",
 			},
 		},
-		{name: "empty", predicate: "", wantErr: PredicateReasonEmpty},
-		{name: "one part", predicate: "predicate", wantErr: PredicateReasonArity},
-		{name: "two parts", predicate: "agent.run", wantErr: PredicateReasonArity},
-		{name: "four parts", predicate: "agent.run.phase.value", wantErr: PredicateReasonArity},
-		{name: "empty segment", predicate: "agent..phase", wantErr: PredicateReasonSegmentEmpty},
-		{name: "uppercase", predicate: "Agent.run.phase", wantErr: PredicateReasonSegmentStart},
-		{name: "underscore", predicate: "agent.run.entity_id", wantErr: PredicateReasonSegmentCharacter},
-		{name: "wildcard star", predicate: "agent.run.*", wantErr: PredicateReasonSegmentStart},
-		{name: "wildcard greater", predicate: "agent.run.>", wantErr: PredicateReasonSegmentStart},
-		{name: "unicode", predicate: "agent.run.snowman-☃", wantErr: PredicateReasonSegmentCharacter},
-		{name: "leading digit", predicate: "1agent.run.phase", wantErr: PredicateReasonSegmentStart},
-		{name: "leading hyphen", predicate: "agent.run.-phase", wantErr: PredicateReasonSegmentStart},
-		{name: "trailing hyphen", predicate: "agent.run.phase-", wantErr: PredicateReasonSegmentHyphen},
-		{name: "double hyphen", predicate: "agent.run.phase--name", wantErr: PredicateReasonSegmentHyphen},
+		{name: "empty", predicate: "", wantErr: PredicateReasonEmpty},                                      // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		{name: "one part", predicate: "predicate", wantErr: PredicateReasonArity},                          // predicate-audit:invalid {"kind":"stored-predicate","value":"predicate","reason":"arity"}
+		{name: "two parts", predicate: "agent.run", wantErr: PredicateReasonArity},                         // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run","reason":"arity"}
+		{name: "four parts", predicate: "agent.run.phase.value", wantErr: PredicateReasonArity},            // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.phase.value","reason":"arity"}
+		{name: "empty segment", predicate: "agent..phase", wantErr: PredicateReasonSegmentEmpty},           // predicate-audit:invalid {"kind":"stored-predicate","value":"agent..phase","reason":"segment_empty"}
+		{name: "uppercase", predicate: "Agent.run.phase", wantErr: PredicateReasonSegmentStart},            // predicate-audit:invalid {"kind":"stored-predicate","value":"Agent.run.phase","reason":"segment_start"}
+		{name: "underscore", predicate: "agent.run.entity_id", wantErr: PredicateReasonSegmentCharacter},   // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.entity_id","reason":"segment_character"}
+		{name: "wildcard star", predicate: "agent.run.*", wantErr: PredicateReasonSegmentStart},            // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.*","reason":"segment_start"}
+		{name: "wildcard greater", predicate: "agent.run.>", wantErr: PredicateReasonSegmentStart},         // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.>","reason":"segment_start"}
+		{name: "unicode", predicate: "agent.run.snowman-☃", wantErr: PredicateReasonSegmentCharacter},      // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.snowman-☃","reason":"segment_character"}
+		{name: "leading digit", predicate: "1agent.run.phase", wantErr: PredicateReasonSegmentStart},       // predicate-audit:invalid {"kind":"stored-predicate","value":"1agent.run.phase","reason":"segment_start"}
+		{name: "leading hyphen", predicate: "agent.run.-phase", wantErr: PredicateReasonSegmentStart},      // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.-phase","reason":"segment_start"}
+		{name: "trailing hyphen", predicate: "agent.run.phase-", wantErr: PredicateReasonSegmentHyphen},    // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.phase-","reason":"segment_hyphen"}
+		{name: "double hyphen", predicate: "agent.run.phase--name", wantErr: PredicateReasonSegmentHyphen}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.phase--name","reason":"segment_hyphen"}
 		{
 			name:      "segment too long",
-			predicate: "agent.run." + strings.Repeat("a", MaxPredicateSegmentBytes+1),
+			predicate: "agent.run." + strings.Repeat("a", MaxPredicateSegmentBytes+1), // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"segment_length"}
 			wantErr:   PredicateReasonSegmentLength,
 		},
 	}
@@ -78,8 +78,8 @@ func TestParsePredicate(t *testing.T) {
 func TestParsePredicateMaximumLength(t *testing.T) {
 	t.Parallel()
 
-	segment := "a" + strings.Repeat("b", MaxPredicateSegmentBytes-1)
-	predicate := strings.Join([]string{segment, segment, segment}, ".")
+	const segment = "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const predicate = segment + "." + segment + "." + segment
 
 	if len(predicate) != MaxPredicateBytes {
 		t.Fatalf("fixture length = %d, want %d", len(predicate), MaxPredicateBytes)
@@ -93,10 +93,10 @@ func FuzzParsePredicateNeverPanics(f *testing.F) {
 	for _, seed := range []string{
 		"agent.run.phase",
 		"agent.run.entity-id",
-		"",
-		"agent..phase",
-		"agent.run.*",
-		"agent.run.snowman-☃",
+		"",                    // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		"agent..phase",        // predicate-audit:invalid {"kind":"stored-predicate","value":"agent..phase","reason":"segment_empty"}
+		"agent.run.*",         // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.*","reason":"segment_start"}
+		"agent.run.snowman-☃", // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run.snowman-☃","reason":"segment_character"}
 	} {
 		f.Add(seed)
 	}

@@ -11,7 +11,7 @@ func TestRegistry(t *testing.T) {
 	resetRegistry()
 	t.Cleanup(resetRegistry)
 
-	if err := Register(csapiSystem()); err != nil {
+	if err := Register(csapiSystem(t)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -21,7 +21,7 @@ func TestRegistry(t *testing.T) {
 	}
 
 	// Duplicate name is rejected.
-	if err := Register(csapiSystem()); !errors.Is(err, ErrInvalidContract) {
+	if err := Register(csapiSystem(t)); !errors.Is(err, ErrInvalidContract) {
 		t.Errorf("duplicate registration should error, got %v", err)
 	}
 
@@ -64,11 +64,11 @@ func TestMustRegister_PanicsOnDuplicate(t *testing.T) {
 	resetRegistry()
 	t.Cleanup(resetRegistry)
 
-	MustRegister(csapiSystem())
+	MustRegister(csapiSystem(t))
 	defer func() {
 		if recover() == nil {
 			t.Error("MustRegister should panic on a duplicate name")
 		}
 	}()
-	MustRegister(csapiSystem())
+	MustRegister(csapiSystem(t))
 }

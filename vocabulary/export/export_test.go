@@ -134,7 +134,7 @@ func TestSerialize_WithSubjectIRIFunc(t *testing.T) {
 func TestSerialize_SkipsInvalidTriples(t *testing.T) {
 	triples := []message.Triple{
 		{Subject: "", Predicate: "robotics.battery.level", Object: 85.5},
-		{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "", Object: 85.5},
+		{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "", Object: 85.5}, // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "robotics.battery.level", Object: nil},
 		{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "robotics.status.mode", Object: "ok"},
 	}

@@ -9,6 +9,7 @@ package ownership
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,15 +40,15 @@ func TestEpoch_IncarnationOfOwner(t *testing.T) {
 	t.Parallel()
 	ep := newEpoch()
 	ep.Owners["owns"] = ownerEntry{Claims: []OwnerClaim{{
-		Owner: "owns", Pattern: "a.b.c.d.e.*", Predicates: []string{"p"},
+		Owner: "owns", Pattern: "a.b.c.d.e.*", Predicates: []string{semantictest.Predicate(t, "test", "value", "p")},
 		Mode: ModeReplaceOwned, Incarnation: "inc-owns",
 	}}}
 	ep.Owners["appends"] = ownerEntry{Claims: []OwnerClaim{{
-		Owner: "appends", Pattern: "a.b.c.d.e.*", Predicates: []string{"p"},
+		Owner: "appends", Pattern: "a.b.c.d.e.*", Predicates: []string{semantictest.Predicate(t, "test", "value", "p")},
 		Mode: ModeAppendEvidence, Incarnation: "inc-appends",
 	}}}
 	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{
-		Owner: "fe-only", Predicate: "rel", Mode: EdgeStrict,
+		Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "rel"), Mode: EdgeStrict,
 	}}}
 
 	t.Run("owning claim returns incarnation, present", func(t *testing.T) {
@@ -92,7 +93,7 @@ func TestRegistry_ProcessEpochUpdate(t *testing.T) {
 		ep := newEpoch()
 		ep.Version = 7
 		ep.Owners[owner] = ownerEntry{Claims: []OwnerClaim{{
-			Owner: owner, Pattern: "a.b.c.d.e.*", Predicates: []string{"p"},
+			Owner: owner, Pattern: "a.b.c.d.e.*", Predicates: []string{"test.value.p"},
 			Mode: ModeReplaceOwned, Incarnation: incarnation,
 		}}}
 		b, err := ep.encode()

@@ -114,7 +114,7 @@ func TestPredicateFormat(t *testing.T) {
 
 func TestPredicateDomainPrefix(t *testing.T) {
 	// Verify all predicates use the "agent" domain
-	predicates := map[string]string{
+	predicates := map[string]string{ // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		"IntentGoal":           agentic.IntentGoal,
 		"CapabilityName":       agentic.CapabilityName,
 		"DelegationFrom":       agentic.DelegationFrom,
@@ -269,7 +269,7 @@ func TestPredicateCount(t *testing.T) {
 
 	agentic.Register()
 
-	predicates := vocabulary.ListRegisteredPredicates()
+	predicates := vocabulary.ListRegisteredPredicates() // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed:runtime-registry-output"}
 
 	// Expected predicates by category:
 	// Intent: 5, Capability: 7, Delegation: 7, Accountability: 6, Execution: 7, Action: 5, Task: 5
@@ -292,7 +292,7 @@ func TestModelPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	modelPredicates := []struct {
+	modelPredicates := []struct { // predicate-audit:unrelated {"column":21,"surface":"go-assignment:modelPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name      string
 		predicate string
 		dataType  string
@@ -325,7 +325,7 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	loopPredicates := []struct {
+	loopPredicates := []struct { // predicate-audit:unrelated {"column":20,"surface":"go-assignment:loopPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name      string
 		predicate string
 		dataType  string
@@ -367,7 +367,7 @@ func TestStepPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	stepPredicates := []struct {
+	stepPredicates := []struct { // predicate-audit:unrelated {"column":20,"surface":"go-assignment:stepPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name      string
 		predicate string
 		dataType  string
@@ -407,7 +407,7 @@ func TestIdentityPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	identityPredicates := []struct {
+	identityPredicates := []struct { // predicate-audit:unrelated {"column":24,"surface":"go-assignment:identityPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name      string
 		predicate string
 		dataType  string
@@ -438,7 +438,7 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	todoPredicates := []struct {
+	todoPredicates := []struct { // predicate-audit:unrelated {"column":20,"surface":"go-assignment:todoPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name       string
 		predicate  string
 		dataType   string
@@ -477,7 +477,7 @@ func TestScratchPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	scratchPredicates := []struct {
+	scratchPredicates := []struct { // predicate-audit:unrelated {"column":23,"surface":"go-assignment:scratchPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name       string
 		predicate  string
 		dataType   string
@@ -515,7 +515,7 @@ func TestWebPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	webPredicates := []struct {
+	webPredicates := []struct { // predicate-audit:unrelated {"column":19,"surface":"go-assignment:webPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name       string
 		predicate  string
 		dataType   string

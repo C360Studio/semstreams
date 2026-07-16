@@ -43,7 +43,7 @@ func TestParsePredicateNamespace(t *testing.T) {
 }
 
 func TestPredicateAuthority(t *testing.T) {
-	registered := "authority-test.declared.value"
+	const registered = "authority-test.declared.value"
 	Register(registered)
 
 	authority, err := NewPredicateAuthority(
@@ -60,14 +60,14 @@ func TestPredicateAuthority(t *testing.T) {
 		predicate string
 		wantErr   bool
 	}{
-		{name: "registered named", producer: "unknown", predicate: registered},
-		{name: "registered anonymous", predicate: registered},
+		{name: "registered named", producer: "unknown", predicate: "authority-test.declared.value"},
+		{name: "registered anonymous", predicate: "authority-test.declared.value"},
 		{name: "domain delegation", producer: "domain-producer", predicate: "product.any-category.new-value"},
 		{name: "category delegation", producer: "category-producer", predicate: "shared.metrics.new-value"},
 		{name: "category delegation does not cross category", producer: "category-producer", predicate: "shared.other.new-value", wantErr: true},
 		{name: "anonymous cannot use delegation", predicate: "product.any-category.new-value", wantErr: true},
 		{name: "other producer cannot use delegation", producer: "other", predicate: "product.any-category.new-value", wantErr: true},
-		{name: "malformed remains invalid", producer: "domain-producer", predicate: "product.any_category.new-value", wantErr: true},
+		{name: "malformed remains invalid", producer: "domain-producer", predicate: "product.any_category.new-value", wantErr: true}, // predicate-audit:invalid {"kind":"stored-predicate","value":"product.any_category.new-value","reason":"segment_character"}
 	}
 
 	for _, tt := range tests {

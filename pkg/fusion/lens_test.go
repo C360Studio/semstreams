@@ -19,10 +19,10 @@ type refLens struct{}
 
 const (
 	refTitlePredicate    = "dc.terms.title"
-	refKindPredicate     = "entity.kind"
-	refPathPredicate     = "source.path"
-	refStorageInstancePr = "content.storage_instance"
-	refStorageKeyPr      = "content.storage_key"
+	refKindPredicate     = "entity.metadata.kind"
+	refPathPredicate     = "source.code.path"
+	refStorageInstancePr = "content.storage.instance"
+	refStorageKeyPr      = "content.storage.key"
 )
 
 func (refLens) Name() string { return "ref" }

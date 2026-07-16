@@ -3,12 +3,14 @@ package fusion
 import (
 	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestSubQuery_Validate_HappyPaths(t *testing.T) {
 	cases := []SubQuery{
-		{Type: SubQueryTypeEntityState, Tier: "0", Source: "x", EntityState: &EntityStateArgs{EntityIDs: []string{"a"}}},
-		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "x", PredicateWalk: &PredicateWalkArgs{Seeds: []string{"a"}}},
+		{Type: SubQueryTypeEntityState, Tier: "0", Source: "x", EntityState: &EntityStateArgs{EntityIDs: []string{semantictest.EntityID(t, "test", "semstreams", "fusion", "subquery", "entity", "a")}}},
+		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "x", PredicateWalk: &PredicateWalkArgs{Seeds: []string{semantictest.EntityID(t, "test", "semstreams", "fusion", "subquery", "entity", "a")}}},
 		{Type: SubQueryTypeTemporalRange, Tier: "0", Source: "x", TemporalRange: &TemporalRangeArgs{Start: "2026-06-02T00:00:00Z", End: "2026-06-03T00:00:00Z"}},
 		{Type: SubQueryTypeBM25, Tier: "1", Source: "x", BM25: &BM25Args{Query: "q"}},
 	}
@@ -51,7 +53,7 @@ func TestSubQuery_Validate_Rejects(t *testing.T) {
 func TestEvidence_Validate_HappyPaths(t *testing.T) {
 	for _, tier := range []string{"0", "1", "2"} {
 		t.Run("tier_"+tier, func(t *testing.T) {
-			e := &Evidence{EntityID: "x", Tier: tier, Source: "s"}
+			e := &Evidence{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "evidence", "entity", "x"), Tier: tier, Source: "s"}
 			if err := e.Validate(); err != nil {
 				t.Errorf("Validate(tier=%q) = %v, want nil", tier, err)
 			}
@@ -66,8 +68,8 @@ func TestEvidence_Validate_Rejects(t *testing.T) {
 		wantSub string
 	}{
 		{"missing entity_id", Evidence{Tier: "0", Source: "x"}, "entity_id"},
-		{"missing source", Evidence{EntityID: "e", Tier: "0"}, "source"},
-		{"bad tier", Evidence{EntityID: "e", Tier: "bogus", Source: "x"}, "tier"},
+		{"missing source", Evidence{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "evidence", "entity", "missing-source"), Tier: "0"}, "source"},
+		{"bad tier", Evidence{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "evidence", "entity", "bad-tier"), Tier: "bogus", Source: "x"}, "tier"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

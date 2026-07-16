@@ -3,20 +3,16 @@ package projection
 import "github.com/c360studio/semstreams/vocabulary"
 
 func init() {
-	for _, predicate := range []string{
-		"a.b.c",
-		"cs-api.deployment.deployed-systems",
-		"cs-api.deployment.parent",
-		"duplicate.value.predicate",
-		"sensorml.component.is-hosted-by",
-		"sensorml.process.description",
-		"sensorml.process.label",
-		"sensorml.process.position",
-		"sensorml.process.type",
-		"sensorml.process.uid",
-		"shared.value.p",
-		"test.value.p",
-	} {
-		vocabulary.Register(predicate)
-	}
+	vocabulary.Register("a.b.c")
+	vocabulary.Register("cs-api.deployment.deployed-systems")
+	vocabulary.Register("cs-api.deployment.parent")
+	vocabulary.Register("duplicate.value.predicate")
+	vocabulary.Register("sensorml.component.is-hosted-by")
+	vocabulary.Register("sensorml.process.description")
+	vocabulary.Register("sensorml.process.label")
+	vocabulary.Register("sensorml.process.position")
+	vocabulary.Register("sensorml.process.type")
+	vocabulary.Register("sensorml.process.uid")
+	vocabulary.Register("shared.value.p")
+	vocabulary.Register("test.value.p")
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -82,7 +83,7 @@ func TestParseSchemaTypeRejectsNoncanonicalTagPredicate(t *testing.T) {
 	t.Parallel()
 	type bad struct {
 		ID    string `json:"id" lifecycle:"id"`
-		Phase string `json:"phase" lifecycle:"phase,predicate=mission.phase"`
+		Phase string `json:"phase" lifecycle:"phase,predicate=mission.phase"` // predicate-audit:invalid {"kind":"stored-predicate","value":"mission.phase","reason":"arity"}
 	}
 	if _, err := parseSchemaType(reflect.TypeOf(bad{})); err == nil {
 		t.Fatal("expected noncanonical lifecycle tag predicate to be rejected")
@@ -96,18 +97,20 @@ func TestProjectTriples_PopulatesScalarAndTime(t *testing.T) {
 		t.Fatalf("parseSchemaType: %v", err)
 	}
 	now := time.Date(2026, 5, 28, 16, 0, 0, 0, time.UTC)
+	entityID := semantictest.EntityID(t, "test", "semstreams", "lifecycle", "projection", "mission", "one")
+	droneID := semantictest.EntityID(t, "test", "semstreams", "lifecycle", "projection", "drone", "one")
 	triples := []message.Triple{
-		{Subject: "x", Predicate: "mission.lifecycle.phase", Object: "flying"},
-		{Subject: "x", Predicate: "mission.identity.owner-org-id", Object: "acme"},
-		{Subject: "x", Predicate: "mission.transition.at", Object: now.Format(time.RFC3339Nano)},
-		{Subject: "x", Predicate: "mission.assignment.drone", Object: "c360.x.fleet.x.drone.001"},
-		{Subject: "x", Predicate: "some.other.predicate", Object: "ignored"},
+		{Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "flying"},
+		{Subject: entityID, Predicate: "mission.identity.owner-org-id", Object: "acme"},
+		{Subject: entityID, Predicate: "mission.transition.at", Object: now.Format(time.RFC3339Nano)},
+		{Subject: entityID, Predicate: "mission.assignment.drone", Object: droneID},
+		{Subject: entityID, Predicate: "some.other.predicate", Object: "ignored"},
 	}
 	target := &fixtureMission{}
-	if err := projectTriples(sm, "x.lifecycle.gcs.mission.001", triples, target); err != nil {
+	if err := projectTriples(sm, entityID, triples, target); err != nil {
 		t.Fatalf("projectTriples: %v", err)
 	}
-	if target.ID != "x.lifecycle.gcs.mission.001" {
+	if target.ID != entityID {
 		t.Errorf("ID not populated from entityID: %q", target.ID)
 	}
 	if target.PhaseF != "flying" {
@@ -119,7 +122,7 @@ func TestProjectTriples_PopulatesScalarAndTime(t *testing.T) {
 	if !target.LastAt.Equal(now) {
 		t.Errorf("LastAt wrong: %v vs %v", target.LastAt, now)
 	}
-	if target.DroneID != "c360.x.fleet.x.drone.001" {
+	if target.DroneID != droneID {
 		t.Errorf("DroneID wrong: %q", target.DroneID)
 	}
 }
@@ -131,11 +134,11 @@ func TestProjectStructToTriples_SkipsReadonlyAndID(t *testing.T) {
 		t.Fatalf("parseSchemaType: %v", err)
 	}
 	src := &fixtureMission{
-		ID:         "x.lifecycle.gcs.mission.001",
+		ID:         semantictest.EntityID(t, "test", "semstreams", "lifecycle", "projection", "mission", "two"),
 		PhaseF:     "planning",
 		OwnerOrgID: "acme",
 		Note:       "test",
-		DroneID:    "should-not-emit",
+		DroneID:    semantictest.EntityID(t, "test", "semstreams", "lifecycle", "projection", "drone", "two"),
 		LastAt:     time.Now(),
 	}
 	emitted := projectStructToTriples(sm, src.ID, src)

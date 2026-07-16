@@ -95,19 +95,19 @@ func TestValidatePredicateFixtureRejectsExactInvalidInput(t *testing.T) {
 	}{
 		{
 			name:       "uppercase is not lowered",
-			parts:      [3]string{"Agentic", "loop", "state"},
+			parts:      [3]string{"Agentic", "loop", "state"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"Agentic.loop.state","reason":"segment_start"}
 			want:       "Agentic.loop.state",
 			wantReason: vocabulary.PredicateReasonSegmentStart,
 		},
 		{
 			name:       "underscore is not replaced",
-			parts:      [3]string{"agentic", "loop_state", "current"},
+			parts:      [3]string{"agentic", "loop_state", "current"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agentic.loop_state.current","reason":"segment_character"}
 			want:       "agentic.loop_state.current",
 			wantReason: vocabulary.PredicateReasonSegmentCharacter,
 		},
 		{
 			name:       "trailing hyphen is not trimmed",
-			parts:      [3]string{"agentic", "loop", "state-"},
+			parts:      [3]string{"agentic", "loop", "state-"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agentic.loop.state-","reason":"segment_hyphen"}
 			want:       "agentic.loop.state-",
 			wantReason: vocabulary.PredicateReasonSegmentHyphen,
 		},

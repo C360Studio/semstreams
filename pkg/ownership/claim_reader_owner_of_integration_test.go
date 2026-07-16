@@ -93,7 +93,7 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	if err := reg.RegisterOwner(ctx, Registration{
 		Owner: "evidence-writer",
 		Claims: []OwnerClaim{
-			oc("evidence-writer", sysPat, ModeAppendEvidence, "web.relation.backlink"),
+			OwnerClaim{Owner: "evidence-writer", Pattern: sysPat, Mode: ModeAppendEvidence, Predicates: []string{"web.relation.backlink"}},
 		},
 	}); err != nil {
 		t.Fatalf("RegisterOwner(append-evidence): %v", err)

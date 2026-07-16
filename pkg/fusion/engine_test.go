@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 // fakeGraphQuery records what was called and returns canned evidence
@@ -94,13 +96,13 @@ func quietLogger() *slog.Logger {
 
 func TestFuse_HappyPath(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut:   []Evidence{{EntityID: "e1", Score: 0.9}},
-		predicateWalkOut: []Evidence{{EntityID: "e2", Score: 0.7}},
-		bm25Out:          []Evidence{{EntityID: "e3", Score: 0.5}},
+		entityStateOut:   []Evidence{{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e1"), Score: 0.9}},
+		predicateWalkOut: []Evidence{{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e2"), Score: 0.7}},
+		bm25Out:          []Evidence{{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e3"), Score: 0.5}},
 	}
 	queries := []SubQuery{
-		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
-		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "pw", PredicateWalk: &PredicateWalkArgs{Seeds: []string{"e1"}}},
+		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e1")}}},
+		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "pw", PredicateWalk: &PredicateWalkArgs{Seeds: []string{semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e1")}}},
 		{Type: SubQueryTypeBM25, Tier: "1", Source: "bm", BM25: &BM25Args{Query: "q"}},
 	}
 	opts := FuseOptions{BudgetTokens: 10000}
@@ -124,11 +126,11 @@ func TestFuse_HappyPath(t *testing.T) {
 
 func TestFuse_PerSubqueryErrorIsDegrading(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut: []Evidence{{EntityID: "e1", Score: 0.9}},
+		entityStateOut: []Evidence{{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e1"), Score: 0.9}},
 		bm25Err:        errors.New("BM25 down"),
 	}
 	queries := []SubQuery{
-		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
+		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{semantictest.EntityID(t, "test", "semstreams", "fusion", "engine", "entity", "e1")}}},
 		{Type: SubQueryTypeBM25, Tier: "1", Source: "bm", BM25: &BM25Args{Query: "q"}},
 	}
 	opts := FuseOptions{BudgetTokens: 10000}
@@ -171,9 +173,9 @@ func TestFuse_NilClientErrors(t *testing.T) {
 
 func TestDedupEvidence_TierZeroWinsOverTierOne(t *testing.T) {
 	in := []Evidence{
-		{EntityID: "e1", Tier: "1", Source: "bm25", Score: 0.9}, // tier 1, high score
-		{EntityID: "e1", Tier: "0", Source: "es", Score: 0.3},   // tier 0, low score — should win
-		{EntityID: "e2", Tier: "0", Source: "pw", Score: 0.7},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "dedup", "entity", "e1"), Tier: "1", Source: "bm25", Score: 0.9}, // tier 1, high score
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "dedup", "entity", "e1"), Tier: "0", Source: "es", Score: 0.3},   // tier 0, low score — should win
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "dedup", "entity", "e2"), Tier: "0", Source: "pw", Score: 0.7},
 	}
 	out := dedupEvidence(in)
 	if len(out) != 2 {
@@ -181,7 +183,7 @@ func TestDedupEvidence_TierZeroWinsOverTierOne(t *testing.T) {
 	}
 	var foundE1 Evidence
 	for _, e := range out {
-		if e.EntityID == "e1" {
+		if e.EntityID == "test.semstreams.fusion.dedup.entity.e1" {
 			foundE1 = e
 		}
 	}
@@ -192,8 +194,8 @@ func TestDedupEvidence_TierZeroWinsOverTierOne(t *testing.T) {
 
 func TestDedupEvidence_HigherScoreWinsWithinTier(t *testing.T) {
 	in := []Evidence{
-		{EntityID: "e1", Tier: "0", Source: "a", Score: 0.3},
-		{EntityID: "e1", Tier: "0", Source: "b", Score: 0.9}, // should win
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "score", "entity", "e1"), Tier: "0", Source: "a", Score: 0.3},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "score", "entity", "e1"), Tier: "0", Source: "b", Score: 0.9}, // should win
 	}
 	out := dedupEvidence(in)
 	if len(out) != 1 {
@@ -206,8 +208,8 @@ func TestDedupEvidence_HigherScoreWinsWithinTier(t *testing.T) {
 
 func TestDedupEvidence_SkipsEmptyEntityID(t *testing.T) {
 	in := []Evidence{
-		{EntityID: "", Tier: "0", Source: "x"},
-		{EntityID: "e1", Tier: "0", Source: "x"},
+		{EntityID: "", Tier: "0", Source: "x"}, // entity-id-audit:classify intentional-malformed "" line=211 column=14 surface=go-field:.EntityID entity_id_invalid:empty dedup rejection fixture
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "empty", "entity", "e1"), Tier: "0", Source: "x"},
 	}
 	out := dedupEvidence(in)
 	if len(out) != 1 {
@@ -219,14 +221,14 @@ func TestDedupEvidence_SkipsEmptyEntityID(t *testing.T) {
 
 func TestSortEvidence_TierThenScoreThenID(t *testing.T) {
 	ev := []Evidence{
-		{EntityID: "z", Tier: "1", Score: 0.9},
-		{EntityID: "a", Tier: "0", Score: 0.3},
-		{EntityID: "b", Tier: "0", Score: 0.9},
-		{EntityID: "c", Tier: "0", Score: 0.9},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "sort", "entity", "z"), Tier: "1", Score: 0.9},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "sort", "entity", "a"), Tier: "0", Score: 0.3},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "sort", "entity", "b"), Tier: "0", Score: 0.9},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "sort", "entity", "c"), Tier: "0", Score: 0.9},
 	}
 	sortEvidence(ev)
 	// Want: Tier 0 sorted by score-desc then ID-asc, then Tier 1.
-	wantOrder := []string{"b", "c", "a", "z"}
+	wantOrder := []string{"test.semstreams.fusion.sort.entity.b", "test.semstreams.fusion.sort.entity.c", "test.semstreams.fusion.sort.entity.a", "test.semstreams.fusion.sort.entity.z"}
 	for i, want := range wantOrder {
 		if ev[i].EntityID != want {
 			t.Errorf("sortEvidence[%d]: got %q, want %q (full order: %v)", i, ev[i].EntityID, want, evIDs(ev))
@@ -245,26 +247,25 @@ func evIDs(ev []Evidence) []string {
 // --- budget enforcement ---
 
 func TestEnforceBudget_DropsLowestRanked(t *testing.T) {
-	// 3 evidence entries, each ~5 tokens (estimateEvidenceTokens rough).
-	// Budget 8 should keep 1.
+	// Three canonical entity-ID evidence entries exceed a tight 24-token budget.
 	in := []Evidence{
-		{EntityID: "first", Tier: "0", Source: "src", SnippetText: "snip"},
-		{EntityID: "secnd", Tier: "0", Source: "src", SnippetText: "snip"},
-		{EntityID: "third", Tier: "0", Source: "src", SnippetText: "snip"},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "budget", "entity", "first"), Tier: "0", Source: "src", SnippetText: "snip"},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "budget", "entity", "second"), Tier: "0", Source: "src", SnippetText: "snip"},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "budget", "entity", "third"), Tier: "0", Source: "src", SnippetText: "snip"},
 	}
-	out, used := enforceBudget(in, 8)
+	out, used := enforceBudget(in, 24)
 	if len(out) < 1 || len(out) > 2 {
 		t.Errorf("budget enforcement should keep 1-2 evidence under tight budget; got %d (used=%d)", len(out), used)
 	}
-	if used > 8 {
-		t.Errorf("used %d exceeded budget 8", used)
+	if used > 24 {
+		t.Errorf("used %d exceeded budget 24", used)
 	}
 }
 
 func TestEnforceBudget_GenerousBudgetKeepsAll(t *testing.T) {
 	in := []Evidence{
-		{EntityID: "e1", Tier: "0", Source: "x"},
-		{EntityID: "e2", Tier: "1", Source: "x"},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "generous", "entity", "e1"), Tier: "0", Source: "x"},
+		{EntityID: semantictest.EntityID(t, "test", "semstreams", "fusion", "generous", "entity", "e2"), Tier: "1", Source: "x"},
 	}
 	out, _ := enforceBudget(in, 1_000_000)
 	if len(out) != 2 {
@@ -327,5 +328,5 @@ func (g *countingDelayedGQ) TemporalRange(_ context.Context, _ TemporalRangeArgs
 func (g *countingDelayedGQ) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]Evidence, error) {
 	atomic.AddInt64(&g.calls, 1)
 	time.Sleep(g.delay)
-	return []Evidence{{EntityID: "e", Tier: tier, Source: source, Score: 0.5}}, nil
+	return []Evidence{{EntityID: "test.semstreams.fusion.concurrent.entity.e", Tier: tier, Source: source, Score: 0.5}}, nil
 }

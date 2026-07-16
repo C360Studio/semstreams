@@ -68,7 +68,7 @@ func TestHistoryReturnsNoPartialEventsWhenAnyRevisionIsPoisoned(t *testing.T) {
 }
 
 func poisonedLifecycleState(entityID string) []byte {
-	return []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"planning"}]}`)
+	return []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"planning"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 }
 
 func assertResetReason(t *testing.T, err error, want graph.StateResetReason) {

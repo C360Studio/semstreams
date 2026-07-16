@@ -57,7 +57,7 @@ func TestTriple_IsRelationship(t *testing.T) {
 			name: "relationship triple with valid entity ID",
 			triple: Triple{
 				Subject:    "c360.platform1.robotics.mav1.drone.0",
-				Predicate:  "robotics.component.powered_by",
+				Predicate:  semantictest.Predicate(t, "robotics", "component", "powered-by"),
 				Object:     "c360.platform1.robotics.mav1.battery.0",
 				Source:     "system",
 				Timestamp:  now,

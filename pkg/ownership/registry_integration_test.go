@@ -33,10 +33,6 @@ func newTestRegistry(t *testing.T) (*Registry, *natsclient.KVStore, context.Cont
 	return NewRegistry(claims, presence, nil), claims, ctx
 }
 
-func reg(owner, pattern string, preds ...string) Registration {
-	return Registration{Owner: owner, Claims: []OwnerClaim{oc(owner, pattern, ModeReplaceOwned, preds...)}}
-}
-
 // readEpoch reads and decodes the current epoch for assertions.
 func readEpoch(t *testing.T, claims *natsclient.KVStore, ctx context.Context) *epoch {
 	t.Helper()
@@ -57,12 +53,12 @@ func readEpoch(t *testing.T, claims *natsclient.KVStore, ctx context.Context) *e
 func TestRegistry_RegisterAndReject(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "sensorml.process.label")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}}}); err != nil {
 		t.Fatalf("first registration should succeed: %v", err)
 	}
 
 	// Overlapping owner on the same cell → reject, epoch unchanged.
-	err := r.RegisterOwner(ctx, reg("other", sysPat, "sensorml.process.label"))
+	err := r.RegisterOwner(ctx, Registration{Owner: "other", Claims: []OwnerClaim{OwnerClaim{Owner: "other", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}}})
 	if !errors.Is(err, ErrOwnershipOverlap) {
 		t.Fatalf("overlapping registration should fail with ErrOwnershipOverlap, got %v", err)
 	}
@@ -72,7 +68,7 @@ func TestRegistry_RegisterAndReject(t *testing.T) {
 	}
 
 	// Disjoint id-space → allowed.
-	if err := r.RegisterOwner(ctx, reg("other", depPat, "sensorml.process.label")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "other", Claims: []OwnerClaim{OwnerClaim{Owner: "other", Pattern: depPat, Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}}}); err != nil {
 		t.Fatalf("disjoint registration should succeed: %v", err)
 	}
 
@@ -92,11 +88,11 @@ func TestRegistry_Idempotent(t *testing.T) {
 	r, _, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "test.value.a")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.a"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	// Re-register the SAME owner with a different predicate set → replaces, no overlap.
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "test.value.b")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.b"}}}}); err != nil {
 		t.Fatalf("re-registration of same owner should succeed: %v", err)
 	}
 
@@ -119,7 +115,7 @@ func TestRegistry_Idempotent(t *testing.T) {
 func TestRegistry_RegisterStampsIncarnationOnStoredClaim(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "sensorml.process.label")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}}}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -151,7 +147,7 @@ func TestRegistry_OwnerOf(t *testing.T) {
 		t.Errorf("empty registry OwnerOf should be false,nil; got ok=%v err=%v", ok, err)
 	}
 
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "sensorml.process.label")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	owner, ok, err := r.OwnerOf(ctx, entity, "sensorml.process.label")
@@ -172,7 +168,7 @@ func TestRegistry_ForeignEdgeClaimFor(t *testing.T) {
 	if err := r.RegisterOwner(ctx, Registration{
 		Owner: "sensorml-producer",
 		ForeignEdges: []ForeignEdgeClaim{{
-			Owner: "sensorml-producer", Predicate: isHostedBy, Mode: EdgeNoBirthStub,
+			Owner: "sensorml-producer", Predicate: "sensorml.component.is-hosted-by", Mode: EdgeNoBirthStub,
 			Producer: "sensorml.asset.v1", TargetPattern: sysPat,
 		}},
 	}); err != nil {
@@ -198,7 +194,7 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "test.value.p")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "owner-a", Claims: []OwnerClaim{OwnerClaim{Owner: "owner-a", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.p"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	// owner-a "crashes": its heartbeat key disappears.
@@ -208,7 +204,7 @@ func TestRegistry_StaleCompaction(t *testing.T) {
 
 	// owner-b claims the SAME cell. Without compaction this overlaps owner-a;
 	// with compaction owner-a is evicted first and owner-b succeeds.
-	if err := r.RegisterOwner(ctx, reg("owner-b", sysPat, "test.value.p")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "owner-b", Claims: []OwnerClaim{OwnerClaim{Owner: "owner-b", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.p"}}}}); err != nil {
 		t.Fatalf("owner-b should claim the freed cell after owner-a compaction: %v", err)
 	}
 
@@ -233,7 +229,7 @@ func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
 	r, claims, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
-	if err := r.RegisterOwner(ctx, reg("owner-a", sysPat, "test.value.p")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "owner-a", Claims: []OwnerClaim{OwnerClaim{Owner: "owner-a", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.p"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	// owner-a's presence key ages out (TTL expiry, sans wait)...
@@ -247,7 +243,7 @@ func TestRegistry_HeartbeatedOwnerSurvivesCompaction(t *testing.T) {
 
 	// owner-b registers on a DISJOINT cell, triggering a compaction sweep.
 	// owner-a's presence is live again → it must survive.
-	if err := r.RegisterOwner(ctx, reg("owner-b", depPat, "test.value.p")); err != nil {
+	if err := r.RegisterOwner(ctx, Registration{Owner: "owner-b", Claims: []OwnerClaim{OwnerClaim{Owner: "owner-b", Pattern: depPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.p"}}}}); err != nil {
 		t.Fatalf("register owner-b: %v", err)
 	}
 
@@ -276,7 +272,7 @@ func TestRegistry_ConcurrentDisjoint(t *testing.T) {
 			defer wg.Done()
 			owner := fmt.Sprintf("owner-%d", i)
 			pattern := fmt.Sprintf("c360.semconnect.systems.csapi.type%d.*", i)
-			errs[i] = r.RegisterOwner(ctx, reg(owner, pattern, "test.value.p"))
+			errs[i] = r.RegisterOwner(ctx, Registration{Owner: owner, Claims: []OwnerClaim{OwnerClaim{Owner: owner, Pattern: pattern, Mode: ModeReplaceOwned, Predicates: []string{"test.value.p"}}}})
 		}(i)
 	}
 	wg.Wait()

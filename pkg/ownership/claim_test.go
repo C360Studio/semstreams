@@ -4,10 +4,12 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestOwnerClaim_Validate(t *testing.T) {
-	good := oc("cs-api", "c360.semconnect.systems.csapi.system.*", ModeReplaceOwned, "sensorml.process.label")
+	good := OwnerClaim{Owner: "cs-api", Pattern: "c360.semconnect.systems.csapi.system.*", Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("well-formed claim should validate: %v", err)
 	}
@@ -16,15 +18,15 @@ func TestOwnerClaim_Validate(t *testing.T) {
 		name  string
 		claim OwnerClaim
 	}{
-		{"empty owner", oc("", "a.b.c.d.e.f", ModeReplaceOwned, "p")},
-		{"5-part pattern", oc("o", "a.b.c.d.e", ModeReplaceOwned, "p")},
-		{"bare star pattern", oc("o", "*", ModeReplaceOwned, "p")},
-		{"partial wildcard pattern", oc("o", "a.b.c.d.e.foo*", ModeReplaceOwned, "sensorml.process.label")},
-		{"leading underscore pattern", oc("o", "a.b.c.d.e._bad", ModeReplaceOwned, "sensorml.process.label")},
-		{"no predicates", oc("o", "a.b.c.d.e.f", ModeReplaceOwned)},
-		{"empty predicate", oc("o", "a.b.c.d.e.f", ModeReplaceOwned, "")},
-		{"wildcard predicate", oc("o", "a.b.c.d.e.f", ModeReplaceOwned, "agent.*")},
-		{"invalid mode", oc("o", "a.b.c.d.e.f", WriteMode("bogus"), "p")},
+		{"empty owner", OwnerClaim{Owner: "", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		{"5-part pattern", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		{"bare star pattern", OwnerClaim{Owner: "o", Pattern: "*", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		{"partial wildcard pattern", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e.foo*", Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}},
+		{"leading underscore pattern", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e._bad", Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}}},
+		{"no predicates", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned}},
+		{"empty predicate", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{""}}},           // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		{"wildcard predicate", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{"agent.*"}}}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.*","reason":"arity"}
+		{"invalid mode", OwnerClaim{Owner: "o", Pattern: "a.b.c.d.e.f", Mode: WriteMode("bogus"), Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
 	}
 	for _, tt := range bad {
 		t.Run(tt.name, func(t *testing.T) {
@@ -36,7 +38,7 @@ func TestOwnerClaim_Validate(t *testing.T) {
 }
 
 func TestForeignEdgeClaim_Validate(t *testing.T) {
-	good := fe("cs-api", "sensorml.component.is-hosted-by", "c360.semconnect.systems.csapi.system.*", EdgeNoBirthStub)
+	good := ForeignEdgeClaim{Owner: "cs-api", Predicate: "sensorml.component.is-hosted-by", TargetPattern: "c360.semconnect.systems.csapi.system.*", Mode: EdgeNoBirthStub}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("well-formed foreign-edge claim should validate: %v", err)
 	}
@@ -49,11 +51,11 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 		name string
 		fec  ForeignEdgeClaim
 	}{
-		{"empty owner", ForeignEdgeClaim{Owner: "", Predicate: "p", TargetPattern: "", Mode: EdgeConditional}},                                                                  // entity-id-audit:classify intentional-sentinel "" line=54 column=77 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
-		{"empty predicate", ForeignEdgeClaim{Owner: "o", Predicate: "", TargetPattern: "", Mode: EdgeConditional}},                                                              // entity-id-audit:classify intentional-sentinel "" line=55 column=82 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
-		{"wildcard predicate", ForeignEdgeClaim{Owner: "o", Predicate: "p.*", TargetPattern: "", Mode: EdgeConditional}},                                                        // entity-id-audit:classify intentional-sentinel "" line=56 column=88 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"empty owner", ForeignEdgeClaim{Owner: "", Predicate: semantictest.Predicate(t, "test", "edge", "p"), TargetPattern: "", Mode: EdgeConditional}},                       // entity-id-audit:classify intentional-sentinel "" line=54 column=121 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"empty predicate", ForeignEdgeClaim{Owner: "o", Predicate: "", TargetPattern: "", Mode: EdgeConditional}},                                                              // entity-id-audit:classify intentional-sentinel "" line=55 column=82 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel; predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		{"wildcard predicate", ForeignEdgeClaim{Owner: "o", Predicate: "p.*", TargetPattern: "", Mode: EdgeConditional}},                                                        // entity-id-audit:classify intentional-sentinel "" line=56 column=88 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel; predicate-audit:invalid {"kind":"stored-predicate","value":"p.*","reason":"arity"}
 		{"invalid mode", ForeignEdgeClaim{Owner: "o", Predicate: "test.edge.p", TargetPattern: "", Mode: EdgeMode("bogus")}},                                                    // entity-id-audit:classify intentional-sentinel "" line=57 column=90 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
-		{"bad target pattern", ForeignEdgeClaim{Owner: "o", Predicate: "p", TargetPattern: "a.b.c", Mode: EdgeConditional}},                                                     // entity-id-audit:classify intentional-malformed "a.b.c" line=58 column=83 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:arity short target rejection fixture
+		{"bad target pattern", ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "p"), TargetPattern: "a.b.c", Mode: EdgeConditional}},          // entity-id-audit:classify intentional-malformed "a.b.c" line=58 column=129 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:arity short target rejection fixture
 		{"partial wildcard target pattern", ForeignEdgeClaim{Owner: "o", Predicate: "sensorml.component.is-hosted-by", TargetPattern: "a.b.c.d.e.foo*", Mode: EdgeConditional}}, // entity-id-audit:classify intentional-malformed "a.b.c.d.e.foo*" line=59 column=129 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:alphabet partial wildcard rejection fixture
 	}
 	for _, tt := range bad {
@@ -90,8 +92,8 @@ func TestCoordinationWaiver_Validate(t *testing.T) {
 func TestEpoch_OwnerOf(t *testing.T) {
 	ep := newEpoch()
 	ep.Owners["cs-api"] = ownerEntry{Claims: []OwnerClaim{
-		oc("cs-api", "c360.semconnect.systems.csapi.system.*", ModeReplaceOwned, "sensorml.process.label"),
-		oc("cs-api", "c360.semconnect.systems.csapi.system.*", ModeAppendEvidence, "evidence.note"),
+		OwnerClaim{Owner: "cs-api", Pattern: "c360.semconnect.systems.csapi.system.*", Mode: ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}},
+		OwnerClaim{Owner: "cs-api", Pattern: "c360.semconnect.systems.csapi.system.*", Mode: ModeAppendEvidence, Predicates: []string{semantictest.Predicate(t, "evidence", "annotation", "note")}},
 	}}
 
 	owner, ok := ep.ownerOf("c360.semconnect.systems.csapi.system.drone-001", "sensorml.process.label")
@@ -114,29 +116,29 @@ func TestEpoch_OwnerOf(t *testing.T) {
 func TestEpoch_ForeignEdgeClaimFor(t *testing.T) {
 	ep := newEpoch()
 	ep.Owners["p"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{
-		{Owner: "p", Predicate: "edge.specific", Mode: EdgeConditional, Producer: "type.a"},
-		{Owner: "p", Predicate: "edge.any", Mode: EdgeStrict, Producer: ""},
+		{Owner: "p", Predicate: semantictest.Predicate(t, "test", "edge", "specific"), Mode: EdgeConditional, Producer: "type.a"},
+		{Owner: "p", Predicate: semantictest.Predicate(t, "test", "edge", "any"), Mode: EdgeStrict, Producer: ""},
 	}}
 
-	if c, ok := ep.foreignEdgeClaimFor("type.a", "edge.specific"); !ok || c.Producer != "type.a" {
+	if c, ok := ep.foreignEdgeClaimFor("type.a", semantictest.Predicate(t, "test", "edge", "specific")); !ok || c.Producer != "type.a" {
 		t.Errorf("exact producer match: got %+v ok=%v", c, ok)
 	}
-	if _, ok := ep.foreignEdgeClaimFor("type.b", "edge.specific"); ok {
+	if _, ok := ep.foreignEdgeClaimFor("type.b", semantictest.Predicate(t, "test", "edge", "specific")); ok {
 		t.Error("a producer-specific claim must not match a different producer")
 	}
-	if _, ok := ep.foreignEdgeClaimFor("any.type.at.all", "edge.any"); !ok {
+	if _, ok := ep.foreignEdgeClaimFor("any.type.at.all", semantictest.Predicate(t, "test", "edge", "any")); !ok {
 		t.Error("an empty-producer (any) claim should match any message type")
 	}
-	if _, ok := ep.foreignEdgeClaimFor("type.a", "edge.unknown"); ok {
+	if _, ok := ep.foreignEdgeClaimFor("type.a", semantictest.Predicate(t, "test", "edge", "unknown")); ok {
 		t.Error("an unknown predicate must not match")
 	}
 }
 
 func TestEpoch_ForeignEdgeClaimFor_ExactBeatsAny(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["p1"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p1", Predicate: "e", Mode: EdgeStrict, Producer: ""}}}
-	ep.Owners["p2"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p2", Predicate: "e", Mode: EdgeConditional, Producer: "type.x"}}}
-	c, ok := ep.foreignEdgeClaimFor("type.x", "e")
+	ep.Owners["p1"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p1", Predicate: semantictest.Predicate(t, "test", "edge", "e"), Mode: EdgeStrict, Producer: ""}}}
+	ep.Owners["p2"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "p2", Predicate: semantictest.Predicate(t, "test", "edge", "e"), Mode: EdgeConditional, Producer: "type.x"}}}
+	c, ok := ep.foreignEdgeClaimFor("type.x", semantictest.Predicate(t, "test", "edge", "e"))
 	if !ok || c.Producer != "type.x" {
 		t.Errorf("an exact producer match must win over an any-producer claim, got %+v ok=%v", c, ok)
 	}
@@ -148,15 +150,15 @@ func TestEpoch_ForeignEdgeClaimFor_ExactBeatsAny(t *testing.T) {
 // across calls (sorted-owner scan), not a map-iteration coin-flip.
 func TestEpoch_ForeignEdgeClaimFor_Deterministic(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["zeta"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "zeta", Predicate: "e", Mode: EdgeStrict, Producer: ""}}}
-	ep.Owners["alpha"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "alpha", Predicate: "e", Mode: EdgeConditional, Producer: ""}}}
+	ep.Owners["zeta"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "zeta", Predicate: semantictest.Predicate(t, "test", "edge", "e"), Mode: EdgeStrict, Producer: ""}}}
+	ep.Owners["alpha"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "alpha", Predicate: semantictest.Predicate(t, "test", "edge", "e"), Mode: EdgeConditional, Producer: ""}}}
 
-	first, ok := ep.foreignEdgeClaimFor("any.type", "e")
+	first, ok := ep.foreignEdgeClaimFor("any.type", semantictest.Predicate(t, "test", "edge", "e"))
 	if !ok {
 		t.Fatal("expected a match")
 	}
 	for i := 0; i < 50; i++ {
-		got, _ := ep.foreignEdgeClaimFor("any.type", "e")
+		got, _ := ep.foreignEdgeClaimFor("any.type", semantictest.Predicate(t, "test", "edge", "e"))
 		if got.Owner != first.Owner || got.Mode != first.Mode {
 			t.Fatalf("non-deterministic foreign-edge lookup: got %+v, first %+v", got, first)
 		}
@@ -169,9 +171,9 @@ func TestEpoch_ForeignEdgeClaimFor_Deterministic(t *testing.T) {
 
 func TestEpoch_CompactStale(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["live"] = ownerEntry{Claims: []OwnerClaim{oc("live", "a.b.c.d.e.f", ModeReplaceOwned, "p")}}
-	ep.Owners["dead"] = ownerEntry{Claims: []OwnerClaim{oc("dead", "a.b.c.d.e.g", ModeReplaceOwned, "p")}}
-	ep.Owners["registrant"] = ownerEntry{Claims: []OwnerClaim{oc("registrant", "a.b.c.d.e.h", ModeReplaceOwned, "p")}}
+	ep.Owners["live"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "live", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
+	ep.Owners["dead"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "dead", Pattern: "a.b.c.d.e.g", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
+	ep.Owners["registrant"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "registrant", Pattern: "a.b.c.d.e.h", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
 
 	// Only "live" has presence; "registrant" is exempt; "dead" gets evicted.
 	live := map[string]struct{}{"live": {}}
@@ -197,12 +199,12 @@ func TestEpoch_CompactStale(t *testing.T) {
 // an OwnerClaim is still reaped (it holds a contested cell).
 func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "fe-only", Predicate: "x.edge", TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=213 column=117 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "x"), TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=202 column=176 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	ep.Owners["mixed"] = ownerEntry{
-		Claims:       []OwnerClaim{{Owner: "mixed", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{"p"}}},
-		ForeignEdges: []ForeignEdgeClaim{{Owner: "mixed", Predicate: "y.edge", TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=216 column=89 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		Claims:       []OwnerClaim{{Owner: "mixed", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		ForeignEdges: []ForeignEdgeClaim{{Owner: "mixed", Predicate: semantictest.Predicate(t, "test", "edge", "y"), TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=205 column=141 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	}
-	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{oc("owning-dead", "a.b.c.d.e.g", ModeReplaceOwned, "p")}}
+	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "owning-dead", Pattern: "a.b.c.d.e.g", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
 	// A degenerate empty entry (no claims, no edges) is NOT exempt — the
 	// exemption guards FE-claim-only owners, not empties. validateStructural
 	// prevents registering one, so this is defense-in-depth.
@@ -236,22 +238,22 @@ func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 // touches only the resolver + logger, not the buckets.
 func TestRegistry_checkInverseGate(t *testing.T) {
 	resolve := func(p string) (string, bool) {
-		if p == "has.inverse" {
+		if p == "test.edge.has-inverse" {
 			return "inv.of.it", true
 		}
 		return "", false
 	}
 	withResolver := &Registry{logger: slog.Default(), inverseResolver: resolve}
 
-	condNoInv := ForeignEdgeClaim{Owner: "o", Predicate: "no.inverse", TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=266 column=76 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	condNoInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=248 column=127 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condNoInv}); !errors.Is(err, ErrInvalidClaim) {
 		t.Errorf("Conditional edge without a registered inverse must fail the gate; got %v", err)
 	}
-	condWithInv := ForeignEdgeClaim{Owner: "o", Predicate: "has.inverse", TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=270 column=78 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	condWithInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "has-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=252 column=130 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condWithInv}); err != nil {
 		t.Errorf("Conditional edge WITH a registered inverse must pass; got %v", err)
 	}
-	stub := ForeignEdgeClaim{Owner: "o", Predicate: "no.inverse", TargetPattern: "", Mode: EdgeNoBirthStub} // entity-id-audit:classify intentional-sentinel "" line=274 column=73 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	stub := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeNoBirthStub} // entity-id-audit:classify intentional-sentinel "" line=256 column=122 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{stub}); err != nil {
 		t.Errorf("NoBirthStub needs no inverse, must pass; got %v", err)
 	}
@@ -268,8 +270,8 @@ func TestEpoch_RoundTrip(t *testing.T) {
 	ep := newEpoch()
 	ep.Version = 7
 	ep.Owners["cs-api"] = ownerEntry{
-		Claims:       []OwnerClaim{oc("cs-api", "a.b.c.d.e.f", ModeReplaceOwned, "p")},
-		ForeignEdges: []ForeignEdgeClaim{fe("cs-api", "edge", "a.b.c.d.e.*", EdgeConditional)},
+		Claims:       []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "cs-api", Predicate: semantictest.Predicate(t, "test", "edge", "related"), TargetPattern: "a.b.c.d.e.*", Mode: EdgeConditional}},
 	}
 	b, err := ep.encode()
 	if err != nil {
