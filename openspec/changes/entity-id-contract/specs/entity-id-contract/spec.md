@@ -241,6 +241,43 @@ NOT select ObjectStore retention, reachability, reference-counting, or reclamati
 - **THEN** this contract makes no reclamation or ownership decision
 - **AND** the separately governed ObjectStore lifecycle remains authoritative
 
+### Requirement: Entity-ID test fixtures are canonical or exactly classified negatives
+
+The tracked local entity-ID corpus MUST include production sources, every `*_test.go` file, and every structured
+artifact beneath `testdata`. Positive runtime fixtures SHOULD use the grammar-only `internal/semantictest` entity-ID
+builder. The builder MUST accept all six semantic positions explicitly, MUST join and validate them through
+`pkg/types` without normalization or defaults, and MUST return only the validated string. It MUST NOT construct
+`graph.EntityState`, triples, Graphable values, or other behavior-bearing graph fixtures. Production Go files MUST NOT
+import this test helper. Grammar-authority tests and literal constants MAY remain raw source values, but MUST remain in
+the checked corpus.
+
+Every intentional invalid fixture MUST be classified at one exact occurrence with its contract kind, exact value, and
+authoritative stable reason. A commentless structured fixture MUST use a checked manifest entry naming its file and
+structural location or record. File-wide or directory-wide invalid allowances MUST NOT satisfy the corpus. Missing,
+stale, duplicate, unmatched, broad, or reason-mismatched classifications MUST fail, and every classification MUST
+resolve to exactly one candidate.
+
+#### Scenario: the shared helper preserves exact invalid input
+
+- **GIVEN** explicit entity-ID positions containing a byte that violates the canonical grammar
+- **WHEN** the test fixture builder joins and validates them
+- **THEN** it fails through the `pkg/types` authority
+- **AND** it does not trim, normalize, replace, default, or return a repaired identity
+
+#### Scenario: production code cannot depend on semantic test fixtures
+
+- **GIVEN** a non-test Go file imports `internal/semantictest`
+- **WHEN** repository contract checks run
+- **THEN** the check fails and identifies the production import
+- **AND** moving graph construction into the test helper is not accepted as a fix
+
+#### Scenario: an exact intentional negative is fail-closed evidence
+
+- **GIVEN** one malformed fixture occurrence classified with its exact value and authoritative reason
+- **WHEN** the entity-ID corpus audit resolves the classification
+- **THEN** it accepts the exception only when exactly one candidate matches and validation returns that reason
+- **AND** a missing, stale, duplicate, broad, unmatched, or wrong-reason classification fails the audit
+
 ### Requirement: The pre-v1 beta cutover is a clean owned-source break
 
 The breaking beta release MUST announce the exact entity-ID contract change and update SemStreams plus every owned

@@ -213,6 +213,29 @@ ledger because every reference design is owned and required before v1.
 Those coordinated owned-reference gates block the v1 release and archive of this change, not local framework
 graph-index activation after its named clean pre-v1 prerequisites have passed.
 
+### 8. Shared test fixtures construct grammar values, not graph entities
+
+The local source corpus includes every tracked `*_test.go` file and structured artifact beneath `testdata`. A green
+production-only scan is not evidence that positive fixtures satisfy the entity-ID contract. Positive fixtures use a
+small `internal/semantictest` builder where runtime construction is appropriate. The builder accepts the six explicit
+entity-ID positions, joins them without rewriting any byte, delegates to `pkg/types.ValidateEntityID`, and returns the
+validated string. It supplies no default namespace, normalization, randomness, options, `graph.EntityState`, triples,
+or Graphable factory. Tests that need an entity remain responsible for constructing the exact state their behavior
+requires.
+
+Only test files may import `internal/semantictest`; a repository contract test rejects imports from production Go
+files. `pkg/types` grammar-authority tests remain raw fixtures because importing a helper that delegates back to
+`pkg/types` would create a cycle. Literal constants and formats that cannot call the runtime helper remain subject to
+the same checked source audit.
+
+Intentional invalid fixtures are exceptions to the positive-fixture rule, not file-wide allowances. In source formats
+with comments, an invalid classification binds to the exact candidate occurrence and records its contract kind, exact
+value, and authoritative stable reason. Strict JSON, JSONL, and other commentless structured fixtures use a checked
+manifest keyed by file plus structural location or record, kind, exact value, and reason. The auditor rejects missing,
+stale, duplicate, broad, unmatched, or reason-mismatched classifications and requires every classification to resolve
+to exactly one candidate. This preserves negative grammar tests without allowing an old positive fixture to hide
+behind another occurrence of the same malformed value.
+
 ## Implementation checkpoint: PR #534 authoritative write seam
 
 PR #534, merged at `c8f0b92e` with final branch head `6ef169dd`, completes task 3.2. The final authoritative marshal
@@ -267,6 +290,10 @@ real-NATS integration.
   content-object I/O; broader ObjectStore lifecycle policy remains separately governed.
 - **Delegating APIs can look like duplicate authority.** Tests pin identical results across `pkg/types`, `message`,
   graph-ingest, and pattern registration; only `pkg/types` owns grammar code.
+- **A broad test helper can hide semantics.** The shared helper constructs and validates only grammar strings. Tests
+  continue to express subjects, references, hierarchy, versions, and projection state directly.
+- **Negative-fixture allowances can mask stale positives.** Exact occurrence and authoritative-reason matching makes
+  every exception fail closed when its source moves, disappears, duplicates, or changes meaning.
 - **Wipe/reseed is operationally disruptive.** It is acceptable because no product is in production and every
   reference design is owned. Release docs name the exact NATS resources, reseed commands, and e2e gates; they do not
   promise export, old-state inspection, or rollback.
@@ -286,6 +313,12 @@ NATS data is separately rejected without partial output. ObjectStore proof recor
 writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway inputs before any
 NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites, real-NATS
 integration, and every affected product e2e tier before the BREAKING release lands.
+
+Fixture-contract tests prove that the shared builder returns the exact unmodified joined bytes accepted by
+`pkg/types`, rejects malformed components rather than repairing them, and cannot be imported by production Go files.
+Audit fixtures prove that `*_test.go` and structured `testdata` are scanned; an exact intentional-negative
+classification passes only for the matching stable reason; and missing, stale, duplicate, broad, or wrong-reason
+classifications fail. The local corpus reaches zero unexplained violations before the clean cutover is complete.
 
 Authoritative-state tests separately prove Graphable empty-subject fill before marshal, rejection of the same empty
 subject on mutation/direct/replay candidates, canonical validation of every explicit subject, current structural

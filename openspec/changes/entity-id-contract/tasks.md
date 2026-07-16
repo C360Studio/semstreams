@@ -1,8 +1,10 @@
 ## 1. Contract and Failing Tests
 
 - [ ] 1.1 Inventory every local entity-ID literal, constructor, parser, validator, pattern, schema, config field,
-      graph-state seed, KV key/filter builder, and direct split/match implementation; classify each as literal,
-      declaration pattern, query prefix, unrelated test glob, or malformed. Use the ADR-075 selected framework
+      graph-state seed, KV key/filter builder, and direct split/match implementation, including every tracked
+      `*_test.go` file and structured artifact beneath `testdata`; classify each as a canonical positive fixture,
+      exact intentional negative, declaration pattern, query prefix, unrelated test glob, or malformed. Use the
+      ADR-075 selected framework
       composition: exclude deleted `federation` and moved OMS/SensorML sources from the local corpus, and track their
       owner-side audit in the boundary handoff. Explicitly include `StoredMessage.Validate`, gated-DAG config/schema,
       lifecycle OpenAPI source/generated OAS, rule expression helpers, graph/fusion/embedding scopes, graph-research
@@ -78,12 +80,17 @@
 - [x] 3.3b Record projection-contract pattern coverage as satisfied transitively: `projection.Contract.Validate`
       derives ownership claims, whose owner and foreign-edge target patterns use the shared pattern API before bind
 - [ ] 3.4 Update all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and direct
-      split/match helpers in the selected framework composition. Explicitly cover `StoredMessage.Validate`, gated-DAG
-      `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS, graph-research sources, and rule expression
-      helpers; remove duplicate regexes, alphabets, arity-only checks, magic limits, and validators. Do not retain
-      moved OMS/SensorML or deleted federation code to satisfy this task
+      split/match helpers in the selected framework composition. Add the grammar-only `internal/semantictest` entity-ID
+      fixture builder, make it delegate without normalization to `pkg/types`, ban imports from production Go files,
+      and migrate positive test fixtures without adding a shared `graph.EntityState` factory. Explicitly cover
+      `StoredMessage.Validate`, gated-DAG `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS,
+      graph-research sources, and rule expression helpers; remove duplicate regexes, alphabets, arity-only checks,
+      magic limits, and validators. Do not retain moved OMS/SensorML or deleted federation code to satisfy this task
 - [ ] 3.5 Check in the deterministic local literal/pattern/prefix source corpus report and exact breaking source/config
-      change list; reach zero unexplained violations without creating a runtime alias or transformation ledger
+      change list; reach zero unexplained violations across production, `*_test.go`, and structured `testdata` without
+      creating a runtime alias or transformation ledger. Every intentional invalid MUST be bound to one exact source
+      occurrence, value, contract kind, and authoritative reason; missing, stale, duplicate, broad, or reason-mismatched
+      classifications fail the audit
 - [ ] 3.6 Add invalid-input side-effect tests proving no NATS call, retry, callback, watcher/lister creation, raw-ID
       log field, or operation metric occurs before rejection
 - [x] 3.6a Prove the implemented prefix/scope boundaries reject before downstream request, lister, storage, or paid
