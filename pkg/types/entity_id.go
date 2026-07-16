@@ -45,6 +45,19 @@ const (
 	EntityIDDetailAllowedParts = "allowed_parts"
 	// EntityIDDetailSegmentIndex reports the zero-based failing position.
 	EntityIDDetailSegmentIndex = "segment_index"
+
+	entityIDLiteralSegmentPattern = `[A-Za-z0-9][A-Za-z0-9_-]*`
+	entityIDLiteralBodyPattern    = entityIDLiteralSegmentPattern + `(?:\.` + entityIDLiteralSegmentPattern + `){5}`
+
+	// EntityIDLiteralPattern is the anchored JSON-Schema-compatible regular
+	// expression for a canonical six-part literal entity ID.
+	EntityIDLiteralPattern = `^` + entityIDLiteralBodyPattern + `$`
+	// EntityIDLiteralPrefixPattern is the anchored JSON-Schema-compatible
+	// regular expression for a canonical one-to-six-part literal query prefix.
+	EntityIDLiteralPrefixPattern = `^` + entityIDLiteralSegmentPattern + `(?:\.` + entityIDLiteralSegmentPattern + `){0,5}$`
+	// OptionalEntityIDLiteralPattern is EntityIDLiteralPattern plus the explicit
+	// empty-string sentinel used by optional configuration fields.
+	OptionalEntityIDLiteralPattern = `^(?:$|` + entityIDLiteralBodyPattern + `)$`
 )
 
 const canonicalEntityIDParts = 6

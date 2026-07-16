@@ -1,9 +1,11 @@
 package message
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,6 +15,20 @@ type TestPayload struct {
 	Value string
 	Valid bool
 }
+
+type codedValidationPayload struct {
+	err error
+}
+
+func (*codedValidationPayload) Schema() Type {
+	return Type{Domain: "test", Category: "coded", Version: "v1"}
+}
+
+func (p *codedValidationPayload) Validate() error { return p.err }
+
+func (*codedValidationPayload) MarshalJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+func (*codedValidationPayload) UnmarshalJSON([]byte) error { return nil }
 
 func (p *TestPayload) Schema() Type {
 	return Type{Domain: "test", Category: "payload", Version: "v1"}
@@ -182,6 +198,58 @@ func TestBaseMessage_Validate(t *testing.T) {
 		"source",
 	)
 	assert.Error(t, invalidTypeMsg.Validate())
+}
+
+func TestBaseMessagePreservesCodedPayloadValidationError(t *testing.T) {
+	t.Parallel()
+
+	const code = "test_contract_invalid"
+	detail := map[string]any{"reason": "test"}
+	payloadErr := errs.ClassifiedCodeDetail(errs.ErrorInvalid, code, detail, errors.New("invalid test contract"))
+	msg := NewBaseMessage(
+		Type{Domain: "test", Category: "coded", Version: "v1"},
+		&codedValidationPayload{err: payloadErr},
+		"test-source",
+	)
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{name: "validate", run: msg.Validate, want: "BaseMessage.Validate"},
+		{name: "marshal", run: func() error { _, err := msg.MarshalJSON(); return err }, want: "BaseMessage.MarshalJSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.Error(t, err)
+			var classified *errs.ClassifiedError
+			require.ErrorAs(t, err, &classified)
+			assert.Equal(t, code, classified.Code)
+			assert.Equal(t, detail, classified.Detail)
+			assert.Contains(t, err.Error(), tc.want, "context must remain operator-visible")
+		})
+	}
+
+	ordinary := NewBaseMessage(
+		Type{Domain: "test", Category: "ordinary", Version: "v1"},
+		&TestPayload{Valid: false},
+		"test-source",
+	)
+	for _, tc := range []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{name: "ordinary validate", run: ordinary.Validate, want: "BaseMessage.Validate: invalid payload failed"},
+		{name: "ordinary marshal", run: func() error { _, err := ordinary.MarshalJSON(); return err }, want: "BaseMessage.MarshalJSON: payload validation failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
 }
 
 func TestBaseMessage_NoRouteMethod(t *testing.T) {

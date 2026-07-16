@@ -241,6 +241,9 @@ func TestExtractSchema(t *testing.T) {
 					Type:        "string",
 					Description: "Test property",
 					Default:     "default value",
+					MinLength:   intPtr(1),
+					MaxLength:   intPtr(256),
+					Pattern:     `^[a-z]+$`,
 				},
 				"numberProp": {
 					Type:        "int",
@@ -273,6 +276,87 @@ func TestExtractSchema(t *testing.T) {
 	}
 	if schema.Metadata.Name != "test-component" {
 		t.Errorf("Invalid metadata name: %s", schema.Metadata.Name)
+	}
+	stringProperty := schema.Properties["testProp"]
+	if stringProperty.MinLength == nil || *stringProperty.MinLength != 1 {
+		t.Errorf("Invalid minLength: %v", stringProperty.MinLength)
+	}
+	if stringProperty.MaxLength == nil || *stringProperty.MaxLength != 256 {
+		t.Errorf("Invalid maxLength: %v", stringProperty.MaxLength)
+	}
+	if stringProperty.Pattern != `^[a-z]+$` {
+		t.Errorf("Invalid pattern: %q", stringProperty.Pattern)
+	}
+}
+
+func TestConvertPropertySchemaPtrPreservesStringConstraints(t *testing.T) {
+	source := &component.PropertySchema{
+		Type:      "string",
+		MinLength: intPtr(1),
+		MaxLength: intPtr(256),
+		Pattern:   `^[a-z]+$`,
+	}
+
+	converted := convertPropertySchemaPtr(source)
+	if converted.MinLength == nil || *converted.MinLength != 1 {
+		t.Errorf("Invalid nested minLength: %v", converted.MinLength)
+	}
+	if converted.MaxLength == nil || *converted.MaxLength != 256 {
+		t.Errorf("Invalid nested maxLength: %v", converted.MaxLength)
+	}
+	if converted.Pattern != source.Pattern {
+		t.Errorf("Invalid nested pattern: %q", converted.Pattern)
+	}
+}
+
+func TestGatedDAGGeneratedSchemaEntityIDPatterns(t *testing.T) {
+	registry := component.NewRegistry()
+	if err := componentregistry.Register(registry); err != nil {
+		t.Fatalf("register components: %v", err)
+	}
+	registration := registry.ListFactories()["gated-dag"]
+	if registration == nil {
+		t.Fatal("gated-dag registration not found")
+	}
+	schema := extractSchema("gated-dag", registration)
+
+	tests := []struct {
+		name     string
+		property string
+		value    string
+		valid    bool
+	}{
+		{"one-token prefix", "unit_entity_prefix", "acme", true},
+		{"six-token prefix", "unit_entity_prefix", "acme.ops.plan.fanout.unit.1", true},
+		{"wildcard prefix", "unit_entity_prefix", "acme.*", false},
+		{"backslash prefix", "unit_entity_prefix", `acme\.ops`, false},
+		{"canonical instance", "fan_out_instance_id", "acme.ops.plan.fanout.instance.1", true},
+		{"empty instance sentinel", "fan_out_instance_id", "", true},
+		{"short instance", "fan_out_instance_id", "acme.ops.plan", false},
+		{"backslash instance", "fan_out_instance_id", `acme\.ops.plan.fanout.instance.1`, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			propertySchema, err := json.Marshal(schema.Properties[tt.property])
+			if err != nil {
+				t.Fatalf("marshal %s schema: %v", tt.property, err)
+			}
+			document, err := json.Marshal(tt.value)
+			if err != nil {
+				t.Fatalf("marshal document: %v", err)
+			}
+			result, err := gojsonschema.Validate(
+				gojsonschema.NewBytesLoader(propertySchema),
+				gojsonschema.NewBytesLoader(document),
+			)
+			if err != nil {
+				t.Fatalf("validate document: %v", err)
+			}
+			if result.Valid() != tt.valid {
+				t.Errorf("valid = %t, want %t; errors=%v", result.Valid(), tt.valid, result.Errors())
+			}
+		})
 	}
 }
 

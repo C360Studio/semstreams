@@ -76,7 +76,9 @@
     },
     "fan_out_instance_id": {
       "type": "string",
-      "description": "Optional 6-part entity ID of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty = no instance lifecycle owned.",
+      "description": "Optional canonical six-part literal entity ID, at most 256 bytes, of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty or omitted means no instance lifecycle is owned.",
+      "maxLength": 256,
+      "pattern": "^(?:$|[A-Za-z0-9][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9][A-Za-z0-9_-]*){5})$",
       "category": "advanced"
     },
     "fan_out_workflow": {
@@ -116,7 +118,10 @@
     },
     "unit_entity_prefix": {
       "type": "string",
-      "description": "graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out. Required.",
+      "description": "Required canonical literal entity-ID query prefix with one to six dot-separated tokens and at most 256 bytes; wildcards are not accepted. This is the graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out.",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*(?:\\.[A-Za-z0-9][A-Za-z0-9_-]*){0,5}$",
       "category": "basic"
     },
     "workers": {

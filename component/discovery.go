@@ -56,6 +56,9 @@ type PropertySchema struct {
 	Enum        []string                  `json:"enum,omitempty"`        // Valid string values
 	Minimum     *int                      `json:"minimum,omitempty"`     // For numeric types
 	Maximum     *int                      `json:"maximum,omitempty"`     // For numeric types
+	MinLength   *int                      `json:"minLength,omitempty"`   // Minimum string length
+	MaxLength   *int                      `json:"maxLength,omitempty"`   // Maximum string length
+	Pattern     string                    `json:"pattern,omitempty"`     // Regular expression for string values
 	Category    string                    `json:"category,omitempty"`    // "basic" or "advanced" for UI organization
 	PortFields  map[string]PortFieldInfo  `json:"portFields,omitempty"`  // Metadata for port fields (when type is "ports")
 	CacheFields map[string]CacheFieldInfo `json:"cacheFields,omitempty"` // Metadata for cache fields (when type is "cache")

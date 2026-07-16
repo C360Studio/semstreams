@@ -156,6 +156,9 @@ type PropertySchema struct {
 	Enum        []string                  `json:"enum,omitempty"`
 	Minimum     *int                      `json:"minimum,omitempty"`
 	Maximum     *int                      `json:"maximum,omitempty"`
+	MinLength   *int                      `json:"minLength,omitempty"`
+	MaxLength   *int                      `json:"maxLength,omitempty"`
+	Pattern     string                    `json:"pattern,omitempty"`
 	Items       *PropertySchema           `json:"items,omitempty"`      // For array types
 	Category    string                    `json:"category,omitempty"`   // UI organization: "basic" or "advanced"
 	Properties  map[string]PropertySchema `json:"properties,omitempty"` // Nested properties for object types
@@ -202,6 +205,9 @@ func convertProperties(props map[string]component.PropertySchema) map[string]Pro
 			Enum:        propSchema.Enum,
 			Minimum:     propSchema.Minimum,
 			Maximum:     propSchema.Maximum,
+			MinLength:   propSchema.MinLength,
+			MaxLength:   propSchema.MaxLength,
+			Pattern:     propSchema.Pattern,
 			Category:    propSchema.Category,
 		}
 
@@ -239,6 +245,9 @@ func convertPropertySchemaPtr(src *component.PropertySchema) *PropertySchema {
 		Enum:        src.Enum,
 		Minimum:     src.Minimum,
 		Maximum:     src.Maximum,
+		MinLength:   src.MinLength,
+		MaxLength:   src.MaxLength,
+		Pattern:     src.Pattern,
 	}
 	if len(src.Properties) > 0 {
 		result.Properties = convertProperties(src.Properties)

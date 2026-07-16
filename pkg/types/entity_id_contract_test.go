@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -172,6 +173,32 @@ func TestValidateEntityIDPrefix(t *testing.T) {
 			err := ValidateEntityIDPrefix(tt.value)
 			assertEntityIDContractError(t, err, ErrorCodeEntityIDPrefixInvalid, tt.wantReason, nil)
 		})
+	}
+}
+
+func TestEntityIDSchemaPatterns(t *testing.T) {
+	t.Parallel()
+
+	full := regexp.MustCompile(EntityIDLiteralPattern)
+	prefix := regexp.MustCompile(EntityIDLiteralPrefixPattern)
+	optional := regexp.MustCompile(OptionalEntityIDLiteralPattern)
+
+	for _, value := range []string{"a.b.c.d.e.f", "Acme.ops2.robotics.gcs_1.drone-type.001", entityIDWithBytes(256)} {
+		assert.True(t, full.MatchString(value), value)
+		assert.True(t, optional.MatchString(value), value)
+		require.NoError(t, ValidateEntityID(value))
+	}
+	for _, value := range []string{"", "a.b.c", "a.b.c.d.e.*", `a\.b.c.d.e.f`} {
+		assert.False(t, full.MatchString(value), value)
+	}
+	assert.True(t, optional.MatchString(""), "optional schema sentinel")
+
+	for _, value := range []string{"a", "a.b.c", "a.b.c.d.e.f", entityIDWithBytes(256)} {
+		assert.True(t, prefix.MatchString(value), value)
+		require.NoError(t, ValidateEntityIDPrefix(value))
+	}
+	for _, value := range []string{"", "a.*", "a.b.c.d.e.f.g", `a\.b`} {
+		assert.False(t, prefix.MatchString(value), value)
 	}
 }
 

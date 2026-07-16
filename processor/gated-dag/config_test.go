@@ -2,8 +2,13 @@ package gateddagexec
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +20,7 @@ func validCfg() Config {
 }
 
 func TestConfig_DefaultsFillUnsetFields(t *testing.T) {
-	c := Config{UnitEntityPrefix: "p", DispatchSubject: "s"}.withDefaults()
+	c := Config{UnitEntityPrefix: "acme", DispatchSubject: "s"}.withDefaults()
 	require.Equal(t, FanOutWorkflow, c.FanOutWorkflow)
 	require.Equal(t, defaultCompletedPredicate, c.CompletedPredicate)
 	require.Equal(t, defaultClaimPredicate, c.ClaimPredicate)
@@ -33,6 +38,8 @@ func TestConfig_Validate(t *testing.T) {
 		errSub string
 	}{
 		{"missing prefix", func(c *Config) { c.UnitEntityPrefix = "" }, "unit_entity_prefix is required"},
+		{"wildcard prefix", func(c *Config) { c.UnitEntityPrefix = "acme.*" }, "unit_entity_prefix"},
+		{"seven-part prefix", func(c *Config) { c.UnitEntityPrefix = "a.b.c.d.e.f.g" }, "unit_entity_prefix"},
 		{"missing subject", func(c *Config) { c.DispatchSubject = "" }, "dispatch_subject is required"},
 		{"empty workflow", func(c *Config) { c.FanOutWorkflow = "" }, "fan_out_workflow"},
 		{"zero workers", func(c *Config) { c.Workers = 0 }, "workers must be > 0"},
@@ -57,6 +64,9 @@ func TestConfig_Validate(t *testing.T) {
 			c.FanOutInstanceID = "org.plat.gateddag.fanout.instance.x"
 			c.FanOutWorkflow = "custom-wf"
 		}, "requires the default fan_out_workflow"},
+		{"noncanonical instance id", func(c *Config) {
+			c.FanOutInstanceID = "fanout-1"
+		}, "fan_out_instance_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,7 +82,46 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestConfig_ValidateHappy(t *testing.T) {
-	require.NoError(t, validCfg().Validate())
+	cfg := validCfg()
+	cfg.FanOutInstanceID = ""
+	require.NoError(t, cfg.Validate(), "empty fan_out_instance_id is the explicit no-lifecycle sentinel")
+}
+
+func TestConfig_EntityIDByteBoundaries(t *testing.T) {
+	t.Parallel()
+
+	prefix256 := strings.Repeat("a", semtypes.MaxEntityIDBytes)
+	id256 := "a.b.c.d.e." + strings.Repeat("x", semtypes.MaxEntityIDBytes-10)
+	require.Len(t, prefix256, semtypes.MaxEntityIDBytes)
+	require.Len(t, id256, semtypes.MaxEntityIDBytes)
+
+	tests := []struct {
+		name     string
+		mutate   func(*Config)
+		wantCode string
+	}{
+		{"256 byte prefix", func(c *Config) { c.UnitEntityPrefix = prefix256 }, ""},
+		{"257 byte prefix", func(c *Config) { c.UnitEntityPrefix = prefix256 + "a" }, semtypes.ErrorCodeEntityIDPrefixInvalid},
+		{"256 byte instance ID", func(c *Config) { c.FanOutInstanceID = id256 }, ""},
+		{"257 byte instance ID", func(c *Config) { c.FanOutInstanceID = id256 + "x" }, semtypes.ErrorCodeEntityIDInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validCfg()
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			var classified *errs.ClassifiedError
+			require.Error(t, err)
+			require.True(t, errors.As(err, &classified), "entity contract error type must survive config context")
+			assert.Equal(t, tt.wantCode, classified.Code)
+		})
+	}
 }
 
 // TestConfig_JSONRoundTrip exercises EVERY operator-reachable field with a

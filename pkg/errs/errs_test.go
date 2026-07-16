@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -259,6 +260,45 @@ func TestWrapClassified(t *testing.T) {
 				t.Errorf("error should contain standard format, got: %s", ce.Error())
 			}
 		})
+	}
+}
+
+func TestWrapClassifiedPreservesMachineContract(t *testing.T) {
+	t.Parallel()
+
+	const code = "test_contract"
+	detail := map[string]any{"reason": "invalid"}
+	inner := ClassifiedCodeDetail(ErrorInvalid, code, detail, errors.New("contract rejected"))
+
+	for _, tc := range []struct {
+		name string
+		wrap func(error, string, string, string) error
+	}{
+		{name: "transient", wrap: WrapTransient},
+		{name: "fatal", wrap: WrapFatal},
+		{name: "invalid", wrap: WrapInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := tc.wrap(inner, "component", "operation", "add context")
+			var classified *ClassifiedError
+			if !errors.As(wrapped, &classified) {
+				t.Fatalf("wrapped error type = %T, want *ClassifiedError", wrapped)
+			}
+			if classified.Code != code {
+				t.Errorf("Code = %q, want %q", classified.Code, code)
+			}
+			if !reflect.DeepEqual(classified.Detail, detail) {
+				t.Errorf("Detail = %#v, want %#v", classified.Detail, detail)
+			}
+			if !strings.Contains(wrapped.Error(), "component.operation: add context failed") {
+				t.Errorf("context missing from %q", wrapped.Error())
+			}
+		})
+	}
+
+	replacement := ClassifiedCode(ErrorInvalid, "replacement_contract", inner)
+	if replacement.Code != "replacement_contract" || replacement.Detail != nil {
+		t.Errorf("explicit replacement leaked inner contract: Code=%q Detail=%#v", replacement.Code, replacement.Detail)
 	}
 }
 
