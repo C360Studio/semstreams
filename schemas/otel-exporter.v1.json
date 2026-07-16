@@ -24,14 +24,8 @@
     },
     "endpoint": {
       "type": "string",
-      "description": "OTEL collector endpoint",
-      "default": "localhost:4317",
-      "category": "basic"
-    },
-    "export_logs": {
-      "type": "boolean",
-      "description": "Enable log export",
-      "default": false,
+      "description": "OTLP HTTP collector base URL",
+      "default": "http://localhost:4318",
       "category": "basic"
     },
     "export_metrics": {
@@ -57,18 +51,6 @@
       "description": "Additional export headers",
       "category": "advanced"
     },
-    "max_batch_size": {
-      "type": "integer",
-      "description": "Maximum batch size",
-      "default": 512,
-      "category": "advanced"
-    },
-    "max_export_batch_size": {
-      "type": "integer",
-      "description": "Max export batch size",
-      "default": 512,
-      "category": "advanced"
-    },
     "ports": {
       "type": "string",
       "description": "Port configuration",
@@ -77,13 +59,8 @@
     "protocol": {
       "type": "string",
       "description": "Export protocol",
-      "default": "grpc",
+      "default": "http",
       "category": "basic"
-    },
-    "resource_attributes": {
-      "type": "object",
-      "description": "Resource attributes",
-      "category": "advanced"
     },
     "sampling_rate": {
       "type": "number",

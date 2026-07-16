@@ -27,6 +27,8 @@ import (
 	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/flowtemplate"
+	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
+	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -92,6 +94,9 @@ func run() error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+	if err := graphresearch.ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("invalid capability composition: %w", err)
+	}
 
 	if cliCfg.Validate {
 		fmt.Println("✓ Configuration is valid")
@@ -127,7 +132,7 @@ func run() error {
 		return err
 	}
 
-	payloadReg, err := buildPayloadRegistry()
+	payloadReg, err := buildPayloadRegistry(cfg)
 	if err != nil {
 		return err
 	}
@@ -145,9 +150,15 @@ func run() error {
 		PersonaManager:          buildPersonaManager(natsClient, logger),
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
+		LoopsBucket:             graphresearch.LoopsBucket(cfg),
 		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
 	}); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
+	}
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterTool(ctx, toolRegistry, natsClient, platform, logger, graphresearch.LoopsBucket(cfg)); err != nil {
+			return fmt.Errorf("register graph research tool: %w", err)
+		}
 	}
 
 	svcDeps := createServiceDependencies(natsClient, metricsRegistry, logger, platform, configManager, componentRegistry)
@@ -236,7 +247,7 @@ func run() error {
 // only first-party builtins; example processors register their own
 // payload types so downstream consumers (semdragons, semspec)
 // don't inherit example dependencies.
-func buildPayloadRegistry() (*payloadregistry.Registry, error) {
+func buildPayloadRegistry(cfg *config.Config) (*payloadregistry.Registry, error) {
 	reg := payloadregistry.New()
 	if err := payloadbuiltins.Register(reg); err != nil {
 		return nil, fmt.Errorf("register builtin payloads: %w", err)
@@ -249,6 +260,11 @@ func buildPayloadRegistry() (*payloadregistry.Registry, error) {
 	}
 	if err := mission.RegisterPayloads(reg); err != nil {
 		return nil, fmt.Errorf("register mission payloads: %w", err)
+	}
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterPayloads(reg); err != nil {
+			return nil, fmt.Errorf("register graph research payloads: %w", err)
+		}
 	}
 	return reg, nil
 }
@@ -589,6 +605,16 @@ func setupRegistriesAndManager(cfg *config.Config) (*component.Registry, *servic
 	slog.Debug("Registering core component factories")
 	if err := componentregistry.Register(componentRegistry); err != nil {
 		return nil, nil, fmt.Errorf("register components: %w", err)
+	}
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterComponents(componentRegistry); err != nil {
+			return nil, nil, fmt.Errorf("register graph research components: %w", err)
+		}
+	}
+	if optionalotel.Selected(cfg) {
+		if err := optionalotel.Register(componentRegistry); err != nil {
+			return nil, nil, fmt.Errorf("register optional OTEL adapter: %w", err)
+		}
 	}
 
 	// Register bundled example/domain components used by e2e configs

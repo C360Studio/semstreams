@@ -60,12 +60,11 @@ that exercise.
   constrains the spawned role's terminal vocabulary. SAP coercion
   metric (`action_allowlist_sap_coerced_total`) is the drift
   telemetry that should inform prompt iteration post-merge.
-- **PR 6 reference flow positioning** — `configs/flows/research-graph-pipeline.yaml`
-  is a *reference example* showing how to compose the five components,
-  not canonical config every operator must enable. Components ship as
-  substrate; chain wiring is application-shaped. Either move under
-  `configs/examples/` or doc-comment the file accordingly. The
-  components themselves remain canonical semstreams primitives.
+- **Superseded ownership note** — PR 6 originally positioned the rule
+  chain as application-shaped. ADR-075 supersedes that split: the five
+  components, research payloads, tools, and R0-R6 pack are now one
+  atomic framework capability. The example remains operator-tunable,
+  but cannot omit or replace required capability members.
 - **Phase-2 cleanup candidate**: PR 1 shipped `budget_tokens` and
   `max_iterations` on the agent-facing `research_graph` tool. These
   are operator policy (role-default config), not agent intent. Agent
@@ -139,7 +138,7 @@ Phase 1 deliverables shipped in beta.95:
   interface + NATS adapter shared across all five components.
 - Per-component handler updates (5 packages): each stamps its
   orchestration triple batch after the envelope write.
-- `processor/agentic-tools/executors/research_graph.go` — tool now
+- `frameworkcapabilities/graphresearch/executor.go` — tool now
   also stamps kickoff triples on the loop entity.
 - `configs/rules/research-graph/` — R0-R6 rule pack (6 JSON files).
 - `configs/examples/research-graph-pipeline.json` — reference flow
@@ -540,14 +539,11 @@ tested.
 ### Deliverables
 
 - **`configs/flows/research-graph-pipeline.yaml`** reference flow:
-  - **Positioning** (per concept doc 25 + substrate-vs-app split): this
-    file is a *reference example* showing how the five components
-    compose into a phased agentic chain, not canonical config every
-    operator must enable. The five components are framework
-    substrate; this specific chain wiring is application-shaped.
-    Document this in the file's header doc-comment so future readers
-    don't treat the chain config as canonical. Consider relocating
-    under `configs/examples/` once that convention exists.
+  - **Current positioning (ADR-075 supersedes the original plan)**:
+    the reference file demonstrates the atomic framework capability.
+    Endpoint and bounded stage settings are operator-tunable; the five
+    components, research payloads, tools, and R0-R6 pack are a coherent
+    unit and partial composition fails boot.
   - All five components instantiated.
   - All seven rules (R0–R6 plus the continuation rule R-cont).
   - Each `publish_agent` rule action declares `action_allowlist`

@@ -1,10 +1,36 @@
 package otel
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
 )
+
+func TestNewComponentRejectsUnimplementedConfigFields(t *testing.T) {
+	for _, field := range []string{
+		"export_logs",
+		"resource_attributes",
+		"max_batch_size",
+		"max_export_batch_size",
+		"insecure",
+	} {
+		t.Run(field, func(t *testing.T) {
+			raw := json.RawMessage(`{"endpoint":"http://localhost:4318","protocol":"http","` + field + `":true}`)
+			if field == "resource_attributes" {
+				raw = json.RawMessage(`{"endpoint":"http://localhost:4318","protocol":"http","resource_attributes":{"region":"test"}}`)
+			}
+			if strings.Contains(field, "batch_size") {
+				raw = json.RawMessage(`{"endpoint":"http://localhost:4318","protocol":"http","` + field + `":1}`)
+			}
+			_, err := NewComponent(raw, component.Dependencies{})
+			if err == nil || !strings.Contains(err.Error(), "unknown field") {
+				t.Fatalf("NewComponent error = %v, want explicit unknown-field rejection", err)
+			}
+		})
+	}
+}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
@@ -13,12 +39,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("expected ports, got nil")
 	}
 
-	if cfg.Endpoint != "localhost:4317" {
-		t.Errorf("expected endpoint 'localhost:4317', got %q", cfg.Endpoint)
+	if cfg.Endpoint != "http://localhost:4318" {
+		t.Errorf("expected OTLP/HTTP endpoint, got %q", cfg.Endpoint)
 	}
 
-	if cfg.Protocol != "grpc" {
-		t.Errorf("expected protocol 'grpc', got %q", cfg.Protocol)
+	if cfg.Protocol != "http" {
+		t.Errorf("expected protocol 'http', got %q", cfg.Protocol)
 	}
 
 	if cfg.ServiceName != "semstreams" {
@@ -33,10 +59,6 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("expected export_metrics to be true")
 	}
 
-	if cfg.ExportLogs {
-		t.Error("expected export_logs to be false")
-	}
-
 	if cfg.SamplingRate != 1.0 {
 		t.Errorf("expected sampling_rate 1.0, got %f", cfg.SamplingRate)
 	}
@@ -49,24 +71,24 @@ func TestConfigValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid grpc config",
+			name:    "valid http config",
 			config:  DefaultConfig(),
 			wantErr: false,
 		},
 		{
-			name: "valid http config",
+			name: "unsupported grpc config",
 			config: func() Config {
 				cfg := DefaultConfig()
-				cfg.Protocol = "http"
+				cfg.Protocol = "grpc"
 				return cfg
 			}(),
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "missing ports",
 			config: Config{
-				Endpoint: "localhost:4317",
-				Protocol: "grpc",
+				Endpoint: "http://localhost:4318",
+				Protocol: "http",
 			},
 			wantErr: true,
 		},
@@ -75,6 +97,15 @@ func TestConfigValidate(t *testing.T) {
 			config: func() Config {
 				cfg := DefaultConfig()
 				cfg.Protocol = "websocket"
+				return cfg
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "endpoint without http scheme",
+			config: func() Config {
+				cfg := DefaultConfig()
+				cfg.Endpoint = "localhost:4318"
 				return cfg
 			}(),
 			wantErr: true,
@@ -93,24 +124,6 @@ func TestConfigValidate(t *testing.T) {
 			config: func() Config {
 				cfg := DefaultConfig()
 				cfg.ExportTimeout = "invalid"
-				return cfg
-			}(),
-			wantErr: true,
-		},
-		{
-			name: "negative max_batch_size",
-			config: func() Config {
-				cfg := DefaultConfig()
-				cfg.MaxBatchSize = -1
-				return cfg
-			}(),
-			wantErr: true,
-		},
-		{
-			name: "negative max_export_batch_size",
-			config: func() Config {
-				cfg := DefaultConfig()
-				cfg.MaxExportBatchSize = -1
 				return cfg
 			}(),
 			wantErr: true,
@@ -137,8 +150,6 @@ func TestConfigValidate(t *testing.T) {
 			name: "zero values allowed",
 			config: func() Config {
 				cfg := DefaultConfig()
-				cfg.MaxBatchSize = 0
-				cfg.MaxExportBatchSize = 0
 				cfg.SamplingRate = 0
 				return cfg
 			}(),

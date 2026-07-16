@@ -21,10 +21,10 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/componentregistry"
 	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/examples/processors/document"
-	iotsensor "github.com/c360studio/semstreams/examples/processors/iot_sensor"
 	"github.com/c360studio/semstreams/flowstore"
 	"github.com/c360studio/semstreams/flowtemplate"
+	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
+	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -95,6 +95,9 @@ func run() error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
+	if err := graphresearch.ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("invalid capability composition: %w", err)
+	}
 
 	if cliCfg.Validate {
 		fmt.Println("✓ Configuration is valid")
@@ -145,7 +148,7 @@ func run() error {
 	// has the registry available. Mirrors the tools-registry shape
 	// shipped in beta.16. See registerPayloads for the example-processor
 	// migration (post-beta.18 payload-registry singleton retirement).
-	payloadReg, err := registerPayloads()
+	payloadReg, err := registerPayloads(cfg)
 	if err != nil {
 		return err
 	}
@@ -171,10 +174,15 @@ func run() error {
 		PersonaManager:          personaMgr,
 		FlowTemplateManager:     buildFlowTemplateManager(natsClient, logger),
 		ComponentRegistry:       componentRegistry,
-		LoopsBucket:             extractLoopsBucket(cfg),
+		LoopsBucket:             graphresearch.LoopsBucket(cfg),
 		RestrictedDecideActions: extractRestrictedDecideActions(cfg, logger),
 	}); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
+	}
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterTool(ctx, toolRegistry, natsClient, platform, logger, graphresearch.LoopsBucket(cfg)); err != nil {
+			return fmt.Errorf("register graph research tool: %w", err)
+		}
 	}
 
 	// 10. Create service dependencies
@@ -384,31 +392,11 @@ func createNATSClient(cfg *config.Config) (*natsclient.Client, error) {
 	return natsclient.NewClient(natsURLs)
 }
 
-// extractLoopsBucket pulls the agentic-tools loops_bucket config value so
-// executors.RegisterAll can thread it into the stateful-tool registrations
-// (read_loop_result, monitor_flow). Empty return falls back to AGENT_LOOPS
-// inside RegisterAll. Tool registration is boot-time, so the bucket name is
-// frozen for the lifetime of the process — one bucket per process.
-func extractLoopsBucket(cfg *config.Config) string {
-	for _, cc := range cfg.Components {
-		if cc.Name != "agentic-tools" || !cc.Enabled {
-			continue
-		}
-		var tcfg struct {
-			LoopsBucket string `json:"loops_bucket"`
-		}
-		if err := json.Unmarshal(cc.Config, &tcfg); err == nil && tcfg.LoopsBucket != "" {
-			return tcfg.LoopsBucket
-		}
-	}
-	return ""
-}
-
 // extractRestrictedDecideActions reads the deployment-level decide-action
 // restriction policy (gh#239) from the agentic-tools component config. The
 // decide tool bars these action names for every coordinator task (front-
 // door and rule-spawned); empty means the permissive default. Mirrors
-// extractLoopsBucket — the agentic-tools Config field is the operator/schema
+// graphresearch.LoopsBucket — the agentic-tools Config field is the operator/schema
 // surface; this bridges it into the boot-time ToolDependencies.
 func extractRestrictedDecideActions(cfg *config.Config, logger *slog.Logger) []string {
 	for _, cc := range cfg.Components {
@@ -455,11 +443,15 @@ func setupRegistriesAndManager(cfg *config.Config) (*component.Registry, *servic
 	if err := componentregistry.Register(componentRegistry); err != nil {
 		return nil, nil, fmt.Errorf("register components: %w", err)
 	}
-
-	// Register bundled example/domain components (not in core registry to avoid
-	// pulling example deps into downstream consumers like semdragons/semspec)
-	if err := registerExampleComponents(componentRegistry); err != nil {
-		return nil, nil, fmt.Errorf("register example components: %w", err)
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterComponents(componentRegistry); err != nil {
+			return nil, nil, fmt.Errorf("register graph research components: %w", err)
+		}
+	}
+	if optionalotel.Selected(cfg) {
+		if err := optionalotel.Register(componentRegistry); err != nil {
+			return nil, nil, fmt.Errorf("register optional OTEL adapter: %w", err)
+		}
 	}
 
 	factories := componentRegistry.ListFactories()
@@ -743,36 +735,17 @@ func loadConfig(path string) (*config.Config, error) {
 	return cfg, nil
 }
 
-// registerExampleComponents registers bundled example/domain processors.
-// These are kept out of componentregistry.Register() so that downstream
-// consumers (semdragons, semspec) don't inherit example dependencies.
-func registerExampleComponents(registry *component.Registry) error {
-	if err := iotsensor.Register(registry); err != nil {
-		return fmt.Errorf("register iot_sensor: %w", err)
-	}
-	if err := document.Register(registry); err != nil {
-		return fmt.Errorf("register document: %w", err)
-	}
-	return nil
-}
-
-// registerPayloads builds the payload registry, registers framework
-// builtins, then registers payload types for every example processor
-// imported by this binary. Mirrors cmd/e2e-semstreams/main.go's
-// equivalent block. Post-beta.18 payload-registry singleton retirement,
-// every binary that uses example payload types must call this — missing
-// the registration silently breaks every flow that produces those types
-// (BaseMessage.UnmarshalJSON returns "unregistered payload type: X").
-func registerPayloads() (*payloadregistry.Registry, error) {
+// registerPayloads builds the core payload registry and adds only capabilities
+// explicitly selected by this deployment.
+func registerPayloads(cfg *config.Config) (*payloadregistry.Registry, error) {
 	reg := payloadregistry.New()
 	if err := payloadbuiltins.Register(reg); err != nil {
 		return nil, fmt.Errorf("register builtin payloads: %w", err)
 	}
-	if err := iotsensor.RegisterPayloads(reg); err != nil {
-		return nil, fmt.Errorf("register iot_sensor payloads: %w", err)
-	}
-	if err := document.RegisterPayloads(reg); err != nil {
-		return nil, fmt.Errorf("register document payloads: %w", err)
+	if graphresearch.Selected(cfg) {
+		if err := graphresearch.RegisterPayloads(reg); err != nil {
+			return nil, fmt.Errorf("register graph research payloads: %w", err)
+		}
 	}
 	return reg, nil
 }

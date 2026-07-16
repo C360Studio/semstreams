@@ -7,13 +7,22 @@ import (
 
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
+func newResearchDecoder(t *testing.T) *message.Decoder {
+	t.Helper()
+	registry := payloadregistry.New()
+	if err := research.RegisterPayloads(registry); err != nil {
+		t.Fatalf("register research payloads: %v", err)
+	}
+	return message.NewDecoder(registry)
+}
+
 // Production-decoder round-trip tests for the three ADR-045 payload
 // types per feedback_production_decoder_round_trip_required. Uses the
-// real payloadbuiltins.NewTestDecoder rather than an anonymous shape-
+// the capability-owned payload registration rather than an anonymous shape-
 // cast so a registry regression (forgotten RegisterPayloads wire-up,
 // domain/category mismatch) surfaces here, not in downstream PRs.
 
@@ -35,7 +44,7 @@ func TestResearchIntent_RoundTripThroughDecoder(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -101,7 +110,7 @@ func TestSearchResult_RoundTripThroughDecoder(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -180,7 +189,7 @@ func TestClassifierOutput_RoundTripThroughDecoder(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -276,7 +285,7 @@ func TestRouteDecision_RoundTripThroughDecoder(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -742,7 +751,7 @@ func TestExecutionOutput_RoundTripThroughDecoder(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -784,7 +793,7 @@ func TestExecutionOutput_DegradedRoundTrip(t *testing.T) {
 	}
 	envelope := message.NewBaseMessage(original.Schema(), original, "test")
 	wireBytes, _ := json.Marshal(envelope)
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -859,7 +868,7 @@ func TestAssessmentOutput_RoundTripThroughDecoder_Sufficient(t *testing.T) {
 		t.Fatalf("marshal envelope: %v", err)
 	}
 
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("registry decode: %v\nwire: %s", err, wireBytes)
@@ -905,7 +914,7 @@ func TestAssessmentOutput_RoundTripThroughDecoder_RefinePath(t *testing.T) {
 	}
 	envelope := message.NewBaseMessage(original.Schema(), original, "test")
 	wireBytes, _ := json.Marshal(envelope)
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -934,7 +943,7 @@ func TestAssessmentOutput_DegradedRoundTrip(t *testing.T) {
 	}
 	envelope := message.NewBaseMessage(original.Schema(), original, "test")
 	wireBytes, _ := json.Marshal(envelope)
-	decoder := payloadbuiltins.NewTestDecoder(t)
+	decoder := newResearchDecoder(t)
 	decoded, err := decoder.Decode(wireBytes)
 	if err != nil {
 		t.Fatalf("decode: %v", err)

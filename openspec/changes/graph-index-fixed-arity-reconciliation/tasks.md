@@ -33,7 +33,9 @@
 
 - [ ] 1.1 Inventory every derived-index layout, fixed or variable token arity, semantic owner, literal forward
       filter or explicit non-filterability, literal owner filter or alternate authority, value-overwrite policy,
-      lifecycle behavior, reset rule, and readiness consequence
+      lifecycle behavior, reset rule, and readiness consequence in the ADR-075 selected framework composition.
+      Product-adapter projections remain in their owner's index and retention inventory rather than the framework
+      matrix; graph-research graph state remains framework-owned
 - [ ] 1.2 Encode literal filter strings through the shared NATS KV validators and pin the complete PR #524 ownership
       matrix plus maximum token/key/filter formulas in table-driven tests, including ALIAS, PREDICATE_CATALOG, every
       current layout, and the raw PREDICATE candidate. Physical layouts, filters, and formulas are pinned, but the
@@ -123,7 +125,8 @@
 ## 5. Governance and Documentation Closeout
 
 - [ ] 5.1 Publish the measured owner-discovery matrix as an input to the separate retention epic without selecting
-      ObjectStore reachability, tombstone payload, TTL, stream-limit, cascade, or global GC policy here
+      ObjectStore reachability, tombstone payload, TTL, stream-limit, cascade, or global GC policy here. Name only
+      selected framework stores; hand product-adapter derived records to the owner notices from ADR-075
 - [ ] 5.2 Correct gh#527 and cross-link remaining gh#433 cleanup scope without absorbing those changes
 - [ ] 5.3 Supersede ADR-065/068 through new records without rewriting historical decisions
 - [ ] 5.4 Update KV Twofer, knowledge-graph, vocabulary, index-reference, reset, and query-ordering documentation

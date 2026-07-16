@@ -1,6 +1,7 @@
 package otel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -40,7 +41,7 @@ type Component struct {
 	// JetStream consumer
 	consumer jetstream.Consumer
 
-	// Export client (stub for OTEL SDK)
+	// Export client. Configuration validation guarantees a supported exporter.
 	exporter Exporter
 
 	// Lifecycle management
@@ -62,7 +63,6 @@ type Component struct {
 }
 
 // Exporter defines the interface for OTEL export operations.
-// This is a stub interface - full implementation requires OTEL SDK.
 type Exporter interface {
 	// ExportSpans exports spans to the OTEL collector.
 	ExportSpans(ctx context.Context, spans []*SpanData) error
@@ -77,7 +77,7 @@ type Exporter interface {
 // NewComponent creates a new OTEL exporter component.
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	var config Config
-	if err := json.Unmarshal(rawConfig, &config); err != nil {
+	if err := decodeConfig(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 	}
 
@@ -85,7 +85,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if config.Ports == nil {
 		config = DefaultConfig()
 		// Re-unmarshal to get user-provided values
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
+		if err := decodeConfig(rawConfig, &config); err != nil {
 			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 	}
@@ -118,17 +118,19 @@ func (c *Component) Initialize() error {
 		c.config.ServiceVersion,
 	)
 
-	// Wire the real OTLP exporter when protocol is HTTP and an endpoint is configured.
-	if c.config.Protocol == "http" && c.config.Endpoint != "" {
-		c.exporter = NewOTLPExporter(
-			c.config.Endpoint,
-			c.config.Insecure,
-			c.config.Headers,
-			c.logger,
-		)
-	}
+	c.exporter = NewOTLPExporter(
+		c.config.Endpoint,
+		c.config.Headers,
+		c.logger,
+	)
 
 	return nil
+}
+
+func decodeConfig(raw json.RawMessage, target *Config) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
 }
 
 // Start begins processing agent events and exporting OTEL data.
@@ -312,10 +314,9 @@ func (c *Component) exportLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Final export on shutdown with fresh context
-			finalCtx, cancel := context.WithTimeout(context.Background(), c.config.GetExportTimeout())
-			c.exportData(finalCtx)
-			cancel()
+			// The component context is already canceled. Give the final flush a
+			// fresh parent; exportData applies the configured hard deadline.
+			c.exportData(context.Background())
 			return
 		case <-ticker.C:
 			c.exportData(ctx)
@@ -325,6 +326,9 @@ func (c *Component) exportLoop(ctx context.Context) {
 
 // exportData exports collected spans and metrics.
 func (c *Component) exportData(ctx context.Context) {
+	exportCtx, cancel := context.WithTimeout(ctx, c.config.GetExportTimeout())
+	defer cancel()
+
 	exporter := c.getExporter()
 
 	// Export spans
@@ -332,7 +336,7 @@ func (c *Component) exportData(ctx context.Context) {
 		spans := c.spanCollector.FlushCompleted()
 		if len(spans) > 0 {
 			if exporter != nil {
-				if err := exporter.ExportSpans(ctx, spans); err != nil {
+				if err := exporter.ExportSpans(exportCtx, spans); err != nil {
 					c.logger.Warn("Failed to export spans",
 						slog.Int("count", len(spans)),
 						slog.Any("error", err))
@@ -346,12 +350,9 @@ func (c *Component) exportData(ctx context.Context) {
 						slog.Int("count", len(spans)))
 				}
 			} else {
-				// Stub: log span export
-				c.logger.Debug("Would export spans (no exporter configured)",
+				c.logger.Error("OTEL exporter unavailable; spans were not exported",
 					slog.Int("count", len(spans)))
-				c.mu.Lock()
-				c.spansExported += int64(len(spans))
-				c.mu.Unlock()
+				c.incrementErrors()
 			}
 		}
 	}
@@ -361,7 +362,7 @@ func (c *Component) exportData(ctx context.Context) {
 		metrics := c.metricMapper.FlushMetrics()
 		if len(metrics) > 0 {
 			if exporter != nil {
-				if err := exporter.ExportMetrics(ctx, metrics); err != nil {
+				if err := exporter.ExportMetrics(exportCtx, metrics); err != nil {
 					c.logger.Warn("Failed to export metrics",
 						slog.Int("count", len(metrics)),
 						slog.Any("error", err))
@@ -375,12 +376,9 @@ func (c *Component) exportData(ctx context.Context) {
 						slog.Int("count", len(metrics)))
 				}
 			} else {
-				// Stub: log metric export
-				c.logger.Debug("Would export metrics (no exporter configured)",
+				c.logger.Error("OTEL exporter unavailable; metrics were not exported",
 					slog.Int("count", len(metrics)))
-				c.mu.Lock()
-				c.metricsExported += int64(len(metrics))
-				c.mu.Unlock()
+				c.incrementErrors()
 			}
 		}
 	}

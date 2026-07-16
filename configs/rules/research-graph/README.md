@@ -6,10 +6,13 @@ pattern. Wires the five research-graph components
 `assess_sufficiency`, `synthesize_answer`) into a single coordinated
 pipeline.
 
-This pack is the **application-shaped wiring** that closes ADR-045
-Phase 1 — the five components themselves ship as canonical framework
-substrate (under `processor/research-graph-*`), but the specific chain
-shape (R0→R6 + the retighten/refine branching) is operator-owned.
+Under ADR-075 this pack is part of the **atomic graph-research framework
+capability**, together with the five components, research payloads,
+`research_graph`, and `read_loop_result`. Selecting any part selects the
+capability; boot validation rejects missing or incoherent components,
+model routes, loop storage, tool access, or canonical rule files. Products
+own their personas and domain policy, but not an alternate partial copy of
+this framework rule chain.
 
 See:
 
@@ -39,7 +42,7 @@ Triple builders live in `agentic/research/orchestration.go`; the
 shared NATS publisher lives in
 `processor/research-graph-llmwrap/triplepub.go`. R0's kickoff triples
 are stamped by the `research_graph` tool itself (in
-`processor/agentic-tools/executors/research_graph.go`).
+`frameworkcapabilities/graphresearch/executor.go`).
 
 ## Rule files
 

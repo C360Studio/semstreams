@@ -20,8 +20,8 @@ type OTLPExporter struct {
 
 // NewOTLPExporter creates a new OTLP HTTP exporter.
 // endpoint should be the base URL of the OTLP collector (e.g., "http://localhost:4318").
-// insecure is accepted for future TLS configuration; the http.Client is always plain-HTTP capable.
-func NewOTLPExporter(endpoint string, _ bool, headers map[string]string, logger *slog.Logger) *OTLPExporter {
+// HTTP versus HTTPS is selected explicitly by the endpoint URL scheme.
+func NewOTLPExporter(endpoint string, headers map[string]string, logger *slog.Logger) *OTLPExporter {
 	if logger == nil {
 		logger = slog.Default()
 	}

@@ -769,7 +769,7 @@ func toFloat64(v interface{}) (float64, bool) {
 		// json.Number arrives when a decoder was configured with
 		// UseNumber() to preserve precision (avoiding float64's
 		// 15-digit limit on large integers). Used elsewhere in the
-		// codebase (processor/agentic-loop, message/oms). Forward-
+		// codebase (for example, processor/agentic-loop). Forward-
 		// looking: no current rule pack stamps json.Number on a
 		// Triple Object, but the type is in circulation and a future
 		// producer could surface it. Treating it like a numeric Go

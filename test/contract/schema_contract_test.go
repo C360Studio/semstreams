@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/componentregistry"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -40,7 +39,7 @@ func TestCommittedSchemasMatchCode(t *testing.T) {
 
 	// Initialize component registry
 	registry := component.NewRegistry()
-	if err := componentregistry.Register(registry); err != nil {
+	if err := registerPublishedComposition(registry); err != nil {
 		t.Fatalf("Failed to register components: %v", err)
 	}
 
@@ -172,7 +171,7 @@ func TestNoOrphanedSchemaFiles(t *testing.T) {
 
 	// Initialize component registry
 	registry := component.NewRegistry()
-	if err := componentregistry.Register(registry); err != nil {
+	if err := registerPublishedComposition(registry); err != nil {
 		t.Fatalf("Failed to register components: %v", err)
 	}
 

@@ -1,5 +1,5 @@
 // Package main provides the standalone mock servers for E2E testing.
-// It runs OpenAI and AGNTCY mock servers. Multiple e2e scenarios share
+// It runs an OpenAI-compatible mock server. Multiple e2e scenarios share
 // this binary; the --scenario flag selects which response/tool-call
 // preset to apply (see applyScenarioPreset).
 package main
@@ -22,7 +22,6 @@ import (
 
 func main() {
 	port := flag.Int("port", 8080, "Port for OpenAI mock server")
-	agntcyPort := flag.Int("agntcy-port", 8081, "Port for AGNTCY mock server")
 	scenario := flag.String("scenario", "default", "Which preset of role responses / tool-call scripts to apply (default, deep-research, crud-tools, ops, research-graph)")
 	flag.Parse()
 
@@ -40,17 +39,6 @@ func main() {
 	log.Printf("  Health endpoint: %s/health", openaiServer.URL())
 	log.Printf("  Chat completions: %s/v1/chat/completions", openaiServer.URL())
 
-	// Start AGNTCY mock server
-	agntcyAddr := fmt.Sprintf(":%d", *agntcyPort)
-	agntcyServer := mock.NewAGNTCYServer()
-
-	if err := agntcyServer.Start(agntcyAddr); err != nil {
-		log.Fatalf("Failed to start AGNTCY mock server: %v", err)
-	}
-	log.Printf("Mock AGNTCY server listening on %s", agntcyServer.URL())
-	log.Printf("  Directory: %s/v1/agents/register", agntcyServer.URL())
-	log.Printf("  OTEL HTTP: %s/v1/traces", agntcyServer.URL())
-
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -59,9 +47,6 @@ func main() {
 	log.Println("Shutting down...")
 	if err := openaiServer.Stop(); err != nil {
 		log.Printf("Error stopping OpenAI mock: %v", err)
-	}
-	if err := agntcyServer.Stop(); err != nil {
-		log.Printf("Error stopping AGNTCY mock: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package otel
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
@@ -13,11 +14,11 @@ type Config struct {
 	Ports *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
 
 	// Endpoint is the OTEL collector endpoint.
-	Endpoint string `json:"endpoint" schema:"type:string,description:OTEL collector endpoint,category:basic,default:localhost:4317"`
+	Endpoint string `json:"endpoint" schema:"type:string,description:OTLP HTTP collector base URL,category:basic,default:http://localhost:4318"`
 
 	// Protocol specifies the export protocol.
-	// Supported values: "grpc", "http"
-	Protocol string `json:"protocol" schema:"type:string,description:Export protocol,category:basic,default:grpc"`
+	// Only OTLP/HTTP is currently implemented. Unsupported transports fail closed.
+	Protocol string `json:"protocol" schema:"type:string,description:Export protocol,category:basic,default:http"`
 
 	// ServiceName is the service name for OTEL traces.
 	ServiceName string `json:"service_name" schema:"type:string,description:Service name for traces,category:basic,default:semstreams"`
@@ -31,29 +32,14 @@ type Config struct {
 	// ExportMetrics enables metric export.
 	ExportMetrics bool `json:"export_metrics" schema:"type:bool,description:Enable metric export,category:basic,default:true"`
 
-	// ExportLogs enables log export.
-	ExportLogs bool `json:"export_logs" schema:"type:bool,description:Enable log export,category:basic,default:false"`
-
 	// BatchTimeout is the timeout for batching exports.
 	BatchTimeout string `json:"batch_timeout" schema:"type:string,description:Batch export timeout,category:advanced,default:5s"`
-
-	// MaxBatchSize is the maximum number of items per batch.
-	MaxBatchSize int `json:"max_batch_size" schema:"type:int,description:Maximum batch size,category:advanced,default:512"`
-
-	// MaxExportBatchSize is the maximum number of items per export.
-	MaxExportBatchSize int `json:"max_export_batch_size" schema:"type:int,description:Max export batch size,category:advanced,default:512"`
 
 	// ExportTimeout is the timeout for each export operation.
 	ExportTimeout string `json:"export_timeout" schema:"type:string,description:Export operation timeout,category:advanced,default:30s"`
 
-	// Insecure allows insecure connections to the collector.
-	Insecure bool `json:"insecure" schema:"type:bool,description:Allow insecure connections,category:security,default:true"`
-
 	// Headers are additional headers to send with exports.
 	Headers map[string]string `json:"headers" schema:"type:object,description:Additional export headers,category:advanced"`
-
-	// ResourceAttributes are additional resource attributes.
-	ResourceAttributes map[string]string `json:"resource_attributes" schema:"type:object,description:Resource attributes,category:advanced"`
 
 	// SamplingRate is the trace sampling rate (0.0 to 1.0).
 	SamplingRate float64 `json:"sampling_rate" schema:"type:float,description:Trace sampling rate,category:advanced,default:1.0"`
@@ -89,19 +75,15 @@ func DefaultConfig() Config {
 			},
 			Outputs: []component.PortDefinition{},
 		},
-		Endpoint:           "localhost:4317",
-		Protocol:           "grpc",
-		ServiceName:        "semstreams",
-		ServiceVersion:     "1.0.0",
-		ExportTraces:       true,
-		ExportMetrics:      true,
-		ExportLogs:         false,
-		BatchTimeout:       "5s",
-		MaxBatchSize:       512,
-		MaxExportBatchSize: 512,
-		ExportTimeout:      "30s",
-		Insecure:           true,
-		SamplingRate:       1.0,
+		Endpoint:       "http://localhost:4318",
+		Protocol:       "http",
+		ServiceName:    "semstreams",
+		ServiceVersion: "1.0.0",
+		ExportTraces:   true,
+		ExportMetrics:  true,
+		BatchTimeout:   "5s",
+		ExportTimeout:  "30s",
+		SamplingRate:   1.0,
 	}
 }
 
@@ -111,8 +93,17 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ports configuration is required")
 	}
 
-	if c.Protocol != "" && c.Protocol != "grpc" && c.Protocol != "http" {
-		return fmt.Errorf("invalid protocol: %s (must be 'grpc' or 'http')", c.Protocol)
+	if c.Protocol != "http" {
+		return fmt.Errorf("unsupported protocol %q: only OTLP/HTTP is implemented", c.Protocol)
+	}
+	if (c.ExportTraces || c.ExportMetrics) && c.Endpoint == "" {
+		return fmt.Errorf("endpoint is required when telemetry export is enabled")
+	}
+	if c.Endpoint != "" {
+		endpoint, err := url.Parse(c.Endpoint)
+		if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" {
+			return fmt.Errorf("endpoint must be an absolute http or https URL")
+		}
 	}
 
 	if c.BatchTimeout != "" {
@@ -125,14 +116,6 @@ func (c *Config) Validate() error {
 		if _, err := time.ParseDuration(c.ExportTimeout); err != nil {
 			return fmt.Errorf("invalid export_timeout: %w", err)
 		}
-	}
-
-	if c.MaxBatchSize < 0 {
-		return fmt.Errorf("max_batch_size must be non-negative")
-	}
-
-	if c.MaxExportBatchSize < 0 {
-		return fmt.Errorf("max_export_batch_size must be non-negative")
 	}
 
 	if c.SamplingRate < 0 || c.SamplingRate > 1 {

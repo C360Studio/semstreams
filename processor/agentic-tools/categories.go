@@ -66,12 +66,6 @@ var toolCategories = map[string]ToolCategory{
 	"start_flow":    CategoryMeta,
 	"stop_flow":     CategoryMeta,
 	"undeploy_flow": CategoryMeta,
-
-	// GitHub tools
-	"github_read":   CategoryKnowledge,
-	"github_write":  CategoryInspect,
-	"github_init":   CategoryCore,
-	"github_client": CategoryCore,
 }
 
 // GetToolCategory returns the category for a tool name.

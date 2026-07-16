@@ -41,7 +41,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Mock OpenAI Server + AGNTCY Server (deterministic responses for testing)
+  # Mock OpenAI server (deterministic responses for testing)
   mock-llm:
     build:
       context: ../..
@@ -49,7 +49,6 @@ services:
     container_name: semstreams-agentic-mock-llm
     ports:
       - "38180:8080" # Mock LLM (3xxxx range)
-      - "38181:8081" # Mock AGNTCY (directory + OTEL)
     networks:
       - semstreams-agentic-net
     healthcheck:
@@ -85,7 +84,6 @@ services:
       - ../../testdata:/data/testdata:ro
     ports:
       - "38080:8080"   # HTTP API (health, components)
-      - "38282:8282"   # A2A adapter
       - "39090:9090"   # Prometheus metrics
       - "36060:6060"   # pprof (when SEMSTREAMS_DEBUG=true)
     networks:

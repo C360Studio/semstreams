@@ -243,14 +243,3 @@ func TestNewWebDID(t *testing.T) {
 		t.Errorf("ID = %q, want 'example.com:users:alice'", did.ID)
 	}
 }
-
-func TestNewAgntcyDID(t *testing.T) {
-	did := NewAgntcyDID("agent-123")
-
-	if did.Method != MethodAgntcy {
-		t.Errorf("Method = %q, want %q", did.Method, MethodAgntcy)
-	}
-	if did.ID != "agent-123" {
-		t.Errorf("ID = %q, want 'agent-123'", did.ID)
-	}
-}

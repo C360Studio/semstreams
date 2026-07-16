@@ -242,29 +242,6 @@ func TestRegisterBuiltins_SkipBuiltins_MultiToolGroup(t *testing.T) {
 			t.Errorf("query_entity should not register when NATSClient is nil regardless of skip")
 		}
 	})
-
-	t.Run("github_group_skip", func(t *testing.T) {
-		t.Parallel()
-		// github is a multi-tool group with no NATS dependency. Skipping
-		// it should leave bash registered while all github_* tools are
-		// absent.
-		reg := agentictools.NewExecutorRegistry()
-		err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
-			Logger:       slog.Default(),
-			SkipBuiltins: []string{"github"},
-		})
-		if err != nil {
-			t.Fatalf("RegisterBuiltins: %v", err)
-		}
-		if !containsName(reg.ListTools(), "bash") {
-			t.Errorf("bash should still register when only github is skipped")
-		}
-		for _, name := range reg.ListTools() {
-			if strings.HasPrefix(name.Name, "github_") {
-				t.Errorf("github_* tool %q should be absent under SkipBuiltins=[github]", name.Name)
-			}
-		}
-	})
 }
 
 // TestRegisterBuiltins_SkipBuiltins_MultipleNames verifies that
@@ -275,7 +252,7 @@ func TestRegisterBuiltins_SkipBuiltins_MultipleNames(t *testing.T) {
 	reg := agentictools.NewExecutorRegistry()
 	err := RegisterBuiltins(context.Background(), reg, ToolDependencies{
 		Logger:       slog.Default(),
-		SkipBuiltins: []string{"bash", "web_search", "github"},
+		SkipBuiltins: []string{"bash", "web_search"},
 	})
 	if err != nil {
 		t.Fatalf("RegisterBuiltins: %v", err)
@@ -358,8 +335,8 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		"bash", "web_search", "http_request",
 		"read_loop_result", "decide", "emit_diagnosis",
 		"write_todos", "scratchpad",
-		"summarize_graph", "search_graph", "research_graph", "flow_monitor",
-		"github", "graph_query",
+		"summarize_graph", "search_graph", "flow_monitor",
+		"graph_query",
 		"rules", "flows", "personas", "flow_templates",
 		"component_catalog",
 		"flow_lifecycle",
@@ -370,6 +347,29 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 	for i, k := range want {
 		if BuiltinGroupKeys[i] != k {
 			t.Errorf("BuiltinGroupKeys[%d] = %q, want %q. Order matters for golden-test reproducibility.", i, BuiltinGroupKeys[i], k)
+		}
+	}
+}
+
+func TestCoreToolGroupsExcludeProductAndCapabilityTools(t *testing.T) {
+	t.Parallel()
+	for _, forbidden := range []string{"github", "research_graph"} {
+		for _, group := range BuiltinGroupKeys {
+			if group == forbidden {
+				t.Errorf("core tool groups unexpectedly contain %q", forbidden)
+			}
+		}
+	}
+	for _, required := range []string{"graph_query", "search_graph", "summarize_graph"} {
+		found := false
+		for _, group := range BuiltinGroupKeys {
+			if group == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("core tool groups are missing direct graph group %q", required)
 		}
 	}
 }

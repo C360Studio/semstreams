@@ -2,6 +2,9 @@
 
 ## Status
 
+**Superseded by ADR-075 — 2026-07-15.** The schema-bound encoding contract remains useful, but its package and
+conformance lifecycle are SemConnect-owned rather than SemStreams framework substrate.
+
 **Accepted** — 2026-05-29 with the next tag bundle (Phase 1 of
 ADR-050 lands as an additive framework primitive; tag will be cut
 once any sibling work in flight has cleared). Closes

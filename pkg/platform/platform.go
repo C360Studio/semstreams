@@ -4,8 +4,8 @@
 // full config tree.
 //
 // Historically PlatformConfig lived in package config. That created a
-// transitive import cycle: any package that wanted to label messages
-// with platform identity (e.g. message/federation.go) had to import
+// transitive import cycle: any message package that wanted to label messages
+// with platform identity had to import
 // config, which forced config to stay free of imports from packages
 // like component — even though config legitimately needs to consume
 // component port definitions for stream derivation. Promoting the

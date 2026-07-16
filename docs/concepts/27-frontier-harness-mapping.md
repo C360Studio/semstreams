@@ -63,7 +63,7 @@ iteration, deciding when to stop.
 
 The semstreams equivalent (shipped in ADR-045) is a tool
 `research_graph(topic, hints?)` registered in
-`processor/agentic-tools/executors/research_graph.go`. The parent
+`frameworkcapabilities/graphresearch/executor.go`. The parent
 agent calls it like any other tool. Behind the tool, six processor
 components execute a rule chain:
 

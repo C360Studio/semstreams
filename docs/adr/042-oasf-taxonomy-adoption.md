@@ -2,6 +2,9 @@
 
 ## Status
 
+**Superseded by ADR-075 — 2026-07-15.** OASF taxonomy mapping and directory projection are SemTeams-owned product
+composition rather than SemStreams framework substrate.
+
 **Proposed — 2026-05-14.** Tag scope: TBD. Resolves the PR-C blocker
 recorded in `project_pr70_deferred_review_findings.md` (`OASFSkill.ID`
 string vs AGNTCY proto `Skill.id` uint32 schema mismatch).

@@ -1,7 +1,7 @@
 // Package executors hosts the concrete tool implementations and their
 // wire-to-registry entry points.
 //
-// Stateless tools (bash, http_request, web_search, github_*) wire from env
+// Stateless tools (bash, http_request, web_search) wire from env
 // vars alone. Stateful tools (query_entity, read_loop_result, decide) need
 // runtime deps (NATS KV buckets, platform identity) which only exist after
 // the binary has initialised streams/buckets — so their wire functions
@@ -108,10 +108,8 @@ var BuiltinGroupKeys = []string{
 	"scratchpad",
 	"summarize_graph",
 	"search_graph",
-	"research_graph",
 	"flow_monitor",
 	// Multi-tool registrations: key is the register-function's domain
-	"github",            // registerGitHub — github_* tools
 	"graph_query",       // registerGraphQuery — query_entity + 4 others
 	"rules",             // registerRules — rule CRUD tools
 	"flows",             // registerFlows — flow CRUD tools
@@ -178,7 +176,6 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	gate("bash", func() error { return registerBash(reg, logger) })
 	gate("web_search", func() error { return registerWebSearch(reg, deps.NATSClient, deps.Platform, logger) })
 	gate("http_request", func() error { return registerHTTPRequest(reg, deps.NATSClient, deps.Platform, logger) })
-	gate("github", func() error { return registerGitHub(reg, logger) })
 
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity); web_search and http_request fall back to text-only return without graph emission")
@@ -197,9 +194,6 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		// required. See project_graph_tools_gateway_first_plan memory.
 		gate("summarize_graph", func() error { return registerSummarizeGraph(reg, deps.NATSClient, logger) })
 		gate("search_graph", func() error { return registerSearchGraph(reg, deps.NATSClient, logger) })
-		gate("research_graph", func() error {
-			return registerResearchGraph(ctx, reg, deps.NATSClient, deps.Platform, logger, loopsBucket)
-		})
 	}
 
 	// Pattern-B registry-backed tools. A nil manager is a legal skip;

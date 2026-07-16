@@ -1,7 +1,9 @@
 ## 1. Contract and Inventory
 
 - [ ] 1.1 Add storage-class, budget, threshold, and migration-override configuration types with validation
-- [ ] 1.2 Inventory ordinary streams plus `KV_*` and `OBJ_*` backing streams with logical-owner mapping
+- [ ] 1.2 Inventory ordinary streams plus `KV_*` and `OBJ_*` backing streams with logical-owner mapping. Classify
+      discovered product-adapter resources under their selected ADR-075 capability owner rather than treating them as
+      framework-derived stores; retain account-wide visibility even when the owner is external to SemStreams core
 - [ ] 1.3 Add an optional capacity-reporting capability for registered non-NATS `storage.Store` backends
 - [ ] 1.4 Expose storage doctor output and Prometheus metrics for usage, headroom, growth, and time to threshold
 - [ ] 1.5 Add unit tests for unknown capacity, ownership mapping, pressure transitions, and typed budget errors
@@ -22,7 +24,8 @@
 - [ ] 3.2 Implement warning/high/critical admission while reserving replacement and recovery headroom
 - [ ] 3.3 Permit finite graph `MaxBytes` only after verifying `DiscardNew` and rejection observability
 - [ ] 3.4 Add tests proving graph TTL/`DiscardOld` rejection and non-evicting capacity failure
-- [ ] 3.5 Add product-facing diagnostics for telemetry identities and unbounded append predicates
+- [ ] 3.5 Add product-facing diagnostics for telemetry identities and unbounded append predicates, including the
+      selected product or optional-adapter owner responsible for each derived record
 
 ## 4. Store and Reference Hardening
 

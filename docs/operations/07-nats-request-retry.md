@@ -157,7 +157,6 @@ respData, err := natsClient.RequestReadyClassified(
 - `graph/inference/applier.go` — inference-emitted triples
 - `processor/agentic-tools/decide.go` — decide tool's terminal
   triple (coordinator pattern)
-- `examples/github-pr-workflow/component.go` — example mutation
 
 ### Queries (using bare Request)
 
