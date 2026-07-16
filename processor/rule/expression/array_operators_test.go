@@ -110,15 +110,15 @@ func TestEvaluator_LengthEqEndToEnd(t *testing.T) {
 	// subtopic count.
 	entity := &gtypes.EntityState{
 		Triples: []message.Triple{
-			{Predicate: "gather.completed_subtopic", Object: "hydraulics"},
-			{Predicate: "gather.completed_subtopic", Object: "pneumatics"},
-			{Predicate: "gather.completed_subtopic", Object: "electrics"},
+			{Predicate: "test.gather.completed-subtopic", Object: "hydraulics"},
+			{Predicate: "test.gather.completed-subtopic", Object: "pneumatics"},
+			{Predicate: "test.gather.completed-subtopic", Object: "electrics"},
 		},
 	}
 
 	got, err := ev.Evaluate(entity, LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "gather.completed_subtopic", Operator: OpLengthEq, Value: 3},
+			{Field: "test.gather.completed-subtopic", Operator: OpLengthEq, Value: 3},
 		},
 		Logic: "and",
 	})
@@ -137,13 +137,13 @@ func TestEvaluator_LengthEqMissingPredicateIsZero(t *testing.T) {
 
 	entity := &gtypes.EntityState{
 		Triples: []message.Triple{
-			{Predicate: "agent.role", Object: "coordinator"},
+			{Predicate: "test.agent.role", Object: "coordinator"},
 		},
 	}
 
 	got, err := ev.Evaluate(entity, LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "gather.completed_subtopic", Operator: OpLengthEq, Value: 0},
+			{Field: "test.gather.completed-subtopic", Operator: OpLengthEq, Value: 0},
 		},
 		Logic: "and",
 	})
@@ -160,14 +160,14 @@ func TestEvaluator_ArrayContainsEndToEnd(t *testing.T) {
 
 	entity := &gtypes.EntityState{
 		Triples: []message.Triple{
-			{Predicate: "gather.completed_subtopic", Object: "hydraulics"},
-			{Predicate: "gather.completed_subtopic", Object: "pneumatics"},
+			{Predicate: "test.gather.completed-subtopic", Object: "hydraulics"},
+			{Predicate: "test.gather.completed-subtopic", Object: "pneumatics"},
 		},
 	}
 
 	got, err := ev.Evaluate(entity, LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "gather.completed_subtopic", Operator: OpArrayContains, Value: "hydraulics"},
+			{Field: "test.gather.completed-subtopic", Operator: OpArrayContains, Value: "hydraulics"},
 		},
 		Logic: "and",
 	})
@@ -177,7 +177,7 @@ func TestEvaluator_ArrayContainsEndToEnd(t *testing.T) {
 	// Negative case — predicate doesn't carry that value.
 	got, err = ev.Evaluate(entity, LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "gather.completed_subtopic", Operator: OpArrayContains, Value: "electrics"},
+			{Field: "test.gather.completed-subtopic", Operator: OpArrayContains, Value: "electrics"},
 		},
 		Logic: "and",
 	})

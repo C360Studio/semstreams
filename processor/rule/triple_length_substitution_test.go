@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -25,20 +26,20 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 	}{
 		{
 			name:     "native []string of 3 → 3",
-			template: "$entity.triple.subtopics.length",
+			template: "$entity.triple.test.fixture.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []string{"a", "b", "c"}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{"a", "b", "c"}},
 				},
 			},
 			want: "3",
 		},
 		{
 			name:     "[]any of 5 → 5 (JSON-unmarshal shape)",
-			template: "$entity.triple.subtopics.length",
+			template: "$entity.triple.test.fixture.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []any{"a", "b", "c", "d", "e"}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []any{"a", "b", "c", "d", "e"}},
 				},
 			},
 			want: "5",
@@ -48,34 +49,34 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 			template: "$entity.triple.coordinator.decision.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "coordinator.decision.subtopics", Object: `["hydraulics","pneumatics","electrics","sensors"]`},
+					{Predicate: semantictest.Predicate(t, "coordinator", "decision", "subtopics"), Object: `["hydraulics","pneumatics","electrics","sensors"]`},
 				},
 			},
 			want: "4",
 		},
 		{
 			name:     "empty list → 0",
-			template: "$entity.triple.subtopics.length",
+			template: "$entity.triple.test.fixture.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []any{}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []any{}},
 				},
 			},
 			want: "0",
 		},
 		{
 			name:     "missing predicate → 0",
-			template: "$entity.triple.subtopics.length",
+			template: "$entity.triple.test.fixture.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "other.predicate", Object: "x"},
+					{Predicate: semantictest.Predicate(t, "test", "other", "predicate"), Object: "x"},
 				},
 			},
 			want: "0",
 		},
 		{
 			name:     "entity nil → 0",
-			template: "$entity.triple.subtopics.length",
+			template: "$entity.triple.test.fixture.subtopics.length",
 			entity:   nil,
 			want:     "0",
 		},
@@ -84,17 +85,17 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 			template: "$entity.triple.coordinator.decision.subtopics.length",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "coordinator.decision.subtopics", Object: []string{"a", "b"}},
+					{Predicate: semantictest.Predicate(t, "coordinator", "decision", "subtopics"), Object: []string{"a", "b"}},
 				},
 			},
 			want: "2",
 		},
 		{
 			name:     "interpolated into a larger string",
-			template: "expected=$entity.triple.subtopics.length children",
+			template: "expected=$entity.triple.test.fixture.subtopics.length children",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []string{"a", "b", "c"}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{"a", "b", "c"}},
 				},
 			},
 			want: "expected=3 children",
@@ -104,7 +105,7 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ec := &ExecutionContext{
-				EntityID: "e.1",
+				EntityID: semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "entity", "001"),
 				Entity:   tc.entity,
 			}
 			got := ec.SubstituteVariables(tc.template)
@@ -129,17 +130,17 @@ func TestTripleLengthSubstitution_TruthTable(t *testing.T) {
 // shape can surface a structured diagnosis.
 func TestTripleLengthSubstitution_NonListShapeEmitsErrorSentinel(t *testing.T) {
 	ec := &ExecutionContext{
-		EntityID: "e.1",
+		EntityID: semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "entity", "001"),
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
 				// agent.role is a scalar string, not a list — author
 				// shouldn't be using .length against it.
-				{Predicate: "agent.role", Object: "researcher"},
+				{Predicate: semantictest.Predicate(t, "test", "agent", "role"), Object: "researcher"},
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$entity.triple.agent.role.length")
-	assert.Equal(t, "[ERROR_LENGTH_NOT_LIST:agent.role]", got,
+	got := ec.SubstituteVariables("$entity.triple.test.agent.role.length")
+	assert.Equal(t, "[ERROR_LENGTH_NOT_LIST:test.agent.role]", got,
 		"non-list Object must replace the .length token with the error sentinel so author errors don't silently parse as 0 downstream")
 }
 
@@ -148,15 +149,15 @@ func TestTripleLengthSubstitution_NonListShapeEmitsErrorSentinel(t *testing.T) {
 // ec.Related — symmetric with the $entity case.
 func TestTripleLengthSubstitution_RelatedNamespace(t *testing.T) {
 	ec := &ExecutionContext{
-		EntityID:  "e.1",
-		RelatedID: "r.1",
+		EntityID:  semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "entity", "001"),
+		RelatedID: semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "related", "001"),
 		Related: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "items", Object: []string{"x", "y"}},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "items"), Object: []string{"x", "y"}},
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$related.triple.items.length")
+	got := ec.SubstituteVariables("$related.triple.test.fixture.items.length")
 	assert.Equal(t, "2", got)
 }
 
@@ -166,17 +167,17 @@ func TestTripleLengthSubstitution_RelatedNamespace(t *testing.T) {
 // and then strand the .length suffix. The pre-pass ordering matters.
 func TestTripleLengthSubstitution_NotInterferingWithOrdinarySubstitution(t *testing.T) {
 	ec := &ExecutionContext{
-		EntityID: "e.1",
+		EntityID: semantictest.EntityID(t, "test", "rule", "fixture", "substitution", "entity", "001"),
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "subtopics", Object: []string{"a", "b", "c"}},
-				{Predicate: "agent.role", Object: "coordinator"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{"a", "b", "c"}},
+				{Predicate: semantictest.Predicate(t, "test", "agent", "role"), Object: "coordinator"},
 			},
 		},
 	}
 	// Both forms in one template: ordinary triple substitution AND
 	// .length substitution. Both must resolve.
-	got := ec.SubstituteVariables("role=$entity.triple.agent.role count=$entity.triple.subtopics.length")
+	got := ec.SubstituteVariables("role=$entity.triple.test.agent.role count=$entity.triple.test.fixture.subtopics.length")
 	assert.Equal(t, "role=coordinator count=3", got)
 }
 
@@ -184,7 +185,7 @@ func TestTripleLengthSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{Entity: &gtypes.EntityState{Triples: []message.Triple{
-		{Predicate: "coordinator.decision.next-actions", Object: []string{"review", "merge"}},
+		{Predicate: semantictest.Predicate(t, "coordinator", "decision", "next-actions"), Object: []string{"review", "merge"}},
 	}}}
 
 	got := ec.SubstituteVariables("$entity.triple.coordinator.decision.next-actions.length")

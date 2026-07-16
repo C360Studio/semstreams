@@ -96,11 +96,11 @@ func TestResolveListValue_NonListReturnsFalse(t *testing.T) {
 	ec := &ExecutionContext{
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "agent.role", Object: "researcher", Timestamp: time.Now()},
+				{Predicate: "test.agent.role", Object: "researcher", Timestamp: time.Now()},
 			},
 		},
 	}
-	got, ok := ec.ResolveListValue("$entity.triple.agent.role")
+	got, ok := ec.ResolveListValue("$entity.triple.test.agent.role")
 	assert.False(t, ok, "scalar string should not resolve as list")
 	assert.Nil(t, got)
 }
@@ -112,11 +112,11 @@ func TestResolveListValue_MissingPredicateReturnsFalse(t *testing.T) {
 	ec := &ExecutionContext{
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "agent.role", Object: "researcher", Timestamp: time.Now()},
+				{Predicate: "test.agent.role", Object: "researcher", Timestamp: time.Now()},
 			},
 		},
 	}
-	got, ok := ec.ResolveListValue("$entity.triple.nonexistent.predicate")
+	got, ok := ec.ResolveListValue("$entity.triple.test.nonexistent.predicate")
 	assert.False(t, ok)
 	assert.Nil(t, got)
 }
@@ -144,11 +144,11 @@ func TestResolveListValue_MalformedJSONReturnsFalse(t *testing.T) {
 	ec := &ExecutionContext{
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "broken.list", Object: `["a", "b" "c]`, Timestamp: time.Now()},
+				{Predicate: "test.broken.list", Object: `["a", "b" "c]`, Timestamp: time.Now()},
 			},
 		},
 	}
-	got, ok := ec.ResolveListValue("$entity.triple.broken.list")
+	got, ok := ec.ResolveListValue("$entity.triple.test.broken.list")
 	assert.False(t, ok, "malformed JSON should not resolve as list")
 	assert.Nil(t, got)
 }

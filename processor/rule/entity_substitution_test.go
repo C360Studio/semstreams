@@ -116,12 +116,12 @@ func TestSubstituteVariables_EntityParts_NoCollisionWithIDOrTriple(t *testing.T)
 		EntityID: "acme.ops.robotics.gcs.drone.001",
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "org", Object: "triple-derived-org"},
+				{Predicate: "test.fixture.org", Object: "triple-derived-org"},
 			},
 		},
 	}
 
-	in := "part=$entity.org triple=$entity.triple.org id=$entity.id instance=$entity.instance"
+	in := "part=$entity.org triple=$entity.triple.test.fixture.org id=$entity.id instance=$entity.instance"
 	want := "part=acme triple=triple-derived-org id=acme.ops.robotics.gcs.drone.001 instance=001"
 	if got := ec.SubstituteVariables(in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
@@ -157,15 +157,15 @@ func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.
 		{
 			name: "shorter predicate first (regression case)",
 			tripleOrder: []message.Triple{
-				{Predicate: "lineage.researcher-plan", Object: planUUID},
-				{Predicate: "lineage.researcher-plan-entity", Object: planEntity},
+				{Predicate: "test.lineage.researcher-plan", Object: planUUID},
+				{Predicate: "test.lineage.researcher-plan-entity", Object: planEntity},
 			},
 		},
 		{
 			name: "longer predicate first (previously-passing case)",
 			tripleOrder: []message.Triple{
-				{Predicate: "lineage.researcher-plan-entity", Object: planEntity},
-				{Predicate: "lineage.researcher-plan", Object: planUUID},
+				{Predicate: "test.lineage.researcher-plan-entity", Object: planEntity},
+				{Predicate: "test.lineage.researcher-plan", Object: planUUID},
 			},
 		},
 	}
@@ -181,7 +181,7 @@ func TestSubstituteVariables_TriplePrefixCollision_LongestMatchFirst(t *testing.
 				},
 			}
 
-			in := "subject=$entity.triple.lineage.researcher-plan-entity short=$entity.triple.lineage.researcher-plan"
+			in := "subject=$entity.triple.test.lineage.researcher-plan-entity short=$entity.triple.test.lineage.researcher-plan"
 			want := "subject=" + planEntity + " short=" + planUUID
 
 			if got := ec.SubstituteVariables(in); got != want {

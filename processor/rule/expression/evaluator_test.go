@@ -8,16 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
 func TestExpressionEvaluator_NumericOperators(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "numeric", "drone", "001")
 
 	// Create test entity with battery level
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.battery.level",
 			Object:    85.5,
 			Source:    "test",
@@ -118,11 +120,12 @@ func TestExpressionEvaluator_NumericOperators(t *testing.T) {
 
 func TestExpressionEvaluator_StringOperators(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "string", "drone", "001")
 
 	// Create test entity with status string
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.system.status",
 			Object:    "ARMED_READY",
 			Source:    "test",
@@ -188,18 +191,19 @@ func TestExpressionEvaluator_StringOperators(t *testing.T) {
 
 func TestExpressionEvaluator_LogicOperators(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "logic", "drone", "001")
 
 	// Create test entity with multiple properties
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.battery.level",
 			Object:    85.5,
 			Source:    "test",
 			Timestamp: time.Now(),
 		},
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.system.status",
 			Object:    "ARMED_READY",
 			Source:    "test",
@@ -269,11 +273,12 @@ func TestExpressionEvaluator_LogicOperators(t *testing.T) {
 
 func TestExpressionEvaluator_MissingFields(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "missing", "drone", "001")
 
 	// Create entity with only battery level (missing status)
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.battery.level",
 			Object:    85.5,
 			Source:    "test",
@@ -353,11 +358,12 @@ func TestExpressionEvaluator_MissingFields(t *testing.T) {
 
 func TestExpressionEvaluator_TypeConversion(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "conversion", "drone", "001")
 
 	// Create entity with mixed types
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.battery.level",
 			Object:    int64(85), // Integer that should compare with float
 			Source:    "test",
@@ -378,7 +384,10 @@ func TestExpressionEvaluator_TypeConversion(t *testing.T) {
 
 func TestExpressionEvaluator_EmptyConditions(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
-	entityState := createTestEntity("drone.001", []message.Triple{})
+	entityState := createTestEntity(
+		semantictest.EntityID(t, "test", "rule", "expression", "empty", "drone", "001"),
+		[]message.Triple{},
+	)
 
 	result, err := evaluator.Evaluate(entityState, LogicalExpression{
 		Conditions: []ConditionExpression{},
@@ -391,9 +400,10 @@ func TestExpressionEvaluator_EmptyConditions(t *testing.T) {
 
 func TestExpressionEvaluator_UnsupportedOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
-	entityState := createTestEntity("drone.001", []message.Triple{
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "unsupported", "drone", "001")
+	entityState := createTestEntity(entityID, []message.Triple{
 		{
-			Subject:   "drone.001",
+			Subject:   entityID,
 			Predicate: "robotics.battery.level",
 			Object:    85.5,
 			Source:    "test",
@@ -418,6 +428,8 @@ func TestExpressionEvaluator_UnsupportedOperator(t *testing.T) {
 // T054: Test hasTriple() function
 func TestHasTriple(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	droneID := semantictest.EntityID(t, "test", "rule", "expression", "has-triple", "drone", "001")
+	relatedID := semantictest.EntityID(t, "test", "rule", "expression", "has-triple", "drone", "002")
 
 	tests := []struct {
 		name      string
@@ -427,42 +439,42 @@ func TestHasTriple(t *testing.T) {
 	}{
 		{
 			name: "triple exists",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
-					Predicate: "proximity.near",
-					Object:    "drone.002",
+					Subject:   droneID,
+					Predicate: "test.proximity.near",
+					Object:    relatedID,
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 			}),
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  true,
 		},
 		{
 			name: "triple does not exist",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
+					Subject:   droneID,
 					Predicate: "robotics.battery.level",
 					Object:    85.5,
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 			}),
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  false,
 		},
 		{
 			name:      "nil entity",
 			entity:    nil,
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  false,
 		},
 		{
 			name:      "empty triples",
-			entity:    createTestEntity("drone.001", []message.Triple{}),
-			predicate: "proximity.near",
+			entity:    createTestEntity(droneID, []message.Triple{}),
+			predicate: "test.proximity.near",
 			expected:  false,
 		},
 	}
@@ -478,6 +490,7 @@ func TestHasTriple(t *testing.T) {
 // T055: Test getOutgoing() function
 func TestGetOutgoing(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	droneID := semantictest.EntityID(t, "test", "rule", "expression", "outgoing", "drone", "001")
 
 	tests := []struct {
 		name      string
@@ -487,58 +500,58 @@ func TestGetOutgoing(t *testing.T) {
 	}{
 		{
 			name: "single outgoing relationship",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
-					Predicate: "proximity.near",
+					Subject:   droneID,
+					Predicate: "test.proximity.near",
 					Object:    "c360.platform1.robotics.mav1.drone.002",
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 			}),
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  []string{"c360.platform1.robotics.mav1.drone.002"},
 		},
 		{
 			name: "multiple outgoing relationships",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
-					Predicate: "proximity.near",
+					Subject:   droneID,
+					Predicate: "test.proximity.near",
 					Object:    "c360.platform1.robotics.mav1.drone.002",
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 				{
-					Subject:   "drone.001",
-					Predicate: "proximity.near",
+					Subject:   droneID,
+					Predicate: "test.proximity.near",
 					Object:    "c360.platform1.robotics.mav1.drone.003",
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 			}),
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  []string{"c360.platform1.robotics.mav1.drone.002", "c360.platform1.robotics.mav1.drone.003"},
 		},
 		{
 			name: "no matching predicate",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
-					Predicate: "fleet.member_of",
+					Subject:   droneID,
+					Predicate: "test.fleet.member-of",
 					Object:    "c360.platform1.robotics.mav1.fleet.alpha",
 					Source:    "test",
 					Timestamp: time.Now(),
 				},
 			}),
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  []string{},
 		},
 		{
 			name: "non-relationship triple (literal value)",
-			entity: createTestEntity("drone.001", []message.Triple{
+			entity: createTestEntity(droneID, []message.Triple{
 				{
-					Subject:   "drone.001",
+					Subject:   droneID,
 					Predicate: "robotics.battery.level",
 					Object:    85.5,
 					Source:    "test",
@@ -551,7 +564,7 @@ func TestGetOutgoing(t *testing.T) {
 		{
 			name:      "nil entity",
 			entity:    nil,
-			predicate: "proximity.near",
+			predicate: "test.proximity.near",
 			expected:  []string{},
 		},
 	}
@@ -567,6 +580,10 @@ func TestGetOutgoing(t *testing.T) {
 // T056: Test distance() function
 func TestDistance(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entity1ID := semantictest.EntityID(t, "test", "rule", "expression", "distance", "drone", "001")
+	entity2ID := semantictest.EntityID(t, "test", "rule", "expression", "distance", "drone", "002")
+	entity3ID := semantictest.EntityID(t, "test", "rule", "expression", "distance", "drone", "003")
+	entityNoPosID := semantictest.EntityID(t, "test", "rule", "expression", "distance", "drone", "004")
 
 	// Create entities with position data (now stored as triples)
 	entityWithPosition := func(id string, lat, lon float64) *gtypes.EntityState {
@@ -593,17 +610,17 @@ func TestDistance(t *testing.T) {
 		}
 	}
 
-	entity1 := entityWithPosition("drone.001", 40.7128, -74.0060)  // New York
-	entity2 := entityWithPosition("drone.002", 34.0522, -118.2437) // Los Angeles
-	entity3 := entityWithPosition("drone.003", 40.7128, -74.0060)  // Same as entity1
-	entityNoPos := createTestEntity("drone.004", []message.Triple{})
+	entity1 := entityWithPosition(entity1ID, 40.7128, -74.0060)  // New York
+	entity2 := entityWithPosition(entity2ID, 34.0522, -118.2437) // Los Angeles
+	entity3 := entityWithPosition(entity3ID, 40.7128, -74.0060)  // Same as entity1
+	entityNoPos := createTestEntity(entityNoPosID, []message.Triple{})
 
 	// Store entities in a map for lookup
 	entities := map[string]*gtypes.EntityState{
-		"drone.001": entity1,
-		"drone.002": entity2,
-		"drone.003": entity3,
-		"drone.004": entityNoPos,
+		entity1ID:     entity1,
+		entity2ID:     entity2,
+		entity3ID:     entity3,
+		entityNoPosID: entityNoPos,
 	}
 
 	tests := []struct {
@@ -616,32 +633,32 @@ func TestDistance(t *testing.T) {
 	}{
 		{
 			name:        "different locations (NY to LA)",
-			entity1ID:   "drone.001",
-			entity2ID:   "drone.002",
+			entity1ID:   entity1ID,
+			entity2ID:   entity2ID,
 			expectError: false,
 			minDistance: 3900000, // ~3900 km
 			maxDistance: 4000000, // ~4000 km
 		},
 		{
 			name:        "same location",
-			entity1ID:   "drone.001",
-			entity2ID:   "drone.003",
+			entity1ID:   entity1ID,
+			entity2ID:   entity3ID,
 			expectError: false,
 			minDistance: 0,
 			maxDistance: 1, // Allow tiny floating point error
 		},
 		{
 			name:        "missing position data",
-			entity1ID:   "drone.001",
-			entity2ID:   "drone.004",
+			entity1ID:   entity1ID,
+			entity2ID:   entityNoPosID,
 			expectError: true,
 			minDistance: 0,
 			maxDistance: 0,
 		},
 		{
 			name:        "both missing position",
-			entity1ID:   "drone.004",
-			entity2ID:   "drone.004",
+			entity1ID:   entityNoPosID,
+			entity2ID:   entityNoPosID,
 			expectError: true,
 			minDistance: 0,
 			maxDistance: 0,
@@ -669,8 +686,8 @@ func TestExtractLatLonIgnoresBarePredicateAliases(t *testing.T) {
 	entity := &gtypes.EntityState{Triples: []message.Triple{
 		{Predicate: "geo.location.latitude", Object: 40.0},
 		{Predicate: "geo.location.longitude", Object: -100.0},
-		{Predicate: "latitude", Object: 1.0},
-		{Predicate: "longitude", Object: 2.0},
+		{Predicate: "latitude", Object: 1.0},  // predicate-audit:invalid {"kind":"stored-predicate","value":"latitude","reason":"arity"}
+		{Predicate: "longitude", Object: 2.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"longitude","reason":"arity"}
 	}}
 	lat, lon := extractLatLonFromTriples(entity)
 	if lat != 40 || lon != -100 {
@@ -680,6 +697,7 @@ func TestExtractLatLonIgnoresBarePredicateAliases(t *testing.T) {
 
 func TestExpressionEvaluator_InOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	workflowID := semantictest.EntityID(t, "test", "rule", "expression", "workflow", "entity", "001")
 
 	tests := []struct {
 		name      string
@@ -690,12 +708,12 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 	}{
 		{
 			name: "string in array - match",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
+					{Field: "test.workflow.phase", Operator: OpIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -703,12 +721,12 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 		},
 		{
 			name: "string in array - no match",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
+					{Field: "test.workflow.phase", Operator: OpIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -716,12 +734,12 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 		},
 		{
 			name: "numeric in array - match",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "error.code", Object: float64(404), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.error.code", Object: float64(404), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "error.code", Operator: OpIn, Value: []interface{}{float64(400), float64(404), float64(500)}, Required: true},
+					{Field: "test.error.code", Operator: OpIn, Value: []interface{}{float64(400), float64(404), float64(500)}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -729,12 +747,12 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 		},
 		{
 			name: "in with non-array value - error",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpIn, Value: "not_an_array", Required: true},
+					{Field: "test.workflow.phase", Operator: OpIn, Value: "not_an_array", Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -743,12 +761,12 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 		},
 		{
 			name: "in with empty array",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpIn, Value: []interface{}{}, Required: true},
+					{Field: "test.workflow.phase", Operator: OpIn, Value: []interface{}{}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -771,6 +789,7 @@ func TestExpressionEvaluator_InOperator(t *testing.T) {
 
 func TestExpressionEvaluator_NotInOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	workflowID := semantictest.EntityID(t, "test", "rule", "expression", "workflow", "entity", "002")
 
 	tests := []struct {
 		name      string
@@ -781,12 +800,12 @@ func TestExpressionEvaluator_NotInOperator(t *testing.T) {
 	}{
 		{
 			name: "string not in array - true (not found)",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpNotIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
+					{Field: "test.workflow.phase", Operator: OpNotIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -794,12 +813,12 @@ func TestExpressionEvaluator_NotInOperator(t *testing.T) {
 		},
 		{
 			name: "string not in array - false (found)",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "rejected", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpNotIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
+					{Field: "test.workflow.phase", Operator: OpNotIn, Value: []interface{}{"rejected", "not_a_bug", "wont_fix"}, Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -807,12 +826,12 @@ func TestExpressionEvaluator_NotInOperator(t *testing.T) {
 		},
 		{
 			name: "not_in with non-array value - error",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "test.workflow.phase", Object: "developing", Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
-					{Field: "workflow.phase", Operator: OpNotIn, Value: "not_an_array", Required: true},
+					{Field: "test.workflow.phase", Operator: OpNotIn, Value: "not_an_array", Required: true},
 				},
 				Logic: LogicAnd,
 			},
@@ -836,6 +855,7 @@ func TestExpressionEvaluator_NotInOperator(t *testing.T) {
 
 func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	workflowID := semantictest.EntityID(t, "test", "rule", "expression", "between", "workflow", "001")
 
 	tests := []struct {
 		name      string
@@ -846,8 +866,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 	}{
 		{
 			name: "value within range",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -859,8 +879,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "value at lower bound (inclusive)",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(100000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(100000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -872,8 +892,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "value at upper bound (inclusive)",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(500000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(500000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -885,8 +905,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "value below range",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(50000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(50000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -898,8 +918,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "value above range",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(600000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(600000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -911,8 +931,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "between with non-array value - error",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -925,8 +945,8 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 		},
 		{
 			name: "between with wrong array length - error",
-			entity: createTestEntity("wf.001", []message.Triple{
-				{Subject: "wf.001", Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
+			entity: createTestEntity(workflowID, []message.Triple{
+				{Subject: workflowID, Predicate: "workflow.tokens.total", Object: float64(250000), Source: "test", Timestamp: time.Now()},
 			}),
 			expr: LogicalExpression{
 				Conditions: []ConditionExpression{
@@ -954,9 +974,10 @@ func TestExpressionEvaluator_BetweenOperator(t *testing.T) {
 
 func TestExpressionEvaluator_TransitionOperator(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "transition", "plan", "001")
 
-	entity := createTestEntity("plan.001", []message.Triple{
-		{Subject: "plan.001", Predicate: "workflow.plan.status", Object: "drafting", Source: "test", Timestamp: time.Now()},
+	entity := createTestEntity(entityID, []message.Triple{
+		{Subject: entityID, Predicate: "workflow.plan.status", Object: "drafting", Source: "test", Timestamp: time.Now()},
 	})
 
 	tests := []struct {
@@ -1304,9 +1325,10 @@ func TestEvaluateWithStateAndMessage_BareNameMessagePath(t *testing.T) {
 // on `field: "battery.level"` against entity state must keep working.
 func TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
-	entity := createTestEntity("test.entity.001", []message.Triple{
-		{Predicate: "battery.level", Object: 15.0},
-		{Predicate: "status", Object: "active"},
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "entity-path", "entity", "001")
+	entity := createTestEntity(entityID, []message.Triple{
+		{Predicate: "test.battery.level", Object: 15.0},
+		{Predicate: "test.fixture.status", Object: "active"},
 	})
 
 	tests := []struct {
@@ -1317,7 +1339,7 @@ func TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged(t *testing.T) {
 		{
 			name: "bare predicate resolves from entity triple",
 			condition: ConditionExpression{
-				Field:    "battery.level",
+				Field:    "test.battery.level",
 				Operator: OpLessThan,
 				Value:    20.0,
 			},
@@ -1326,7 +1348,7 @@ func TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged(t *testing.T) {
 		{
 			name: "bare predicate string operator",
 			condition: ConditionExpression{
-				Field:    "status",
+				Field:    "test.fixture.status",
 				Operator: OpEqual,
 				Value:    "active",
 			},
@@ -1351,13 +1373,14 @@ func TestEvaluateWithStateAndMessage_EntityPathBareNameUnchanged(t *testing.T) {
 // match on the inbound event's metadata.
 func TestEvaluateWithStateAndMessage_EntityFallsThroughToMessage(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
-	entity := createTestEntity("test.entity.001", []message.Triple{
-		{Predicate: "battery.level", Object: 15.0},
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "message-fallback", "entity", "001")
+	entity := createTestEntity(entityID, []message.Triple{
+		{Predicate: "test.battery.level", Object: 15.0},
 	})
 
 	expr := LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "battery.level", Operator: OpLessThan, Value: 20.0},
+			{Field: "test.battery.level", Operator: OpLessThan, Value: 20.0},
 			{Field: "command", Operator: OpContains, Value: "danger"}, // from messageFields
 		},
 		Logic: LogicAnd,
@@ -1372,30 +1395,33 @@ func TestEvaluateWithStateAndMessage_EntityFallsThroughToMessage(t *testing.T) {
 // Even when keys overlap across sources, the explicit namespace wins.
 func TestEvaluateWithStateAndMessage_PrecedenceOrder(t *testing.T) {
 	evaluator := NewExpressionEvaluator()
-	entity := createTestEntity("test.entity.001", []message.Triple{
-		{Predicate: "shared_key", Object: "entity_value"},
+	entityID := semantictest.EntityID(t, "test", "rule", "expression", "precedence", "entity", "001")
+	entity := createTestEntity(entityID, []message.Triple{
+		{Predicate: "shared.key.value", Object: "entity_value"},
 	})
 
-	// $message.shared_key explicit beats entity triple of same name.
+	// $message.shared.key.value explicitly selects the message value even though
+	// the entity carries the same canonical predicate.
 	expr := LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "$message.shared_key", Operator: OpEqual, Value: "message_value"},
+			{Field: "$message.shared.key.value", Operator: OpEqual, Value: "message_value"},
 		},
 		Logic: LogicAnd,
 	}
-	result, err := evaluator.EvaluateWithStateAndMessage(entity, nil, MessageFields{"shared_key": "message_value"}, expr)
+	message := MessageFields{"shared": map[string]any{"key": map[string]any{"value": "message_value"}}}
+	result, err := evaluator.EvaluateWithStateAndMessage(entity, nil, message, expr)
 	require.NoError(t, err)
 	assert.True(t, result, "$message.* explicit must resolve from messageFields, not entity triple")
 
-	// Bare shared_key with entity present resolves from entity, NOT
+	// Bare shared.key.value with entity present resolves from entity, NOT
 	// messageFields (entity wins for bare names on entity-path rules).
 	expr2 := LogicalExpression{
 		Conditions: []ConditionExpression{
-			{Field: "shared_key", Operator: OpEqual, Value: "entity_value"},
+			{Field: "shared.key.value", Operator: OpEqual, Value: "entity_value"},
 		},
 		Logic: LogicAnd,
 	}
-	result2, err := evaluator.EvaluateWithStateAndMessage(entity, nil, MessageFields{"shared_key": "message_value"}, expr2)
+	result2, err := evaluator.EvaluateWithStateAndMessage(entity, nil, message, expr2)
 	require.NoError(t, err)
 	assert.True(t, result2, "bare name with entity present must resolve from entity triple")
 }

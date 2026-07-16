@@ -389,7 +389,7 @@ func TestValidateDefinitionRejectsNoncanonicalActionPredicate(t *testing.T) {
 		ID: "invalid-action-predicate",
 		OnEnter: []Action{{
 			Type:      ActionTypeAddTriple,
-			Predicate: "workflow.state.next_phase",
+			Predicate: "workflow.state.next_phase", // predicate-audit:invalid {"kind":"stored-predicate","value":"workflow.state.next_phase","reason":"segment_character"}
 		}},
 	}
 	err := ValidateDefinition(def)

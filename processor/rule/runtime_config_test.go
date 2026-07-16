@@ -58,7 +58,7 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 						"name": "Invalid Rule",
 						"conditions": []any{
 							map[string]any{
-								"field":    "test.field",
+								"field":    "test.test.field",
 								"operator": "eq",
 								"value":    "test",
 							},

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -89,12 +90,13 @@ func TestApplyScheduleSubstitutions_UnknownTokenSurvives(t *testing.T) {
 func TestExecutionContext_ScheduleAndEntityCoexist(t *testing.T) {
 	t.Parallel()
 
+	entityID := semantictest.EntityID(t, "test", "rule", "cron", "schedule", "drone", "001")
 	ec := &ExecutionContext{
-		EntityID: "drone.001",
+		EntityID: entityID,
 		Entity: &gtypes.EntityState{
-			ID: "drone.001",
+			ID: entityID,
 			Triples: []message.Triple{
-				{Subject: "drone.001", Predicate: "agent.role", Object: "scout"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "agent", "role"), Object: "scout"},
 			},
 		},
 		Schedule: &ScheduleContext{
@@ -104,8 +106,8 @@ func TestExecutionContext_ScheduleAndEntityCoexist(t *testing.T) {
 		},
 	}
 
-	in := "rule=$schedule.id entity=$entity.id role=$entity.triple.agent.role last=$schedule.last_fired_at"
-	want := "rule=weekly entity=drone.001 role=scout last=2026-04-27T09:00:00Z"
+	in := "rule=$schedule.id entity=$entity.id role=$entity.triple.test.agent.role last=$schedule.last_fired_at"
+	want := "rule=weekly entity=" + entityID + " role=scout last=2026-04-27T09:00:00Z"
 	if got := ec.SubstituteVariables(in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -119,7 +121,7 @@ func TestExecutionContext_ScheduleTokenInExpressionRuleSurvives(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{
-		EntityID: "drone.001",
+		EntityID: semantictest.EntityID(t, "test", "rule", "cron", "expression", "drone", "001"),
 		// Schedule deliberately nil — we're an expression rule
 	}
 
@@ -223,7 +225,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 
 	got := ec.SubstituteVariables("$entity.triple.agent.loop.run")
 	if got != "root-loop-uuid" {
-		t.Errorf("$entity.triple.agent.run resolved to %q, want %q", got, "root-loop-uuid")
+		t.Errorf("$entity.triple.agent.loop.run resolved to %q, want %q", got, "root-loop-uuid")
 	}
 
 	// ADR-053 follow-up: the 6-part run entity ID is the rule-addressable upsert
@@ -231,7 +233,7 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	// rule can use it as an add_triple/update_triple Subject.
 	gotEntity := ec.SubstituteVariables("$entity.triple.agent.run.entity-id")
 	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; gotEntity != want {
-		t.Errorf("$entity.triple.agent.run.entity_id resolved to %q, want %q", gotEntity, want)
+		t.Errorf("$entity.triple.agent.run.entity-id resolved to %q, want %q", gotEntity, want)
 	}
 
 	// Verify an entity WITHOUT agent.run returns an unresolved token (not empty,

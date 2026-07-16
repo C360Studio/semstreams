@@ -293,7 +293,7 @@ func validRuleEntityEntry(t *testing.T, entityID string, revision uint64) jetstr
 func poisonedRuleEntityEntry(entityID string, revision uint64) jetstream.KeyValueEntry {
 	return &mockKVEntry{
 		key: entityID, revision: revision, created: time.Now(),
-		value: []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"mission"}]}`),
+		value: []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"mission"}]}`), // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	}
 }
 

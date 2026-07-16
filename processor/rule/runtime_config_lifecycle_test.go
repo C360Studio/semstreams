@@ -61,7 +61,7 @@ func TestApplyConfigUpdate_LifecycleManagerReachesReconciledRules(t *testing.T) 
 				"name": "Phase-gated transition",
 				"conditions": []any{
 					map[string]any{
-						"field":    "$entity.lifecycle.phase",
+						"field":    "$entity.lifecycle.phase", // predicate-audit:invalid {"kind":"stored-predicate","value":"$entity.lifecycle.phase","reason":"segment_start"}
 						"operator": "eq",
 						"value":    "posted",
 						"required": true,

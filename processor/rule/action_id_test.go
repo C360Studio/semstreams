@@ -42,7 +42,7 @@ func TestFingerprint_ChangesWhenShapeChanges(t *testing.T) {
 		mut  func(Action) Action
 	}{
 		{"different rule_id", func(a Action) Action { return a }}, // tested below via direct param change
-		{"different action type", func(a Action) Action { a.Type = ActionTypeAddTriple; a.Predicate = "x"; return a }},
+		{"different action type", func(a Action) Action { a.Type = ActionTypeAddTriple; a.Predicate = "test.fixture.x"; return a }},
 		{"different subject", func(a Action) Action { a.Subject = "agent.task.reviewer"; return a }},
 		{"different role", func(a Action) Action { a.Role = "reviewer"; return a }},
 	}
@@ -123,7 +123,7 @@ func TestEffectiveMaxIterations_ExplicitNonZero(t *testing.T) {
 // firing counter.
 func TestFingerprint_DistinguisherByActionType(t *testing.T) {
 	publish := Action{Type: ActionTypePublish, Subject: "events.foo", Role: "x"}
-	addTriple := Action{Type: ActionTypeAddTriple, Subject: "events.foo", Predicate: "rel.foo", Role: "x"}
+	addTriple := Action{Type: ActionTypeAddTriple, Subject: "events.foo", Predicate: "test.rel.foo", Role: "x"}
 	updateKV := Action{Type: ActionTypeUpdateKV, Bucket: "BUCKET", Key: "key", Role: "x"}
 
 	fp1 := publish.fingerprint("r")

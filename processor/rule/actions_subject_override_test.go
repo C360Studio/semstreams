@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -29,7 +30,7 @@ func TestExecuteAddTriple_SubjectExplicitLiteral(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeAddTriple,
 		Subject:   "acme.ops.robot.gcs.plan.42",
-		Predicate: "gather.completed_subtopic",
+		Predicate: "test.gather.completed-subtopic",
 		Object:    "hydraulics",
 	}
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robot.gcs.gather.99"}))
@@ -37,7 +38,7 @@ func TestExecuteAddTriple_SubjectExplicitLiteral(t *testing.T) {
 	require.Len(t, mutator.addedTriples, 1)
 	assert.Equal(t, "acme.ops.robot.gcs.plan.42", mutator.addedTriples[0].Subject,
 		"literal Subject must override the trigger entity ID")
-	assert.Equal(t, "gather.completed_subtopic", mutator.addedTriples[0].Predicate)
+	assert.Equal(t, "test.gather.completed-subtopic", mutator.addedTriples[0].Predicate)
 	assert.Equal(t, "hydraulics", mutator.addedTriples[0].Object)
 }
 
@@ -61,7 +62,7 @@ func TestExecuteAddTriple_SubjectSubstitutionResolved(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeAddTriple,
 		Subject:   "$entity.triple.agent.loop.parent",
-		Predicate: "gather.completed_subtopic",
+		Predicate: "test.gather.completed-subtopic",
 		Object:    "hydraulics",
 	}
 	require.NoError(t, executor.Execute(ctx, action, ec))
@@ -111,7 +112,7 @@ func TestExecuteAddTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeAddTriple,
 		Subject:   "$entity.triple.agent.loop.parent",
-		Predicate: "gather.completed_subtopic",
+		Predicate: "test.gather.completed-subtopic",
 		Object:    "hydraulics",
 	}
 	err := executor.Execute(ctx, action, ec)
@@ -131,13 +132,13 @@ func TestExecuteRemoveTriple_SubjectOverrideTargetsNamedEntity(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeRemoveTriple,
 		Subject:   "acme.ops.robot.gcs.plan.42",
-		Predicate: "gather.completed_subtopic",
+		Predicate: "test.gather.completed-subtopic",
 	}
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robot.gcs.gather.99"}))
 
 	require.Len(t, mutator.removedTriples, 1)
 	assert.Equal(t, "acme.ops.robot.gcs.plan.42", mutator.removedTriples[0].subject)
-	assert.Equal(t, "gather.completed_subtopic", mutator.removedTriples[0].predicate)
+	assert.Equal(t, "test.gather.completed-subtopic", mutator.removedTriples[0].predicate)
 }
 
 func TestExecuteRemoveTriple_SubjectEmptyDefaultsToEntityID(t *testing.T) {
@@ -169,7 +170,7 @@ func TestExecuteRemoveTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeRemoveTriple,
 		Subject:   "$entity.triple.agent.loop.parent",
-		Predicate: "gather.completed_subtopic",
+		Predicate: "test.gather.completed-subtopic",
 	}
 	require.Error(t, executor.Execute(ctx, action, ec))
 	assert.Empty(t, mutator.removedTriples)
@@ -194,7 +195,7 @@ func TestExecuteUpdateTriple_SubjectSubstitutionResolved(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
 		Subject:   "$entity.triple.agent.loop.parent",
-		Predicate: "plan.status",
+		Predicate: "test.plan.status",
 		Object:    "synthesizing",
 	}
 	require.NoError(t, executor.Execute(ctx, action, ec))
@@ -236,7 +237,7 @@ func TestExecuteUpdateTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
 		Subject:   "$entity.triple.agent.loop.parent",
-		Predicate: "plan.status",
+		Predicate: "test.plan.status",
 		Object:    "synthesizing",
 	}
 	require.Error(t, executor.Execute(ctx, action, ec))
@@ -249,6 +250,10 @@ func TestExecuteUpdateTriple_SubjectResolvedEmptyIsError(t *testing.T) {
 // paths from the helper itself. Pure function over (Action, EC).
 func TestResolveTripleSubject_TruthTable(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "subject", "override", "entity", "001")
+	literalID := semantictest.EntityID(t, "test", "rule", "subject", "override", "literal", "001")
+	childID := semantictest.EntityID(t, "test", "rule", "subject", "override", "child", "001")
+	parentID := semantictest.EntityID(t, "test", "rule", "subject", "override", "parent", "001")
 	cases := []struct {
 		name      string
 		action    Action
@@ -259,32 +264,32 @@ func TestResolveTripleSubject_TruthTable(t *testing.T) {
 		{
 			name:   "empty subject defaults to EntityID",
 			action: Action{},
-			ec:     &ExecutionContext{EntityID: "e.1"},
-			want:   "e.1",
+			ec:     &ExecutionContext{EntityID: entityID},
+			want:   entityID,
 		},
 		{
 			name:   "literal subject overrides EntityID",
-			action: Action{Subject: "literal.entity.id"},
-			ec:     &ExecutionContext{EntityID: "e.1"},
-			want:   "literal.entity.id",
+			action: Action{Subject: literalID},
+			ec:     &ExecutionContext{EntityID: entityID},
+			want:   literalID,
 		},
 		{
 			name:   "subject substitutes from entity triples",
 			action: Action{Subject: "$entity.triple.agent.loop.parent"},
 			ec: &ExecutionContext{
-				EntityID: "e.child",
+				EntityID: childID,
 				Entity: &gtypes.EntityState{
 					Triples: []message.Triple{
-						{Predicate: "agent.loop.parent", Object: "e.parent"},
+						{Predicate: "agent.loop.parent", Object: parentID},
 					},
 				},
 			},
-			want: "e.parent",
+			want: parentID,
 		},
 		{
 			name:      "subject has unresolved tokens after substitution → error",
-			action:    Action{Subject: "$entity.triple.nonexistent"},
-			ec:        &ExecutionContext{EntityID: "e.1", Entity: &gtypes.EntityState{}},
+			action:    Action{Subject: "$entity.triple.test.fixture.nonexistent"},
+			ec:        &ExecutionContext{EntityID: entityID, Entity: &gtypes.EntityState{}},
 			wantError: true,
 		},
 		{

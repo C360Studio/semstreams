@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -77,7 +78,7 @@ func TestStatefulEvaluator_Evaluate(t *testing.T) {
 				},
 			}
 
-			entityID := "entity-123"
+			entityID := semantictest.EntityID(t, "test", "rule", "stateful", "evaluation", "entity", "123")
 			entityKey := entityID
 
 			if tt.previousMatching {
@@ -150,7 +151,7 @@ func TestStatefulEvaluator_NoInitialState(t *testing.T) {
 
 	transition, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-new",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "transition", "entity", "new"),
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -178,12 +179,12 @@ func TestStatefulEvaluator_PairRule(t *testing.T) {
 		Type: "pair",
 		Name: "Pair Rule",
 		OnEnter: []Action{
-			{Type: ActionTypeAddTriple, Predicate: "related_to", Object: "$related.id"},
+			{Type: ActionTypeAddTriple, Predicate: "test.fixture.related-to", Object: "$related.id"},
 		},
 	}
 
-	entity1 := "entity-a"
-	entity2 := "entity-b"
+	entity1 := semantictest.EntityID(t, "test", "rule", "stateful", "pair", "entity", "a")
+	entity2 := semantictest.EntityID(t, "test", "rule", "stateful", "pair", "entity", "b")
 
 	transition1, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
@@ -227,13 +228,13 @@ func TestStatefulEvaluator_MultipleActions(t *testing.T) {
 		OnEnter: []Action{
 			{Type: ActionTypePublish, Subject: "test.action1"},
 			{Type: ActionTypePublish, Subject: "test.action2"},
-			{Type: ActionTypeAddTriple, Predicate: "status", Object: "active"},
+			{Type: ActionTypeAddTriple, Predicate: "test.fixture.status", Object: "active"},
 		},
 	}
 
 	transition, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-multi",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "actions", "entity", "multi"),
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -266,7 +267,7 @@ func TestStatefulEvaluator_Iteration(t *testing.T) {
 		},
 	}
 
-	entityID := "entity-iter"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "iteration", "entity", "001")
 
 	// First entry: iteration should be 1
 	_, err := evaluator.Evaluate(ctx, Evaluation{Rule: ruleDef, EntityID: entityID, CurrentlyMatching: true})
@@ -322,11 +323,12 @@ func TestStatefulEvaluator_WhenClause(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "when", "entity", "001")
 	entity := &gtypes.EntityState{
-		ID: "entity-when",
+		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: "entity-when", Predicate: "review.verdict", Object: "approved"},
-			{Subject: "entity-when", Predicate: "status", Object: "complete"},
+			{Subject: entityID, Predicate: "test.review.verdict", Object: "approved"},
+			{Subject: entityID, Predicate: "test.fixture.status", Object: "complete"},
 		},
 	}
 
@@ -339,14 +341,14 @@ func TestStatefulEvaluator_WhenClause(t *testing.T) {
 				Type:    ActionTypePublish,
 				Subject: "test.approved",
 				When: []expression.ConditionExpression{
-					{Field: "review.verdict", Operator: "eq", Value: "approved"},
+					{Field: "test.review.verdict", Operator: "eq", Value: "approved"},
 				},
 			},
 			{
 				Type:    ActionTypePublish,
 				Subject: "test.rejected",
 				When: []expression.ConditionExpression{
-					{Field: "review.verdict", Operator: "eq", Value: "rejected"},
+					{Field: "test.review.verdict", Operator: "eq", Value: "rejected"},
 				},
 			},
 			{
@@ -406,7 +408,7 @@ func TestStatefulEvaluator_WhenWithStateFields(t *testing.T) {
 		},
 	}
 
-	entityID := "entity-budget"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "budget", "entity", "001")
 
 	// First 3 entries: retry action fires, escalate doesn't
 	for i := range 3 {
@@ -471,7 +473,7 @@ func TestStatefulEvaluator_WhenNilEntity(t *testing.T) {
 
 	_, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-nil",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "nil", "entity", "001"),
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -569,7 +571,7 @@ func TestStatefulEvaluator_WhenMessagePayloadAccess(t *testing.T) {
 
 	_, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-msg-path",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "message", "entity", "001"),
 		CurrentlyMatching: true,
 		MessageData: map[string]any{
 			"command":   "cd /workspace && something",
@@ -633,7 +635,7 @@ func TestStatefulEvaluator_WhenConsolidatedGovernancePattern(t *testing.T) {
 	actionExecutor.executeCallCount = 0
 	_, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-1",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "governance", "entity", "001"),
 		CurrentlyMatching: true,
 		MessageData:       map[string]any{"command": "cd /workspace && ls", "tool_name": "bash"},
 	})
@@ -648,7 +650,7 @@ func TestStatefulEvaluator_WhenConsolidatedGovernancePattern(t *testing.T) {
 	actionExecutor.executeCallCount = 0
 	_, err = evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-2",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "governance", "entity", "002"),
 		CurrentlyMatching: true,
 		MessageData:       map[string]any{"command": "ls /tmp", "tool_name": "bash"},
 	})
@@ -687,7 +689,7 @@ func TestStatefulEvaluator_TransitionFieldTracking(t *testing.T) {
 		},
 	}
 
-	entityID := "plan.001"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "transition", "plan", "001")
 	entityCreated := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
@@ -771,11 +773,12 @@ func TestStatefulEvaluator_FieldValuesBackwardCompat(t *testing.T) {
 	stateTracker := NewStateTracker(bucket, logger)
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "history", "entity", "old")
 
 	// Simulate old persisted state without FieldValues
 	oldState := MatchState{
 		RuleID:         "test-rule",
-		EntityKey:      "entity-old",
+		EntityKey:      entityID,
 		IsMatching:     true,
 		LastTransition: "entered",
 		TransitionAt:   time.Now().Add(-1 * time.Minute),
@@ -799,7 +802,7 @@ func TestStatefulEvaluator_FieldValuesBackwardCompat(t *testing.T) {
 	// Evaluate with existing state — should work fine with nil FieldValues
 	transition, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-old",
+		EntityID:          entityID,
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -824,7 +827,7 @@ func TestStatefulEvaluator_BootstrapRecovery_OnRecovery(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-recovery"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "recovery", "entity", "001")
 
 	// Persist state that says the rule was matching before the crash.
 	prev := MatchState{
@@ -894,7 +897,7 @@ func TestStatefulEvaluator_BootstrapRecovery_RerunOnRecoveryFlag(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-rerun"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "rerun", "entity", "001")
 
 	prev := MatchState{
 		RuleID:         "rerun-rule",
@@ -955,7 +958,7 @@ func TestStatefulEvaluator_BootstrapNoRecoveryWithoutOptIn(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-no-optin"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "optin", "entity", "none")
 	prev := MatchState{
 		RuleID:         "no-optin-rule",
 		EntityKey:      entityID,
@@ -1015,7 +1018,7 @@ func TestStatefulEvaluator_StaleRevisionShortCircuits(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-stale"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "revision", "entity", "stale")
 
 	// Seed persisted state that already recorded revision 100.
 	prev := MatchState{
@@ -1088,7 +1091,7 @@ func TestStatefulEvaluator_NewerRevisionFires(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-newer"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "revision", "entity", "newer")
 
 	prev := MatchState{
 		RuleID:         "newer-rule",
@@ -1164,7 +1167,7 @@ func TestStatefulEvaluator_ZeroRevisionSkipsGuard(t *testing.T) {
 	actionExecutor := &mockActionExecutor{}
 	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
 
-	entityID := "entity-zero"
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "revision", "entity", "zero")
 
 	prev := MatchState{
 		RuleID:         "zero-rule",
@@ -1256,7 +1259,7 @@ func TestRunActions_DenyShortCircuits(t *testing.T) {
 
 	_, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-deny-test",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "deny", "entity", "001"),
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -1299,7 +1302,7 @@ func TestRunActions_NonDenyErrorContinues(t *testing.T) {
 
 	_, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              ruleDef,
-		EntityID:          "entity-non-deny-test",
+		EntityID:          semantictest.EntityID(t, "test", "rule", "stateful", "deny", "entity", "002"),
 		CurrentlyMatching: true,
 	})
 	if err != nil {

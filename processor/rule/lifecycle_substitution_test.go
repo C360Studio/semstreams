@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -43,10 +44,11 @@ func newCountingManager() *countingManager {
 
 func TestSubstitute_LifecyclePhase(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "phase", "entity", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-1", PhaseF: "flying", TerminalF: false})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying", TerminalF: false})
 
-	ec := &ExecutionContext{EntityID: "s-1", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("phase=$entity.lifecycle.phase")
 	if got != "phase=flying" {
 		t.Errorf("got %q, want phase=flying", got)
@@ -55,10 +57,11 @@ func TestSubstitute_LifecyclePhase(t *testing.T) {
 
 func TestSubstitute_LifecycleTerminal(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "terminal", "entity", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-2", PhaseF: "completed", TerminalF: true})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "completed", TerminalF: true})
 
-	ec := &ExecutionContext{EntityID: "s-2", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("t=$entity.lifecycle.terminal")
 	if got != "t=true" {
 		t.Errorf("got %q, want t=true", got)
@@ -67,10 +70,11 @@ func TestSubstitute_LifecycleTerminal(t *testing.T) {
 
 func TestSubstitute_LifecycleWorkflow(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "workflow", "entity", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-3", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 
-	ec := &ExecutionContext{EntityID: "s-3", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("w=$entity.lifecycle.workflow")
 	if got != "w=mission" {
 		t.Errorf("got %q, want w=mission", got)
@@ -79,18 +83,19 @@ func TestSubstitute_LifecycleWorkflow(t *testing.T) {
 
 func TestSubstitute_LifecycleWorkflowAndWorkflowDef_PrefixOrdering(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "definition", "entity", "001")
 	// Verify that .workflow_def is substituted BEFORE .workflow so the
 	// longer prefix wins. A naive ReplaceAll order would substitute
 	// `.workflow` first, leaving `_def` as a dangling literal suffix.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-4", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 	mgr.workflowDefs["mission"] = lifecycle.WorkflowDef{
 		Workflow:        "mission",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*",
-		PhasePredicate:  "mission.phase",
+		EntityIDPattern: "*.test.lifecycle.gcs.mission.*",
+		PhasePredicate:  "test.mission.phase",
 	}
 
-	ec := &ExecutionContext{EntityID: "s-4", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("w=$entity.lifecycle.workflow|def=$entity.lifecycle.workflow_def")
 	if !strings.HasPrefix(got, "w=mission|def={") {
 		t.Errorf("workflow_def prefix-ordering broken, got %q", got)
@@ -99,15 +104,16 @@ func TestSubstitute_LifecycleWorkflowAndWorkflowDef_PrefixOrdering(t *testing.T)
 
 func TestSubstitute_WorkflowDefLookupFailureLeavesTokenVerbatim(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "definition", "entity", "missing")
 	// Loud-fail discipline: when workflow_def resolution fails, the
 	// surviving token must come back unchanged so the unresolved-
 	// template warning catches it. Silent empty-string substitution
 	// would defeat the warning ([[feedback_no_clean_except_handwave]]).
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-def-fail", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 	// Note: no entry in mgr.workflowDefs for "mission" → GetWorkflowDefinition errors.
 
-	ec := &ExecutionContext{EntityID: "s-def-fail", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("def=$entity.lifecycle.workflow_def")
 	if got != "def=$entity.lifecycle.workflow_def" {
 		t.Errorf("workflow_def failure must leave token verbatim, got %q", got)
@@ -116,6 +122,7 @@ func TestSubstitute_WorkflowDefLookupFailureLeavesTokenVerbatim(t *testing.T) {
 
 func TestSubstitute_WorkflowDefFailureDoesNotCorruptWorkflow(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "definition", "entity", "corrupt")
 	// Regression guard against the prefix-ordering trap: when
 	// .workflow_def resolution fails (token survives) AND the template
 	// references .workflow separately, the .workflow substitution must
@@ -123,9 +130,9 @@ func TestSubstitute_WorkflowDefFailureDoesNotCorruptWorkflow(t *testing.T) {
 	// `$entity.lifecycle.<workflowName>_def`. Verified by the
 	// placeholder-swap inside applyLifecycleSubstitutions.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-def-corrupt", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 
-	ec := &ExecutionContext{EntityID: "s-def-corrupt", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	got := ec.SubstituteVariables("w=$entity.lifecycle.workflow|def=$entity.lifecycle.workflow_def")
 	// .workflow resolved to "mission"; .workflow_def left verbatim.
 	if got != "w=mission|def=$entity.lifecycle.workflow_def" {
@@ -135,7 +142,7 @@ func TestSubstitute_WorkflowDefFailureDoesNotCorruptWorkflow(t *testing.T) {
 
 func TestSubstitute_NilManagerLeavesTokens(t *testing.T) {
 	t.Parallel()
-	ec := &ExecutionContext{EntityID: "s-5"}
+	ec := &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "lifecycle", "manager", "entity", "nil")}
 	in := "phase=$entity.lifecycle.phase"
 	got := ec.SubstituteVariables(in)
 	if got != in {
@@ -147,7 +154,7 @@ func TestSubstitute_UnknownEntityLeavesTokens(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
 	// No seed for entityID — LookupByEntityID returns not-found.
-	ec := &ExecutionContext{EntityID: "s-6", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "lifecycle", "lookup", "entity", "missing"), Lifecycle: mgr}
 	in := "phase=$entity.lifecycle.phase"
 	got := ec.SubstituteVariables(in)
 	if got != in {
@@ -157,12 +164,13 @@ func TestSubstitute_UnknownEntityLeavesTokens(t *testing.T) {
 
 func TestSubstitute_NoLifecycleTokenShortCircuits(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "short-circuit", "entity", "001")
 	// Templates without `$entity.lifecycle.` shouldn't trigger a
 	// LookupByEntityID at all — verified via counter.
 	mgr := newCountingManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-7", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 
-	ec := &ExecutionContext{EntityID: "s-7", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	_ = ec.SubstituteVariables("plain text, no tokens")
 	_ = ec.SubstituteVariables("$entity.id only")
 	if mgr.lookups.Load() != 0 {
@@ -172,12 +180,13 @@ func TestSubstitute_NoLifecycleTokenShortCircuits(t *testing.T) {
 
 func TestSubstitute_LookupMemoizedPerEC(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "memoized", "entity", "001")
 	// Two substitution calls on the same EC → one lookup. Both
 	// positive and negative caches matter; this test covers positive.
 	mgr := newCountingManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s-8", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
 
-	ec := &ExecutionContext{EntityID: "s-8", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: entityID, Lifecycle: mgr}
 	_ = ec.SubstituteVariables("phase=$entity.lifecycle.phase")
 	_ = ec.SubstituteVariables("workflow=$entity.lifecycle.workflow")
 	_ = ec.SubstituteVariables("terminal=$entity.lifecycle.terminal")
@@ -189,7 +198,7 @@ func TestSubstitute_LookupMemoizedPerEC(t *testing.T) {
 func TestSubstitute_NegativeLookupMemoized(t *testing.T) {
 	t.Parallel()
 	mgr := newCountingManager() // no seed — every lookup fails
-	ec := &ExecutionContext{EntityID: "s-9", Lifecycle: mgr}
+	ec := &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "lifecycle", "memoized", "entity", "missing"), Lifecycle: mgr}
 	_ = ec.SubstituteVariables("a=$entity.lifecycle.phase")
 	_ = ec.SubstituteVariables("b=$entity.lifecycle.workflow")
 	if got := mgr.lookups.Load(); got != 1 {
@@ -201,11 +210,12 @@ func TestSubstitute_NegativeLookupMemoized(t *testing.T) {
 
 func TestPopulateLifecycleStateFields_PopulatesAllKeys(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "state-fields", "participant", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "p-1", PhaseF: "flying", TerminalF: false})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying", TerminalF: false})
 
 	fields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), mgr, "p-1", fields)
+	PopulateLifecycleStateFields(context.Background(), mgr, entityID, fields)
 
 	if fields["$entity.lifecycle.phase"] != "flying" {
 		t.Errorf("phase: got %v", fields["$entity.lifecycle.phase"])
@@ -221,7 +231,7 @@ func TestPopulateLifecycleStateFields_PopulatesAllKeys(t *testing.T) {
 func TestPopulateLifecycleStateFields_NilManagerNoOp(t *testing.T) {
 	t.Parallel()
 	fields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), nil, "p-2", fields)
+	PopulateLifecycleStateFields(context.Background(), nil, semantictest.EntityID(t, "test", "rule", "lifecycle", "state-fields", "participant", "002"), fields)
 	if len(fields) != 0 {
 		t.Errorf("nil manager should populate nothing, got %v", fields)
 	}
@@ -231,7 +241,7 @@ func TestPopulateLifecycleStateFields_UnknownEntityNoOp(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
 	fields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), mgr, "does-not-exist", fields)
+	PopulateLifecycleStateFields(context.Background(), mgr, semantictest.EntityID(t, "test", "rule", "lifecycle", "state-fields", "participant", "missing"), fields)
 	if len(fields) != 0 {
 		t.Errorf("unknown entity should populate nothing, got %v", fields)
 	}
@@ -241,11 +251,12 @@ func TestPopulateLifecycleStateFields_UnknownEntityNoOp(t *testing.T) {
 
 func TestEvaluator_ResolvesLifecyclePhaseConditionField(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "condition", "entity", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "e-1", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
 
 	fields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), mgr, "e-1", fields)
+	PopulateLifecycleStateFields(context.Background(), mgr, entityID, fields)
 
 	evaluator := expression.NewExpressionEvaluator()
 	expr := expression.LogicalExpression{
@@ -273,8 +284,9 @@ func TestEvaluator_ResolvesLifecyclePhaseConditionField(t *testing.T) {
 // fail this test ([[feedback_integration_tests_must_drive_production_wire]]).
 func TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "wire", "entity", "001")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "wire-1", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
 
 	def := Definition{
 		ID:      "wire-rule-1",
@@ -292,7 +304,7 @@ func TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase(t *testing.T)
 	}
 	rule.SetLifecycleManager(mgr)
 
-	entity := &gtypes.EntityState{ID: "wire-1"}
+	entity := &gtypes.EntityState{ID: entityID}
 	if !rule.EvaluateEntityState(entity) {
 		t.Errorf("expected EvaluateEntityState=true for phase==flying via production wire")
 	}
@@ -300,8 +312,9 @@ func TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase(t *testing.T)
 
 func TestExpressionRule_EvaluateEntityState_LifecyclePhaseMismatch(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "wire", "entity", "002")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "wire-2", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 
 	def := Definition{
 		ID:      "wire-rule-2",
@@ -319,7 +332,7 @@ func TestExpressionRule_EvaluateEntityState_LifecyclePhaseMismatch(t *testing.T)
 	}
 	rule.SetLifecycleManager(mgr)
 
-	entity := &gtypes.EntityState{ID: "wire-2"}
+	entity := &gtypes.EntityState{ID: entityID}
 	if rule.EvaluateEntityState(entity) {
 		t.Errorf("expected EvaluateEntityState=false for phase==planning vs value=flying")
 	}
@@ -353,7 +366,8 @@ func TestStatefulEvaluator_ResolvesLifecyclePhase(t *testing.T) {
 	evaluator := NewStatefulEvaluator(stateTracker, actionExec, nil)
 
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "stateful-1", PhaseF: "flying"})
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "stateful", "entity", "001")
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "flying"})
 	evaluator.SetLifecycleManager(mgr)
 
 	def := Definition{
@@ -374,7 +388,7 @@ func TestStatefulEvaluator_ResolvesLifecyclePhase(t *testing.T) {
 
 	transition, err := evaluator.Evaluate(ctx, Evaluation{
 		Rule:              def,
-		EntityID:          "stateful-1",
+		EntityID:          entityID,
 		CurrentlyMatching: true,
 	})
 	if err != nil {
@@ -408,7 +422,7 @@ func TestExpressionRule_NoManagerLeavesLifecyclePhaseUnresolved(t *testing.T) {
 	}
 	// Deliberately omit SetLifecycleManager.
 
-	entity := &gtypes.EntityState{ID: "wire-3"}
+	entity := &gtypes.EntityState{ID: semantictest.EntityID(t, "test", "rule", "lifecycle", "wire", "entity", "003")}
 	if rule.EvaluateEntityState(entity) {
 		t.Errorf("expected false-match with no manager wired (field missing → no fire)")
 	}
@@ -416,11 +430,12 @@ func TestExpressionRule_NoManagerLeavesLifecyclePhaseUnresolved(t *testing.T) {
 
 func TestEvaluator_LifecyclePhaseMismatchYieldsFalse(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "lifecycle", "condition", "entity", "002")
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "e-2", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: entityID, PhaseF: "planning"})
 
 	fields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), mgr, "e-2", fields)
+	PopulateLifecycleStateFields(context.Background(), mgr, entityID, fields)
 
 	evaluator := expression.NewExpressionEvaluator()
 	expr := expression.LogicalExpression{

@@ -262,7 +262,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 		"name": "Dynamic Battery Rule",
 		"conditions": []any{
 			map[string]any{
-				"field":    "$message.battery.level",
+				"field":    "$message.battery.level", // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.battery.level","reason":"segment_start"}
 				"operator": "lt",
 				"value":    30.0,
 				"required": true,
@@ -297,7 +297,7 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 		"name": "Updated Dynamic Rule",
 		"conditions": []any{
 			map[string]any{
-				"field":    "$message.battery.level",
+				"field":    "$message.battery.level", // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.battery.level","reason":"segment_start"}
 				"operator": "lt",
 				"value":    15.0, // Changed threshold
 				"required": true,
