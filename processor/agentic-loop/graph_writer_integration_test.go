@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -35,6 +36,8 @@ type tripleCollector struct {
 	batchRequests  int
 	batchSizes     []int
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=635 column=18 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed replay root rejection
 
 func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, error) {
 	var req gtypes.AddTripleRequest
@@ -640,7 +643,7 @@ func TestWriteSpawnIdentity_EntityExistsPoisonedReadbackFailsClosed_Integration(
 				MessageType: agentic.LoopExecutionMessageType(),
 				Triples: []message.Triple{{
 					Subject:   "bad",
-					Predicate: agvocab.LoopTask,
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 					Object:    "task-first",
 				}},
 			},
@@ -653,12 +656,12 @@ func TestWriteSpawnIdentity_EntityExistsPoisonedReadbackFailsClosed_Integration(
 				Triples: []message.Triple{
 					{
 						Subject:   validID,
-						Predicate: agvocab.LoopTask,
+						Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 						Object:    "task-first",
 					},
 					{
 						Subject:   validID,
-						Predicate: agvocab.LoopParent,
+						Predicate: semantictest.Predicate(t, "agent", "loop", "parent"),
 						Object:    "bad",
 						Datatype:  message.EntityReferenceDatatype,
 					},
@@ -1196,7 +1199,7 @@ func TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   "acme.ops.agent.agentic-loop.execution.loop-reuse",
-					Predicate: agvocab.LoopTask,
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 					Object:    "task-first",
 				},
 			},
@@ -1237,7 +1240,7 @@ func TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   "acme.ops.agent.agentic-loop.execution.loop-retry",
-					Predicate: agvocab.LoopTask,
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 					Object:    "task-same",
 				},
 			},

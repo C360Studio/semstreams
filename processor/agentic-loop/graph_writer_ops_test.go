@@ -546,7 +546,7 @@ func TestOpsQuery_ErrorCategories(t *testing.T) {
 func TestOpsQuery_StepPredicatesRegistered(t *testing.T) {
 	// Verify the new predicates are accessible as constants (compile-time check).
 	// If these don't compile, the predicates weren't added to the vocabulary package.
-	predicates := []string{
+	facts := []string{
 		agvocab.StepType,
 		agvocab.StepIndex,
 		agvocab.StepLoop,
@@ -568,14 +568,14 @@ func TestOpsQuery_StepPredicatesRegistered(t *testing.T) {
 		agvocab.LoopHasStep,
 	}
 
-	for _, p := range predicates {
+	for _, p := range facts {
 		if p == "" {
 			t.Errorf("predicate constant is empty string — likely undefined")
 		}
 	}
 
 	// Verify string values follow the agent.step.* / agent.loop.* convention
-	for _, p := range predicates[:18] { // step predicates
+	for _, p := range facts[:18] { // step predicates
 		if len(p) < len("agent.step.") {
 			t.Errorf("step predicate %q too short", p)
 		}

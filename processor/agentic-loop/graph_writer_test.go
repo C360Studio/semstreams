@@ -58,11 +58,11 @@ func TestBuildModelEndpointTriples_RequiredFields(t *testing.T) {
 		}
 	}
 
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	required := []string{agvocab.ModelProvider, agvocab.ModelName, agvocab.ModelSupportsTools}
 	for _, pred := range required {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
 	}
@@ -87,7 +87,7 @@ func TestBuildModelEndpointTriples_OptionalFieldsOmittedWhenZero(t *testing.T) {
 	}
 
 	triples := buildModelEndpointTriples(entityID, ep)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	optional := []string{
 		agvocab.ModelMaxTokens,
@@ -97,7 +97,7 @@ func TestBuildModelEndpointTriples_OptionalFieldsOmittedWhenZero(t *testing.T) {
 		agvocab.ModelRateLimit,
 	}
 	for _, pred := range optional {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("expected predicate %s to be omitted when zero, but it was present", pred)
 		}
 	}
@@ -117,7 +117,7 @@ func TestBuildModelEndpointTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 	}
 
 	triples := buildModelEndpointTriples(entityID, ep)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	optional := []string{
 		agvocab.ModelMaxTokens,
@@ -127,7 +127,7 @@ func TestBuildModelEndpointTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 		agvocab.ModelRateLimit,
 	}
 	for _, pred := range optional {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("expected predicate %s to be present, but it was omitted", pred)
 		}
 	}
@@ -172,7 +172,7 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 		}
 	}
 
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 	required := []string{
 		agvocab.LoopOutcome,
 		agvocab.LoopIterations,
@@ -181,7 +181,7 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 		agvocab.LoopEndedAt,
 	}
 	for _, pred := range required {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
 	}
@@ -195,13 +195,13 @@ func TestBuildLoopCompletionTriples_RequiredFields(t *testing.T) {
 		agvocab.LoopTask,
 	}
 	for _, pred := range spawnStamped {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("predicate %s should be spawn-stamped only, not in completion triples", pred)
 		}
 	}
 
 	// LoopModelUsed is conditional on non-empty modelEntityID.
-	if !predicates[agvocab.LoopModelUsed] {
+	if !facts[agvocab.LoopModelUsed] {
 		t.Errorf("expected LoopModelUsed when modelEntityID is non-empty")
 	}
 	if got := objectFor(triples, agvocab.LoopModelUsed); got != modelEntityID {
@@ -235,8 +235,8 @@ func TestBuildLoopCompletionTriples_CostCalculation(t *testing.T) {
 	cost := float64(event.TokensIn)*3.0/1_000_000 + float64(event.TokensOut)*15.0/1_000_000
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
 
-	predicates := predicateSet(triples)
-	if !predicates[agvocab.LoopCostUSD] {
+	facts := predicateSet(triples)
+	if !facts[agvocab.LoopCostUSD] {
 		t.Fatal("expected LoopCostUSD triple to be present")
 	}
 
@@ -266,9 +266,9 @@ func TestBuildLoopCompletionTriples_ZeroCostOmitted(t *testing.T) {
 	}
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if predicates[agvocab.LoopCostUSD] {
+	if facts[agvocab.LoopCostUSD] {
 		t.Error("expected LoopCostUSD to be omitted when cost is 0")
 	}
 }
@@ -289,7 +289,7 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 	}
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	optional := []string{
 		agvocab.LoopParent,
@@ -299,7 +299,7 @@ func TestBuildLoopCompletionTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T)
 		agvocab.LoopDescription,
 	}
 	for _, pred := range optional {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("expected predicate %s to be omitted when empty, but it was present", pred)
 		}
 	}
@@ -421,7 +421,7 @@ func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
 	}
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	spawnOnly := []string{
 		agvocab.LoopParent,
@@ -432,7 +432,7 @@ func TestBuildLoopCompletionTriples_SpawnFieldsNotInCompletion(t *testing.T) {
 		agvocab.LoopTask,
 	}
 	for _, pred := range spawnOnly {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("predicate %s leaked into completion stamp; should be spawn-only", pred)
 		}
 	}
@@ -457,7 +457,7 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 	}
 
 	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	required := []string{
 		agvocab.LoopOutcome,
@@ -467,21 +467,21 @@ func TestBuildLoopFailureTriples_RequiredFields(t *testing.T) {
 		agvocab.LoopEndedAt,
 	}
 	for _, pred := range required {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
 	}
 
 	// gh#159: role and task are spawn-stamped, not failure-stamped.
-	if predicates[agvocab.LoopRole] {
+	if facts[agvocab.LoopRole] {
 		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopRole)
 	}
-	if predicates[agvocab.LoopTask] {
+	if facts[agvocab.LoopTask] {
 		t.Errorf("%s leaked into failure stamp; should be spawn-only", agvocab.LoopTask)
 	}
 
 	// LoopModelUsed is conditional on non-empty modelEntityID.
-	if !predicates[agvocab.LoopModelUsed] {
+	if !facts[agvocab.LoopModelUsed] {
 		t.Errorf("expected LoopModelUsed when modelEntityID is non-empty")
 	}
 
@@ -505,14 +505,14 @@ func TestBuildLoopFailureTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	}
 
 	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	// ParentLoopID belongs to the optional set — when empty (failure on a
 	// chain root or a non-chain-fanned spawn), no agent.loop.parent triple
 	// should be emitted.
 	optional := []string{agvocab.LoopWorkflow, agvocab.LoopWorkflowStep, agvocab.LoopUser, agvocab.LoopParent}
 	for _, pred := range optional {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("expected predicate %s to be omitted when empty", pred)
 		}
 	}
@@ -571,7 +571,7 @@ func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
 
 	cost := 0.005
 	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	spawnOnly := []string{
 		agvocab.LoopRole,
@@ -581,16 +581,16 @@ func TestBuildLoopFailureTriples_SpawnFieldsNotInFailure(t *testing.T) {
 		agvocab.LoopUser,
 	}
 	for _, pred := range spawnOnly {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("predicate %s leaked into failure stamp; should be spawn-only", pred)
 		}
 	}
 
 	// Completion-shape signals must remain.
-	if !predicates[agvocab.LoopCostUSD] {
+	if !facts[agvocab.LoopCostUSD] {
 		t.Errorf("expected %s to be present in failure stamp", agvocab.LoopCostUSD)
 	}
-	if !predicates[agvocab.LoopModelUsed] {
+	if !facts[agvocab.LoopModelUsed] {
 		t.Errorf("expected %s to be present in failure stamp", agvocab.LoopModelUsed)
 	}
 	if got := objectFor(triples, agvocab.LoopModelUsed); got != modelEntityID {
@@ -611,9 +611,9 @@ func TestBuildLoopFailureTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 	}
 
 	triples := buildLoopFailureTriples(loopEntityID, event, "", 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if predicates[agvocab.LoopModelUsed] {
+	if facts[agvocab.LoopModelUsed] {
 		t.Error("expected LoopModelUsed to be omitted when modelEntityID is empty")
 	}
 }
@@ -631,9 +631,9 @@ func TestBuildLoopCompletionTriples_EmptyModelOmitsModelUsed(t *testing.T) {
 	}
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, "", 0)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if predicates[agvocab.LoopModelUsed] {
+	if facts[agvocab.LoopModelUsed] {
 		t.Error("expected LoopModelUsed to be omitted when modelEntityID is empty")
 	}
 }
@@ -652,17 +652,17 @@ func TestBuildLoopCancellationTriples_RequiredFields(t *testing.T) {
 	}
 
 	triples := buildLoopCancellationTriples(loopEntityID, event)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	required := []string{agvocab.LoopOutcome, agvocab.LoopEndedAt}
 	for _, pred := range required {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
 	}
 
 	// gh#159: task is spawn-only; cancellation stamp must not re-emit it.
-	if predicates[agvocab.LoopTask] {
+	if facts[agvocab.LoopTask] {
 		t.Errorf("%s leaked into cancellation stamp; should be spawn-only", agvocab.LoopTask)
 	}
 
@@ -686,7 +686,7 @@ func TestBuildLoopCancellationTriples_SpawnFieldsNotInCancellation(t *testing.T)
 	}
 
 	triples := buildLoopCancellationTriples(loopEntityID, event)
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	spawnOnly := []string{
 		agvocab.LoopTask,
@@ -694,7 +694,7 @@ func TestBuildLoopCancellationTriples_SpawnFieldsNotInCancellation(t *testing.T)
 		agvocab.LoopWorkflowStep,
 	}
 	for _, pred := range spawnOnly {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("predicate %s leaked into cancellation stamp; should be spawn-only", pred)
 		}
 	}
@@ -1079,14 +1079,14 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 		}
 	}
 
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 	wantPredicates := []string{
 		agentic.LineageTriplePredicate("researcher"),
 		agentic.LineageTriplePredicate("planner"),
 	}
 	for _, want := range wantPredicates {
-		if !predicates[want] {
-			t.Errorf("missing expected predicate %q in %v", want, predicates)
+		if !facts[want] {
+			t.Errorf("missing expected predicate %q in %v", want, facts)
 		}
 	}
 

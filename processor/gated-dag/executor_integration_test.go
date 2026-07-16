@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -126,14 +127,6 @@ func (c *dispatchCapture) snapshot() []string {
 	return out
 }
 
-// completed/dependsOn marker triples for seeding (using the executor's config).
-func completedTri(c *Component) message.Triple {
-	return message.Triple{Predicate: c.cfg.CompletedPredicate, Object: true, Confidence: 1.0}
-}
-func dependsTri(c *Component, prereq string) message.Triple {
-	return message.Triple{Predicate: c.cfg.DependsOnPredicate, Object: prereq, Confidence: 1.0}
-}
-
 // TestIntegration_GatedDispatch_DependsOnAndDedup drives the whole wire: a
 // prerequisite completes, its dependent is dispatched exactly once, the dispatch
 // commits a durable claim, and a later backstop pass does not re-dispatch.
@@ -143,8 +136,8 @@ func TestIntegration_GatedDispatch_DependsOnAndDedup(t *testing.T) {
 	capt := subscribeDispatch(t, nc)
 
 	a, b := unitID("a"), unitID("b")
-	seedUnit(t, gi, a, completedTri(c))  // a is Done
-	seedUnit(t, gi, b, dependsTri(c, a)) // b depends on a → dispatchable
+	seedUnit(t, gi, a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: true, Confidence: 1.0}) // a is Done
+	seedUnit(t, gi, b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a, Confidence: 1.0})   // b depends on a → dispatchable
 
 	// Wait for b to be dispatched (a backstop pass picks up the seeded units).
 	require.Eventually(t, func() bool {
@@ -176,11 +169,10 @@ func TestIntegration_BootReconcile(t *testing.T) {
 	// a backstop tick.
 	gi, nc, exec := startStack(t, "10m")
 	capt := subscribeDispatch(t, nc)
-	c := exec
 
 	a, b := unitID("a"), unitID("b")
-	seedUnit(t, gi, a, completedTri(c))
-	seedUnit(t, gi, b, dependsTri(c, a))
+	seedUnit(t, gi, a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: true, Confidence: 1.0})
+	seedUnit(t, gi, b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a, Confidence: 1.0})
 
 	// startStack already called Start. The initial reEvaluate fires on Start —
 	// but seeding happened after Start here, so nudge a fresh reconcile by

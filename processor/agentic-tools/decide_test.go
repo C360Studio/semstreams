@@ -614,14 +614,14 @@ func TestDecideExecutor_SAP_CoercesAndSignalsLoudly(t *testing.T) {
 	if len(pub.triples) != 3 {
 		t.Fatalf("triples published = %d, want 3 (next_action + reason + sap_coerced audit)", len(pub.triples))
 	}
-	byPredicate := map[string]any{}
+	facts := map[string]any{}
 	for _, tr := range pub.triples {
-		byPredicate[tr.Predicate] = tr.Object
+		facts[tr.Predicate] = tr.Object
 	}
-	if got := byPredicate[agvocab.CoordinatorNextAction]; got != "fan_out" {
+	if got := facts[agvocab.CoordinatorNextAction]; got != "fan_out" {
 		t.Errorf("CoordinatorNextAction = %v, want canonical %q", got, "fan_out")
 	}
-	if got := byPredicate[agvocab.CoordinatorDecisionSAPCoerced]; got != "fan-out|fan_out" {
+	if got := facts[agvocab.CoordinatorDecisionSAPCoerced]; got != "fan-out|fan_out" {
 		t.Errorf("CoordinatorDecisionSAPCoerced = %v, want %q", got, "fan-out|fan_out")
 	}
 }
@@ -768,14 +768,14 @@ func TestDecideExecutor_HappyPath(t *testing.T) {
 		}
 	}
 
-	byPredicate := map[string]any{}
+	facts := map[string]any{}
 	for _, tr := range pub.triples {
-		byPredicate[tr.Predicate] = tr.Object
+		facts[tr.Predicate] = tr.Object
 	}
-	if got := byPredicate[agvocab.CoordinatorNextAction]; got != "fan_out" {
+	if got := facts[agvocab.CoordinatorNextAction]; got != "fan_out" {
 		t.Errorf("CoordinatorNextAction = %v, want fan_out", got)
 	}
-	if got := byPredicate[agvocab.CoordinatorDecisionReason]; got != "three separable subtopics identified" {
+	if got := facts[agvocab.CoordinatorDecisionReason]; got != "three separable subtopics identified" {
 		t.Errorf("CoordinatorDecisionReason = %v, want reason text", got)
 	}
 

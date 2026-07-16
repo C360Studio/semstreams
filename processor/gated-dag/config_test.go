@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -50,9 +51,8 @@ func TestConfig_Validate(t *testing.T) {
 		{"nonpositive backstop", func(c *Config) { c.BackstopInterval = "0s" }, "backstop_interval"},
 		{"bad query timeout", func(c *Config) { c.QueryTimeout = "" }, "query_timeout"},
 		{"bad failure policy", func(c *Config) { c.FailurePolicy = "panic" }, "failure_policy"},
-		{"predicate collision", func(c *Config) { c.ClaimPredicate = c.CompletedPredicate }, "must be distinct"},
-		{"empty predicate", func(c *Config) { c.DirtiedPredicate = "" }, "must not be empty"},
-		{"noncanonical predicate", func(c *Config) { c.DirtiedPredicate = "gateddag.unit.dirtied_marker" }, "segment_character"},
+		{"empty predicate", func(c *Config) { c.DirtiedPredicate = "" }, "must not be empty"},                                    // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		{"noncanonical predicate", func(c *Config) { c.DirtiedPredicate = "gateddag.unit.dirtied_marker" }, "segment_character"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"gateddag.unit.dirtied_marker","reason":"segment_character"}
 		{"missing dispatch stream", func(c *Config) { c.DispatchStream = "" }, "dispatch_stream is required"},
 		{"bad dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "nope" }, "dispatch_stream_max_age"},
 		{"nonpositive dispatch stream max age", func(c *Config) { c.DispatchStreamMaxAge = "0s" }, "dispatch_stream_max_age"},
@@ -79,6 +79,14 @@ func TestConfig_Validate(t *testing.T) {
 			require.Contains(t, err.Error(), tt.errSub)
 		})
 	}
+}
+
+func TestConfig_ValidateRejectsPredicateCollision(t *testing.T) {
+	cfg := validCfg()
+	cfg.ClaimPredicate = semantictest.Predicate(t, "gateddag", "unit", "completed")
+	err := cfg.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be distinct")
 }
 
 func TestConfig_ValidateHappy(t *testing.T) {
@@ -134,11 +142,11 @@ func TestConfig_JSONRoundTrip(t *testing.T) {
 		FanOutWorkflow:       "custom-fanout",
 		UnitEntityPrefix:     "acme.ops.plan.fanout.unit",
 		DispatchSubject:      "custom.dispatch",
-		CompletedPredicate:   "x.done",
-		FailedPredicate:      "x.failed",
-		DirtiedPredicate:     "x.reset",
-		DependsOnPredicate:   "x.needs",
-		ClaimPredicate:       "x.inflight",
+		CompletedPredicate:   semantictest.Predicate(t, "test", "gateddag", "done"),
+		FailedPredicate:      semantictest.Predicate(t, "test", "gateddag", "failed"),
+		DirtiedPredicate:     semantictest.Predicate(t, "test", "gateddag", "reset"),
+		DependsOnPredicate:   semantictest.Predicate(t, "test", "gateddag", "needs"),
+		ClaimPredicate:       semantictest.Predicate(t, "test", "gateddag", "inflight"),
 		Workers:              7,
 		QueueSize:            99,
 		BackstopInterval:     "12s",

@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -104,12 +105,16 @@ func TestFullStack_ReferentialStubNotDispatchedUntilBorn(t *testing.T) {
 	fs.birthRestamping(t, selfHeal)
 	require.Eventually(t, func() bool { return fs.dispatched.count(selfHeal) == 1 }, fsEventually, 100*time.Millisecond,
 		"once a real producer re-stamps the stub envelope, the unit dispatches (self-heal)")
+	require.Eventually(t, func() bool { return fs.unitHasPredicate(t, selfHeal, pCompleted) }, fsEventually, 100*time.Millisecond,
+		"the self-healed unit must persist the canonical completion marker after dispatch")
 
 	// 4. Precondition (negative): "birth" stuck via triple.add only. triple.add
 	//    never touches MessageType, so the stub envelope survives → the unit stays
 	//    filtered → it never dispatches. A future semspec write-lane change to a
 	//    non-re-stamping birth would surface HERE, not as a silent paid-run wedge.
-	addMarker(context.Background(), fs.nc, stuck, "fs.unit.content")
+	addMarker(context.Background(), fs.nc, message.Triple{
+		Subject: stuck, Predicate: semantictest.Predicate(t, "fs", "unit", "content"), Object: true, Timestamp: time.Now(), Confidence: 1.0,
+	})
 	require.True(t, fs.unitIsStub(t, stuck), "triple.add must not re-stamp the stub envelope")
 	time.Sleep(2 * time.Second)
 	require.Equal(t, 0, fs.dispatched.count(stuck),

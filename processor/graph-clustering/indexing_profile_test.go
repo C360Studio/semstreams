@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -25,11 +26,11 @@ func TestObserveIndexingProfileForClustering_LenientNoPanic(t *testing.T) {
 		"",
 		"garbage",
 	} {
-		es := &graph.EntityState{ID: "c360.platform.test.sys.widget.001"}
+		es := &graph.EntityState{ID: semantictest.EntityID(t, "c360", "platform", "test", "sys", "widget", "001")}
 		if profile != "" {
 			es.Triples = []message.Triple{{
 				Subject:   es.ID,
-				Predicate: vocabulary.EntityIndexingProfile,
+				Predicate: semantictest.Predicate(t, "entity", "indexing", "profile"),
 				Object:    profile,
 			}}
 		}

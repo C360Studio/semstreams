@@ -11,11 +11,11 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
-	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,11 +72,11 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	triples := make([]message.Triple, 0, len(items)*5)
 	for i, it := range items {
 		triples = append(triples,
-			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoID, Object: it.id, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoContent, Object: it.content, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoStatus, Object: it.status, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoPosition, Object: i, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: agvocab.TodoUpdatedAt, Object: now.Format(time.RFC3339Nano), Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
+			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: it.id, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
+			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: it.content, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
+			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "status"), Object: it.status, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
+			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "position"), Object: i, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
+			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "updated-at"), Object: now.Format(time.RFC3339Nano), Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
 		)
 	}
 

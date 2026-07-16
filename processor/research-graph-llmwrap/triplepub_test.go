@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
 )
@@ -58,11 +59,12 @@ func (r *recordingPublisher) AddTriplesBatch(_ context.Context, triples []messag
 func TestTriplePublisher_InterfaceShape(t *testing.T) {
 	var pub TriplePublisher = &recordingPublisher{}
 	assert.NotNil(t, pub)
-	err := pub.CreateEntityWithTriples(context.Background(), "c360.ops.agent.agentic-loop.execution.rg_x", message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}, []message.Triple{{Subject: "c360.ops.agent.agentic-loop.execution.rg_x", Predicate: "y", Object: "z", Timestamp: time.Now()}})
+	entityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "rg-x")
+	err := pub.CreateEntityWithTriples(context.Background(), entityID, message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}, []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "shape"), Object: "z", Timestamp: time.Now()}})
 	assert.NoError(t, err)
-	err = pub.AddTriple(context.Background(), message.Triple{Subject: "x", Predicate: "y", Object: "z", Timestamp: time.Now()})
+	err = pub.AddTriple(context.Background(), message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "single"), Object: "z", Timestamp: time.Now()})
 	assert.NoError(t, err)
-	err = pub.AddTriplesBatch(context.Background(), []message.Triple{{Subject: "x", Predicate: "y", Object: "z", Timestamp: time.Now()}})
+	err = pub.AddTriplesBatch(context.Background(), []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "batch"), Object: "z", Timestamp: time.Now()}})
 	assert.NoError(t, err)
 }
 
@@ -87,9 +89,9 @@ func TestBirthLoopEntityWithTriples_NilPublisher_Degraded(t *testing.T) {
 // the gh#390 fix: the FIRST write must CREATE the entity, not append to it.
 func TestBirthLoopEntityWithTriples_Success(t *testing.T) {
 	pub := &recordingPublisher{}
-	entityID := "c360.ops.agent.agentic-loop.execution.rg_x"
+	entityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "rg-x")
 	want := message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}
-	triples := []message.Triple{{Subject: entityID, Predicate: "research.topic", Object: "drones", Timestamp: time.Now()}}
+	triples := []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "research", "graph", "topic"), Object: "drones", Timestamp: time.Now()}}
 
 	err := BirthLoopEntityWithTriples(context.Background(), pub, &countingLogger{}, "research_graph_tool", "rg_x", entityID, want, triples)
 	assert.NoError(t, err)

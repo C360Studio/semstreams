@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/types"
-	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // todoFixtureLoopEntityID is the canonical loop entity ID used by
@@ -27,24 +27,6 @@ func todoTestLogger() *slog.Logger { return slog.Default() }
 
 var errTodoReadFailed = errors.New("graph-gateway transient unavailable")
 
-// makeTodoBatch produces the canonical 5-triple sequence write_todos
-// emits per item, in the same interleaved order. Tests use it to
-// avoid hand-rolling the fixture format.
-func makeTodoBatch(t *testing.T, items []TodoState, ts time.Time) []message.Triple {
-	t.Helper()
-	out := make([]message.Triple, 0, len(items)*todoTripleStride)
-	for i, item := range items {
-		out = append(out,
-			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoID, Object: item.ID, Timestamp: ts, Confidence: 1.0},
-			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoContent, Object: item.Content, Timestamp: ts, Confidence: 1.0},
-			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoStatus, Object: item.Status, Timestamp: ts, Confidence: 1.0},
-			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoPosition, Object: i, Timestamp: ts, Confidence: 1.0},
-			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoUpdatedAt, Object: ts.Format(time.RFC3339Nano), Timestamp: ts, Confidence: 1.0},
-		)
-	}
-	return out
-}
-
 func TestReconstructTodos_HappyPath(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	items := []TodoState{
@@ -52,7 +34,17 @@ func TestReconstructTodos_HappyPath(t *testing.T) {
 		{ID: "2", Content: "Draft new rule", Status: "in_progress"},
 		{ID: "3", Content: "Wire e2e test", Status: "pending"},
 	}
-	got := ReconstructTodos(makeTodoBatch(t, items, now))
+	triples := make([]message.Triple, 0, len(items)*todoTripleStride)
+	for i, item := range items {
+		triples = append(triples,
+			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: item.ID, Timestamp: now, Confidence: 1.0},
+			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: item.Content, Timestamp: now, Confidence: 1.0},
+			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "status"), Object: item.Status, Timestamp: now, Confidence: 1.0},
+			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "position"), Object: i, Timestamp: now, Confidence: 1.0},
+			message.Triple{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "updated-at"), Object: now.Format(time.RFC3339Nano), Timestamp: now, Confidence: 1.0},
+		)
+	}
+	got := ReconstructTodos(triples)
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
@@ -80,8 +72,8 @@ func TestReconstructTodos_EmptyAndIrrelevant(t *testing.T) {
 	}
 	now := time.Now()
 	mixed := []message.Triple{
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.LoopOutcome, Object: "success", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: "rule.task.spawned", Object: "x", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "loop", "outcome"), Object: "success", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "rule", "task", "spawned"), Object: "x", Timestamp: now},
 	}
 	if got := ReconstructTodos(mixed); got != nil {
 		t.Errorf("non-todo triples → got %v, want nil", got)
@@ -94,8 +86,8 @@ func TestReconstructTodos_EmptyAndIrrelevant(t *testing.T) {
 func TestReconstructTodos_FewerThanStride(t *testing.T) {
 	now := time.Now()
 	partial := []message.Triple{
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoID, Object: "1", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoContent, Object: "x", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: "1", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: "x", Timestamp: now},
 		// status, position, updated_at missing — simulates a write that
 		// got partially flushed before the loop entity was read.
 	}
@@ -112,17 +104,17 @@ func TestReconstructTodos_OutOfOrderGroupSkipped(t *testing.T) {
 	now := time.Now()
 	scrambled := []message.Triple{
 		// Group 1 — order matches contract (id, content, status, position, updated_at).
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoID, Object: "1", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoContent, Object: "ok", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoStatus, Object: "pending", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoPosition, Object: 0, Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoUpdatedAt, Object: now.Format(time.RFC3339Nano), Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: "1", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: "ok", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "status"), Object: "pending", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "position"), Object: 0, Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "updated-at"), Object: now.Format(time.RFC3339Nano), Timestamp: now},
 		// Group 2 — predicate order scrambled (status before id). Skipped.
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoStatus, Object: "completed", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoID, Object: "2", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoContent, Object: "skipped", Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoPosition, Object: 1, Timestamp: now},
-		{Subject: todoFixtureLoopEntityID, Predicate: agvocab.TodoUpdatedAt, Object: now.Format(time.RFC3339Nano), Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "status"), Object: "completed", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: "2", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: "skipped", Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "position"), Object: 1, Timestamp: now},
+		{Subject: todoFixtureLoopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "updated-at"), Object: now.Format(time.RFC3339Nano), Timestamp: now},
 	}
 	got := ReconstructTodos(scrambled)
 	if len(got) != 1 {

@@ -230,6 +230,11 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// addMarker's 25s — under fsEventually even in the worst case — and a
 	// goroutine-per-marker alternative measurably worsened scheduling contention
 	// under constrained CPU, so synchronous is the right trade here.
+	// These terminal markers are part of the test consumer's fixed graph
+	// contract, not caller options. Keeping them here makes every composed
+	// scenario—including future ones—incapable of emitting an empty predicate.
+	completedMarker := message.Triple{Predicate: "gateddag.unit.completed", Object: true, Confidence: 1.0}
+	failedMarker := message.Triple{Predicate: "gateddag.unit.failed", Object: true, Confidence: 1.0}
 	dec := newDispatchDecoder(t)
 	sub, err := nc.Subscribe(ctx, subject, func(_ context.Context, msg *nats.Msg) {
 		unitID, ok := dec(msg.Data)
@@ -237,11 +242,13 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 			return
 		}
 		dispatched.add(unitID)
-		pred := pCompleted
+		marker := completedMarker
 		if failUnits[unitID] {
-			pred = pFailed
+			marker = failedMarker
 		}
-		addMarker(markerCtx, nc, unitID, pred)
+		marker.Subject = unitID
+		marker.Timestamp = time.Now()
+		addMarker(markerCtx, nc, marker)
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
@@ -361,10 +368,8 @@ func (fs *fullStack) unitHasPredicate(t *testing.T, id, predicate string) bool {
 // NOTE: this makes the TEST consumer infallible. Production has no such
 // guarantee and a stranded claimed-but-unmarked unit is not auto-recovered —
 // tracked separately as a production gap (gh#373 follow-up).
-func addMarker(ctx context.Context, nc *natsclient.Client, unitID, predicate string) {
-	req := gtypes.AddTripleRequest{Triple: message.Triple{
-		Subject: unitID, Predicate: predicate, Object: true, Timestamp: time.Now(), Confidence: 1.0,
-	}}
+func addMarker(ctx context.Context, nc *natsclient.Client, triple message.Triple) {
+	req := gtypes.AddTripleRequest{Triple: triple}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return

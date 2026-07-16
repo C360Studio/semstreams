@@ -50,7 +50,7 @@ var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:
 // When this list grows, prefer moving the predicate into
 // vocabulary/agentic/predicates.go so it's grep-discoverable from
 // the framework side.
-var rulesStampedPredicates = map[string]string{
+var rulesStampedPredicates = map[string]string{ // predicate-audit:unrelated {"column":30,"surface":"go-declaration:rulesStampedPredicates","value":"","basis":"reviewed:allowlist-container-name-not-a-predicate-value"}
 	"gather.child.completed": "example-fan-out/02 stamps this on the parent loop entity when each child investigator completes; the counter the join rule matches against",
 	// Add justified entries here as new reference packs land. Empty
 	// justification (or absent entry) causes the test to fail.
@@ -177,7 +177,7 @@ func TestReferenceConfigs_AllTripleRefsResolveToKnownPredicates(t *testing.T) {
 		}
 		extractStrings(v, func(s string) {
 			for _, m := range tripleRefRe.FindAllStringSubmatch(s, -1) {
-				refs = append(refs, ref{predicate: m[1], file: path})
+				refs = append(refs, ref{predicate: m[1], file: path}) // predicate-audit:unrelated {"column":40,"surface":"go-field:predicate","value":"","basis":"reviewed:scanner-output-validated-against-framework-allowlists"}
 			}
 		})
 		return nil

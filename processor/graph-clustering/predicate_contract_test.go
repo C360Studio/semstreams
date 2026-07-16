@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -15,12 +16,12 @@ import (
 func TestEntityQuerierReturnsNoPartialResultWhenAnyEntityIsPoisoned(t *testing.T) {
 	t.Parallel()
 
-	validID := "acme.ops.robotics.gcs.drone.001"
-	poisonedID := "acme.ops.robotics.gcs.drone.002"
+	validID := semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone", "001")
+	poisonedID := semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone", "002")
 	validData, err := graph.MarshalEntityState(&graph.EntityState{
 		ID: validID,
 		Triples: []message.Triple{{
-			Subject: validID, Predicate: "robotics.status.armed", Object: true,
+			Subject: validID, Predicate: semantictest.Predicate(t, "robotics", "status", "armed"), Object: true,
 		}},
 	})
 	if err != nil {
@@ -29,7 +30,7 @@ func TestEntityQuerierReturnsNoPartialResultWhenAnyEntityIsPoisoned(t *testing.T
 
 	bucket := newMockKVBucket()
 	bucket.data[validID] = validData
-	bucket.data[poisonedID] = []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`)
+	bucket.data[poisonedID] = []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	querier := newKVEntityQuerier(bucket, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	entities, err := querier.GetEntities(context.Background(), []string{validID, poisonedID})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -106,9 +107,9 @@ func TestSummarizeGraphExecutor_HappyPath_FormatsText(t *testing.T) {
 			{Type: "agent.web.observation", Count: 30, Examples: []string{"acme.x.agent.web.observation.h1", "acme.x.agent.web.observation.h2"}},
 			{Type: "agent.agentic-loop.execution", Count: 12, Examples: []string{"acme.x.agent.agentic-loop.execution.l1"}},
 		},
-		Predicates: []graph.PredicateSummary{
-			{Predicate: "agent.web.url", EntityCount: 30},
-			{Predicate: "agent.loop.outcome", EntityCount: 12},
+		Predicates: []graph.PredicateSummary{ // predicate-audit:unrelated {"column":15,"surface":"go-field:Predicates","value":"","basis":"reviewed:graph-summary-output-collection"}
+			{Predicate: semantictest.Predicate(t, "agent", "web", "url"), EntityCount: 30},
+			{Predicate: semantictest.Predicate(t, "agent", "loop", "outcome"), EntityCount: 12},
 		},
 		PredicateTotal: 2,
 	}
@@ -254,11 +255,12 @@ func TestSummarizeGraphExecutor_HandlerErrorEnvelope(t *testing.T) {
 // calls on the same graph produce identical text.
 func TestSortedPredicatesByCount_StableTieBreak(t *testing.T) {
 	input := []graph.PredicateSummary{
-		{Predicate: "zebra", EntityCount: 5},
-		{Predicate: "apple", EntityCount: 5},
+		{Predicate: semantictest.Predicate(t, "test", "sort", "zebra"), EntityCount: 5},
+		{Predicate: semantictest.Predicate(t, "test", "sort", "apple"), EntityCount: 5},
 	}
 	sorted := sortedPredicatesByCount(input)
-	if sorted[0].Predicate != "apple" {
-		t.Errorf("alphabetical tie-break broken: first = %q, want apple", sorted[0].Predicate)
+	want := semantictest.Predicate(t, "test", "sort", "apple")
+	if sorted[0].Predicate != want {
+		t.Errorf("alphabetical tie-break broken: first = %q, want %q", sorted[0].Predicate, want)
 	}
 }
