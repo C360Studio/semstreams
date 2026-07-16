@@ -20,14 +20,15 @@
       validators. Audit ALIAS's representative raw key separately and hand its missing identity bound or raw/opaque/
       owner-discovery decision to the owning ALIAS change without blocking unrelated reconciliation. Real-NATS maxima
       and the remaining local entity-contract gates in task 0.7 still block activation
-- [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.4 (including authoritative
-      write task 3.2 and independent replay/direct-poison task 3.2a), local tasks 5.1, 5.2-5.3 and 5.6, and tasks
+- [ ] 0.7 Complete the `entity-id-contract` local activation prerequisites: tasks 1.1-4.3 (including completed
+      authoritative write task 3.2 and open independent replay/direct-poison task 3.2a), local tasks 5.1, 5.2-5.3 and
+      5.6, and tasks
       6.1-6.4a (including final 6.2b and 6.4a reruns). Evidence includes the canonical `E <= 256` API, explicit final
       entity/triple-subject and `@id` reference validation, local zero-violation source corpus, ObjectStore zero-I/O
-      guard, malformed current-write/direct-NATS fail-fast proof, clean local NATS wipe/reseed, maximum key/filter
-      conformance, and final breaking e2e. This blocks framework current-layout reconciliation but does not require the
-      entity-ID change to archive. Owned-product tasks 5.1a, 5.4-5.5 and 6.5a remain coordinated pre-v1 release/archive
-      gates
+      guard, malformed current-write/direct-NATS fail-fast proof, clean local NATS wipe/reseed, and final breaking e2e.
+      PR #534 (`c8f0b92e`, branch head `6ef169dd`) supplies task 3.2 evidence only. This blocks framework
+      current-layout reconciliation but does not require the entity-ID change to archive. Owned-product tasks 5.1a,
+      5.4-5.5 and 6.5a remain coordinated pre-v1 release/archive gates
 
 ## 1. PR #524 Store and Query Contract
 
@@ -41,6 +42,9 @@
       current layout, and the raw PREDICATE candidate. Physical layouts, filters, and formulas are pinned, but the
       table-driven test does not yet encode the complete semantic owner, overwrite, lifecycle, reset, and readiness
       matrix required by tasks 1.1-1.2
+- [ ] 1.2a Add malformed-axis and complete-key/filter pre-I/O controls for production CONTEXT, OUTGOING, and every
+      remaining graph-index path, covering watcher, Get, lister, Put, Delete, and any additional I/O before activation.
+      This is the graph-index-owned obligation moved from `entity-id-contract`; it is not waived
 - [ ] 1.3 Define and test the INCOMING source-ownership contract, including source fact replacement, source
       removal/tombstone, target retirement, and authorized cascade behavior, without production wiring
 - [ ] 1.4 Pin shipped framework behavior: OUTGOING and CONTEXT reconcile; PREDICATE, NAME, ALIAS, and source-owned
@@ -62,7 +66,8 @@
       hand its unbounded result to the separate ALIAS owner rather than blocking unrelated stores
 - [ ] 2.2a Prove those governed maxima and exact match sets in real NATS with Put/Get/Delete/ListKeysFiltered/Watch,
       including malformed shorter/longer, neighboring-owner, and reversed-axis controls; representative corpus
-      success MUST NOT substitute for governed maxima
+      success MUST NOT substitute for governed maxima. This owns the maximum graph-index conformance moved from
+      `entity-id-contract`, whose unit `E <= 256` bound is a shared prerequisite rather than duplicate proof
 - [ ] 2.3 Test concurrent Put/Delete, duplicate observation and exact-key deduplication, cancellation, empty buckets,
       error classification, and convergence to a declared final ENTITY_STATES revision. Cancellation, stable error
       classification, and duplicate-result deduplication are proven; concurrency, empty-bucket recreation, and final
@@ -80,8 +85,9 @@
 
 - [ ] 3.1 Write and approve the owner-discovery and INCOMING-ownership ADR, selecting mechanisms per store from the
       complete correctness and resource evidence; block activation on every failed filter mechanism or incomplete
-      maximum real-NATS key/filter proof. Record ALIAS risk for its separate owning change without making it a gate
-      for unrelated current-layout reconciliation
+      production-path pre-I/O control or maximum real-NATS key/filter proof. Keep activation blocked until task 0.7
+      and this change's tasks 1.2a and 2.2a pass. Record ALIAS risk for its separate owning change without making it a
+      gate for unrelated current-layout reconciliation
 - [ ] 3.2 For each failed query-visible owner filter, first complete its approved dependent bounded replacement
       mechanism. After the announced pre-v1 wipe/reseed, initialize PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX,
       and INCOMING_INDEX with readiness false before canonical reseed; remain not-ready until initial replay reaches

@@ -162,14 +162,17 @@ remain:
 
 INCOMING is the maximum at 902 bytes, leaving 122 bytes beneath the project 1,024-byte key/filter contract. Its
 layout has 13 tokens, also beneath the 64-token contract. Owner and forward filters replace one or more literal
-positions with one-byte complete-token `*`, so none exceeds the corresponding maximum literal layout. Tests still
-construct every maximum key and filter and pass it through the shared NATS validators; arithmetic does not replace
-real-NATS conformance.
+positions with one-byte complete-token `*`, so none exceeds the corresponding maximum literal layout. This change's
+tests construct every maximum key and filter and pass it through the shared NATS validators, establishing the
+governed entity-axis bound and unit budget proof. The dependent `graph-index-fixed-arity-reconciliation` change owns
+complete production CONTEXT/OUTGOING and remaining-path pre-I/O controls plus pinned real-NATS maximum-key,
+maximum-filter, and exact-match conformance. Moving those graph-index proofs does not waive them.
 
 Graph-index benchmark scaffolding may consume the contract for proof, but framework fixed-arity reconciliation MUST
 remain inactive until the named local contract/API, corpus, ObjectStore zero-I/O, clean wipe/reseed, key-budget, and
-breaking e2e tasks in this change pass, and the dependent graph-index activation gates pass. It does not wait for
-this change to archive. This change does not select raw versus hashed PREDICATE representation.
+breaking e2e tasks in this change pass, and the dependent graph-index production-path, real-NATS, ADR, performance,
+correctness, and activation gates pass. It does not wait for this change to archive or for owned-product rollout tasks
+that are explicitly pre-v1/archive-only. This change does not select raw versus hashed PREDICATE representation.
 
 ### 6. Enforcement is unconditional and the beta cutover is clean
 
@@ -210,7 +213,19 @@ ledger because every reference design is owned and required before v1.
 Those coordinated owned-reference gates block the v1 release and archive of this change, not local framework
 graph-index activation after its named clean pre-v1 prerequisites have passed.
 
-## Implementation checkpoint: first reviewed slice
+## Implementation checkpoint: PR #534 authoritative write seam
+
+PR #534, merged at `c8f0b92e` with final branch head `6ef169dd`, completes task 3.2. The final authoritative marshal
+candidate validates its entity ID, every explicit triple subject, and classified entity references before
+ENTITY_STATES or derived-projection I/O. The Graphable lane may fill only an omitted subject from the envelope ID;
+mutation and direct candidates receive no normalization. Terminal structural rejections are bounded and observable,
+and incompatible stored state latches reset-required readiness instead of entering an unlimited redelivery loop.
+
+That merge evidence does not complete the independent replay/direct-NATS coverage in task 3.2a, the full lane matrix
+in task 3.1, the local source corpus and cutover gates, or any graph-index production-path or real-NATS activation
+proof transferred to `graph-index-fixed-arity-reconciliation`.
+
+## Implementation checkpoint: first reviewed API slice
 
 The first reviewer-approved implementation slice establishes the canonical `pkg/types` literal, pattern, and prefix
 APIs, stable error constants, byte-exact grammar, and boolean/parser delegation. Graph-ingest's existing private
@@ -232,7 +247,8 @@ reclamation policy.
 The graph-index unit matrix now uses `E = 256` to prove the current maximum formulas and shared-validator acceptance.
 Inactive PREDICATE, NAME, and both INCOMING entity axes also reject a 257-byte ID before lister, Put, or Delete I/O.
 Production CONTEXT/OUTGOING semantic preflight, malformed complete-axis controls, and real-NATS maximum key/filter
-operations and match sets remain open, so production fixed-arity reconciliation remains blocked.
+operations and match sets remain open under `graph-index-fixed-arity-reconciliation`, so production fixed-arity
+reconciliation remains blocked.
 
 The reviewed slice passed `task lint`, `go test -race ./...`, and `go test ./test/contract/...`; task 6.4 records the
 green breaking e2e evidence. This checkpoint does not claim completion of the full local inventory/corpus, schema

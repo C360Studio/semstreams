@@ -65,9 +65,10 @@
       the authoritative seam; mutation/direct/replay lanes reject empty or malformed subjects. Cover canonical-shaped
       string references plus explicitly marked `message.EntityReferenceDatatype = "@id"` string, malformed-string, and
       non-string objects; require typed rejection before state or projection I/O
-- [ ] 3.2 Apply canonical literal and explicit-subject checks at the complete-final-candidate authoritative write seam;
+- [x] 3.2 Apply canonical literal and explicit-subject checks at the complete-final-candidate authoritative write seam;
       keep optional handler validation delegating and non-authoritative. Do not normalize mutation/direct candidates or
-      any non-empty subject bytes
+      any non-empty subject bytes. PR #534 is the merge evidence: its authoritative marshal seam validates the final
+      entity ID, explicit subjects, and classified entity references before state or projection I/O
 - [ ] 3.2a Apply the same complete-candidate contract independently at every authoritative replay decoder, including
       direct-NATS poison; classify malformed stored state fail-closed before derived projection I/O
 - [x] 3.3 Validate lifecycle `Workflow.EntityIDPattern` and `ReferenceSpec.TargetPattern` plus ownership
@@ -105,14 +106,10 @@
       its missing governed maximum from blocking unrelated current-layout reconciliation
 - [x] 4.3 Add a 257-byte semantic-axis control proving inactive PREDICATE, NAME, and INCOMING reconciliation helpers
       reject before lister, Put, or Delete I/O, including both INCOMING entity axes
-- [ ] 4.3a Add malformed-axis and complete-key/filter controls for production CONTEXT/OUTGOING and every remaining
-      graph-index path, covering watcher, Get, and any additional I/O before activation
-- [ ] 4.4 Run pinned real-NATS Put/Get/Delete/ListKeysFiltered/Watch conformance for maximum valid shapes and exact
-      match sets, including shorter, longer, neighboring-owner, and reversed-axis controls
-- [ ] 4.5 Keep framework fixed-arity reconciliation inactive until local tasks 1.1-4.4 (including 3.2a), 5.1, 5.2-5.3,
-      5.6, and 6.1-6.4a (including 6.2a/6.2b) pass plus the dependent graph-index ADR/performance/correctness gates.
-      Record the evidence handoff there; do not require this change to archive or owned-product tasks 5.1a, 5.4-5.5,
-      and 6.5a to complete for local reconciliation
+
+The dependent `graph-index-fixed-arity-reconciliation` change owns the remaining production CONTEXT/OUTGOING and
+complete-key/filter pre-I/O controls, pinned real-NATS maximum/exact-match conformance, and the framework activation
+gate. Those obligations moved to its tasks 1.2a, 2.2a, and 3.1; they are not waived by this entity-axis contract.
 
 ## 5. Clean Pre-v1 Cutover and Owned Reference Updates
 
@@ -146,8 +143,9 @@
       The first-slice run produced zero schema/spec drift, but this remains open until those updates are complete
 - [ ] 6.2b After the complete local implementation lands, rerun `task lint`, `go test -race ./...`, and
       `go test ./test/contract/...`; the first-slice evidence in 6.2 does not substitute for this final merge gate
-- [ ] 6.3 Run the repository's real-NATS integration suite with `-race`, including canonical replay, malformed current
-      direct-NATS injection, fresh wipe/reseed, maximum key/filter, and concurrent watcher/list behavior
+- [ ] 6.3 Run the repository's entity-contract real-NATS integration scope with `-race`, including canonical replay,
+      malformed current direct-NATS injection, and fresh wipe/reseed. Maximum graph-index key/filter and exact-match
+      conformance is owned, without waiver, by `graph-index-fixed-arity-reconciliation` task 2.2a
 - [x] 6.4 Run every affected e2e tier before the BREAKING commit lands, at minimum core, structural, agentic, and
       semantic ingest-to-ENTITY_STATES-to-index-to-query paths. Green evidence before commit: `task e2e:core` 2/2;
       `task e2e:structural` 37/37; `task e2e:agentic` scenario success with 3 loops; `task e2e:semantic` 46/46 in
@@ -163,6 +161,8 @@
 - [ ] 6.6 Publish BREAKING changelog and release notes for gh#531 with the grammar, 256-byte boundary, source audit,
       owned-reference update checklist, exact NATS wipe/reseed commands, and product e2e evidence; promise no beta
       persisted-state migration export/preservation contract, compatibility reader, online migration, or rollback
-- [ ] 6.7 Strict-validate and review this OpenSpec change, then archive it only after implementation, all owned
-      reference v1 release gates, real-NATS proof, and relevant e2e evidence are complete; archive is not a
-      prerequisite to local framework graph-index reconciliation after task 4.5's named local evidence passes
+- [ ] 6.7 Strict-validate and review the completed SemStreams-local OpenSpec implementation and evidence
+- [ ] 6.7a Archive this change only after every other task in this change is complete, including local implementation,
+      local real-NATS and final e2e proof, task 6.6's BREAKING changelog and release notes, and owned-product tasks
+      5.1a, 5.4-5.5, and 6.5a for the v1 rollout. Archive is not a prerequisite to local framework graph-index
+      reconciliation after the shared dependency gates named by that change pass
