@@ -166,10 +166,10 @@ func (f *TestRuleFactory) Create(ruleID string, def Definition, _ Dependencies) 
 	// For test rules, subscribe to all subjects by default to simplify testing
 	subjects := []string{">"}
 
-	// If the rule definition has entity patterns, subscribe to that pattern
-	// This allows the rule to receive KV watcher updates for matching entity keys
+	// Entity patterns are evaluated against ENTITY_STATES keys, never NATS
+	// subjects. Entity-scoped test rules therefore have no message subscription.
 	if def.Entity.Pattern != "" {
-		subjects = []string{def.Entity.Pattern}
+		subjects = nil
 	}
 
 	rule := NewTestRule(ruleID, def.Name, subjects, def.Conditions)

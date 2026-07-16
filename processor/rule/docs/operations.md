@@ -172,7 +172,7 @@ nats kv get INCOMING_INDEX "fleet.rescue"
 Monitor entity updates in real-time:
 
 ```bash
-nats kv watch ENTITY_STATES "acme.*.robotics.>"
+nats kv watch ENTITY_STATES "acme.*.robotics.*.*.*"
 ```
 
 ### View Published Messages
@@ -198,7 +198,7 @@ Returns:
   "buffer_window_size": "10m",
   "alert_cooldown_period": "2m",
   "enable_graph_integration": true,
-  "entity_watch_patterns": ["acme.*.robotics.>"],
+  "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.robotics.*.*.*"]},
   "rules": {...},
   "rule_count": 5,
   "is_running": true
@@ -217,9 +217,7 @@ err := processor.ApplyConfigUpdate(changes)
 Dynamically updateable:
 - `enable_graph_integration`
 - `rules` (add/update/remove)
-
-Not dynamically updateable (requires restart):
-- `entity_watch_patterns`
+- `entity_watch_buckets`
 
 ## Common Issues
 
@@ -236,7 +234,7 @@ Not dynamically updateable (requires restart):
 
 2. Is entity matching the watch pattern?
    ```bash
-   # Check config entity_watch_patterns
+   # Check config entity_watch_buckets["ENTITY_STATES"]
    ```
 
 3. Is cooldown active?
@@ -342,10 +340,10 @@ More specific patterns = fewer evaluations:
 
 ```json
 // Broad (evaluates all entities)
-"entity_watch_patterns": [">"]
+"entity_watch_buckets": {"ENTITY_STATES": ["*.*.*.*.*.*"]}
 
 // Specific (evaluates only drones)
-"entity_watch_patterns": ["*.*.robotics.*.drone.*"]
+"entity_watch_buckets": {"ENTITY_STATES": ["*.*.robotics.*.drone.*"]}
 ```
 
 ### Optimize Conditions

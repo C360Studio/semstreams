@@ -32,23 +32,13 @@ func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
 		}
 	}
 
-	// Validate entity_watch_patterns if present
-	if patternsVal, ok := changes["entity_watch_patterns"]; ok {
-		if _, ok := patternsVal.([]string); !ok {
-			// Try to convert from []any to []string
-			if anySlice, ok := patternsVal.([]any); ok {
-				for i, v := range anySlice {
-					if _, ok := v.(string); !ok {
-						return errs.WrapInvalid(
-							fmt.Errorf("entity_watch_patterns[%d] must be string, got %T", i, v),
-							"RuleProcessor", "ValidateConfigUpdate", "validate patterns type")
-					}
-				}
-			} else {
-				return errs.WrapInvalid(
-					fmt.Errorf("entity_watch_patterns must be array of strings, got %T", patternsVal),
-					"RuleProcessor", "ValidateConfigUpdate", "validate patterns type")
-			}
+	if bucketsValue, ok := changes["entity_watch_buckets"]; ok {
+		buckets, err := parseEntityWatchBuckets(bucketsValue)
+		if err != nil {
+			return errs.WrapInvalid(err, "RuleProcessor", "ValidateConfigUpdate", "parse entity watch buckets")
+		}
+		if err := validateEntityWatchBuckets(buckets); err != nil {
+			return errs.WrapInvalid(err, "RuleProcessor", "ValidateConfigUpdate", "validate entity watch buckets")
 		}
 	}
 
@@ -258,6 +248,9 @@ func ValidateDefinition(def Definition) error {
 	}
 	if err := validateConditionFields(def); err != nil {
 		return err
+	}
+	if err := validateDefinitionEntityPattern(def); err != nil {
+		return errs.WrapInvalid(err, "RuleProcessor", "ValidateDefinition", "validate entity pattern")
 	}
 	return validateActionLists(def)
 }

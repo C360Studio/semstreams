@@ -540,10 +540,12 @@ Complete configuration file with multiple rules:
 
 ```json
 {
-  "entity_watch_patterns": [
-    "acme.*.robotics.*.drone.*",
-    "acme.*.environmental.*.sensor.*"
-  ],
+  "entity_watch_buckets": {
+    "ENTITY_STATES": [
+      "acme.*.robotics.*.drone.*",
+      "acme.*.environmental.*.sensor.*"
+    ]
+  },
 
   "enable_graph_integration": true,
   "alert_cooldown_period": "2m",

@@ -140,7 +140,7 @@
           "inputs": [],
           "outputs": []
         },
-        "entity_watch_patterns": ["c360.test.lifecycle.gcs.mission.*"],
+        "entity_watch_buckets": {"ENTITY_STATES": ["c360.test.lifecycle.gcs.mission.*"]},
         "rules_files": ["/app/configs/rules/lifecycle/01-mission-launch.json"],
         "buffer_window_size": "10m",
         "alert_cooldown_period": "2m"

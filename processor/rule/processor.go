@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,20 +28,7 @@ var _ component.Discoverable = (*Processor)(nil)
 
 // schema defines the configuration schema for rule processor component
 // Generated from Config struct tags using reflection
-var schema = func() component.ConfigSchema {
-	s := component.GenerateConfigSchema(reflect.TypeOf(Config{}))
-
-	// Add "rules" property for runtime-only dynamic rule definitions
-	// This field is not in Config struct since it's only used for runtime updates
-	s.Properties["rules"] = component.PropertySchema{
-		Type:        "object",
-		Description: "Dynamic rule definitions (rules.{rule_id} pattern)",
-		Default:     map[string]interface{}{},
-		Category:    "advanced",
-	}
-
-	return s
-}()
+var schema = buildRuleProcessorSchema()
 
 // RuleMetrics and newRuleMetrics are in metrics.go
 // Config and DefaultConfig are in config.go
@@ -246,6 +232,9 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 	// Validate required configuration
 	if config.Ports == nil {
 		return nil, fmt.Errorf("rule processor config missing required Ports configuration")
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 
 	// Create message cache - will be initialized with context in Start()

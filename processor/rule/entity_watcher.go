@@ -198,64 +198,38 @@ func (rp *Processor) waitGraphStateGuard(ctx context.Context) bool {
 	}
 }
 
-// getEffectiveBucketPatterns returns the bucket-to-patterns map to use.
-// If EntityWatchBuckets is configured, use it directly.
-// Otherwise, fall back to EntityWatchPatterns for ENTITY_STATES bucket (backwards compatibility).
+// getEffectiveBucketPatterns returns the configured ENTITY_STATES patterns.
 func (rp *Processor) getEffectiveBucketPatterns() map[string][]string {
-	if len(rp.config.EntityWatchBuckets) > 0 {
-		return rp.config.EntityWatchBuckets
-	}
-
-	// Backwards compatibility: use EntityWatchPatterns for ENTITY_STATES
-	if len(rp.config.EntityWatchPatterns) > 0 {
-		return map[string][]string{
-			"ENTITY_STATES": rp.config.EntityWatchPatterns,
-		}
-	}
-
-	return nil
+	return rp.config.EntityWatchBuckets
 }
 
 // getOrCreateBucket gets or creates a KV bucket by name.
 // Uses appropriate defaults based on bucket purpose.
 func (rp *Processor) getOrCreateBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
+	if bucketName != gtypes.BucketEntityStates {
+		return nil, unsupportedEntityWatchBucket(bucketName)
+	}
 	// Try to get existing bucket first
 	bucket, err := rp.natsClient.GetKeyValueBucket(ctx, bucketName)
 	if err == nil {
 		return bucket, nil
 	}
 
-	// Bucket doesn't exist - only create ENTITY_STATES (others should exist)
-	if bucketName == "ENTITY_STATES" {
-		return rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-			Bucket:      bucketName,
-			Description: "Entity state storage",
-			History:     10,
-			TTL:         7 * 24 * time.Hour, // 7 days
-			MaxBytes:    -1,                 // Unlimited
-		})
-	}
-
-	// For other buckets (WORKFLOW_EXECUTIONS, AGENT_LOOPS), they should already exist
-	// Return the error to indicate the bucket isn't available
-	return nil, errs.WrapTransient(err, "Processor", "getOrCreateBucket", fmt.Sprintf("bucket %s not found", bucketName))
-}
-
-// getOrCreateEntityBucket gets or creates the ENTITY_STATES KV bucket
-// DEPRECATED: Use getOrCreateBucket for multi-bucket support
-func (rp *Processor) getOrCreateEntityBucket(ctx context.Context) (jetstream.KeyValue, error) {
-	return rp.getOrCreateBucket(ctx, "ENTITY_STATES")
-}
-
-// startWatcherForPattern starts a KV watcher for a specific pattern on ENTITY_STATES.
-// DEPRECATED: Use startWatcherForBucketPattern for multi-bucket support.
-func (rp *Processor) startWatcherForPattern(ctx context.Context, pattern string) error {
-	return rp.startWatcherForBucketPattern(ctx, "ENTITY_STATES", pattern)
+	return rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      bucketName,
+		Description: "Entity state storage",
+		History:     10,
+		TTL:         7 * 24 * time.Hour, // 7 days
+		MaxBytes:    -1,                 // Unlimited
+	})
 }
 
 // startWatcherForBucketPattern starts a KV watcher for a specific bucket and pattern.
 // Returns an error if the watcher cannot be started.
 func (rp *Processor) startWatcherForBucketPattern(ctx context.Context, bucketName, pattern string) error {
+	if err := validateEntityWatchPattern(bucketName, pattern); err != nil {
+		return err
+	}
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	return rp.startWatcherForBucketPatternLocked(ctx, bucketName, pattern)
@@ -266,14 +240,11 @@ func watcherKey(bucketName, pattern string) string {
 	return bucketName + ":" + pattern
 }
 
-// startWatcherForPatternLocked is the internal version that assumes the caller holds the lock.
-// DEPRECATED: Use startWatcherForBucketPatternLocked for multi-bucket support.
-func (rp *Processor) startWatcherForPatternLocked(ctx context.Context, pattern string) error {
-	return rp.startWatcherForBucketPatternLocked(ctx, "ENTITY_STATES", pattern)
-}
-
 // startWatcherForBucketPatternLocked is the internal version that assumes the caller holds the lock.
 func (rp *Processor) startWatcherForBucketPatternLocked(ctx context.Context, bucketName, pattern string) error {
+	if err := validateEntityWatchPattern(bucketName, pattern); err != nil {
+		return err
+	}
 	key := watcherKey(bucketName, pattern)
 
 	// Check if watcher already exists for this bucket+pattern
@@ -304,23 +275,11 @@ func (rp *Processor) startWatcherForBucketPatternLocked(ctx context.Context, buc
 	return nil
 }
 
-// stopWatcherForPattern stops a KV watcher for a specific pattern on ENTITY_STATES.
-// DEPRECATED: Use stopWatcherForBucketPattern for multi-bucket support.
-func (rp *Processor) stopWatcherForPattern(pattern string) error {
-	return rp.stopWatcherForBucketPattern("ENTITY_STATES", pattern)
-}
-
 // stopWatcherForBucketPattern stops a KV watcher for a specific bucket and pattern.
 func (rp *Processor) stopWatcherForBucketPattern(bucketName, pattern string) error {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	return rp.stopWatcherForBucketPatternLocked(bucketName, pattern)
-}
-
-// stopWatcherForPatternLocked is the internal version that assumes the caller holds the lock.
-// DEPRECATED: Use stopWatcherForBucketPatternLocked for multi-bucket support.
-func (rp *Processor) stopWatcherForPatternLocked(pattern string) error {
-	return rp.stopWatcherForBucketPatternLocked("ENTITY_STATES", pattern)
 }
 
 // stopWatcherForBucketPatternLocked is the internal version that assumes the caller holds the lock.
@@ -353,33 +312,11 @@ func (rp *Processor) stopWatcherForBucketPatternLocked(bucketName, pattern strin
 	return nil
 }
 
-// UpdateWatchPatterns dynamically updates the entity watch patterns for ENTITY_STATES.
-// DEPRECATED: Use UpdateWatchBuckets for multi-bucket support.
-func (rp *Processor) UpdateWatchPatterns(newPatterns []string) error {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	return rp.updateWatchPatternsLocked(newPatterns)
-}
-
-// updateWatchPatternsLocked is the internal version that assumes the caller holds the lock.
-// Called by ApplyConfigUpdate which already holds the lock.
-// DEPRECATED: Use updateWatchBucketsLocked for multi-bucket support.
-func (rp *Processor) updateWatchPatternsLocked(newPatterns []string) error {
-	// Convert to bucket format and delegate
-	buckets := map[string][]string{
-		"ENTITY_STATES": newPatterns,
-	}
-	if err := rp.updateWatchBucketsLocked(buckets); err != nil {
+// UpdateWatchBuckets dynamically updates the canonical ENTITY_STATES patterns.
+func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
+	if err := validateEntityWatchBuckets(newBuckets); err != nil {
 		return err
 	}
-
-	// Update legacy config field for backwards compatibility
-	rp.config.EntityWatchPatterns = newPatterns
-	return nil
-}
-
-// UpdateWatchBuckets dynamically updates the entity watch buckets and patterns.
-func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	return rp.updateWatchBucketsLocked(newBuckets)
@@ -387,6 +324,9 @@ func (rp *Processor) UpdateWatchBuckets(newBuckets map[string][]string) error {
 
 // updateWatchBucketsLocked is the internal version that assumes the caller holds the lock.
 func (rp *Processor) updateWatchBucketsLocked(newBuckets map[string][]string) error {
+	if err := validateEntityWatchBuckets(newBuckets); err != nil {
+		return err
+	}
 	watcherCtx := rp.watcherCtx
 
 	// If no watcher context, processor not started yet - just update config

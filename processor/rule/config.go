@@ -13,7 +13,7 @@ import (
 // Config holds configuration for the RuleProcessor
 type Config struct {
 	// Port configuration for inputs and outputs
-	Ports *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration for inputs (KV watch: ENTITY_STATES PREDICATE_INDEX) and outputs (NATS: control commands),category:basic"`
+	Ports *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration for ENTITY_STATES and message inputs plus action outputs,category:basic"`
 
 	// Rule configuration sources
 	RulesFiles  []string     `json:"rules_files" schema:"type:array,description:Paths to JSON rule definition files,default:[],category:basic"`
@@ -31,16 +31,10 @@ type Config struct {
 	// Graph processor integration
 	EnableGraphIntegration bool `json:"enable_graph_integration" schema:"type:bool,description:Enable graph entity creation from rules,default:true,category:basic"`
 
-	// NATS KV patterns to watch for entity changes (e.g., 'telemetry.robotics.>')
-	// DEPRECATED: Use EntityWatchBuckets for multi-bucket support. This field is still
-	// supported for backwards compatibility and applies to ENTITY_STATES bucket.
-	EntityWatchPatterns []string `json:"entity_watch_patterns" schema:"type:array,description:NATS KV patterns to watch for entity changes (e.g. 'telemetry.robotics.>'),category:advanced"`
-
-	// EntityWatchBuckets maps bucket names to watch patterns.
-	// This enables rules to observe operational results from multiple components.
-	// Example: {"ENTITY_STATES": ["telemetry.>"], "WORKFLOW_EXECUTIONS": ["COMPLETE_*"]}
-	// If not specified, falls back to EntityWatchPatterns for ENTITY_STATES bucket.
-	EntityWatchBuckets map[string][]string `json:"entity_watch_buckets" schema:"type:object,description:Map of bucket names to watch patterns for multi-bucket observability,category:advanced"`
+	// EntityWatchBuckets declares exact six-position entity ID patterns for the
+	// typed EntityState evaluator. ENTITY_STATES is the only supported bucket.
+	// Operational KV values need a separately designed typed decoder/evaluator.
+	EntityWatchBuckets map[string][]string `json:"entity_watch_buckets" schema:"type:object,description:ENTITY_STATES patterns for the typed EntityState evaluator,category:advanced"`
 
 	// Debounce delay for rule evaluation (settling time for entity state)
 	// Default is 0 (disabled) to ensure rules evaluate against each state change.
@@ -105,11 +99,11 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 // is itself subject-safe.
 const packIDCharset = "[A-Za-z0-9._=-]"
 
-// Validate checks pack-level invariants on the rule config. Today it only
-// guards PackID: a non-empty PackID must be subject-safe so the derived owner
-// id "rule-pack.<PackID>" is usable directly as a NATS KV key segment (no
-// hashing — ownership identity is compared as the canonical string). An empty
-// PackID is valid (the pack declares no projection ownership).
+// Validate checks pack ownership and KV-watch declarations before activation.
+// A non-empty PackID must be subject-safe so the derived owner id
+// "rule-pack.<PackID>" is usable directly as a NATS KV key segment. An empty
+// PackID is valid (the pack declares no projection ownership). ENTITY_STATES
+// watch patterns must satisfy the canonical entity ID pattern contract.
 func (c Config) Validate() error {
 	for _, r := range c.PackID {
 		switch {
@@ -119,6 +113,14 @@ func (c Config) Validate() error {
 			return fmt.Errorf(
 				"rule config: invalid pack_id %q — owner id rule-pack.%s must use only %s (offending char %q)",
 				c.PackID, c.PackID, packIDCharset, string(r))
+		}
+	}
+	if err := validateEntityWatchBuckets(c.EntityWatchBuckets); err != nil {
+		return fmt.Errorf("rule config: %w", err)
+	}
+	for index, definition := range c.InlineRules {
+		if err := ValidateDefinition(definition); err != nil {
+			return fmt.Errorf("rule config: inline_rules[%d]: %w", index, err)
 		}
 	}
 	return nil
@@ -134,12 +136,6 @@ func DefaultConfig() Config {
 					Type:        "kv-watch",
 					Required:    true,
 					Description: "Watch entity state changes from ENTITY_STATES KV bucket",
-				},
-				{
-					Name:        "predicate_index",
-					Type:        "kv-watch",
-					Required:    false,
-					Description: "Watch predicate index changes for pattern-based rules",
 				},
 			},
 			Outputs: []component.PortDefinition{

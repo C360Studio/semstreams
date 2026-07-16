@@ -4,6 +4,7 @@
   "name": "Stamp Investigator Completion on Parent Loop",
   "description": "Fires when an investigator completes successfully. Writes a gather.completed_child triple onto the PARENT loop entity (resolved via $entity.triple.agent.loop.parent — the parent ref the agentic-loop stamps natively on every rule-fanned spawn from a loop entity, per actions.go:executePublishAgent). The triple's Object is this child's TaskID (agent.loop.task — distinct per investigator since TaskIDs are unique). graph-ingest's per-(subject,predicate,object) set semantics naturally dedup if rule 02 fires twice for the same investigator (e.g. transient redelivery), and rule 03's length_eq counts one triple per distinct child. The subject-override on add_triple is the ADR-046 Phase 1 join enabler — pre-#147 add_triple could only write to the trigger entity, so the counter pattern was unwritable. Note: the synthesizer downstream recovers per-subtopic context by walking children via agent.loop.parent and calling read_loop_result on each child's loop — that's the rule-pack discipline of carrying references, not payloads (ADR-028).",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

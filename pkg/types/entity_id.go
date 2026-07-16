@@ -48,10 +48,16 @@ const (
 
 	entityIDLiteralSegmentPattern = `[A-Za-z0-9][A-Za-z0-9_-]*`
 	entityIDLiteralBodyPattern    = entityIDLiteralSegmentPattern + `(?:\.` + entityIDLiteralSegmentPattern + `){5}`
+	entityIDPatternSegmentPattern = `(?:\*|` + entityIDLiteralSegmentPattern + `)`
+	entityIDPatternBodyPattern    = entityIDPatternSegmentPattern + `(?:\.` + entityIDPatternSegmentPattern + `){5}`
 
 	// EntityIDLiteralPattern is the anchored JSON-Schema-compatible regular
 	// expression for a canonical six-part literal entity ID.
 	EntityIDLiteralPattern = `^` + entityIDLiteralBodyPattern + `$`
+	// EntityIDDeclarationPattern is the anchored JSON-Schema-compatible
+	// regular expression for an exact six-position entity ID declaration
+	// pattern whose positions are canonical literals or the complete token "*".
+	EntityIDDeclarationPattern = `^` + entityIDPatternBodyPattern + `$`
 	// EntityIDLiteralPrefixPattern is the anchored JSON-Schema-compatible
 	// regular expression for a canonical one-to-six-part literal query prefix.
 	EntityIDLiteralPrefixPattern = `^` + entityIDLiteralSegmentPattern + `(?:\.` + entityIDLiteralSegmentPattern + `){0,5}$`
@@ -144,6 +150,27 @@ func ValidateEntityIDPattern(value string) error {
 	return validateEntityIDValue(
 		value, ErrorCodeEntityIDPatternInvalid, canonicalEntityIDParts, canonicalEntityIDParts, true,
 	)
+}
+
+// MatchEntityIDPattern reports whether entityID matches an exact six-position
+// declaration pattern. Both inputs are validated by the canonical contract;
+// callers never receive a partial or best-effort match for malformed data.
+func MatchEntityIDPattern(pattern, entityID string) (bool, error) {
+	if err := ValidateEntityIDPattern(pattern); err != nil {
+		return false, err
+	}
+	if err := ValidateEntityID(entityID); err != nil {
+		return false, err
+	}
+
+	patternParts := strings.Split(pattern, ".")
+	entityParts := strings.Split(entityID, ".")
+	for index := range patternParts {
+		if patternParts[index] != "*" && patternParts[index] != entityParts[index] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // ValidateEntityIDPrefix validates a non-empty one-to-six-position literal

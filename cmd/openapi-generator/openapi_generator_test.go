@@ -290,11 +290,13 @@ func TestExtractSchema(t *testing.T) {
 }
 
 func TestConvertPropertySchemaPtrPreservesStringConstraints(t *testing.T) {
+	disallowAdditional := false
 	source := &component.PropertySchema{
-		Type:      "string",
-		MinLength: intPtr(1),
-		MaxLength: intPtr(256),
-		Pattern:   `^[a-z]+$`,
+		Type:                 "string",
+		MinLength:            intPtr(1),
+		MaxLength:            intPtr(256),
+		Pattern:              `^[a-z]+$`,
+		AdditionalProperties: &disallowAdditional,
 	}
 
 	converted := convertPropertySchemaPtr(source)
@@ -306,6 +308,9 @@ func TestConvertPropertySchemaPtrPreservesStringConstraints(t *testing.T) {
 	}
 	if converted.Pattern != source.Pattern {
 		t.Errorf("Invalid nested pattern: %q", converted.Pattern)
+	}
+	if converted.AdditionalProperties == nil || *converted.AdditionalProperties {
+		t.Errorf("Invalid nested additionalProperties: %v", converted.AdditionalProperties)
 	}
 }
 

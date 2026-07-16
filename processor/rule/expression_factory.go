@@ -45,6 +45,9 @@ func (r *ExpressionRule) SetLifecycleManager(m LifecycleManager) {
 
 // NewExpressionRule creates a new expression-based rule
 func NewExpressionRule(def Definition) (*ExpressionRule, error) {
+	if err := validateDefinitionEntityPattern(def); err != nil {
+		return nil, err
+	}
 	// Parse cooldown if specified
 	var cooldown time.Duration
 	if def.Cooldown != "" {
@@ -61,10 +64,12 @@ func NewExpressionRule(def Definition) (*ExpressionRule, error) {
 		logic = "and"
 	}
 
-	// Determine subscription subjects
+	// Entity.Pattern belongs exclusively to ENTITY_STATES selection. Entity-
+	// scoped rules do not participate in the message path; message rules without
+	// an entity declaration retain the catch-all subject filter.
 	subjects := []string{">"}
 	if def.Entity.Pattern != "" {
-		subjects = []string{def.Entity.Pattern}
+		subjects = nil
 	}
 
 	return &ExpressionRule{

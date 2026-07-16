@@ -122,9 +122,11 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 			errorMsg:  "must have at least one condition",
 		},
 		{
-			name: "valid_entity_watch_patterns",
+			name: "valid_entity_watch_buckets",
 			changes: map[string]any{
-				"entity_watch_patterns": []string{"*.robotics.*.battery.*", "*.sensors.*"},
+				"entity_watch_buckets": map[string][]string{
+					"ENTITY_STATES": {"*.robotics.*.battery.*.*"},
+				},
 			},
 			wantError: false,
 		},
@@ -222,7 +224,7 @@ func TestRuntimeConfigurable_GetRuntimeConfig(t *testing.T) {
 			BufferWindowSize:       "10m",
 			AlertCooldownPeriod:    "2m",
 			EnableGraphIntegration: true,
-			EntityWatchPatterns:    []string{"*.robotics.*"},
+			EntityWatchBuckets:     map[string][]string{"ENTITY_STATES": {"*.robotics.*.*.*.*"}},
 		},
 		isSubscribed: true,
 	}
@@ -233,7 +235,7 @@ func TestRuntimeConfigurable_GetRuntimeConfig(t *testing.T) {
 	assert.NotNil(t, config["buffer_window_size"])
 	assert.NotNil(t, config["alert_cooldown_period"])
 	assert.NotNil(t, config["enable_graph_integration"])
-	assert.NotNil(t, config["entity_watch_patterns"])
+	assert.NotNil(t, config["entity_watch_buckets"])
 	assert.NotNil(t, config["rules"])
 	assert.NotNil(t, config["rule_count"])
 	assert.NotNil(t, config["is_running"])
@@ -431,10 +433,10 @@ func marshalRuleDefinition(def Definition) json.RawMessage {
 	return data
 }
 
-// TestUpdateWatchPatterns_NotRunning tests pattern updates when processor is not running
-func TestUpdateWatchPatterns_NotRunning(t *testing.T) {
+// TestUpdateWatchBuckets_NotRunning tests bucket-pattern updates before activation.
+func TestUpdateWatchBuckets_NotRunning(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.EntityWatchPatterns = []string{"*.initial.*"}
+	cfg.EntityWatchBuckets = map[string][]string{"ENTITY_STATES": {"*.initial.*.*.*.*"}}
 
 	processor := &Processor{
 		logger:           slog.Default(),
@@ -444,18 +446,19 @@ func TestUpdateWatchPatterns_NotRunning(t *testing.T) {
 	}
 
 	// Update patterns when not running should just update config
-	newPatterns := []string{"*.new.pattern.*", "*.another.*"}
-	err := processor.UpdateWatchPatterns(newPatterns)
+	newBuckets := map[string][]string{
+		"ENTITY_STATES": {"*.new.pattern.*.*.*", "*.second.pattern.*.*.*"},
+	}
+	err := processor.UpdateWatchBuckets(newBuckets)
 	require.NoError(t, err)
 
 	// Verify config was updated
-	assert.Equal(t, newPatterns, processor.config.EntityWatchPatterns)
+	assert.Equal(t, newBuckets, processor.config.EntityWatchBuckets)
 }
 
-// TestUpdateWatchPatterns_AddRemove tests adding and removing patterns
-func TestUpdateWatchPatterns_AddRemove(t *testing.T) {
+// TestUpdateWatchBuckets_AddRemove tests adding and removing bucket patterns.
+func TestUpdateWatchBuckets_AddRemove(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.EntityWatchPatterns = []string{}
 
 	processor := &Processor{
 		logger:           slog.Default(),
@@ -466,28 +469,28 @@ func TestUpdateWatchPatterns_AddRemove(t *testing.T) {
 	}
 
 	// Start with no patterns
-	assert.Empty(t, processor.config.EntityWatchPatterns)
+	assert.Empty(t, processor.config.EntityWatchBuckets)
 
 	// Add some patterns
-	patterns1 := []string{"*.pattern1.*", "*.pattern2.*"}
-	err := processor.UpdateWatchPatterns(patterns1)
+	buckets1 := map[string][]string{"ENTITY_STATES": {"*.pattern1.*.*.*.*", "*.pattern2.*.*.*.*"}}
+	err := processor.UpdateWatchBuckets(buckets1)
 	require.NoError(t, err)
-	assert.Equal(t, patterns1, processor.config.EntityWatchPatterns)
+	assert.Equal(t, buckets1, processor.config.EntityWatchBuckets)
 
 	// Update to different patterns (remove pattern1, keep pattern2, add pattern3)
-	patterns2 := []string{"*.pattern2.*", "*.pattern3.*"}
-	err = processor.UpdateWatchPatterns(patterns2)
+	buckets2 := map[string][]string{"ENTITY_STATES": {"*.pattern2.*.*.*.*", "*.pattern3.*.*.*.*"}}
+	err = processor.UpdateWatchBuckets(buckets2)
 	require.NoError(t, err)
-	assert.Equal(t, patterns2, processor.config.EntityWatchPatterns)
+	assert.Equal(t, buckets2, processor.config.EntityWatchBuckets)
 
 	// Clear all patterns
-	err = processor.UpdateWatchPatterns([]string{})
+	err = processor.UpdateWatchBuckets(map[string][]string{})
 	require.NoError(t, err)
-	assert.Empty(t, processor.config.EntityWatchPatterns)
+	assert.Empty(t, processor.config.EntityWatchBuckets)
 }
 
-// TestStopWatcherForPattern_NotExists tests stopping a non-existent watcher
-func TestStopWatcherForPattern_NotExists(t *testing.T) {
+// TestStopWatcherForBucketPattern_NotExists tests stopping a non-existent watcher.
+func TestStopWatcherForBucketPattern_NotExists(t *testing.T) {
 	processor := &Processor{
 		logger:           slog.Default(),
 		entityWatcherMap: make(map[string]jetstream.KeyWatcher),
@@ -495,6 +498,6 @@ func TestStopWatcherForPattern_NotExists(t *testing.T) {
 	}
 
 	// Stopping a non-existent watcher should not error
-	err := processor.stopWatcherForPattern("*.nonexistent.*")
+	err := processor.stopWatcherForBucketPattern("ENTITY_STATES", "*.nonexistent.*.*.*.*")
 	require.NoError(t, err)
 }

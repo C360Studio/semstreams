@@ -550,7 +550,10 @@ tested.
     constraining the spawned role's terminal vocabulary (per concept
     doc 25 + the semteams gatherer-chain pattern). SAP coercion
     metric monitored as drift telemetry.
-  - `entity_watch_buckets` config for AGENT_LOOPS patterns.
+  - No rule-level `AGENT_LOOPS` watch: component-owned operational state stays
+    behind its typed component boundary. Rule entity selection uses canonical
+    `ENTITY_STATES` lifecycle patterns; any future operational-state trigger
+    requires a separately designed decoder/evaluator adapter.
   - Per-action `MaxIterations`: 2 on R2's retighten branch, 5 on
     R4's refine branch.
 - **Rule definitions** in JSON or YAML per existing rule-config

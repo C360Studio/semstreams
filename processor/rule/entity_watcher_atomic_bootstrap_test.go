@@ -102,9 +102,11 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	processor.rules["recovery-rule"] = NewTestRule("recovery-rule", "Recovery Rule", nil, nil)
 	processor.ruleDefinitions["recovery-rule"] = Definition{
 		ID: "recovery-rule", Name: "Recovery Rule", Type: "test_rule",
+		Entity:     EntityConfig{Pattern: "*.*.*.*.*.*"},
 		OnRecovery: []Action{{Type: ActionTypePublish, Subject: "test.recovered"}},
 	}
-	processor.matchCounters["recovery-rule"] = &atomic.Int64{}
+	// This fixture observes the stateful OnRecovery leg only and has no NATS
+	// publisher; leave the separate triggered-event action leg gated off.
 	entityID := "acme.ops.rule.gcs.mission.recovery"
 	if err := tracker.Set(context.Background(), MatchState{
 		RuleID: "recovery-rule", EntityKey: entityID, IsMatching: true,

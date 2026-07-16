@@ -4,6 +4,7 @@
   "name": "R2 — Route decision dispatch",
   "description": "ADR-045 R2. Fires on research.route.complete (the route_search component's terminal stamp). Four action-level branches keyed on research.route.action (per ADR-041 action-level when clauses): synthesize_directly short-circuits to synthesize_answer; retighten re-dispatches nl_classify after clearing the classify+route markers (so R1 can re-fire); walk_seeds and decompose both dispatch execute_subqueries. The retighten branch carries MaxIterations=2 (per ADR-045 § Rule chain — caps the classify→retighten ping-pong at 2 rounds). walk_seeds/decompose dispatch is a single action with an `in` operator covering both routes, avoiding action duplication. R0 doesn't re-fire on retighten because research.requested is never cleared — the retighten path is rule-driven, not kickoff-driven.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

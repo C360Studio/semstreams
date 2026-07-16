@@ -58,7 +58,6 @@ func TestProcessor_DebounceZero_NoCoalescingSet(t *testing.T) {
 			// Create minimal config
 			config := DefaultConfig()
 			config.DebounceDelayMs = tt.debounceDelayMs
-			config.EntityWatchPatterns = []string{} // No KV watchers for this test
 
 			// Create processor
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
@@ -98,7 +97,6 @@ func TestProcessor_DebounceZero_ImmediateProcessing(t *testing.T) {
 
 	config := DefaultConfig()
 	config.DebounceDelayMs = 0
-	config.EntityWatchPatterns = []string{} // No KV watchers
 
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -138,7 +136,6 @@ func TestProcessor_DebounceZero_ImmediateProcessing(t *testing.T) {
 func TestProcessor_DebounceZero_NoTickerSpinning(t *testing.T) {
 	config := DefaultConfig()
 	config.DebounceDelayMs = 0
-	config.EntityWatchPatterns = []string{}
 
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -182,7 +179,6 @@ func TestProcessor_DebounceZero_NoTickerSpinning(t *testing.T) {
 func TestProcessor_DebounceNonZero_CoalescingSetCreated(t *testing.T) {
 	config := DefaultConfig()
 	config.DebounceDelayMs = 100 * time.Millisecond
-	config.EntityWatchPatterns = []string{}
 
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -409,7 +405,6 @@ func TestProcessor_DebounceZero_Transition(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := DefaultConfig()
 			config.DebounceDelayMs = tt.debounceDelayMs
-			config.EntityWatchPatterns = []string{}
 
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
 			if err != nil {
@@ -443,7 +438,6 @@ func TestProcessor_DebounceZero_Transition(t *testing.T) {
 func TestProcessor_DebounceZero_ConfigValidation(t *testing.T) {
 	config := DefaultConfig()
 	config.DebounceDelayMs = 0
-	config.EntityWatchPatterns = []string{}
 
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
@@ -519,7 +513,6 @@ func TestProcessor_DebounceZero_EdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			config := DefaultConfig()
 			config.DebounceDelayMs = tt.debounceDelayMs
-			config.EntityWatchPatterns = []string{}
 
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
 			if err != nil {
@@ -550,7 +543,6 @@ func TestProcessor_DebounceZero_EdgeCases(t *testing.T) {
 func TestProcessor_DebounceZero_NoResourceLeak(t *testing.T) {
 	config := DefaultConfig()
 	config.DebounceDelayMs = 0
-	config.EntityWatchPatterns = []string{}
 
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),

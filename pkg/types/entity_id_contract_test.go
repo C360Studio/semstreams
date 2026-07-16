@@ -150,6 +150,24 @@ func TestValidateEntityIDPattern(t *testing.T) {
 	assert.Error(t, ValidateEntityID("acme.*.robotics.gcs.drone.*"))
 }
 
+func TestMatchEntityIDPattern(t *testing.T) {
+	t.Parallel()
+
+	matched, err := MatchEntityIDPattern(
+		"acme.*.robotics.*.drone.*",
+		"acme.prod.robotics.gcs.drone.d007",
+	)
+	require.NoError(t, err)
+	require.True(t, matched)
+
+	matched, err = MatchEntityIDPattern(
+		"acme.*.environmental.*.sensor.*",
+		"acme.prod.robotics.gcs.drone.d007",
+	)
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
 func TestValidateEntityIDPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -180,8 +198,12 @@ func TestEntityIDSchemaPatterns(t *testing.T) {
 	t.Parallel()
 
 	full := regexp.MustCompile(EntityIDLiteralPattern)
+	declaration := regexp.MustCompile(EntityIDDeclarationPattern)
 	prefix := regexp.MustCompile(EntityIDLiteralPrefixPattern)
 	optional := regexp.MustCompile(OptionalEntityIDLiteralPattern)
+	require.True(t, declaration.MatchString("acme.*.robotics.gcs.drone.*"))
+	require.False(t, declaration.MatchString("acme.ops.robotics.>"))
+	require.False(t, declaration.MatchString("acme.ops.robotics.gcs.drøne.1"))
 
 	for _, value := range []string{"a.b.c.d.e.f", "Acme.ops2.robotics.gcs_1.drone-type.001", entityIDWithBytes(256)} {
 		assert.True(t, full.MatchString(value), value)

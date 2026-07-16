@@ -4,6 +4,7 @@
   "name": "Mission Launch on Command Triple",
   "description": "Lifecycle e2e fixture. Fires when a mission entity's ENTITY_STATES record gains a mission.command=launch triple (stamped by the mission-command processor from UDP). Drives Manager.Transition(mission, $entity.id, flying, TransitionSourceRule). Proves the full rule → lifecycle_transition wire end-to-end: UDP → graph-ingest → entity-watcher → rule → Manager.Transition → MISSIONS KV write → lifecycle-gateway readable.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "mission.command.requested",

@@ -4,6 +4,7 @@
   "name": "Fan Out Subtopics (Parallel)",
   "description": "Fires when the coordinator decides fan_out. Iterates the coordinator.decision.subtopics list (stamped by the decide tool as a JSON-encoded []string per ADR-046 Phase 1) and spawns one investigator per item. Each investigator carries the parent loop id on its TaskMessage so rule 02 can stamp the completion counter on the right entity. See ADR-046 + the example-fan-out README for the full join pattern.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

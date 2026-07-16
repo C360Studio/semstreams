@@ -4,10 +4,6 @@
   "name": "Extract File Modifications",
   "description": "Extract file modification facts from agent tool results. Creates triples tracking which files were modified, created, or deleted during agentic execution.",
   "enabled": true,
-  "entity": {
-    "pattern": "loop.agentic.task.*",
-    "watch_buckets": ["AGENT_LOOPS"]
-  },
   "conditions": [
     {
       "field": "$message.tool_results",

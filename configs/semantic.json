@@ -288,7 +288,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
-        "entity_watch_patterns": ["c360.>"],
+        "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
         "ports": {
           "inputs": [
             {
@@ -316,12 +316,13 @@
         "graph_event_subject_prefix": "objectstore.stored",
         "inline_rules": [
           {
-            "id": "cold-storage-temp-alert",
+          "id": "cold-storage-temp-alert",
             "type": "expression",
             "name": "Cold Storage Temperature Alert",
             "description": "Fires when cold storage temperature exceeds safe threshold (40F). OnEnter creates alert triple, OnExit removes it.",
-            "enabled": true,
-            "conditions": [
+          "enabled": true,
+          "entity": {"pattern": "*.*.*.*.*.*"},
+          "conditions": [
               {
                 "field": "sensor.measurement.fahrenheit",
                 "operator": "gte",
@@ -366,12 +367,13 @@
             }
           },
           {
-            "id": "high-humidity-alert",
+          "id": "high-humidity-alert",
             "type": "expression",
             "name": "High Humidity Alert",
             "description": "Fires when humidity exceeds 50% threshold. Demonstrates stateful rule transitions.",
-            "enabled": true,
-            "conditions": [
+          "enabled": true,
+          "entity": {"pattern": "*.*.*.*.*.*"},
+          "conditions": [
               {
                 "field": "sensor.measurement.percent",
                 "operator": "gte",
@@ -412,12 +414,13 @@
             }
           },
           {
-            "id": "low-pressure-alert",
+          "id": "low-pressure-alert",
             "type": "expression",
             "name": "Low Air Pressure Alert",
             "description": "Fires when compressed air pressure drops below 100 PSI. OnEnter/OnExit demonstrate dynamic graph state.",
-            "enabled": true,
-            "conditions": [
+          "enabled": true,
+          "entity": {"pattern": "*.*.*.*.*.*"},
+          "conditions": [
               {
                 "field": "sensor.measurement.psi",
                 "operator": "lt",

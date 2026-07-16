@@ -99,7 +99,8 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 		Entity: rule.EntityConfig{
-			Pattern: "c360.platform1.test.>",
+			Pattern:      "c360.platform1.test.*.*.*",
+			WatchBuckets: []string{gtypes.BucketEntityStates},
 		},
 	}
 
@@ -126,7 +127,7 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 		},
 	}
 	config.InlineRules = []rule.Definition{ruleDef}
-	config.EntityWatchPatterns = []string{"c360.platform1.test.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.platform1.test.*.*.*"}}
 	config.EnableGraphIntegration = false // We're testing KV watch, not graph integration
 
 	// Create processor with metrics
@@ -511,7 +512,7 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 			{Name: "rule_events", Type: "nats", Subject: "events.rule.triggered", Required: true},
 		},
 	}
-	config.EntityWatchPatterns = []string{"c360.platform1.test.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.platform1.test.*.*.*"}}
 	config.EnableGraphIntegration = false
 
 	// Add a rule that triggers on battery level
@@ -525,7 +526,8 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 		Entity: rule.EntityConfig{
-			Pattern: ">", // Match all entities
+			Pattern:      "*.*.*.*.*.*", // Match all canonical entities
+			WatchBuckets: []string{gtypes.BucketEntityStates},
 		},
 	}
 	config.InlineRules = []rule.Definition{ruleDef}
@@ -584,9 +586,11 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	// Now dynamically add a new watch pattern
 	changes := map[string]any{
-		"entity_watch_patterns": []string{
-			"c360.platform1.test.>",
-			"c360.platform2.test.>", // New pattern
+		"entity_watch_buckets": map[string][]string{
+			gtypes.BucketEntityStates: {
+				"c360.platform1.test.*.*.*",
+				"c360.platform2.test.*.*.*", // New pattern
+			},
 		},
 	}
 	err = processor.ApplyConfigUpdate(changes)
@@ -618,8 +622,8 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 
 	// Verify runtime config shows updated patterns
 	runtimeConfig := processor.GetRuntimeConfig()
-	patterns := runtimeConfig["entity_watch_patterns"].([]string)
-	assert.Contains(t, patterns, "c360.platform2.test.>")
+	buckets := runtimeConfig["entity_watch_buckets"].(map[string][]string)
+	assert.Contains(t, buckets[gtypes.BucketEntityStates], "c360.platform2.test.*.*.*")
 }
 
 // TestIntegration_GraphIntegration tests event publishing to graph processor
@@ -786,7 +790,8 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 		Entity: rule.EntityConfig{
-			Pattern: "c360.test.workflow.>",
+			Pattern:      "c360.test.workflow.*.*.*",
+			WatchBuckets: []string{gtypes.BucketEntityStates},
 		},
 		OnEnter: []rule.Action{
 			{
@@ -815,7 +820,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 		},
 	}
 	config.InlineRules = []rule.Definition{ruleDef}
-	config.EntityWatchPatterns = []string{"c360.test.workflow.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.test.workflow.*.*.*"}}
 	config.EnableGraphIntegration = false
 
 	metricsRegistry := metric.NewMetricsRegistry()

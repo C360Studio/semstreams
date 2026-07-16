@@ -4,10 +4,6 @@
   "name": "Track Tool Usage",
   "description": "Track tool invocation patterns during agentic execution. Creates triples recording which tools were used and their frequency.",
   "enabled": true,
-  "entity": {
-    "pattern": "loop.agentic.task.*",
-    "watch_buckets": ["AGENT_LOOPS"]
-  },
   "conditions": [
     {
       "field": "$message.tool_calls",

@@ -206,13 +206,14 @@
           "inputs": [{"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}],
           "outputs": [{"name": "workflow_triggers", "subject": "workflow.trigger.*", "type": "jetstream"}]
         },
-        "entity_watch_patterns": [">"],
+        "entity_watch_buckets": {"ENTITY_STATES": ["*.*.*.*.*.*"]},
         "inline_rules": [
           {
             "id": "cold-storage-temp-violation",
             "type": "expression",
             "name": "Cold Storage Temperature Violation",
             "enabled": true,
+            "entity": {"pattern": "*.*.*.*.*.*"},
             "conditions": [
               {"field": "sensor.measurement.fahrenheit", "operator": "gte", "value": 40},
               {"field": "geo.location.zone", "operator": "contains", "value": "cold-storage"}

@@ -91,13 +91,14 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 		Entity: rule.EntityConfig{
-			Pattern: "test.debounce.>",
+			Pattern:      "test.debounce.*.*.*.*",
+			WatchBuckets: []string{gtypes.BucketEntityStates},
 		},
 	}
 
 	// Create processor with debouncing (100ms default)
 	config := rule.DefaultConfig()
-	config.EntityWatchPatterns = []string{"test.debounce.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"test.debounce.*.*.*.*"}}
 	config.DebounceDelayMs = 100 * time.Millisecond
 	config.InlineRules = []rule.Definition{ruleDef}
 
@@ -315,7 +316,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.temperature.>",
+				Pattern:      "c360.logistics.environmental.sensor.temperature.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -333,7 +335,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.pressure.>",
+				Pattern:      "c360.logistics.environmental.sensor.pressure.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -351,7 +354,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.humidity.>",
+				Pattern:      "c360.logistics.environmental.sensor.humidity.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -369,7 +373,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.vibration.>",
+				Pattern:      "c360.logistics.environmental.sensor.vibration.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 	}
@@ -377,7 +382,7 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	// Create processor with DebounceDelayMs=0 for immediate processing
 	// This bypasses the coalescing set and processes each entity update immediately
 	config := rule.DefaultConfig()
-	config.EntityWatchPatterns = []string{"c360.logistics.environmental.sensor.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.logistics.environmental.sensor.*.*"}}
 	config.DebounceDelayMs = 0 // Immediate processing - no batching
 	config.InlineRules = rules
 

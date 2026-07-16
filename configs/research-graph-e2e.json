@@ -291,7 +291,7 @@
         ],
         "enable_graph_integration": true,
         "entity_watch_buckets": {
-          "ENTITY_STATES": [">"]
+          "ENTITY_STATES": ["*.*.*.*.*.*"]
         },
         "ports": {
           "inputs": [

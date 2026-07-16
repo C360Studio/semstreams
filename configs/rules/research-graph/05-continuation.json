@@ -4,6 +4,7 @@
   "name": "R6 — Continuation: route SearchResult to parent",
   "description": "ADR-045 R6. Fires on research.search-result.complete (synthesize_answer's terminal stamp). Publishes a follow-up agent task to the parent loop's role; the parent's next iteration fetches the SearchResult via read_loop_result(loop_id=<rg_…>) — synthesize_answer also wrote the envelope to AGENT_LOOPS at COMPLETE_<loopID> so this works out of the box. Note: when research.parent.role is empty (research_graph tool invoked outside an agent loop), the role substitution leaves a literal $entity.triple.research.parent.role in the spawned task — the spawn fails loudly rather than silently mis-routing. Phase 2 may add a configured default_parent_role fallback per ADR-045 § Open questions.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",
