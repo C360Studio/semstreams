@@ -323,6 +323,7 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedToolChoice, loopID)
 	delete(m.cachedMetadata, loopID)
 	delete(m.cachedRequestTimeout, loopID)
+	delete(m.cachedResponseFormat, loopID)
 	delete(m.taskPrompts, loopID)
 	delete(m.truncationRetryAttempts, loopID)
 

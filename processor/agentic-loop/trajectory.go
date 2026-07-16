@@ -76,6 +76,14 @@ func (m *TrajectoryManager) GetTrajectory(loopID string) (agentic.Trajectory, er
 	return *traj, nil
 }
 
+// DeleteTrajectory removes an uncommitted trajectory during loop-creation
+// rollback. It performs no persistence or publication.
+func (m *TrajectoryManager) DeleteTrajectory(loopID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.trajectories, loopID)
+}
+
 // SaveTrajectory saves a trajectory to KV storage
 func (m *TrajectoryManager) SaveTrajectory(_ context.Context, _ agentic.Trajectory) error {
 	// In unit tests with mock KV, this is a no-op

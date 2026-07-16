@@ -182,10 +182,10 @@ func MarshalEntityState(entity *EntityState) ([]byte, error) {
 // graph-view consumers. It refuses unreadable or noncanonical stored state.
 func UnmarshalEntityState(data []byte, entity *EntityState) error {
 	if err := json.Unmarshal(data, entity); err != nil {
-		return errs.WrapFatal(&StateContractError{
+		return ClassifyStateContractError(errs.WrapFatal(&StateContractError{
 			Reason: GraphStateReasonUnreadableEntity,
 			Err:    err,
-		}, "graph", "UnmarshalEntityState", "decode authoritative entity state")
+		}, "graph", "UnmarshalEntityState", "decode authoritative entity state"))
 	}
 	if err := ValidateEntityStateContract(entity); err != nil {
 		reason := GraphStateReasonNoncanonicalEntityID
@@ -193,10 +193,10 @@ func UnmarshalEntityState(data []byte, entity *EntityState) error {
 		if errors.As(err, &predicateErr) {
 			reason = GraphStateReasonNoncanonicalPredicate
 		}
-		return errs.WrapFatal(&StateContractError{
+		return ClassifyStateContractError(errs.WrapFatal(&StateContractError{
 			Reason: reason,
 			Err:    err,
-		}, "graph", "UnmarshalEntityState", "decode authoritative entity state")
+		}, "graph", "UnmarshalEntityState", "decode authoritative entity state"))
 	}
 	return nil
 }

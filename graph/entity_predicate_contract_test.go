@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -96,6 +97,13 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var entity EntityState
 			err := UnmarshalEntityState(tt.data, &entity)
+			var classified *errs.ClassifiedError
+			if !errors.As(err, &classified) {
+				t.Fatalf("UnmarshalEntityState() error = %T %v, want *errs.ClassifiedError", err, err)
+			}
+			if classified.Class != errs.ErrorFatal || classified.Code != ErrorCodeGraphStateResetRequired {
+				t.Fatalf("classification = %s/%q, want fatal/%q", classified.Class, classified.Code, ErrorCodeGraphStateResetRequired)
+			}
 			var stateErr *StateContractError
 			if !errors.As(err, &stateErr) {
 				t.Fatalf("UnmarshalEntityState() error = %T %v, want *StateContractError", err, err)

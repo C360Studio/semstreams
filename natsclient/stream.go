@@ -64,6 +64,11 @@ type StreamConsumerConfig struct {
 	// processing time including any downstream calls (e.g., LLM requests).
 	// Default is 30 seconds if not specified.
 	MessageTimeout time.Duration
+
+	// DisableMessageTimeout keeps the handler context bound to the consumer
+	// lifecycle. Use only when the handler applies its own ordinary work deadline
+	// and needs to retain an in-flight delivery across that deadline.
+	DisableMessageTimeout bool
 }
 
 // StreamAutoCreateConfig configures automatic stream creation.
@@ -152,6 +157,18 @@ func (c *Client) ConsumeStreamWithConfig(
 	cfg StreamConsumerConfig,
 	handler func(ctx context.Context, msg jetstream.Msg),
 ) error {
+	return c.ConsumeStreamWithConfigContexts(ctx, ctx, cfg, handler)
+}
+
+// ConsumeStreamWithConfigContexts separates bounded setup I/O from callback
+// lifetime. setupCtx governs stream lookup and consumer creation; handlerCtx is
+// only the parent for delivered-message contexts after setup succeeds.
+func (c *Client) ConsumeStreamWithConfigContexts(
+	setupCtx context.Context,
+	handlerCtx context.Context,
+	cfg StreamConsumerConfig,
+	handler func(ctx context.Context, msg jetstream.Msg),
+) error {
 	if cfg.StreamName == "" {
 		return errs.WrapInvalid(
 			fmt.Errorf("stream name is required"),
@@ -173,13 +190,13 @@ func (c *Client) ConsumeStreamWithConfig(
 
 	// Auto-create stream if enabled
 	if cfg.AutoCreate {
-		if err := c.ensureStreamForConsumer(ctx, js, cfg); err != nil {
+		if err := c.ensureStreamForConsumer(setupCtx, js, cfg); err != nil {
 			return err
 		}
 	}
 
 	// Get the stream
-	stream, err := js.Stream(ctx, cfg.StreamName)
+	stream, err := js.Stream(setupCtx, cfg.StreamName)
 	if err != nil {
 		c.recordFailure()
 		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
@@ -202,34 +219,32 @@ func (c *Client) ConsumeStreamWithConfig(
 	consumerCfg := c.buildConsumerConfig(cfg)
 
 	// Create or update consumer
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerCfg)
+	consumer, err := stream.CreateOrUpdateConsumer(setupCtx, consumerCfg)
 	if err != nil {
 		c.recordFailure()
 		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
 			"failed to create consumer for stream "+cfg.StreamName)
 	}
 
-	// Track consumer for JetStream metrics (Prometheus poller)
-	if c.jsMetrics != nil {
-		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, consumer)
-	}
-
-	// Determine message timeout (default 30s if not specified)
+	// Determine message timeout (default 30s if not specified).
 	messageTimeout := cfg.MessageTimeout
 	if messageTimeout <= 0 {
 		messageTimeout = 30 * time.Second
 	}
 
 	// Start consuming
+	if err := setupCtx.Err(); err != nil {
+		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
+			"setup context ended before starting consumer")
+	}
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
 		// Extract trace from JetStream message headers
-		msgCtx := ctx
+		msgCtx := handlerCtx
 		if tc := ExtractTraceFromJetStream(msg.Headers()); tc != nil {
-			msgCtx = ContextWithTrace(ctx, tc)
+			msgCtx = ContextWithTrace(handlerCtx, tc)
 		}
 
-		// Create per-message context with configurable timeout
-		msgCtx, cancel := context.WithTimeout(msgCtx, messageTimeout)
+		msgCtx, cancel := messageHandlerContext(msgCtx, messageTimeout, cfg.DisableMessageTimeout)
 		defer cancel()
 
 		// Wrap handler with panic recovery and default Nak
@@ -239,6 +254,16 @@ func (c *Client) ConsumeStreamWithConfig(
 		c.recordFailure()
 		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
 			"failed to start consuming from stream "+cfg.StreamName)
+	}
+	if err := setupCtx.Err(); err != nil {
+		consumeCtx.Stop()
+		return errs.WrapTransient(err, "Client", "ConsumeStreamWithConfig",
+			"setup context ended while starting consumer")
+	}
+
+	// Track consumer for JetStream metrics only after setup committed.
+	if c.jsMetrics != nil {
+		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, consumer)
 	}
 
 	// Track consumer for cleanup
@@ -251,6 +276,13 @@ func (c *Client) ConsumeStreamWithConfig(
 
 	c.resetCircuit()
 	return nil
+}
+
+func messageHandlerContext(parent context.Context, timeout time.Duration, disabled bool) (context.Context, context.CancelFunc) {
+	if disabled {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // safeHandleMessage wraps the handler with panic recovery.
