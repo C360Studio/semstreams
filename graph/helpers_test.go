@@ -205,7 +205,7 @@ func TestGetRelationshipTriples(t *testing.T) {
 		relationships := GetRelationshipTriples(entity)
 		require.Len(t, relationships, 2)
 
-		predicates := make([]string, len(relationships))
+		predicates := make([]string, len(relationships)) // predicate-audit:unrelated {"column":17,"surface":"go-assignment:predicates","value":"","basis":"reviewed output accumulator populated from returned relationship triples"}
 		for i, rel := range relationships {
 			predicates[i] = rel.Predicate
 		}
@@ -244,7 +244,7 @@ func TestGetPropertyTriples(t *testing.T) {
 		properties := GetPropertyTriples(entity)
 		require.Len(t, properties, 2)
 
-		predicates := make([]string, len(properties))
+		predicates := make([]string, len(properties)) // predicate-audit:unrelated {"column":17,"surface":"go-assignment:predicates","value":"","basis":"reviewed output accumulator populated from returned property triples"}
 		for i, prop := range properties {
 			predicates[i] = prop.Predicate
 		}

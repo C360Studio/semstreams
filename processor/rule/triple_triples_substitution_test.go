@@ -192,9 +192,9 @@ func TestTripleTriplesSubstitution_MultipleTokensInOneTemplate(t *testing.T) {
 			},
 		},
 	}
-	prompt := "Sibling IDs: $entity.triple.test.fixture.first.triples. Subtopics: $entity.triple.test.fixture.second.triples."
+	prompt := "Sibling IDs: $entity.triple.test.fixture.first.triples; Subtopics: $entity.triple.test.fixture.second.triples"
 	got := ec.SubstituteVariables(prompt)
-	assert.Equal(t, `Sibling IDs: ["a","b"]. Subtopics: ["x"].`, got)
+	assert.Equal(t, `Sibling IDs: ["a","b"]; Subtopics: ["x"]`, got)
 }
 
 func TestTripleTriplesSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {

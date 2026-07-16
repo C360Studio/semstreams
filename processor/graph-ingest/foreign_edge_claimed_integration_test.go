@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/ownership"
@@ -79,7 +80,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_RoutesNoBirthStub(t *testing.
 		Name:          "csapi.system.hierarchy",
 		MessageType:   producerType, // stamped as the ForeignEdgeClaim Producer
 		EntityPattern: "*.*.*.*.system.*",
-		ForeignEdges:  []projection.ForeignEdge{{Predicate: isHostedBy, Mode: ownership.EdgeNoBirthStub}},
+		ForeignEdges:  []projection.ForeignEdge{{Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), Mode: ownership.EdgeNoBirthStub}},
 	})
 
 	unclaimedBefore := testutil.ToFloat64(c.foreignEdgeUnclaimed.WithLabelValues(producerType, isHostedBy))
@@ -91,8 +92,8 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_RoutesNoBirthStub(t *testing.
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: isHostedBy, Object: systemID, Timestamp: time.Now(), Confidence: 1},        // foreign
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1},                                                  // own
+			{Subject: componentID, Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign
 		},
 	}
 	data, err := json.Marshal(req)
@@ -138,7 +139,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_StrictDropsAbsentTarget(t *te
 		Name:          "csapi.strict",
 		MessageType:   producerType,
 		EntityPattern: "*.*.*.*.system.*",
-		ForeignEdges:  []projection.ForeignEdge{{Predicate: strictEdge, Mode: ownership.EdgeStrict}},
+		ForeignEdges:  []projection.ForeignEdge{{Predicate: semantictest.Predicate(t, "test", "strict", "hosted-by"), Mode: ownership.EdgeStrict}},
 	})
 
 	unclaimedBefore := testutil.ToFloat64(c.foreignEdgeUnclaimed.WithLabelValues(producerType, strictEdge))
@@ -147,8 +148,8 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_StrictDropsAbsentTarget(t *te
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: strictEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},        // foreign, Strict, absent target
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1},                                        // own
+			{Subject: componentID, Predicate: semantictest.Predicate(t, "test", "strict", "hosted-by"), Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign, Strict, absent target
 		},
 	}
 	data, err := json.Marshal(req)
@@ -187,7 +188,7 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t 
 		Name:          "csapi.updatelane",
 		MessageType:   producerType,
 		EntityPattern: "*.*.*.*.system.*",
-		ForeignEdges:  []projection.ForeignEdge{{Predicate: isHostedBy, Mode: ownership.EdgeNoBirthStub}},
+		ForeignEdges:  []projection.ForeignEdge{{Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), Mode: ownership.EdgeNoBirthStub}},
 	})
 
 	// Pre-create the parent so update_with_triples has an existing entity (must-exist on the primary).
@@ -201,8 +202,8 @@ func TestIntegration_SharedSeam_ClaimedForeignEdge_UpdateLaneMaterialisesStub(t 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID, MessageType: producerMT},
 		AddTriples: []message.Triple{
-			{Subject: systemID, Predicate: "test.system.note", Object: "n", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: isHostedBy, Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign
+			{Subject: systemID, Predicate: "test.system.note", Object: "n", Timestamp: time.Now(), Confidence: 1},                                                         // own
+			{Subject: componentID, Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign
 		},
 	}
 	data, err := json.Marshal(req)
@@ -238,7 +239,7 @@ func TestIntegration_SharedSeam_ProducerEmptyClaim_RoutesAnyProducer(t *testing.
 		Name:          "csapi.anyproducer",
 		MessageType:   "", // Producer-empty → matches any producer at the seam (transitional shape)
 		EntityPattern: "*.*.*.*.system.*",
-		ForeignEdges:  []projection.ForeignEdge{{Predicate: anyEdge, Mode: ownership.EdgeNoBirthStub}},
+		ForeignEdges:  []projection.ForeignEdge{{Predicate: semantictest.Predicate(t, "test", "anyproducer", "hosted-by"), Mode: ownership.EdgeNoBirthStub}},
 	})
 
 	unclaimedBefore := testutil.ToFloat64(c.foreignEdgeUnclaimed.WithLabelValues(invalidLabel, anyEdge))
@@ -247,8 +248,8 @@ func TestIntegration_SharedSeam_ProducerEmptyClaim_RoutesAnyProducer(t *testing.
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: systemID}, // empty MessageType, like cs-api ingestTriples
 		Triples: []message.Triple{
-			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1}, // own
-			{Subject: componentID, Predicate: anyEdge, Object: systemID, Timestamp: time.Now(), Confidence: 1},           // foreign
+			{Subject: systemID, Predicate: "test.system.label", Object: "Gateway", Timestamp: time.Now(), Confidence: 1},                                             // own
+			{Subject: componentID, Predicate: semantictest.Predicate(t, "test", "anyproducer", "hosted-by"), Object: systemID, Timestamp: time.Now(), Confidence: 1}, // foreign
 		},
 	}
 	data, err := json.Marshal(req)

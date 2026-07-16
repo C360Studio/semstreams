@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -201,7 +202,9 @@ func TestStorageRefExtraction_ConsumerLiftsRefOntoEntity(t *testing.T) {
 func TestStorageRefExtraction_NonStorablePayloadLeavesRefNil(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	// testGraphablePayload (indexing_profile_test.go) is Graphable but NOT Storable.
-	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{userTriple("test.fixture.value", "v")}}
+	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{{
+		Subject: flParentID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"), Object: "v", Timestamp: time.Now(),
+	}}}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
 
 	entity, err := comp.extractEntityFromMessage(msg)

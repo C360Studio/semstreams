@@ -737,7 +737,7 @@ func (m *mockTripleMutator) ReplaceOwned(_ context.Context, ruleID, owner, entit
 		ruleID:    ruleID,
 		owner:     owner,
 		entityID:  entityID,
-		predicate: predicate,
+		predicate: predicate, // predicate-audit:unrelated {"column":14,"surface":"go-field:predicate","value":"","basis":"reviewed mock call capture copied from production invocation"}
 		objects:   objects,
 	})
 	return uint64(len(m.replaceOwnedCalls)), nil

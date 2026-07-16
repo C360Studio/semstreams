@@ -34,7 +34,7 @@ func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 		"agent.run.phase":    {"c360.a.b.c.d.e3"},
 	})
 
-	predicates, err := comp.listAllPredicates(context.Background())
+	predicates, err := comp.listAllPredicates(context.Background()) // predicate-audit:unrelated {"column":21,"surface":"go-assignment:predicates","value":"","basis":"reviewed query output returned by predicate index"}
 	require.NoError(t, err)
 
 	byName := make(map[string]int)
@@ -49,7 +49,7 @@ func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 func TestListAllPredicates_EmptyCatalog(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 
-	predicates, err := comp.listAllPredicates(context.Background())
+	predicates, err := comp.listAllPredicates(context.Background()) // predicate-audit:unrelated {"column":21,"surface":"go-assignment:predicates","value":"","basis":"reviewed query output returned by predicate index"}
 	require.NoError(t, err)
 	assert.Empty(t, predicates)
 }
@@ -68,7 +68,7 @@ func TestListPredicatesByNamespace_TrailingDotNormalization(t *testing.T) {
 
 	for _, prefix := range []string{"inferred.semantic.", "inferred.semantic"} {
 		t.Run("prefix="+prefix, func(t *testing.T) {
-			predicates, err := comp.listPredicatesByNamespace(context.Background(), prefix)
+			predicates, err := comp.listPredicatesByNamespace(context.Background(), prefix) // predicate-audit:unrelated {"column":23,"surface":"go-assignment:predicates","value":"","basis":"reviewed query output returned by predicate index"}
 			require.NoError(t, err)
 
 			byName := make(map[string]int)
@@ -90,7 +90,7 @@ func TestListPredicatesByNamespace_NoMatches(t *testing.T) {
 		"agent.run.identity": {"c360.a.b.c.d.e1"},
 	})
 
-	predicates, err := comp.listPredicatesByNamespace(context.Background(), "inferred.semantic")
+	predicates, err := comp.listPredicatesByNamespace(context.Background(), "inferred.semantic") // predicate-audit:unrelated {"column":21,"surface":"go-assignment:predicates","value":"","basis":"reviewed query output returned by predicate index"}
 	require.NoError(t, err)
 	assert.Empty(t, predicates)
 }

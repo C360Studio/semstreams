@@ -323,7 +323,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			wantOutgoing:  true,
 			wantIncoming:  true,
 			wantAlias:     false,
-			wantPredicate: 1,
+			wantPredicate: 1, // predicate-audit:unrelated {"column":19,"surface":"go-field:wantPredicate","value":"","basis":"reviewed numeric index-count expectation, not predicate syntax"}
 		},
 		{
 			name: "literal triple indexes only predicate",
@@ -337,7 +337,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			wantOutgoing:  false,
 			wantIncoming:  false,
 			wantAlias:     false,
-			wantPredicate: 1,
+			wantPredicate: 1, // predicate-audit:unrelated {"column":19,"surface":"go-field:wantPredicate","value":"","basis":"reviewed numeric index-count expectation, not predicate syntax"}
 		},
 		{
 			name: "alias triple indexes alias",
@@ -351,7 +351,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			wantOutgoing:  false,
 			wantIncoming:  false,
 			wantAlias:     true,
-			wantPredicate: 1,
+			wantPredicate: 1, // predicate-audit:unrelated {"column":19,"surface":"go-field:wantPredicate","value":"","basis":"reviewed numeric index-count expectation, not predicate syntax"}
 		},
 		{
 			name: "multiple triples index appropriately",
@@ -375,7 +375,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			wantOutgoing:  true,
 			wantIncoming:  true,
 			wantAlias:     true,
-			wantPredicate: 3,
+			wantPredicate: 3, // predicate-audit:unrelated {"column":19,"surface":"go-field:wantPredicate","value":"","basis":"reviewed numeric index-count expectation, not predicate syntax"}
 		},
 	}
 
@@ -429,7 +429,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 			}
 
 			// Verify predicate index
-			predicate := predicateMock(comp)
+			predicate := predicateMock(comp) // predicate-audit:unrelated {"column":17,"surface":"go-assignment:predicate","value":"","basis":"reviewed mock predicate-index bucket returned for output assertions"}
 			predicate.mu.Lock()
 			predicateCount := len(predicate.data)
 			predicate.mu.Unlock()

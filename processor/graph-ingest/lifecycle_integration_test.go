@@ -18,14 +18,10 @@ func TestMain(m *testing.M) {
 	// Declare the test-only predicates used by projection/ownership contracts.
 	// Runtime graph writes require canonical syntax, while authoring surfaces
 	// additionally require explicit vocabulary declaration.
-	for _, predicate := range []string{
-		"mission.state.phase",
-		"sensorml.component.is-hosted-by",
-		"test.anyproducer.hosted-by",
-		"test.strict.hosted-by",
-	} {
-		vocabulary.Register(predicate)
-	}
+	vocabulary.Register("mission.state.phase")
+	vocabulary.Register("sensorml.component.is-hosted-by")
+	vocabulary.Register("test.anyproducer.hosted-by")
+	vocabulary.Register("test.strict.hosted-by")
 
 	// Setup shared NATS client for all integration tests
 	t := &testing.T{}

@@ -103,7 +103,7 @@ func TestHandleQueryGraphSummary_PoisonedPrefixReplyPropagates(t *testing.T) {
 // from graph.index.query.predicateList.
 func predicateListResponse(preds ...graph.PredicateSummary) []byte {
 	resp := graph.NewQueryResponse(graph.PredicateListData{
-		Predicates: preds,
+		Predicates: preds, // predicate-audit:unrelated {"column":15,"surface":"go-field:Predicates","value":"","basis":"reviewed query-response output supplied by caller"}
 		Total:      len(preds),
 	})
 	out, _ := json.Marshal(resp)

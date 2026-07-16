@@ -88,7 +88,7 @@ func TestOwnerReconcile_DeduplicatesFilteredResults(t *testing.T) {
 
 func TestOwnerReconcileSpike_RetractsReplacedAndEmptyMemberships(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	comp.namePredicates = map[string]int{semantictest.Predicate(t, "core", "identity", "name"): 0}
+	comp.namePredicates = map[string]int{semantictest.Predicate(t, "core", "identity", "name"): 0} // predicate-audit:unrelated {"column":24,"surface":"go-assignment:namePredicates","value":"","basis":"reviewed component test configuration map; contained predicate is runtime-authoritative"}
 	ctx := context.Background()
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	targetA := "acme.ops.robotics.gcs.mission.001"

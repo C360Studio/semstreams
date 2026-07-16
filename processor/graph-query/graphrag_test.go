@@ -6,9 +6,8 @@ import (
 	"testing"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/vocabulary"
-	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 func TestExtractEntityType(t *testing.T) {
@@ -52,8 +51,8 @@ func TestResolveLabel(t *testing.T) {
 		entity := &gtypes.EntityState{
 			ID: "acme.ops.robotics.gcs.drone.001",
 			Triples: []message.Triple{
-				{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: vocabulary.DCTermsTitle, Object: "Alpha Drone"},
-				{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: agvocab.IdentityDisplayName, Object: "Drone 001"},
+				{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: semantictest.Predicate(t, "agent", "identity", "display-name"), Object: "Drone 001"},
+				{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: semantictest.Predicate(t, "dc", "terms", "title"), Object: "Alpha Drone"},
 			},
 		}
 		got := resolveLabel(entity)
@@ -66,7 +65,7 @@ func TestResolveLabel(t *testing.T) {
 		entity := &gtypes.EntityState{
 			ID: "acme.ops.agent.loop.agent.bot1",
 			Triples: []message.Triple{
-				{Subject: "acme.ops.agent.loop.agent.bot1", Predicate: agvocab.IdentityDisplayName, Object: "Scout Bot"},
+				{Subject: "acme.ops.agent.loop.agent.bot1", Predicate: semantictest.Predicate(t, "agent", "identity", "display-name"), Object: "Scout Bot"},
 			},
 		}
 		got := resolveLabel(entity)
@@ -79,7 +78,7 @@ func TestResolveLabel(t *testing.T) {
 		entity := &gtypes.EntityState{
 			ID: "local.dev.agent.model-registry.endpoint.semembed",
 			Triples: []message.Triple{
-				{Subject: "local.dev.agent.model-registry.endpoint.semembed", Predicate: agvocab.ModelName, Object: "nomic-embed-text"},
+				{Subject: "local.dev.agent.model-registry.endpoint.semembed", Predicate: semantictest.Predicate(t, "agent", "model", "name"), Object: "nomic-embed-text"},
 			},
 		}
 		got := resolveLabel(entity)

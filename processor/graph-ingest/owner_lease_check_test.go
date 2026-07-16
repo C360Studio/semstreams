@@ -176,7 +176,7 @@ func TestOwnerLease_CreateWithTriples_StaleToken_MetricAndCommits(t *testing.T) 
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{ID: "c360.test.lease.sys.w.crt1", MessageType: mt},
 		Triples: []message.Triple{
-			{Subject: "c360.test.lease.sys.w.crt1", Predicate: pred, Object: "planning"},
+			{Subject: "c360.test.lease.sys.w.crt1", Predicate: leasePred, Object: "planning"},
 		},
 		OwnerToken: staleToken(),
 	}
@@ -210,12 +210,12 @@ func TestOwnerLease_UpdateWithTriples_StaleToken_MetricAndCommits(t *testing.T) 
 	// Pre-create so update_with_triples finds a must-exist entity.
 	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
 		ID: eid, MessageType: mt, Version: 1,
-		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+		Triples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "init"}},
 	}))
 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-		AddTriples: []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		AddTriples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "planning"}},
 		OwnerToken: staleToken(),
 	}
 	data, err := json.Marshal(req)
@@ -248,14 +248,14 @@ func TestOwnerLease_UpdateWithTriplesCAS_StaleToken_MetricAndCommits(t *testing.
 	// Pre-create and capture the revision.
 	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
 		ID: eid, MessageType: mt, Version: 1,
-		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+		Triples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "init"}},
 	}))
 	_, rev, err := comp.fetchEntityState(context.Background(), eid)
 	require.NoError(t, err)
 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity:           &graph.EntityState{ID: eid, MessageType: mt},
-		AddTriples:       []message.Triple{{Subject: eid, Predicate: pred, Object: "active"}},
+		AddTriples:       []message.Triple{{Subject: eid, Predicate: leasePred, Object: "active"}},
 		ExpectedRevision: rev,
 		OwnerToken:       staleToken(),
 	}
@@ -291,7 +291,7 @@ func TestOwnerLease_EmptyToken_AllLanes_NoMetric(t *testing.T) {
 		eid := "c360.test.lease.sys.w.emp1"
 		req := graph.CreateEntityWithTriplesRequest{
 			Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-			Triples:    []message.Triple{{Subject: eid, Predicate: pred, Object: "x"}},
+			Triples:    []message.Triple{{Subject: eid, Predicate: leasePred, Object: "x"}},
 			OwnerToken: "",
 		}
 		data, _ := json.Marshal(req)
@@ -308,11 +308,11 @@ func TestOwnerLease_EmptyToken_AllLanes_NoMetric(t *testing.T) {
 		eid := "c360.test.lease.sys.w.emp2"
 		require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
 			ID: eid, MessageType: mt, Version: 1,
-			Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+			Triples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "init"}},
 		}))
 		req := graph.UpdateEntityWithTriplesRequest{
 			Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-			AddTriples: []message.Triple{{Subject: eid, Predicate: pred, Object: "updated"}},
+			AddTriples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "updated"}},
 			OwnerToken: "",
 		}
 		data, _ := json.Marshal(req)
@@ -463,7 +463,7 @@ func TestOwnerLease_CreateWithTriples_EnforceOn_Rejects(t *testing.T) {
 
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-		Triples:    []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		Triples:    []message.Triple{{Subject: eid, Predicate: leasePred, Object: "planning"}},
 		OwnerToken: staleToken(),
 	}
 	data, err := json.Marshal(req)
@@ -492,12 +492,12 @@ func TestOwnerLease_UpdateWithTriples_EnforceOn_Rejects(t *testing.T) {
 
 	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
 		ID: eid, MessageType: mt, Version: 1,
-		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+		Triples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "init"}},
 	}))
 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-		AddTriples: []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		AddTriples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "planning"}},
 		OwnerToken: staleToken(),
 	}
 	data, err := json.Marshal(req)
@@ -535,14 +535,14 @@ func TestOwnerLease_UpdateWithTriplesCAS_EnforceOn_Rejects(t *testing.T) {
 
 	require.NoError(t, comp.CreateEntity(context.Background(), &graph.EntityState{
 		ID: eid, MessageType: mt, Version: 1,
-		Triples: []message.Triple{{Subject: eid, Predicate: pred, Object: "init"}},
+		Triples: []message.Triple{{Subject: eid, Predicate: leasePred, Object: "init"}},
 	}))
 	_, rev, err := comp.fetchEntityState(context.Background(), eid)
 	require.NoError(t, err)
 
 	req := graph.UpdateEntityWithTriplesRequest{
 		Entity:           &graph.EntityState{ID: eid, MessageType: mt},
-		AddTriples:       []message.Triple{{Subject: eid, Predicate: pred, Object: "active"}},
+		AddTriples:       []message.Triple{{Subject: eid, Predicate: leasePred, Object: "active"}},
 		ExpectedRevision: rev,
 		OwnerToken:       staleToken(),
 	}
@@ -571,7 +571,7 @@ func TestOwnerLease_EnforceOn_MeteredMutation_RecordsRejection(t *testing.T) {
 
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: eid, MessageType: mt},
-		Triples:    []message.Triple{{Subject: eid, Predicate: pred, Object: "planning"}},
+		Triples:    []message.Triple{{Subject: eid, Predicate: leasePred, Object: "planning"}},
 		OwnerToken: staleToken(),
 	}
 	data, err := json.Marshal(req)

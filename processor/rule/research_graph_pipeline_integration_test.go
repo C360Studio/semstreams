@@ -92,12 +92,12 @@ func kickoffEntity(entityID string) *gtypes.EntityState {
 	return &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Predicate: research.PredicateLoopRole, Object: research.PipelineRole},
-			{Predicate: research.PredicateResearchRequested, Object: "true"},
-			{Predicate: research.PredicateResearchTopic, Object: testTopic},
-			{Predicate: research.PredicateResearchLoopID, Object: testLoopID},
-			{Predicate: research.PredicateResearchParentLoop, Object: testParentLoopID},
-			{Predicate: research.PredicateResearchParentRole, Object: testParentRole},
+			{Predicate: "agent.loop.role", Object: research.PipelineRole},
+			{Predicate: "research.request.received", Object: "true"},
+			{Predicate: "research.request.topic", Object: testTopic},
+			{Predicate: "research.loop.id", Object: testLoopID},
+			{Predicate: "research.parent.loop", Object: testParentLoopID},
+			{Predicate: "research.parent.role", Object: testParentRole},
 		},
 	}
 }
@@ -107,10 +107,10 @@ func kickoffEntity(entityID string) *gtypes.EntityState {
 // upstream stamps intact so action-level $entity.triple.* substitution
 // (e.g. R0's subject literal `component.nl_classify.$entity.triple.research.loop_id`)
 // resolves the loopID consistently.
-func withTriple(base *gtypes.EntityState, predicate string, object any) *gtypes.EntityState {
+func withTriple(base *gtypes.EntityState, triple message.Triple) *gtypes.EntityState {
 	clone := *base
 	clone.Triples = append([]message.Triple(nil), base.Triples...)
-	clone.Triples = append(clone.Triples, message.Triple{Predicate: predicate, Object: object})
+	clone.Triples = append(clone.Triples, triple)
 	return &clone
 }
 
@@ -180,8 +180,8 @@ func TestResearchGraphPipeline_R0_DoesNotFireOnNonResearchLoops(t *testing.T) {
 	entity := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Predicate: research.PredicateLoopRole, Object: "coordinator"},
-			{Predicate: research.PredicateResearchRequested, Object: "true"},
+			{Predicate: semantictest.Predicate(t, "agent", "loop", "role"), Object: "coordinator"},
+			{Predicate: semantictest.Predicate(t, "research", "request", "received"), Object: "true"},
 		},
 	}
 	rule, err := NewExpressionRule(r0)
@@ -196,7 +196,7 @@ func TestResearchGraphPipeline_R0_DoesNotFireOnNonResearchLoops(t *testing.T) {
 func TestResearchGraphPipeline_R1_ClassifyCompleteDispatchesRoute(t *testing.T) {
 	_, r1, _, _, _, _ := loadResearchGraphRules(t)
 	entityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", testLoopID)
-	entity := withTriple(kickoffEntity(entityID), research.PredicateResearchClassifyComplete, "2026-06-02T18:30:45Z")
+	entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "classify", "complete"), Object: "2026-06-02T18:30:45Z"})
 	pub, _ := runOnEnter(t, r1, entity)
 
 	require.Len(t, pub.published, 1)
@@ -239,15 +239,15 @@ func TestResearchGraphPipeline_R2_RouteAction_AllFourBranches(t *testing.T) {
 			action:      research.ActionRetighten,
 			wantSubject: "component.nl_classify." + testLoopID,
 			wantRemovedPredicates: []string{
-				research.PredicateResearchClassifyComplete,
-				research.PredicateResearchRouteComplete,
+				semantictest.Predicate(t, "research", "classify", "complete"),
+				semantictest.Predicate(t, "research", "route", "complete"),
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			entity := withTriple(kickoffEntity(entityID), research.PredicateResearchClassifyComplete, "2026-06-02T18:30:00Z")
-			entity = withTriple(entity, research.PredicateResearchRouteComplete, "2026-06-02T18:30:45Z")
-			entity = withTriple(entity, research.PredicateResearchRouteAction, tc.action)
+			entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "classify", "complete"), Object: "2026-06-02T18:30:00Z"})
+			entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "route", "complete"), Object: "2026-06-02T18:30:45Z"})
+			entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "route", "action"), Object: tc.action})
 
 			pub, mut := runOnEnter(t, r2, entity)
 			require.Len(t, pub.published, 1, "R2 must publish exactly one next-stage dispatch for action=%q", tc.action)
@@ -275,7 +275,7 @@ func TestResearchGraphPipeline_R2_RouteAction_AllFourBranches(t *testing.T) {
 func TestResearchGraphPipeline_R3_ExecuteCompleteDispatchesAssess(t *testing.T) {
 	_, _, _, r3, _, _ := loadResearchGraphRules(t)
 	entityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", testLoopID)
-	entity := withTriple(kickoffEntity(entityID), research.PredicateResearchExecuteComplete, "2026-06-02T18:31:00Z")
+	entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "execute", "complete"), Object: "2026-06-02T18:31:00Z"})
 	pub, _ := runOnEnter(t, r3, entity)
 
 	require.Len(t, pub.published, 1)
@@ -291,9 +291,9 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 	entityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", testLoopID)
 
 	t.Run("sufficient_true_dispatches_synthesize", func(t *testing.T) {
-		entity := withTriple(kickoffEntity(entityID), research.PredicateResearchExecuteComplete, "2026-06-02T18:31:00Z")
-		entity = withTriple(entity, research.PredicateResearchAssessComplete, "2026-06-02T18:31:30Z")
-		entity = withTriple(entity, research.PredicateResearchAssessSufficient, "true")
+		entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "execute", "complete"), Object: "2026-06-02T18:31:00Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "complete"), Object: "2026-06-02T18:31:30Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "sufficient"), Object: "true"})
 
 		pub, mut := runOnEnter(t, r4, entity)
 		require.Len(t, pub.published, 1)
@@ -302,9 +302,9 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 	})
 
 	t.Run("sufficient_false_refines_via_execute", func(t *testing.T) {
-		entity := withTriple(kickoffEntity(entityID), research.PredicateResearchExecuteComplete, "2026-06-02T18:31:00Z")
-		entity = withTriple(entity, research.PredicateResearchAssessComplete, "2026-06-02T18:31:30Z")
-		entity = withTriple(entity, research.PredicateResearchAssessSufficient, "false")
+		entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "execute", "complete"), Object: "2026-06-02T18:31:00Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "complete"), Object: "2026-06-02T18:31:30Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "sufficient"), Object: "false"})
 
 		pub, mut := runOnEnter(t, r4, entity)
 		require.Len(t, pub.published, 1)
@@ -332,9 +332,9 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 	// that should fire). Without this fallback, the chain stalls
 	// silently after 5 insufficient refines.
 	t.Run("sufficient_false_at_cap_exhaust_falls_to_synthesize", func(t *testing.T) {
-		entity := withTriple(kickoffEntity(entityID), research.PredicateResearchExecuteComplete, "2026-06-02T18:35:00Z")
-		entity = withTriple(entity, research.PredicateResearchAssessComplete, "2026-06-02T18:35:30Z")
-		entity = withTriple(entity, research.PredicateResearchAssessSufficient, "false")
+		entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "execute", "complete"), Object: "2026-06-02T18:35:00Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "complete"), Object: "2026-06-02T18:35:30Z"})
+		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "sufficient"), Object: "false"})
 
 		rule, err := NewExpressionRule(r4)
 		require.NoError(t, err)
@@ -396,8 +396,8 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 func TestResearchGraphPipeline_R6_ContinuationDispatchesParentTask(t *testing.T) {
 	_, _, _, _, _, r6 := loadResearchGraphRules(t)
 	entityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", testLoopID)
-	entity := withTriple(kickoffEntity(entityID), research.PredicateResearchSearchResultComplete, "2026-06-02T18:32:00Z")
-	entity = withTriple(entity, research.PredicateResearchSearchResultRef, "search_result.complete."+testLoopID)
+	entity := withTriple(kickoffEntity(entityID), message.Triple{Predicate: semantictest.Predicate(t, "research", "search-result", "complete"), Object: "2026-06-02T18:32:00Z"})
+	entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "search-result", "ref"), Object: "search_result.complete." + testLoopID})
 
 	pub, _ := runOnEnter(t, r6, entity)
 	require.Len(t, pub.published, 1, "R6 must dispatch exactly one continuation task to the parent")

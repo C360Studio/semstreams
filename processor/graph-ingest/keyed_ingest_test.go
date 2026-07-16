@@ -163,7 +163,14 @@ func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
 		{name: "invalid envelope", entity: &graph.EntityState{ID: "bad"}, field: "id", reason: "arity", tripleIndex: -1},
 		{name: "invalid subject", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: "test.state.value"}}}, field: "subject", reason: "arity", tripleIndex: 0},
 		{name: "invalid explicit reference", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: validID, Predicate: "test.state.value", Object: 42, Datatype: message.EntityReferenceDatatype}}}, field: "reference", reason: "object_type", tripleIndex: 0},
-		{name: "invalid predicate", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: validID, Predicate: "bad.two"}}}, field: "predicate", reason: "arity", tripleIndex: -1, predicate: true}, // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+		{
+			name: "invalid predicate",
+			entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{
+				Subject: validID, Predicate: "bad.two", // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+			}}},
+			field: "predicate", reason: "arity", tripleIndex: -1,
+			predicate: true, // predicate-audit:unrelated {"column":15,"surface":"go-field:predicate","value":"","basis":"reviewed boolean expectation flag, not predicate syntax"}
+		},
 	}
 
 	for _, tt := range tests {

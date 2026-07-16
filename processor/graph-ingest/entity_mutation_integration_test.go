@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -245,7 +246,7 @@ func TestIntegration_HandleEntityUpdateWithTriples_AddAndRemove(t *testing.T) {
 	var stored graph.EntityState
 	require.NoError(t, json.Unmarshal(entry.Value, &stored))
 
-	predicates := make(map[string]bool, len(stored.Triples))
+	predicates := make(map[string]bool, len(stored.Triples)) // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed output map populated from persisted triples"}
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = true
 	}
@@ -759,23 +760,22 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 	const N = 5
 	var wg sync.WaitGroup
 	results := make([]string, N) // empty on success, error msg on failure
+	addTriples := make([]message.Triple, N)
+	for i := range addTriples {
+		addTriples[i] = message.Triple{
+			Subject: entityID, Predicate: semantictest.Predicate(t, "test", "concurrent", fmt.Sprintf("value-%d", i)),
+			Object: i, Timestamp: time.Now(), Confidence: 1.0,
+		}
+	}
 
 	for i := 0; i < N; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			req := graph.UpdateEntityWithTriplesRequest{
-				Entity: newMutationTestEntity(entityID),
-				AddTriples: []message.Triple{
-					{
-						Subject:    entityID,
-						Predicate:  fmt.Sprintf("test.concurrent.value-%d", idx),
-						Object:     idx,
-						Timestamp:  time.Now(),
-						Confidence: 1.0,
-					},
-				},
-				RequestID: fmt.Sprintf("req-conc-%d", idx),
+				Entity:     newMutationTestEntity(entityID),
+				AddTriples: []message.Triple{addTriples[idx]},
+				RequestID:  fmt.Sprintf("req-conc-%d", idx),
 			}
 			respBytes, err := c.handleEntityUpdateWithTriples(ctx, mustJSON(t, req))
 			if err != nil {
@@ -804,7 +804,7 @@ func TestIntegration_HandleEntityUpdateWithTriples_ConcurrentUpdatesSurvive(t *t
 	var stored graph.EntityState
 	require.NoError(t, json.Unmarshal(entry.Value, &stored))
 
-	predicates := make(map[string]bool, len(stored.Triples))
+	predicates := make(map[string]bool, len(stored.Triples)) // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed output map populated from persisted triples"}
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = true
 	}
@@ -977,13 +977,20 @@ func TestIntegration_UpdateEntityWithTriples_ExpectedRevisionRaceAtWrite(t *test
 		mu           sync.Mutex
 		wg           sync.WaitGroup
 	)
+	addTriples := make([]message.Triple, N)
+	for i := range addTriples {
+		addTriples[i] = message.Triple{
+			Subject: entityID, Predicate: semantictest.Predicate(t, "test", "race", fmt.Sprintf("value-%d", i)),
+			Object: "via-cas", Timestamp: time.Now(), Confidence: 1.0,
+		}
+	}
 	for i := 0; i < N; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
 			req := graph.UpdateEntityWithTriplesRequest{
 				Entity:           seed,
-				AddTriples:       []message.Triple{{Subject: entityID, Predicate: fmt.Sprintf("test.race.value-%d", idx), Object: "via-cas", Timestamp: time.Now(), Confidence: 1.0}},
+				AddTriples:       []message.Triple{addTriples[idx]},
 				ExpectedRevision: sharedRev,
 				RequestID:        fmt.Sprintf("req-race-%d", idx),
 			}

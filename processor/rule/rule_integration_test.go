@@ -17,6 +17,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -848,7 +849,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	entityCreated := gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: rulepacks.WorkflowStateStatus, Object: "created", Source: "test", Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "status"), Object: "created", Source: "test", Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -875,7 +876,7 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	entityDrafting := gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: rulepacks.WorkflowStateStatus, Object: "drafting", Source: "test", Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "status"), Object: "drafting", Source: "test", Timestamp: time.Now()},
 		},
 		Version:   2,
 		UpdatedAt: time.Now(),

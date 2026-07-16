@@ -37,16 +37,16 @@ import (
 // then boots a graph-ingest Component that self-wires the real ClaimReader.
 // Returns the component, the registry (so callers can read Incarnation()), and ctx.
 func bootIngestWithOwnerClaim(
-	t *testing.T, ownerID, entityPattern, pred string,
+	t *testing.T, ownerID, entityPattern string,
 ) (*Component, *ownership.Registry, context.Context) {
 	t.Helper()
-	return bootIngestWithOwnerClaimCfg(t, ownerID, entityPattern, pred, DefaultConfig())
+	return bootIngestWithOwnerClaimCfg(t, ownerID, entityPattern, DefaultConfig())
 }
 
 // bootIngestWithOwnerClaimCfg is bootIngestWithOwnerClaim with an explicit
 // Config so PR-5 tests can boot with EnforceOwnerLease=true.
 func bootIngestWithOwnerClaimCfg(
-	t *testing.T, ownerID, entityPattern, pred string, cfg Config,
+	t *testing.T, ownerID, entityPattern string, cfg Config,
 ) (*Component, *ownership.Registry, context.Context) {
 	t.Helper()
 	ctx := context.Background()
@@ -65,7 +65,7 @@ func bootIngestWithOwnerClaimCfg(
 			{
 				Owner:      ownerID,
 				Pattern:    entityPattern,
-				Predicates: []string{pred},
+				Predicates: []string{intPred},
 				Mode:       ownership.ModeReplaceOwned,
 			},
 		},
@@ -103,7 +103,7 @@ var intMT = message.Type{Domain: "test", Category: "integration", Version: "v1"}
 // matching OwnerToken on create_with_triples produces no metric increment AND
 // the write commits (Success=true, entity readable).
 func TestIntegration_OwnerLease_CreateWithTriples_MatchingToken(t *testing.T) {
-	c, reg, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat, intPred)
+	c, reg, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat)
 	label := labelForMessageType(intMT)
 	token := ownerToken(intOwnerID, reg.Incarnation())
 
@@ -134,7 +134,7 @@ func TestIntegration_OwnerLease_CreateWithTriples_MatchingToken(t *testing.T) {
 // OwnerToken (same owner, dead incarnation) increments the metric BUT the write
 // still commits (observe-only).
 func TestIntegration_OwnerLease_CreateWithTriples_StaleToken(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat, intPred)
+	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat)
 	label := labelForMessageType(intMT)
 	stale := ownerToken(intOwnerID, "deadbeef-stale-0000") // not the live incarnation
 
@@ -171,7 +171,7 @@ func TestIntegration_OwnerLease_CreateWithTriples_StaleToken(t *testing.T) {
 // TestIntegration_OwnerLease_CreateWithTriples_EmptyToken proves the legacy-
 // writer skip: empty OwnerToken → no metric, write commits.
 func TestIntegration_OwnerLease_CreateWithTriples_EmptyToken(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat, intPred)
+	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat)
 	label := labelForMessageType(intMT)
 
 	eid := "c360.platform.test.sys.w.empty"
@@ -203,7 +203,7 @@ func TestIntegration_OwnerLease_CreateWithTriples_EmptyToken(t *testing.T) {
 // invariant on the update_with_triples lane: stale token → metric fires, write
 // commits.
 func TestIntegration_OwnerLease_UpdateWithTriples_StaleToken(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat, intPred)
+	c, _, ctx := bootIngestWithOwnerClaim(t, intOwnerID, intEntityPat)
 	label := labelForMessageType(intMT)
 	stale := ownerToken(intOwnerID, "deadbeef-stale-upd0")
 
@@ -260,7 +260,7 @@ func enforceCfg() Config {
 // TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected proves the
 // create lane rejects a stale token AND the entity is never created.
 func TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, enforceCfg())
 	label := labelForMessageType(intMT)
 	stale := ownerToken(intOwnerID, "deadbeef-stale-enf0")
 
@@ -293,7 +293,7 @@ func TestIntegration_OwnerLease_Enforce_CreateWithTriples_StaleRejected(t *testi
 // TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected proves the
 // update lane rejects a stale token AND the prior state is unchanged.
 func TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, enforceCfg())
 	stale := ownerToken(intOwnerID, "deadbeef-stale-enfu")
 
 	eid := "c360.platform.test.sys.w.enfupd"
@@ -331,7 +331,7 @@ func TestIntegration_OwnerLease_Enforce_UpdateWithTriples_StaleRejected(t *testi
 // path) rejects a stale token through the real wire AND the prior state and
 // revision are untouched (the CAS write never ran).
 func TestIntegration_OwnerLease_Enforce_UpdateWithTriplesCAS_StaleRejected(t *testing.T) {
-	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	c, _, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, enforceCfg())
 	stale := ownerToken(intOwnerID, "deadbeef-stale-enfc")
 
 	eid := "c360.platform.test.sys.w.enfcas"
@@ -371,7 +371,7 @@ func TestIntegration_OwnerLease_Enforce_UpdateWithTriplesCAS_StaleRejected(t *te
 // TestIntegration_OwnerLease_Enforce_MatchingToken_Commits proves enforcement
 // does not block the legitimate live owner: a matching token still commits.
 func TestIntegration_OwnerLease_Enforce_MatchingToken_Commits(t *testing.T) {
-	c, reg, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, intPred, enforceCfg())
+	c, reg, ctx := bootIngestWithOwnerClaimCfg(t, intOwnerID, intEntityPat, enforceCfg())
 	token := ownerToken(intOwnerID, reg.Incarnation())
 
 	eid := "c360.platform.test.sys.w.enfok"

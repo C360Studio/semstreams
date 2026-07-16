@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -141,7 +142,7 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 					"type": "test_rule",
 					"conditions": []any{
 						map[string]any{
-							"field":    opaqueField,
+							"field":    semantictest.Predicate(t, "test", "todo", "content"),
 							"operator": "eq",
 							"value":    "anything",
 						},
@@ -169,7 +170,7 @@ func TestValidateExpressionRule_RejectsRuleOpaqueField(t *testing.T) {
 					"type": "test_rule",
 					"conditions": []any{
 						map[string]any{
-							"field":    structuralField,
+							"field":    semantictest.Predicate(t, "test", "todo", "status"),
 							"operator": "eq",
 							"value":    "completed",
 						},
