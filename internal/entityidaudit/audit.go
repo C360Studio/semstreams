@@ -281,6 +281,10 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse Go %s: %w", path, err)
 	}
+	semanticTestAliases, err := semanticTestImportAliases(file, path)
+	if err != nil {
+		return nil, err
+	}
 	imports := make(map[string]string)
 	for _, spec := range file.Imports {
 		importPath, unquoteErr := strconv.Unquote(spec.Path.Value)
@@ -378,6 +382,25 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			}
 		case *ast.CallExpr:
 			name := expressionName(n.Fun)
+			if isSemanticTestCall(n.Fun, file.Name.Name, path, semanticTestAliases, "EntityID") && len(n.Args) == 7 {
+				parts := make([]string, 0, 6)
+				resolved := true
+				for _, argument := range n.Args[1:] {
+					part, ok := resolve(argument)
+					if !ok {
+						resolved = false
+						break
+					}
+					parts = append(parts, part)
+				}
+				if resolved {
+					position := fset.Position(n.Pos())
+					out = append(out, Candidate{
+						File: path, Line: position.Line, Column: position.Column, Language: LanguageLiteral,
+						Value: strings.Join(parts, "."), Surface: "go-call:semantictest.EntityID",
+					})
+				}
+			}
 			if len(n.Args) > 0 {
 				switch name {
 				case "ValidateEntityID", "ParseEntityID", "IsValidEntityID":
@@ -403,6 +426,152 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		return true
 	})
 	return out, nil
+}
+
+func isSemanticTestCall(
+	function ast.Expr,
+	packageName string,
+	path string,
+	aliases map[string]bool,
+	helper string,
+) bool {
+	switch typed := function.(type) {
+	case *ast.SelectorExpr:
+		identifier, ok := typed.X.(*ast.Ident)
+		return ok && aliases[identifier.Name] && typed.Sel.Name == helper
+	case *ast.Ident:
+		return typed.Name == helper && packageName == "semantictest" &&
+			isSemanticTestPackagePath(path)
+	default:
+		return false
+	}
+}
+
+func isSemanticTestPackagePath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return strings.HasPrefix(clean, "internal/semantictest/") ||
+		strings.Contains(clean, "/internal/semantictest/")
+}
+
+func semanticTestImportAliases(file *ast.File, path string) (map[string]bool, error) {
+	aliases := make(map[string]bool)
+	if file.Name.Name == "semantictest" && isSemanticTestPackagePath(path) &&
+		(goFileDeclaresIdentifier(file, "EntityID", true) || goFileImportDeclaresIdentifier(file, "EntityID")) {
+		return nil, fmt.Errorf(
+			"%s: declaration shadows the package semantictest.EntityID helper",
+			path,
+		)
+	}
+	importsSemanticTest := false
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || importPath != "github.com/c360studio/semstreams/internal/semantictest" {
+			continue
+		}
+		importsSemanticTest = true
+		if spec.Name != nil {
+			return nil, fmt.Errorf(
+				"%s: internal/semantictest must use its canonical unaliased import name",
+				path,
+			)
+		}
+		aliases["semantictest"] = true
+	}
+	if importsSemanticTest && goFileDeclaresIdentifier(file, "semantictest", false) {
+		return nil, fmt.Errorf(
+			"%s: declaration shadows the canonical internal/semantictest import name",
+			path,
+		)
+	}
+	return aliases, nil
+}
+
+func goFileDeclaresIdentifier(file *ast.File, wanted string, allowPackageFunction bool) bool {
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		if found {
+			return false
+		}
+		switch typed := node.(type) {
+		case *ast.ValueSpec:
+			found = identifiersContain(typed.Names, wanted)
+		case *ast.TypeSpec:
+			found = typed.Name.Name == wanted
+		case *ast.FuncDecl:
+			declaresFunctionName := typed.Name.Name == wanted
+			if allowPackageFunction && typed.Recv == nil {
+				declaresFunctionName = false
+			}
+			found = declaresFunctionName ||
+				fieldListDeclares(typed.Recv, wanted) ||
+				fieldListDeclares(typed.Type.Params, wanted) ||
+				fieldListDeclares(typed.Type.Results, wanted)
+		case *ast.FuncLit:
+			found = fieldListDeclares(typed.Type.Params, wanted) ||
+				fieldListDeclares(typed.Type.Results, wanted)
+		case *ast.AssignStmt:
+			if typed.Tok == token.DEFINE {
+				found = expressionsDeclare(typed.Lhs, wanted)
+			}
+		case *ast.RangeStmt:
+			if typed.Tok == token.DEFINE {
+				found = expressionDeclares(typed.Key, wanted) || expressionDeclares(typed.Value, wanted)
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func goFileImportDeclaresIdentifier(file *ast.File, wanted string) bool {
+	for _, spec := range file.Imports {
+		if spec.Name != nil {
+			if spec.Name.Name == wanted {
+				return true
+			}
+			continue
+		}
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err == nil && filepath.Base(importPath) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldListDeclares(fields *ast.FieldList, wanted string) bool {
+	if fields == nil {
+		return false
+	}
+	for _, field := range fields.List {
+		if identifiersContain(field.Names, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func identifiersContain(identifiers []*ast.Ident, wanted string) bool {
+	for _, identifier := range identifiers {
+		if identifier.Name == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func expressionsDeclare(expressions []ast.Expr, wanted string) bool {
+	for _, expression := range expressions {
+		if expressionDeclares(expression, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func expressionDeclares(expression ast.Expr, wanted string) bool {
+	identifier, ok := expression.(*ast.Ident)
+	return ok && identifier.Name == wanted
 }
 
 func excludedDeclarationName(name string) bool {

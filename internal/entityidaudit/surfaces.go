@@ -46,6 +46,7 @@ func SurfaceRules() []SurfaceRule {
 		{"direct-split", "Every Go call to strings.Split; every exact group requires a checked disposition"},
 		{"match-family-call", "Every Go call whose called function or method name contains match; every exact group requires a checked disposition"},
 		{"schema-regex", "Entity-named Go string declarations containing regex metacharacters; inventoried but excluded from declaration-pattern values and every exact group requires a checked disposition"},
+		{"semantic-test-helper-call", "Every exact internal/semantictest.EntityID call with its required seven arguments; dynamic positions remain runtime-authoritative rather than disappearing from the inventory"},
 	}
 }
 
@@ -86,6 +87,10 @@ func auditGoSurfaces(path string) ([]surfaceOccurrence, error) {
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
 		return nil, fmt.Errorf("parse Go surface inventory %s: %w", path, err)
+	}
+	semanticTestAliases, err := semanticTestImportAliases(file, path)
+	if err != nil {
+		return nil, err
 	}
 	var out []surfaceOccurrence
 	add := func(node ast.Node, kind, name string) {
@@ -137,6 +142,11 @@ func auditGoSurfaces(path string) ([]surfaceOccurrence, error) {
 						return true
 					}
 					callName := expressionName(call.Fun)
+					if len(call.Args) == 7 && isSemanticTestCall(
+						call.Fun, file.Name.Name, path, semanticTestAliases, "EntityID",
+					) {
+						add(call.Fun, "semantic-test-helper-call", "EntityID in "+functionName)
+					}
 					if entityIDAPIs[callName] {
 						add(call.Fun, "parser-validator-api-call", callName+" in "+functionName)
 					}

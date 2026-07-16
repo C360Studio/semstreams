@@ -11,7 +11,8 @@
     {"id":"kv-call","description":"Every Go call to Get, Put, Delete, Watch, Keys, or ListKeysFiltered; every exact group requires a checked disposition"},
     {"id":"direct-split","description":"Every Go call to strings.Split; every exact group requires a checked disposition"},
     {"id":"match-family-call","description":"Every Go call whose called function or method name contains match; every exact group requires a checked disposition"},
-    {"id":"schema-regex","description":"Entity-named Go string declarations containing regex metacharacters; inventoried but excluded from declaration-pattern values and every exact group requires a checked disposition"}
+    {"id":"schema-regex","description":"Entity-named Go string declarations containing regex metacharacters; inventoried but excluded from declaration-pattern values and every exact group requires a checked disposition"},
+    {"id":"semantic-test-helper-call","description":"Every exact internal/semantictest.EntityID call with its required seven arguments; dynamic positions remain runtime-authoritative rather than disappearing from the inventory"}
   ],
   "value_corpus": {
     "candidates": [

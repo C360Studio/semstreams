@@ -439,7 +439,9 @@ func TestEntityIDNamedStringBuildersHaveConstructorOrFixtureDispositions(t *test
 		matched++
 		switch disposition.Classification {
 		case "relevant":
-			if disposition.Basis != "reviewed:entity-id-constructor" && disposition.Basis != "reviewed:graphable-entity-id-constructor" {
+			if disposition.Basis != "reviewed:entity-id-constructor" &&
+				disposition.Basis != "reviewed:graphable-entity-id-constructor" &&
+				disposition.Basis != "reviewed:entity-id-test-fixture-builder" {
 				t.Errorf("relevant EntityID builder %s has non-constructor basis %q", key, disposition.Basis)
 			}
 		case "unrelated":
@@ -490,6 +492,156 @@ var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.test"}
 	}
 	if len(candidates) != 2 {
 		t.Fatalf("candidates = %#v, want Go test and testdata seed", candidates)
+	}
+}
+
+func TestAuditRecognizesSemanticTestEntityIDCalls(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "fixture_test.go", `package fixture
+import "github.com/c360studio/semstreams/internal/semantictest"
+var rawEntityID = "bad"
+func testFixture(t interface{}) string {
+  return semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone", "001")
+}
+`)
+
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Value != "bad" {
+		t.Fatalf("findings = %#v, want adjacent raw fixture preserved", findings)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %#v, want helper-built identity plus raw fixture", candidates)
+	}
+	foundHelper := false
+	for _, candidate := range candidates {
+		if candidate.Surface != "go-call:semantictest.EntityID" {
+			continue
+		}
+		foundHelper = true
+		if got, want := candidate.Value, "acme.ops.robotics.gcs.drone.001"; got != want {
+			t.Fatalf("helper candidate = %q, want %q", got, want)
+		}
+	}
+	if !foundHelper {
+		t.Fatalf("candidates = %#v, want exact semantic helper surface", candidates)
+	}
+}
+
+func TestSemanticTestEntityIDSurfaceRequiresExactAPIAndArity(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path := filepath.Join(root, "fixture_test.go")
+	writeFixture(t, root, "fixture_test.go", `package fixture
+import "github.com/c360studio/semstreams/internal/semantictest"
+func dynamic(t interface{}, instance string) string {
+  return semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone", instance)
+}
+func wrongArity(t interface{}) string {
+  return semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone")
+}
+`)
+
+	surfaces, err := auditGoSurfaces(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helperSurfaces []AuditedSurface
+	for _, surface := range groupSurfaces(surfaces) {
+		if surface.Kind == "semantic-test-helper-call" {
+			helperSurfaces = append(helperSurfaces, surface)
+		}
+	}
+	if len(helperSurfaces) != 1 || helperSurfaces[0].Name != "EntityID in dynamic" {
+		t.Fatalf("helper surfaces = %#v, want exact dynamic seven-argument API only", helperSurfaces)
+	}
+}
+
+func TestSemanticTestImportPolicyRejectsAmbiguousResolution(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "explicit alias",
+			content: `package fixture
+import st "github.com/c360studio/semstreams/internal/semantictest"
+var _ = st.EntityID
+`,
+			want: "canonical unaliased import name",
+		},
+		{
+			name: "dot import",
+			content: `package fixture
+import . "github.com/c360studio/semstreams/internal/semantictest"
+var _ = EntityID
+`,
+			want: "canonical unaliased import name",
+		},
+		{
+			name: "local shadow",
+			content: `package fixture
+import "github.com/c360studio/semstreams/internal/semantictest"
+func fixture() {
+  semantictest := struct{ EntityID string }{}
+  _ = semantictest.EntityID
+}
+`,
+			want: "shadows the canonical",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeFixture(t, root, "fixture_test.go", test.content)
+			if _, _, err := Audit(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Audit() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSemanticTestPackageRejectsDirectEntityIDShadowing(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "parameter",
+			content: `package semantictest
+func fixture(EntityID func(...string) string) {
+  _ = EntityID("acme", "ops", "robotics", "gcs", "drone", "001")
+}
+`,
+		},
+		{
+			name: "local closure",
+			content: `package semantictest
+func fixture() {
+  EntityID := func(...string) string { return "not-authoritative" }
+  _ = EntityID("acme", "ops", "robotics", "gcs", "drone", "001")
+}
+`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeFixture(t, root, "internal/semantictest/fixture_test.go", test.content)
+			if _, _, err := Audit(root); err == nil || !strings.Contains(err.Error(), "shadows the package semantictest.EntityID") {
+				t.Fatalf("Audit() error = %v, want direct-helper shadow rejection", err)
+			}
+		})
 	}
 }
 
