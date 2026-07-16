@@ -189,6 +189,56 @@ func TestCoalescingSet_RemoveExcludesFromBatch(t *testing.T) {
 	}
 }
 
+func TestCoalescingSet_RemovePrefixExcludesMatchingKeys(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	received := make(chan []string, 1)
+	set := NewCoalescingSet(ctx, 50*time.Millisecond, func(keys []string) {
+		received <- keys
+	})
+	defer func() { require.NoError(t, set.Close()) }()
+
+	set.Add("entity-1\x00watch-a\x001")
+	set.Add("entity-1\x00watch-b\x002")
+	set.Add("entity-10\x00watch-a\x001")
+	set.RemovePrefix("entity-1\x00")
+
+	select {
+	case keys := <-received:
+		require.ElementsMatch(t, []string{"entity-10\x00watch-a\x001"}, keys)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for coalesced batch")
+	}
+}
+
+func TestCoalescingSet_DrainReturnsAndClearsPendingKeys(t *testing.T) {
+	t.Parallel()
+
+	set := NewCoalescingSet(context.Background(), time.Hour, nil)
+	set.Add("entity-1")
+	set.Add("entity-2")
+	require.ElementsMatch(t, []string{"entity-1", "entity-2"}, set.Drain())
+	require.Zero(t, set.PendingCount())
+	require.Empty(t, set.Drain())
+	require.NoError(t, set.Close())
+}
+
+func TestCoalescingSet_MutationResultsTrackPendingOwnership(t *testing.T) {
+	t.Parallel()
+
+	set := NewCoalescingSet(context.Background(), time.Hour, nil)
+	require.True(t, set.Add("entity-1"))
+	require.False(t, set.Add("entity-1"))
+	require.False(t, set.Remove("missing"))
+	require.True(t, set.Remove("entity-1"))
+	require.True(t, set.Add("entity-1\x00watch-a"))
+	require.True(t, set.Add("entity-1\x00watch-b"))
+	require.Equal(t, 2, set.RemovePrefix("entity-1\x00"))
+	require.Zero(t, set.PendingCount())
+	require.NoError(t, set.Close())
+}
+
 // TestCoalescingSet_EmptyBatchNoCallback verifies no callback (or empty slice) when no keys collected.
 func TestCoalescingSet_EmptyBatchNoCallback(t *testing.T) {
 	t.Parallel()
