@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -191,6 +192,87 @@ func (c *Component) recordPredicateContractRejections(lane string, err error) {
 	}
 	for reason := range reasons {
 		c.predicateContractRejections.WithLabelValues(lane, string(reason)).Inc()
+	}
+}
+
+const (
+	entityStateReasonObjectType = "object_type"
+	contractReasonUnknown       = "unknown"
+	contractFieldPredicate      = "predicate"
+)
+
+// recordEntityStateContractRejection records the first identity-bearing field
+// rejected by the authoritative entity-state contract. All labels are closed,
+// bounded sets; rejected entity bytes and error strings never become labels.
+func (c *Component) recordEntityStateContractRejection(lane string, err error) {
+	if c.entityStateContractRejections == nil {
+		return
+	}
+	field, reason, _, ok := entityStateContractRejectionLabels(err)
+	if !ok {
+		return
+	}
+	c.entityStateContractRejections.WithLabelValues(lane, field, reason).Inc()
+}
+
+func entityStateContractRejectionLabels(err error) (field, reason string, tripleIndex int, ok bool) {
+	var contractErr *graph.EntityStateContractError
+	if !errors.As(err, &contractErr) {
+		return "", "", -1, false
+	}
+	switch contractErr.Field {
+	case graph.EntityStateContractFieldID, graph.EntityStateContractFieldSubject, graph.EntityStateContractFieldReference:
+		field = string(contractErr.Field)
+	default:
+		return "", "", -1, false
+	}
+
+	reason = entityIDContractReason(contractErr.Err)
+	if reason == contractReasonUnknown && contractErr.Field == graph.EntityStateContractFieldReference {
+		// The only non-ClassifiedError reference failure is an explicit @id
+		// object whose dynamic type is not string.
+		reason = entityStateReasonObjectType
+	}
+	return field, reason, contractErr.TripleIndex, true
+}
+
+func entityIDContractReason(err error) string {
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) {
+		return contractReasonUnknown
+	}
+	reason, _ := classified.Detail[semtypes.EntityIDDetailReason].(string)
+	switch reason {
+	case semtypes.EntityIDReasonEmpty,
+		semtypes.EntityIDReasonBytes,
+		semtypes.EntityIDReasonArity,
+		semtypes.EntityIDReasonEmptySegment,
+		semtypes.EntityIDReasonFirstByte,
+		semtypes.EntityIDReasonAlphabet:
+		return reason
+	default:
+		return contractReasonUnknown
+	}
+}
+
+func predicateContractReason(err error) (string, bool) {
+	var contractErr *graph.EntityPredicateContractError
+	if !errors.As(err, &contractErr) || len(contractErr.Violations) == 0 {
+		return "", false
+	}
+	reason := contractErr.Violations[0].Reason
+	switch reason {
+	case vocabulary.PredicateReasonEmpty,
+		vocabulary.PredicateReasonLength,
+		vocabulary.PredicateReasonArity,
+		vocabulary.PredicateReasonSegmentEmpty,
+		vocabulary.PredicateReasonSegmentLength,
+		vocabulary.PredicateReasonSegmentStart,
+		vocabulary.PredicateReasonSegmentCharacter,
+		vocabulary.PredicateReasonSegmentHyphen:
+		return string(reason), true
+	default:
+		return contractReasonUnknown, true
 	}
 }
 
@@ -468,6 +550,9 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	if len(req.Triples) > 0 {
 		req.Entity.Triples = req.Triples
 	}
+	if err := validateMutationEntityState(req.Entity, nil); err != nil {
+		return nil, rejectFromError(err)
+	}
 	if err := validateMutationPredicates(req.Entity.Triples, nil); err != nil {
 		return nil, rejectFromError(err)
 	}
@@ -562,6 +647,9 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 	}
 	if req.Entity == nil {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
+	}
+	if err := validateMutationEntityState(req.Entity, nil); err != nil {
+		return nil, rejectFromError(err)
 	}
 
 	_, currentRev, err := c.fetchEntityState(ctx, req.Entity.ID)
@@ -711,6 +799,9 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 			Timestamp:  time.Now(),
 			Confidence: 1.0,
 		})
+	}
+	if err := validateMutationEntityState(req.Entity, req.AddTriples); err != nil {
+		return nil, rejectFromError(err)
 	}
 	if err := validateMutationPredicates(req.AddTriples, req.RemoveTriples); err != nil {
 		return nil, rejectFromError(err)
@@ -990,6 +1081,9 @@ func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte
 	if req.EntityID == "" {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity_id cannot be empty"))
 	}
+	if err := validateEntityID(req.EntityID); err != nil {
+		return nil, rejectFromError(err)
+	}
 
 	existed, err := c.entityExists(ctx, req.EntityID)
 	if err != nil {
@@ -1060,6 +1154,24 @@ func validateMutationPredicates(add []message.Triple, remove []string) error {
 	}
 	if err := graph.ValidateEntityPredicates(&graph.EntityState{Triples: triples}); err != nil {
 		return errs.WrapInvalid(err, "Component", "validateMutationPredicates", "invalid predicate contract")
+	}
+	return nil
+}
+
+// validateMutationEntityState rejects malformed request identity before an
+// owner-lease lookup, existence read, CAS retry, or write. It does not fill
+// omitted subjects: that convenience belongs exclusively to Graphable fact
+// projection.
+func validateMutationEntityState(entity *graph.EntityState, additional []message.Triple) error {
+	if entity == nil {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "validateMutationEntityState", "entity cannot be nil")
+	}
+	candidate := *entity
+	candidate.Triples = make([]message.Triple, 0, len(entity.Triples)+len(additional))
+	candidate.Triples = append(candidate.Triples, entity.Triples...)
+	candidate.Triples = append(candidate.Triples, additional...)
+	if err := graph.ValidateEntityStateContract(&candidate); err != nil {
+		return errs.WrapInvalid(err, "Component", "validateMutationEntityState", "invalid entity state contract")
 	}
 	return nil
 }

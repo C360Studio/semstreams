@@ -1,5 +1,8 @@
-## ADDED Requirements
+# graph-index Specification
 
+## Purpose
+TBD - created by archiving change graph-index-hardening. Update Purpose after archive.
+## Requirements
 ### Requirement: List-valued indexes store one sharded key per membership, not a monolithic list
 
 Each migrated multi-membership graph index — `INCOMING`, `NAME`, and `CONTEXT` — MUST store one
@@ -32,12 +35,12 @@ Every token of a sharded index key MUST be NATS-KV-safe and unambiguously recons
   raw dotted value cannot token-position-collide under NATS prefix matching (ADR-065). The
   human-readable value is not recoverable from the hash, so the small per-key value MUST carry it
   (name original-case + priority; context value).
-- **The predicate axis** MUST be reversibly **hex-encoded** in the key. graph-ingest accepts any
-  non-empty predicate, including KV-unsafe values (spaces, unicode, wildcard tokens); a raw predicate
-  token would make the reverse-index `Put` fail while `PREDICATE_INDEX` (hashed) and `ENTITY_STATES`
-  succeed, silently desyncing the forward and reverse views. Hex is chosen over a hash so the reader
-  recovers the exact predicate from the key with no per-row value lookup (keeping `INCOMING` a pure
-  prefix key-scan).
+- **The predicate axis** MUST retain PR #524's reversible untagged **hex encoding** in the key. PR #524
+  selected that layout when graph-ingest still admitted any non-empty predicate, including KV-unsafe
+  text. PR #532 now enforces the canonical three-part predicate contract at authoritative graph writes,
+  and graph-index independently revalidates replayed state. The codec is a storage and reconstruction
+  layout, not permission to persist a noncanonical predicate. Hex remains so readers recover the exact
+  accepted predicate without a per-row value lookup, keeping `INCOMING` a pure prefix key-scan.
 - **Entity-ID axes** MAY stay raw (fixed 6-token, collision-safe as a prefix), but the write path
   MUST validate every entity ID it composes into a key with `IsValidEntityID` and skip-with-log on
   failure. A key MUST NOT contain an empty token.
@@ -47,11 +50,25 @@ Every token of a sharded index key MUST be NATS-KV-safe and unambiguously recons
 entity's own memberships by prefix scan to RETRACT superseded rows on update and to self-clean on
 delete. `INCOMING` keys on the target ID; `NAME` keys on the name hash.
 
-#### Scenario: a KV-unsafe predicate round-trips through the key
+`PREDICATE_INDEX` membership keys remain `hash(predicate).entityID`, while `PREDICATE_CATALOG` uses the raw
+accepted predicate as its key. Before PR #532, the reverse-key codec and hashed membership could represent a
+noncanonical predicate while the raw catalog `Put` failed; that required failure withheld readiness. Current
+graph-ingest rejects noncanonical candidates before persistence, and graph-index replay revalidation rejects invalid
+preexisting state before membership, catalog, or reverse-index I/O and keeps readiness false.
 
-- **GIVEN** a triple whose predicate contains a space or other KV-unsafe character
-- **WHEN** the reverse index is written and later read
-- **THEN** the write succeeds and the reader reconstructs the exact original predicate
+#### Scenario: codec round-trip does not change predicate acceptance
+
+- **GIVEN** arbitrary bytes are passed directly to the predicate key codec
+- **WHEN** the encoded token is decoded
+- **THEN** the codec reconstructs the exact original bytes
+- **AND** that codec result does not authorize a graph write or index write
+
+#### Scenario: a noncanonical current predicate is rejected before index I/O
+
+- **GIVEN** a current write candidate whose predicate has the wrong arity, whitespace, or a wildcard token
+- **WHEN** it reaches the authoritative graph-write contract
+- **THEN** the candidate is rejected before membership, catalog, or reverse-index I/O
+- **AND** invalid preexisting replay state fails graph-index revalidation and keeps readiness false
 
 #### Scenario: re-indexing an entity retracts its superseded context memberships
 
@@ -133,7 +150,7 @@ only); it is the data gate for the deferred change-detection work.
 - **THEN** the no-op counter increments
 - **AND** the index writes still occur (instrumentation does not change behavior)
 
-### Requirement: Readiness is authoritative — no consumer serves partial results or advertises ready after a failed index write or delete
+### Requirement: Readiness is authoritative and consumers fail closed on incomplete indexes
 
 Graph-index MUST NOT advertise readiness, and its reverse-index query/traversal/clustering consumers
 MUST NOT return a successful result, while the index is known-incomplete — whether because it is

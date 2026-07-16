@@ -14,6 +14,15 @@ A stream processor that builds semantic knowledge graphs from event data using N
 Events → Graphable Interface → Knowledge Graph → Queries
 ```
 
+## Semantic Agent Routing
+
+- Nontrivial SemStreams backend implementation uses `semstreams-developer`.
+- Every nontrivial change is reviewed by `semstreams-reviewer` before integration.
+- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace either role.
+- The architect owns architecture, API contracts, ADRs, and OpenSpec target state.
+- The technical writer owns durable documentation and conservative OpenSpec task truth.
+- Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
+
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data
 - **Processor**: Graph, JSONMap, Rule — transform and enrich
@@ -222,4 +231,3 @@ Polymorphic JSON deserialization via type-discriminated envelopes. Every new mes
 3. Package import (blank import if needed) so `init()` runs
 
 Use `/new-payload` for the step-by-step checklist with code templates. See [Payload Registry Guide](docs/concepts/15-payload-registry.md).
-

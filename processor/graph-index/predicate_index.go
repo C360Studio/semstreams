@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // predicateIndexMarker is the fixed, content-free value stored at every
@@ -61,6 +63,9 @@ func entityIDFromPredicateKey(key, predicate string) string {
 // predicate *names* sharing a namespace, never corrupt which entities
 // carry which predicate. See ADR-065.
 func (c *Component) updatePredicateCatalog(ctx context.Context, predicate string) error {
+	if err := natsclient.ValidateKVLiteralKey(predicate); err != nil {
+		return err
+	}
 	if c.predicateCatalogBucket == nil {
 		return nil
 	}

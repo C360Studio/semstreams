@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -26,6 +27,23 @@ func (c *Component) reconcileOwnedRows(
 	desired map[string][]byte,
 	overwriteExisting bool,
 ) error {
+	// This helper remains benchmark-only. Validate the complete filter and every
+	// desired physical key before opening a lister or mutating the bucket so a
+	// failed proof is side-effect free and preserves the shared classified error.
+	if err := natsclient.ValidateKVWildcardFilter(ownerFilter); err != nil {
+		return err
+	}
+	desiredKeys := make([]string, 0, len(desired))
+	for key := range desired {
+		desiredKeys = append(desiredKeys, key)
+	}
+	sort.Strings(desiredKeys)
+	for _, key := range desiredKeys {
+		if err := natsclient.ValidateKVLiteralKey(key); err != nil {
+			return err
+		}
+	}
+
 	existingKeys, err := bucket.KeysByFilter(ctx, ownerFilter)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
@@ -45,12 +63,6 @@ func (c *Component) reconcileOwnedRows(
 		}
 	}
 	sort.Strings(stale)
-
-	desiredKeys := make([]string, 0, len(desired))
-	for key := range desired {
-		desiredKeys = append(desiredKeys, key)
-	}
-	sort.Strings(desiredKeys)
 
 	var failures []error
 	for _, key := range stale {
@@ -80,14 +92,41 @@ func (c *Component) reconcileOwnedRows(
 }
 
 func (c *Component) reconcilePredicateIndex(ctx context.Context, entityID string, predicates map[string]bool) error {
-	desired := make(map[string][]byte, len(predicates))
-	orderedPredicates := make([]string, 0, len(predicates))
+	rows := make([]predicateReconcileRow, 0, len(predicates))
 	for predicate := range predicates {
+		rows = append(rows, predicateReconcileRow{predicate: predicate, catalogKey: predicate})
+	}
+	return c.reconcilePredicateIndexRows(ctx, entityID, rows)
+}
+
+type predicateReconcileRow struct {
+	predicate  string
+	catalogKey string
+}
+
+// reconcilePredicateIndexRows keeps the physical catalog key explicit so the
+// inactive contract proof can exercise preflight failure independently of the
+// stricter canonical predicate parser. Production always supplies the same
+// canonical predicate for both fields through reconcilePredicateIndex.
+func (c *Component) reconcilePredicateIndexRows(
+	ctx context.Context,
+	entityID string,
+	rows []predicateReconcileRow,
+) error {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return err
+	}
+	desired := make(map[string][]byte, len(rows))
+	orderedRows := append([]predicateReconcileRow(nil), rows...)
+	for _, row := range orderedRows {
+		predicate := row.predicate
 		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
 			return errs.WrapInvalid(err, "Component", "reconcilePredicateIndex", "invalid predicate")
 		}
+		if err := natsclient.ValidateKVLiteralKey(row.catalogKey); err != nil {
+			return err
+		}
 		desired[predicateIndexKey(predicate, entityID)] = predicateIndexMarker
-		orderedPredicates = append(orderedPredicates, predicate)
 	}
 
 	if err := c.reconcileOwnedRows(ctx, "predicate", c.predicateBucket,
@@ -97,12 +136,14 @@ func (c *Component) reconcilePredicateIndex(ctx context.Context, entityID string
 
 	// Catalog and membership are one required projection while the hash layout is
 	// active. Re-put every desired name so repair converges either partial order.
-	sort.Strings(orderedPredicates)
+	sort.Slice(orderedRows, func(i, j int) bool {
+		return orderedRows[i].catalogKey < orderedRows[j].catalogKey
+	})
 	var failures []error
-	for _, predicate := range orderedPredicates {
-		if err := c.updatePredicateCatalog(ctx, predicate); err != nil {
+	for _, row := range orderedRows {
+		if err := c.updatePredicateCatalog(ctx, row.catalogKey); err != nil {
 			atomic.AddInt64(&c.errors, 1)
-			failures = append(failures, fmt.Errorf("catalog predicate %q: %w", predicate, err))
+			failures = append(failures, fmt.Errorf("catalog predicate %q: %w", row.catalogKey, err))
 		}
 	}
 	if err := errors.Join(failures...); err != nil {
@@ -116,8 +157,14 @@ func (c *Component) reconcileIncomingIndex(
 	sourceID string,
 	incomingByTarget map[string][]graph.IncomingEntry,
 ) error {
+	if err := semtypes.ValidateEntityID(sourceID); err != nil {
+		return err
+	}
 	desired := make(map[string][]byte)
 	for targetID, entries := range incomingByTarget {
+		if err := semtypes.ValidateEntityID(targetID); err != nil {
+			return err
+		}
 		for _, entry := range entries {
 			if !validateIncomingKeyInputs(targetID, sourceID, entry.Predicate, c.logger) {
 				return errs.WrapInvalid(errs.ErrInvalidData, "Component", "reconcileIncomingIndex",

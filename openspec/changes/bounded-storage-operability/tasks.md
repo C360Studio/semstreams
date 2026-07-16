@@ -5,6 +5,9 @@
 - [ ] 1.3 Add an optional capacity-reporting capability for registered non-NATS `storage.Store` backends
 - [ ] 1.4 Expose storage doctor output and Prometheus metrics for usage, headroom, growth, and time to threshold
 - [ ] 1.5 Add unit tests for unknown capacity, ownership mapping, pressure transitions, and typed budget errors
+- [ ] 1.6 Define and validate the versioned retained-state upgrade manifest/schema: source/target binary and config
+      versions, retained-resource inventory/data shapes, backup/export and restore scope, ordered migration/rebuild,
+      readiness/validation gates, safe rollback point, and owner/deadline for temporary compatibility
 
 ## 2. JetStream Bounds and Reconciliation
 
@@ -40,11 +43,19 @@
 - [ ] 5.3 Gate NATS handlers, direct clients, traversal, and clustering on the same rebuild readiness state
 - [ ] 5.4 Add empty-graph, interrupted-rebuild, partial-write, and successful-rebuild integration tests
 
-## 6. Migration and Release Gates
+## 6. Post-v1 Migration and Release Gates
 
-- [ ] 6.1 Ship report-only inventory and classify existing resources before enabling admission
-- [ ] 6.2 Generate migration diagnostics for unbounded resources, mixed classes, drift, and dangling references
+- [ ] 6.1 Ship versioned report-only inventory/preflight against the upgrade manifest before enabling startup or write
+      enforcement; report observed resource configuration and data shapes without mutation
+- [ ] 6.2 Generate storage-doctor diagnostics for unbounded resources, mixed classes, drift, dangling references, and
+      migration/rebuild order; verify the declared backup/export and restore procedure before destructive work
 - [ ] 6.3 Update ADR-068/073 wording to separate lifecycle retention from `DiscardNew` capacity rejection
-- [ ] 6.4 Write pressure, full-resource, reference-repair, and maintenance-rebuild operator runbooks
-- [ ] 6.5 Run lint, race tests, schema no-drift checks, contracts, real-NATS integration, and relevant e2e tiers
-- [ ] 6.6 Enable startup enforcement, then write admission, only after migration preflight is clean
+- [ ] 6.4 Write pressure, full-resource, reference-repair, and maintenance-rebuild runbooks including operator approval,
+      ordered gates, last safe compatible binary/configuration rollback point, and forward-recovery boundary
+- [ ] 6.5 Run lint, race tests, schema no-drift checks, contracts, relevant e2e, and real-NATS supported
+      upgrade/rollback parity with backup/restore, readiness, resource, and query validation
+- [ ] 6.6 Enable startup enforcement and then write admission in stages only after report-only preflight,
+      backup/restore, operator-approved migration/rebuild, readiness, and validation gates are clean
+- [ ] 6.7 Remove temporary migration compatibility when its manifest deadline arrives or target validation passes,
+      whichever comes first; block release on any overdue bridge and prohibit indefinite legacy readers, dual writers,
+      permissive validation, or rollback outside the last proven compatible state

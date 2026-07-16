@@ -1,13 +1,17 @@
 package ownership
 
-import "strings"
+import (
+	"strings"
+
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+)
 
 // validPattern reports whether p is a 6-part dotted entity-ID glob. Bare "*"
 // (match-any) is intentionally NOT a valid OwnerClaim pattern — an owner
 // claiming every entity is almost always a bug; patternsIntersect still
 // handles "*" for the ForeignEdgeClaim match-any default.
 func validPattern(p string) bool {
-	return len(strings.Split(p, ".")) == idArity
+	return semtypes.ValidateEntityIDPattern(p) == nil
 }
 
 // validOwnerID reports whether an owner id is usable directly as a NATS KV key

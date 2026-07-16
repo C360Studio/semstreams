@@ -385,6 +385,7 @@ func TestProcessEntityUpdate_TripleIndexing(t *testing.T) {
 
 			entityID := "c360.platform.robotics.mav1.drone.001"
 			state := graph.EntityState{
+				ID:      entityID,
 				Triples: tt.triples,
 			}
 
@@ -487,6 +488,7 @@ func TestProcessEntityUpdate_RelationshipDetection(t *testing.T) {
 
 			entityID := "c360.platform.robotics.mav1.drone.001"
 			state := graph.EntityState{
+				ID:      entityID,
 				Triples: []message.Triple{tt.triple},
 			}
 

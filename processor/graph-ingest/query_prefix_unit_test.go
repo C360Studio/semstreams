@@ -4,14 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandleQueryPrefix_InvalidPrefixHasNoBucketIO(t *testing.T) {
+	comp, mock := createTestComponentWithMockKVBucket(t)
+	var lists atomic.Int64
+	mock.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		lists.Add(1)
+		return nil, nil
+	}
+	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme.*"})
+	require.NoError(t, err)
+	_, err = comp.handleQueryPrefixNATS(context.Background(), request)
+	require.Error(t, err)
+	assert.True(t, errs.IsInvalid(err))
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+	assert.Zero(t, lists.Load())
+}
 
 // storePrefixEntity is a helper that stores an entity with a single triple.
 func storePrefixEntity(t *testing.T, comp *Component, id string) {

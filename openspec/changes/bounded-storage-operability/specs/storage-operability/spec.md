@@ -61,6 +61,51 @@ rejection. Entity IDs, object keys, and other unbounded values MUST NOT be metri
   class
 - **AND** no object key is emitted as a Prometheus label
 
+### Requirement: Post-v1 retained-state upgrades are versioned and operator approved
+
+Every post-v1 breaking storage or enforcement upgrade MUST begin with a versioned report-only manifest naming the
+source and target binary/configuration versions, authoritative retained-resource inventory and expected data shapes,
+backup/export and restore-validation scope, ordered migration/rebuild steps, readiness and data/query validation
+gates, the last safe compatible binary/configuration rollback point, and the owner/removal deadline for any temporary
+migration-only compatibility mechanism.
+
+The storage doctor MUST compare live inventory, configuration, and data shape with that manifest without mutation.
+An operator MUST approve the exact maintenance plan before resource mutation. Destructive migration or stricter
+enforcement MUST remain disabled until backup/restore, supported upgrade, readiness, resource, and query-result proof
+passes. Rollback MUST return only to the last manifest-declared compatible binary/configuration while its retained
+state is proven readable; after an irreversible boundary, the plan MUST require forward recovery.
+
+Temporary migration compatibility MUST NOT relax canonical validation, become a permissive dual contract, or remain
+past its declared removal deadline. A release MUST NOT retain an indefinite legacy reader or dual writer.
+
+#### Scenario: report-only preflight cannot mutate retained resources
+
+- **GIVEN** a post-v1 source/target manifest and retained resources with configuration or data-shape drift
+- **WHEN** the storage doctor runs in report-only preflight mode
+- **THEN** it reports the exact drift, affected resource, required order, and blocking proof
+- **AND** it does not reconfigure, delete, rewrite, rebuild, or enforce a stricter admission rule
+
+#### Scenario: destructive enforcement waits for proven recovery
+
+- **GIVEN** an upgrade would delete, reformat, rebuild, or newly reject retained production state
+- **WHEN** backup/restore validation, operator approval, or a required readiness/query gate is missing
+- **THEN** the destructive or stricter step remains blocked
+- **AND** the diagnostic identifies the missing manifest gate
+
+#### Scenario: rollback uses only the last compatible state
+
+- **GIVEN** the supported real-NATS upgrade has not crossed its manifest-declared irreversible boundary
+- **WHEN** validation fails and the operator selects rollback
+- **THEN** the retained resources, binary, and configuration return to the last proven compatible point
+- **AND** no permissive reader, dual writer, or relaxed validator is enabled
+
+#### Scenario: temporary compatibility expires
+
+- **GIVEN** a migration-only bridge has an owner and removal deadline in the versioned manifest
+- **WHEN** the deadline is reached or the target validation gate passes
+- **THEN** release remains blocked until the bridge is removed
+- **AND** the bridge cannot become an indefinite legacy contract
+
 ### Requirement: Maintenance rebuild reclaims only derived index state
 
 SemStreams MUST provide a readiness-gated maintenance operation that clears configured rebuildable

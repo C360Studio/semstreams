@@ -2,11 +2,33 @@ package graph
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
+
+func TestPredicateValidationErrorSupportsWrappedCauses(t *testing.T) {
+	t.Parallel()
+
+	want := &vocabulary.PredicateValidationError{Reason: vocabulary.PredicateReasonArity}
+	got, err := predicateViolationFromError("bad.two", fmt.Errorf("wrapped parser error: %w", want))
+	if err != nil || got.Reason != want.Reason || got.Predicate != "bad.two" {
+		t.Fatalf("predicateViolationFromError() = %#v, %v; want wrapped typed cause", got, err)
+	}
+}
+
+func TestPredicateValidationErrorFailsClosedOnUnexpectedCause(t *testing.T) {
+	t.Parallel()
+
+	got, err := predicateViolationFromError("bad.two", errors.New("unexpected parser failure"))
+	if err == nil {
+		t.Fatalf("predicateViolationFromError() = %#v, nil; want fail-closed error", got)
+	}
+}
 
 func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 	t.Parallel()
@@ -60,8 +82,13 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 	}{
 		{name: "unreadable", data: []byte("{"), reason: GraphStateReasonUnreadableEntity},
 		{
+			name:   "noncanonical entity id",
+			data:   []byte(`{"id":"bad","triples":[]}`),
+			reason: GraphStateReasonNoncanonicalEntityID,
+		},
+		{
 			name:   "noncanonical predicate",
-			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"predicate":"bad.two"}]}`),
+			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"acme.ops.test.system.widget.001","predicate":"bad.two"}]}`),
 			reason: GraphStateReasonNoncanonicalPredicate,
 		},
 	}
@@ -77,5 +104,166 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 				t.Fatalf("reason = %q, want %q", stateErr.Reason, tt.reason)
 			}
 		})
+	}
+}
+
+func TestValidateEntityStateContractIdentityAndReferenceRules(t *testing.T) {
+	t.Parallel()
+
+	maxID := "a.b.c.d.e." + strings.Repeat("f", semtypes.MaxEntityIDBytes-10)
+	validID := "acme.ops.test.system.widget.001"
+	validRef := "acme.ops.test.system.widget.002"
+
+	tests := []struct {
+		name      string
+		entity    *EntityState
+		wantField EntityStateContractField
+		wantIndex int
+	}{
+		{
+			name: "maximum root and subject",
+			entity: &EntityState{ID: maxID, Triples: []message.Triple{{
+				Subject: maxID, Predicate: "test.state.value", Object: "ok",
+			}}},
+			wantIndex: -1,
+		},
+		{
+			name:      "invalid root",
+			entity:    &EntityState{ID: "bad", Triples: []message.Triple{{Subject: validID, Predicate: "test.state.value"}}},
+			wantField: EntityStateContractFieldID,
+			wantIndex: -1,
+		},
+		{
+			name:      "empty subject",
+			entity:    &EntityState{ID: validID, Triples: []message.Triple{{Subject: "", Predicate: "test.state.value"}}},
+			wantField: EntityStateContractFieldSubject,
+			wantIndex: 0,
+		},
+		{
+			name:      "malformed subject",
+			entity:    &EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: "test.state.value"}}},
+			wantField: EntityStateContractFieldSubject,
+			wantIndex: 0,
+		},
+		{
+			name: "canonical explicit reference",
+			entity: &EntityState{ID: validID, Triples: []message.Triple{{
+				Subject: validID, Predicate: "test.state.target", Object: validRef, Datatype: message.EntityReferenceDatatype,
+			}}},
+			wantIndex: -1,
+		},
+		{
+			name: "malformed explicit reference",
+			entity: &EntityState{ID: validID, Triples: []message.Triple{{
+				Subject: validID, Predicate: "test.state.target", Object: "bad", Datatype: message.EntityReferenceDatatype,
+			}}},
+			wantField: EntityStateContractFieldReference,
+			wantIndex: 0,
+		},
+		{
+			name: "non-string explicit reference",
+			entity: &EntityState{ID: validID, Triples: []message.Triple{{
+				Subject: validID, Predicate: "test.state.target", Object: 42, Datatype: message.EntityReferenceDatatype,
+			}}},
+			wantField: EntityStateContractFieldReference,
+			wantIndex: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEntityStateContract(tt.entity)
+			if tt.wantField == "" {
+				if err != nil {
+					t.Fatalf("ValidateEntityStateContract() error = %v, want nil", err)
+				}
+				return
+			}
+			var contractErr *EntityStateContractError
+			if !errors.As(err, &contractErr) {
+				t.Fatalf("error = %T %v, want *EntityStateContractError", err, err)
+			}
+			if contractErr.Field != tt.wantField || contractErr.TripleIndex != tt.wantIndex {
+				t.Fatalf("contract error = %#v, want field=%q triple=%d", contractErr, tt.wantField, tt.wantIndex)
+			}
+		})
+	}
+}
+
+func TestValidateEntityStateContractDeterministicPrecedence(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	entity := &EntityState{
+		ID: "bad",
+		Triples: []message.Triple{{
+			Subject:   "also-bad",
+			Predicate: "bad.two",
+			Object:    42,
+			Datatype:  message.EntityReferenceDatatype,
+		}},
+	}
+
+	err := ValidateEntityStateContract(entity)
+	var contractErr *EntityStateContractError
+	if !errors.As(err, &contractErr) || contractErr.Field != EntityStateContractFieldID {
+		t.Fatalf("first error = %T %#v, want root ID", err, contractErr)
+	}
+
+	entity.ID = validID
+	err = ValidateEntityStateContract(entity)
+	if !errors.As(err, &contractErr) || contractErr.Field != EntityStateContractFieldSubject {
+		t.Fatalf("second error = %T %#v, want subject", err, contractErr)
+	}
+
+	entity.Triples[0].Subject = validID
+	err = ValidateEntityStateContract(entity)
+	if !errors.As(err, &contractErr) || contractErr.Field != EntityStateContractFieldReference {
+		t.Fatalf("third error = %T %#v, want reference", err, contractErr)
+	}
+
+	entity.Triples[0].Datatype = ""
+	err = ValidateEntityStateContract(entity)
+	var predicateErr *EntityPredicateContractError
+	if !errors.As(err, &predicateErr) {
+		t.Fatalf("fourth error = %T %v, want predicate contract", err, err)
+	}
+}
+
+func TestMarshalAndUnmarshalEntityStateRejectIdentityViolations(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	for _, entity := range []*EntityState{
+		{ID: "bad", Triples: []message.Triple{{Subject: validID, Predicate: "test.state.value"}}},
+		{ID: validID, Triples: []message.Triple{{Subject: "", Predicate: "test.state.value"}}},
+		{ID: validID, Triples: []message.Triple{{Subject: validID, Predicate: "test.state.target", Object: "bad", Datatype: message.EntityReferenceDatatype}}},
+	} {
+		data, err := MarshalEntityState(entity)
+		if err == nil || data != nil {
+			t.Fatalf("MarshalEntityState(%#v) = %q, %v; want nil error result", entity, data, err)
+		}
+	}
+
+	data := []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"","predicate":"test.state.value"}]}`)
+	var decoded EntityState
+	err := UnmarshalEntityState(data, &decoded)
+	var stateErr *StateContractError
+	if !errors.As(err, &stateErr) || stateErr.Reason != GraphStateReasonNoncanonicalEntityID {
+		t.Fatalf("UnmarshalEntityState() error = %T %v, want entity-ID reset reason", err, err)
+	}
+}
+
+func TestAuthoritativeEntityStateContractRejectsNilCandidate(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateEntityStateContract(nil)
+	var contractErr *EntityStateContractError
+	if !errors.As(err, &contractErr) || contractErr.Field != EntityStateContractFieldID {
+		t.Fatalf("ValidateEntityStateContract(nil) error = %T %v, want root-ID contract error", err, err)
+	}
+	data, err := MarshalEntityState(nil)
+	if err == nil || data != nil {
+		t.Fatalf("MarshalEntityState(nil) = %q, %v; want nil bytes and error", data, err)
 	}
 }

@@ -18,10 +18,10 @@ Audit of every graph-index write path:
 | Index | Pre-change write | Class | Delivered shape |
 |---|---|---|---|
 | PREDICATE | composite-key `Put` (sharded, ADR-065) | fixed | — |
-| **INCOMING** | `UpdateWithRetry` CAS of `[]IncomingEntry` per target | O(in-degree²) | `targetID.sourceID.hex(predicate)` |
-| **NAME** | `UpdateWithRetry` CAS of `NameIndexEntry.Items` per `hash(name)` | O(shared-name²) | `hash(name).entityID.hex(predicate)` |
-| **CONTEXT** | non-CAS `Get`+`Put` of `[]ContextEntry` per raw context value | O(fan-in²) + lost-update race | `entityID.hash(context).hex(predicate)`, reconcile + delete by entity prefix |
-| OUTGOING | full-overwrite `Put` per owning entity (`component.go:1101`) | self-bounded, no O(N²) | **deferred (Non-goal)** |
+| **INCOMING** | CAS list per target | O(in-degree²) | `targetID.sourceID.hex(predicate)` |
+| **NAME** | CAS `Items` per `hash(name)` | O(shared-name²) | `hash(name).entityID.hex(predicate)` |
+| **CONTEXT** | non-CAS list per raw context | O(fan-in²) + race | entity-prefixed; reconcile/delete |
+| OUTGOING | full overwrite per entity | self-bounded | **deferred (Non-goal)** |
 | ALIAS / spatial / temporal / community / structural | single-value or composite | safe | — |
 
 ## Goals / Non-Goals
@@ -40,9 +40,9 @@ measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension)
 
 | Index | Prefix (scan) axis | Key | Value | Notes |
 |---|---|---|---|---|
-| INCOMING | target (raw 6-token) | `targetID.sourceID.hex(predicate)` | empty | source = next 6 tokens; predicate token reversibly decodes |
-| NAME | `hash(name)` | `hash(name).entityID.hex(predicate)` | `{name, priority}` | value carries original-case + priority |
-| CONTEXT | entity (raw 6-token) | `entityID.hash(context).hex(predicate)` | `{contextValue}` (+ fields) | entity prefix enables update reconciliation and delete cleanup |
+| INCOMING | target (raw 6-token) | `targetID.sourceID.hex(predicate)` | empty | source + reversible predicate |
+| NAME | `hash(name)` | `hash(name).entityID.hex(predicate)` | `{name, priority}` | value retains case/priority |
+| CONTEXT | entity6 | `entityID.hash(context).hex(predicate)` | `{contextValue}` | reconcile/delete prefix |
 
 - **Raw entity-ID prefixes are collision-safe** (fixed 6-token; no ID is a token-prefix of another —
   `IsValidEntityID` `message/triple.go:145`), matching graph-ingest's `handleQueryPrefixNATS`.
@@ -52,8 +52,11 @@ measurement (filed as follow-ups). A query-readiness envelope (gh#397 extension)
 - NAME/CONTEXT need a **small value** (original-case name/priority; context provenance) — not
   recoverable from a hashed prefix. Empty marker for INCOMING.
 - Unconditional `Put`, no CAS — ADR-065 footgun comment (key uniqueness → CAS unnecessary).
-- Predicate tokens are reversibly hex-encoded because graph-ingest accepts KV-unsafe
-  predicate text. Name/context values use hashes and remain recoverable from their small values.
+- Predicate tokens retain PR #524's reversible untagged hex layout. PR #524 selected that defensive
+  representation while graph-ingest still accepted KV-unsafe predicate text. PR #532 now enforces
+  canonical three-part predicates, and graph-index revalidates replay; the codec reconstructs accepted
+  identity but does not authorize input. Name/context values use hashes and remain recoverable from
+  their small values.
 
 ### D2 — Definitive reader inventory (do not defer the audit — the first review found a missed reader)
 
@@ -141,12 +144,14 @@ The initial L1 design (above) shipped, then a retention-contract review (Codex) 
 because #524 FREEZES the reverse-index storage format and several correctness gaps would be cast in
 concrete. The following revisions supersede the shapes above where they differ:
 
-- **P1a — predicate token is `hex(predicate)`, not raw.** graph-ingest accepts KV-unsafe predicates;
-  a raw token made INCOMING/NAME/CONTEXT Puts fail while the hashed PREDICATE_INDEX / raw
-  ENTITY_STATES / OUTGOING succeeded, desyncing forward vs reverse. Hex (reversible, shared
-  `graph.EncodePredicateToken`) keeps INCOMING a pure key-scan (no value Get); entity axes stay raw,
-  hashed name/context ride in the value. Updated key shapes: INCOMING `targetID.sourceID.hex(pred)`,
-  NAME `hash(name).entityID.hex(pred)`.
+- **P1a — predicate token is `hex(predicate)`, not raw.** At PR #524 design time, graph-ingest accepted
+  KV-unsafe predicates. A raw reverse token could fail after ENTITY_STATES and hashed
+  PREDICATE_INDEX writes succeeded; the raw PREDICATE_CATALOG key could fail independently and hold
+  readiness. Reversible `graph.EncodePredicateToken` kept INCOMING a pure key-scan. PR #532 now rejects
+  noncanonical predicates at authoritative writes and graph-index replay revalidation before
+  membership, catalog, or reverse-index I/O. The shipped untagged hex remains layout, not permission.
+  Key shapes remain INCOMING `targetID.sourceID.hex(pred)` and NAME
+  `hash(name).entityID.hex(pred)`.
 
 - **P1f — CONTEXT is entity-prefixed and self-reconciling: `entityID.hash(context).hex(pred)`.** The
   original hash(context)-prefix layout could not retract superseded memberships on update

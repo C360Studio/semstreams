@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // defaultMaxConcurrent is the default bounded concurrency for entity fetches
@@ -118,7 +119,6 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("invalid request: %w", err))
 	}
-
 	// Handle empty IDs (return empty entities)
 	if len(req.IDs) == 0 {
 		return c.finalizeEntityQueryResponse([]byte(`{"entities":[]}`), nil)
@@ -174,6 +174,11 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 	var req graph.PrefixQueryRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("invalid request: %w", err))
+	}
+	if req.Prefix != "" {
+		if err := semtypes.ValidateEntityIDPrefix(req.Prefix); err != nil {
+			return nil, err
+		}
 	}
 
 	// Clamp limit.

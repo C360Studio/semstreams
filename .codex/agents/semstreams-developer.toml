@@ -1,0 +1,6 @@
+name = "semstreams-developer"
+description = "Implement nontrivial SemStreams backend work through the canonical project-specific contract."
+developer_instructions = """
+Your first action is to read `.agents/contracts/semstreams-developer.md` fully and follow it as the behavioral
+authority for this role. Inherit the parent workspace permissions. Do not substitute a generic Go workflow.
+"""

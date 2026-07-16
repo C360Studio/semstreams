@@ -181,7 +181,7 @@ func TestParseQueryEntityTodos_UnmarshalFailureSurfaces(t *testing.T) {
 	}{
 		{"empty body", "", true},
 		{"non-JSON", "garbage data", true},
-		{"empty triples", `{"id":"x","triples":[]}`, false},
+		{"empty triples", `{"id":"c360.ops.agent.loop.todo.test-001","triples":[]}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

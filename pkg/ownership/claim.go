@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -109,8 +110,8 @@ func (c OwnerClaim) Validate() error {
 	if !validOwnerID(c.Owner) {
 		return fmt.Errorf("%w: owner %q is empty or not subject-safe", ErrInvalidClaim, c.Owner)
 	}
-	if !validPattern(c.Pattern) {
-		return fmt.Errorf("%w: pattern %q is not a %d-part entity-ID glob", ErrInvalidClaim, c.Pattern, idArity)
+	if err := semtypes.ValidateEntityIDPattern(c.Pattern); err != nil {
+		return fmt.Errorf("%w: invalid entity-ID pattern: %w", ErrInvalidClaim, err)
 	}
 	if len(c.Predicates) == 0 {
 		return fmt.Errorf("%w: claim by %q on %q has no predicates", ErrInvalidClaim, c.Owner, c.Pattern)
@@ -175,8 +176,10 @@ func (f ForeignEdgeClaim) Validate() error {
 	if !f.Mode.valid() {
 		return fmt.Errorf("%w: foreign-edge claim by %q has invalid edge mode %q", ErrInvalidClaim, f.Owner, f.Mode)
 	}
-	if f.TargetPattern != "" && !validPattern(f.TargetPattern) {
-		return fmt.Errorf("%w: foreign-edge target pattern %q is not a %d-part glob", ErrInvalidClaim, f.TargetPattern, idArity)
+	if f.TargetPattern != "" {
+		if err := semtypes.ValidateEntityIDPattern(f.TargetPattern); err != nil {
+			return fmt.Errorf("%w: invalid foreign-edge target pattern: %w", ErrInvalidClaim, err)
+		}
 	}
 	return nil
 }

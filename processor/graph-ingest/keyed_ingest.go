@@ -3,6 +3,7 @@ package graphingest
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -122,6 +123,20 @@ func (c *Component) teardownIngestPool() {
 // stamps the guard (durable first, then in-memory) and acks — the ADR-072
 // two-tier guard, updated AFTER side effects and BEFORE ack.
 func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork) error {
+	// Validate and prepare the complete Graphable candidate before its identity
+	// participates in the idempotency guard. Structural failures are terminal
+	// for this immutable stream message and must not create a guard key/Get or a
+	// redelivery loop.
+	if validationErr := c.prepareFactProjection(work.entity); validationErr != nil {
+		c.recordEntityStateContractRejection("graphable", validationErr)
+		c.recordPredicateContractRejections("graphable", validationErr)
+		c.logStructuralContractRejection("graphable", validationErr)
+		if termErr := work.msg.Term(); termErr != nil {
+			c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
+		}
+		return validationErr
+	}
+
 	// Redelivery guard (ADR-072 B1/B2/B3): drop a stale re-delivery whose stream
 	// sequence is not newer than the last already applied to this entity from the
 	// same stream.
@@ -151,13 +166,34 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 	ingestErr := c.ingestEntity(ctx, work.entity)
 	c.processingDuration.Observe(time.Since(start).Seconds())
 	if ingestErr != nil {
-		c.recordPredicateContractRejections("graphable", ingestErr)
-		if errs.IsInvalid(ingestErr) {
-			if termErr := work.msg.Term(); termErr != nil {
-				c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
+		var stateErr *graph.StateContractError
+		if errors.As(ingestErr, &stateErr) {
+			if c.latchEntityStatePoison(stateErr) && c.logger != nil {
+				c.logger.Error("authoritative graph state requires reset; graph-ingest queries blocked",
+					slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+					slog.String("reason", string(stateErr.Reason)))
 			}
-		} else if nakErr := work.msg.Nak(); nakErr != nil {
-			c.logger.Error("Failed to Nak after transient ingest error", slog.Any("error", nakErr))
+			if termErr := work.msg.Term(); termErr != nil {
+				c.logger.Error("Failed to terminate ingest blocked by authoritative graph state", slog.Any("error", termErr))
+			}
+		} else {
+			c.recordEntityStateContractRejection("graphable", ingestErr)
+			c.recordPredicateContractRejections("graphable", ingestErr)
+			if errs.IsInvalid(ingestErr) {
+				if termErr := work.msg.Term(); termErr != nil {
+					c.logger.Error("Failed to terminate structurally invalid ingest", slog.Any("error", termErr))
+				}
+			} else if errs.IsFatal(ingestErr) {
+				if c.logger != nil {
+					c.logger.Error("graph-ingest: fatal ingest failure; terminating",
+						slog.String("class", errs.ErrorFatal.String()))
+				}
+				if termErr := work.msg.Term(); termErr != nil {
+					c.logger.Error("Failed to terminate fatal ingest", slog.Any("error", termErr))
+				}
+			} else if nakErr := work.msg.Nak(); nakErr != nil {
+				c.logger.Error("Failed to Nak after transient ingest error", slog.Any("error", nakErr))
+			}
 		}
 		return ingestErr
 	}
@@ -180,6 +216,30 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 		c.logger.Error("Failed to ack JetStream message", slog.Any("error", ackErr))
 	}
 	return nil
+}
+
+func (c *Component) logStructuralContractRejection(lane string, err error) {
+	if c.logger == nil {
+		return
+	}
+	field, reason, tripleIndex, ok := entityStateContractRejectionLabels(err)
+	if !ok {
+		predicateReason, predicate := predicateContractReason(err)
+		if predicate {
+			field, reason, tripleIndex = contractFieldPredicate, predicateReason, -1
+		} else {
+			field, reason, tripleIndex = string(graph.EntityStateContractFieldID), contractReasonUnknown, -1
+		}
+	}
+	attrs := []any{
+		slog.String("lane", lane),
+		slog.String("field", field),
+		slog.String("reason", reason),
+	}
+	if tripleIndex >= 0 {
+		attrs = append(attrs, slog.Int("triple_index", tripleIndex))
+	}
+	c.logger.Warn("graph-ingest: structural contract rejection; terminating", attrs...)
 }
 
 // ingestGuardStale reports whether work is a stale redelivery — its stream

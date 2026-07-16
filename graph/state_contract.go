@@ -26,6 +26,10 @@ const (
 	GraphStateReasonUnreadableEntity StateResetReason = "unreadable_entity_state"
 	// GraphStateReasonNoncanonicalPredicate means stored state violates the predicate grammar.
 	GraphStateReasonNoncanonicalPredicate StateResetReason = "noncanonical_predicate"
+	// GraphStateReasonNoncanonicalEntityID means the stored entity ID, a triple
+	// subject, or an explicitly marked entity reference violates the canonical
+	// entity identity contract.
+	GraphStateReasonNoncanonicalEntityID StateResetReason = "noncanonical_entity_id"
 )
 
 // StateContractError means the authoritative graph cannot be safely read

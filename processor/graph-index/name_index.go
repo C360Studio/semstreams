@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -88,6 +89,9 @@ type nameIndexWrite struct {
 }
 
 func (c *Component) reconcileNameIndex(ctx context.Context, entityID string, writes []nameIndexWrite) error {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return err
+	}
 	desired := make(map[string][]byte, len(writes))
 	for _, write := range writes {
 		if write.name == "" || !validateNameKeyInputs(entityID, write.predicate, c.logger) {

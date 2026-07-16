@@ -41,10 +41,15 @@ references for large content.
 - Provide operator runbooks and a maintenance-mode derived-index rebuild from current
   `ENTITY_STATES`, so stale/rebuildable projection debris can be reclaimed without deciding whether a
   semantic identity is dead.
+- Own post-v1 retained-state upgrades through a versioned report-only preflight and operator-approved migration
+  manifest. The manifest declares source/target versions, retained resources, backup/export scope, migration and
+  rebuild order, readiness/validation gates, a safe rollback point, and a removal deadline for any temporary
+  migration-only compatibility mechanism.
 
 **BREAKING (operational):** production-mode startup and writes may reject previously accepted
 unbounded configurations, over-budget entity births, append-shaped state, and ObjectStore writes.
-This is deliberate fail-safe behavior and requires migration diagnostics before enforcement.
+This is deliberate fail-safe behavior. Post-v1, report-only diagnostics, backup/restore proof, an operator-approved
+plan, and supported real-NATS upgrade evidence precede destructive migration or stricter enforcement.
 
 ## Non-goals
 
@@ -59,6 +64,8 @@ This is deliberate fail-safe behavior and requires migration diagnostics before 
   v1.
 - Replacing external object storage such as filesystem/S3. NATS ObjectStore remains one implementation
   of the common contract and is not presumed suitable for every large-media workload.
+- Treating a permissive legacy reader, indefinite dual writer, or relaxed validation contract as rollback. Rollback
+  means returning to the last compatible binary/configuration at the manifest's proven safe point.
 
 ## Capabilities
 
@@ -82,7 +89,8 @@ This is deliberate fail-safe behavior and requires migration diagnostics before 
   metrics, `processor/graph-ingest`, graph-index readiness/rebuild surfaces,
   `storage/objectstore`, `storage.Store`, and `message.StorageReference` validation.
 - **Operator surface:** production startup validation, storage status/doctor output, Prometheus
-  metrics and alerts, generated/recommended NATS account configuration, and pressure runbooks.
+  metrics and alerts, generated/recommended NATS account configuration, versioned upgrade manifests,
+  backup/restore validation, and pressure/migration runbooks.
 - **Consumers:** SemSource and SemLink raw/binary ingestion; SemOps telemetry and evidence; SemConnect
   observations/artifacts; SemTeams/SemDev agent content and trajectories; every product creating
   persistent graph identities.

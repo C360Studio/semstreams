@@ -36,7 +36,9 @@ are **deferred behind measurement** rather than built on an unverified root caus
 ## What Changes
 
 - **Composite-key sharding** of `INCOMING`, `NAME`, and `CONTEXT`: one KV key per
-  edge/membership with KV-safe predicate tokens. `INCOMING` is target-prefixed,
+  edge/membership with reversible untagged-hex predicate tokens. PR #524 selected that layout against
+  the then-permissive predicate corpus; PR #532 now enforces canonical three-part predicates, and the
+  codec remains physical layout rather than acceptance authority. `INCOMING` is target-prefixed,
   `NAME` is name-hash-prefixed, and `CONTEXT` is entity-prefixed. Writes become
   unconditional `Put` operations (no CAS/list rewrite), while `CONTEXT` can retract
   superseded memberships and self-clean by entity prefix.

@@ -1,11 +1,55 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 )
+
+const (
+	// MaxEntityIDBytes is the maximum serialized size of a canonical entity ID,
+	// including its five separators. There is no independent segment bound.
+	MaxEntityIDBytes = 256
+
+	// ErrorCodeEntityIDInvalid classifies an invalid literal entity ID.
+	ErrorCodeEntityIDInvalid = "entity_id_invalid"
+	// ErrorCodeEntityIDPatternInvalid classifies an invalid declaration pattern.
+	ErrorCodeEntityIDPatternInvalid = "entity_id_pattern_invalid"
+	// ErrorCodeEntityIDPrefixInvalid classifies an invalid query prefix.
+	ErrorCodeEntityIDPrefixInvalid = "entity_id_prefix_invalid"
+
+	// EntityIDReasonEmpty identifies an empty whole input.
+	EntityIDReasonEmpty = "empty"
+	// EntityIDReasonBytes identifies a serialized byte-limit violation.
+	EntityIDReasonBytes = "bytes"
+	// EntityIDReasonArity identifies an invalid number of positions.
+	EntityIDReasonArity = "arity"
+	// EntityIDReasonEmptySegment identifies an empty position.
+	EntityIDReasonEmptySegment = "empty_segment"
+	// EntityIDReasonFirstByte identifies a non-alphanumeric segment start.
+	EntityIDReasonFirstByte = "first_byte"
+	// EntityIDReasonAlphabet identifies a forbidden segment byte.
+	EntityIDReasonAlphabet = "alphabet"
+
+	// EntityIDDetailReason is the stable reason detail key.
+	EntityIDDetailReason = "reason"
+	// EntityIDDetailMeasuredBytes reports the rejected serialized byte count.
+	EntityIDDetailMeasuredBytes = "measured_bytes"
+	// EntityIDDetailAllowedBytes reports the serialized byte limit.
+	EntityIDDetailAllowedBytes = "allowed_bytes"
+	// EntityIDDetailMeasuredParts reports the rejected position count.
+	EntityIDDetailMeasuredParts = "measured_parts"
+	// EntityIDDetailAllowedParts reports the position-count limit.
+	EntityIDDetailAllowedParts = "allowed_parts"
+	// EntityIDDetailSegmentIndex reports the zero-based failing position.
+	EntityIDDetailSegmentIndex = "segment_index"
+)
+
+const canonicalEntityIDParts = 6
+
+var errInvalidEntityIDContract = errors.New("invalid entity ID contract input")
 
 // EntityID represents a complete entity identifier with semantic structure.
 // Follows the pattern: org.platform.domain.system.type.instance for federated entity management.
@@ -47,30 +91,19 @@ func (eid EntityID) EntityType() EntityType {
 	return EntityType{Domain: eid.Domain, Type: eid.Type}
 }
 
-// IsValid checks if the EntityID has all required fields populated
+// IsValid reports whether the exact serialized fields form a canonical ID.
 func (eid EntityID) IsValid() bool {
-	return eid.Org != "" && eid.Platform != "" && eid.System != "" && eid.Domain != "" && eid.Type != "" &&
-		eid.Instance != ""
+	return ValidateEntityID(eid.Key()) == nil
 }
 
 // ParseEntityID creates EntityID from dotted string format.
 // Expects exactly 6 parts: org.platform.domain.system.type.instance
 // Returns an error if the format is invalid.
 func ParseEntityID(s string) (EntityID, error) {
+	if err := ValidateEntityID(s); err != nil {
+		return EntityID{}, err
+	}
 	parts := strings.Split(s, ".")
-	if len(parts) != 6 {
-		return EntityID{}, errs.WrapInvalid(errs.ErrInvalidData, "EntityID", "ParseEntityID",
-			fmt.Sprintf("expected 6 parts, got %d", len(parts)))
-	}
-
-	// Check that no part is empty
-	for i, part := range parts {
-		if part == "" {
-			return EntityID{}, errs.WrapInvalid(errs.ErrInvalidData, "EntityID", "ParseEntityID",
-				fmt.Sprintf("part %d is empty", i+1))
-		}
-	}
-
 	return EntityID{
 		Org:      parts[0],
 		Platform: parts[1],
@@ -79,6 +112,97 @@ func ParseEntityID(s string) (EntityID, error) {
 		Type:     parts[4],
 		Instance: parts[5],
 	}, nil
+}
+
+// ValidateEntityID validates one canonical six-part entity identity without
+// rewriting, encoding, or normalizing any input byte.
+func ValidateEntityID(value string) error {
+	return validateEntityIDValue(value, ErrorCodeEntityIDInvalid, canonicalEntityIDParts, canonicalEntityIDParts, false)
+}
+
+// IsValidEntityID is the boolean convenience over ValidateEntityID.
+func IsValidEntityID(value string) bool {
+	return ValidateEntityID(value) == nil
+}
+
+// ValidateEntityIDPattern validates an exact six-position declaration
+// pattern. Each position is either one canonical literal segment or "*".
+func ValidateEntityIDPattern(value string) error {
+	return validateEntityIDValue(
+		value, ErrorCodeEntityIDPatternInvalid, canonicalEntityIDParts, canonicalEntityIDParts, true,
+	)
+}
+
+// ValidateEntityIDPrefix validates a non-empty one-to-six-position literal
+// query prefix. Match-all surfaces must handle empty before calling this API.
+func ValidateEntityIDPrefix(value string) error {
+	return validateEntityIDValue(value, ErrorCodeEntityIDPrefixInvalid, 1, canonicalEntityIDParts, false)
+}
+
+func validateEntityIDValue(value, code string, minimumParts, maximumParts int, allowWildcard bool) error {
+	if value == "" {
+		return newEntityIDContractError(code, EntityIDReasonEmpty, nil)
+	}
+	if len(value) > MaxEntityIDBytes {
+		return newEntityIDContractError(code, EntityIDReasonBytes, map[string]any{
+			EntityIDDetailMeasuredBytes: len(value),
+			EntityIDDetailAllowedBytes:  MaxEntityIDBytes,
+		})
+	}
+
+	parts := strings.Split(value, ".")
+	if len(parts) < minimumParts || len(parts) > maximumParts {
+		return newEntityIDContractError(code, EntityIDReasonArity, map[string]any{
+			EntityIDDetailMeasuredParts: len(parts),
+			EntityIDDetailAllowedParts:  maximumParts,
+		})
+	}
+	for index, part := range parts {
+		if part == "" {
+			return newEntityIDContractError(code, EntityIDReasonEmptySegment, map[string]any{
+				EntityIDDetailSegmentIndex: index,
+			})
+		}
+	}
+	for index, part := range parts {
+		if allowWildcard && part == "*" {
+			continue
+		}
+		if !isEntityIDAlphanumeric(part[0]) {
+			return newEntityIDContractError(code, EntityIDReasonFirstByte, map[string]any{
+				EntityIDDetailSegmentIndex: index,
+			})
+		}
+	}
+	for index, part := range parts {
+		if allowWildcard && part == "*" {
+			continue
+		}
+		for position := 1; position < len(part); position++ {
+			if !isEntityIDRemainingByte(part[position]) {
+				return newEntityIDContractError(code, EntityIDReasonAlphabet, map[string]any{
+					EntityIDDetailSegmentIndex: index,
+				})
+			}
+		}
+	}
+	return nil
+}
+
+func isEntityIDAlphanumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
+}
+
+func isEntityIDRemainingByte(value byte) bool {
+	return isEntityIDAlphanumeric(value) || value == '_' || value == '-'
+}
+
+func newEntityIDContractError(code, reason string, detail map[string]any) error {
+	if detail == nil {
+		detail = make(map[string]any, 1)
+	}
+	detail[EntityIDDetailReason] = reason
+	return errs.ClassifiedCodeDetail(errs.ErrorInvalid, code, detail, errInvalidEntityIDContract)
 }
 
 // TypePrefix returns the 5-part prefix identifying the entity type level.

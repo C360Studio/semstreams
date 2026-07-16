@@ -123,6 +123,34 @@ func TestTriple_IsRelationship(t *testing.T) {
 	}
 }
 
+func TestEntityReferenceDatatypeContract(t *testing.T) {
+	t.Parallel()
+
+	if EntityReferenceDatatype != "@id" {
+		t.Fatalf("EntityReferenceDatatype = %q, want @id", EntityReferenceDatatype)
+	}
+
+	canonical := "acme.ops.test.system.widget.001"
+	tests := []struct {
+		name   string
+		triple Triple
+		want   bool
+	}{
+		{name: "legacy untyped canonical string", triple: Triple{Object: canonical}, want: true},
+		{name: "explicit canonical reference", triple: Triple{Object: canonical, Datatype: EntityReferenceDatatype}, want: true},
+		{name: "typed literal canonical text", triple: Triple{Object: canonical, Datatype: "xsd:string"}, want: false},
+		{name: "explicit malformed reference", triple: Triple{Object: "bad", Datatype: EntityReferenceDatatype}, want: false},
+		{name: "explicit non-string reference", triple: Triple{Object: 42, Datatype: EntityReferenceDatatype}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.triple.IsRelationship(); got != tt.want {
+				t.Fatalf("Triple%#v.IsRelationship() = %v, want %v", tt.triple, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsValidEntityID(t *testing.T) {
 	tests := []struct {
 		name     string
