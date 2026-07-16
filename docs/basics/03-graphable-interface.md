@@ -24,9 +24,15 @@ org.platform.domain.system.type.instance
 
 **Requirements:**
 
-- Deterministic: Same input always produces same ID
-- Hierarchical: Enables prefix queries (`acme.ops.*`)
-- Unique: No collisions within your system
+- Exactly six dot-separated positions: `org.platform.domain.system.type.instance`
+- At most 256 serialized bytes, including the five separators
+- Each position matches `[A-Za-z0-9][A-Za-z0-9_-]*`
+- Deterministic: the same input always produces the same ID
+- Hierarchical: literal prefixes such as `acme.ops` enable scoped queries; query prefixes never contain wildcards
+- Unique: no collisions within your system
+
+Use `pkg/types.ValidateEntityID` or `pkg/types.ParseEntityID` at an authoring boundary. SemStreams never trims,
+normalizes, hashes, or repairs an invalid ID.
 
 **Example:**
 
@@ -84,6 +90,7 @@ func (s *SensorReading) Triples() []message.Triple {
             Subject:   id,
             Predicate: "geo.location.zone",
             Object:    s.ZoneEntityID, // Another entity ID
+            Datatype:  message.EntityReferenceDatatype,
             Source:    "iot_sensor",
             Timestamp: s.ObservedAt,
         },
@@ -99,9 +106,16 @@ The Object field determines whether a triple is a property or a relationship:
 // Property: Object is a value
 {Predicate: "sensor.measurement.celsius", Object: 23.5}
 
-// Relationship: Object is another entity ID
-{Predicate: "geo.location.zone", Object: "acme.logistics.facility.zone.area.warehouse-7"}
+// Relationship: @id marks the object as a canonical entity reference
+{
+    Predicate: "geo.location.zone",
+    Object: "acme.logistics.facility.zone.area.warehouse-7",
+    Datatype: message.EntityReferenceDatatype,
+}
 ```
+
+A string that merely resembles an entity ID remains a scalar property unless its datatype is explicitly `@id`.
+An `@id` object must be a canonical entity-ID string; malformed or non-string references reject the whole candidate.
 
 Relationships create edges in the graph. These edges are:
 
@@ -185,6 +199,7 @@ func (d *DroneTelemetry) Triples() []message.Triple {
             Subject:   id,
             Predicate: "fleet.membership.current",
             Object:    fleetEntityID,
+            Datatype:  message.EntityReferenceDatatype,
             Timestamp: ts,
         })
     }

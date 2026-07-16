@@ -417,7 +417,7 @@ func TestIntegration_StructStillMarshaledCorrectly(t *testing.T) {
 	err = json.Unmarshal(retrieved, &parsed)
 	require.NoError(t, err)
 	assert.Equal(t, "sensor", parsed["type"])
-	assert.Equal(t, "sensor-789", parsed["entity_id"])
+	assert.Equal(t, input.EntityID, parsed["entity_id"])
 	assert.Equal(t, float64(42), parsed["value"]) // JSON numbers are float64
 }
 

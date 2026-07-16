@@ -1,6 +1,10 @@
 package graph
 
-import "strings"
+import (
+	"strings"
+
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+)
 
 // MatchesAnyIDPrefix reports whether a dot-delimited entity ID falls under any
 // of the given ID prefixes (OR-matched). An empty/nil prefixes slice means "no
@@ -20,8 +24,22 @@ import "strings"
 // match-all (consistent with empty=no-filter), not as "matches only the empty
 // ID".
 func MatchesAnyIDPrefix(id string, prefixes []string) bool {
+	if err := semtypes.ValidateEntityID(id); err != nil {
+		return false
+	}
 	if len(prefixes) == 0 {
 		return true
+	}
+	// Validate the complete filter before matching so a valid first entry cannot
+	// hide a malformed later entry. Callers that need the typed failure validate
+	// at their request boundary; this boolean helper fails closed.
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		if err := semtypes.ValidateEntityIDPrefix(prefix); err != nil {
+			return false
+		}
 	}
 	for _, p := range prefixes {
 		if p == "" || id == p || strings.HasPrefix(id, p+".") {

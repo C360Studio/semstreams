@@ -26,7 +26,9 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 
 	var allRequired []string
 
-	// Structural tier uses e2e-structural.json config with rule processor
+	// Every tier exercises the rule processor. Requiring the instance here is
+	// load-bearing: a config-validation failure used to omit the component while
+	// the remainder of the semantic scenario still reported success.
 	if s.config.Variant == "structural" {
 		// Components for structural testing with rule processor
 		// Graph components are now modular: graph-ingest, graph-index, graph-gateway
@@ -46,6 +48,7 @@ func (s *TieredScenario) executeVerifyComponents(ctx context.Context, result *Re
 		allRequired = append(inputComponents, domainProcessors...)
 		allRequired = append(allRequired, graphComponents...)
 		allRequired = append(allRequired, outputComponents...)
+		allRequired = append(allRequired, "rule")
 	}
 
 	foundComponents := make(map[string]bool)
@@ -545,6 +548,12 @@ func (s *TieredScenario) executeValidateRules(ctx context.Context, result *Resul
 
 	// Record validation results
 	s.recordRuleValidationResults(result, baselineMetrics, finalMetrics, ruleMetricsPresent, foundCount, sentCount)
+	if foundCount < 2 {
+		return fmt.Errorf("rule engine metrics missing: found %d of 3", foundCount)
+	}
+	if finalMetrics.Evaluations <= 0 {
+		return fmt.Errorf("rule engine performed no evaluations")
+	}
 
 	return nil
 }
@@ -554,8 +563,8 @@ func (s *TieredScenario) checkReactiveMetricsPresence(ctx context.Context) (map[
 	metricsRaw, err := s.metrics.FetchRaw(ctx)
 	metricNames := []string{
 		"semstreams_rule_evaluations_total",
-		"semstreams_rule_firings_total",
-		"semstreams_rule_actions_dispatched_total",
+		"semstreams_rule_triggers_total",
+		"semstreams_rule_events_published_total",
 	}
 
 	presence := make(map[string]bool, len(metricNames))

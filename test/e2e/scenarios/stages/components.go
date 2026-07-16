@@ -67,6 +67,8 @@ func (v *ComponentVerifier) getRequiredComponents() []string {
 		"graph-ingest",
 		// Output/storage
 		"file", "objectstore",
+		// Stateful rule evaluation is part of every tier.
+		"rule",
 	}
 }
 

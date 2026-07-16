@@ -32,10 +32,10 @@ func TestSearchRequest_ScopeRoundTrip(t *testing.T) {
 
 	// The decoded scope drives the same filter both paths apply.
 	corpus := []string{
-		"c360.semspec.python.pkg.fn.test_raises", // code — out of scope
-		"c360.semspec.source.doc.exceptions",     // in scope
-		"c360.semspec.source.chunk.exceptions_0", // in scope
-		"c360.semspec.golang.pkg.fn.Handle",      // code — out of scope
+		"c360.semspec.python.pkg.fn.test_raises",         // code — out of scope
+		"c360.semspec.source.doc.page.exceptions",        // in scope
+		"c360.semspec.source.chunk.segment.exceptions_0", // in scope
+		"c360.semspec.golang.pkg.fn.Handle",              // code — out of scope
 	}
 	var kept []string
 	for _, id := range corpus {
@@ -43,7 +43,7 @@ func TestSearchRequest_ScopeRoundTrip(t *testing.T) {
 			kept = append(kept, id)
 		}
 	}
-	wantKept := []string{"c360.semspec.source.doc.exceptions", "c360.semspec.source.chunk.exceptions_0"}
+	wantKept := []string{"c360.semspec.source.doc.page.exceptions", "c360.semspec.source.chunk.segment.exceptions_0"}
 	if !slices.Equal(kept, wantKept) {
 		t.Errorf("filtered corpus = %v, want %v", kept, wantKept)
 	}

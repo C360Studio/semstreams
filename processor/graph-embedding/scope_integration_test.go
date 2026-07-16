@@ -50,8 +50,8 @@ func TestIntegration_ScopedSearch_BothPaths(t *testing.T) {
 		"c360.semspec.golang.pkg.fn.Handle",
 	}
 	docs := []string{
-		"c360.semspec.source.chunk.exceptions_0",
-		"c360.semspec.source.doc.exceptions",
+		"c360.semspec.source.chunk.segment.exceptions_0",
+		"c360.semspec.source.doc.page.exceptions",
 	} // kept sorted so assertDocsOnly can compare against the sorted result
 	save := func(id string, vec []float32) {
 		require.NoError(t, st.SavePending(ctx, id, "hash-"+id, "text", 0))

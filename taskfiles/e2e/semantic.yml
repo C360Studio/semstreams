@@ -14,8 +14,7 @@ tasks:
       - echo "[OK] ML services are healthy (SemEmbed + SemInstruct)"
       - echo "[SEMANTIC] Running semantic tier scenario..."
       # ML app runs on port 38180 (HTTP), 39190 (metrics), 34650 (UDP) to avoid conflict
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
-        ignore_error: true
+      - cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
       - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
 
   debug:

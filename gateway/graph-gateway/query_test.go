@@ -22,6 +22,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // ====================================================================================
@@ -1383,7 +1385,7 @@ func TestGateway_PrefixQuery_DefaultsLimitTo100(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entitiesByPrefix(prefix: "test.") { id } }`,
+		"query": `{ entitiesByPrefix(prefix: "test") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1416,7 +1418,7 @@ func TestGateway_PrefixQuery_ExplicitLimitOverridesDefault(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entitiesByPrefix(prefix: "test.", limit: 500) { id } }`,
+		"query": `{ entitiesByPrefix(prefix: "test", limit: 500) { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1427,6 +1429,49 @@ func TestGateway_PrefixQuery_ExplicitLimitOverridesDefault(t *testing.T) {
 
 	comp.handleGraphQL(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestGateway_PrefixQueriesRejectInvalidPrefixBeforeNATS(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		subject string
+		query   string
+	}{
+		{name: "entities by prefix", subject: "graph.query.prefix", query: `{ entitiesByPrefix(prefix: "acme.*") { id } }`},
+		{name: "hierarchy stats", subject: "graph.query.hierarchyStats", query: `{ entityIdHierarchy(prefix: "acme.*") { prefix } }`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			validationErr := validateGatewayPrefixPayload(tt.subject, map[string]interface{}{"prefix": "acme.*"})
+			require.Error(t, validationErr)
+			var classified *semerrs.ClassifiedError
+			require.ErrorAs(t, validationErr, &classified)
+			assert.Equal(t, semtypes.ErrorCodeEntityIDPrefixInvalid, classified.Code)
+
+			requestCalls := 0
+			mock := newMockNATSRequester()
+			mock.requestFunc = func(context.Context, string, []byte, time.Duration) ([]byte, error) {
+				requestCalls++
+				return nil, errors.New("unexpected NATS request")
+			}
+
+			comp := createTestGatewayWithMock(t, mock)
+			body, err := json.Marshal(map[string]interface{}{"query": tt.query})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+
+			comp.handleGraphQL(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Zero(t, requestCalls, "invalid prefix must fail before NATS request")
+			assert.Contains(t, w.Body.String(), "invalid entity ID contract input")
+		})
+	}
 }
 
 func TestGateway_InlineArgs_ExplicitVariablesOverrideInline(t *testing.T) {

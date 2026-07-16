@@ -31,7 +31,7 @@ func newOwnershipRegistry(t *testing.T) (*ownership.Registry, context.Context) {
 // to the write-time lease lookup.
 func TestBind_DerivesAndRegisters(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	token, err := Bind(ctx, reg, "cs-api", csapiSystem())
+	token, err := Bind(ctx, reg, "cs-api", csapiSystem(t))
 	if err != nil {
 		t.Fatalf("bind cs-api System projection: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestBind_DerivesAndRegisters(t *testing.T) {
 // one Registry, so this proves cross-OWNER rejection.)
 func TestBind_CrossOwnerOverlapRejected(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	if _, err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
+	if _, err := Bind(ctx, reg, "cs-api", csapiSystem(t)); err != nil {
 		t.Fatal(err)
 	}
 	poacher := Contract{
@@ -82,7 +82,7 @@ func TestBindAndHeartbeat_EnrollsOnSuccess(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
 	hb := reg.NewHeartbeater(ownership.HeartbeatInterval)
 
-	if _, err := BindAndHeartbeat(ctx, reg, hb, "cs-api", csapiSystem()); err != nil {
+	if _, err := BindAndHeartbeat(ctx, reg, hb, "cs-api", csapiSystem(t)); err != nil {
 		t.Fatalf("BindAndHeartbeat: %v", err)
 	}
 	if !hb.IsEnrolled("cs-api") {
@@ -99,7 +99,7 @@ func TestBindAndHeartbeat_EnrollsOnSuccess(t *testing.T) {
 // it would heartbeat a presence key for a non-owner.
 func TestBindAndHeartbeat_SkipsEnrollOnBindFailure(t *testing.T) {
 	reg, ctx := newOwnershipRegistry(t)
-	if _, err := Bind(ctx, reg, "cs-api", csapiSystem()); err != nil {
+	if _, err := Bind(ctx, reg, "cs-api", csapiSystem(t)); err != nil {
 		t.Fatal(err)
 	}
 	hb := reg.NewHeartbeater(ownership.HeartbeatInterval)

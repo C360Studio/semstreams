@@ -256,7 +256,7 @@ audit triple with `Subject = ec.RuleID()` via `tripleMutator.AddTriple` →
 `graph.mutation.triple.add` → `Component.AddTriple`'s auto-vivify branch — the only
 write path that skips `validateEntityID`. Rule IDs are bare slugs (zero dots:
 `role-gate-rule`, `architect_complete_spawn_editor`), so they fail the 6-part
-`entityIDRegex` and **can take no birth lane**. The write is best-effort: on
+canonical `pkg/types.ValidateEntityID` contract and **can take no birth lane**. The write is best-effort: on
 failure both callers "intentionally fall through — verdict is structural"
 (`:1414`, `:1465`) and only log. `configs/agentic.json` uses `approve` in
 production. **Under must-exist, the first deny/approve on a never-seen rule-ID
