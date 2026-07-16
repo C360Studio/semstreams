@@ -44,7 +44,7 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	// Register cs-api as the owning owner of sensorml.process.label on sysPat
 	// entities. The registry stamps its per-process incarnation onto the stored
 	// claim so OwnerOf can return it.
-	if err := reg.RegisterOwner(ctx, reg_("cs-api", sysPat, "sensorml.process.label")); err != nil {
+	if err := reg.RegisterOwner(ctx, systemOwnerRegistration("cs-api")); err != nil {
 		t.Fatalf("RegisterOwner: %v", err)
 	}
 	wantIncarnation := reg.Incarnation()
@@ -107,13 +107,14 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	}
 }
 
-// reg_ keeps the registration fixture concise without hiding entity patterns
-// from the source audit behind a production helper.
-func reg_(owner, pattern string, preds ...string) Registration {
+// systemOwnerRegistration keeps the shared integration setup concise while
+// leaving both governed semantic values exact at their authoring surface.
+func systemOwnerRegistration(owner string) Registration {
 	return Registration{
 		Owner: owner,
 		Claims: []OwnerClaim{{
-			Owner: owner, Pattern: pattern, Mode: ModeReplaceOwned, Predicates: preds,
+			Owner: owner, Pattern: "c360.semconnect.systems.csapi.system.*", Mode: ModeReplaceOwned,
+			Predicates: []string{"sensorml.process.label"},
 		}},
 	}
 }

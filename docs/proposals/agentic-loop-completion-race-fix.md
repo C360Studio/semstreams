@@ -145,7 +145,7 @@ A failing test against current main (before the fix) is the gate that proves the
 1. **`WriteLoopCancellation`.** Should the cancellation path get the same atomic-batch treatment for consistency? It's currently a smaller stamp (~3 triples) but the same per-triple loop. Suggest yes, for symmetry — no incremental cost.
 2. **Which triples does (b) hoist?** Proposed set: `parent`, `role`, `task`, `workflow`, `workflow_step`, `user`. Anything spawn-known I'm missing? `description` (prompt) is spawn-known; debatable whether it belongs at spawn or completion.
 3. **Tests asserting "parent present on failure path".** `graph_writer_test.go:540` and `graph_writer_integration_test.go:192` keep asserting parent presence. Under (b), the source comment changes ("stamped at spawn, observed at failure") but the assertion stays valid. Confirm test locality is OK.
-4. **semteams workaround sunset.** The `lineage.researcher-plan-entity` workaround they shipped after this race is precisely the spawn-time stamp pattern (b) generalizes. Once (a)+(b) land, semteams can retire that workaround in their rule pack; we should confirm migration cost is small.
+4. **semteams workaround sunset.** The `agent.lineage.researcher-plan-entity` workaround they shipped after this race is precisely the spawn-time stamp pattern (b) generalizes. Once (a)+(b) land, semteams can retire that workaround in their rule pack; we should confirm migration cost is small.
 
 ## References
 

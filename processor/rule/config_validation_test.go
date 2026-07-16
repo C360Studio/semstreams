@@ -383,6 +383,81 @@ func TestValidateActionLists_FilesystemPolicyInvalidRejects(t *testing.T) {
 	}
 }
 
+func TestValidateActionListsRelatedLoopsAcrossEveryActionList(t *testing.T) {
+	t.Parallel()
+	lists := []struct {
+		name string
+		set  func(*Definition, []Action)
+	}{
+		{name: "on_enter", set: func(def *Definition, actions []Action) { def.OnEnter = actions }},
+		{name: "on_exit", set: func(def *Definition, actions []Action) { def.OnExit = actions }},
+		{name: "while_true", set: func(def *Definition, actions []Action) { def.WhileTrue = actions }},
+		{name: "on_recovery", set: func(def *Definition, actions []Action) { def.OnRecovery = actions }},
+		{name: "cron_actions", set: func(def *Definition, actions []Action) { def.Actions = actions }},
+	}
+	for _, list := range lists {
+		list := list
+		t.Run(list.name, func(t *testing.T) {
+			t.Parallel()
+			def := Definition{ID: "lineage-" + list.name}
+			list.set(&def, []Action{{
+				Type: ActionTypePublishAgent,
+				RelatedLoops: map[string]string{
+					"bad_key": "loop-1",
+				},
+			}})
+			err := ValidateDefinition(def)
+			if err == nil || !strings.Contains(err.Error(), "related_loops") {
+				t.Fatalf("ValidateDefinition error = %v, want related_loops rejection", err)
+			}
+		})
+	}
+}
+
+func TestValidateActionListsRelatedLoopsRejectsInvalidDeclarations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		action Action
+	}{
+		{name: "non publish agent", action: Action{Type: ActionTypePublish, RelatedLoops: map[string]string{"researcher": "loop-1"}}},
+		{name: "empty map on non publish agent", action: Action{Type: ActionTypePublish, RelatedLoops: map[string]string{}}},
+		{name: "empty key", action: Action{Type: ActionTypePublishAgent, RelatedLoops: map[string]string{"": "loop-1"}}},
+		{name: "dotted key", action: Action{Type: ActionTypePublishAgent, RelatedLoops: map[string]string{"research.reviewer": "loop-1"}}},
+		{name: "uppercase key", action: Action{Type: ActionTypePublishAgent, RelatedLoops: map[string]string{"Researcher": "loop-1"}}},
+		{name: "wildcard key", action: Action{Type: ActionTypePublishAgent, RelatedLoops: map[string]string{"*": "loop-1"}}},
+		{name: "empty source", action: Action{Type: ActionTypePublishAgent, RelatedLoops: map[string]string{"researcher": ""}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateDefinition(Definition{ID: "invalid-lineage", OnEnter: []Action{test.action}})
+			if err == nil {
+				t.Fatal("ValidateDefinition error = nil, want rejection")
+			}
+		})
+	}
+}
+
+func TestDefinitionFromMapRejectsDisabledAndCronRelatedLoops(t *testing.T) {
+	t.Parallel()
+	tests := []map[string]any{
+		{
+			"type": "expression", "enabled": false,
+			"on_enter": []any{map[string]any{"type": ActionTypePublishAgent, "related_loops": map[string]any{"bad_key": "loop-1"}}},
+		},
+		{
+			"type": CronRuleType, "enabled": false, "schedule": "0 * * * *",
+			"actions": []any{map[string]any{"type": ActionTypePublishAgent, "related_loops": map[string]any{"bad_key": "loop-1"}}},
+		},
+	}
+	for _, ruleMap := range tests {
+		if _, err := definitionFromMap("disabled-lineage", ruleMap); err == nil {
+			t.Fatal("definitionFromMap error = nil, want disabled declaration rejected")
+		}
+	}
+}
+
 func TestValidateDefinitionRejectsNoncanonicalActionPredicate(t *testing.T) {
 	t.Parallel()
 

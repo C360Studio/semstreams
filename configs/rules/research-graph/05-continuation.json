@@ -27,7 +27,7 @@
       "tools": ["read_loop_result"],
       "prompt": "A research operation completed. The SearchResult is at AGENT_LOOPS loop_id=$entity.triple.research.loop.id — call read_loop_result with that ID to fetch the synthesis text + evidence refs + DecompTrace. The original topic was $entity.triple.research.request.topic — quote evidence refs verbatim where you cite them.",
       "related_loops": {
-        "research_pipeline": "$entity.triple.research.loop.id"
+        "research-pipeline": "$entity.triple.research.loop.id"
       }
     }
   ]

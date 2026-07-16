@@ -1,7 +1,9 @@
 # Predicate Corpus Audit and Release Gate
 
 **Status:** Release procedure. The commands define the evidence required for the ADR-074 breaking cutover; this
-document is not evidence that the gate has passed.
+document is not evidence that the gate has passed. The destructive cutover procedure is
+[`17-predicate-cutover-clean-wipe.md`](17-predicate-cutover-clean-wipe.md): wipe, restart, and canonical
+reseed, with no beta-state export, inspection, preservation, or rollback.
 
 The coordinated release audit has two jobs:
 
@@ -261,15 +263,16 @@ them. A separate test-literal scan found 16 `*_test.go` files containing previou
 intentional parser rejection fixtures and others were positive integration fixtures. Regenerate the manifest and
 classify those files through their native tests before using any count as release evidence.
 
-## Operator Reset and Query-Parity Gate
+## Operator Wipe and Query-Parity Gate
 
-After source audits are clean, rehearse the breaking deployment with representative beta state:
+After source audits are clean, rehearse the breaking deployment in a disposable local account:
 
-1. Seed or preserve a beta graph containing at least one renamed predicate.
+1. Inject synthetic incompatible graph state containing at least one former predicate identity.
 2. Start the breaking binary and prove `graph_state_reset_required` prevents readiness and all affected queries.
-3. Export required source data, stop writers, and reset graph/index buckets using
-   [`17-predicate-cutover-reset-reingest.md`](17-predicate-cutover-reset-reingest.md).
-4. Reingest canonical source data.
+3. Stop every writer and wipe the complete incompatible resource set using
+   [`17-predicate-cutover-clean-wipe.md`](17-predicate-cutover-clean-wipe.md).
+   Do not export, inspect, preserve, translate, or roll back the synthetic beta state.
+4. Restart and reseed canonical source data.
 5. Prove exact queries for representative renamed predicates and namespace queries return expected results.
 6. Restart again and prove replay produces the same results and readiness revision.
 
@@ -287,7 +290,7 @@ The coordinated release is blocked unless all of the following are true:
 - all audited repository statuses are clean and commit IDs are recorded;
 - local parser, registry, reference-config, declarative, race, schema, contract, and structural e2e gates pass;
 - every affected sister repository passes its native contract and e2e gates against the same breaking version;
-- the reset/reingest and restart/query-parity rehearsal passes; and
+- the wipe/restart/reseed and restart/query-parity rehearsal passes; and
 - review confirms no runtime alias, dual read/write, permissive mode, or in-process rewrite was introduced.
 
 One missing repository, unclassified candidate, dirty evidence checkout, or untested exact-query consumer is a

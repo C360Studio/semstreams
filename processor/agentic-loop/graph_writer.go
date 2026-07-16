@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -584,80 +585,96 @@ func (w *graphWriter) WriteTrajectorySteps(ctx context.Context, loopID string, t
 // triple of the form:
 //
 //	subject:   <spawned loop entity ID>
-//	predicate: lineage.<roleKey>           // via agentic.LineageTriplePredicate
+//	predicate: agent.lineage.<role-key> // via agentic.LineageTriplePredicate
 //	object:    <upstream loop ID string>
 //
 // Downstream rules that fire on the spawned entity read these via
 // the existing $entity.triple.<predicate> substitution, e.g.
-// $entity.triple.lineage.researcher. No substitution-layer changes
+// $entity.triple.agent.lineage.researcher. No substitution-layer changes
 // needed; multi-segment predicates already work.
 //
 // `related` is typed map[string]any because the Metadata round-trips
 // through JSON (each value is a Go string, just typed as any).
-// Non-string values are skipped — they should never appear given the
-// rule.Action.RelatedLoops map[string]string type, but defensive
-// skipping keeps a malformed product from polluting the graph.
-//
-// Failure handling: per-entry errors are logged and continue, matching
-// the configureLoopMetadata + WriteLoopCompletion precedent. A failed
-// write surfaces downstream as $entity.triple.lineage.X passing
-// through the unresolvedTemplateVarRe warning — same shape as
-// late-arriving triples.
-func (w *graphWriter) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) {
-	if w.natsClient == nil {
-		return
-	}
-	if w.platform.Org == "" || w.platform.Platform == "" {
-		w.logger.Warn("graph_writer: cannot write lineage triples, platform identity missing",
-			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
-	}
+// The complete candidate batch is validated before any I/O. Malformed
+// metadata is returned as a typed invalid error; no entry is skipped.
+func (w *graphWriter) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
 	if len(related) == 0 {
-		return
+		return nil
 	}
 
-	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
-	triples := buildLineageTriples(loopEntityID, related)
+	loopEntityID, err := agentic.TryLoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
+	if err != nil {
+		return errs.WrapInvalid(err, "agentic-loop", "WriteLineageTriples", "construct lineage subject")
+	}
+	triples, err := buildLineageTriples(loopEntityID, related)
+	if err != nil {
+		return errs.WrapInvalid(err, "agentic-loop", "WriteLineageTriples", "preflight lineage batch")
+	}
+	if w.natsClient == nil {
+		return nil
+	}
 	// Atomic batch on the loop entity so downstream rules firing on any
-	// lineage.X triple see all sibling lineage.Y triples in the same
+	// agent.lineage.<role-key> triple see all sibling agent.lineage.<role-key>
+	// triples in the same
 	// EntityState snapshot — same race-fix shape as WriteLoopCompletion
 	// (gh#159).
 	if err := w.writeBatch(ctx, triples); err != nil {
-		w.logger.Warn("graph_writer: failed to write lineage batch",
-			"loop_id", loopID, "predicate_count", len(triples), "error", err)
+		return fmt.Errorf("write lineage batch: %w", err)
 	}
+	return nil
 }
 
 // buildLineageTriples converts a RelatedLoops map into lineage triples
 // on the spawned loop's entity. Pure (no NATS, no clock-injection
 // support beyond now()) so it's straightforward to unit-test.
 //
-// Non-string values and empty strings are skipped: the producer-side
-// type is map[string]string, so a non-string here means the wire
-// format was tampered with or a non-rule-engine producer wrote
-// malformed metadata. Either way, dropping is safer than emitting
-// garbage triples.
-func buildLineageTriples(loopEntityID string, related map[string]any) []message.Triple {
+// The builder is an all-or-nothing preflight. One invalid subject, role key,
+// value type, empty value, or constructed predicate returns an error and no
+// triples; callers must not silently drop malformed entries.
+func buildLineageTriples(loopEntityID string, related map[string]any) ([]message.Triple, error) {
 	if len(related) == 0 {
-		return nil
+		return nil, nil
+	}
+	if !message.IsValidEntityID(loopEntityID) {
+		return nil, fmt.Errorf("lineage subject %q is not a valid entity ID", loopEntityID)
+	}
+	keys := make([]string, 0, len(related))
+	for roleKey := range related {
+		keys = append(keys, roleKey)
+	}
+	sort.Strings(keys)
+	type lineageValue struct {
+		predicate string
+		loopID    string
+	}
+	values := make([]lineageValue, 0, len(keys))
+	for _, roleKey := range keys {
+		predicate, err := agentic.LineageTriplePredicate(roleKey)
+		if err != nil {
+			return nil, fmt.Errorf("lineage role key %q: %w", roleKey, err)
+		}
+		loopID, ok := related[roleKey].(string)
+		if !ok {
+			return nil, fmt.Errorf("lineage role key %q loop ID must be a string, got %T", roleKey, related[roleKey])
+		}
+		if loopID == "" {
+			return nil, fmt.Errorf("lineage role key %q loop ID must not be empty", roleKey)
+		}
+		values = append(values, lineageValue{predicate: predicate, loopID: loopID})
 	}
 	now := time.Now()
-	triples := make([]message.Triple, 0, len(related))
-	for roleKey, raw := range related {
-		loopIDStr, ok := raw.(string)
-		if !ok || loopIDStr == "" {
-			continue
-		}
+	triples := make([]message.Triple, 0, len(values))
+	for _, value := range values {
 		triples = append(triples, message.Triple{
 			Subject:    loopEntityID,
-			Predicate:  agentic.LineageTriplePredicate(roleKey),
-			Object:     loopIDStr,
+			Predicate:  value.predicate,
+			Object:     value.loopID,
 			Source:     graphWriterSource,
 			Timestamp:  now,
 			Confidence: 1.0,
 		})
 	}
-	return triples
+	return triples, nil
 }
 
 // WriteSpawnIdentity births the loop-execution entity via a typed origin

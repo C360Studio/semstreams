@@ -291,9 +291,9 @@ func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
 	}
 }
 
-// --- ADR-053 Pass A: agent.run triple in spawn identity ---
+// --- ADR-053 Pass A: agent.loop.run triple in spawn identity ---
 
-// TestBuildSpawnIdentityTriples_StampsRunID verifies that agent.run is stamped
+// TestBuildSpawnIdentityTriples_StampsRunID verifies that agent.loop.run is stamped
 // with the bare RunID string when TaskMessage.RunID is set (ADR-053 D7).
 func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-001"
@@ -307,7 +307,7 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	facts := predicateSet(triples)
 
 	if !facts[agvocab.LoopRun] {
-		t.Fatalf("expected agent.run triple; got predicates: %v", facts)
+		t.Fatalf("expected agent.loop.run triple; got predicates: %v", facts)
 	}
 
 	runID, ok := objectFor(triples, agvocab.LoopRun).(string)
@@ -318,10 +318,10 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 		t.Errorf("LoopRun = %q, want %q", runID, "root-loop-uuid")
 	}
 
-	// ADR-053 follow-up: agent.run.entity_id is the FULL 6-part chain entity ID,
+	// ADR-053 follow-up: agent.run.entity-id is the FULL 6-part chain entity ID,
 	// the rule-addressable upsert subject.
 	if !facts[agvocab.LoopRunEntityID] {
-		t.Fatalf("expected agent.run.entity_id triple; got predicates: %v", facts)
+		t.Fatalf("expected agent.run.entity-id triple; got predicates: %v", facts)
 	}
 	runEntityID, ok := objectFor(triples, agvocab.LoopRunEntityID).(string)
 	if !ok {
@@ -332,7 +332,7 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	}
 }
 
-// TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty verifies that agent.run is
+// TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty verifies that agent.loop.run is
 // NOT emitted when TaskMessage.RunID is empty — loops not in a run must not
 // carry a zero-value triple.
 func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
@@ -347,17 +347,17 @@ func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
 	facts := predicateSet(triples)
 
 	if facts[agvocab.LoopRun] {
-		t.Errorf("expected agent.run triple to be omitted when RunID is empty")
+		t.Errorf("expected agent.loop.run triple to be omitted when RunID is empty")
 	}
 	if facts[agvocab.LoopRunEntityID] {
-		t.Errorf("expected agent.run.entity_id triple to be omitted when RunID is empty")
+		t.Errorf("expected agent.run.entity-id triple to be omitted when RunID is empty")
 	}
 }
 
 // TestBuildSpawnIdentityTriples_RunIDIsNotEntityID guards that the LoopRun
 // object is the BARE run loop-id (the 6-part form lives on the separate
-// agent.run.entity_id triple). Conflating the two would break ResolveRun,
-// which reads agent.run as a bare id and rebuilds the chain entity ID.
+// agent.run.entity-id triple). Conflating the two would break ResolveRun,
+// which reads agent.loop.run as a bare id and rebuilds the chain entity ID.
 func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.child-run-002"
 	task := &agentic.TaskMessage{

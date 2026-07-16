@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -204,7 +205,7 @@ type Action struct {
 	// RelatedLoops is cross-arc loop-ID lineage threaded onto the
 	// spawned task so a downstream role can read_loop_result against
 	// upstream loops without the IDs being baked into the prompt. Map
-	// keys are role names (or product-specific lineage labels);
+	// keys are exact static lower-kebab predicate segments (maximum 64 bytes);
 	// values are loop ID strings. When non-empty, executePublishAgent
 	// substitutes variables in each value and stamps the resolved map
 	// onto TaskMessage.Metadata under MetadataKeyRelatedLoops; the
@@ -216,9 +217,9 @@ type Action struct {
 	// precedent) rather than nesting structured data here.
 	//
 	// Variable substitution applies to values, so rule authors can
-	// write `"researcher": "$entity.triple.research_loop_id"` and
+	// write `"researcher": "$entity.triple.agent.loop.parent"` and
 	// the resolved loop ID flows through. Substitution is NOT
-	// applied to keys (they are role/lineage labels, not data).
+	// applied to keys, and keys are never normalized.
 	//
 	// Empty/nil leaves no lineage threaded (back-compat: pre-existing
 	// flows that don't opt in see no Metadata change).
@@ -257,7 +258,7 @@ type Action struct {
 	//   - "new"     — mint a new AgentRun rooted at the FIRING loop. The spawned task carries
 	//                 the firing loop's ID as its RunID; the framework mints the run entity
 	//                 (idempotent). Use on the coordinator's initial dispatch action.
-	//   - "inherit" — propagate the firing loop's existing agent.run triple to the spawned task.
+	//   - "inherit" — propagate the firing loop's existing agent.loop.run triple to the spawned task.
 	//                 Default when the firing entity already carries a run; preserves the
 	//                 existing run for child loop spawns within the same arc.
 	//   - "none"    — do NOT propagate RunID. Use to suppress run association on standalone
@@ -1204,25 +1205,35 @@ func (e *ActionExecutor) resolveToolNames(names []string) []agentic.ToolDefiniti
 // stampRelatedLoops writes the cross-arc loop-ID lineage map onto
 // the TaskMessage.Metadata under agentic.MetadataKeyRelatedLoops.
 // Each value goes through ec.SubstituteVariablesWithIterVar so rule
-// authors can declare `"researcher": "$entity.triple.research_loop_id"`
+// authors can declare `"researcher": "$entity.triple.agent.loop.parent"`
 // and the resolved loop ID flows through, with the for_each iter-var
 // (ADR-046 Phase 1) also bound when set so authors can thread the
-// current item into a related-loop label if a use case arises.
+// current item into a related-loop value. Keys are exact static lower-kebab
+// predicate segments (maximum 64 bytes); they are not substituted or
+// normalized.
 // String-to-string by design — see agentic.MetadataKeyRelatedLoops.
 // Empty/nil RelatedLoops is a no-op (back-compat: pre-existing flows
 // that don't opt in see no Metadata change).
-func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext, iterVarName, iterVarValue string) {
+func stampRelatedLoops(task *agentic.TaskMessage, related map[string]string, ec *ExecutionContext, iterVarName, iterVarValue string) error {
 	if len(related) == 0 {
-		return
+		return nil
+	}
+	resolved := make(map[string]any, len(related))
+	for label, loopID := range related {
+		if _, err := agentic.LineageTriplePredicate(label); err != nil {
+			return fmt.Errorf("related_loops role key %q: %w", label, err)
+		}
+		resolvedLoopID := ec.SubstituteVariablesWithIterVar(loopID, iterVarName, iterVarValue)
+		if resolvedLoopID == "" {
+			return fmt.Errorf("related_loops role key %q resolved to an empty loop ID", label)
+		}
+		resolved[label] = resolvedLoopID
 	}
 	if task.Metadata == nil {
 		task.Metadata = map[string]any{}
 	}
-	resolved := make(map[string]any, len(related))
-	for label, loopID := range related {
-		resolved[label] = ec.SubstituteVariablesWithIterVar(loopID, iterVarName, iterVarValue)
-	}
 	task.Metadata[agentic.MetadataKeyRelatedLoops] = resolved
+	return nil
 }
 
 // isReservedTaskMetadataKey reports whether a key on TaskMessage.Metadata
@@ -1492,14 +1503,19 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	//     loop-execution entity, "new" is treated as "inherit" with a warning.
 	//
 	//   "inherit" or "":
-	//     Default Pass A behavior — propagate the agent.run triple from the
+	//     Default Pass A behavior — propagate the agent.loop.run triple from the
 	//     firing loop entity to the spawned TaskMessage (the child belongs to
-	//     the parent's run). Non-loop trigger entities with no agent.run triple
+	//     the parent's run). Non-loop trigger entities with no agent.loop.run triple
 	//     produce no inheritance (RunID stays empty).
 	//
 	//   "none":
 	//     Suppress RunID propagation entirely. The spawned loop has no run
 	//     association. Used for standalone fire-and-forget dispatches.
+	var pendingRunMint *struct {
+		org          string
+		platform     string
+		firingLoopID string
+	}
 	switch action.RunScope {
 	case "new":
 		// Mint a new AgentRun rooted at the firing loop entity.
@@ -1528,51 +1544,12 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 			idParts := strings.SplitN(entityID, ".", 6)
 			if len(idParts) == 6 {
 				org, platform := idParts[0], idParts[1]
-				if _, mintErr := agentrun.Mint(ctx, e.lifecycle, org, platform, firingLoopID); mintErr != nil {
-					// Mint failure is logged but does not abort the dispatch — the
-					// child loop still publishes; the run entity is just absent.
-					if e.logger != nil {
-						e.logger.Error("publish_agent: agentrun.Mint failed — spawning without run association",
-							slog.String("entity_id", entityID),
-							slog.String("firing_loop_id", firingLoopID),
-							slog.String("rule_id", ec.RuleID()),
-							slog.Any("error", mintErr))
-					}
-				} else {
-					task.RunID = firingLoopID
-					// ADR-053 D4: stamp agent.run on the FIRING (root/coordinator)
-					// entity so its own terminal events carry a resolvable run anchor.
-					// Without this triple the root's entity.RunID is empty (it was not
-					// spawned with a RunID), so ev.RunID=="" in its terminal events and
-					// the D3 zombie-prevention guard can never fire.
-					// The triple is best-effort: a write failure does not abort the
-					// dispatch or the child publish.
-					if e.tripleMutator != nil {
-						stampRun := func(predicate, object string) {
-							if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), message.Triple{
-								Subject:    entityID,
-								Predicate:  predicate,
-								Object:     object,
-								Source:     "rule_engine",
-								Timestamp:  time.Now(),
-								Confidence: 1.0,
-							}); tripleErr != nil && e.logger != nil {
-								e.logger.Warn("publish_agent: run_scope=new: failed to stamp run anchor on firing entity",
-									slog.String("entity_id", entityID),
-									slog.String("predicate", predicate),
-									slog.String("firing_loop_id", firingLoopID),
-									slog.String("rule_id", ec.RuleID()),
-									slog.Any("error", tripleErr))
-							}
-						}
-						// agent.run (bare) → D3 root resolution; agent.run.entity_id
-						// (6-part) → rule-addressable upsert subject (ADR-053 follow-up).
-						stampRun(agvocab.LoopRun, firingLoopID)
-						if runEntityID, idErr := agentic.TryChainExecutionEntityID(org, platform, firingLoopID); idErr == nil {
-							stampRun(agvocab.LoopRunEntityID, runEntityID)
-						}
-					}
-				}
+				task.RunID = firingLoopID
+				pendingRunMint = &struct {
+					org          string
+					platform     string
+					firingLoopID string
+				}{org: org, platform: platform, firingLoopID: firingLoopID}
 			}
 		} else {
 			// No lifecycle manager wired — log and fall through to inherit.
@@ -1594,8 +1571,8 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 		// Suppress RunID propagation — no run association on the spawned loop.
 
 	default: // "inherit" or ""
-		// Pass A default: propagate the agent.run triple from the firing entity.
-		// Non-loop trigger entities that have no agent.run triple produce no
+		// Pass A default: propagate the agent.loop.run triple from the firing entity.
+		// Non-loop trigger entities that have no agent.loop.run triple produce no
 		// inheritance (RunID stays empty), which is correct.
 		if ec != nil && ec.Entity != nil {
 			if runIDVal, ok := ec.Entity.GetPropertyValue(agvocab.LoopRun); ok {
@@ -1651,11 +1628,53 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 
 	// Per-spawn cross-arc loop-ID lineage. Mirrors the ActionAllowlist
 	// Metadata stamping pattern. See stampRelatedLoops for the why.
-	stampRelatedLoops(&task, action.RelatedLoops, ec, iterVarName, iterVarValue)
+	if err := stampRelatedLoops(&task, action.RelatedLoops, ec, iterVarName, iterVarValue); err != nil {
+		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted related_loops")
+	}
 
 	// Per-spawn read-only execution policy (ADR-067, gh#445). Same
 	// framework-owned Metadata path; dispatch propagates it authoritatively.
 	stampFilesystemPolicy(&task, action)
+	if err := task.Validate(); err != nil {
+		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted task")
+	}
+
+	// run_scope=new is intentionally committed only after the complete,
+	// substituted TaskMessage has passed validation. Mint and graph writes are
+	// externally visible; an invalid lineage map must produce none of them.
+	if pendingRunMint != nil {
+		if _, mintErr := agentrun.Mint(ctx, e.lifecycle, pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID); mintErr != nil {
+			// Mint failure is logged but does not abort dispatch. Remove the
+			// prospective run association before publication because no run exists.
+			task.RunID = ""
+			if e.logger != nil {
+				e.logger.Error("publish_agent: agentrun.Mint failed — spawning without run association",
+					slog.String("entity_id", entityID),
+					slog.String("firing_loop_id", pendingRunMint.firingLoopID),
+					slog.String("rule_id", ec.RuleID()),
+					slog.Any("error", mintErr))
+			}
+		} else if e.tripleMutator != nil {
+			stampRun := func(predicate, object string) {
+				if _, tripleErr := e.tripleMutator.AddTriple(ctx, ec.RuleID(), message.Triple{
+					Subject: entityID, Predicate: predicate, Object: object,
+					Source: "rule_engine", Timestamp: time.Now(), Confidence: 1.0,
+				}); tripleErr != nil && e.logger != nil {
+					e.logger.Warn("publish_agent: run_scope=new: failed to stamp run anchor on firing entity",
+						slog.String("entity_id", entityID),
+						slog.String("predicate", predicate),
+						slog.String("firing_loop_id", pendingRunMint.firingLoopID),
+						slog.String("rule_id", ec.RuleID()),
+						slog.Any("error", tripleErr))
+				}
+			}
+			stampRun(agvocab.LoopRun, pendingRunMint.firingLoopID)
+			if runEntityID, idErr := agentic.TryChainExecutionEntityID(
+				pendingRunMint.org, pendingRunMint.platform, pendingRunMint.firingLoopID); idErr == nil {
+				stampRun(agvocab.LoopRunEntityID, runEntityID)
+			}
+		}
+	}
 
 	if e.logger != nil {
 		e.logger.Debug("Triggering agent task",

@@ -75,7 +75,7 @@ import (
 //
 // Predicate character class allows letters, digits, dot, hyphen,
 // underscore — matching the predicate shapes used in production
-// (e.g. `lineage.run-loop-entity-id` carries a hyphen).
+// (e.g. `agent.lineage.research-reviewer` carries a hyphen).
 var typedEntityTripleRe = regexp.MustCompile(`^\$entity\.triple\.([\w.-]+)$`)
 
 // typedRelatedTripleRe — mirror of typedEntityTripleRe for the related

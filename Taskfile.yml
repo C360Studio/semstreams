@@ -76,6 +76,11 @@ tasks:
     cmds:
       - go run ./cmd/entity-id-audit .
 
+  predicate:test-audit:
+    desc: Audit predicate candidates in Go tests and structured testdata with exact negative classifications
+    cmds:
+      - go run ./cmd/predicate-test-audit .
+
   # Observability shortcuts
   observe:up:
     desc: Start Prometheus + Grafana for local monitoring

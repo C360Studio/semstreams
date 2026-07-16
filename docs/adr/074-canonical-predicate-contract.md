@@ -61,7 +61,8 @@ If graph-index observes unreadable ENTITY_STATES or a noncanonical predicate, it
 `graph_state_reset_required`. The repair loop cannot clear this state. Readiness stays false and query consumers
 receive a fatal typed error with a bounded reason.
 
-Only an operator export/reset/reingest followed by process restart clears the poison state.
+Only a complete incompatible-resource wipe followed by process restart and canonical-source reseed clears the poison
+state. The pre-v1 contract does not define beta-state export, inspection, preservation, or rollback.
 
 ENTITY_STATES watch handling distinguishes state poison from transport and deletion. PUT/CREATE values pass
 through the canonical decoder. DEL and PURGE entries are valid empty-payload tombstones that drive the same
@@ -73,8 +74,8 @@ latch `graph_state_reset_required`. Transport recovery does not require an opera
 
 Owned producers, configurations, exact queries, schemas, and sister repositories update in lockstep. The rename
 ledger is release documentation only; runtime code does not load it. Existing incompatible graph and derived-index
-buckets are not rewritten in place. Operators export if needed, delete incompatible buckets, restart, and reingest
-canonical source data.
+buckets are not rewritten or inspected in place. Operators stop all writers, delete the complete incompatible
+resource set, restart, and reseed canonical source data.
 
 ## Consequences
 

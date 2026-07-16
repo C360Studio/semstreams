@@ -452,8 +452,8 @@ const (
 
 	// LoopRun is the bare run loop-id this loop belongs to (ADR-053 D7).
 	// Stamped at spawn time by LoopExecutionEntity.Triples() when TaskMessage.RunID is non-empty.
-	// Rules can read this via $entity.triple.agent.run. Grammar-collision-free:
-	// no existing $-regex matches agent.run.* (audited at ADR-053 implementation).
+	// Rules can read this via $entity.triple.agent.loop.run. Grammar-collision-free:
+	// no existing $-regex matches agent.loop.run (audited at ADR-053 implementation).
 	// Example: "loop-uuid-of-the-root-coordinator"
 	// DataType: string (bare loop UUID, NOT a 6-part entity ID)
 	LoopRun = "agent.loop.run"
@@ -461,9 +461,9 @@ const (
 	// LoopRunEntityID is the FULL 6-part chain.execution entity ID of the run
 	// this loop belongs to (ADR-053). Stamped at spawn alongside LoopRun.
 	// This is the rule-addressable upsert SUBJECT for run-scoped state: a rule
-	// firing on a loop reads $entity.triple.agent.run.entity_id and uses it as
+	// firing on a loop reads $entity.triple.agent.run.entity-id and uses it as
 	// the Subject of add_triple/update_triple (the typed replacement for the
-	// old $entity.triple.lineage.run-loop-entity-id pattern). Rules cannot
+	// retired untyped related-loop run-anchor pattern). Rules cannot
 	// derive the 6-part from the bare LoopRun (substitution is string interp,
 	// not function calls), so the framework stamps the full form directly.
 	// For computed run-state, prefer a Go agentrun.MilestoneHandler instead.

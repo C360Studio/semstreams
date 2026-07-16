@@ -108,6 +108,23 @@ func TestConsumeWithHeartbeat_NaksWithDelayOnWorkError(t *testing.T) {
 	assert.False(t, msg.ackCalled.Load(), "expected Ack to not be called")
 }
 
+func TestConsumeWithHeartbeatTermsPermanentWorkError(t *testing.T) {
+	msg := &mockMsg{subject: "test.subject"}
+	workErr := errors.New("permanent invalid payload")
+
+	err := ConsumeWithHeartbeat(
+		context.Background(),
+		msg,
+		50*time.Millisecond,
+		func(context.Context) error { return TerminateDelivery(workErr) },
+	)
+
+	require.ErrorIs(t, err, workErr)
+	assert.True(t, msg.termCalled.Load(), "permanent delivery must be terminated")
+	assert.False(t, msg.ackCalled.Load(), "permanent delivery must not be acked as success")
+	assert.False(t, msg.nakCalled.Load(), "permanent delivery must not be retried")
+}
+
 func TestConsumeWithHeartbeat_NaksOnContextCancel(t *testing.T) {
 	msg := &mockMsg{subject: "test.subject"}
 	ctx, cancel := context.WithCancel(context.Background())

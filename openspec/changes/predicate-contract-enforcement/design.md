@@ -155,6 +155,11 @@ scan must both be clean before local zero-violation evidence is complete.
   construct their own graph state, subjects, and references.
 - **File-wide invalid allowances can hide stale predicates:** bind every negative classification to one occurrence and
   its authoritative reason, and fail on stale or ambiguous entries.
+- **Authoring delegation is not runtime namespace authorization:** configuration-time checks prevent rules and
+  dispatch from inventing `agent.lineage.*`, but any holder of a raw graph-mutation lane or graph-writing tool can
+  still mint syntactically valid `agent.*` triples because the ENTITY_STATES seam authenticates no principal. This
+  is an explicit threat-model gap, not an implied trust guarantee. The named follow-up is a principal-bearing
+  mutation envelope plus seam-level denial of undeclared `agent.*` writes on every non-delegated lane.
 
 ## Cutover Plan
 

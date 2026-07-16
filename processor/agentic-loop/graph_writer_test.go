@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -8,8 +9,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -1053,7 +1057,7 @@ func TestComputeCost(t *testing.T) {
 // TestBuildLineageTriples_StampsLineagePredicates verifies that each
 // entry in the RelatedLoops map (typed map[string]any after JSON
 // round-trip through BaseMessage) becomes one triple of the form
-// <loopEntityID> lineage.<roleKey> <upstream loop ID>.
+// <loopEntityID> agent.lineage.<role-key> <upstream loop ID>.
 func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.architect-loop-001"
 	related := map[string]any{
@@ -1061,7 +1065,10 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 		"planner":    "loop-plan-xyz",
 	}
 
-	triples := buildLineageTriples(loopEntityID, related)
+	triples, err := buildLineageTriples(loopEntityID, related)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if len(triples) != 2 {
 		t.Fatalf("expected 2 triples, got %d", len(triples))
@@ -1081,8 +1088,8 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 
 	facts := predicateSet(triples)
 	wantPredicates := []string{
-		agentic.LineageTriplePredicate("researcher"),
-		agentic.LineageTriplePredicate("planner"),
+		semantictest.Predicate(t, "agent", "lineage", "researcher"),
+		semantictest.Predicate(t, "agent", "lineage", "planner"),
 	}
 	for _, want := range wantPredicates {
 		if !facts[want] {
@@ -1093,11 +1100,11 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 	// Object pairings — predicate→object must round-trip.
 	for _, tr := range triples {
 		switch tr.Predicate {
-		case agentic.LineageTriplePredicate("researcher"):
+		case semantictest.Predicate(t, "agent", "lineage", "researcher"):
 			if tr.Object != "loop-research-abc" {
 				t.Errorf("researcher object = %v, want loop-research-abc", tr.Object)
 			}
-		case agentic.LineageTriplePredicate("planner"):
+		case semantictest.Predicate(t, "agent", "lineage", "planner"):
 			if tr.Object != "loop-plan-xyz" {
 				t.Errorf("planner object = %v, want loop-plan-xyz", tr.Object)
 			}
@@ -1113,59 +1120,72 @@ func TestBuildLineageTriples_StampsLineagePredicates(t *testing.T) {
 func TestBuildLineageTriples_EmptyAndNilNoops(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
 
-	if got := buildLineageTriples(loopEntityID, nil); got != nil {
+	if got, err := buildLineageTriples(loopEntityID, nil); err != nil || got != nil {
 		t.Errorf("nil related: got %d triples, want 0 (nil)", len(got))
 	}
-	if got := buildLineageTriples(loopEntityID, map[string]any{}); got != nil {
+	if got, err := buildLineageTriples(loopEntityID, map[string]any{}); err != nil || got != nil {
 		t.Errorf("empty related: got %d triples, want 0 (nil)", len(got))
 	}
 }
 
-// TestBuildLineageTriples_NonStringValuesSkipped verifies defensive
-// dropping of malformed entries. The producer-side type is
-// map[string]string so non-strings should never appear, but defensive
-// skipping keeps a malformed product / future schema bug from
-// polluting the graph with garbage triples.
-func TestBuildLineageTriples_NonStringValuesSkipped(t *testing.T) {
+// TestBuildLineageTriples_MalformedBatchRejectedAtomically verifies that one
+// malformed entry rejects every sibling rather than being silently skipped.
+func TestBuildLineageTriples_MalformedBatchRejectedAtomically(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
-	related := map[string]any{
-		"researcher": "loop-research-abc",
-		"planner":    42, // wrong type — should be skipped
-		"reviewer":   "", // empty string — should be skipped
-		"architect":  nil,
+	tests := []struct {
+		name    string
+		subject string
+		related map[string]any
+	}{
+		{name: "non-string", subject: loopEntityID, related: map[string]any{"researcher": "valid", "reviewer": 42}},
+		{name: "empty", subject: loopEntityID, related: map[string]any{"researcher": "valid", "reviewer": ""}},
+		{name: "invalid role key", subject: loopEntityID, related: map[string]any{"researcher": "valid", "bad_key": "loop"}},
+		{name: "invalid subject", subject: "not-an-entity", related: map[string]any{"researcher": "valid"}},
 	}
-
-	triples := buildLineageTriples(loopEntityID, related)
-
-	if len(triples) != 1 {
-		t.Fatalf("expected 1 triple (only valid string entry survives), got %d", len(triples))
-	}
-	if triples[0].Predicate != agentic.LineageTriplePredicate("researcher") {
-		t.Errorf("predicate = %q, want %q",
-			triples[0].Predicate, agentic.LineageTriplePredicate("researcher"))
-	}
-	if triples[0].Object != "loop-research-abc" {
-		t.Errorf("object = %v, want loop-research-abc", triples[0].Object)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			triples, err := buildLineageTriples(test.subject, test.related)
+			if err == nil {
+				t.Fatal("buildLineageTriples error = nil, want rejection")
+			}
+			if triples != nil {
+				t.Fatalf("triples = %#v, want no partial batch", triples)
+			}
+		})
 	}
 }
 
-// TestBuildLineageTriples_PredicatePrefix verifies that all generated
-// predicates use the LineageTriplePrefix exposed in agentic/tools.go.
+// TestBuildLineageTriples_PredicateNamespace verifies that all generated
+// predicates use the fixed namespace exposed in agentic/tools.go.
 // This is the contract ops-agent (ADR-027) and the operating-curve
 // observability primitives (ADR-033) rely on for cross-arc / cross-
 // run aggregation. Drift here breaks consumer aggregation queries.
-func TestBuildLineageTriples_PredicatePrefix(t *testing.T) {
+func TestBuildLineageTriples_PredicateNamespace(t *testing.T) {
 	loopEntityID := "acme.ops.agent.agentic-loop.execution.x"
 	related := map[string]any{
-		"researcher":             "loop-research",
-		"some.dotted.role.label": "loop-other",
+		"researcher":        "loop-research",
+		"research-reviewer": "loop-other",
 	}
 
-	triples := buildLineageTriples(loopEntityID, related)
+	triples, err := buildLineageTriples(loopEntityID, related)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tr := range triples {
-		if !strings.HasPrefix(tr.Predicate, agentic.LineageTriplePrefix) {
-			t.Errorf("predicate %q missing prefix %q", tr.Predicate, agentic.LineageTriplePrefix)
+		if !strings.HasPrefix(tr.Predicate, agentic.LineageTripleNamespace+".") {
+			t.Errorf("predicate %q missing namespace %q", tr.Predicate, agentic.LineageTripleNamespace)
 		}
+	}
+}
+
+func TestWriteLineageTriplesPropagatesTypedPreflightFailureBeforeIO(t *testing.T) {
+	w := &graphWriter{platform: types.PlatformMeta{Org: "acme", Platform: "ops"}}
+	err := w.WriteLineageTriples(context.Background(), "loop-1", map[string]any{
+		"researcher": "upstream",
+		"reviewer":   42,
+	})
+	if err == nil || !errs.IsInvalid(err) {
+		t.Fatalf("WriteLineageTriples error = %v, want typed invalid rejection", err)
 	}
 }

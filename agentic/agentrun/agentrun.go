@@ -262,7 +262,7 @@ type MintableManager interface {
 // entity triples. A concrete *natsclient.Client or any adapter satisfies this.
 // Defined here so callers can mock resolution in tests without a live NATS server.
 type LoopTripleReader interface {
-	// GetLoopRunID reads the agent.run triple from the given loop entity ID.
+	// GetLoopRunID reads the agent.loop.run triple from the given loop entity ID.
 	// Returns ("", false, nil) when the triple is absent (not an error — the
 	// loop simply has no run association).
 	// Returns ("", false, err) on read failures (NATS, decode errors).
@@ -280,7 +280,7 @@ const maxAncestryHops = 32
 // ResolveRun resolves the AgentRun for a given loop (ADR-053 D6).
 //
 // Resolution order:
-//  1. Typed-first: read the loop entity's agent.run triple (the RunID stamped at
+//  1. Typed-first: read the loop entity's agent.loop.run triple (the RunID stamped at
 //     spawn by LoopExecutionEntity.Triples()). If present, construct the run entity ID
 //     directly.
 //  2. Ancestry-walk fallback (for pre-migration / un-threaded loops): walk
@@ -298,10 +298,10 @@ func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReade
 		return nil, fmt.Errorf("agentrun.ResolveRun: build loop entity ID: %w", err)
 	}
 
-	// -- Path 1: typed agent.run triple --
+	// -- Path 1: typed agent.loop.run triple --
 	runID, ok, err := reader.GetLoopRunID(ctx, loopEntityID)
 	if err != nil {
-		return nil, fmt.Errorf("agentrun.ResolveRun: read agent.run triple: %w", err)
+		return nil, fmt.Errorf("agentrun.ResolveRun: read agent.loop.run triple: %w", err)
 	}
 	if ok && runID != "" {
 		runEntityID, err := agentic.TryChainExecutionEntityID(org, platform, runID)
@@ -322,7 +322,7 @@ func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReade
 	// -- Path 2: ancestry-walk fallback --
 	// Walk agent.loop.parent triples to the root (the loop with no parent).
 	// The root loop's bare ID is the run ID for pre-migration loops.
-	logger.Warn("agentrun.ResolveRun: agent.run triple absent — falling back to ancestry walk (loop not yet migrated to ADR-053 run threading)",
+	logger.Warn("agentrun.ResolveRun: agent.loop.run triple absent — falling back to ancestry walk",
 		slog.String("loop_id", loopID),
 		slog.String("org", org),
 		slog.String("platform", platform))
@@ -580,7 +580,7 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 	// (the wire field). The wire RunID is populated from LoopEntity.RunID which is set at
 	// spawn via SetRunID — but the root/coordinator loop itself was NOT spawned with a RunID
 	// (it predates the run_scope:new rule firing). Instead, the run_scope=new path stamps
-	// agent.run on the firing entity via tripleMutator; ResolveRun reads that triple and
+	// agent.loop.run on the firing entity via tripleMutator; ResolveRun reads that triple and
 	// resolves the run. The wire ev.RunID is therefore "" for root terminations — using it
 	// as the identity check would make D3 unreachable.
 	if run != nil && run.PhaseField == "dispatched" {

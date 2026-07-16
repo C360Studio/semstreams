@@ -2118,7 +2118,7 @@ trigger-entity-scoped (semteams correction).** An earlier draft cleared the rule
 derived-fact stamps (`actions.go:600/684/821/1353`) *"only because they stamp the rule's own
 trigger entity"* (`graphable-bypass-audit.md:240-244`). The semteams acceptance probe (below)
 falsifies that rationale as a general principle: **22 production agent-run rules deliberately
-stamp a FOREIGN entity** — the run entity, via `$entity.triple.agent.run.entity_id`, while firing
+stamp a FOREIGN entity** — the run entity, via `$entity.triple.agent.run.entity-id`, while firing
 on a coordinator/reviewer/execute loop (`configs/rules/agent-run/05-*.json`). That is not the
 anti-pattern; it is the load-bearing ADR-053 coordination pattern. The correct invariant is
 therefore: a rule may write a predicate group on **any** entity, including one it does not own,

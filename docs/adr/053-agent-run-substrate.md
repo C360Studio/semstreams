@@ -40,10 +40,10 @@ semteams carries two, side by side:
 
 1. **Ancestry-walk chain (ADR-038):** `chain_id` = dispatch-root loop UUID, found
    by walking `agent.loop.parent` (`chain/resolver.go:97`).
-2. **`run-loop-entity-id` lineage thread:** pinned in `related_loops` at the root
-   and re-threaded through every spawn rule, read as
-   `$entity.triple.lineage.run-loop-entity-id` (autoresearch `01:48`, `04c:26`;
-   sibling `lineage.plan-loop-entity-id` for the gather-join, research `03a`).
+2. **Historical related-loop run-anchor thread (retired):** the reference design
+   pinned an untyped run entity ID at the root and re-threaded it through every
+   spawn rule. The framework contract replaces that mechanism with
+   `agent.loop.run` (bare run ID) and `agent.run.entity-id` (full entity ID).
 
 Mechanism #2 exists to dodge the gh#159 completion-time race — **which the
 framework has already closed**: `WriteSpawnIdentity` now stamps `agent.loop.parent`
@@ -206,9 +206,9 @@ product-domain.
   `ParentLoopID` inheritance (`actions.go:1114`). **Propagate at BOTH spawn
   sites** — `executePublishAgent` AND the architect→editor sub-spawn — or the
   second falls back to the walk.
-- Stamp `agent.run` on the loop entity in `buildSpawnIdentityTriples`
-  (`graph_writer.go:506`), atomic at spawn. Upserts read `$entity.triple.agent.run`.
-  (`agent.run` token verified collision-free; full grammar-collision audit at
+- Stamp `agent.loop.run` on the loop entity in `buildSpawnIdentityTriples`
+  (`graph_writer.go:506`), atomic at spawn. Upserts read `$entity.triple.agent.loop.run`.
+  (`agent.loop.run` token verified collision-free; full grammar-collision audit at
   implementation time per `feedback_grammar_collision_audit_on_new_tokens`.)
 
 This collapses both run-identity mechanisms and retires the read-side walk for
@@ -246,12 +246,12 @@ agentic product gets the run primitive instead of re-plumbing it.
 
 - Framework changes are additive (`RunID` fields, `RunScope`, `AgentRun`, the
   adapter).
-- **semteams rule-pack migration**: ~**35** rule files; a **family** of
-  run-anchor predicates (`lineage.run-loop-entity-id` AND
-  `lineage.plan-loop-entity-id`); run-anchor vs genuine sibling-lineage is **not
-  syntactically distinguishable** — per-site semantic audit, NOT a sed. Retires
-  `related_loops`-as-run-anchor; keeps `related_loops`-as-sibling-lineage
-  (`lineage.researcher`). Lockstep with the framework tag.
+- **semteams rule-pack migration**: ~**35** rule files; the historical untyped
+  run-anchor family migrates to `agent.loop.run` / `agent.run.entity-id`, while
+  genuine sibling-loop relationships migrate to `agent.lineage.<role-key>`.
+  The two meanings are not syntactically distinguishable in the old data, so
+  this requires a per-site semantic audit, not a mechanical replacement.
+  Lockstep with the framework tag.
 - Touches ingest→entity→graph→query → **`task e2e:agentic` green required before
   tag** (CLAUDE.md hard rule).
 
@@ -274,7 +274,7 @@ cross-run analytics; parallel/multi-arc runs (ADR-038 defers).
 ### Open at implementation time
 
 Grammar-collision audit over all `$`-token regexes + `agvocab` constants for
-`agent.run*`; confirm cancellation routing/subject and whether a third spawn site
+the `agent.loop.run` / `agent.run.*` contracts; confirm cancellation routing/subject and whether a third spawn site
 (dispatcher-direct / MCP) needs `RunID`; finalize the `RunScope` default.
 
 ## References

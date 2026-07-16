@@ -21,6 +21,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -283,10 +284,10 @@ func TestMint_DotInLoopIDReturnsError(t *testing.T) {
 
 func TestResolveRun_TypedTriplePath_WhenRunIDPresent(t *testing.T) {
 	t.Parallel()
-	// Set up: reader has agent.run triple on the loop entity.
+	// Set up: reader has agent.loop.run triple on the loop entity.
 	reader := newFakeTripleReader()
 	loopEntityID, _ := agentic.TryLoopExecutionEntityID("acme", "ops", "child-loop-id")
-	reader.set(loopEntityID, "agent.run", "root-run-id")
+	reader.set(loopEntityID, agvocab.LoopRun, "root-run-id")
 
 	// Verify reader returns the runID correctly.
 	runID, ok, err := reader.GetLoopRunID(context.Background(), loopEntityID)
@@ -321,9 +322,9 @@ func TestResolveRun_AncestryWalkPath_WhenNoRunTriple(t *testing.T) {
 // TestTerminalAuthority_RootLoopFailViaResolveWalk exercises D3 via the PRODUCTION
 // resolution path: the root coordinator loop's terminal event carries RunID="" and
 // RunEntityID="" (because the root was not spawned with a RunID — the run_scope:new
-// rule fires AFTER the root starts, stamping agent.run via tripleMutator on the
+// rule fires AFTER the root starts, stamping agent.loop.run via tripleMutator on the
 // firing entity but NOT updating LoopEntity.RunID). So the subscriber falls through
-// to ResolveRun → reads the agent.run triple from the firing entity (the root loop
+// to ResolveRun → reads the agent.loop.run triple from the firing entity (the root loop
 // entity) → builds the chain entity ID → Manager.Get → D3 guard fires.
 //
 // This test drives the exact resolution path production uses when the root loop
@@ -338,11 +339,11 @@ func TestTerminalAuthority_RootLoopFailViaResolveWalk(t *testing.T) {
 		PhaseField:    "dispatched",
 	}
 
-	// The reader simulates the effect of run_scope=new stamping agent.run
+	// The reader simulates the effect of run_scope=new stamping agent.loop.run
 	// on the firing (root) entity via tripleMutator (ADR-053 D4).
 	reader := newFakeTripleReader()
 	rootLoopEntityID, _ := agentic.TryLoopExecutionEntityID("acme", "ops", rootLoopID)
-	reader.set(rootLoopEntityID, "agent.run", rootLoopID)
+	reader.set(rootLoopEntityID, agvocab.LoopRun, rootLoopID)
 
 	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
@@ -625,7 +626,7 @@ func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 	assert.True(t, secondHandlerCalled, "second handler must run even when first panics")
 }
 
-// --- D3: Non-run loops (no RunEntityID, no agent.run triple) ---
+// --- D3: Non-run loops (no RunEntityID, no agent.loop.run triple) ---
 
 // TestSubscriber_NonRunLoop_HandlersCalledWithNilRun verifies the exact contract for
 // a standalone loop (not part of any run): resolveRunForEvent returns (nil, nil) →
@@ -633,7 +634,7 @@ func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 // handler-call contract so product handlers know to expect nil.
 func TestSubscriber_NonRunLoop_HandlersCalledWithNilRun(t *testing.T) {
 	t.Parallel()
-	// reader has NO agent.run triple for standalone-loop → walk → root has no parent
+	// reader has NO agent.loop.run triple for standalone-loop → walk → root has no parent
 	// → Manager.Get for the loop itself returns ErrEntityNotFound → (nil, nil).
 	reader := newFakeTripleReader()
 	pub := &fakePublisher{}
@@ -651,7 +652,7 @@ func TestSubscriber_NonRunLoop_HandlersCalledWithNilRun(t *testing.T) {
 		},
 	})
 
-	// Loop with no RunID or RunEntityID and no agent.run triple → non-run loop.
+	// Loop with no RunID or RunEntityID and no agent.loop.run triple → non-run loop.
 	completed := &agentic.LoopCompletedEvent{
 		LoopID:      "standalone-loop",
 		TaskID:      "task-006",
@@ -695,7 +696,7 @@ func (r *fakeTripleReader) set(entityID, predicate, value string) {
 
 func (r *fakeTripleReader) GetLoopRunID(_ context.Context, loopEntityID string) (string, bool, error) {
 	if m, ok := r.triples[loopEntityID]; ok {
-		if v, ok2 := m["agent.run"]; ok2 && v != "" {
+		if v, ok2 := m[agvocab.LoopRun]; ok2 && v != "" {
 			return v, true, nil
 		}
 	}

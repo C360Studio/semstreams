@@ -3,6 +3,7 @@ package agentic
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -44,7 +45,7 @@ type UserMessage struct {
 	//
 	// RunID is the bare run anchor the reply should re-attach to. A client
 	// resuming a paused run (ADR-053) echoes the RunID it held from the pause
-	// state so the resumed loop carries agent.run / agent.run.entity_id even
+	// state so the resumed loop carries agent.loop.run / agent.run.entity-id even
 	// when the prior loop entity was evicted during the pause. Empty for
 	// non-run submissions.
 	RunID string `json:"run_id,omitempty"`
@@ -363,6 +364,44 @@ func (t TaskMessage) Validate() error {
 	if t.ResponseFormat != nil {
 		if err := t.ResponseFormat.Validate(); err != nil {
 			return err
+		}
+	}
+	if raw, ok := t.Metadata[MetadataKeyRelatedLoops]; ok {
+		if err := validateRelatedLoopsMetadata(raw); err != nil {
+			return fmt.Errorf("metadata %q: %w", MetadataKeyRelatedLoops, err)
+		}
+	}
+	return nil
+}
+
+func validateRelatedLoopsMetadata(raw any) error {
+	values := make(map[string]any)
+	switch related := raw.(type) {
+	case map[string]any:
+		values = related
+	case map[string]string:
+		for key, value := range related {
+			values[key] = value
+		}
+	default:
+		return fmt.Errorf("must be an object of role keys to loop ID strings, got %T", raw)
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := LineageTriplePredicate(key); err != nil {
+			return fmt.Errorf("role key %q: %w", key, err)
+		}
+		loopID, ok := values[key].(string)
+		if !ok {
+			return fmt.Errorf("role key %q loop ID must be a string, got %T", key, values[key])
+		}
+		if loopID == "" {
+			return fmt.Errorf("role key %q loop ID must not be empty", key)
 		}
 	}
 	return nil

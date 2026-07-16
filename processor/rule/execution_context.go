@@ -282,8 +282,8 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	//
 	// gh#160: iterate triples in descending predicate-length order so a
 	// shorter predicate cannot swallow a longer one. Without the sort,
-	// `$entity.triple.lineage.researcher-plan` would substitute inside
-	// the longer reference `$entity.triple.lineage.researcher-plan-entity`
+	// `$entity.triple.agent.lineage.researcher-plan` would substitute inside
+	// the longer reference `$entity.triple.agent.lineage.researcher-plan-entity`
 	// — leaving the `-entity` suffix dangling and producing a phantom
 	// subject. Stable sort preserves the original order within equal-
 	// length groups for deterministic test output.

@@ -24,6 +24,7 @@ type inputAckMsg struct {
 	nakCount   atomic.Int32
 	nakDelay   atomic.Int64
 	inProgress atomic.Int32
+	terminated atomic.Bool
 	progress   chan struct{}
 }
 
@@ -55,8 +56,14 @@ func (m *inputAckMsg) InProgress() error {
 	}
 	return nil
 }
-func (m *inputAckMsg) Term() error                 { return nil }
-func (m *inputAckMsg) TermWithReason(string) error { return nil }
+func (m *inputAckMsg) Term() error {
+	m.terminated.Store(true)
+	return nil
+}
+func (m *inputAckMsg) TermWithReason(string) error {
+	m.terminated.Store(true)
+	return nil
+}
 
 func TestHandleSpawnIdentityFailure_GraphStatePoisonHasNoBusinessSideEffects(t *testing.T) {
 	t.Parallel()

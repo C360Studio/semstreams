@@ -628,7 +628,7 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 		ContextRequestID: msg.ContextRequestID,
 		// Resumable-reply anchors (gh#256). Both omitempty and client-set, so an
 		// ordinary submission carries neither: RunID re-attaches the resumed loop
-		// to its paused run (→ agent.run / agent.run.entity_id), InReplyTo marks
+		// to its paused run (→ agent.loop.run / agent.run.entity-id), InReplyTo marks
 		// it as a reply (→ agent.loop.reply_to) so a resume rule can fire on it.
 		RunID:     msg.RunID,
 		InReplyTo: msg.InReplyTo,

@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -396,8 +397,9 @@ func TestActionExecutor(t *testing.T) {
 
 // mockPublisher implements Publisher interface for testing
 type mockPublisher struct {
-	published []publishedMessage
-	err       error
+	published      []publishedMessage
+	err            error
+	successMetrics int
 }
 
 type publishedMessage struct {
@@ -410,6 +412,7 @@ func (m *mockPublisher) Publish(_ context.Context, subject string, data []byte) 
 		return m.err
 	}
 	m.published = append(m.published, publishedMessage{subject: subject, data: data})
+	m.successMetrics++
 	return nil
 }
 
@@ -1566,7 +1569,7 @@ func TestAction_PublishAgent_RelatedLoops(t *testing.T) {
 // TestAction_PublishAgent_RelatedLoops_VariableSubstitution verifies
 // that substitution tokens in RelatedLoops values resolve at execute
 // time. The load-bearing case: rule configs declare
-// `"researcher": "$entity.triple.research_loop_id"` (or any
+// `"researcher": "$entity.triple.agent.loop.parent"` (or any
 // supported substitution token) and the resolved ID flows onto the
 // Metadata.
 func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
@@ -1632,6 +1635,46 @@ func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
 		_, has := task.Metadata[agentic.MetadataKeyRelatedLoops]
 		assert.False(t, has, "no related_loops field should be set on Metadata when RelatedLoops is empty")
 	}
+}
+
+func TestActionPublishAgentRelatedLoopsRejectsResolvedEmptyBeforePublish(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		RelatedLoops: map[string]string{
+			"researcher": "$entity.id",
+		},
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{})
+	require.Error(t, err)
+	assert.True(t, errs.IsInvalid(err), "error must retain typed invalid classification: %v", err)
+	assert.Empty(t, mock.published, "invalid substituted lineage must fail before task publication")
+}
+
+func TestActionPublishAgentRelatedLoopsRejectsInvalidKeyBeforePublish(t *testing.T) {
+	t.Parallel()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+	err := executor.Execute(context.Background(), Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		RelatedLoops: map[string]string{
+			"research_pipeline": "loop-1",
+		},
+	}, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "lineage", "entity", "001")})
+	require.Error(t, err)
+	assert.Empty(t, mock.published)
 }
 
 // --- gh#354: publish_agent.properties → TaskMessage.Metadata ---
@@ -1948,7 +1991,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=1949 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=1992 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2644,7 +2687,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2647 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2690 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
@@ -3191,7 +3234,7 @@ func TestExecuteApprove_NoPublisherIsNoOp(t *testing.T) {
 // --- ADR-053 Pass A: RunID inheritance in executePublishAgent ---
 
 // TestAction_PublishAgent_RunIDInheritedFromLoopEntity verifies that when the
-// trigger entity is a loop execution with an agent.run triple, the spawned
+// trigger entity is a loop execution with an agent.loop.run triple, the spawned
 // TaskMessage.RunID is set to that run ID (ADR-053 D7 inherit default).
 // Drives through the production Execute entry point per
 // feedback_integration_tests_must_drive_production_wire.
@@ -3209,7 +3252,7 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 		Prompt:  "investigate the problem",
 	}
 
-	// Build an entity state that carries agent.run = "root-loop-uuid".
+	// Build an entity state that carries agent.loop.run = "root-loop-uuid".
 	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-abc")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
@@ -3233,14 +3276,14 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 	assert.Equal(t, "root-loop-uuid", task.RunID,
-		"RunID must be inherited from the firing loop entity's agent.run triple (ADR-053 D7)")
+		"RunID must be inherited from the firing loop entity's agent.loop.run triple (ADR-053 D7)")
 	// ParentLoopID is also inherited independently (existing behaviour preserved).
 	assert.Equal(t, "loop-abc", task.ParentLoopID,
 		"ParentLoopID must still be inherited from the loop entity ID shape")
 }
 
 // TestAction_PublishAgent_RunIDNotInheritedWhenMissing verifies that when the
-// trigger entity has no agent.run triple, the spawned TaskMessage.RunID stays
+// trigger entity has no agent.loop.run triple, the spawned TaskMessage.RunID stays
 // empty — additive-only, back-compat preserved.
 func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	t.Parallel()
@@ -3256,7 +3299,7 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 		Prompt:  "investigate",
 	}
 
-	// Loop entity without agent.run triple.
+	// Loop entity without agent.loop.run triple.
 	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-xyz")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
@@ -3276,12 +3319,12 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 	assert.Empty(t, task.RunID,
-		"RunID must be empty when the trigger entity has no agent.run triple")
+		"RunID must be empty when the trigger entity has no agent.loop.run triple")
 }
 
 // TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple verifies that
 // RunID inheritance is triple-driven (not loop-shape-gated): any entity with
-// an agent.run triple propagates RunID to the spawned task. This is intentional
+// an agent.loop.run triple propagates RunID to the spawned task. This is intentional
 // — a chain entity or coordinator entity acting as trigger can thread RunID
 // forward. ParentLoopID remains loop-execution-shape-gated.
 func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T) {
@@ -3298,7 +3341,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 		Prompt:  "investigate",
 	}
 
-	// Chain entity (not a loop execution) carrying an agent.run triple.
+	// Chain entity (not a loop execution) carrying an agent.loop.run triple.
 	chainEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "chain", "execution", "chain-abc")
 	entity := &gtypes.EntityState{
 		ID: chainEntityID,
@@ -3319,7 +3362,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	require.True(t, ok)
 	// RunID IS inherited: triple-driven, not loop-shape-gated.
 	assert.Equal(t, "root-loop-uuid", task.RunID,
-		"RunID must be inherited from agent.run triple on any entity type")
+		"RunID must be inherited from agent.loop.run triple on any entity type")
 	// ParentLoopID stays empty: chain entity doesn't match agentic-loop.execution shape.
 	assert.Empty(t, task.ParentLoopID,
 		"ParentLoopID must be empty for non-loop-execution trigger entities")
@@ -3333,7 +3376,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 // TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun verifies that
 // run_scope=new: (1) calls Manager.Create (minting the run), (2) sets task.RunID
 // to the firing loop's bare ID on the spawned child, and (3) stamps the
-// agent.run triple on the firing entity via tripleMutator.
+// agent.loop.run triple on the firing entity via tripleMutator.
 func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3378,7 +3421,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 	_, created := mgr.entities["agent-run"][runEntityID]
 	assert.True(t, created, "Manager.Create must mint the AgentRun entity")
 
-	// agent.run triple must be stamped on the FIRING entity (ADR-053 D4 fix).
+	// agent.loop.run triple must be stamped on the FIRING entity (ADR-053 D4 fix).
 	var agentRunTriple *message.Triple
 	for i := range mutator.addedTriples {
 		if mutator.addedTriples[i].Subject == loopEntityID &&
@@ -3388,9 +3431,42 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 		}
 	}
 	require.NotNil(t, agentRunTriple,
-		"agent.run triple must be stamped on the FIRING entity so the root's terminal events can be resolved")
+		"agent.loop.run triple must be stamped on the FIRING entity so the root's terminal events can be resolved")
 	assert.Equal(t, firingLoopID, agentRunTriple.Object,
-		"agent.run triple object must be the bare firing loop ID")
+		"agent.loop.run triple object must be the bare firing loop ID")
+}
+
+func TestActionPublishAgentRunScopeNewInvalidLineageHasNoSideEffects(t *testing.T) {
+	t.Parallel()
+	pub := &mockPublisher{}
+	mutator := &mockTripleMutator{}
+	mgr := newFakeManager()
+	executor := NewActionExecutorComplete(nil, mutator, pub, nil)
+	executor.SetLifecycleManager(mgr)
+
+	firingLoopID := "coordinator-invalid-lineage"
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
+	err := executor.Execute(context.Background(), Action{
+		Type:     ActionTypePublishAgent,
+		Subject:  "agent.task.researcher",
+		Role:     "researcher",
+		Model:    "mock-model",
+		Prompt:   "investigate",
+		RunScope: "new",
+		RelatedLoops: map[string]string{
+			"researcher": "$related.id",
+		},
+	}, &ExecutionContext{EntityID: loopEntityID})
+
+	require.Error(t, err)
+	assert.True(t, errs.IsInvalid(err))
+	assert.Empty(t, mgr.entities, "invalid lineage must not mint lifecycle run state")
+	assert.Empty(t, mgr.transitionCalls, "invalid lineage must not transition lifecycle state")
+	assert.Empty(t, mgr.completeCalls, "invalid lineage must not complete lifecycle state")
+	assert.Empty(t, mgr.failCalls, "invalid lineage must not fail lifecycle state")
+	assert.Empty(t, mutator.addedTriples, "invalid lineage must not mutate graph state")
+	assert.Empty(t, pub.published, "invalid lineage must not publish")
+	assert.Zero(t, pub.successMetrics, "invalid lineage must not increment publication success metrics")
 }
 
 // TestAction_PublishAgent_RunScopeNew_NonLoopEntityFallsBackToInherit verifies that
@@ -3427,9 +3503,9 @@ func TestAction_PublishAgent_RunScopeNew_NonLoopEntityFallsBackToInherit(t *test
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 
-	// No run is minted; RunID is empty (inherit from entity, but entity has no agent.run triple).
+	// No run is minted; RunID is empty (inherit from entity, but entity has no agent.loop.run triple).
 	assert.Empty(t, task.RunID,
-		"non-loop trigger with run_scope=new and no agent.run triple must produce empty RunID")
+		"non-loop trigger with run_scope=new and no agent.loop.run triple must produce empty RunID")
 }
 
 // TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit verifies that
@@ -3463,13 +3539,13 @@ func TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit(t 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	require.True(t, ok)
 
-	// No manager → no mint → RunID stays empty (inherit fallback, entity has no agent.run triple).
+	// No manager → no mint → RunID stays empty (inherit fallback, entity has no agent.loop.run triple).
 	assert.Empty(t, task.RunID,
 		"run_scope=new with nil lifecycle manager must not panic and produce empty RunID")
 }
 
 // TestAction_PublishAgent_RunScopeNone_SuppressesRunID verifies that run_scope=none
-// prevents RunID propagation even when the trigger entity has an agent.run triple.
+// prevents RunID propagation even when the trigger entity has an agent.loop.run triple.
 func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -3480,7 +3556,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	firingLoopID := "coordinator-loop-uuid"
 	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
 
-	// Entity has an agent.run triple — but run_scope:none suppresses it.
+	// Entity has an agent.loop.run triple — but run_scope:none suppresses it.
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3507,7 +3583,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Empty(t, task.RunID,
-		"run_scope=none must suppress RunID even when the firing entity has an agent.run triple")
+		"run_scope=none must suppress RunID even when the firing entity has an agent.loop.run triple")
 }
 
 // TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully verifies run_scope=new

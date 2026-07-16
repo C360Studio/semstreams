@@ -120,7 +120,7 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 		triples = append(triples, triple(agvocab.LoopParent, parentEntityID))
 	}
 	// Stamp the run anchor when the loop belongs to a run (ADR-053 D7).
-	// Two triples: agent.run = bare RunID; agent.run.entity_id = the full
+	// Two triples: agent.loop.run = bare RunID; agent.run.entity-id = the full
 	// 6-part chain.execution ID for rule substitution.
 	if e.Task.RunID != "" {
 		triples = append(triples, triple(agvocab.LoopRun, e.Task.RunID))
