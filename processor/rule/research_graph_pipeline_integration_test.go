@@ -129,7 +129,7 @@ func withTriple(base *gtypes.EntityState, triple message.Triple) *gtypes.EntityS
 // stateful_evaluator's own integration suite.
 func runOnEnter(t *testing.T, def Definition, entity *gtypes.EntityState) (*mockPublisher, *mockTripleMutator) {
 	t.Helper()
-	rule, err := NewExpressionRule(def)
+	rule, err := NewExpressionRule("direct-expression-test", def)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(entity),
 		"rule %s EvaluateEntityState must match (production wire)", def.ID)
@@ -184,7 +184,7 @@ func TestResearchGraphPipeline_R0_DoesNotFireOnNonResearchLoops(t *testing.T) {
 			{Predicate: semantictest.Predicate(t, "research", "request", "received"), Object: "true"},
 		},
 	}
-	rule, err := NewExpressionRule(r0)
+	rule, err := NewExpressionRule("direct-expression-test", r0)
 	require.NoError(t, err)
 	assert.False(t, rule.EvaluateEntityState(entity),
 		"R0 must not fire on coordinator/investigator loops — loop.role scoping is the safety net")
@@ -336,7 +336,7 @@ func TestResearchGraphPipeline_R4_AssessDecision_BothBranches(t *testing.T) {
 		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "complete"), Object: "2026-06-02T18:35:30Z"})
 		entity = withTriple(entity, message.Triple{Predicate: semantictest.Predicate(t, "research", "assess", "sufficient"), Object: "false"})
 
-		rule, err := NewExpressionRule(r4)
+		rule, err := NewExpressionRule("direct-expression-test", r4)
 		require.NoError(t, err)
 		require.True(t, rule.EvaluateEntityState(entity))
 

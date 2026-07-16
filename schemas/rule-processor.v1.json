@@ -25,8 +25,8 @@
     },
     "enable_graph_integration": {
       "type": "boolean",
-      "description": "Enable graph entity creation from rules",
-      "default": true,
+      "description": "Enable graph entity creation from rules; every rule processor requires an explicit pack_id",
+      "default": false,
       "category": "basic"
     },
     "entity_watch_buckets": {
@@ -1164,8 +1164,11 @@
     },
     "pack_id": {
       "type": "string",
-      "description": "owner = rule-pack.\u003cpack_id\u003e",
-      "category": "advanced"
+      "description": "Required stable rule-pack projection owner and graph-event producer identity",
+      "minLength": 1,
+      "maxLength": 246,
+      "pattern": "^[A-Za-z0-9_=-]+$",
+      "category": "basic"
     },
     "ports": {
       "type": "string",
@@ -1257,7 +1260,9 @@
       "category": "basic"
     }
   },
-  "required": [],
+  "required": [
+    "pack_id"
+  ],
   "x-component-metadata": {
     "name": "rule-processor",
     "type": "processor",

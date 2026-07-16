@@ -230,8 +230,7 @@ func TestIntegration_ReplaceOwned_ProcessorWiresOwner(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	natsClient := tc.Client
 
-	cfg := DefaultConfig()
-	cfg.PackID = "replace-owned-test"
+	cfg := mustTestConfig(t, "replace-owned-test")
 	cfg.ProjectionContracts = replaceOwnedTestContracts()
 	rp, err := NewProcessorWithMetrics(natsClient, &cfg, nil)
 	require.NoError(t, err)

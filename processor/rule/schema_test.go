@@ -2,6 +2,7 @@ package rule
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -9,6 +10,52 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xeipuuv/gojsonschema"
 )
+
+func TestRuleProcessorSchemaDescribesPackProducerIdentity(t *testing.T) {
+	t.Parallel()
+
+	packID := schema.Properties["pack_id"]
+	require.Contains(t, strings.ToLower(packID.Description), "graph-event producer identity")
+	require.NotNil(t, packID.MaxLength)
+	require.Equal(t, maxRulePackIDBytes, *packID.MaxLength)
+	require.NotNil(t, packID.MinLength)
+	require.Equal(t, 1, *packID.MinLength)
+	require.Equal(t, packIDPattern, packID.Pattern)
+	require.Contains(t, schema.Required, "pack_id")
+	integration := schema.Properties["enable_graph_integration"]
+	require.Equal(t, false, integration.Default)
+
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": false,
+	}, false)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": false,
+		"pack_id":                  "non-graph-pack",
+	}, true)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+	}, false)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+		"pack_id":                  "contract-pack",
+	}, true)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+		"pack_id":                  strings.Repeat("p", maxRulePackIDBytes+1),
+	}, false)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+		"pack_id":                  "",
+	}, false)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+		"pack_id":                  "bad:pack",
+	}, false)
+	assertConfigSchemaValidation(t, map[string]any{
+		"enable_graph_integration": true,
+		"pack_id":                  strings.Repeat("é", maxRulePackIDBytes),
+	}, false)
+}
 
 func TestRuleProcessorSchemaConstrainsEntityWatchBuckets(t *testing.T) {
 	t.Parallel()
@@ -64,6 +111,37 @@ func TestRuleProcessorSchemaConstrainsInlineEntityDeclaration(t *testing.T) {
 func assertSchemaValidation(t *testing.T, property any, document any, wantValid bool) {
 	t.Helper()
 	schemaJSON, err := json.Marshal(property)
+	require.NoError(t, err)
+	documentJSON, err := json.Marshal(document)
+	require.NoError(t, err)
+	result, err := gojsonschema.Validate(
+		gojsonschema.NewBytesLoader(schemaJSON),
+		gojsonschema.NewBytesLoader(documentJSON),
+	)
+	require.NoError(t, err)
+	require.Equal(t, wantValid, result.Valid(), "schema errors: %v", result.Errors())
+}
+
+func assertConfigSchemaValidation(t *testing.T, document any, wantValid bool) {
+	t.Helper()
+	packID := schema.Properties["pack_id"]
+	integration := schema.Properties["enable_graph_integration"]
+	schemaJSON, err := json.Marshal(map[string]any{
+		"type":     "object",
+		"required": schema.Required,
+		"properties": map[string]any{
+			"pack_id": map[string]any{
+				"type":      "string",
+				"minLength": packID.MinLength,
+				"maxLength": packID.MaxLength,
+				"pattern":   packID.Pattern,
+			},
+			"enable_graph_integration": map[string]any{
+				"type":    "boolean",
+				"default": integration.Default,
+			},
+		},
+	})
 	require.NoError(t, err)
 	documentJSON, err := json.Marshal(document)
 	require.NoError(t, err)

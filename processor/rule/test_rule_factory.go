@@ -12,6 +12,7 @@ import (
 // TestRule is a functional rule implementation for testing
 type TestRule struct {
 	id            string
+	packID        string
 	name          string
 	subscribed    []string
 	enabled       bool
@@ -21,17 +22,21 @@ type TestRule struct {
 	shouldTrigger bool // Set to true when conditions match
 }
 
-// NewTestRule creates a new test rule
-func NewTestRule(id, name string, subjects []string, conditions []expression.ConditionExpression) *TestRule {
+// NewTestRule creates a test rule under an explicit stable pack identity.
+func NewTestRule(packID, id, name string, subjects []string, conditions []expression.ConditionExpression) (*TestRule, error) {
+	if err := validatePackID(packID); err != nil {
+		return nil, err
+	}
 	return &TestRule{
 		id:         id,
+		packID:     packID,
 		name:       name,
 		subscribed: subjects,
 		enabled:    true,
 		conditions: conditions,
 		logic:      expression.LogicAnd,
 		evaluator:  expression.NewExpressionEvaluator(),
-	}
+	}, nil
 }
 
 // Name returns the rule name
@@ -119,28 +124,27 @@ func (r *TestRule) ExecuteEvents(messages []message.Message) ([]Event, error) {
 
 	msg := messages[len(messages)-1]
 
-	// Create a rule trigger event
-	event := gtypes.Event{
-		Type:     gtypes.EventEntityUpdate, // Using a standard event type
-		EntityID: "test.entity." + r.id,
-		Properties: map[string]any{
-			"rule_id":    r.id,
-			"rule_name":  r.name,
-			"message_id": msg.ID(),
-			"triggered":  true,
-		},
-		Metadata: gtypes.EventMetadata{
-			Source:    r.name,
-			Timestamp: msg.Meta().CreatedAt(),
-			Reason:    "Rule triggered",
-			RuleName:  r.name,
-			Version:   "1.0.0",
-		},
-		Confidence: 1.0,
+	entityID, err := ruleTriggerEntityID(r.packID, r.id)
+	if err != nil {
+		return nil, err
+	}
+	event, err := gtypes.NewEntityUpdateEvent(entityID, map[string]any{
+		"rule_id":    r.id,
+		"rule_name":  r.name,
+		"message_id": msg.ID(),
+		"triggered":  true,
+	}, gtypes.EventMetadata{
+		Source:    r.name,
+		Timestamp: msg.Meta().CreatedAt(),
+		Reason:    "Rule triggered",
+		RuleName:  r.name,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	r.shouldTrigger = false // Reset trigger state
-	return []Event{&event}, nil
+	return []Event{event}, nil
 }
 
 // TestRuleFactory creates test rules for integration testing
@@ -161,7 +165,7 @@ func (f *TestRuleFactory) Type() string {
 }
 
 // Create creates a test rule from definition
-func (f *TestRuleFactory) Create(ruleID string, def Definition, _ Dependencies) (Rule, error) {
+func (f *TestRuleFactory) Create(ruleID string, def Definition, deps Dependencies) (Rule, error) {
 	// Create test rule with conditions from definition
 	// For test rules, subscribe to all subjects by default to simplify testing
 	subjects := []string{">"}
@@ -172,8 +176,7 @@ func (f *TestRuleFactory) Create(ruleID string, def Definition, _ Dependencies) 
 		subjects = nil
 	}
 
-	rule := NewTestRule(ruleID, def.Name, subjects, def.Conditions)
-	return rule, nil
+	return NewTestRule(deps.PackID, ruleID, def.Name, subjects, def.Conditions)
 }
 
 // Validate validates the rule definition

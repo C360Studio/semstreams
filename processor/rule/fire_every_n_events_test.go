@@ -149,7 +149,7 @@ func TestFireEveryNEvents_CounterResetOnRuleUpdate(t *testing.T) {
 
 	// Build a minimal Processor without NATS for unit-test purposes.
 	// We exercise applyRuleChanges directly, so we only need the fields it touches.
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	rp := &Processor{
 		natsClient:      nil,
 		logger:          slog.Default(),
@@ -225,7 +225,7 @@ func TestFireEveryNEvents_CounterResetOnRuleUpdate(t *testing.T) {
 func TestApplyRuleChanges_SyncsRuleDefinitions(t *testing.T) {
 	t.Parallel()
 
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	rp := &Processor{
 		natsClient:      nil,
 		logger:          slog.Default(),

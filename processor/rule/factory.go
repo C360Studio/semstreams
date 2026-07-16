@@ -38,8 +38,9 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 			"rule-processor-factory", "create", "NATS client validation")
 	}
 
-	// Start with defaults
-	ruleConfig := DefaultConfig()
+	// Start with identity-free internal defaults; the required operator pack_id
+	// is overlaid below and the complete config is validated before construction.
+	ruleConfig := defaultConfig()
 	if len(rawConfig) > 0 {
 		// Parse user config
 		var userConfig Config

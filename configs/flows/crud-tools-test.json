@@ -181,6 +181,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "crud-tools-test-rules",
         "enable_graph_integration": false,
         "entity_watch_buckets": {
           "ENTITY_STATES": ["*.*.*.*.*.*"]

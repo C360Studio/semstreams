@@ -61,18 +61,28 @@ Rule definitions embedded directly in config (alternative to files).
 
 ### enable_graph_integration
 
-When true, `add_triple` and `remove_triple` actions modify the graph.
+When true, graph events and triple mutations are emitted. The default is `false`; omission disables graph-event
+publication. Set the field explicitly in every deployment. A stable `pack_id` is required in both modes.
 
 ```json
 {
+  "pack_id": "drone-operations-rules",
   "enable_graph_integration": true
 }
 ```
 
 **Type:** `bool`
-**Default:** `true`
+**Default:** `false`
 
-When disabled, triple actions are logged but not executed. Useful for testing.
+The safe default is disabled because SemStreams cannot invent a stable producer identity. When disabled, triple
+actions are logged but not executed. Useful for testing.
+
+### pack_id
+
+Stable identity for the composed rule pack. It serves both as the `rule-pack.<pack_id>` projection owner and as the
+producer identity in deterministic graph rule-trigger IDs. Replicas of the same pack use the same exact value;
+independently composed packs use different values. It is required regardless of `enable_graph_integration` and has
+no default.
 
 ## Advanced Configuration
 
@@ -221,39 +231,19 @@ Internal message caching for windowed analysis.
 | `cleanup_interval` | duration | `"15s"` | Cache cleanup frequency |
 | `stats_interval` | duration | `"30s"` | Stats logging frequency |
 
-## Default Configuration
+## Configuration Defaults
 
 ```go
-func DefaultConfig() Config {
-    return Config{
-        Ports: &component.PortConfig{
-            Inputs: []component.PortDefinition{
-                {Name: "entity_states", Type: "kv-watch", Required: true},
-            },
-            Outputs: []component.PortDefinition{
-                {Name: "control_commands", Type: "nats", Subject: "control.*.commands"},
-            },
-        },
-        MessageCache: cache.Config{
-            Enabled:         true,
-            Strategy:        cache.StrategyTTL,
-            MaxSize:         1000,
-            TTL:             30 * time.Second,
-            CleanupInterval: 15 * time.Second,
-            StatsInterval:   30 * time.Second,
-        },
-        BufferWindowSize:       "10m",
-        AlertCooldownPeriod:    "2m",
-        EnableGraphIntegration: true,
-        Consumer: {
-            Enabled:        true,
-            AckWaitSeconds: 30,
-            MaxDeliver:     3,
-            ReplayPolicy:   "instant",
-        },
-    }
+config, err := rule.NewConfig("my-stable-rule-pack")
+if err != nil {
+    return err
 }
 ```
+
+`NewConfig` applies the framework defaults but requires the caller to provide the
+pack's stable identity. Every rule processor requires `pack_id`, whether graph
+publication is enabled or disabled. The identity is static for the processor's
+lifetime and has no implicit default or runtime fallback.
 
 ## Runtime Configuration
 
@@ -266,6 +256,9 @@ Some settings can be updated at runtime without restart.
 | `enable_graph_integration` | Yes | Takes effect on next action |
 | `rules` (individual) | Yes | Add/update/remove rules |
 | `entity_watch_buckets` | Yes | Watchers added/removed dynamically |
+
+`pack_id` is static and cannot be hot-reloaded. A runtime change may enable graph integration only when the processor
+started with a non-empty stable `pack_id`.
 
 ### ApplyConfigUpdate
 
@@ -291,6 +284,7 @@ config := processor.GetRuntimeConfig()
 // {
 //   "buffer_window_size": "10m",
 //   "alert_cooldown_period": "2m",
+//   "pack_id": "drone-operations-rules",
 //   "enable_graph_integration": true,
 //   "entity_watch_buckets": {...},
 //   "rules": {...},
@@ -326,6 +320,7 @@ config := processor.GetRuntimeConfig()
 
   "buffer_window_size": "10m",
   "alert_cooldown_period": "5m",
+  "pack_id": "drone-operations-rules",
   "enable_graph_integration": true,
 
   "consumer": {
@@ -355,6 +350,7 @@ Configuration is validated on load:
 - `inline_rules` must have valid structure
 - `buffer_window_size` must be valid Go duration
 - `alert_cooldown_period` must be valid Go duration
+- `pack_id` must always be non-empty, static, 1-246 ASCII bytes, and use only `A-Z a-z 0-9 . _ = -`
 - `entity_watch_buckets["ENTITY_STATES"]` values must be canonical six-position entity ID patterns
 
 Invalid entity watch declarations fail before any watcher is created.

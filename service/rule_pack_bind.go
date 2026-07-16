@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
+	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
 )
 
 // ProjectionBinder is implemented by components that declare a pack-level graph
@@ -57,11 +59,9 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 // epoch). The only entry point that reads the contracts is
 // ProjectionBinder.ProjectionBindings(), which carries the same invariant.
 //
-// Binding is best-effort / observe-only, matching the rest of the ADR-056
-// rollout: a nil registry is a no-op (ownership disabled this boot), and any
-// per-pack bind error is logged and skipped — it never aborts boot. An owner id
-// is "rule-pack.<pack_id>"; the pack_id is validated subject-safe at config
-// time (rule.Config.Validate), so RegisterOwner cannot reject it on charset.
+// The complete enabled binder set is preflighted before any owner token is
+// minted or claim is bound. Missing or duplicate pack IDs are composition
+// errors and abort boot. Substrate overlap/bind failures remain observe-only.
 //
 // ADR-056 PR-3.5: also mints the typed OwnerToken via ownerReg.OwnerToken and
 // stamps it on the binder (if it implements SetProjectionOwnerToken) so the
@@ -69,27 +69,20 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 // requests. This is the only point where the process-local Registry is reachable
 // alongside the binders; minting here keeps producers from hand-composing the
 // "<owner>#<incarnation>" format.
-func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *ownership.Registry, hb *ownership.Heartbeater, logger *slog.Logger) {
+func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *ownership.Registry, hb *ownership.Heartbeater, logger *slog.Logger) error {
+	binders := manager.ProjectionBinders()
+	if err := validateRulePackComposition(binders); err != nil {
+		return err
+	}
 	if ownerReg == nil {
-		return
+		return nil
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	bound := make(map[string]struct{}) // pack_id set, for duplicate detection
-	for _, b := range manager.ProjectionBinders() {
+	for _, b := range binders {
 		packID, contracts := b.ProjectionBindings()
-		if packID == "" {
-			continue
-		}
-		if _, exists := bound[packID]; exists {
-			logger.Error("duplicate rule pack_id across components — skipping second bind",
-				"pack_id", packID)
-			continue
-		}
-		bound[packID] = struct{}{}
-
 		ownerID := "rule-pack." + packID
 
 		// ADR-056 PR-3.5: mint the typed OwnerToken from the Registry and stamp
@@ -124,4 +117,20 @@ func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *owne
 			}
 		}
 	}
+	return nil
+}
+
+func validateRulePackComposition(binders []ProjectionBinder) error {
+	seen := make(map[string]struct{}, len(binders))
+	for _, binder := range binders {
+		packID, _ := binder.ProjectionBindings()
+		if err := rulepackcontract.ValidateID(packID); err != nil {
+			return fmt.Errorf("enabled rule processor has invalid pack_id: %w", err)
+		}
+		if _, duplicate := seen[packID]; duplicate {
+			return fmt.Errorf("duplicate enabled rule pack_id %q in one composition", packID)
+		}
+		seen[packID] = struct{}{}
+	}
+	return nil
 }

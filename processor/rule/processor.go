@@ -31,7 +31,7 @@ var _ component.Discoverable = (*Processor)(nil)
 var schema = buildRuleProcessorSchema()
 
 // RuleMetrics and newRuleMetrics are in metrics.go
-// Config and DefaultConfig are in config.go
+// Config and NewConfig are in config.go
 
 // Processor is a component that processes messages through rules
 type Processor struct {
@@ -43,8 +43,9 @@ type Processor struct {
 	flowMetrics component.FlowMetrics
 
 	// Rule processing resources
-	natsClient *natsclient.Client
-	rules      map[string]Rule // Self-loaded rules; written by applyRuleChanges under mu.Lock, read under mu.RLock.
+	natsClient          *natsclient.Client
+	graphEventPublisher graphEventPublisher
+	rules               map[string]Rule // Self-loaded rules; written by applyRuleChanges under mu.Lock, read under mu.RLock.
 	// ruleDefinitions holds the parsed Definition for each rule. Writers:
 	// loadRules (called only from Initialize, before any goroutines start) and
 	// applyRuleChanges (hot-reload path). Both write under mu.Lock. Reads in
@@ -233,8 +234,7 @@ func NewProcessor(natsClient *natsclient.Client, config *Config) (*Processor, er
 // NewProcessorWithMetrics creates a new rule processor with optional metrics
 func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metricsRegistry *metric.MetricsRegistry) (*Processor, error) {
 	if config == nil {
-		defaultConfig := DefaultConfig()
-		config = &defaultConfig
+		return nil, fmt.Errorf("rule processor config is required")
 	}
 
 	// Validate required configuration
@@ -288,6 +288,9 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		isSubscribed: false,
 		metrics:      newRuleMetrics(metricsRegistry, "rule"),
 		logger:       slog.Default().With("component", "rule-processor"),
+	}
+	if natsClient != nil {
+		rp.graphEventPublisher = natsClient
 	}
 
 	// Set up input and output ports
@@ -637,29 +640,25 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	// ADR-056 Decision 3: wire the rule pack's projection-owner identity onto
 	// the executor so replace_owned actions can thread it to the mutator
 	// boundary. The owner is "rule-pack.<PackID>" — the SAME identity the
-	// composition root binds the pack's ProjectionContracts under (inc 2). Only
-	// when the pack declares a PackID; an empty PackID leaves the owner unset
-	// and any replace_owned action returns an error (an unowned pack cannot
-	// reconcile an owned predicate group). Same type-assert setter pattern as
-	// SetToolRegistry / SetLifecycleManager.
-	if rp.config.PackID != "" {
+	// composition root binds the pack's ProjectionContracts under (inc 2).
+	// Config validation makes PackID universally present before construction.
+	// Same type-assert setter pattern as SetToolRegistry / SetLifecycleManager.
+	if setter, ok := actionExecutor.(interface {
+		SetProjectionOwner(string)
+	}); ok {
+		setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
+	}
+	// ADR-056 PR-3.5: forward the typed OwnerToken so the executor can stamp
+	// its wire form on every replace_owned request. The token is minted by
+	// the ownership Registry and set by service.BindRulePackContracts (which
+	// holds the Registry) BEFORE Start is called. A zero token (Registry not
+	// wired) yields an empty wire string — correct for test paths where the
+	// ownership registry is intentionally absent.
+	if !rp.projectionOwnerToken.IsZero() {
 		if setter, ok := actionExecutor.(interface {
-			SetProjectionOwner(string)
+			SetProjectionOwnerToken(ownership.OwnerToken)
 		}); ok {
-			setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
-		}
-		// ADR-056 PR-3.5: forward the typed OwnerToken so the executor can stamp
-		// its wire form on every replace_owned request. The token is minted by
-		// the ownership Registry and set by service.BindRulePackContracts (which
-		// holds the Registry) BEFORE Start is called. A zero token (Registry not
-		// wired) yields an empty wire string — correct for test / unowned paths,
-		// where the lease check skips an empty token.
-		if !rp.projectionOwnerToken.IsZero() {
-			if setter, ok := actionExecutor.(interface {
-				SetProjectionOwnerToken(ownership.OwnerToken)
-			}); ok {
-				setter.SetProjectionOwnerToken(rp.projectionOwnerToken)
-			}
+			setter.SetProjectionOwnerToken(rp.projectionOwnerToken)
 		}
 	}
 

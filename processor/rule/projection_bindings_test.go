@@ -27,8 +27,7 @@ func TestProcessorProjectionBindings(t *testing.T) {
 		},
 	}
 
-	cfg := DefaultConfig()
-	cfg.PackID = "drone-ops.v1"
+	cfg := mustTestConfig(t, "drone-ops-v1")
 	cfg.ProjectionContracts = contracts
 
 	rp, err := NewProcessor(nil, &cfg)
@@ -37,30 +36,22 @@ func TestProcessorProjectionBindings(t *testing.T) {
 	}
 
 	gotPack, gotContracts := rp.ProjectionBindings()
-	if gotPack != "drone-ops.v1" {
-		t.Errorf("packID: got %q want %q", gotPack, "drone-ops.v1")
+	if gotPack != "drone-ops-v1" {
+		t.Errorf("packID: got %q want %q", gotPack, "drone-ops-v1")
 	}
 	if !reflect.DeepEqual(gotContracts, contracts) {
 		t.Errorf("contracts mismatch:\n got %#v\nwant %#v", gotContracts, contracts)
 	}
 }
 
-// TestProcessorProjectionBindings_NoPack verifies the no-pack case returns an
-// empty declaration so the composition root binds nothing.
-func TestProcessorProjectionBindings_NoPack(t *testing.T) {
+// TestProcessorProjectionBindings_ContractsRequirePack verifies projection
+// ownership cannot be constructed without its required pack identity.
+func TestProcessorProjectionBindings_ContractsRequirePack(t *testing.T) {
 	t.Parallel()
 
-	cfg := DefaultConfig() // no PackID, no contracts
-	rp, err := NewProcessor(nil, &cfg)
-	if err != nil {
-		t.Fatalf("NewProcessor: %v", err)
-	}
-
-	gotPack, gotContracts := rp.ProjectionBindings()
-	if gotPack != "" {
-		t.Errorf("packID: got %q want empty", gotPack)
-	}
-	if len(gotContracts) != 0 {
-		t.Errorf("contracts: got %d want 0", len(gotContracts))
+	cfg := defaultConfig()
+	cfg.ProjectionContracts = []projection.Contract{{Name: "missing-pack"}}
+	if _, err := NewProcessor(nil, &cfg); err == nil {
+		t.Fatal("NewProcessor accepted projection contracts without pack_id")
 	}
 }

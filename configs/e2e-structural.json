@@ -202,6 +202,8 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "e2e-structural-rules",
+        "enable_graph_integration": true,
         "ports": {
           "inputs": [{"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}],
           "outputs": [{"name": "workflow_triggers", "subject": "workflow.trigger.*", "type": "jetstream"}]

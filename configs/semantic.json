@@ -288,6 +288,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "semantic-rules",
         "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
         "ports": {
           "inputs": [

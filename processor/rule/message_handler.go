@@ -216,6 +216,15 @@ func (rp *Processor) fireRuleActions(
 		rp.recordError(fmt.Sprintf("rule %s execution failed: %v", ruleName, err))
 		return
 	}
+	// Preflight before the rule-trigger notification so an invalid graph batch
+	// cannot produce any publish or metric side effect on the shared fire path.
+	prepared, err := rp.prepareGraphEvents(events)
+	if err != nil {
+		rp.logger.Error("Rule returned an invalid graph-event batch",
+			"rule_name", ruleName,
+			"error", err)
+		return
+	}
 
 	// Publish rule event notification
 	if err := rp.publishRuleEvent(ctx, ruleName, "triggered"); err != nil {
@@ -223,7 +232,7 @@ func (rp *Processor) fireRuleActions(
 	}
 
 	// Publish graph events
-	if err := rp.publishGraphEvents(ctx, events); err != nil {
+	if err := rp.publishPreparedGraphEvents(ctx, prepared); err != nil {
 		rp.recordError(fmt.Sprintf("failed to publish events from rule %s: %v", ruleName, err))
 	} else {
 		atomic.AddInt64(&rp.rulesTriggered, 1)

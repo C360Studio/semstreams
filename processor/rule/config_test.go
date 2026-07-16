@@ -11,16 +11,22 @@ import (
 )
 
 // TestConfig_DebounceDelayMs_Default tests default debounce delay is 0 (disabled)
-// Given: Default Config created via DefaultConfig()
+// Given: default settings created with an explicit pack identity
 // When: No explicit debounce_delay_ms configured
 // Then: DebounceDelayMs defaults to 0 (disabled for real-time rule evaluation)
 func TestConfig_DebounceDelayMs_Default(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 
 	// Default should be 0 (disabled) to ensure rules evaluate against each state change
 	expected := time.Duration(0)
 	if cfg.DebounceDelayMs != expected {
 		t.Errorf("Expected default DebounceDelayMs to be %v, got %v", expected, cfg.DebounceDelayMs)
+	}
+	if cfg.EnableGraphIntegration {
+		t.Fatal("default config must not enable graph integration without an explicit pack identity")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("NewConfig result Validate() = %v, want nil", err)
 	}
 }
 

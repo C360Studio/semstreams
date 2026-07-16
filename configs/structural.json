@@ -282,6 +282,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "structural-rules",
         "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
         "ports": {
           "inputs": [

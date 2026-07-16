@@ -93,6 +93,7 @@ type Factory interface {
 type Dependencies struct {
 	NATSClient *natsclient.Client
 	Logger     *slog.Logger
+	PackID     string
 }
 
 // Schema describes the configuration schema for a rule type
@@ -189,6 +190,9 @@ func GetRuleSchemas() map[string]Schema {
 func CreateRuleFromDefinition(def Definition, deps Dependencies) (Rule, error) {
 	if err := ValidateDefinition(def); err != nil {
 		return nil, fmt.Errorf("rule authoring validation failed: %w", err)
+	}
+	if err := validatePackID(deps.PackID); err != nil {
+		return nil, fmt.Errorf("rule construction: %w", err)
 	}
 	factory, exists := GetRuleFactory(def.Type)
 	if !exists {

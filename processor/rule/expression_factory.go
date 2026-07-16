@@ -15,6 +15,7 @@ import (
 // ExpressionRule implements Rule interface for expression-based condition evaluation
 type ExpressionRule struct {
 	id            string
+	packID        string
 	name          string
 	description   string
 	subscribed    []string
@@ -43,8 +44,12 @@ func (r *ExpressionRule) SetLifecycleManager(m LifecycleManager) {
 	r.lifecycleManager = m
 }
 
-// NewExpressionRule creates a new expression-based rule
-func NewExpressionRule(def Definition) (*ExpressionRule, error) {
+// NewExpressionRule creates a new expression-based rule under an explicit
+// stable pack identity.
+func NewExpressionRule(packID string, def Definition) (*ExpressionRule, error) {
+	if err := validatePackID(packID); err != nil {
+		return nil, err
+	}
 	if err := validateDefinitionEntityPattern(def); err != nil {
 		return nil, err
 	}
@@ -74,6 +79,7 @@ func NewExpressionRule(def Definition) (*ExpressionRule, error) {
 
 	return &ExpressionRule{
 		id:          def.ID,
+		packID:      packID,
 		name:        def.Name,
 		description: def.Description,
 		subscribed:  subjects,
@@ -231,9 +237,6 @@ func (r *ExpressionRule) ExecuteEvents(messages []message.Message) ([]Event, err
 
 	msg := messages[len(messages)-1]
 
-	// Update last triggered time
-	r.lastTriggered = time.Now()
-
 	// Build event properties
 	properties := map[string]interface{}{
 		"rule_id":    r.id,
@@ -247,22 +250,23 @@ func (r *ExpressionRule) ExecuteEvents(messages []message.Message) ([]Event, err
 		properties[k] = v
 	}
 
-	event := gtypes.Event{
-		Type:       gtypes.EventEntityUpdate,
-		EntityID:   fmt.Sprintf("rule.%s.triggered", r.id),
-		Properties: properties,
-		Metadata: gtypes.EventMetadata{
-			Source:    r.name,
-			Timestamp: msg.Meta().CreatedAt(),
-			Reason:    fmt.Sprintf("Rule %s triggered", r.name),
-			RuleName:  r.name,
-			Version:   "1.0.0",
-		},
-		Confidence: 1.0,
+	entityID, err := ruleTriggerEntityID(r.packID, r.id)
+	if err != nil {
+		return nil, err
+	}
+	event, err := gtypes.NewEntityUpdateEvent(entityID, properties, gtypes.EventMetadata{
+		Source:    r.name,
+		Timestamp: msg.Meta().CreatedAt(),
+		Reason:    fmt.Sprintf("Rule %s triggered", r.name),
+		RuleName:  r.name,
+	})
+	if err != nil {
+		return nil, err
 	}
 
+	r.lastTriggered = time.Now()
 	r.shouldTrigger = false
-	return []Event{&event}, nil
+	return []Event{event}, nil
 }
 
 // ExpressionRuleFactory creates expression-based rules
@@ -283,8 +287,12 @@ func (f *ExpressionRuleFactory) Type() string {
 }
 
 // Create creates an expression rule from definition
-func (f *ExpressionRuleFactory) Create(_ string, def Definition, _ Dependencies) (Rule, error) {
-	return NewExpressionRule(def)
+func (f *ExpressionRuleFactory) Create(_ string, def Definition, deps Dependencies) (Rule, error) {
+	rule, err := NewExpressionRule(deps.PackID, def)
+	if err != nil {
+		return nil, err
+	}
+	return rule, nil
 }
 
 // Validate validates the rule definition

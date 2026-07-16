@@ -20,7 +20,7 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	original := Config{
-		PackID: "drone-ops.v1",
+		PackID: "drone-ops-v1",
 		ProjectionContracts: []projection.Contract{
 			{
 				Name:          "drone.status",
@@ -54,7 +54,7 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 	}
 
 	// pack_id must be present in the wire form (it rides the alias).
-	if !strings.Contains(string(data), `"pack_id":"drone-ops.v1"`) {
+	if !strings.Contains(string(data), `"pack_id":"drone-ops-v1"`) {
 		t.Errorf("marshaled JSON missing pack_id: %s", data)
 	}
 
@@ -72,25 +72,32 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestConfigPackIDValidation pins the subject-safe charset guard on pack_id so
-// the derived owner id "rule-pack.<pack_id>" can never be rejected later by
-// ownership.RegisterOwner on charset.
+// TestConfigPackIDValidation pins the literal-token guard on pack_id so the
+// derived owner key "rule-pack.<pack_id>" always has exactly two positions.
 func TestConfigPackIDValidation(t *testing.T) {
 	t.Parallel()
 
 	t.Run("valid pack_id passes", func(t *testing.T) {
 		t.Parallel()
-		cfg := Config{PackID: "my-pack.v1"}
+		cfg := Config{PackID: "my-pack_v1"}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("valid pack_id rejected: %v", err)
 		}
 	})
 
-	t.Run("empty pack_id is a no-op", func(t *testing.T) {
+	t.Run("empty pack_id is always rejected", func(t *testing.T) {
 		t.Parallel()
 		cfg := Config{PackID: ""}
-		if err := cfg.Validate(); err != nil {
-			t.Errorf("empty pack_id rejected: %v", err)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
+			t.Fatalf("empty pack_id error = %v, want required error", err)
+		}
+	})
+
+	t.Run("every config requires explicit pack_id", func(t *testing.T) {
+		t.Parallel()
+		cfg := Config{EnableGraphIntegration: true}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
+			t.Fatalf("graph-integrated empty pack_id error = %v, want required error", err)
 		}
 	})
 
@@ -105,8 +112,56 @@ func TestConfigPackIDValidation(t *testing.T) {
 		if !strings.Contains(msg, "rule-pack.my:pack") {
 			t.Errorf("error must name the derived owner id rule-pack.my:pack, got: %s", msg)
 		}
-		if !strings.Contains(msg, "[A-Za-z0-9._=-]") {
+		if !strings.Contains(msg, "[A-Za-z0-9_=-]") {
 			t.Errorf("error must name the allowed charset, got: %s", msg)
 		}
 	})
+
+	t.Run("dot separator is rejected", func(t *testing.T) {
+		t.Parallel()
+		err := (Config{PackID: "my-pack.v1"}).Validate()
+		if err == nil || !strings.Contains(err.Error(), "one literal KV token") {
+			t.Fatalf("dotted pack_id error = %v, want literal-token error", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		bytes   int
+		wantErr bool
+	}{
+		{"245 bytes", 245, false},
+		{"246 bytes", 246, false},
+		{"247 bytes", 247, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{PackID: strings.Repeat("p", test.bytes), EnableGraphIntegration: true}
+			err := cfg.Validate()
+			if test.wantErr && err == nil {
+				t.Fatalf("%d-byte pack_id accepted, want error", test.bytes)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("%d-byte pack_id rejected: %v", test.bytes, err)
+			}
+		})
+	}
+}
+
+func TestNewConfigRequiresExplicitPackID(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewConfig(""); err == nil || !strings.Contains(err.Error(), "pack_id is required") {
+		t.Fatalf("NewConfig empty error = %v, want required error", err)
+	}
+	cfg, err := NewConfig("config-constructor-test")
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	if cfg.PackID != "config-constructor-test" {
+		t.Fatalf("PackID = %q, want explicit identity", cfg.PackID)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("constructed config invalid: %v", err)
+	}
 }

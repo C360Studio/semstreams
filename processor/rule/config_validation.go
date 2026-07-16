@@ -15,6 +15,11 @@ import (
 
 // ValidateConfigUpdate validates proposed configuration changes
 func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
+	if _, present := changes["pack_id"]; present {
+		return errs.WrapInvalid(
+			fmt.Errorf("pack_id is static and cannot be updated at runtime"),
+			"RuleProcessor", "ValidateConfigUpdate", "reject producer identity update")
+	}
 	// Validate rule configurations if present
 	if rulesConfig, ok := changes["rules"]; ok {
 		rulesMap, ok := rulesConfig.(map[string]any)
@@ -45,10 +50,16 @@ func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
 
 	// Validate enable_graph_integration if present
 	if integrationVal, ok := changes["enable_graph_integration"]; ok {
-		if _, ok := integrationVal.(bool); !ok {
+		integration, ok := integrationVal.(bool)
+		if !ok {
 			return errs.WrapInvalid(
 				fmt.Errorf("enable_graph_integration must be boolean, got %T", integrationVal),
 				"RuleProcessor", "ValidateConfigUpdate", "validate integration type")
+		}
+		if integration && (rp.config == nil || rp.config.PackID == "") {
+			return errs.WrapInvalid(
+				fmt.Errorf("rule processor is missing its universally required pack_id"),
+				"RuleProcessor", "ValidateConfigUpdate", "validate graph producer identity")
 		}
 	}
 
@@ -529,6 +540,7 @@ func (rp *Processor) createRuleFromConfig(ruleID string, ruleMap map[string]any)
 	deps := Dependencies{
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
+		PackID:     rp.config.PackID,
 	}
 
 	// Use factory to create rule

@@ -60,7 +60,7 @@ func getIntegrationNATSClient(t *testing.T) *natsclient.Client {
 func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rules []Definition) (*Processor, *metric.MetricsRegistry) {
 	t.Helper()
 
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Interface: "core.entity.v1", Required: false},

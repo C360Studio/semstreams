@@ -23,7 +23,8 @@ func TestStatefulEvaluator_Integration(t *testing.T) {
 	defer testClient.Terminate()
 
 	// Create processor with default config
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
+	config.PackID = "stateful-integration-test"
 	processor, err := NewProcessor(testClient.Client, &config)
 	if err != nil {
 		t.Fatalf("Failed to create processor: %v", err)

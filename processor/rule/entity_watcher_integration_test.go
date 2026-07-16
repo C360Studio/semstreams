@@ -94,8 +94,8 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	}
 
 	// Create processor with debouncing (100ms default)
-	config := rule.DefaultConfig()
-	config.PackID = "entity-watcher-debounce-test"
+	config, configErr := rule.NewConfig("entity-watcher-debounce-test")
+	require.NoError(t, configErr)
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"test.debounce.*.*.*.*"}}
 	config.DebounceDelayMs = 100 * time.Millisecond
 	config.InlineRules = []rule.Definition{ruleDef}
@@ -379,8 +379,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 
 	// Create processor with DebounceDelayMs=0 for immediate processing
 	// This bypasses the coalescing set and processes each entity update immediately
-	config := rule.DefaultConfig()
-	config.PackID = "entity-watcher-bounded-test"
+	config, configErr := rule.NewConfig("entity-watcher-bounded-test")
+	require.NoError(t, configErr)
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.logistics.environmental.sensor.*.*"}}
 	config.DebounceDelayMs = 0 // Immediate processing - no batching
 	config.InlineRules = rules

@@ -1,483 +1,371 @@
 package graph
 
 import (
+	"math"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
-func TestEvent_Validate_Valid(t *testing.T) {
-	now := time.Now()
-	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	batteryID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "001")
-	validMetadata := EventMetadata{
-		RuleName:  "test_rule",
-		Timestamp: now,
-		Source:    "test_component",
-		Reason:    "test reason",
-		Version:   "1.0.0",
+func TestEventValidateContract(t *testing.T) {
+	primary := eventTestID(t, "primary")
+	target := eventTestID(t, "target")
+	metadata := eventTestMetadata()
+	valid := Event{
+		Type:       EventRelationshipCreate,
+		EntityID:   primary,
+		TargetID:   target,
+		Properties: map[string]any{"edge_type": "owns"},
+		Metadata:   metadata,
+		Confidence: 1,
 	}
-
-	tests := []struct {
-		name  string
-		event Event
-	}{
-		{
-			name: "valid entity update event",
-			event: Event{
-				Type:       EventEntityUpdate,
-				EntityID:   droneID,
-				Properties: map[string]any{"status": "active"},
-				Metadata:   validMetadata,
-				Confidence: 0.8,
-			},
-		},
-		{
-			name: "valid relationship create event",
-			event: Event{
-				Type:       EventRelationshipCreate,
-				EntityID:   droneID,
-				TargetID:   batteryID,
-				Properties: map[string]any{"edge_type": "POWERED_BY"},
-				Metadata:   validMetadata,
-				Confidence: 1.0,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.event.Validate()
-			if err != nil {
-				t.Errorf("Event.Validate() error = %v, want nil", err)
-			}
-		})
-	}
-}
-
-func TestEvent_Validate_Invalid(t *testing.T) {
-	now := time.Now()
-	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	validMetadata := EventMetadata{
-		RuleName:  "test_rule",
-		Timestamp: now,
-		Source:    "test_component",
-		Reason:    "test reason",
-		Version:   "1.0.0",
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid event rejected: %v", err)
 	}
 
 	tests := []struct {
 		name   string
-		event  Event
-		errMsg string
+		mutate func(*Event)
 	}{
-		{
-			name: "missing event type",
-			event: Event{
-				EntityID:   droneID,
-				Properties: map[string]any{},
-				Metadata:   validMetadata,
-				Confidence: 1.0,
-			},
-			errMsg: "event type is required",
-		},
-		{
-			name: "missing entity ID",
-			event: Event{
-				Type:       EventEntityUpdate,
-				Properties: map[string]any{},
-				Metadata:   validMetadata,
-				Confidence: 1.0,
-			},
-			errMsg: "entity ID is required",
-		},
-		{
-			name: "confidence too low",
-			event: Event{
-				Type:       EventEntityUpdate,
-				EntityID:   droneID,
-				Properties: map[string]any{},
-				Metadata:   validMetadata,
-				Confidence: -0.1,
-			},
-			errMsg: "confidence must be between 0.0 and 1.0",
-		},
-		{
-			name: "confidence too high",
-			event: Event{
-				Type:       EventEntityUpdate,
-				EntityID:   droneID,
-				Properties: map[string]any{},
-				Metadata:   validMetadata,
-				Confidence: 1.1,
-			},
-			errMsg: "confidence must be between 0.0 and 1.0",
-		},
-		{
-			name: "relationship event missing target ID",
-			event: Event{
-				Type:       EventRelationshipCreate,
-				EntityID:   droneID,
-				Properties: map[string]any{},
-				Metadata:   validMetadata,
-				Confidence: 1.0,
-			},
-			errMsg: "target ID is required for relationship events",
-		},
+		{"unknown type", func(event *Event) { event.Type = EventType("future") }},
+		{"malformed primary", func(event *Event) { event.EntityID = "three.part.id" }},
+		{"missing relationship target", func(event *Event) { event.TargetID = "" }},
+		{"malformed relationship target", func(event *Event) { event.TargetID = "three.part.id" }},
+		{"entity event target", func(event *Event) { event.Type = EventEntityUpdate }},
+		{"negative confidence", func(event *Event) { event.Confidence = -0.01 }},
+		{"high confidence", func(event *Event) { event.Confidence = 1.01 }},
+		{"nan confidence", func(event *Event) { event.Confidence = math.NaN() }},
+		{"positive infinity", func(event *Event) { event.Confidence = math.Inf(1) }},
+		{"negative infinity", func(event *Event) { event.Confidence = math.Inf(-1) }},
+		{"missing rule", func(event *Event) { event.Metadata.RuleName = "" }},
+		{"missing timestamp", func(event *Event) { event.Metadata.Timestamp = time.Time{} }},
+		{"missing source", func(event *Event) { event.Metadata.Source = "" }},
+		{"missing reason", func(event *Event) { event.Metadata.Reason = "" }},
+		{"missing version", func(event *Event) { event.Metadata.Version = "" }},
+		{"unknown version", func(event *Event) { event.Metadata.Version = "2.0.0" }},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.event.Validate()
-			if err == nil {
-				t.Errorf("Event.Validate() error = nil, want error")
-				return
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := cloneEvent(valid)
+			test.mutate(&candidate)
+			before := cloneEvent(candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("Validate() = nil, want error")
 			}
-			if !containsString(err.Error(), tt.errMsg) {
-				t.Errorf("Event.Validate() error = %v, want error containing %v", err, tt.errMsg)
+			if !eventContractEqual(candidate, before) {
+				t.Fatalf("Validate mutated event\nbefore: %#v\nafter:  %#v", before, candidate)
 			}
 		})
 	}
+
+	for _, key := range []string{"entity_id", "target_id", "confidence", "metadata"} {
+		t.Run("reserved "+key, func(t *testing.T) {
+			candidate := cloneEvent(valid)
+			candidate.Properties[key] = "shadow"
+			before := cloneEvent(candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("Validate() = nil, want error")
+			}
+			if !reflect.DeepEqual(candidate, before) {
+				t.Fatal("Validate mutated properties")
+			}
+		})
+	}
+
+	var nilEvent *Event
+	if err := nilEvent.Validate(); err == nil {
+		t.Fatal("nil Event.Validate() = nil, want error")
+	}
 }
 
-func TestEvent_Validate_Metadata(t *testing.T) {
-	now := time.Now()
-	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
+func TestGraphEventConstructorsFailClosed(t *testing.T) {
+	validID := eventTestID(t, "source")
+	targetID := eventTestID(t, "target")
+	metadata := eventTestMetadata()
+	badID := "three.part.id"
 
 	tests := []struct {
-		name     string
-		metadata EventMetadata
-		errMsg   string
+		name      string
+		construct func(string) (*Event, error)
 	}{
-		{
-			name: "missing rule name",
-			metadata: EventMetadata{
-				Timestamp: now,
-				Source:    "test_component",
-				Reason:    "test reason",
-			},
-			errMsg: "rule name is required in metadata",
-		},
-		{
-			name: "missing timestamp",
-			metadata: EventMetadata{
-				RuleName: "test_rule",
-				Source:   "test_component",
-				Reason:   "test reason",
-			},
-			errMsg: "timestamp is required in metadata",
-		},
-		{
-			name: "missing source",
-			metadata: EventMetadata{
-				RuleName:  "test_rule",
-				Timestamp: now,
-				Reason:    "test reason",
-			},
-			errMsg: "source is required in metadata",
-		},
+		{"entity update", func(id string) (*Event, error) {
+			return NewEntityUpdateEvent(id, map[string]any{"state": "ready"}, metadata)
+		}},
+		{"entity create", func(id string) (*Event, error) {
+			return NewEntityCreateEvent(id, "worker", map[string]any{"state": "ready"}, metadata)
+		}},
+		{"entity delete", func(id string) (*Event, error) {
+			return NewEntityDeleteEvent(id, "retired", metadata)
+		}},
+		{"relationship create source", func(id string) (*Event, error) {
+			return NewRelationshipCreateEvent(id, targetID, "owns", metadata)
+		}},
+		{"relationship create target", func(id string) (*Event, error) {
+			return NewRelationshipCreateEvent(validID, id, "owns", metadata)
+		}},
+		{"relationship delete source", func(id string) (*Event, error) {
+			return NewRelationshipDeleteEvent(id, targetID, "owns", metadata)
+		}},
+		{"relationship delete target", func(id string) (*Event, error) {
+			return NewRelationshipDeleteEvent(validID, id, "owns", metadata)
+		}},
+		{"alert source", func(id string) (*Event, error) {
+			return NewAlertEvent("threshold", id, map[string]any{"observed": 42}, metadata)
+		}},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			event := Event{
-				Type:       EventEntityUpdate,
-				EntityID:   droneID,
-				Properties: map[string]any{},
-				Metadata:   tt.metadata,
-				Confidence: 1.0,
-			}
-
-			err := event.Validate()
-			if err == nil {
-				t.Errorf("Event.Validate() error = nil, want error")
-				return
-			}
-			if !containsString(err.Error(), tt.errMsg) {
-				t.Errorf("Event.Validate() error = %v, want error containing %v", err, tt.errMsg)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event, err := test.construct(badID)
+			if err == nil || event != nil {
+				t.Fatalf("construct() = (%#v, %v), want (nil, error)", event, err)
 			}
 		})
 	}
 }
 
-func TestEvent_Validate_AutoVersion(t *testing.T) {
-	now := time.Now()
-	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	event := Event{
-		Type:       EventEntityUpdate,
-		EntityID:   droneID,
-		Properties: map[string]any{},
-		Metadata: EventMetadata{
-			RuleName:  "test_rule",
-			Timestamp: now,
-			Source:    "test_component",
-			Reason:    "test reason",
-			// Version not set
-		},
-		Confidence: 1.0,
-	}
+func TestConstructorsOwnTopLevelPropertiesOnly(t *testing.T) {
+	metadata := eventTestMetadata()
+	nestedMap := map[string]any{"value": 1}
+	nestedSlice := []string{"a", "b"}
+	caller := map[string]any{"nested_map": nestedMap, "nested_slice": nestedSlice, "status_text": "new"}
+	before := cloneProperties(caller)
 
-	err := event.Validate()
+	event, err := NewAlertEvent("threshold", eventTestID(t, "source"), caller, metadata)
 	if err != nil {
-		t.Errorf("Event.Validate() error = %v, want nil", err)
+		t.Fatalf("NewAlertEvent: %v", err)
 	}
-	if event.Metadata.Version != "1.0.0" {
-		t.Errorf("Expected version to be set to '1.0.0', got '%s'", event.Metadata.Version)
+	if !reflect.DeepEqual(caller, before) {
+		t.Fatalf("constructor mutated caller properties\nbefore: %#v\nafter:  %#v", before, caller)
 	}
-}
-
-func TestEvent_Subject(t *testing.T) {
-	tests := []struct {
-		name     string
-		event    Event
-		expected string
-	}{
-		{
-			name: "entity create event",
-			event: Event{
-				Type: EventEntityCreate,
-			},
-			expected: "graph.events.entity.create",
-		},
-		{
-			name: "entity update event",
-			event: Event{
-				Type: EventEntityUpdate,
-			},
-			expected: "graph.events.entity.update",
-		},
-		{
-			name: "entity delete event",
-			event: Event{
-				Type: EventEntityDelete,
-			},
-			expected: "graph.events.entity.delete",
-		},
-		{
-			name: "relationship create event",
-			event: Event{
-				Type: EventRelationshipCreate,
-			},
-			expected: "graph.events.relationship.create",
-		},
-		{
-			name: "relationship delete event",
-			event: Event{
-				Type: EventRelationshipDelete,
-			},
-			expected: "graph.events.relationship.delete",
-		},
+	if reflect.ValueOf(caller).Pointer() == reflect.ValueOf(event.Properties).Pointer() {
+		t.Fatal("constructor retained caller top-level map")
+	}
+	if reflect.ValueOf(caller["nested_map"]).Pointer() != reflect.ValueOf(event.Properties["nested_map"]).Pointer() {
+		t.Fatal("constructor deep-copied nested map; nested values must remain caller-owned")
+	}
+	if reflect.ValueOf(caller["nested_slice"]).Pointer() != reflect.ValueOf(event.Properties["nested_slice"]).Pointer() {
+		t.Fatal("constructor deep-copied nested slice; nested values must remain caller-owned")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.event.Subject()
-			if got != tt.expected {
-				t.Errorf("Event.Subject() = %v, want %v", got, tt.expected)
+	caller["later"] = true
+	if _, exists := event.Properties["later"]; exists {
+		t.Fatal("later caller top-level mutation changed event")
+	}
+	event.Properties["event_only"] = true
+	if _, exists := caller["event_only"]; exists {
+		t.Fatal("later event top-level mutation changed caller")
+	}
+
+	for _, key := range []string{"alert_type", "source_entity", "status", "entity_id", "target_id", "confidence", "metadata"} {
+		t.Run(key, func(t *testing.T) {
+			input := map[string]any{key: "collision", "nested": nestedMap}
+			inputBefore := cloneProperties(input)
+			got, constructErr := NewAlertEvent("threshold", eventTestID(t, "source"), input, metadata)
+			if constructErr == nil || got != nil {
+				t.Fatalf("collision construct = (%#v, %v), want (nil, error)", got, constructErr)
+			}
+			if !reflect.DeepEqual(input, inputBefore) {
+				t.Fatal("failed construction mutated caller properties")
 			}
 		})
 	}
 }
 
-func TestNewEntityUpdateEvent(t *testing.T) {
-	entityID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	properties := map[string]any{
-		"status":  "active",
-		"battery": 85.5,
+func TestConstructorOwnedPropertyCollisions(t *testing.T) {
+	metadata := eventTestMetadata()
+	id := eventTestID(t, "source")
+	if event, err := NewEntityCreateEvent(id, "worker", map[string]any{"type": "collision"}, metadata); err == nil || event != nil {
+		t.Fatalf("entity type collision = (%#v, %v), want (nil, error)", event, err)
 	}
-	metadata := EventMetadata{
-		RuleName:  "battery_monitor",
-		Timestamp: time.Now(),
-		Source:    "rule_engine",
-		Reason:    "battery level update",
-		Version:   "1.0.0",
+	if event, err := NewRelationshipCreateEvent(id, eventTestID(t, "target"), "", metadata); err == nil || event != nil {
+		t.Fatalf("empty relationship type = (%#v, %v), want (nil, error)", event, err)
 	}
-
-	event := NewEntityUpdateEvent(entityID, properties, metadata)
-
-	if event.Type != EventEntityUpdate {
-		t.Errorf("Expected event type %v, got %v", EventEntityUpdate, event.Type)
-	}
-	if event.EntityID != entityID {
-		t.Errorf("Expected entity ID %v, got %v", entityID, event.EntityID)
-	}
-	if event.Confidence != 1.0 {
-		t.Errorf("Expected confidence 1.0, got %v", event.Confidence)
-	}
-	if len(event.Properties) != 2 {
-		t.Errorf("Expected 2 properties, got %v", len(event.Properties))
+	if event, err := NewAlertEvent("", id, nil, metadata); err == nil || event != nil {
+		t.Fatalf("empty alert type = (%#v, %v), want (nil, error)", event, err)
 	}
 }
 
-func TestNewRelationshipCreateEvent(t *testing.T) {
-	fromID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	toID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "001")
-	relationshipType := "POWERED_BY"
-	metadata := EventMetadata{
-		RuleName:  "power_relationship_detector",
-		Timestamp: time.Now(),
-		Source:    "rule_engine",
-		Reason:    "detected power relationship",
-		Version:   "1.0.0",
+func TestConstructorMetadataVersionIsLocalAndClosed(t *testing.T) {
+	metadata := eventTestMetadata()
+	metadata.Version = ""
+	event, err := NewEntityUpdateEvent(eventTestID(t, "version-default"), nil, metadata)
+	if err != nil {
+		t.Fatalf("NewEntityUpdateEvent: %v", err)
+	}
+	if event.Metadata.Version != eventMetadataVersion {
+		t.Fatalf("event metadata version = %q, want %q", event.Metadata.Version, eventMetadataVersion)
+	}
+	if metadata.Version != "" {
+		t.Fatalf("constructor mutated caller metadata version to %q", metadata.Version)
 	}
 
-	event := NewRelationshipCreateEvent(fromID, toID, relationshipType, metadata)
-
-	if event.Type != EventRelationshipCreate {
-		t.Errorf("Expected event type %v, got %v", EventRelationshipCreate, event.Type)
-	}
-	if event.EntityID != fromID {
-		t.Errorf("Expected entity ID %v, got %v", fromID, event.EntityID)
-	}
-	if event.TargetID != toID {
-		t.Errorf("Expected target ID %v, got %v", toID, event.TargetID)
-	}
-	if event.Properties["edge_type"] != relationshipType {
-		t.Errorf("Expected edge_type %v, got %v", relationshipType, event.Properties["edge_type"])
+	metadata.Version = "2.0.0"
+	if event, err = NewEntityUpdateEvent(eventTestID(t, "version-rejected"), nil, metadata); err == nil || event != nil {
+		t.Fatalf("unknown metadata version = (%#v, %v), want (nil, error)", event, err)
 	}
 }
 
-func TestNewAlertEvent(t *testing.T) {
-	alertType := "battery_low"
-	entityID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	properties := map[string]any{
-		"battery_level": 15.0,
-		"threshold":     20.0,
-	}
+func TestNewAlertEventDigestContract(t *testing.T) {
 	metadata := EventMetadata{
-		RuleName:  "battery_alert_rule",
-		Timestamp: time.Now(),
-		Source:    "rule_engine",
+		RuleName:  "battery-rule",
+		Timestamp: time.Date(2026, time.July, 16, 12, 34, 56, 789123456, time.UTC),
+		Source:    "rule-processor",
 		Reason:    "battery below threshold",
-		Version:   "1.0.0",
+	}
+	sourceID := eventTestID(t, "drone-001")
+	event, err := NewAlertEvent("battery_low", sourceID, map[string]any{"value": 10}, metadata)
+	if err != nil {
+		t.Fatalf("NewAlertEvent: %v", err)
+	}
+	const golden = "semstreams.framework.graph.rules.alert.3c18b02fde7a5bdd8e7ab45cd2309936067799121833df9a2b579a4bd8080ce4"
+	if event.EntityID != golden {
+		t.Fatalf("alert ID = %q, want %q", event.EntityID, golden)
+	}
+	if len(event.EntityID) != 103 {
+		t.Fatalf("alert ID length = %d, want 103", len(event.EntityID))
+	}
+	if event.Metadata.Version != eventMetadataVersion || metadata.Version != "" {
+		t.Fatalf("local version default failed: event=%q caller=%q", event.Metadata.Version, metadata.Version)
 	}
 
-	event := NewAlertEvent(alertType, entityID, properties, metadata)
-
-	if event.Type != EventEntityCreate {
-		t.Errorf("Expected event type %v, got %v", EventEntityCreate, event.Type)
+	repeated, err := NewAlertEvent("battery_low", sourceID, map[string]any{"different": true}, EventMetadata{
+		RuleName:  metadata.RuleName,
+		Timestamp: metadata.Timestamp.In(time.FixedZone("other", -7*60*60)),
+		Source:    metadata.Source,
+		Reason:    "different mutable reason",
+		Version:   eventMetadataVersion,
+	})
+	if err != nil {
+		t.Fatalf("repeat NewAlertEvent: %v", err)
 	}
-	if event.Properties["alert_type"] != alertType {
-		t.Errorf("Expected alert_type %v, got %v", alertType, event.Properties["alert_type"])
-	}
-	if event.Properties["source_entity"] != entityID {
-		t.Errorf("Expected source_entity %v, got %v", entityID, event.Properties["source_entity"])
-	}
-	if event.Properties["status"] != "warning" {
-		t.Errorf("Expected status %v, got %v", "warning", event.Properties["status"])
-	}
-	if event.Confidence != 0.8 {
-		t.Errorf("Expected confidence 0.8, got %v", event.Confidence)
+	if repeated.EntityID != event.EntityID {
+		t.Fatalf("same instant/default-equivalent metadata changed identity: %q != %q", repeated.EntityID, event.EntityID)
 	}
 
-	// Check that the alert ID was generated properly
-	if event.EntityID == "" {
-		t.Error("Expected non-empty alert entity ID")
+	changes := []struct {
+		name      string
+		sourceID  string
+		alertType string
+		metadata  EventMetadata
+	}{
+		{"source", eventTestID(t, "drone-002"), "battery_low", metadata},
+		{"alert type", sourceID, "temperature_high", metadata},
+		{"rule name", sourceID, "battery_low", withRuleName(metadata, "other-rule")},
+		{"source component", sourceID, "battery_low", withSource(metadata, "other-processor")},
+		{"timestamp", sourceID, "battery_low", withTimestamp(metadata, metadata.Timestamp.Add(time.Nanosecond))},
 	}
-	if !containsString(event.EntityID, "alert_") {
-		t.Errorf("Expected alert entity ID to contain 'alert_', got %v", event.EntityID)
+	for _, change := range changes {
+		t.Run(change.name, func(t *testing.T) {
+			changed, changedErr := NewAlertEvent(change.alertType, change.sourceID, nil, change.metadata)
+			if changedErr != nil {
+				t.Fatalf("NewAlertEvent: %v", changedErr)
+			}
+			if changed.EntityID == event.EntityID {
+				t.Fatal("identity-bearing input change did not change digest")
+			}
+		})
 	}
 }
 
-func TestNewEntityCreateEvent(t *testing.T) {
-	entityID := semantictest.EntityID(t, "test", "graph", "events", "telemetry", "sensor", "001")
-	entityType := "sensor:Temperature"
-	properties := map[string]any{
-		"location": "engine_room",
-		"unit":     "celsius",
+func TestNewAlertEventMaximumSource(t *testing.T) {
+	metadata := eventTestMetadata()
+	maximum := "a.b.c.d.e." + strings.Repeat("x", 246)
+	if len(maximum) != 256 {
+		t.Fatalf("test source length = %d, want 256", len(maximum))
 	}
-	metadata := EventMetadata{
-		RuleName:  "sensor_discovery",
-		Timestamp: time.Now(),
-		Source:    "discovery_engine",
-		Reason:    "new sensor detected",
-		Version:   "1.0.0",
+	event, err := NewAlertEvent("maximum", maximum, nil, metadata)
+	if err != nil {
+		t.Fatalf("NewAlertEvent maximum source: %v", err)
+	}
+	if len(event.EntityID) != 103 || !strings.HasPrefix(event.EntityID, alertEntityPrefix) {
+		t.Fatalf("alert ID = %q (len %d), want fixed canonical form", event.EntityID, len(event.EntityID))
+	}
+	repeated, err := NewAlertEvent("maximum", maximum, nil, metadata)
+	if err != nil {
+		t.Fatalf("repeat NewAlertEvent maximum source: %v", err)
+	}
+	if repeated.EntityID != event.EntityID {
+		t.Fatalf("maximum-source replay ID = %q, want %q", repeated.EntityID, event.EntityID)
 	}
 
-	event := NewEntityCreateEvent(entityID, entityType, properties, metadata)
-
-	if event.Type != EventEntityCreate {
-		t.Errorf("Expected event type %v, got %v", EventEntityCreate, event.Type)
-	}
-	if event.EntityID != entityID {
-		t.Errorf("Expected entity ID %v, got %v", entityID, event.EntityID)
-	}
-	if event.Properties["type"] != entityType {
-		t.Errorf("Expected type %v, got %v", entityType, event.Properties["type"])
-	}
-	if event.Confidence != 1.0 {
-		t.Errorf("Expected confidence 1.0, got %v", event.Confidence)
+	tooLong := "a.b.c.d.e." + strings.Repeat("x", 247)
+	if event, err = NewAlertEvent("maximum", tooLong, nil, metadata); err == nil || event != nil {
+		t.Fatalf("257-byte source = (%#v, %v), want (nil, error)", event, err)
 	}
 }
 
-func TestNewEntityDeleteEvent(t *testing.T) {
-	entityID := semantictest.EntityID(t, "test", "graph", "events", "telemetry", "sensor", "retired-001")
-	reason := "sensor offline for 24 hours"
-	metadata := EventMetadata{
-		RuleName:  "cleanup_rule",
-		Timestamp: time.Now(),
-		Source:    "cleanup_engine",
-		Version:   "1.0.0",
+func TestEventSubjectAndPayload(t *testing.T) {
+	event, err := NewRelationshipCreateEvent(
+		eventTestID(t, "source"),
+		eventTestID(t, "target"),
+		"owns",
+		eventTestMetadata(),
+	)
+	if err != nil {
+		t.Fatalf("NewRelationshipCreateEvent: %v", err)
 	}
-
-	event := NewEntityDeleteEvent(entityID, reason, metadata)
-
-	if event.Type != EventEntityDelete {
-		t.Errorf("Expected event type %v, got %v", EventEntityDelete, event.Type)
+	if got, want := event.Subject(), "graph.events.relationship.create"; got != want {
+		t.Fatalf("Subject() = %q, want %q", got, want)
 	}
-	if event.EntityID != entityID {
-		t.Errorf("Expected entity ID %v, got %v", entityID, event.EntityID)
-	}
-	if event.Metadata.Reason != reason {
-		t.Errorf("Expected reason %v, got %v", reason, event.Metadata.Reason)
-	}
-	if event.Confidence != 1.0 {
-		t.Errorf("Expected confidence 1.0, got %v", event.Confidence)
+	payload := event.Payload()
+	if payload["entity_id"] != event.EntityID || payload["target_id"] != event.TargetID || payload["edge_type"] != "owns" {
+		t.Fatalf("Payload() = %#v", payload)
 	}
 }
 
-func TestNewRelationshipDeleteEvent(t *testing.T) {
-	fromID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
-	toID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "retired-001")
-	relationshipType := "POWERED_BY"
-	metadata := EventMetadata{
-		RuleName:  "battery_replacement_rule",
-		Timestamp: time.Now(),
-		Source:    "rule_engine",
-		Reason:    "battery replaced",
-		Version:   "1.0.0",
-	}
+func eventTestID(t testing.TB, instance string) string {
+	t.Helper()
+	return semantictest.EntityID(t, "test", "graph", "events", "rules", "entity", instance)
+}
 
-	event := NewRelationshipDeleteEvent(fromID, toID, relationshipType, metadata)
-
-	if event.Type != EventRelationshipDelete {
-		t.Errorf("Expected event type %v, got %v", EventRelationshipDelete, event.Type)
-	}
-	if event.EntityID != fromID {
-		t.Errorf("Expected entity ID %v, got %v", fromID, event.EntityID)
-	}
-	if event.TargetID != toID {
-		t.Errorf("Expected target ID %v, got %v", toID, event.TargetID)
-	}
-	if event.Properties["edge_type"] != relationshipType {
-		t.Errorf("Expected edge_type %v, got %v", relationshipType, event.Properties["edge_type"])
+func eventTestMetadata() EventMetadata {
+	return EventMetadata{
+		RuleName:  "contract-rule",
+		Timestamp: time.Date(2026, time.July, 16, 12, 0, 0, 123, time.UTC),
+		Source:    "rule-processor",
+		Reason:    "contract test",
+		Version:   eventMetadataVersion,
 	}
 }
 
-// Helper function to check if a string contains a substring
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		(len(s) > len(substr) && (s[:len(substr)] == substr ||
-			s[len(s)-len(substr):] == substr ||
-			findSubstring(s, substr))))
+func cloneEvent(event Event) Event {
+	event.Properties = cloneProperties(event.Properties)
+	return event
 }
 
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func eventContractEqual(left, right Event) bool {
+	confidenceEqual := left.Confidence == right.Confidence ||
+		math.IsNaN(left.Confidence) && math.IsNaN(right.Confidence)
+	return left.Type == right.Type &&
+		left.EntityID == right.EntityID &&
+		left.TargetID == right.TargetID &&
+		reflect.DeepEqual(left.Properties, right.Properties) &&
+		reflect.DeepEqual(left.Metadata, right.Metadata) &&
+		confidenceEqual
+}
+
+func cloneProperties(properties map[string]any) map[string]any {
+	result := make(map[string]any, len(properties))
+	for key, value := range properties {
+		result[key] = value
 	}
-	return false
+	return result
+}
+
+func withRuleName(metadata EventMetadata, value string) EventMetadata {
+	metadata.RuleName = value
+	return metadata
+}
+
+func withSource(metadata EventMetadata, value string) EventMetadata {
+	metadata.Source = value
+	return metadata
+}
+
+func withTimestamp(metadata EventMetadata, value time.Time) EventMetadata {
+	metadata.Timestamp = value
+	return metadata
 }

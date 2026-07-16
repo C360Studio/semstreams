@@ -12,7 +12,10 @@ Processes message streams through configurable rules and evaluates conditions ag
 ## Quick Start
 
 ```go
-config := rule.DefaultConfig()
+config, err := rule.NewConfig("example-rule-pack")
+if err != nil {
+    log.Fatal(err)
+}
 config.Ports = &component.PortsDefinition{
     Inputs: []component.PortDefinition{{Subject: "process.>"}},
     Outputs: []component.PortDefinition{{Subject: "rule.events.>"}},

@@ -15,7 +15,10 @@ func createTestRuleComponent() component.LifecycleComponent {
 		panic("failed to create NATS client: " + err.Error())
 	}
 
-	config := DefaultConfig()
+	config, err := NewConfig("rule-lifecycle-test")
+	if err != nil {
+		panic("failed to create rule config: " + err.Error())
+	}
 
 	comp, err := NewProcessor(natsClient, &config)
 	if err != nil {

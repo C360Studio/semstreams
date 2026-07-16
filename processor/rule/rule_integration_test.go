@@ -106,7 +106,8 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	}
 
 	// Create rule processor config
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-crud-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -214,7 +215,8 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 	natsClient := getTestNATSClient(t)
 
 	// Create processor with initial configuration
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-file-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -357,7 +359,8 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create processor with rules_files config
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-entity-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -402,7 +405,8 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 	metricsRegistry := metric.NewMetricsRegistry()
 	require.NotNil(t, metricsRegistry)
 
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-graph-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -504,7 +508,8 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 	}
 
 	// Create processor with initial watch patterns
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-dynamic-watch-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Required: true},
@@ -631,7 +636,8 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 func TestIntegration_GraphIntegration(t *testing.T) {
 	natsClient := getTestNATSClient(t)
 
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-graph-publish-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -811,7 +817,8 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	}
 
 	// Configure processor
-	config := rule.DefaultConfig()
+	config, configErr := rule.NewConfig("rule-transition-integration-test")
+	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Interface: "core.entity.v1", Required: true},

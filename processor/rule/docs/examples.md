@@ -547,6 +547,7 @@ Complete configuration file with multiple rules:
     ]
   },
 
+  "pack_id": "drone-alert-rules",
   "enable_graph_integration": true,
   "alert_cooldown_period": "2m",
   "buffer_window_size": "10m",

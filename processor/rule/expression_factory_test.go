@@ -206,7 +206,7 @@ func TestExpressionRuleCreation(t *testing.T) {
 		},
 	}
 
-	rule, err := factory.Create(def.ID, def, Dependencies{})
+	rule, err := factory.Create(def.ID, def, Dependencies{PackID: "expression-factory-test"})
 	if err != nil {
 		t.Fatalf("failed to create rule: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestExpressionRuleEvaluation(t *testing.T) {
 				Conditions: tt.conditions,
 			}
 
-			rule, err := NewExpressionRule(def)
+			rule, err := NewExpressionRule("direct-expression-test", def)
 			if err != nil {
 				t.Fatalf("failed to create rule: %v", err)
 			}
@@ -369,10 +369,11 @@ func TestExpressionRuleCooldown(t *testing.T) {
 		},
 	}
 
-	rule, err := NewExpressionRule(def)
+	rule, err := NewExpressionRule("direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("failed to create rule: %v", err)
 	}
+	rule.packID = "cooldown-test-pack"
 
 	msg := createTestMessage(map[string]interface{}{"value": "trigger"})
 
@@ -382,7 +383,9 @@ func TestExpressionRuleCooldown(t *testing.T) {
 	}
 
 	// Execute events to set lastTriggered
-	_, _ = rule.ExecuteEvents([]message.Message{msg})
+	if _, err := rule.ExecuteEvents([]message.Message{msg}); err != nil {
+		t.Fatalf("ExecuteEvents: %v", err)
+	}
 
 	// Immediate re-evaluation should be blocked by cooldown
 	if rule.Evaluate([]message.Message{msg}) {
@@ -410,7 +413,7 @@ func TestCreateRuleFromDefinition_Expression(t *testing.T) {
 		},
 	}
 
-	rule, err := CreateRuleFromDefinition(def, Dependencies{})
+	rule, err := CreateRuleFromDefinition(def, Dependencies{PackID: "definition-factory-test"})
 	if err != nil {
 		t.Fatalf("CreateRuleFromDefinition failed: %v", err)
 	}
@@ -429,7 +432,7 @@ func TestCreateRuleFromDefinition_UnknownType(t *testing.T) {
 		},
 	}
 
-	_, err := CreateRuleFromDefinition(def, Dependencies{})
+	_, err := CreateRuleFromDefinition(def, Dependencies{PackID: "unknown-type-test"})
 	if err == nil {
 		t.Error("expected error for unknown rule type")
 	}
@@ -628,7 +631,7 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 				Conditions: tt.conditions,
 			}
 
-			rule, err := NewExpressionRule(def)
+			rule, err := NewExpressionRule("direct-expression-test", def)
 			if err != nil {
 				t.Fatalf("failed to create rule: %v", err)
 			}

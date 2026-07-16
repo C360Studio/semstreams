@@ -197,6 +197,7 @@ Returns:
 {
   "buffer_window_size": "10m",
   "alert_cooldown_period": "2m",
+  "pack_id": "operations-rules",
   "enable_graph_integration": true,
   "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.robotics.*.*.*"]},
   "rules": {...},
@@ -218,6 +219,10 @@ Dynamically updateable:
 - `enable_graph_integration`
 - `rules` (add/update/remove)
 - `entity_watch_buckets`
+
+`pack_id` is a universally required static producer identity. It must be set before the processor is constructed and
+cannot be added or changed through runtime configuration. Graph integration may be toggled only on a processor that
+already passed that universal boot contract.
 
 ## Common Issues
 
@@ -254,7 +259,10 @@ Dynamically updateable:
 **Check:**
 1. Is graph integration enabled?
    ```json
-   "enable_graph_integration": true
+   {
+     "pack_id": "operations-rules",
+     "enable_graph_integration": true
+   }
    ```
 
 2. Check for action errors:

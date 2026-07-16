@@ -43,8 +43,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 	bootstrapID := "acme.prod.robotics.lab.sensor.bootstrap"
 	putWatcherState(t, ctx, kv, bootstrapID)
 
-	config := DefaultConfig()
-	config.PackID = "watcher-hardening-integration"
+	config := mustTestConfig(t, "watcher-hardening-integration")
 	config.DebounceDelayMs = 100 * time.Millisecond
 	config.EntityWatchBuckets = map[string][]string{
 		graph.BucketEntityStates: {

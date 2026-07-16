@@ -281,6 +281,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "research-graph-e2e-rules",
         "rules_files": [
           "/app/configs/rules/research-graph/00-kickoff-classify.json",
           "/app/configs/rules/research-graph/01-classify-routes.json",
