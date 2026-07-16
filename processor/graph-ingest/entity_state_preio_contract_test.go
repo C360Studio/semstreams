@@ -19,6 +19,9 @@ func mutationRequestJSON(t *testing.T, value any) []byte {
 	return data
 }
 
+// entity-id-audit:classify intentional-malformed "bad" line=29 column=46 surface=go-triple-subject entity_id_invalid:arity malformed triple subject pre-I/O rejection fixture
+// entity-id-audit:classify intentional-malformed "bad" line=32 column=11 surface=go-triple-reference entity_id_invalid:arity malformed triple reference pre-I/O rejection fixture
+
 func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 	validID := "acme.ops.test.system.widget.001"
 	validPredicate := "test.state.value"

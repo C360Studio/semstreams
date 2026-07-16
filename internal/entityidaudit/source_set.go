@@ -3,18 +3,17 @@ package entityidaudit
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-// Result contains the concrete value corpus and the distinct implementation
-// surface inventory produced from one exact source set.
+// Result contains the concrete value corpus produced from one exact source set.
 type Result struct {
 	Candidates []Candidate
 	Findings   []Finding
-	Surfaces   []AuditedSurface
 }
 
 // AuditRepository audits one Git repository using a single reproducible source
@@ -25,37 +24,15 @@ func AuditRepository(root string, includeUntracked bool) ([]Candidate, []Finding
 	return result.Candidates, result.Findings, err
 }
 
-// AuditRepositoryFull inventories values and contract-bearing surfaces from
-// one Git-enumerated source set.
+// AuditRepositoryFull inventories values from one Git-enumerated source set.
 func AuditRepositoryFull(root string, includeUntracked bool) (Result, error) {
-	result, files, err := inventoryRepositoryFull(root, includeUntracked)
-	if err != nil {
-		return Result{}, err
-	}
-	if containsSemStreamsEntityAuthority(files) {
-		if err := validateCheckedSurfaceDispositions(result.Surfaces); err != nil {
-			return Result{}, err
-		}
-	}
-	return result, nil
-}
-
-// InventoryRepositoryFull returns the exact value and surface inventory before
-// checked-disposition enforcement. It exists so maintainers can generate a
-// review candidate when source drift introduces an unreviewed surface.
-func InventoryRepositoryFull(root string, includeUntracked bool) (Result, error) {
-	result, _, err := inventoryRepositoryFull(root, includeUntracked)
-	return result, err
-}
-
-func inventoryRepositoryFull(root string, includeUntracked bool) (Result, []string, error) {
 	args := []string{"-C", root, "ls-files", "-z", "--cached"}
 	if includeUntracked {
 		args = append(args, "--others", "--exclude-standard")
 	}
 	output, err := exec.Command("git", args...).Output()
 	if err != nil {
-		return Result{}, nil, fmt.Errorf("enumerate Git source set: %w", err)
+		return Result{}, fmt.Errorf("enumerate Git source set: %w", err)
 	}
 	var files []string
 	for _, raw := range bytes.Split(output, []byte{0}) {
@@ -66,57 +43,60 @@ func inventoryRepositoryFull(root string, includeUntracked bool) (Result, []stri
 		if ignoredRepositoryPath(relative) || !supportedExtension(strings.ToLower(filepath.Ext(relative))) {
 			continue
 		}
-		files = append(files, filepath.Join(root, relative))
+		path := filepath.Join(root, relative)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return Result{}, fmt.Errorf("inspect tracked source %s: %w", relative, err)
+		}
+		files = append(files, path)
 	}
 	sort.Strings(files)
 	candidates, findings, err := auditFiles(files)
 	if err != nil {
-		return Result{}, nil, err
+		return Result{}, err
 	}
-	surfaces, err := auditSurfaces(files)
-	if err != nil {
-		return Result{}, nil, err
+	if err := normalizeCandidatePaths(root, candidates, findings); err != nil {
+		return Result{}, err
 	}
-	if err := normalizeSurfacePaths(root, surfaces); err != nil {
-		return Result{}, nil, err
-	}
-	applyCheckedSurfaceDispositions(surfaces)
-	return Result{Candidates: candidates, Findings: findings, Surfaces: surfaces}, files, nil
+	return Result{Candidates: candidates, Findings: findings}, nil
 }
 
-func containsSemStreamsEntityAuthority(files []string) bool {
-	for _, path := range files {
-		if strings.HasSuffix(filepath.ToSlash(path), "pkg/types/entity_id.go") {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeSurfacePaths(root string, surfaces []AuditedSurface) error {
+func normalizeCandidatePaths(root string, candidates []Candidate, findings []Finding) error {
 	rootAbsolute, err := filepath.Abs(root)
 	if err != nil {
 		return fmt.Errorf("resolve entity-ID audit root: %w", err)
 	}
-	for index := range surfaces {
-		pathAbsolute, err := filepath.Abs(surfaces[index].File)
+	normalize := func(path string) (string, error) {
+		pathAbsolute, err := filepath.Abs(path)
 		if err != nil {
-			return fmt.Errorf("resolve entity-ID surface path %q: %w", surfaces[index].File, err)
+			return "", fmt.Errorf("resolve entity-ID candidate path %q: %w", path, err)
 		}
 		relative, err := filepath.Rel(rootAbsolute, pathAbsolute)
 		if err != nil {
-			return fmt.Errorf("make entity-ID surface path relative to repository: %w", err)
+			return "", fmt.Errorf("make entity-ID candidate path relative to repository: %w", err)
 		}
 		if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("entity-ID surface path escapes repository: %s", surfaces[index].File)
+			return "", fmt.Errorf("entity-ID candidate path escapes repository: %s", path)
 		}
-		surfaces[index].File = filepath.ToSlash(relative)
+		return filepath.ToSlash(relative), nil
+	}
+	for index := range candidates {
+		candidates[index].File, err = normalize(candidates[index].File)
+		if err != nil {
+			return err
+		}
+	}
+	for index := range findings {
+		findings[index].File, err = normalize(findings[index].File)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func ignoredRepositoryPath(path string) bool {
 	clean := filepath.ToSlash(path)
-	return clean == "docs/operations/28-entity-id-source-corpus.json" ||
-		strings.HasPrefix(clean, "openspec/changes/archive/")
+	return strings.HasPrefix(clean, "openspec/changes/archive/")
 }

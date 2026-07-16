@@ -82,11 +82,11 @@ func newTestComponent(loops LoopStore, assessor Assessor) *Component {
 
 func TestComponent_HandleMessage_SufficientHappyPath(t *testing.T) {
 	loops := &fakeLoopStore{
-		intent: &research.Intent{Topic: "drone-001 maintenance events"},
+		intent: &research.Intent{Topic: "test.research.graph.assess.entity.drone-001 maintenance events"},
 		exec: &research.ExecutionOutput{
-			Topic:    "drone-001 maintenance events",
+			Topic:    "test.research.graph.assess.entity.drone-001 maintenance events",
 			Action:   research.ActionWalkSeeds,
-			Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x", Score: 0.9}},
+			Evidence: []fusion.Evidence{{EntityID: "test.research.graph.assess.entity.drone-001", Tier: "0", Source: "x", Score: 0.9}},
 		},
 	}
 	a := &fakeAssessor{
@@ -119,7 +119,7 @@ func TestComponent_HandleMessage_SufficientHappyPath(t *testing.T) {
 	if !strings.Contains(string(loops.assessEnvelope), `"evidence_count":1`) {
 		t.Error("envelope should carry evidence_count:1 (echoes upstream Evidence len)")
 	}
-	if !strings.Contains(string(loops.assessEnvelope), `"topic":"drone-001 maintenance events"`) {
+	if !strings.Contains(string(loops.assessEnvelope), `"topic":"test.research.graph.assess.entity.drone-001 maintenance events"`) {
 		t.Error("envelope should carry topic echoed from intent")
 	}
 }
@@ -130,7 +130,7 @@ func TestComponent_HandleMessage_RefinePath(t *testing.T) {
 		exec: &research.ExecutionOutput{
 			Topic:    "fleet status",
 			Action:   research.ActionDecompose,
-			Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x"}},
+			Evidence: []fusion.Evidence{{EntityID: "test.research.graph.assess.entity.drone-001", Tier: "0", Source: "x"}},
 		},
 	}
 	a := &fakeAssessor{
@@ -209,7 +209,7 @@ func TestComponent_HandleMessage_ExecMissingEmitsDegraded(t *testing.T) {
 func TestComponent_HandleMessage_AssessorErrorEmitsDegraded(t *testing.T) {
 	loops := &fakeLoopStore{
 		intent: &research.Intent{Topic: "x"},
-		exec:   &research.ExecutionOutput{Topic: "x", Action: research.ActionDecompose, Evidence: []fusion.Evidence{{EntityID: "e", Tier: "0", Source: "s"}}},
+		exec:   &research.ExecutionOutput{Topic: "x", Action: research.ActionDecompose, Evidence: []fusion.Evidence{{EntityID: "test.research.graph.assess.entity.e", Tier: "0", Source: "s"}}},
 	}
 	a := &fakeAssessor{content: `not a JSON object at all`}
 	c := newTestComponent(loops, a)

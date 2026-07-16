@@ -27,4 +27,4 @@ func TestDecodeEntityStateResponseRejectsCompleteCandidatePoison(t *testing.T) {
 	assert.Nil(t, entities, "the valid prefix of a poisoned batch must not escape")
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=17 column=21 surface=go-assignment:invalidEntityID research evidence aggregate reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=17 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity research evidence aggregate reference poison fixture

@@ -16,6 +16,10 @@ type storedMessageTestGraphable struct {
 	entityID string
 }
 
+// entity-id-audit:classify intentional-malformed "" line=51 column=14 surface=go-field:.entityID entity_id_invalid:empty empty stored-message ID rejection fixture
+// entity-id-audit:classify intentional-malformed "legacy-id" line=56 column=16 surface=go-field:.entityID entity_id_invalid:arity legacy stored-message ID rejection fixture
+// entity-id-audit:classify intentional-malformed "legacy-id" line=100 column=41 surface=go-field:storedMessageTestGraphable.entityID entity_id_invalid:arity legacy Graphable ID rejection fixture
+
 func (g *storedMessageTestGraphable) EntityID() string        { return g.entityID }
 func (*storedMessageTestGraphable) Triples() []message.Triple { return nil }
 

@@ -41,7 +41,7 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 		t.Fatalf("well-formed foreign-edge claim should validate: %v", err)
 	}
 	// Empty target pattern (match-any) is valid.
-	if err := fe("o", "test.edge.p", "", EdgeConditional).Validate(); err != nil {
+	if err := (ForeignEdgeClaim{Owner: "o", Predicate: "test.edge.p", TargetPattern: "", Mode: EdgeConditional}).Validate(); err != nil { // entity-id-audit:classify intentional-sentinel "" line=46 column=83 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 		t.Errorf("empty target pattern should be valid (match-any): %v", err)
 	}
 
@@ -49,12 +49,12 @@ func TestForeignEdgeClaim_Validate(t *testing.T) {
 		name string
 		fec  ForeignEdgeClaim
 	}{
-		{"empty owner", fe("", "p", "", EdgeConditional)},
-		{"empty predicate", fe("o", "", "", EdgeConditional)},
-		{"wildcard predicate", fe("o", "p.*", "", EdgeConditional)},
-		{"invalid mode", fe("o", "test.edge.p", "", EdgeMode("bogus"))},
-		{"bad target pattern", fe("o", "p", "a.b.c", EdgeConditional)},
-		{"partial wildcard target pattern", fe("o", "sensorml.component.is-hosted-by", "a.b.c.d.e.foo*", EdgeConditional)},
+		{"empty owner", ForeignEdgeClaim{Owner: "", Predicate: "p", TargetPattern: "", Mode: EdgeConditional}},                                                                  // entity-id-audit:classify intentional-sentinel "" line=54 column=77 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"empty predicate", ForeignEdgeClaim{Owner: "o", Predicate: "", TargetPattern: "", Mode: EdgeConditional}},                                                              // entity-id-audit:classify intentional-sentinel "" line=55 column=82 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"wildcard predicate", ForeignEdgeClaim{Owner: "o", Predicate: "p.*", TargetPattern: "", Mode: EdgeConditional}},                                                        // entity-id-audit:classify intentional-sentinel "" line=56 column=88 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"invalid mode", ForeignEdgeClaim{Owner: "o", Predicate: "test.edge.p", TargetPattern: "", Mode: EdgeMode("bogus")}},                                                    // entity-id-audit:classify intentional-sentinel "" line=57 column=90 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		{"bad target pattern", ForeignEdgeClaim{Owner: "o", Predicate: "p", TargetPattern: "a.b.c", Mode: EdgeConditional}},                                                     // entity-id-audit:classify intentional-malformed "a.b.c" line=58 column=83 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:arity short target rejection fixture
+		{"partial wildcard target pattern", ForeignEdgeClaim{Owner: "o", Predicate: "sensorml.component.is-hosted-by", TargetPattern: "a.b.c.d.e.foo*", Mode: EdgeConditional}}, // entity-id-audit:classify intentional-malformed "a.b.c.d.e.foo*" line=59 column=129 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:alphabet partial wildcard rejection fixture
 	}
 	for _, tt := range bad {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,10 +197,10 @@ func TestEpoch_CompactStale(t *testing.T) {
 // an OwnerClaim is still reaped (it holds a contested cell).
 func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{fe("fe-only", "x.edge", "", EdgeNoBirthStub)}}
+	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "fe-only", Predicate: "x.edge", TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=213 column=117 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	ep.Owners["mixed"] = ownerEntry{
-		Claims:       []OwnerClaim{oc("mixed", "a.b.c.d.e.f", ModeReplaceOwned, "p")},
-		ForeignEdges: []ForeignEdgeClaim{fe("mixed", "y.edge", "", EdgeStrict)},
+		Claims:       []OwnerClaim{{Owner: "mixed", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{"p"}}},
+		ForeignEdges: []ForeignEdgeClaim{{Owner: "mixed", Predicate: "y.edge", TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=216 column=89 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	}
 	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{oc("owning-dead", "a.b.c.d.e.g", ModeReplaceOwned, "p")}}
 	// A degenerate empty entry (no claims, no edges) is NOT exempt — the
@@ -243,15 +243,15 @@ func TestRegistry_checkInverseGate(t *testing.T) {
 	}
 	withResolver := &Registry{logger: slog.Default(), inverseResolver: resolve}
 
-	condNoInv := fe("o", "no.inverse", "", EdgeConditional)
+	condNoInv := ForeignEdgeClaim{Owner: "o", Predicate: "no.inverse", TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=266 column=76 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condNoInv}); !errors.Is(err, ErrInvalidClaim) {
 		t.Errorf("Conditional edge without a registered inverse must fail the gate; got %v", err)
 	}
-	condWithInv := fe("o", "has.inverse", "", EdgeConditional)
+	condWithInv := ForeignEdgeClaim{Owner: "o", Predicate: "has.inverse", TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=270 column=78 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condWithInv}); err != nil {
 		t.Errorf("Conditional edge WITH a registered inverse must pass; got %v", err)
 	}
-	stub := fe("o", "no.inverse", "", EdgeNoBirthStub)
+	stub := ForeignEdgeClaim{Owner: "o", Predicate: "no.inverse", TargetPattern: "", Mode: EdgeNoBirthStub} // entity-id-audit:classify intentional-sentinel "" line=274 column=73 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{stub}); err != nil {
 		t.Errorf("NoBirthStub needs no inverse, must pass; got %v", err)
 	}

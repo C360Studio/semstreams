@@ -27,6 +27,8 @@ type keyedIngestTestMsg struct {
 	term atomic.Bool
 }
 
+// entity-id-audit:classify intentional-malformed "bad" line=163 column=61 surface=go-field:EntityState.ID entity_id_invalid:arity malformed keyed-ingest state rejection fixture
+
 func (*keyedIngestTestMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
 func (*keyedIngestTestMsg) Data() []byte                              { return nil }
 func (*keyedIngestTestMsg) Headers() nats.Header                      { return nil }

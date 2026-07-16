@@ -187,5 +187,5 @@ func TestReader_ColdStartTruncationDoesNotPersistWarmState(t *testing.T) {
 	require.True(t, r.warmed)
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=105 column=21 surface=go-assignment:invalidEntityID gated DAG aggregate reference poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=129 column=31 surface=go-assignment:invalidSecondPageEntityID gated DAG second-page aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=105 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity gated DAG aggregate reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=129 column=31 surface=go-assignment:invalidSecondPageEntityID entity_id_invalid:arity gated DAG second-page aggregate poison fixture

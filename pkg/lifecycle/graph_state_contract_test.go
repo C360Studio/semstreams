@@ -29,7 +29,7 @@ func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
 	assertResetReason(t, err, graph.GraphStateReasonNoncanonicalPredicate)
 
 	// Sticky means later calls fail before reading, even if the offending key
-	// were repaired in place. Recovery requires the documented reset/reingest
+	// were repaired in place. Recovery requires the documented wipe/restart/reseed
 	// and process restart boundary.
 	delete(bucket.raw, entityID)
 	participant, err = mgr.Get(context.Background(), "fixture", entityID)

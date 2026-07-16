@@ -294,9 +294,10 @@ func TestResolveTripleSubject_TruthTable(t *testing.T) {
 			// message-path rules that don't have an entity in scope).
 			// Covers the `if resolved == ""` check that the unresolved-
 			// tokens case bypasses entirely.
-			name:      "subject resolves to empty string (no surviving tokens) → error",
-			action:    Action{Subject: "$entity.id"},
-			ec:        &ExecutionContext{EntityID: ""},
+			name:   "subject resolves to empty string (no surviving tokens) → error",
+			action: Action{Subject: "$entity.id"},
+			ec:     &ExecutionContext{EntityID: ""},
+			// entity-id-audit:classify intentional-malformed "" line=304 column=40 surface=go-field:ExecutionContext.EntityID entity_id_invalid:empty empty-after-substitution rejection fixture
 			wantError: true,
 		},
 	}

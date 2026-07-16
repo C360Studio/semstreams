@@ -346,7 +346,7 @@ func TestParseGraphSummaryRequest_ExplicitFalseOverrides(t *testing.T) {
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=78 column=21 surface=go-assignment:invalidEntityID graph summary prefix aggregate subject poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=78 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity graph summary prefix aggregate subject poison fixture
 
 // TestParseSummaryRequest_RoundTrip locks in the JSON tag contract
 // per the project's polymorphic-config rule (memory:

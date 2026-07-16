@@ -14,15 +14,7 @@ func TestGoldenCorpusReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := walkSourceFiles([]string{"testdata/corpus"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	surfaces, err := auditSurfaces(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	report := BuildReport([]string{"testdata/corpus"}, "fixture", Result{Candidates: candidates, Findings: findings, Surfaces: surfaces})
+	report := BuildReport([]string{"testdata/corpus"}, "fixture", Result{Candidates: candidates, Findings: findings})
 	got, err := MarshalReport(report)
 	if err != nil {
 		t.Fatal(err)
@@ -147,12 +139,12 @@ func TestAuditRequiresBoundedExplicitClassifications(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeFixture(t, root, "negative.go", `package fixture
-// entity-id-audit:classify intentional-malformed "bad.id" line=3 column=25 surface=go-field:EntityState.ID parser rejection fixture one
+// entity-id-audit:classify intentional-malformed "bad.id" line=3 column=25 surface=go-field:EntityState.ID entity_id_invalid:arity parser rejection fixture one
 var _ = EntityState{ID: "bad.id"}
-// entity-id-audit:classify intentional-malformed "bad.id" line=5 column=25 surface=go-field:EntityState.ID parser rejection fixture two
+// entity-id-audit:classify intentional-malformed "bad.id" line=5 column=25 surface=go-field:EntityState.ID entity_id_invalid:arity parser rejection fixture two
 var _ = EntityState{ID: "bad.id"}
-// entity-id-audit:classify unrelated-glob "raw.sensor.>" line=7 column=23 surface=go-unrelated-glob NATS subscription filter
-var _ = Port{Subject: "raw.sensor.>"}
+// entity-id-audit:classify unrelated-glob "raw.sensor.>" line=7 column=25 surface=go-declaration:entityIDPattern entity_id_pattern_invalid:arity NATS subscription filter
+const entityIDPattern = "raw.sensor.>"
 `)
 
 	candidates, findings, err := Audit(root)
@@ -164,13 +156,13 @@ var _ = Port{Subject: "raw.sensor.>"}
 	}
 	languages := map[Language]bool{}
 	for _, candidate := range candidates {
-		languages[candidate.Language] = true
+		languages[candidate.Classification] = true
 	}
 	if !languages[LanguageIntentionalMalformed] || !languages[LanguageUnrelatedGlob] {
 		t.Fatalf("languages = %#v, want both explicit classifications", languages)
 	}
 	for _, candidate := range candidates {
-		if candidate.Value == "bad.id" && candidate.Language != LanguageIntentionalMalformed {
+		if candidate.Value == "bad.id" && candidate.Classification != LanguageIntentionalMalformed {
 			t.Fatalf("candidate = %#v, want every exact occurrence classified", candidate)
 		}
 	}
@@ -224,7 +216,7 @@ var _ = EntityState{ID: ""}
 	if len(candidates) != 2 || len(findings) != 1 {
 		t.Fatalf("candidates = %#v, findings = %#v, want one exact empty occurrence classified and one finding", candidates, findings)
 	}
-	if candidates[0].Language != LanguageIntentionalMalformed || candidates[0].ClassificationReason != classificationReason {
+	if candidates[0].Classification != LanguageIntentionalMalformed || candidates[0].ClassificationReason != classificationReason {
 		t.Fatalf("first candidate = %#v, want exact occurrence and stable classification reason", candidates[0])
 	}
 	if candidates[1].Language != LanguageLiteral || findings[0].Line != 4 || findings[0].Reason != "entity_id_invalid:empty" {
@@ -232,11 +224,119 @@ var _ = EntityState{ID: ""}
 	}
 }
 
+func TestAuditIntentionalSentinelRequiresOneExactOccurrence(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "sentinel.go", `package fixture
+// entity-id-audit:classify intentional-sentinel "" line=3 column=36 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:empty documented match-all prefix
+var _ = PrefixQueryRequest{Prefix: ""}
+`)
+
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || len(findings) != 0 {
+		t.Fatalf("candidates = %#v, findings = %#v, want one classified sentinel", candidates, findings)
+	}
+	if candidates[0].Classification != LanguageIntentionalSentinel {
+		t.Fatalf("candidate = %#v, want intentional sentinel", candidates[0])
+	}
+}
+
+func TestAuditIntentionalTemplateRequiresOneExactSubstitution(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "template.go", `package fixture
+// entity-id-audit:classify intentional-template "$entity.id" line=3 column=18 surface=go-declaration:entityID entity_id_invalid:arity runtime substitution
+const entityID = "$entity.id"
+`)
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || len(findings) != 0 || candidates[0].Classification != LanguageIntentionalTemplate {
+		t.Fatalf("candidates = %#v, findings = %#v, want one exact template classification", candidates, findings)
+	}
+
+	writeFixture(t, root, "not_template.go", `package fixture
+// entity-id-audit:classify intentional-template "$garbage" line=3 column=18 surface=go-declaration:entityID entity_id_invalid:arity unknown substitution syntax
+const entityID = "$garbage"
+`)
+	if _, _, err := Audit(root); err == nil {
+		t.Fatal("Audit() error = nil, want non-substitution template classification rejection")
+	}
+}
+
+func TestAuditRejectsReasonMismatchAndValidMalformedClassification(t *testing.T) {
+	t.Parallel()
+	for _, fixture := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "wrong_reason.go",
+			content: `package fixture
+// entity-id-audit:classify intentional-malformed "bad.id" line=3 column=25 surface=go-field:EntityState.ID entity_id_invalid:alphabet wrong reason
+var _ = EntityState{ID: "bad.id"}
+`,
+		},
+		{
+			name: "valid_value.go",
+			content: `package fixture
+// entity-id-audit:classify intentional-malformed "acme.ops.robotics.gcs.drone.001" line=3 column=25 surface=go-field:EntityState.ID entity_id_invalid:arity must not classify valid values
+var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
+`,
+		},
+	} {
+		fixture := fixture
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeFixture(t, root, fixture.name, fixture.content)
+			if _, _, err := Audit(root); err == nil {
+				t.Fatal("Audit() error = nil, want classification contract rejection")
+			}
+		})
+	}
+}
+
+func TestAuditRejectsUnmatchedUnrelatedGlobClassification(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "stale.go", `package fixture
+// entity-id-audit:classify unrelated-glob "raw.sensor.>" line=3 column=25 surface=go-declaration:entityIDPattern entity_id_pattern_invalid:arity stale NATS glob
+const anotherName = "raw.sensor.>"
+`)
+	if _, _, err := Audit(root); err == nil {
+		t.Fatal("Audit() error = nil, want stale unrelated-glob annotation rejection")
+	}
+}
+
+func TestAuditExtractsStringKeyedSemanticMapFields(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "maps.go", `package fixture
+var _ = map[string]any{"entity_id": "legacy-id"}
+var _ = map[string]string{"entity_id_prefix": "acme.ops"}
+`)
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || len(findings) != 1 {
+		t.Fatalf("candidates = %#v, findings = %#v, want two map candidates and one malformed ID", candidates, findings)
+	}
+	if findings[0].Value != "legacy-id" || findings[0].Reason != "entity_id_invalid:arity" {
+		t.Fatalf("finding = %#v, want malformed string-keyed entity_id", findings[0])
+	}
+}
+
 func TestAuditRejectsAnnotationThatDoesNotMatchExactOccurrence(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	writeFixture(t, root, "negative.go", `package fixture
-// entity-id-audit:classify intentional-malformed "bad.id" line=3 column=24 surface=go-field:EntityState.ID wrong column
+// entity-id-audit:classify intentional-malformed "bad.id" line=3 column=24 surface=go-field:EntityState.ID entity_id_invalid:arity wrong column
 var _ = EntityState{ID: "bad.id"}
 `)
 	if _, _, err := Audit(root); err == nil {
@@ -343,185 +443,37 @@ func TestAuditRejectsMalformedJSONWithoutTextFallback(t *testing.T) {
 	}
 }
 
-func TestSchemaRegexConstantIsSurfaceNotDeclarationPattern(t *testing.T) {
+func TestRegexLikeSemanticPatternIsAudited(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeFixture(t, root, "schema.go", `package fixture
-const entityIDPattern = "^[A-Za-z0-9_-]+$"
+	writeFixture(t, root, "semantic.go", `package fixture
+const entityIDPattern = "a.b.[bad].d.e.f"
 `)
 	candidates, findings, err := Audit(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 0 || len(findings) != 0 {
-		t.Fatalf("candidates = %#v, findings = %#v, want regex excluded from value corpus", candidates, findings)
+	if len(candidates) != 1 || len(findings) != 1 {
+		t.Fatalf("candidates = %#v, findings = %#v, want regex-like semantic pattern reported", candidates, findings)
 	}
-	files, err := walkSourceFiles([]string{root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	surfaces, err := auditSurfaces(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(surfaces) != 1 || surfaces[0].Kind != "schema-regex" {
-		t.Fatalf("surfaces = %#v, want schema-regex inventory", surfaces)
+	if findings[0].Value != "a.b.[bad].d.e.f" || !strings.Contains(findings[0].Reason, "first_byte") {
+		t.Fatalf("finding = %#v, want malformed declaration-pattern first-byte finding", findings[0])
 	}
 }
 
-func TestSurfaceInventoryCoversAPISchemaKVAndDirectImplementations(t *testing.T) {
+func TestEntityIDSchemaRegexExclusionIsPathAndNameBounded(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	writeFixture(t, root, "surfaces.go", `package fixture
-import "strings"
-func ValidateEntityID(value string) error { return nil }
-func buildEntityKey(entityID string) string { return "prefix." + entityID }
-func use(entityID, entityPattern string) {
-  _ = ValidateEntityID(entityID)
-  _ = strings.Split(entityID, ".")
-  _ = matchPattern(entityPattern, entityID)
-  _, _ = kv.Get(entityID)
-}
-`)
-	writeFixture(t, root, "schemas/entity.json", `{"properties":{"entity_id":{"type":"string"},"entity_id_prefix":{"type":"string"}}}`)
-	files, err := walkSourceFiles([]string{root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	surfaces, err := auditSurfaces(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kinds := map[string]bool{}
-	for _, surface := range surfaces {
-		kinds[surface.Kind] = true
-		if !strings.HasPrefix(surface.Classification, "unreviewed:") {
-			t.Fatalf("surface = %#v, want unreviewed classification without a checked exact disposition", surface)
-		}
-		if len(surface.Locations) == 0 || surface.Locations[0].Line == 0 || surface.Locations[0].Column == 0 {
-			t.Fatalf("surface = %#v, want at least one exact location", surface)
+	authorityPath := filepath.Join(t.TempDir(), "pkg", "types", "entity_id.go")
+	for _, path := range []string{authorityPath, filepath.Join("pkg", "types", "entity_id.go")} {
+		if !isEntityIDSchemaRegexDeclaration(path, "EntityIDDeclarationPattern") {
+			t.Errorf("canonical schema regex declaration at %q was not excluded", path)
 		}
 	}
-	for _, want := range []string{"parser-validator-api-declaration", "parser-validator-api-call", "string-builder-candidate", "kv-call", "direct-split", "match-family-call", "schema-contract-field"} {
-		if !kinds[want] {
-			t.Fatalf("surfaces = %#v, missing kind %s", surfaces, want)
-		}
+	if isEntityIDSchemaRegexDeclaration(authorityPath, "entityIDPattern") {
+		t.Fatal("ordinary semantic entityIDPattern declaration was excluded")
 	}
-}
-
-func TestUnreviewedSurfaceFailsReportGeneration(t *testing.T) {
-	t.Parallel()
-	surfaces := groupSurfaces([]surfaceOccurrence{{file: "example.go", kind: "kv-call", name: "Get in load", line: 4, column: 2}})
-	if len(surfaces) != 1 || !strings.HasPrefix(surfaces[0].Classification, "unreviewed:") {
-		t.Fatalf("surfaces = %#v, want one unreviewed group", surfaces)
-	}
-	report := BuildReport([]string{"."}, "fixture", Result{Surfaces: surfaces})
-	if _, err := MarshalReport(report); err == nil || !strings.Contains(err.Error(), "unreviewed") {
-		t.Fatalf("MarshalReport() error = %v, want unreviewed rejection", err)
-	}
-	candidates, err := MarshalSurfaceDispositionCandidates(surfaces)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(candidates), `"classification":"unreviewed"`) || !strings.Contains(string(candidates), `"basis":"REVIEW REQUIRED"`) {
-		t.Fatalf("disposition candidate = %s, want explicit review-required entry", candidates)
-	}
-}
-
-func TestDispositionCoverageFailsClosedForOmissionAndStaleEntry(t *testing.T) {
-	t.Parallel()
-	surface := AuditedSurface{
-		File: "example.go", Kind: "kv-call", Name: "Get in load",
-		Classification: "unreviewed:missing-disposition", Locations: []Location{{Line: 4, Column: 2}},
-	}
-	if err := validateSurfaceDispositionCoverage([]AuditedSurface{surface}, map[string]SurfaceDisposition{}); err == nil || !strings.Contains(err.Error(), "unreviewed") {
-		t.Fatalf("missing disposition error = %v, want unreviewed rejection", err)
-	}
-
-	surface.Classification = "unrelated:reviewed:not-entity-id-contract"
-	stale := map[string]SurfaceDisposition{
-		"removed.go|kv-call|Get in removed": {
-			File: "removed.go", Kind: "kv-call", Name: "Get in removed",
-			Classification: "unrelated", Basis: "reviewed:not-entity-id-contract",
-		},
-	}
-	if err := validateSurfaceDispositionCoverage([]AuditedSurface{surface}, stale); err == nil || !strings.Contains(err.Error(), "no inventoried surface") {
-		t.Fatalf("stale disposition error = %v, want exact-coverage rejection", err)
-	}
-}
-
-func TestCheckedDispositionManifestPinsRepresentativeCoreSurfaces(t *testing.T) {
-	t.Parallel()
-	required := []string{
-		"graph/id_prefix_test.go|match-family-call|MatchesAnyIDPrefix in TestMatchesAnyIDPrefix",
-		"graph/query/client.go|kv-call|Get in GetEntity",
-		"pkg/fusion/retrieval.go|go-contract-field|ResolveQuery.Scope",
-		"pkg/lifecycle/manager.go|kv-call|Get in getEntity",
-		"pkg/lifecycle/manager_query.go|direct-split|strings.Split in matchPattern",
-		"pkg/types/entity_id.go|direct-split|strings.Split in ParseEntityID",
-		"processor/graph-embedding/query.go|go-contract-field|SearchRequest.Scope",
-		"processor/graph-index/context_index.go|string-builder-candidate|contextIndexKey",
-		"processor/graph-index/incoming_index.go|string-builder-candidate|incomingIndexKey",
-		"processor/graph-index/name_index.go|string-builder-candidate|nameCompositeKey",
-		"processor/graph-index/predicate_index.go|string-builder-candidate|predicateIndexKey",
-		"processor/graph-index/component.go|kv-call|Put in UpdatePredicateIndex",
-		"processor/graph-ingest/component.go|kv-call|Put in createEntity",
-		"processor/graph-query/summary.go|direct-split|strings.Split in aggregateEntityTypes",
-	}
-	for _, key := range required {
-		disposition, ok := checkedSurfaceDispositions[key]
-		if !ok {
-			t.Errorf("missing required checked surface disposition %s", key)
-			continue
-		}
-		if disposition.Classification != "relevant" {
-			t.Errorf("disposition %s = %#v, want relevant", key, disposition)
-		}
-	}
-}
-
-func TestEntityIDNamedStringBuildersHaveConstructorOrFixtureDispositions(t *testing.T) {
-	t.Parallel()
-	matched := 0
-	for key, disposition := range checkedSurfaceDispositions {
-		if disposition.Kind != "string-builder-candidate" || !strings.Contains(strings.ToLower(disposition.Name), "entityid") {
-			continue
-		}
-		matched++
-		switch disposition.Classification {
-		case "relevant":
-			if disposition.Basis != "reviewed:entity-id-constructor" &&
-				disposition.Basis != "reviewed:graphable-entity-id-constructor" &&
-				disposition.Basis != "reviewed:entity-id-test-fixture-builder" {
-				t.Errorf("relevant EntityID builder %s has non-constructor basis %q", key, disposition.Basis)
-			}
-		case "unrelated":
-			if disposition.Basis != "reviewed:auditor-implementation-helper" && !strings.HasPrefix(disposition.Basis, "reviewed:test-fixture-") {
-				t.Errorf("unrelated EntityID builder %s lacks explicit fixture/auditor basis: %q", key, disposition.Basis)
-			}
-		default:
-			t.Errorf("EntityID builder %s has invalid classification %q", key, disposition.Classification)
-		}
-	}
-	if matched == 0 {
-		t.Fatal("checked disposition manifest has no EntityID-named string builders")
-	}
-
-	requiredConstructors := []string{
-		"agentic/entity_ids.go|string-builder-candidate|ModelEndpointEntityID",
-		"agentic/entity_ids.go|string-builder-candidate|TryLoopExecutionEntityID",
-		"agentic/ops_diagnosis_entity.go|string-builder-candidate|OpsDiagnosisEntityID",
-		"agentic/web_observation_entity.go|string-builder-candidate|TryWebObservationEntityID",
-		"cmd/e2e-semstreams/mission/command.go|string-builder-candidate|EntityIDFor",
-		"examples/processors/document/payload_document.go|string-builder-candidate|EntityID",
-		"examples/processors/iot_sensor/payload.go|string-builder-candidate|ZoneEntityID",
-		"examples/processors/weather_station/payload.go|string-builder-candidate|EntityID",
-		"processor/agentic-loop/handlers.go|string-builder-candidate|resolveRunEntityID",
-	}
-	for _, key := range requiredConstructors {
-		if disposition := checkedSurfaceDispositions[key]; disposition.Classification != "relevant" {
-			t.Errorf("constructor disposition %s = %#v, want relevant", key, disposition)
-		}
+	if isEntityIDSchemaRegexDeclaration(filepath.Join(t.TempDir(), "schema.go"), "EntityIDDeclarationPattern") {
+		t.Fatal("same-named declaration outside canonical authority was excluded")
 	}
 }
 
@@ -579,35 +531,6 @@ func testFixture(t interface{}) string {
 	}
 	if !foundHelper {
 		t.Fatalf("candidates = %#v, want exact semantic helper surface", candidates)
-	}
-}
-
-func TestSemanticTestEntityIDSurfaceRequiresExactAPIAndArity(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	path := filepath.Join(root, "fixture_test.go")
-	writeFixture(t, root, "fixture_test.go", `package fixture
-import "github.com/c360studio/semstreams/internal/semantictest"
-func dynamic(t interface{}, instance string) string {
-  return semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone", instance)
-}
-func wrongArity(t interface{}) string {
-  return semantictest.EntityID(t, "acme", "ops", "robotics", "gcs", "drone")
-}
-`)
-
-	surfaces, err := auditGoSurfaces(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var helperSurfaces []AuditedSurface
-	for _, surface := range groupSurfaces(surfaces) {
-		if surface.Kind == "semantic-test-helper-call" {
-			helperSurfaces = append(helperSurfaces, surface)
-		}
-	}
-	if len(helperSurfaces) != 1 || helperSurfaces[0].Name != "EntityID in dynamic" {
-		t.Fatalf("helper surfaces = %#v, want exact dynamic seven-argument API only", helperSurfaces)
 	}
 }
 

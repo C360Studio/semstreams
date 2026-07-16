@@ -2618,7 +2618,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id",
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2647 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

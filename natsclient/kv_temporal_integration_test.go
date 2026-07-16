@@ -32,7 +32,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create many revisions with known timestamps
-	entityID := "test.entity"
+	key := "test.entity"
 	var timestamps []time.Time
 	baseTime := time.Now().Add(-1 * time.Hour)
 
@@ -42,12 +42,12 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 		timestamps = append(timestamps, timestamp)
 
 		data := map[string]any{
-			"id":      entityID,
+			"id":      key,
 			"value":   i,
 			"created": timestamp,
 		}
 		bytes, _ := json.Marshal(data)
-		_, err := bucket.Put(ctx, entityID, bytes)
+		_, err := bucket.Put(ctx, key, bytes)
 		require.NoError(t, err)
 
 		// Small delay to ensure different Created() timestamps
@@ -57,7 +57,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 	t.Run("Boundary_BeforeAllHistory", func(t *testing.T) {
 		// Query before any history exists
 		targetTime := baseTime.Add(-1 * time.Hour)
-		entry, err := resolver.GetAtTimestamp(ctx, entityID, targetTime)
+		entry, err := resolver.GetAtTimestamp(ctx, key, targetTime)
 		require.NoError(t, err)
 
 		var result map[string]any
@@ -68,7 +68,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 	t.Run("Boundary_AfterAllHistory", func(t *testing.T) {
 		// Query after all history
 		targetTime := time.Now().Add(1 * time.Hour)
-		entry, err := resolver.GetAtTimestamp(ctx, entityID, targetTime)
+		entry, err := resolver.GetAtTimestamp(ctx, key, targetTime)
 		require.NoError(t, err)
 
 		var result map[string]any
@@ -78,14 +78,14 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 
 	t.Run("ExactMatch", func(t *testing.T) {
 		// Let's use actual entry Created() time instead of our timestamps
-		history, err := bucket.History(ctx, entityID)
+		history, err := bucket.History(ctx, key)
 		require.NoError(t, err)
 
 		// Use middle entry's actual Created() time
 		midIdx := len(history) / 2
 		targetTime := history[midIdx].Created()
 
-		entry, err := resolver.GetAtTimestamp(ctx, entityID, targetTime)
+		entry, err := resolver.GetAtTimestamp(ctx, key, targetTime)
 		require.NoError(t, err)
 
 		var result map[string]any
@@ -99,7 +99,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 
 	t.Run("BetweenRevisions", func(t *testing.T) {
 		// Get actual history to work with real timestamps
-		history, err := bucket.History(ctx, entityID)
+		history, err := bucket.History(ctx, key)
 		require.NoError(t, err)
 
 		if len(history) > 20 {
@@ -108,7 +108,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 			rev11Time := history[11].Created()
 			targetTime := rev10Time.Add(rev11Time.Sub(rev10Time) / 2) // Midpoint
 
-			entry, err := resolver.GetAtTimestamp(ctx, entityID, targetTime)
+			entry, err := resolver.GetAtTimestamp(ctx, key, targetTime)
 			require.NoError(t, err)
 
 			var result map[string]any
@@ -121,7 +121,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 
 	t.Run("TimeWindow", func(t *testing.T) {
 		// Get actual history
-		history, err := bucket.History(ctx, entityID)
+		history, err := bucket.History(ctx, key)
 		require.NoError(t, err)
 
 		if len(history) > 30 {
@@ -129,7 +129,7 @@ func TestTemporalResolver_BinarySearch(t *testing.T) {
 			startTime := history[20].Created()
 			endTime := history[30].Created()
 
-			entries, err := resolver.GetInTimeRange(ctx, entityID, startTime, endTime)
+			entries, err := resolver.GetInTimeRange(ctx, key, startTime, endTime)
 			require.NoError(t, err)
 
 			t.Logf("Time window: found %d entries between indices 20-30", len(entries))
@@ -161,11 +161,11 @@ func TestTemporalResolver_Performance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create maximum history
-	entityID := "perf.entity"
+	key := "perf.entity"
 	for i := 0; i < 64; i++ {
 		data := map[string]any{"value": i}
 		bytes, _ := json.Marshal(data)
-		_, err := bucket.Put(ctx, entityID, bytes)
+		_, err := bucket.Put(ctx, key, bytes)
 		require.NoError(t, err)
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -179,7 +179,7 @@ func TestTemporalResolver_Performance(t *testing.T) {
 	start := time.Now()
 	iterations := 1000
 	for i := 0; i < iterations; i++ {
-		_, err := resolver.GetAtTimestamp(ctx, entityID, targetTime)
+		_, err := resolver.GetAtTimestamp(ctx, key, targetTime)
 		require.NoError(t, err)
 	}
 	duration := time.Since(start)

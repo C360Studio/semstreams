@@ -559,4 +559,4 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=381 column=21 surface=go-assignment:invalidEntityID authoritative reply poison fixtures
+// entity-id-audit:classify intentional-malformed "bad" line=381 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures

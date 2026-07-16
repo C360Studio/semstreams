@@ -499,7 +499,7 @@ func (s *TieredScenario) executeTestEmbeddingFallback(ctx context.Context, resul
 
 	fallbackMsg := map[string]any{
 		"type":        "telemetry",
-		"entity_id":   "fallback-test-device",
+		"entity_id":   "test.e2e.semantic.fallback.sensor.device",
 		"entity_type": "sensor",
 		"timestamp":   time.Now().Unix(),
 		"description": "Testing search fallback mechanism with lexical matching",
@@ -580,8 +580,8 @@ func (s *TieredScenario) sendRuleTestMessages(result *Result) int {
 	defer conn.Close()
 
 	messages := []map[string]any{
-		{"type": "telemetry", "entity_id": "battery-test-device", "battery": map[string]any{"level": 15.0}, "timestamp": time.Now().Unix()},
-		{"type": "telemetry", "entity_id": "temp-test-device", "data": map[string]any{"temperature": 55.0}, "timestamp": time.Now().Unix()},
+		{"type": "telemetry", "entity_id": "test.e2e.rules.validation.sensor.battery", "battery": map[string]any{"level": 15.0}, "timestamp": time.Now().Unix()},
+		{"type": "telemetry", "entity_id": "test.e2e.rules.validation.sensor.temperature", "data": map[string]any{"temperature": 55.0}, "timestamp": time.Now().Unix()},
 	}
 
 	sentCount := 0

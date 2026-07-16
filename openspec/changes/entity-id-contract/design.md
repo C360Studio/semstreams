@@ -204,6 +204,10 @@ persisted-state preservation or rollback obligation.
 The implementation begins with a deterministic source corpus over Go constructors/constants, configs, schemas,
 fixtures, generated tools, and owned reference deployments. It reports literal IDs, declaration patterns, and query
 prefixes separately and identifies source location plus failure reason. It does not inspect persisted beta state.
+The blocking gate is the concrete typed/static value corpus. Repository-wide name heuristics over generic KV calls,
+match-named functions, string builders, or `strings.Split` are not accepted as contract evidence because they are not
+type-aware and do not prove delegation to the canonical APIs. The audit emits diagnostic JSON on demand; a generated
+full-corpus snapshot is not checked into documentation.
 
 SemStreams, SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, and every additional owned producer
 update source/configuration/fixtures against the same SemStreams version. The exact breaking release procedure wipes
@@ -230,11 +234,16 @@ the same checked source audit.
 
 Intentional invalid fixtures are exceptions to the positive-fixture rule, not file-wide allowances. In source formats
 with comments, an invalid classification binds to the exact candidate occurrence and records its contract kind, exact
-value, and authoritative stable reason. Strict JSON, JSONL, and other commentless structured fixtures use a checked
-manifest keyed by file plus structural location or record, kind, exact value, and reason. The auditor rejects missing,
-stale, duplicate, broad, unmatched, or reason-mismatched classifications and requires every classification to resolve
-to exactly one candidate. This preserves negative grammar tests without allowing an old positive fixture to hide
-behind another occurrence of the same malformed value.
+value, and authoritative stable reason. Strict JSON, JSONL, and other commentless structured fixtures remain canonical
+positive data; an intentional negative moves into a comment-capable native rejection test instead of creating a second
+checked classification manifest that can drift. The auditor rejects missing, stale, duplicate, broad, unmatched, or
+reason-mismatched classifications and requires every classification to resolve to exactly one candidate. This
+preserves negative grammar tests without allowing an old positive fixture to hide behind another occurrence of the
+same malformed value.
+
+A pre-substitution entity expression is neither a positive literal nor an intentional malformed value. It uses an
+exact intentional-template classification at its source occurrence and still must pass the canonical contract after
+substitution. The annotation documents the authoring language; it is not a runtime validation exemption.
 
 ## Implementation checkpoint: PR #534 authoritative write seam
 
@@ -263,9 +272,10 @@ rule-watch, gateway, schema, tool, other fusion-engine, and reference-design sur
 inventory and source-update tasks.
 
 ObjectStore now validates `ContentStorable.EntityID()` before binary/content extraction, object-name generation,
-operation metrics, or NATS I/O for both binary and non-binary content. The previous invalid-input log that exposed
-the raw ID was removed. This closes only the `StoreContent` preflight requirement; it does not close retention or
-reclamation policy.
+success/business/storage metrics, or NATS I/O for both binary and non-binary content. Its designated boundary records
+exactly one bounded lane/reason rejection metric without identity bytes in labels. The previous invalid-input log that
+exposed the raw ID was removed. This closes only the `StoreContent` preflight requirement; it does not close retention
+or reclamation policy.
 
 The graph-index unit matrix now uses `E = 256` to prove the current maximum formulas and shared-validator acceptance.
 Inactive PREDICATE, NAME, and both INCOMING entity axes also reject a 257-byte ID before lister, Put, or Delete I/O.

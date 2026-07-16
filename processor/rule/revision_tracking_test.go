@@ -47,11 +47,11 @@ func TestRevisionSkipIsOneTime(t *testing.T) {
 		ownRevisions: make(map[ruleRevKey]map[uint64]time.Time),
 	}
 
-	p.trackRuleRevision("rule-a", "entity-1", 7)
+	p.trackRuleRevision("rule-a", "test.rule.revision.tracking.entity.entity-1", 7)
 
-	assert.True(t, p.shouldSkipRule("rule-a", "entity-1", 7),
+	assert.True(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 7),
 		"first check must skip")
-	assert.False(t, p.shouldSkipRule("rule-a", "entity-1", 7),
+	assert.False(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 7),
 		"second check must not skip (tracking consumed)")
 }
 
@@ -63,16 +63,16 @@ func TestMultipleRevisionsPerRule(t *testing.T) {
 		ownRevisions: make(map[ruleRevKey]map[uint64]time.Time),
 	}
 
-	p.trackRuleRevision("rule-a", "entity-1", 10)
-	p.trackRuleRevision("rule-a", "entity-1", 11)
-	p.trackRuleRevision("rule-a", "entity-1", 12)
+	p.trackRuleRevision("rule-a", "test.rule.revision.tracking.entity.entity-1", 10)
+	p.trackRuleRevision("rule-a", "test.rule.revision.tracking.entity.entity-1", 11)
+	p.trackRuleRevision("rule-a", "test.rule.revision.tracking.entity.entity-1", 12)
 
 	// Watcher delivers them in any order; all three must be suppressed.
-	assert.True(t, p.shouldSkipRule("rule-a", "entity-1", 11))
-	assert.True(t, p.shouldSkipRule("rule-a", "entity-1", 10))
-	assert.True(t, p.shouldSkipRule("rule-a", "entity-1", 12))
+	assert.True(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 11))
+	assert.True(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 10))
+	assert.True(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 12))
 	// Fourth arrival is a non-self revision.
-	assert.False(t, p.shouldSkipRule("rule-a", "entity-1", 13))
+	assert.False(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 13))
 }
 
 // TestTrackRuleRevisionIgnoresZeroArgs verifies that tracking is a no-op for
@@ -83,9 +83,9 @@ func TestTrackRuleRevisionIgnoresZeroArgs(t *testing.T) {
 		ownRevisions: make(map[ruleRevKey]map[uint64]time.Time),
 	}
 
-	p.trackRuleRevision("", "entity-1", 1)
+	p.trackRuleRevision("", "test.rule.revision.tracking.entity.entity-1", 1)
 	p.trackRuleRevision("rule-a", "", 1)
-	p.trackRuleRevision("rule-a", "entity-1", 0)
+	p.trackRuleRevision("rule-a", "test.rule.revision.tracking.entity.entity-1", 0)
 
 	assert.Empty(t, p.ownRevisions, "no-op inputs must not create entries")
 }
@@ -97,10 +97,10 @@ func TestShouldSkipRuleHandlesMissingEntries(t *testing.T) {
 		ownRevisions: make(map[ruleRevKey]map[uint64]time.Time),
 	}
 
-	assert.False(t, p.shouldSkipRule("rule-a", "entity-1", 5))
-	assert.False(t, p.shouldSkipRule("", "entity-1", 5))
+	assert.False(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 5))
+	assert.False(t, p.shouldSkipRule("", "test.rule.revision.tracking.entity.entity-1", 5))
 	assert.False(t, p.shouldSkipRule("rule-a", "", 5))
-	assert.False(t, p.shouldSkipRule("rule-a", "entity-1", 0))
+	assert.False(t, p.shouldSkipRule("rule-a", "test.rule.revision.tracking.entity.entity-1", 0))
 }
 
 // TestPruneStaleRevisions verifies the sweeper removes entries older than
@@ -114,9 +114,9 @@ func TestPruneStaleRevisions(t *testing.T) {
 	now := time.Now()
 	// Inject directly so we can control timestamps (trackRuleRevision uses
 	// time.Now internally, which doesn't let us simulate age).
-	stale := ruleRevKey{ruleID: "rule-a", entityID: "entity-1"}
-	fresh := ruleRevKey{ruleID: "rule-a", entityID: "entity-2"}
-	mixed := ruleRevKey{ruleID: "rule-b", entityID: "entity-1"}
+	stale := ruleRevKey{ruleID: "rule-a", entityID: "test.rule.revision.tracking.entity.entity-1"}
+	fresh := ruleRevKey{ruleID: "rule-a", entityID: "test.rule.revision.tracking.entity.entity-2"}
+	mixed := ruleRevKey{ruleID: "rule-b", entityID: "test.rule.revision.tracking.entity.entity-1"}
 
 	p.ownRevisions[stale] = map[uint64]time.Time{
 		10: now.Add(-10 * time.Minute), // stale

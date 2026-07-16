@@ -33,6 +33,8 @@ func TestAttack_NilContext(t *testing.T) {
 	})
 }
 
+// entity-id-audit:classify intentional-malformed "测试.プラットフォーム.тест.系统.类型.实例" line=361 column=14 surface=go-assignment:entityID entity_id_invalid:first_byte Unicode rejection fixture
+
 func TestAttack_EmptyEntityID(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
@@ -205,7 +207,7 @@ func TestAttack_CancelledContextDoesNotHang(t *testing.T) {
 func TestAttack_ConcurrentReadWriteSameEntity(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
-	entityID := "contested-entity"
+	entityID := "test.graph.index.attack.entity.contested"
 
 	const numWriters = 50
 	const numReaders = 50

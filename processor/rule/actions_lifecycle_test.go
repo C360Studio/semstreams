@@ -43,6 +43,8 @@ type fakeParticipant struct {
 	Pct        float64 `json:"pct"`
 }
 
+// entity-id-audit:classify intentional-malformed "" line=493 column=80 surface=go-field:ExecutionContext.EntityID entity_id_invalid:empty empty lifecycle execution ID rejection fixture
+
 func (p *fakeParticipant) EntityID() string             { return p.EntityIDF }
 func (p *fakeParticipant) Workflow() string             { return p.WorkflowF }
 func (p *fakeParticipant) Phase() string                { return p.PhaseF }
@@ -235,7 +237,7 @@ func (m *fakeLifecycleManager) Transition(_ context.Context, workflow, entityID,
 func TestLifecycleTransition_HappyPath(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-1", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-1", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -245,12 +247,12 @@ func TestLifecycleTransition_HappyPath(t *testing.T) {
 		Workflow: "mission",
 		Phase:    "flying",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-1"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if mgr.entities["mission"]["m-1"].PhaseF != "flying" {
-		t.Errorf("phase did not move, got %q", mgr.entities["mission"]["m-1"].PhaseF)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-1"].PhaseF != "flying" {
+		t.Errorf("phase did not move, got %q", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-1"].PhaseF)
 	}
 	if len(mgr.transitionCalls) != 1 {
 		t.Fatalf("expected one TransitionWith call, got %d", len(mgr.transitionCalls))
@@ -263,7 +265,7 @@ func TestLifecycleTransition_HappyPath(t *testing.T) {
 func TestLifecycleTransition_AtomicSetOps(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-2", PhaseF: "planning", Counter: 5, UCounter: 3})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-2", PhaseF: "planning", Counter: 5, UCounter: 3})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -279,11 +281,11 @@ func TestLifecycleTransition_AtomicSetOps(t *testing.T) {
 			"pct":       map[string]any{"op": "set", "value": 0.75},
 		},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-2"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-2"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	p := mgr.entities["mission"]["m-2"]
+	p := mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-2"]
 	if p.PhaseF != "flying" {
 		t.Errorf("phase: got %q", p.PhaseF)
 	}
@@ -307,7 +309,7 @@ func TestLifecycleTransition_AtomicSetOps(t *testing.T) {
 func TestLifecycleTransition_DecrementUintClampsAtZero(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-3", PhaseF: "planning", UCounter: 0})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-3", PhaseF: "planning", UCounter: 0})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -318,12 +320,12 @@ func TestLifecycleTransition_DecrementUintClampsAtZero(t *testing.T) {
 		Phase:    "flying",
 		Set:      map[string]any{"u_counter": map[string]any{"op": "decrement"}},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-3"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-3"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if mgr.entities["mission"]["m-3"].UCounter != 0 {
-		t.Errorf("uint decrement should clamp at 0, got %d", mgr.entities["mission"]["m-3"].UCounter)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-3"].UCounter != 0 {
+		t.Errorf("uint decrement should clamp at 0, got %d", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-3"].UCounter)
 	}
 }
 
@@ -336,7 +338,7 @@ func TestLifecycleTransition_SetRejectsIdentityField(t *testing.T) {
 	// rule definition shouldn't be more privileged than the operator
 	// API. Mirrors UpdateFromOperator's default-deny.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "b1-id", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.b1-id", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -345,9 +347,9 @@ func TestLifecycleTransition_SetRejectsIdentityField(t *testing.T) {
 		Type:     ActionTypeLifecycleTransition,
 		Workflow: "mission",
 		Phase:    "flying",
-		Set:      map[string]any{"entity_id": "hijacked-id"},
+		Set:      map[string]any{"entity_id": "test.rule.lifecycle.mission.entity.hijacked"},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "b1-id"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.b1-id"})
 	if err == nil {
 		t.Fatalf("expected rejection for entity_id write via Set")
 	}
@@ -355,8 +357,8 @@ func TestLifecycleTransition_SetRejectsIdentityField(t *testing.T) {
 		t.Errorf("expected ErrFieldNotOperatorWritable, got %v", err)
 	}
 	// Phase MUST NOT have moved either (validation precedes mutator).
-	if mgr.entities["mission"]["b1-id"].PhaseF != "planning" {
-		t.Errorf("phase moved despite Set rejection, got %q", mgr.entities["mission"]["b1-id"].PhaseF)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.b1-id"].PhaseF != "planning" {
+		t.Errorf("phase moved despite Set rejection, got %q", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.b1-id"].PhaseF)
 	}
 }
 
@@ -367,7 +369,7 @@ func TestLifecycleTransition_SetRejectsPhaseField(t *testing.T) {
 	// would bypass the table — must be rejected at the validate-then-
 	// mutate gate.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "b1-phase", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.b1-phase", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -378,7 +380,7 @@ func TestLifecycleTransition_SetRejectsPhaseField(t *testing.T) {
 		Phase:    "flying",
 		Set:      map[string]any{"phase": "completed"},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "b1-phase"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.b1-phase"})
 	if err == nil {
 		t.Fatalf("expected rejection for phase write via Set")
 	}
@@ -393,7 +395,7 @@ func TestLifecycleTransition_SetRejectsNonOperatorWritableField(t *testing.T) {
 	// isn't tagged lifecycle:"operator_writable" cannot be written via
 	// Set. Convergence with UpdateFromOperator's protection.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "b1-secret", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.b1-secret", PhaseF: "planning"})
 	// Explicitly do NOT add "secret" to ruleWritableFields — it's a
 	// non-operator-writable field that the rule path must reject.
 
@@ -406,7 +408,7 @@ func TestLifecycleTransition_SetRejectsNonOperatorWritableField(t *testing.T) {
 		Phase:    "flying",
 		Set:      map[string]any{"secret": "leaked"},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "b1-secret"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.b1-secret"})
 	if err == nil {
 		t.Fatalf("expected rejection for non-operator_writable field write")
 	}
@@ -423,7 +425,7 @@ func TestLifecycleTransition_SetRejectsNonOperatorWritableField(t *testing.T) {
 func TestLifecycleTransition_UnknownFieldAborts(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-4", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-4", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -434,19 +436,19 @@ func TestLifecycleTransition_UnknownFieldAborts(t *testing.T) {
 		Phase:    "flying",
 		Set:      map[string]any{"not_a_field": "value"},
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-4"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-4"})
 	if err == nil {
 		t.Fatalf("expected error for unknown field")
 	}
-	if mgr.entities["mission"]["m-4"].PhaseF != "planning" {
-		t.Errorf("phase moved despite mutator error, got %q", mgr.entities["mission"]["m-4"].PhaseF)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-4"].PhaseF != "planning" {
+		t.Errorf("phase moved despite mutator error, got %q", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-4"].PhaseF)
 	}
 }
 
 func TestLifecycleTransition_ResolvesWorkflowViaLookup(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-5", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-5", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -456,7 +458,7 @@ func TestLifecycleTransition_ResolvesWorkflowViaLookup(t *testing.T) {
 		Type:  ActionTypeLifecycleTransition,
 		Phase: "flying",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-5"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-5"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -473,7 +475,7 @@ func TestLifecycleTransition_NilManagerLoudFail(t *testing.T) {
 		Type:  ActionTypeLifecycleTransition,
 		Phase: "flying",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "m-x"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.m-x"})
 	if err == nil {
 		t.Fatalf("expected wiring error when no Manager is set")
 	}
@@ -497,7 +499,7 @@ func TestLifecycleTransition_EmptyEntityIDRejected(t *testing.T) {
 func TestLifecycleTransition_PhaseSubstitution(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "m-6", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.m-6", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -508,15 +510,15 @@ func TestLifecycleTransition_PhaseSubstitution(t *testing.T) {
 		Phase:    "$message.next_phase",
 	}
 	ec := &ExecutionContext{
-		EntityID:    "m-6",
+		EntityID:    "test.rule.lifecycle.mission.entity.m-6",
 		MessageData: map[string]any{"next_phase": "flying"},
 	}
 	err := exec.Execute(context.Background(), action, ec)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if mgr.entities["mission"]["m-6"].PhaseF != "flying" {
-		t.Errorf("phase substitution failed, got %q", mgr.entities["mission"]["m-6"].PhaseF)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-6"].PhaseF != "flying" {
+		t.Errorf("phase substitution failed, got %q", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.m-6"].PhaseF)
 	}
 }
 
@@ -525,17 +527,17 @@ func TestLifecycleTransition_PhaseSubstitution(t *testing.T) {
 func TestLifecycleComplete_DispatchesManager(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "c-1", PhaseF: "landing"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.c-1", PhaseF: "landing"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
 
 	action := Action{Type: ActionTypeLifecycleComplete, Workflow: "mission"}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "c-1"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.c-1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(mgr.completeCalls) != 1 || mgr.completeCalls[0].entityID != "c-1" {
+	if len(mgr.completeCalls) != 1 || mgr.completeCalls[0].entityID != "test.rule.lifecycle.mission.entity.c-1" {
 		t.Errorf("Complete not dispatched, got %v", mgr.completeCalls)
 	}
 }
@@ -545,7 +547,7 @@ func TestLifecycleComplete_DispatchesManager(t *testing.T) {
 func TestLifecycleFail_DispatchesManagerWithReason(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "f-1", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.f-1", PhaseF: "flying"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -555,7 +557,7 @@ func TestLifecycleFail_DispatchesManagerWithReason(t *testing.T) {
 		Workflow: "mission",
 		Reason:   "battery critical",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "f-1"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.f-1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -567,7 +569,7 @@ func TestLifecycleFail_DispatchesManagerWithReason(t *testing.T) {
 func TestLifecycleFail_EmptyReasonRejected(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "f-2", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.f-2", PhaseF: "flying"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -576,7 +578,7 @@ func TestLifecycleFail_EmptyReasonRejected(t *testing.T) {
 		Type:     ActionTypeLifecycleFail,
 		Workflow: "mission",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "f-2"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.f-2"})
 	if err == nil {
 		t.Fatalf("expected rejection for empty Reason")
 	}
@@ -590,7 +592,7 @@ func TestLifecycleFail_EmptyReasonRejected(t *testing.T) {
 func TestLifecycleTransition_UnresolvedPhaseTokenRejected(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s2-phase", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.s2-phase", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -603,22 +605,22 @@ func TestLifecycleTransition_UnresolvedPhaseTokenRejected(t *testing.T) {
 		Workflow: "mission",
 		Phase:    "$message.next_phase",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "s2-phase"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.s2-phase"})
 	if err == nil {
 		t.Fatalf("expected unresolved-template error for phase")
 	}
 	if !strings.Contains(err.Error(), "unresolved template variables") {
 		t.Errorf("error should mention 'unresolved template variables', got %q", err.Error())
 	}
-	if mgr.entities["mission"]["s2-phase"].PhaseF != "planning" {
-		t.Errorf("phase moved despite rejection, got %q", mgr.entities["mission"]["s2-phase"].PhaseF)
+	if mgr.entities["mission"]["test.rule.lifecycle.mission.entity.s2-phase"].PhaseF != "planning" {
+		t.Errorf("phase moved despite rejection, got %q", mgr.entities["mission"]["test.rule.lifecycle.mission.entity.s2-phase"].PhaseF)
 	}
 }
 
 func TestLifecycleFail_UnresolvedReasonTokenRejected(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s2-reason", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.s2-reason", PhaseF: "flying"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -628,7 +630,7 @@ func TestLifecycleFail_UnresolvedReasonTokenRejected(t *testing.T) {
 		Workflow: "mission",
 		Reason:   "denied by $caller.id", // ec.Caller is nil → token survives
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "s2-reason"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.s2-reason"})
 	if err == nil {
 		t.Fatalf("expected unresolved-template error for reason")
 	}
@@ -645,7 +647,7 @@ func TestLifecycleTransition_WorkflowSubstitutionResolved(t *testing.T) {
 	// S3: Action.Workflow now flows through substitution. Author
 	// can data-drive the workflow name via $message.workflow_type.
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s3-wf-resolved", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.s3-wf-resolved", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -656,7 +658,7 @@ func TestLifecycleTransition_WorkflowSubstitutionResolved(t *testing.T) {
 		Phase:    "flying",
 	}
 	ec := &ExecutionContext{
-		EntityID:    "s3-wf-resolved",
+		EntityID:    "test.rule.lifecycle.mission.entity.s3-wf-resolved",
 		MessageData: map[string]any{"workflow_type": "mission"},
 	}
 	err := exec.Execute(context.Background(), action, ec)
@@ -671,7 +673,7 @@ func TestLifecycleTransition_WorkflowSubstitutionResolved(t *testing.T) {
 func TestLifecycleTransition_UnresolvedWorkflowTokenRejected(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "s3-wf-unresolved", PhaseF: "planning"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.s3-wf-unresolved", PhaseF: "planning"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -682,7 +684,7 @@ func TestLifecycleTransition_UnresolvedWorkflowTokenRejected(t *testing.T) {
 		Workflow: "$message.workflow_type",
 		Phase:    "flying",
 	}
-	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "s3-wf-unresolved"})
+	err := exec.Execute(context.Background(), action, &ExecutionContext{EntityID: "test.rule.lifecycle.mission.entity.s3-wf-unresolved"})
 	if err == nil {
 		t.Fatalf("expected unresolved-template error for workflow")
 	}
@@ -697,7 +699,7 @@ func TestLifecycleTransition_UnresolvedWorkflowTokenRejected(t *testing.T) {
 func TestLifecycleFail_ReasonSubstitution(t *testing.T) {
 	t.Parallel()
 	mgr := newFakeManager()
-	mgr.seed("mission", &fakeParticipant{EntityIDF: "f-3", PhaseF: "flying"})
+	mgr.seed("mission", &fakeParticipant{EntityIDF: "test.rule.lifecycle.mission.entity.f-3", PhaseF: "flying"})
 
 	exec := NewActionExecutor(nil)
 	exec.SetLifecycleManager(mgr)
@@ -708,7 +710,7 @@ func TestLifecycleFail_ReasonSubstitution(t *testing.T) {
 		Reason:   "denied by $caller.id",
 	}
 	ec := &ExecutionContext{
-		EntityID: "f-3",
+		EntityID: "test.rule.lifecycle.mission.entity.f-3",
 		Caller:   &CallerContext{ID: "operator-alice"},
 	}
 	err := exec.Execute(context.Background(), action, ec)

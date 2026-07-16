@@ -102,9 +102,9 @@ reader/writer, or online/in-place migration.
 
 ## Impact
 
-- **Framework code:** `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rules,
-  ObjectStore, agentic ID constructors, query/export helpers, schemas, fixtures, and every other literal, pattern,
-  or prefix consumer.
+- **Framework code:** `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, ObjectStore,
+  agentic ID constructors, query/export helpers, schemas, fixtures, and every other literal, pattern, or prefix
+  consumer.
 - **Stored data:** the pre-v1 cutover wipes all incompatible NATS state and reseeds it from canonical owned sources;
   this change provides no old-state preservation contract.
 - **Consumers:** SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, reference deployments, and any

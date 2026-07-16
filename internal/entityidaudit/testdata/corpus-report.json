@@ -1,27 +1,14 @@
 {
-  "version": 1,
+  "version": 2,
   "roots": ["testdata/corpus"],
   "source_set": "fixture",
-  "summary": {"candidate_count":4,"finding_count":0,"surface_group_count":0,"surface_occurrence_count":0,"candidates_by_language":[{"name":"declaration-pattern","count":1},{"name":"literal","count":1},{"name":"query-prefix","count":1},{"name":"unrelated-glob","count":1}],"findings_by_language":[],"findings_by_reason":[],"surfaces_by_kind":[]},
-  "surface_rules": [
-    {"id":"go-contract-field","description":"All Go struct fields from the entity ID, subject, reference, pattern, prefix, scope, and gated-DAG fan-out set; every exact group requires a checked disposition"},
-    {"id":"parser-validator-api","description":"All Go declarations and calls whose function name is one of the five public entity-ID parser or validator APIs; every exact group requires a checked disposition"},
-    {"id":"schema-contract-field","description":"All JSON or YAML schema keys from the explicit contract field set, even without an example value; every exact group requires a checked disposition"},
-    {"id":"string-builder-candidate","description":"Every Go function or method returning string whose body structurally concatenates or formats strings; every exact group requires a checked disposition"},
-    {"id":"kv-call","description":"Every Go call to Get, Put, Delete, Watch, Keys, or ListKeysFiltered; every exact group requires a checked disposition"},
-    {"id":"direct-split","description":"Every Go call to strings.Split; every exact group requires a checked disposition"},
-    {"id":"match-family-call","description":"Every Go call whose called function or method name contains match; every exact group requires a checked disposition"},
-    {"id":"schema-regex","description":"Entity-named Go string declarations containing regex metacharacters; inventoried but excluded from declaration-pattern values and every exact group requires a checked disposition"},
-    {"id":"semantic-test-helper-call","description":"Every exact internal/semantictest.EntityID call with its required seven arguments; dynamic positions remain runtime-authoritative rather than disappearing from the inventory"}
-  ],
+  "summary": {"candidate_count":4,"finding_count":0,"candidates_by_language":[{"name":"declaration-pattern","count":2},{"name":"literal","count":1},{"name":"query-prefix","count":1}],"findings_by_language":[],"findings_by_reason":[]},
   "value_corpus": {
     "candidates": [
     {"file":"testdata/corpus/entities.go","line":3,"column":25,"language":"literal","value":"acme.ops.robotics.gcs.drone.001","surface":"go-field:EntityState.ID","status":"valid"},
     {"file":"testdata/corpus/entities.go","line":4,"column":35,"language":"declaration-pattern","value":"acme.ops.robotics.*.drone.*","surface":"go-field:Workflow.EntityIDPattern","status":"valid"},
     {"file":"testdata/corpus/entities.go","line":5,"column":37,"language":"query-prefix","value":"acme.ops.robotics","surface":"go-field:EntityQuery.EntityIDPrefix","status":"valid"},
-    {"file":"testdata/corpus/entities.go","line":7,"column":23,"language":"unrelated-glob","value":"raw.sensor.\u003e","surface":"go-unrelated-glob","status":"classified","classification_reason":"NATS subscription filter"}
+    {"file":"testdata/corpus/entities.go","line":7,"column":25,"language":"declaration-pattern","value":"raw.sensor.\u003e","surface":"go-declaration:entityIDPattern","status":"classified","classification":"unrelated-glob","classification_reason":"entity_id_pattern_invalid:arity NATS subscription filter"}
     ]
-  },
-  "surface_inventory": [
-  ]
+  }
 }

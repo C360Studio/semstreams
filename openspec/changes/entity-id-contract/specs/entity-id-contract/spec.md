@@ -82,6 +82,10 @@ EntityIDDetailSegmentIndex      = "segment_index"
 `ValidateEntityID` and `ParseEntityID` MUST apply fault precedence as empty input, byte limit, arity, empty segment,
 invalid first byte, then invalid segment alphabet, reporting the first left-to-right segment fault within a reason
 class. Details MUST contain only non-sensitive measurements and limits; they MUST NOT echo the full rejected identity.
+At an operational boundary, one rejected operation MUST record exactly one rejection metric with stable bounded
+lane/reason labels. Pure parser/validator helpers MUST remain side-effect free. Rejection MUST NOT increment a
+success, business, storage, publication, or other operation-success metric and MUST NOT put rejected identity bytes in
+metric labels.
 
 #### Scenario: a multi-fault input has one deterministic classification
 
@@ -224,8 +228,10 @@ expose a permissive mode, legacy validator, normalization shim, alias table, or 
 
 ObjectStore `StoreContent` MUST validate `ContentStorable.EntityID()` through the canonical literal contract before
 generating or writing any binary or content object name. Invalid identity MUST return a typed non-retryable structural
-error with no binary, content-envelope, event, metric, callback, or stored-message side effect. This requirement MUST
-NOT select ObjectStore retention, reachability, reference-counting, or reclamation policy.
+error with no binary, content-envelope, event, success/business/storage metric, callback, or stored-message side
+effect. Its operational boundary MUST record exactly one bounded lane/reason rejection metric without identity bytes
+in labels. This requirement MUST NOT select ObjectStore retention, reachability, reference-counting, or reclamation
+policy.
 
 #### Scenario: invalid content identity leaves no orphan
 
@@ -251,11 +257,25 @@ builder. The builder MUST accept all six semantic positions explicitly, MUST joi
 import this test helper. Grammar-authority tests and literal constants MAY remain raw source values, but MUST remain in
 the checked corpus.
 
+The blocking corpus MUST consist of concrete typed or statically identifiable entity-ID literals, patterns, prefixes,
+known configuration fields, triple subjects, typed `@id` references, and canonical semantic fixture calls. A
+repository-wide name-only inventory of generic KV methods, match-named functions, string builders, or `strings.Split`
+calls MUST NOT be treated as proof of contract coverage. The audit MAY emit the complete corpus as diagnostic JSON,
+but the release gate MUST run against current tracked source and MUST NOT rely on a checked-in generated corpus dump.
+
 Every intentional invalid fixture MUST be classified at one exact occurrence with its contract kind, exact value, and
-authoritative stable reason. A commentless structured fixture MUST use a checked manifest entry naming its file and
-structural location or record. File-wide or directory-wide invalid allowances MUST NOT satisfy the corpus. Missing,
-stale, duplicate, unmatched, broad, or reason-mismatched classifications MUST fail, and every classification MUST
-resolve to exactly one candidate.
+authoritative stable reason. A commentless structured fixture MUST remain canonical positive data; an intentional
+negative MUST move to a comment-capable native rejection test rather than a separate classification manifest.
+File-wide or directory-wide invalid allowances MUST NOT satisfy the corpus. Missing, stale, duplicate, unmatched,
+broad, or reason-mismatched classifications MUST fail, and every classification MUST resolve to exactly one candidate.
+
+An empty value that has explicitly documented non-entity semantics, such as a public match-all prefix or an
+unavailable optional projection, MUST use a distinct exact intentional-sentinel classification. Sentinel
+classification MUST NOT make empty entity IDs valid and MUST NOT apply to an entire field, file, or value family.
+
+A statically visible pre-substitution expression in an entity-ID position MUST use a distinct exact
+intentional-template classification. The classification MUST bind one source occurrence and authoritative reason,
+MUST identify actual substitution syntax, and MUST NOT exempt the resolved runtime value from canonical validation.
 
 #### Scenario: the shared helper preserves exact invalid input
 

@@ -35,6 +35,8 @@ func TestHandleQueryPrefix_InvalidPrefixHasNoBucketIO(t *testing.T) {
 	assert.Zero(t, lists.Load())
 }
 
+// entity-id-audit:classify intentional-malformed "acme.*" line=27 column=64 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:first_byte wildcard query-prefix rejection fixture
+
 // storePrefixEntity is a helper that stores an entity with a single triple.
 func storePrefixEntity(t *testing.T, comp *Component, id string) {
 	t.Helper()

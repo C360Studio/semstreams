@@ -67,7 +67,8 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 	// the pagination contract.
 	prefixPayload, err := json.Marshal(graph.PrefixQueryRequest{
 		Prefix: "",
-		Limit:  req.EntitySampleLimit,
+		// entity-id-audit:classify intentional-sentinel "" line=69 column=11 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:empty documented match-all query
+		Limit: req.EntitySampleLimit,
 	})
 	if err != nil {
 		return nil, errs.Wrap(err, "GraphQuery", "handleQueryGraphSummary", "marshal prefix request")

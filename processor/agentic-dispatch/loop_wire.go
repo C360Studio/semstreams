@@ -41,17 +41,18 @@ type Loop struct {
 // ParentLoopID stays empty — the tracker does not record spawn relationships today.
 func loopFromInfo(in *LoopInfo) Loop {
 	return Loop{
-		LoopID:          in.LoopID,
-		TaskID:          in.TaskID,
-		State:           in.State,
-		Role:            in.Role,
-		Iterations:      in.Iterations,
-		MaxIterations:   in.MaxIterations,
-		UserID:          in.UserID,
-		ChannelType:     in.ChannelType,
-		ParentLoopID:    "", // not tracked in LoopInfo today — scoped-out follow-up
-		RunID:           "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
-		RunEntityID:     "", // ditto
+		LoopID:        in.LoopID,
+		TaskID:        in.TaskID,
+		State:         in.State,
+		Role:          in.Role,
+		Iterations:    in.Iterations,
+		MaxIterations: in.MaxIterations,
+		UserID:        in.UserID,
+		ChannelType:   in.ChannelType,
+		ParentLoopID:  "", // not tracked in LoopInfo today — scoped-out follow-up
+		RunID:         "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
+		RunEntityID:   "", // ditto
+		// entity-id-audit:classify intentional-sentinel "" line=54 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
 		Outcome:         in.Outcome,
 		Result:          in.Result,
 		Error:           in.Error,

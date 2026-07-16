@@ -48,6 +48,8 @@ var testMutationType = message.Type{
 	Version:  "v1",
 }
 
+// entity-id-audit:classify intentional-malformed "" line=566 column=45 surface=go-field:DeleteEntityRequest.EntityID entity_id_invalid:empty empty delete ID rejection fixture
+
 func newMutationTestEntity(id string) *graph.EntityState {
 	now := time.Now()
 	return &graph.EntityState{

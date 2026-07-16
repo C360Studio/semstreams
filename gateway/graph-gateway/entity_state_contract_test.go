@@ -55,4 +55,4 @@ func TestGateway_PrefixRejectsCompleteCandidatePoisonBeforeEmission(t *testing.T
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=22 column=28 surface=go-assignment:invalidGatewayEntityID gateway prefix complete-candidate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=22 column=28 surface=go-assignment:invalidGatewayEntityID entity_id_invalid:arity gateway prefix complete-candidate poison fixture

@@ -15,32 +15,27 @@ type Count struct {
 
 // Summary carries deterministic aggregate counts for a corpus report.
 type Summary struct {
-	CandidateCount         int     `json:"candidate_count"`
-	FindingCount           int     `json:"finding_count"`
-	SurfaceGroupCount      int     `json:"surface_group_count"`
-	SurfaceOccurrenceCount int     `json:"surface_occurrence_count"`
-	CandidatesByLanguage   []Count `json:"candidates_by_language"`
-	FindingsByLanguage     []Count `json:"findings_by_language"`
-	FindingsByReason       []Count `json:"findings_by_reason"`
-	SurfacesByKind         []Count `json:"surfaces_by_kind"`
+	CandidateCount       int     `json:"candidate_count"`
+	FindingCount         int     `json:"finding_count"`
+	CandidatesByLanguage []Count `json:"candidates_by_language"`
+	FindingsByLanguage   []Count `json:"findings_by_language"`
+	FindingsByReason     []Count `json:"findings_by_reason"`
 }
 
 // ValueCorpus separates concrete values and their required changes from the
-// implementation-surface inventory.
+// diagnostic report envelope.
 type ValueCorpus struct {
 	Candidates []Candidate `json:"candidates"`
 }
 
-// Report is the checked-in machine-readable local entity-ID source corpus.
-// Findings are also the exact source/configuration change list still required.
+// Report is an on-demand machine-readable local entity-ID source corpus.
+// It is diagnostic output, not a checked-in release artifact.
 type Report struct {
-	Version          int              `json:"version"`
-	Roots            []string         `json:"roots"`
-	SourceSet        string           `json:"source_set"`
-	Summary          Summary          `json:"summary"`
-	SurfaceRules     []SurfaceRule    `json:"surface_rules"`
-	ValueCorpus      ValueCorpus      `json:"value_corpus"`
-	SurfaceInventory []AuditedSurface `json:"surface_inventory"`
+	Version     int         `json:"version"`
+	Roots       []string    `json:"roots"`
+	SourceSet   string      `json:"source_set"`
+	Summary     Summary     `json:"summary"`
+	ValueCorpus ValueCorpus `json:"value_corpus"`
 }
 
 // BuildReport constructs a stable versioned report from an Audit result.
@@ -53,25 +48,17 @@ func BuildReport(roots []string, sourceSet string, result Result) Report {
 	if result.Findings == nil {
 		result.Findings = []Finding{}
 	}
-	if result.Surfaces == nil {
-		result.Surfaces = []AuditedSurface{}
-	}
 	return Report{
-		Version:          1,
-		Roots:            roots,
-		SourceSet:        sourceSet,
-		Summary:          summarize(result),
-		SurfaceRules:     SurfaceRules(),
-		ValueCorpus:      ValueCorpus{Candidates: result.Candidates},
-		SurfaceInventory: result.Surfaces,
+		Version:     2,
+		Roots:       roots,
+		SourceSet:   sourceSet,
+		Summary:     summarize(result),
+		ValueCorpus: ValueCorpus{Candidates: result.Candidates},
 	}
 }
 
-// MarshalReport serializes a report in the canonical checked-in form.
+// MarshalReport serializes the on-demand diagnostic report.
 func MarshalReport(report Report) ([]byte, error) {
-	if err := validateReviewedReportSurfaces(report.SurfaceInventory); err != nil {
-		return nil, err
-	}
 	var output bytes.Buffer
 	writeJSON := func(value any) error {
 		data, err := json.Marshal(value)
@@ -97,19 +84,11 @@ func MarshalReport(report Report) ([]byte, error) {
 	if err := writeJSON(report.Summary); err != nil {
 		return nil, err
 	}
-	output.WriteString(",\n  \"surface_rules\": [\n")
-	if err := writeCompactEntries(&output, report.SurfaceRules); err != nil {
-		return nil, err
-	}
-	output.WriteString("  ],\n  \"value_corpus\": {\n    \"candidates\": [\n")
+	output.WriteString(",\n  \"value_corpus\": {\n    \"candidates\": [\n")
 	if err := writeCompactEntries(&output, report.ValueCorpus.Candidates); err != nil {
 		return nil, err
 	}
-	output.WriteString("    ]\n  },\n  \"surface_inventory\": [\n")
-	if err := writeCompactEntries(&output, report.SurfaceInventory); err != nil {
-		return nil, err
-	}
-	output.WriteString("  ]\n}\n")
+	output.WriteString("    ]\n  }\n}\n")
 	return output.Bytes(), nil
 }
 
@@ -133,8 +112,6 @@ func summarize(result Result) Summary {
 	candidateLanguages := make(map[string]int)
 	findingLanguages := make(map[string]int)
 	findingReasons := make(map[string]int)
-	surfaceKinds := make(map[string]int)
-	surfaceOccurrences := 0
 	for _, candidate := range result.Candidates {
 		candidateLanguages[string(candidate.Language)]++
 	}
@@ -142,19 +119,12 @@ func summarize(result Result) Summary {
 		findingLanguages[string(finding.Language)]++
 		findingReasons[finding.Reason]++
 	}
-	for _, surface := range result.Surfaces {
-		surfaceKinds[surface.Kind]++
-		surfaceOccurrences += len(surface.Locations)
-	}
 	return Summary{
-		CandidateCount:         len(result.Candidates),
-		FindingCount:           len(result.Findings),
-		SurfaceGroupCount:      len(result.Surfaces),
-		SurfaceOccurrenceCount: surfaceOccurrences,
-		CandidatesByLanguage:   counts(candidateLanguages),
-		FindingsByLanguage:     counts(findingLanguages),
-		FindingsByReason:       counts(findingReasons),
-		SurfacesByKind:         counts(surfaceKinds),
+		CandidateCount:       len(result.Candidates),
+		FindingCount:         len(result.Findings),
+		CandidatesByLanguage: counts(candidateLanguages),
+		FindingsByLanguage:   counts(findingLanguages),
+		FindingsByReason:     counts(findingReasons),
 	}
 }
 

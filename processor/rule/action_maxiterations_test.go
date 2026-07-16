@@ -184,7 +184,7 @@ func TestActionMaxIterations_WhileTrueCap(t *testing.T) {
 	for range 5 {
 		if _, err := evaluator.Evaluate(ctx, Evaluation{
 			Rule:              ruleDef,
-			EntityID:          "ent-wt",
+			EntityID:          "test.rule.actions.max-iterations.entity.ent-wt",
 			CurrentlyMatching: true,
 		}); err != nil {
 			t.Fatalf("evaluate: %v", err)

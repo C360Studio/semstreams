@@ -1,5 +1,5 @@
-// Package entityidaudit inventories structurally identified entity-ID values
-// and validates each value with the public pkg/types contract authority.
+// Package entityidaudit implements a bounded fixture-hygiene lint over statically identifiable
+// entity-ID-shaped source candidates. It does not prove implementation-surface coverage or enforcement.
 package entityidaudit
 
 import (
@@ -23,7 +23,7 @@ import (
 )
 
 // Language is one of the three entity-ID contract languages or one of the
-// two explicit source-corpus classifications.
+// explicit source-corpus classifications.
 type Language string
 
 const (
@@ -37,6 +37,12 @@ const (
 	LanguageUnrelatedGlob Language = "unrelated-glob"
 	// LanguageIntentionalMalformed marks a deliberate negative contract fixture.
 	LanguageIntentionalMalformed Language = "intentional-malformed"
+	// LanguageIntentionalSentinel marks an exact empty value whose surrounding
+	// contract explicitly gives it non-entity semantics, such as match-all.
+	LanguageIntentionalSentinel Language = "intentional-sentinel"
+	// LanguageIntentionalTemplate marks an exact pre-substitution expression
+	// whose resolved runtime value must satisfy the entity-ID contract.
+	LanguageIntentionalTemplate Language = "intentional-template"
 
 	maxAnnotationsPerFile    = 100
 	maxAnnotationLineBytes   = 512
@@ -53,6 +59,7 @@ type Candidate struct {
 	Surface              string   `json:"surface"`
 	Status               string   `json:"status"`
 	Reason               string   `json:"reason,omitempty"`
+	Classification       Language `json:"classification,omitempty"`
 	ClassificationReason string   `json:"classification_reason,omitempty"`
 }
 
@@ -63,8 +70,9 @@ type Finding struct {
 }
 
 var (
-	annotationRE       = regexp.MustCompile(`entity-id-audit:classify[[:space:]]+(intentional-malformed|unrelated-glob)[[:space:]]+("(?:[^"\\]|\\.)*")[[:space:]]+line=([0-9]+)[[:space:]]+column=([0-9]+)[[:space:]]+surface=([^[:space:]]+)[[:space:]]+(.+)$`)
-	structuredPatterns = []struct {
+	annotationRE          = regexp.MustCompile(`entity-id-audit:classify[[:space:]]+(intentional-malformed|intentional-sentinel|intentional-template|unrelated-glob)[[:space:]]+("(?:[^"\\]|\\.)*")[[:space:]]+line=([0-9]+)[[:space:]]+column=([0-9]+)[[:space:]]+surface=([^[:space:]]+)[[:space:]]+(.+)$`)
+	intentionalTemplateRE = regexp.MustCompile(`^\$(?:entity|related|state|schedule|caller|message)\.[a-z0-9][a-z0-9_.-]*$`)
+	structuredPatterns    = []struct {
 		language Language
 		re       *regexp.Regexp
 	}{
@@ -165,7 +173,7 @@ func auditFiles(files []string) ([]Candidate, []Finding, error) {
 	findings := make([]Finding, 0)
 	for index := range candidates {
 		candidate := &candidates[index]
-		if candidate.Language == LanguageIntentionalMalformed || candidate.Language == LanguageUnrelatedGlob {
+		if candidate.Classification != "" {
 			candidate.Status = "classified"
 			continue
 		}
@@ -334,11 +342,8 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 				values := item.(*ast.ValueSpec)
 				for i, name := range values.Names {
 					if i < len(values.Values) && !strings.Contains(filepath.ToSlash(path), "vocabulary/") &&
-						!excludedDeclarationName(name.Name) {
+						!excludedDeclarationName(name.Name) && !isEntityIDSchemaRegexDeclaration(path, name.Name) {
 						if language, ok := languageForName(name.Name, ""); ok {
-							if value, resolved := resolve(values.Values[i]); language == LanguageDeclarationPattern && resolved && looksLikeRegex(value) {
-								continue
-							}
 							add(values.Values[i], language, "go-declaration:"+name.Name)
 						}
 					}
@@ -354,8 +359,15 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			fields := make(map[string]ast.Expr)
 			for _, element := range n.Elts {
 				if keyed, ok := element.(*ast.KeyValueExpr); ok {
-					if name, ok := keyed.Key.(*ast.Ident); ok {
-						fields[name.Name] = keyed.Value
+					switch key := keyed.Key.(type) {
+					case *ast.Ident:
+						fields[key.Name] = keyed.Value
+					case *ast.BasicLit:
+						if key.Kind == token.STRING {
+							if name, err := strconv.Unquote(key.Value); err == nil {
+								fields[name] = keyed.Value
+							}
+						}
 					}
 				}
 			}
@@ -582,6 +594,26 @@ func excludedDeclarationName(name string) bool {
 		}
 	}
 	return false
+}
+
+func isEntityIDSchemaRegexDeclaration(path, name string) bool {
+	cleanPath := filepath.ToSlash(filepath.Clean(path))
+	if cleanPath != "pkg/types/entity_id.go" && !strings.HasSuffix(cleanPath, "/pkg/types/entity_id.go") {
+		return false
+	}
+	switch name {
+	case "entityIDLiteralSegmentPattern",
+		"entityIDLiteralBodyPattern",
+		"entityIDPatternSegmentPattern",
+		"entityIDPatternBodyPattern",
+		"EntityIDLiteralPattern",
+		"EntityIDDeclarationPattern",
+		"EntityIDLiteralPrefixPattern",
+		"OptionalEntityIDLiteralPattern":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveStaticString(expr ast.Expr, fileSymbols, packageSymbols map[string]string, selector func(string, string) (string, bool)) (string, bool) {
@@ -964,24 +996,37 @@ func parseAnnotation(path string, line int, text string) (annotation, error) {
 
 func applyAnnotations(path string, extracted []Candidate, annotations []annotation) ([]Candidate, error) {
 	for _, item := range annotations {
-		matched := false
+		matched := -1
 		for i := range extracted {
 			if extracted[i].Line == item.targetLine && extracted[i].Column == item.targetColumn && extracted[i].Surface == item.targetSurface && extracted[i].Value == item.value {
-				extracted[i].Language = item.language
-				extracted[i].ClassificationReason = item.reason
-				matched = true
+				if matched != -1 {
+					return nil, fmt.Errorf("%s:%d: entity ID audit annotation matches multiple candidates at line=%d column=%d surface=%s value=%q", path, item.declarationLine, item.targetLine, item.targetColumn, item.targetSurface, item.value)
+				}
+				matched = i
 			}
 		}
-		if matched {
-			continue
-		}
-		if item.language != LanguageUnrelatedGlob {
+		if matched == -1 {
 			return nil, fmt.Errorf("%s:%d: entity ID audit annotation does not match target line=%d column=%d surface=%s value=%q", path, item.declarationLine, item.targetLine, item.targetColumn, item.targetSurface, item.value)
 		}
-		extracted = append(extracted, Candidate{
-			File: path, Line: item.targetLine, Column: item.targetColumn, Language: item.language, Value: item.value,
-			Surface: item.targetSurface, ClassificationReason: item.reason,
-		})
+
+		candidate := &extracted[matched]
+		validationErr := validate(candidate.Language, candidate.Value)
+		if validationErr == nil {
+			return nil, fmt.Errorf("%s:%d: entity ID audit classification %s targets valid %s value %q", path, item.declarationLine, item.language, candidate.Language, candidate.Value)
+		}
+		wantReason := validationReason(validationErr)
+		declaredReason := strings.Fields(item.reason)[0]
+		if declaredReason != wantReason {
+			return nil, fmt.Errorf("%s:%d: entity ID audit classification reason %q does not match authoritative reason %q", path, item.declarationLine, declaredReason, wantReason)
+		}
+		if item.language == LanguageIntentionalSentinel && candidate.Value != "" {
+			return nil, fmt.Errorf("%s:%d: intentional-sentinel classification requires an empty value", path, item.declarationLine)
+		}
+		if item.language == LanguageIntentionalTemplate && !intentionalTemplateRE.MatchString(candidate.Value) {
+			return nil, fmt.Errorf("%s:%d: intentional-template classification requires one recognized full substitution token", path, item.declarationLine)
+		}
+		candidate.Classification = item.language
+		candidate.ClassificationReason = item.reason
 	}
 	return extracted, nil
 }

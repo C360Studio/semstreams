@@ -25,4 +25,4 @@ func TestValidateMutationResponseEntityRejectsPoison(t *testing.T) {
 	}
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=14 column=21 surface=go-assignment:invalidEntityID lifecycle mutation reply reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=14 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity lifecycle mutation reply reference poison fixture

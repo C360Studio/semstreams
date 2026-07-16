@@ -39,7 +39,7 @@ func TestSpanCollectorProcessLoopEvents(t *testing.T) {
 		Type:      "loop.created",
 		LoopID:    "loop-001",
 		Timestamp: now,
-		EntityID:  "agent.test.001",
+		EntityID:  "test.otel.agent.span.event.001",
 		Role:      "architect",
 	}
 	data, _ := json.Marshal(createEvent)

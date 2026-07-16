@@ -296,10 +296,10 @@ func TestHandleQueryEntity_PassthroughPropagatesClassifiedError(t *testing.T) {
 	assert.Equal(t, "entity_not_found", ce.Code, "the entity_not_found code must survive the passthrough (404 mapping)")
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=49 column=21 surface=go-assignment:invalidEntityID GraphRAG batch aggregate poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=76 column=27 surface=go-assignment:invalidPublicEntityID public query complete-candidate poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=152 column=29 surface=go-assignment:invalidFallbackEntityID GraphRAG fatal fallback poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=194 column=27 surface=go-assignment:invalidLookupEntityID entity lookup fatal fallback poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=49 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity GraphRAG batch aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=76 column=27 surface=go-assignment:invalidPublicEntityID entity_id_invalid:arity public query complete-candidate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=152 column=29 surface=go-assignment:invalidFallbackEntityID entity_id_invalid:arity GraphRAG fatal fallback poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=194 column=27 surface=go-assignment:invalidLookupEntityID entity_id_invalid:arity entity lookup fatal fallback poison fixture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryPrefix — error-class fidelity (gh#304 primary fix)
@@ -614,4 +614,4 @@ func TestHandleStrategySpatial_HandlerErrorSurfaces(t *testing.T) {
 	assert.True(t, errs.IsTransient(err), "the transient class must survive: %v", err)
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=436 column=21 surface=go-assignment:invalidEntityID hierarchy prefix aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=436 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity hierarchy prefix aggregate poison fixture

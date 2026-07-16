@@ -107,21 +107,21 @@ func newTestComponent(loops LoopStore, synth Synthesizer) *Component {
 
 func TestComponent_HandleMessage_HappyPath(t *testing.T) {
 	loops := &fakeLoopStore{
-		intent: &research.Intent{Topic: "drone-001 maintenance"},
+		intent: &research.Intent{Topic: "test.research.graph.synthesize.entity.drone-001 maintenance"},
 		exec: &research.ExecutionOutput{
-			Topic:    "drone-001 maintenance",
+			Topic:    "test.research.graph.synthesize.entity.drone-001 maintenance",
 			Action:   research.ActionWalkSeeds,
-			Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x", Score: 0.9}},
+			Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.drone-001", Tier: "0", Source: "x", Score: 0.9}},
 		},
 		route: &research.RouteDecision{
 			Action: research.ActionWalkSeeds,
 			Args: map[string]any{
-				"seeds": []map[string]string{{"ref": "drone-001", "ref_type": "name"}},
+				"seeds": []map[string]string{{"ref": "test.research.graph.synthesize.entity.drone-001", "ref_type": "name"}},
 			},
 		},
 	}
 	s := &fakeSynthesizer{
-		content: `{"synthesis":"Drone 001 has a maintenance window.","evidence_refs":["drone-001"]}`,
+		content: `{"synthesis":"Drone 001 has a maintenance window.","evidence_refs":["test.research.graph.synthesize.entity.drone-001"]}`,
 	}
 	c := newTestComponent(loops, s)
 	c.handleMessage(context.Background(), "component.synthesize_answer.loop-9", nil)
@@ -207,12 +207,12 @@ func TestComponent_HandleMessage_RouteMissingProceeds(t *testing.T) {
 		exec: &research.ExecutionOutput{
 			Topic:    "x",
 			Action:   research.ActionSynthesizeDirectly,
-			Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+			Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.e1", Tier: "0", Source: "x"}},
 		},
 		// route: nil
 	}
 	s := &fakeSynthesizer{
-		content: `{"synthesis":"answer","evidence_refs":["e1"]}`,
+		content: `{"synthesis":"answer","evidence_refs":["test.research.graph.synthesize.entity.e1"]}`,
 	}
 	c := newTestComponent(loops, s)
 	c.handleMessage(context.Background(), "component.synthesize_answer.loop-x", nil)
@@ -230,7 +230,7 @@ func TestComponent_HandleMessage_SynthesizerFailEmitsDegraded(t *testing.T) {
 		intent: &research.Intent{Topic: "x"},
 		exec: &research.ExecutionOutput{
 			Topic: "x", Action: research.ActionDecompose,
-			Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+			Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.e1", Tier: "0", Source: "x"}},
 		},
 	}
 	s := &fakeSynthesizer{content: `not JSON at all`}

@@ -18,20 +18,20 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_PreservesPredicates(t *t
 
 	// Store relationships with predicates
 	relationships := []relationshipEntry{
-		{Predicate: "org.employment.works-for", ToEntityID: "entity-B"},
-		{Predicate: "org.membership.member-of", ToEntityID: "entity-C"},
+		{Predicate: "org.employment.works-for", ToEntityID: "test.graph.cluster.anomaly.entity.b"},
+		{Predicate: "org.membership.member-of", ToEntityID: "test.graph.cluster.anomaly.entity.c"},
 	}
 	data, err := json.Marshal(relationships)
 	if err != nil {
 		t.Fatalf("failed to marshal relationships: %v", err)
 	}
-	if _, err := outgoingBucket.Put(context.Background(), "entity-A", data); err != nil {
+	if _, err := outgoingBucket.Put(context.Background(), "test.graph.cluster.anomaly.entity.a", data); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	result, err := querier.GetOutgoingRelationships(context.Background(), "entity-A")
+	result, err := querier.GetOutgoingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.a")
 	if err != nil {
 		t.Fatalf("GetOutgoingRelationships failed: %v", err)
 	}
@@ -44,18 +44,18 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_PreservesPredicates(t *t
 	if result[0].Predicate != "org.employment.works-for" {
 		t.Errorf("expected predicate 'org.employment.works-for', got %s", result[0].Predicate)
 	}
-	if result[0].ToEntityID != "entity-B" {
-		t.Errorf("expected ToEntityID 'entity-B', got %s", result[0].ToEntityID)
+	if result[0].ToEntityID != "test.graph.cluster.anomaly.entity.b" {
+		t.Errorf("expected ToEntityID 'test.graph.cluster.anomaly.entity.b', got %s", result[0].ToEntityID)
 	}
-	if result[0].FromEntityID != "entity-A" {
-		t.Errorf("expected FromEntityID 'entity-A', got %s", result[0].FromEntityID)
+	if result[0].FromEntityID != "test.graph.cluster.anomaly.entity.a" {
+		t.Errorf("expected canonical source entity ID, got %s", result[0].FromEntityID)
 	}
 
 	if result[1].Predicate != "org.membership.member-of" {
 		t.Errorf("expected predicate 'org.membership.member-of', got %s", result[1].Predicate)
 	}
-	if result[1].ToEntityID != "entity-C" {
-		t.Errorf("expected ToEntityID 'entity-C', got %s", result[1].ToEntityID)
+	if result[1].ToEntityID != "test.graph.cluster.anomaly.entity.c" {
+		t.Errorf("expected ToEntityID 'test.graph.cluster.anomaly.entity.c', got %s", result[1].ToEntityID)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_NotFound(t *testing.T) {
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	result, err := querier.GetOutgoingRelationships(context.Background(), "nonexistent-entity")
+	result, err := querier.GetOutgoingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.missing")
 	if err != nil {
 		t.Fatalf("expected no error for missing entity, got: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestKVRelationshipQuerier_GetIncomingRelationships_NotFound(t *testing.T) {
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	result, err := querier.GetIncomingRelationships(context.Background(), "nonexistent-entity")
+	result, err := querier.GetIncomingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.missing")
 	if err != nil {
 		t.Fatalf("expected no error for missing entity, got: %v", err)
 	}
@@ -143,13 +143,13 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_EmptyList(t *testing.T) 
 
 	// Store empty relationship list
 	data, _ := json.Marshal([]relationshipEntry{})
-	if _, err := outgoingBucket.Put(context.Background(), "entity-A", data); err != nil {
+	if _, err := outgoingBucket.Put(context.Background(), "test.graph.cluster.anomaly.entity.a", data); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	result, err := querier.GetOutgoingRelationships(context.Background(), "entity-A")
+	result, err := querier.GetOutgoingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.a")
 	if err != nil {
 		t.Fatalf("GetOutgoingRelationships failed: %v", err)
 	}
@@ -164,13 +164,13 @@ func TestKVRelationshipQuerier_GetOutgoingRelationships_InvalidJSON(t *testing.T
 	incomingBucket := newMockKVBucket()
 
 	// Store invalid JSON
-	if _, err := outgoingBucket.Put(context.Background(), "entity-A", []byte("not valid json")); err != nil {
+	if _, err := outgoingBucket.Put(context.Background(), "test.graph.cluster.anomaly.entity.a", []byte("not valid json")); err != nil {
 		t.Fatalf("failed to put data: %v", err)
 	}
 
 	querier := newKVRelationshipQuerier(outgoingBucket, incomingBucket, nil)
 
-	_, err := querier.GetOutgoingRelationships(context.Background(), "entity-A")
+	_, err := querier.GetOutgoingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.a")
 	if err == nil {
 		t.Error("expected error for invalid JSON, got nil")
 	}
@@ -192,13 +192,13 @@ func TestGraphProviderAdapter_DoesNotPreservePredicates(t *testing.T) {
 
 	mockProvider := &mockClusteringProvider{
 		neighbors: map[string][]string{
-			"entity-A": {"entity-B", "entity-C"},
+			"test.graph.cluster.anomaly.entity.a": {"test.graph.cluster.anomaly.entity.b", "test.graph.cluster.anomaly.entity.c"},
 		},
 	}
 
 	adapter := &graphProviderAdapter{provider: mockProvider}
 
-	result, err := adapter.GetOutgoingRelationships(context.Background(), "entity-A")
+	result, err := adapter.GetOutgoingRelationships(context.Background(), "test.graph.cluster.anomaly.entity.a")
 	if err != nil {
 		t.Fatalf("GetOutgoingRelationships failed: %v", err)
 	}

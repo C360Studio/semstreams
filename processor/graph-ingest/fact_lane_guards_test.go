@@ -37,6 +37,8 @@ type testStorablePayload struct {
 	ref     *message.StorageReference
 }
 
+// entity-id-audit:classify intentional-malformed "malformed" line=146 column=12 surface=go-field:EntityState.ID entity_id_invalid:arity malformed fact-lane state rejection fixture
+
 func (p *testStorablePayload) EntityID() string                      { return p.id }
 func (p *testStorablePayload) Triples() []message.Triple             { return p.triples }
 func (p *testStorablePayload) StorageRef() *message.StorageReference { return p.ref }

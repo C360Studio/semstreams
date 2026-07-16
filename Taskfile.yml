@@ -71,6 +71,11 @@ tasks:
     cmds:
       - go run ./cmd/predicate-audit .
 
+  entity-id:audit:
+    desc: Validate the deterministic local entity-ID source corpus
+    cmds:
+      - go run ./cmd/entity-id-audit .
+
   # Observability shortcuts
   observe:up:
     desc: Start Prometheus + Grafana for local monitoring

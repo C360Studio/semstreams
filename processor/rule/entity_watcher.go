@@ -607,7 +607,7 @@ func (rp *Processor) evaluateEntitiesInBatch(ctx context.Context, entityIDs []st
 
 // markGraphStateResetRequired recognizes the shared ENTITY_STATES poison
 // signal and latches rule evaluation off until the process is restarted after
-// an operator reset/reingest. It returns true only for graph-state contract
+// an operator wipe/restart/reseed. It returns true only for graph-state contract
 // failures so callers can keep their normal transient-error behavior.
 func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID string, err error) bool {
 	var contractErr *gtypes.StateContractError

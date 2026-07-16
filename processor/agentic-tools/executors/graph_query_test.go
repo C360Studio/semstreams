@@ -155,7 +155,7 @@ func TestGraphQueryExecutor_QueryEntity_NotFound(t *testing.T) {
 		ID:   "call_456",
 		Name: "query_entity",
 		Arguments: map[string]any{
-			"entity_id": "nonexistent-entity",
+			"entity_id": "test.agentic.tools.graph.entity.missing",
 		},
 	}
 
@@ -172,7 +172,7 @@ func TestGraphQueryExecutor_QueryEntity_NotFound(t *testing.T) {
 		t.Error("expected error for not found entity")
 	}
 
-	if result.Error != "entity not found: nonexistent-entity" {
+	if result.Error != "entity not found: test.agentic.tools.graph.entity.missing" {
 		t.Errorf("unexpected error message: %s", result.Error)
 	}
 }
@@ -205,7 +205,7 @@ func TestGraphQueryExecutor_QueryEntity_EmptyEntityID(t *testing.T) {
 		ID:   "call_abc",
 		Name: "query_entity",
 		Arguments: map[string]any{
-			"entity_id": "",
+			"entity_id": "", // entity-id-audit:classify intentional-malformed "" line=208 column=17 surface=go-field:.entity_id entity_id_invalid:empty empty tool argument rejection fixture
 		},
 	}
 
@@ -246,13 +246,13 @@ func TestGraphQueryExecutor_NonJSONAuthoritativeStateRequiresReset(t *testing.T)
 	executor := NewGraphQueryExecutor(kv)
 
 	// Store non-JSON content
-	kv.Put("plain-text-entity", []byte("This is plain text, not JSON"))
+	kv.Put("test.agentic.tools.graph.entity.plain-text", []byte("This is plain text, not JSON"))
 
 	call := agentic.ToolCall{
 		ID:   "call_plain",
 		Name: "query_entity",
 		Arguments: map[string]any{
-			"entity_id": "plain-text-entity",
+			"entity_id": "test.agentic.tools.graph.entity.plain-text",
 		},
 	}
 

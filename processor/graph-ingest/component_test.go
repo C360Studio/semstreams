@@ -34,6 +34,9 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
+// entity-id-audit:classify intentional-malformed "" line=799 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=920 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
 	value    []byte

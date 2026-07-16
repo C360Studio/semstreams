@@ -424,7 +424,7 @@ func TestQueryNotFound_Integration(t *testing.T) {
 	nc := natsClient.GetConnection()
 
 	t.Run("outgoing not found", func(t *testing.T) {
-		request := map[string]string{"entity_id": "non.existent.entity"}
+		request := map[string]string{"entity_id": "test.graph.index.query.entity.missing"}
 		requestJSON, err := json.Marshal(request)
 		require.NoError(t, err)
 
@@ -438,7 +438,7 @@ func TestQueryNotFound_Integration(t *testing.T) {
 	})
 
 	t.Run("incoming not found", func(t *testing.T) {
-		request := map[string]string{"entity_id": "non.existent.entity"}
+		request := map[string]string{"entity_id": "test.graph.index.query.entity.missing"}
 		requestJSON, err := json.Marshal(request)
 		require.NoError(t, err)
 

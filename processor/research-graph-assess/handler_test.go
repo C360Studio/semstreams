@@ -67,12 +67,12 @@ func TestAssessSufficiency_SufficientPath(t *testing.T) {
 	a := &fakeAssessor{
 		content: `{"sufficient":true,"rationale":"evidence covers all named actors","confidence":0.82}`,
 	}
-	intent := &research.Intent{Topic: "drone-001 maintenance events"}
+	intent := &research.Intent{Topic: "test.research.graph.assess.entity.drone-001 maintenance events"}
 	exec := &research.ExecutionOutput{
-		Topic:  "drone-001 maintenance events",
+		Topic:  "test.research.graph.assess.entity.drone-001 maintenance events",
 		Action: research.ActionWalkSeeds,
 		Evidence: []fusion.Evidence{
-			{EntityID: "drone-001", Tier: "0", Source: "walk_seeds.entity_state", Score: 0.9, SnippetText: "Drone 001 maintenance window 14:32Z"},
+			{EntityID: "test.research.graph.assess.entity.drone-001", Tier: "0", Source: "walk_seeds.entity_state", Score: 0.9, SnippetText: "Drone 001 maintenance window 14:32Z"},
 		},
 	}
 	got, err := assessSufficiency(context.Background(), a, intent, exec, 1024, 20, 280, quietLogger())
@@ -97,20 +97,20 @@ func TestAssessSufficiency_SufficientPath(t *testing.T) {
 	if a.gotMaxToks != 1024 {
 		t.Errorf("maxTokens = %d, want 1024", a.gotMaxToks)
 	}
-	if !strings.Contains(a.gotUser, "drone-001 maintenance events") {
+	if !strings.Contains(a.gotUser, "test.research.graph.assess.entity.drone-001 maintenance events") {
 		t.Errorf("user prompt missing topic: %q", a.gotUser)
 	}
 }
 
 func TestAssessSufficiency_RefinePath(t *testing.T) {
 	a := &fakeAssessor{
-		content: `{"sufficient":false,"refined_queries":["fleet-wide drone status","battery alerts last 24h"],"rationale":"topic spans fleet but evidence is drone-001 only","confidence":0.4}`,
+		content: `{"sufficient":false,"refined_queries":["fleet-wide drone status","battery alerts last 24h"],"rationale":"topic spans fleet but evidence is test.research.graph.assess.entity.drone-001 only","confidence":0.4}`,
 	}
 	intent := &research.Intent{Topic: "drone status across the fleet"}
 	exec := &research.ExecutionOutput{
 		Topic:    "drone status across the fleet",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []fusion.Evidence{{EntityID: "drone-001", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "test.research.graph.assess.entity.drone-001", Tier: "0", Source: "x"}},
 	}
 	got, err := assessSufficiency(context.Background(), a, intent, exec, 1024, 20, 280, quietLogger())
 	if err != nil {

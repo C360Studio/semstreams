@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -15,9 +14,8 @@ func TestAuditRepositoryTrackedSetIgnoresDirtyRuntimeArtifacts(t *testing.T) {
 	writeFixture(t, root, "tracked.go", `package fixture
 var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
 `)
-	writeFixture(t, root, "docs/operations/28-entity-id-source-corpus.json", `{"entity_id":"bad"}`)
 	runGit(t, root, "init")
-	runGit(t, root, "add", ".gitignore", "tracked.go", "docs/operations/28-entity-id-source-corpus.json")
+	runGit(t, root, "add", ".gitignore", "tracked.go")
 
 	before, err := AuditRepositoryFull(root, false)
 	if err != nil {
@@ -33,7 +31,7 @@ var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
 		t.Fatalf("tracked audit changed: before=%#v after=%#v", before, after)
 	}
 	if len(before.Candidates) != 1 || len(before.Findings) != 0 {
-		t.Fatalf("tracked audit = %#v, checked report must be explicitly self-excluded", before)
+		t.Fatalf("tracked audit = %#v, want only the tracked canonical source", before)
 	}
 	withUntracked, err := AuditRepositoryFull(root, true)
 	if err != nil {
@@ -44,7 +42,7 @@ var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
 	}
 }
 
-func TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeSurfaces(t *testing.T) {
+func TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeCandidates(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live repository inventory")
 	}
@@ -60,26 +58,61 @@ func TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeSurfaces(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Surfaces) == 0 {
-		t.Fatal("absolute-root audit returned no surfaces")
+	if len(result.Candidates) == 0 {
+		t.Fatal("absolute-root audit returned no candidates")
 	}
-	for _, surface := range result.Surfaces {
-		if filepath.IsAbs(surface.File) || surface.File == ".." || strings.HasPrefix(surface.File, "../") {
-			t.Fatalf("surface path %q is not repository-relative", surface.File)
+	for _, candidate := range result.Candidates {
+		if filepath.IsAbs(candidate.File) {
+			t.Fatalf("candidate path %q is not repository-relative", candidate.File)
 		}
 	}
 }
 
-func TestNormalizeSurfacePathsMakesAbsoluteFixturePathRepositoryRelative(t *testing.T) {
+func TestAuditRepositorySkipsUnstagedAndStagedTrackedDeletions(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	path := filepath.Join(root, "nested", "surface.go")
-	surfaces := []AuditedSurface{{File: path, Kind: "direct-split", Name: "strings.Split in parse"}}
-	if err := normalizeSurfacePaths(root, surfaces); err != nil {
+	writeFixture(t, root, "tracked.go", `package fixture
+var _ = EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
+`)
+	runGit(t, root, "init")
+	runGit(t, root, "add", "tracked.go")
+
+	if err := os.Remove(filepath.Join(root, "tracked.go")); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := surfaces[0].File, "nested/surface.go"; got != want {
-		t.Fatalf("surface path = %q, want %q", got, want)
+	unstaged, err := AuditRepositoryFull(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unstaged.Candidates) != 0 || len(unstaged.Findings) != 0 {
+		t.Fatalf("unstaged deletion audit = %#v, want empty", unstaged)
+	}
+
+	runGit(t, root, "add", "-u")
+	staged, err := AuditRepositoryFull(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(staged.Candidates) != 0 || len(staged.Findings) != 0 {
+		t.Fatalf("staged deletion audit = %#v, want empty", staged)
+	}
+}
+
+func TestAuditRepositoryNormalizesFindingPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "bad.go", `package fixture
+var _ = EntityState{ID: "bad"}
+`)
+	runGit(t, root, "init")
+	runGit(t, root, "add", "bad.go")
+
+	result, err := AuditRepositoryFull(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].File != "bad.go" {
+		t.Fatalf("findings = %#v, want one repository-relative path", result.Findings)
 	}
 }
 
