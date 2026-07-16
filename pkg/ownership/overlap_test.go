@@ -151,7 +151,7 @@ func TestCheckOverlap_CrossType(t *testing.T) {
 
 	t.Run("FE with empty target pattern matches any owner pattern → reject", func(t *testing.T) {
 		others := map[string]ownerEntry{
-			"producer": {ForeignEdges: []ForeignEdgeClaim{{Owner: "producer", Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), TargetPattern: "", Mode: EdgeConditional}}}, // entity-id-audit:classify intentional-sentinel "" line=154 column=178 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+			"producer": {ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "producer", Predicate: semantictest.Predicate(t, "sensorml", "component", "is-hosted-by"), TargetPattern: "", Mode: EdgeConditional}}}, // entity-id-audit:classify intentional-sentinel "" line=154 column=180 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 		}
 		cand := ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "sensorml", "component", "is-hosted-by")}}}}
 		if err := checkOverlap("cs-api", cand, others, nil); !errors.Is(err, ErrOwnershipOverlap) {

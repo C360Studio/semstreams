@@ -199,10 +199,10 @@ func TestEpoch_CompactStale(t *testing.T) {
 // an OwnerClaim is still reaped (it holds a contested cell).
 func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{{Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "x"), TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=202 column=176 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "x"), TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=202 column=178 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	ep.Owners["mixed"] = ownerEntry{
 		Claims:       []OwnerClaim{{Owner: "mixed", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
-		ForeignEdges: []ForeignEdgeClaim{{Owner: "mixed", Predicate: semantictest.Predicate(t, "test", "edge", "y"), TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=205 column=141 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+		ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "mixed", Predicate: semantictest.Predicate(t, "test", "edge", "y"), TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=205 column=143 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	}
 	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "owning-dead", Pattern: "a.b.c.d.e.g", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
 	// A degenerate empty entry (no claims, no edges) is NOT exempt — the
