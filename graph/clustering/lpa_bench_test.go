@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 // Benchmark small graph (10 nodes, 2 communities)
@@ -177,12 +179,14 @@ func BenchmarkLPADetector_GetEntityCommunity_Parallel(b *testing.B) {
 	storage := NewMockCommunityStorage()
 
 	// Create simple graph
+	nodes := make([]string, 10)
 	for i := 0; i < 10; i++ {
-		provider.AddEntity(fmt.Sprintf("N%d", i))
+		nodes[i] = semantictest.EntityID(b, "test", "benchmark", "graph", "lpa", "node", fmt.Sprintf("%d", i))
+		provider.AddEntity(nodes[i])
 	}
 	for i := 0; i < 10; i++ {
 		for j := i + 1; j < 10; j++ {
-			provider.AddEdge(fmt.Sprintf("N%d", i), fmt.Sprintf("N%d", j), 1.0)
+			provider.AddEdge(nodes[i], nodes[j], 1.0)
 		}
 	}
 
@@ -197,7 +201,7 @@ func BenchmarkLPADetector_GetEntityCommunity_Parallel(b *testing.B) {
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		entityID := "N5"
+		entityID := nodes[5]
 		for pb.Next() {
 			_, err := detector.GetEntityCommunity(ctx, entityID, 0)
 			if err != nil {

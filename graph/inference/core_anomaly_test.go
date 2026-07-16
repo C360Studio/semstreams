@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph/structural"
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestCoreAnomalyDetector_Name(t *testing.T) {
@@ -62,16 +63,18 @@ func TestCoreAnomalyDetector_Detect_Disabled(t *testing.T) {
 }
 
 func TestCoreAnomalyDetector_IsolationAnomaly_HasSuggestion(t *testing.T) {
+	highCoreID := semantictest.EntityID(t, "test", "inference", "graph", "core", "entity", "high")
+	lowCoreID := semantictest.EntityID(t, "test", "inference", "graph", "core", "entity", "low")
 	// Create a mock k-core index with a high-core entity
 	// Must set both CoreNumbers (for GetCore) and CoreBuckets (for GetEntitiesAboveCore)
 	kcoreIndex := &structural.KCoreIndex{
 		CoreNumbers: map[string]int{
-			"high-core-entity": 5,
-			"low-core-entity":  1,
+			highCoreID: 5,
+			lowCoreID:  1,
 		},
 		CoreBuckets: map[int][]string{
-			5: {"high-core-entity"},
-			1: {"low-core-entity"},
+			5: {highCoreID},
+			1: {lowCoreID},
 		},
 	}
 
@@ -79,8 +82,8 @@ func TestCoreAnomalyDetector_IsolationAnomaly_HasSuggestion(t *testing.T) {
 	// This simulates core isolation - high k-core with few same-core neighbors
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
-			"high-core-entity": {
-				{FromEntityID: "high-core-entity", ToEntityID: "low-core-entity", Predicate: "knows"},
+			highCoreID: {
+				{FromEntityID: highCoreID, ToEntityID: lowCoreID, Predicate: "knows"},
 			},
 		},
 		incoming: map[string][]RelationshipInfo{},
@@ -110,7 +113,7 @@ func TestCoreAnomalyDetector_IsolationAnomaly_HasSuggestion(t *testing.T) {
 	// Should detect isolation anomaly for high-core-entity
 	var isolationAnomaly *StructuralAnomaly
 	for _, a := range anomalies {
-		if a.Type == AnomalyCoreIsolation && a.EntityA == "high-core-entity" {
+		if a.Type == AnomalyCoreIsolation && a.EntityA == highCoreID {
 			isolationAnomaly = a
 			break
 		}
@@ -126,8 +129,8 @@ func TestCoreAnomalyDetector_IsolationAnomaly_HasSuggestion(t *testing.T) {
 	}
 
 	// Verify Suggestion fields
-	if isolationAnomaly.Suggestion.FromEntity != "high-core-entity" {
-		t.Errorf("expected Suggestion.FromEntity='high-core-entity', got %s", isolationAnomaly.Suggestion.FromEntity)
+	if isolationAnomaly.Suggestion.FromEntity != highCoreID {
+		t.Errorf("expected Suggestion.FromEntity=%q, got %s", highCoreID, isolationAnomaly.Suggestion.FromEntity)
 	}
 
 	if isolationAnomaly.Suggestion.Predicate != "inference.suggested.peer" {

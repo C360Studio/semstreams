@@ -365,3 +365,5 @@ func assertGraphResetContract(t *testing.T, err error, reason StateResetReason) 
 
 // entity-id-audit:classify intentional-malformed "bad" line=283 column=21 surface=go-assignment:invalidEntityID aggregate root subject and reference poison fixture
 // entity-id-audit:classify intentional-malformed "bad" line=340 column=21 surface=go-assignment:invalidEntityID identity-only aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=140 column=32 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed root contract rejection
+// entity-id-audit:classify intentional-malformed "bad" line=206 column=7 surface=go-field:EntityState.ID entity_id_invalid:arity verifies deterministic root-before-subject rejection

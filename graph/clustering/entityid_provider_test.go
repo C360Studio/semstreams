@@ -3,6 +3,8 @@ package clustering
 import (
 	"context"
 	"testing"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 // entityIDTestProvider implements Provider for EntityID provider testing
@@ -36,12 +38,12 @@ func TestGetTypePrefix(t *testing.T) {
 	}{
 		{
 			name:     "valid 6-part EntityID",
-			entityID: "c360.logistics.environmental.sensor.temperature.temp-sensor-001",
+			entityID: semantictest.EntityID(t, "c360", "logistics", "environmental", "sensor", "temperature", "temp-sensor-001"),
 			want:     "c360.logistics.environmental.sensor.temperature",
 		},
 		{
 			name:     "another valid 6-part EntityID",
-			entityID: "c360.logistics.maintenance.work.completed.maint-001",
+			entityID: semantictest.EntityID(t, "c360", "logistics", "maintenance", "work", "completed", "maint-001"),
 			want:     "c360.logistics.maintenance.work.completed",
 		},
 		{
@@ -567,3 +569,7 @@ func TestSystemPeers_NoDuplicateWithSiblings(t *testing.T) {
 		t.Errorf("expected 2 total neighbors, got %d: %v", len(neighbors), neighbors)
 	}
 }
+
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature" line=51 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position ID has no type prefix
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature.temp.001" line=56 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position ID has no type prefix
+// entity-id-audit:classify intentional-malformed "" line=61 column=14 surface=go-field:.entityID entity_id_invalid:empty verifies empty input has no type prefix

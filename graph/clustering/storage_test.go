@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -393,6 +394,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	isolatedSwitchID := semantictest.EntityID(t, "c360", "platform1", "network", "datacenter", "switch", "0")
 
 	tests := []struct {
 		name                 string
@@ -446,7 +448,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 		},
 		{
 			name:                 "PathRAG handles entity with no community membership",
-			entityID:             "c360.platform1.network.switch.0",
+			entityID:             isolatedSwitchID,
 			communityID:          "",
 			membershipTriples:    []message.Triple{},
 			wantTraversalSuccess: true,

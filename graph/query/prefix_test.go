@@ -235,3 +235,5 @@ func TestPagePrefixAll_DefensiveEmptyPageWithCursor(t *testing.T) {
 }
 
 // entity-id-audit:classify intentional-malformed "bad" line=21 column=21 surface=go-assignment:invalidEntityID prefix aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "acme.*" line=90 column=86 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:first_byte verifies wildcard prefix rejection before NATS
+// entity-id-audit:classify intentional-malformed "acme.*" line=108 column=36 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:first_byte verifies wildcard prefix rejection before fetch

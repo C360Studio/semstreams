@@ -311,7 +311,7 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 	var out []Candidate
 	add := func(expr ast.Expr, language Language, surface string) {
 		value, ok := resolve(expr)
-		if !ok || value == "" {
+		if !ok {
 			return
 		}
 		position := fset.Position(expr.Pos())

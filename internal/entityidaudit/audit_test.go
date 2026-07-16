@@ -181,6 +181,57 @@ var _ = Port{Subject: "raw.sensor.>"}
 	}
 }
 
+func TestAuditExtractsContextualEmptyEntityIDsButNotUnrelatedEmptyStrings(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFixture(t, root, "empty.go", `package fixture
+var _ = EntityState{ID: ""}
+var _ = IsValidEntityID("")
+var _ = struct{ Name string }{Name: ""}
+`)
+
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || len(findings) != 2 {
+		t.Fatalf("candidates = %#v, findings = %#v, want two contextual empty entity-ID findings", candidates, findings)
+	}
+	for _, finding := range findings {
+		if finding.Value != "" || finding.Reason != "entity_id_invalid:empty" {
+			t.Fatalf("finding = %#v, want exact empty entity-ID classification", finding)
+		}
+	}
+	if candidates[0].Surface != "go-field:EntityState.ID" || candidates[1].Surface != "go-call:IsValidEntityID" {
+		t.Fatalf("candidates = %#v, unrelated empty string must remain excluded", candidates)
+	}
+}
+
+func TestAuditEmptyEntityIDAnnotationResolvesOneExactOccurrence(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const classificationReason = "entity_id_invalid:empty deliberate empty root fixture"
+	writeFixture(t, root, "empty.go", `package fixture
+// entity-id-audit:classify intentional-malformed "" line=3 column=25 surface=go-field:EntityState.ID entity_id_invalid:empty deliberate empty root fixture
+var _ = EntityState{ID: ""}
+var _ = EntityState{ID: ""}
+`)
+
+	candidates, findings, err := Audit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || len(findings) != 1 {
+		t.Fatalf("candidates = %#v, findings = %#v, want one exact empty occurrence classified and one finding", candidates, findings)
+	}
+	if candidates[0].Language != LanguageIntentionalMalformed || candidates[0].ClassificationReason != classificationReason {
+		t.Fatalf("first candidate = %#v, want exact occurrence and stable classification reason", candidates[0])
+	}
+	if candidates[1].Language != LanguageLiteral || findings[0].Line != 4 || findings[0].Reason != "entity_id_invalid:empty" {
+		t.Fatalf("second candidate = %#v, findings = %#v, want unclassified second occurrence", candidates[1], findings)
+	}
+}
+
 func TestAuditRejectsAnnotationThatDoesNotMatchExactOccurrence(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
