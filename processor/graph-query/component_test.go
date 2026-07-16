@@ -469,9 +469,10 @@ func TestRegister_AddsToRegistry(t *testing.T) {
 
 func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 	mockClient := newMockNATSClient()
+	validID := "acme.ops.test.system.widget.001"
 
 	// Mock response from graph-ingest
-	entityResponse := []byte(`{"id":"test.entity.001","triples":[]}`)
+	entityResponse := []byte(`{"id":"acme.ops.test.system.widget.001","triples":[]}`)
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		// Actual query should go to graph-ingest
 		assert.Equal(t, "graph.ingest.query.entity", subject, "should forward to graph-ingest")
@@ -479,7 +480,7 @@ func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 		var req map[string]string
 		err := json.Unmarshal(data, &req)
 		require.NoError(t, err)
-		assert.Equal(t, "test.entity.001", req["id"])
+		assert.Equal(t, validID, req["id"])
 
 		return entityResponse, nil
 	}
@@ -490,7 +491,7 @@ func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"id":"test.entity.001"}`)
+	queryData := []byte(`{"id":"acme.ops.test.system.widget.001"}`)
 
 	response, err := comp.handleQueryEntity(ctx, queryData)
 

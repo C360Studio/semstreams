@@ -70,6 +70,8 @@ const prefixQuerySubject = "graph.ingest.query.prefix"
 func (r *natsGraphReader) ReadUnitSet(ctx context.Context) ([]graph.EntityState, error) {
 	var all []graph.EntityState
 	cursor := ""
+	coldStart := !r.warmed
+	answered := false
 	for {
 		remaining := r.maxUnits - len(all)
 		if remaining <= 0 {
@@ -86,25 +88,34 @@ func (r *natsGraphReader) ReadUnitSet(ctx context.Context) ([]graph.EntityState,
 			return nil, fmt.Errorf("marshal prefix request: %w", err)
 		}
 		var respData []byte
-		if r.warmed {
-			respData, err = r.nc.RequestClassified(ctx, prefixQuerySubject, reqData, r.timeout)
-		} else {
+		useReady := coldStart && !answered
+		if useReady {
 			respData, err = r.nc.RequestReadyClassified(ctx, prefixQuerySubject, reqData, r.readyProbe, r.readyBudget)
+		} else {
+			respData, err = r.nc.RequestClassified(ctx, prefixQuerySubject, reqData, r.timeout)
 		}
 		if err != nil {
-			if !r.warmed && r.onNeverReady != nil {
+			if useReady && r.onNeverReady != nil {
 				r.onNeverReady(err)
 			}
 			return nil, fmt.Errorf("%s: %w", prefixQuerySubject, err)
 		}
-		// graph-ingest answered — subsequent reads are steady-state.
-		r.warmed = true
+		answered = true
 		var resp graph.PrefixQueryResponse
 		if err := json.Unmarshal(respData, &resp); err != nil {
 			return nil, fmt.Errorf("unmarshal prefix response: %w", err)
 		}
+		if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
+			return nil, fmt.Errorf("validate prefix response: %w", err)
+		}
 		all = append(all, resp.Entities...)
 		if resp.NextCursor == "" {
+			// Commit persistent readiness only after every page in this aggregate
+			// has validated. Later pages in the same cold-start read use the
+			// steady request path because the responder already answered page one.
+			if coldStart {
+				r.warmed = true
+			}
 			return all, nil // exhausted
 		}
 		cursor = resp.NextCursor

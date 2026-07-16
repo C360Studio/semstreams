@@ -1333,7 +1333,7 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 		assert.Equal(t, "", payload["prefix"], "inline empty prefix should be extracted")
 		assert.Equal(t, float64(5), payload["limit"], "inline limit should be extracted")
 
-		return []byte(`{"entities":[{"id":"test.001"},{"id":"test.002"}]}`), nil
+		return []byte(`{"entities":[{"id":"acme.ops.test.system.widget.001"},{"id":"acme.ops.test.system.widget.002"}]}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)

@@ -2,15 +2,39 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecodePrefixQueryResponseRejectsPoisonedEntityBeforeReturn(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	tests := []graph.EntityState{
+		{ID: invalidEntityID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+		{ID: validID, Triples: []message.Triple{{
+			Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
+		}}},
+	}
+	for index, poison := range tests {
+		data, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{{ID: validID}, poison}})
+		require.NoError(t, err)
+		got, err := decodePrefixQueryResponse(data)
+		require.Error(t, err, "poison case %d", index)
+		assert.True(t, graph.IsStateContractError(err))
+		assert.Empty(t, got.Entities, "no partial aggregate may escape")
+	}
+}
 
 // scriptedPage is one page a fake fetcher hands back.
 type scriptedPage struct {
@@ -209,3 +233,5 @@ func TestPagePrefixAll_DefensiveEmptyPageWithCursor(t *testing.T) {
 	assert.False(t, truncated)
 	assert.Len(t, got, 2, "stopped after the empty page rather than spinning")
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=21 column=21 surface=go-assignment:invalidEntityID prefix aggregate poison fixture

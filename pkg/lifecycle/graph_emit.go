@@ -153,6 +153,9 @@ func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWi
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
 	}
+	if err := validateMutationResponseEntity(resp.Entity); err != nil {
+		return nil, fmt.Errorf("%w: validate update response: %w", ErrEmitFailed, err)
+	}
 	return &resp, nil
 }
 
@@ -193,7 +196,17 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
 	}
+	if err := validateMutationResponseEntity(resp.Entity); err != nil {
+		return nil, fmt.Errorf("%w: validate create response: %w", ErrEmitFailed, err)
+	}
 	return &resp, nil
+}
+
+func validateMutationResponseEntity(entity *graph.EntityState) error {
+	if entity == nil {
+		return nil
+	}
+	return graph.ValidateDecodedEntityState(entity)
 }
 
 // delete marshals a DeleteEntityRequest, fires it as a NATS

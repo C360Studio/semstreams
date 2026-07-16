@@ -178,6 +178,64 @@ func MarshalEntityState(entity *EntityState) ([]byte, error) {
 	return json.Marshal(entity)
 }
 
+// ValidateDecodedEntityState applies the authoritative graph-state failure
+// contract to an EntityState that was decoded as part of a larger query reply.
+// Aggregate decoders must call this before exposing any candidate downstream.
+func ValidateDecodedEntityState(entity *EntityState) error {
+	if err := ValidateEntityStateContract(entity); err != nil {
+		return classifyDecodedEntityStateError(err)
+	}
+	return nil
+}
+
+// ValidateDecodedEntityStates validates an entire value collection before its
+// caller performs any downstream work. The indexed wrapper preserves the
+// contract error for errors.As while identifying which candidate poisoned the
+// reply.
+func ValidateDecodedEntityStates(entities []EntityState) error {
+	for index := range entities {
+		if err := ValidateDecodedEntityState(&entities[index]); err != nil {
+			return fmt.Errorf("entity[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// ValidateDecodedEntityStatePointers is the pointer-slice counterpart used by
+// GraphRAG hydration replies. Nil entries are contract violations, not absence:
+// the batch protocol represents absence by omitting an entity.
+func ValidateDecodedEntityStatePointers(entities []*EntityState) error {
+	for index, entity := range entities {
+		if err := ValidateDecodedEntityState(entity); err != nil {
+			return fmt.Errorf("entity[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+// ValidateDecodedEntityIDs validates identity-only authoritative query replies
+// (semantic hits, name matches, and relationship endpoints) as one unit.
+func ValidateDecodedEntityIDs(entityIDs []string) error {
+	for index, entityID := range entityIDs {
+		if err := ValidateDecodedEntityState(&EntityState{ID: entityID}); err != nil {
+			return fmt.Errorf("entity_id[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func classifyDecodedEntityStateError(err error) error {
+	reason := GraphStateReasonNoncanonicalEntityID
+	var predicateErr *EntityPredicateContractError
+	if errors.As(err, &predicateErr) {
+		reason = GraphStateReasonNoncanonicalPredicate
+	}
+	return ClassifyStateContractError(errs.WrapFatal(&StateContractError{
+		Reason: reason,
+		Err:    err,
+	}, "graph", "ValidateDecodedEntityState", "validate authoritative entity state"))
+}
+
 // UnmarshalEntityState is the authoritative decoder for ENTITY_STATES and
 // graph-view consumers. It refuses unreadable or noncanonical stored state.
 func UnmarshalEntityState(data []byte, entity *EntityState) error {
@@ -187,16 +245,5 @@ func UnmarshalEntityState(data []byte, entity *EntityState) error {
 			Err:    err,
 		}, "graph", "UnmarshalEntityState", "decode authoritative entity state"))
 	}
-	if err := ValidateEntityStateContract(entity); err != nil {
-		reason := GraphStateReasonNoncanonicalEntityID
-		var predicateErr *EntityPredicateContractError
-		if errors.As(err, &predicateErr) {
-			reason = GraphStateReasonNoncanonicalPredicate
-		}
-		return ClassifyStateContractError(errs.WrapFatal(&StateContractError{
-			Reason: reason,
-			Err:    err,
-		}, "graph", "UnmarshalEntityState", "decode authoritative entity state"))
-	}
-	return nil
+	return ValidateDecodedEntityState(entity)
 }

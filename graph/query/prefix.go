@@ -46,9 +46,20 @@ func (qc *natsClient) QueryPrefix(ctx context.Context, req graph.PrefixQueryRequ
 		return graph.PrefixQueryResponse{}, err
 	}
 
-	var result graph.PrefixQueryResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
+	result, err := decodePrefixQueryResponse(resp)
+	if err != nil {
 		return graph.PrefixQueryResponse{}, err
+	}
+	return result, nil
+}
+
+func decodePrefixQueryResponse(data []byte) (graph.PrefixQueryResponse, error) {
+	var result graph.PrefixQueryResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return graph.PrefixQueryResponse{}, err
+	}
+	if err := graph.ValidateDecodedEntityStates(result.Entities); err != nil {
+		return graph.PrefixQueryResponse{}, fmt.Errorf("validate prefix query response: %w", err)
 	}
 	return result, nil
 }

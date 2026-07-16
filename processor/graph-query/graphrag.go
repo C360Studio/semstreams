@@ -255,6 +255,9 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 				entityIDs[i] = hit.EntityID
 			}
 			entities, loadErr := c.loadEntities(ctx, entityIDs)
+			if gtypes.IsStateContractError(loadErr) {
+				return nil, loadErr
+			}
 			if loadErr == nil {
 				matchedEntities := filterEntitiesByQuery(entities, req.Query, c.minTextRelevance)
 				response := LocalSearchResponse{
@@ -274,6 +277,9 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 	// Load entities from community via graph-ingest
 	entities, err := c.loadEntities(ctx, community.Members)
 	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
 		return nil, errs.WrapTransient(err, "GraphQuery", "handleLocalSearch", "load entities")
 	}
 
@@ -316,15 +322,16 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 }
 
 // tryPathIntentSearch checks a classification result for path intent and routes to PathRAG.
-// Returns (result, true) if handled, or (nil, false) if should fall through to other tiers.
-func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.ClassificationResult, queryText string, startTime time.Time, requestSize int) ([]byte, bool) {
+// Returns (result, true, nil) if handled, (nil, false, nil) when another tier
+// may run, or the fatal graph-state error that must stop all fallback.
+func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.ClassificationResult, queryText string, startTime time.Time, requestSize int) ([]byte, bool, error) {
 	if cr == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	pathIntent, _ := cr.Options["path_intent"].(bool)
 	pathStartNode, _ := cr.Options["path_start_node"].(string)
 	if !pathIntent || pathStartNode == "" {
-		return nil, false
+		return nil, false, nil
 	}
 
 	var pathPredicates []string
@@ -346,6 +353,9 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 	if err == nil && fullID != "" {
 		// Execute PathRAG search
 		pathResult, pathErr := c.executePathSearchForGlobal(ctx, fullID, pathPredicates)
+		if gtypes.IsStateContractError(pathErr) {
+			return nil, false, pathErr
+		}
 		entityCount := 0
 		if pathResult != nil {
 			entityCount = len(pathResult.Entities)
@@ -366,14 +376,16 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 				Count:      len(pathResult.Entities),
 				DurationMs: time.Since(startTime).Milliseconds(),
 			}
-			c.enrichGlobalResponse(ctx, &response, queryText, pathEntityIDs)
+			if err := c.enrichGlobalResponse(ctx, &response, queryText, pathEntityIDs); err != nil {
+				return nil, false, err
+			}
 			c.recordSuccess(requestSize, 0)
 			marshaledResult, _ := json.Marshal(response)
-			return marshaledResult, true
+			return marshaledResult, true, nil
 		}
 		c.logger.Debug("PathRAG returned no results, falling through to other tiers",
 			"error", pathErr)
-		return nil, false
+		return nil, false, nil
 	}
 
 	// At structural tier without entity resolution, return empty result
@@ -386,10 +398,10 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 			DurationMs: time.Since(startTime).Milliseconds(),
 		}
 		marshaledResult, _ := json.Marshal(response)
-		return marshaledResult, true
+		return marshaledResult, true, nil
 	}
 
-	return nil, false
+	return nil, false, nil
 }
 
 // classifyQuery runs the classifier chain if available, returning nil otherwise.
@@ -618,14 +630,22 @@ func (c *Component) handleGlobalSearch(ctx context.Context, data []byte) ([]byte
 
 	switch strategy {
 	case "entity_lookup":
-		if result, handled := c.handleStrategyEntityLookup(ctx, classResult, searchQuery, startTime); handled {
+		result, handled, err := c.handleStrategyEntityLookup(ctx, classResult, searchQuery, startTime)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
 			return result, nil
 		}
 		// entity_lookup couldn't resolve the query as a partial entity ID
 		// (single-word queries, no path_start_node, fewer than 2 dots) —
 		// fall through to graphrag so the semantic tier gets a chance.
 	case "pathrag":
-		if result, handled := c.tryPathIntentSearch(ctx, classResult, req.Query, startTime, len(data)); handled {
+		result, handled, err := c.tryPathIntentSearch(ctx, classResult, req.Query, startTime, len(data))
+		if err != nil {
+			return nil, err
+		}
+		if handled {
 			return result, nil
 		}
 		// Path search found no results — fall through to graphrag.
@@ -697,7 +717,10 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 			}
 
 			// Enrich community summaries with RepEntity digests (single batch load)
-			enriched := c.enrichCommunitySummaries(ctx, communityMatches)
+			enriched, enrichErr := c.enrichCommunitySummaries(ctx, communityMatches)
+			if enrichErr != nil {
+				return nil, enrichErr
+			}
 
 			// Collect labels from enriched summaries for entity digests
 			labels := make(map[string]string)
@@ -727,6 +750,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 		// Load full entity data for the semantic hits.
 		entities, loadErr := c.loadEntities(ctx, entityIDs)
 		if loadErr != nil {
+			if gtypes.IsStateContractError(loadErr) {
+				return nil, loadErr
+			}
 			c.logger.Warn("failed to load semantic search entities, falling back to text",
 				"error", loadErr)
 			// Fall through to text-based search.
@@ -737,7 +763,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				DurationMs: time.Since(startTime).Milliseconds(),
 			}
 			if req.shouldIncludeSummaries() {
-				c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs)
+				if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs); err != nil {
+					return nil, err
+				}
 			}
 			if req.IncludeRelationships {
 				response.Relationships = c.extractRelationships(ctx, entities)
@@ -793,11 +821,10 @@ func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearch
 // handleStrategyEntityLookup resolves a named entity and returns it directly.
 // This is used for exact-match queries like "show me sensor-001".
 //
-// Returns (result, true) when the entity_lookup strategy actually produced
-// a meaningful resolution; (nil, false) when the classifier mis-routed a
-// query that doesn't look like a partial entity ID (single common words,
-// no path_start_node, fewer than 2 dots) so the caller can fall through
-// to graphrag. Mirrors tryPathIntentSearch's signature pattern.
+// Returns (result, true, nil) when the entity_lookup strategy produced a
+// meaningful resolution; (nil, false, nil) when the classifier mis-routed a
+// query so the caller can fall through to GraphRAG; or a fatal graph-state
+// error that must stop fallback. Mirrors tryPathIntentSearch's contract.
 //
 // Prior behavior returned an empty `(result, nil)` in the no-fall-through
 // case; the caller switch then unconditionally returned that empty
@@ -805,7 +832,7 @@ func (c *Component) graphRAGTier2Fallback(ctx context.Context, req *GlobalSearch
 // "temperature" hit this dead-end every time. The known-answer e2e
 // surface caught it; the user-acknowledged "single-word search doesn't
 // work" was the same root cause.
-func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, startTime time.Time) ([]byte, bool) {
+func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.ClassificationResult, searchQuery string, startTime time.Time) ([]byte, bool, error) {
 	// Prefer path_start_node extracted by the classifier; fall back to the
 	// (possibly refined) query text when it looks like a partial entity ID.
 	ref := ""
@@ -817,7 +844,7 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 	}
 	if ref == "" {
 		// Nothing to look up — signal fall-through to graphrag.
-		return nil, false
+		return nil, false, nil
 	}
 
 	fullID, err := c.resolvePartialEntityID(ctx, ref)
@@ -825,15 +852,18 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		c.logger.Debug("entity_lookup: could not resolve entity, falling through",
 			"ref", ref,
 			"error", err)
-		return nil, false
+		return nil, false, nil
 	}
 
 	entities, loadErr := c.loadEntities(ctx, []string{fullID})
 	if loadErr != nil {
+		if gtypes.IsStateContractError(loadErr) {
+			return nil, false, loadErr
+		}
 		c.logger.Debug("entity_lookup: load failed, falling through",
 			"id", fullID,
 			"error", loadErr)
-		return nil, false
+		return nil, false, nil
 	}
 
 	response := GlobalSearchResponse{
@@ -841,7 +871,9 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID})
+	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID}); err != nil {
+		return nil, false, err
+	}
 
 	c.recordSuccess(0, 0)
 	out, err := json.Marshal(response)
@@ -849,9 +881,9 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		c.logger.Debug("entity_lookup: marshal failed, falling through",
 			"id", fullID,
 			"error", err)
-		return nil, false
+		return nil, false, nil
 	}
-	return out, true
+	return out, true, nil
 }
 
 // handleStrategySemantic executes a pure vector similarity search.
@@ -918,6 +950,9 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
 	if loadErr != nil {
+		if gtypes.IsStateContractError(loadErr) {
+			return nil, loadErr
+		}
 		return nil, errs.WrapTransient(loadErr, "GraphQuery", "handleStrategySemantic", "load entities")
 	}
 
@@ -927,7 +962,9 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
 
-	c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs)
+	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs); err != nil {
+		return nil, err
+	}
 
 	if c.promMetrics != nil {
 		c.promMetrics.observeGlobalSearchResponseCount(response.Count)
@@ -983,6 +1020,9 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
 	if loadErr != nil {
+		if gtypes.IsStateContractError(loadErr) {
+			return nil, loadErr
+		}
 		return nil, errs.WrapTransient(loadErr, "GraphQuery", "handleStrategyTemporal", "load entities")
 	}
 
@@ -991,7 +1031,9 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs)
+	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs); err != nil {
+		return nil, err
+	}
 
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
@@ -1039,6 +1081,9 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 
 	entities, loadErr := c.loadEntities(ctx, entityIDs)
 	if loadErr != nil {
+		if gtypes.IsStateContractError(loadErr) {
+			return nil, loadErr
+		}
 		return nil, errs.WrapTransient(loadErr, "GraphQuery", "handleStrategySpatial", "load entities")
 	}
 
@@ -1047,7 +1092,9 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs)
+	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs); err != nil {
+		return nil, err
+	}
 
 	c.recordSuccess(requestSize, 0)
 	return json.Marshal(response)
@@ -1130,6 +1177,9 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 	// Load entities via graph-ingest
 	entities, err := c.loadEntities(ctx, entityIDs)
 	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
 		return nil, errs.WrapTransient(err, "GraphQuery", "globalSearchTextBased", "load entities")
 	}
 
@@ -1167,7 +1217,10 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 
 	// Conditionally include summaries (default: true)
 	if req.shouldIncludeSummaries() {
-		enriched := c.enrichCommunitySummaries(ctx, summaries)
+		enriched, enrichErr := c.enrichCommunitySummaries(ctx, summaries)
+		if enrichErr != nil {
+			return nil, enrichErr
+		}
 		response.CommunitySummaries = enriched
 		synth := c.synthesizeQueryAnswer(ctx, req.Query, enriched, len(matchedEntities))
 		response.Answer = synth.Answer
@@ -1214,6 +1267,9 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 	// an "error: <msg>" body that would mis-decode as an empty entity batch.
 	respData, err := c.natsClient.RequestClassified(ctx, subject, reqData, c.config.QueryTimeout)
 	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
 		return nil, errs.WrapTransient(err, "GraphQuery", "loadEntities", "request entities")
 	}
 
@@ -1223,6 +1279,9 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 	}
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return nil, errs.WrapInvalid(err, "GraphQuery", "loadEntities", "unmarshal response")
+	}
+	if err := gtypes.ValidateDecodedEntityStatePointers(resp.Entities); err != nil {
+		return nil, fmt.Errorf("GraphQuery.loadEntities: validate authoritative response: %w", err)
 	}
 
 	return resp.Entities, nil
@@ -1393,17 +1452,21 @@ var labelPredicates = []string{
 }
 
 // resolveEntityLabels loads a subset of entities and extracts human-readable labels.
-// Returns a map from entity ID to label. Entities that fail to load or have no
-// recognizable label predicate are omitted from the map.
-func (c *Component) resolveEntityLabels(ctx context.Context, entityIDs []string) map[string]string {
+// Returns a map from entity ID to label. Ordinary lookup failures and entities
+// without a recognizable label remain best-effort omissions; authoritative
+// graph-state failures are returned and must stop response enrichment.
+func (c *Component) resolveEntityLabels(ctx context.Context, entityIDs []string) (map[string]string, error) {
 	if len(entityIDs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	entities, err := c.loadEntities(ctx, entityIDs)
 	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
 		c.logger.Debug("failed to load entities for label resolution", "error", err)
-		return nil
+		return nil, nil
 	}
 
 	labels := make(map[string]string, len(entities))
@@ -1413,7 +1476,7 @@ func (c *Component) resolveEntityLabels(ctx context.Context, entityIDs []string)
 			labels[entity.ID] = label
 		}
 	}
-	return labels
+	return labels, nil
 }
 
 // resolveLabel extracts a human-readable label from an entity by trying predicates
@@ -1475,9 +1538,9 @@ func buildEntityDigestsFromEntities(entities []*gtypes.EntityState) []EntityDige
 // enrichCommunitySummaries populates MemberCount and representative entity digests
 // on each CommunitySummary by looking up RepEntities from the community cache and
 // resolving their labels via a single batch entity load.
-func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []CommunitySummary) []CommunitySummary {
+func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []CommunitySummary) ([]CommunitySummary, error) {
 	if c.communityCache == nil || len(summaries) == 0 {
-		return summaries
+		return summaries, nil
 	}
 
 	// Collect all RepEntity IDs across matched communities (deduplicated)
@@ -1500,7 +1563,10 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 	}
 
 	// Single batch label lookup for all representative entities
-	labels := c.resolveEntityLabels(ctx, repEntityIDs)
+	labels, err := c.resolveEntityLabels(ctx, repEntityIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Populate Entities on each summary
 	for i := range summaries {
@@ -1522,7 +1588,7 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 		}
 		summaries[i].Entities = digests
 	}
-	return summaries
+	return summaries, nil
 }
 
 // synthesizeQueryAnswer delegates to the component's answer synthesizer (LLM or template).
@@ -1561,21 +1627,25 @@ func (c *Component) synthesizeQueryAnswer(ctx context.Context, query string, sum
 // GlobalSearchResponse. Looks up communities for the given entity IDs,
 // enriches them with RepEntity digests, and synthesizes an answer.
 // No-op if no communities match or community cache is unavailable.
-func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearchResponse, queryText string, entityIDs []string) {
+func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearchResponse, queryText string, entityIDs []string) error {
 	if len(entityIDs) == 0 {
-		return
+		return nil
 	}
 	communityMatches := c.findCommunitiesForEntities(entityIDs)
 	if len(communityMatches) == 0 {
-		return
+		return nil
 	}
-	enriched := c.enrichCommunitySummaries(ctx, communityMatches)
+	enriched, err := c.enrichCommunitySummaries(ctx, communityMatches)
+	if err != nil {
+		return err
+	}
 	resp.CommunitySummaries = enriched
 	synth := c.synthesizeQueryAnswer(ctx, queryText, enriched, resp.Count)
 	resp.Answer = synth.Answer
 	resp.AnswerModel = synth.Model
 	resp.Degraded = synth.Degraded
 	resp.DegradedReason = synth.Reason
+	return nil
 }
 
 // synthesizeAnswer produces a template-based natural language answer from
@@ -1982,6 +2052,9 @@ func (c *Component) executePathSearchForGlobal(ctx context.Context, startEntityI
 	// Load full entity data via graph-ingest
 	entities, err := c.loadEntities(ctx, entityIDs)
 	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
 		return nil, errs.WrapTransient(err, "GraphQuery", "executePathSearchForGlobal", "load entities")
 	}
 

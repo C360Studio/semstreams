@@ -82,6 +82,11 @@ func (c *natsClaimer) Claim(ctx context.Context, unitID string) error {
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal claim response for %s: %w", unitID, err)
 	}
+	if resp.Entity != nil {
+		if err := graph.ValidateDecodedEntityState(resp.Entity); err != nil {
+			return fmt.Errorf("validate claim response for %s: %w", unitID, err)
+		}
+	}
 	return nil
 }
 

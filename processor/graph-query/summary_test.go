@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -68,6 +69,34 @@ func prefixEnvelope(ids ...string) []byte {
 	}
 	out, _ := json.Marshal(map[string]any{"entities": entities})
 	return out
+}
+
+func TestHandleQueryGraphSummary_PoisonedPrefixReplyPropagates(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	poisoned, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{
+		{ID: validID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+	}})
+	if err != nil {
+		t.Fatalf("marshal poison response: %v", err)
+	}
+	c := newSummaryTestComponent(func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		if subject == "graph.ingest.query.prefix" {
+			return poisoned, nil
+		}
+		return predicateListResponse(), nil
+	})
+
+	response, err := c.handleQueryGraphSummary(context.Background(), []byte(`{"include_predicates":false}`))
+	if err == nil || !graph.IsStateContractError(err) {
+		t.Fatalf("error = %T %v, want graph state reset contract", err, err)
+	}
+	if response != nil {
+		t.Fatalf("response = %s, want nil before summary projection", response)
+	}
 }
 
 // predicateListResponse marshals a successful predicate-list response
@@ -316,6 +345,8 @@ func TestParseGraphSummaryRequest_ExplicitFalseOverrides(t *testing.T) {
 		t.Errorf("explicit include_predicates=false ignored")
 	}
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=78 column=21 surface=go-assignment:invalidEntityID graph summary prefix aggregate subject poison fixture
 
 // TestParseSummaryRequest_RoundTrip locks in the JSON tag contract
 // per the project's polymorphic-config rule (memory:

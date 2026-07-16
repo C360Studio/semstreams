@@ -275,3 +275,93 @@ func TestAuthoritativeEntityStateContractRejectsNilCandidate(t *testing.T) {
 		t.Fatalf("MarshalEntityState(nil) = %q, %v; want nil bytes and error", data, err)
 	}
 }
+
+func TestValidateDecodedEntityStateCollectionsRejectWholeReply(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	tests := []struct {
+		name     string
+		entities []EntityState
+		field    EntityStateContractField
+	}{
+		{
+			name: "root",
+			entities: []EntityState{
+				{ID: validID},
+				{ID: invalidEntityID},
+			},
+			field: EntityStateContractFieldID,
+		},
+		{
+			name: "subject",
+			entities: []EntityState{{
+				ID:      validID,
+				Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}},
+			}},
+			field: EntityStateContractFieldSubject,
+		},
+		{
+			name: "reference",
+			entities: []EntityState{{
+				ID: validID,
+				Triples: []message.Triple{{
+					Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
+				}},
+			}},
+			field: EntityStateContractFieldReference,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDecodedEntityStates(tt.entities)
+			assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+			var contractErr *EntityStateContractError
+			if !errors.As(err, &contractErr) || contractErr.Field != tt.field {
+				t.Fatalf("error = %T %v, want field %q", err, err, tt.field)
+			}
+		})
+	}
+
+	valid := []EntityState{{ID: validID}}
+	if err := ValidateDecodedEntityStates(valid); err != nil {
+		t.Fatalf("ValidateDecodedEntityStates(valid) error = %v", err)
+	}
+	pointers := []*EntityState{&valid[0], nil}
+	err := ValidateDecodedEntityStatePointers(pointers)
+	assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+}
+
+func TestValidateDecodedEntityIDsRejectsWholeReply(t *testing.T) {
+	t.Parallel()
+
+	invalidEntityID := "bad"
+	err := ValidateDecodedEntityIDs([]string{
+		"acme.ops.test.system.widget.001",
+		invalidEntityID,
+	})
+	assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+}
+
+func assertGraphResetContract(t *testing.T, err error, reason StateResetReason) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("error = nil, want graph reset contract")
+	}
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) {
+		t.Fatalf("error = %T %v, want *errs.ClassifiedError", err, err)
+	}
+	if classified.Class != errs.ErrorFatal || classified.Code != ErrorCodeGraphStateResetRequired {
+		t.Fatalf("classification = %s/%q, want fatal/%q", classified.Class, classified.Code, ErrorCodeGraphStateResetRequired)
+	}
+	var stateErr *StateContractError
+	if !errors.As(err, &stateErr) || stateErr.Reason != reason {
+		t.Fatalf("error = %T %v, want reason %q", err, err, reason)
+	}
+}
+
+// entity-id-audit:classify intentional-malformed "bad" line=283 column=21 surface=go-assignment:invalidEntityID aggregate root subject and reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=340 column=21 surface=go-assignment:invalidEntityID identity-only aggregate poison fixture

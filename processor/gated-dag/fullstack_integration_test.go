@@ -204,7 +204,7 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// Rule engine (no rules) — present so its DELETED-branch cleanup runs for the
 	// Stage D assertion; harmless no-op for the other scenarios.
 	rcfg := rule.DefaultConfig()
-	rcfg.EntityWatchPatterns = []string{"fs.test.>"}
+	rcfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"fs.test.*.*.*.*"}}
 	rproc, err := rule.NewProcessor(nc, &rcfg)
 	require.NoError(t, err)
 	require.NoError(t, rproc.Initialize())

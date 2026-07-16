@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,8 +26,11 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/nats-io/nats.go"
 )
 
 // newComponentForHandlerTest builds a minimal Component with router wired
@@ -37,6 +41,231 @@ func newComponentForHandlerTest(t *testing.T, mock *mockNATSClient) *Component {
 	comp := createTestComponentWithMockClient(t, mock)
 	comp.router = NewStaticRouter(comp.logger)
 	return comp
+}
+
+func TestLoadEntitiesRejectsPoisonedAggregateBeforeReturn(t *testing.T) {
+	t.Parallel()
+
+	invalidEntityID := "bad"
+	response, err := json.Marshal(map[string]any{"entities": []*graph.EntityState{
+		{ID: "acme.ops.test.system.widget.001"},
+		{ID: invalidEntityID},
+	}})
+	require.NoError(t, err)
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		assert.Equal(t, "graph.ingest.query.batch", subject)
+		return response, nil
+	}
+	comp := newComponentForHandlerTest(t, mock)
+
+	entities, err := comp.loadEntities(context.Background(), []string{"acme.ops.test.system.widget.001"})
+	require.Error(t, err)
+	assert.True(t, graph.IsStateContractError(err))
+	assert.Nil(t, entities, "the valid prefix of a poisoned batch must not escape")
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, errs.ErrorFatal, classified.Class)
+	assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
+}
+
+func TestPublicEntitySurfacesRejectCompleteCandidatePoisonBeforeSuccess(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidPublicEntityID := "bad"
+	poisons := []graph.EntityState{
+		{ID: invalidPublicEntityID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidPublicEntityID, Predicate: "test.state.value"}}},
+		{ID: validID, Triples: []message.Triple{{
+			Subject: validID, Predicate: "test.state.target", Object: invalidPublicEntityID, Datatype: message.EntityReferenceDatatype,
+		}}},
+	}
+	tests := []struct {
+		name    string
+		request []byte
+		wrap    func(graph.EntityState) []byte
+		handle  func(*Component, context.Context, []byte) ([]byte, error)
+	}{
+		{
+			name:    "entity",
+			request: []byte(`{"id":"acme.ops.test.system.widget.001"}`),
+			wrap:    func(entity graph.EntityState) []byte { return mustMarshalQueryFixture(t, entity) },
+			handle:  (*Component).handleQueryEntity,
+		},
+		{
+			name:    "entity by alias",
+			request: []byte(`{"aliasOrID":"acme.ops.test.system.widget.001"}`),
+			wrap:    func(entity graph.EntityState) []byte { return mustMarshalQueryFixture(t, entity) },
+			handle:  (*Component).handleQueryEntityByAlias,
+		},
+		{
+			name:    "batch",
+			request: []byte(`{"ids":["acme.ops.test.system.widget.001"]}`),
+			wrap: func(entity graph.EntityState) []byte {
+				return mustMarshalQueryFixture(t, map[string]any{"entities": []graph.EntityState{{ID: validID}, entity}})
+			},
+			handle: (*Component).handleQueryBatch,
+		},
+		{
+			name:    "prefix",
+			request: []byte(`{"prefix":"acme.ops"}`),
+			wrap: func(entity graph.EntityState) []byte {
+				return mustMarshalQueryFixture(t, graph.PrefixQueryResponse{Entities: []graph.EntityState{{ID: validID}, entity}})
+			},
+			handle: (*Component).handleQueryPrefix,
+		},
+	}
+
+	for _, tt := range tests {
+		for poisonIndex, poison := range poisons {
+			t.Run(fmt.Sprintf("%s/poison-%d", tt.name, poisonIndex), func(t *testing.T) {
+				response := tt.wrap(poison)
+				mock := newMockNATSClient()
+				mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+					if subject == "graph.index.query.alias" {
+						return []byte(`{"data":{}}`), nil
+					}
+					return response, nil
+				}
+				comp := newComponentForHandlerTest(t, mock)
+
+				got, err := tt.handle(comp, context.Background(), tt.request)
+				require.Error(t, err)
+				assert.True(t, graph.IsStateContractError(err))
+				assert.Nil(t, got, "poison must not be emitted as a successful public response")
+				var classified *errs.ClassifiedError
+				require.ErrorAs(t, err, &classified)
+				assert.Equal(t, errs.ErrorFatal, classified.Class)
+				assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
+				assert.Zero(t, comp.messagesProcessed, "poison must not increment success metrics")
+				assert.EqualValues(t, 1, comp.errors, "poison is recorded as an error")
+			})
+		}
+	}
+}
+
+func TestHandleGlobalSearchDoesNotFallbackAfterAuthoritativePoison(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidFallbackEntityID := "bad"
+	semantic := mustMarshalQueryFixture(t, map[string]any{
+		"results":       []map[string]any{{"entity_id": validID, "similarity": 0.99}},
+		"embedder_type": "neural",
+	})
+	poisonedBatch := mustMarshalQueryFixture(t, map[string]any{"entities": []graph.EntityState{
+		{ID: validID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidFallbackEntityID, Predicate: "test.state.value"}}},
+	}})
+	var requests atomic.Int64
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		requests.Add(1)
+		switch subject {
+		case "graph.embedding.query.search":
+			return semantic, nil
+		case "graph.ingest.query.batch":
+			return poisonedBatch, nil
+		default:
+			return nil, fmt.Errorf("unexpected fallback request: %s", subject)
+		}
+	}
+	comp := newComponentForHandlerTest(t, mock)
+
+	got, err := comp.handleGlobalSearch(context.Background(), []byte(`{
+		"query":"widget", "summarize_threshold":-1, "include_summaries":false
+	}`))
+	require.Error(t, err)
+	assert.True(t, graph.IsStateContractError(err))
+	assert.Nil(t, got, "fatal replay poison must not degrade to a successful text fallback")
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, errs.ErrorFatal, classified.Class)
+	assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
+	assert.EqualValues(t, 2, requests.Load(), "only semantic lookup and authoritative batch load should run")
+	assert.Zero(t, comp.messagesProcessed, "fatal poison must not record success")
+}
+
+func TestEntityLookupStrategyDoesNotFallThroughAfterAuthoritativePoison(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidLookupEntityID := "bad"
+	poisonedBatch := mustMarshalQueryFixture(t, map[string]any{"entities": []graph.EntityState{{
+		ID: validID,
+		Triples: []message.Triple{{
+			Subject: validID, Predicate: "test.state.target", Object: invalidLookupEntityID, Datatype: message.EntityReferenceDatatype,
+		}},
+	}}})
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		assert.Equal(t, "graph.ingest.query.batch", subject)
+		return poisonedBatch, nil
+	}
+	comp := newComponentForHandlerTest(t, mock)
+	classification := &query.ClassificationResult{Options: map[string]any{"path_start_node": validID}}
+
+	got, handled, err := comp.handleStrategyEntityLookup(context.Background(), classification, "widget", time.Now())
+	require.Error(t, err)
+	assert.True(t, graph.IsStateContractError(err))
+	assert.Nil(t, got)
+	assert.False(t, handled, "fatal poison is an error, not permission to run a fallback strategy")
+	assert.Zero(t, comp.messagesProcessed)
+}
+
+func TestHandleGlobalSearchPreservesWireClassifiedGraphReset(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	semantic := mustMarshalQueryFixture(t, map[string]any{
+		"results":       []map[string]any{{"entity_id": validID, "similarity": 0.99}},
+		"embedder_type": "neural",
+	})
+	wireReply := &nats.Msg{Header: nats.Header{}, Data: []byte(`{"message":"authoritative graph reset required"}`)}
+	wireReply.Header.Set(natsclient.HeaderStatus, natsclient.HeaderStatusError)
+	wireReply.Header.Set(natsclient.HeaderErrorClass, errs.ErrorFatal.String())
+	wireReply.Header.Set(natsclient.HeaderErrorCode, graph.ErrorCodeGraphStateResetRequired)
+	_, wireErr := natsclient.ClassifyReply(wireReply)
+	require.Error(t, wireErr)
+	require.True(t, graph.IsStateContractError(wireErr))
+
+	var requests atomic.Int64
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		requests.Add(1)
+		switch subject {
+		case "graph.embedding.query.search":
+			return semantic, nil
+		case "graph.ingest.query.batch":
+			return nil, wireErr
+		default:
+			return nil, fmt.Errorf("unexpected fallback request: %s", subject)
+		}
+	}
+	comp := newComponentForHandlerTest(t, mock)
+
+	got, err := comp.handleGlobalSearch(context.Background(), []byte(`{
+		"query":"widget", "summarize_threshold":-1, "include_summaries":false
+	}`))
+	require.Error(t, err)
+	assert.Equal(t, wireErr, err, "wire-classified graph reset must pass through unchanged")
+	assert.True(t, graph.IsStateContractError(err))
+	assert.False(t, errs.IsTransient(err), "fatal reset must not acquire an outer transient class")
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, errs.ErrorFatal, classified.Class)
+	assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
+	assert.Nil(t, got)
+	assert.EqualValues(t, 2, requests.Load(), "fatal batch error must stop before fallback")
+	assert.Zero(t, comp.messagesProcessed)
+}
+
+func mustMarshalQueryFixture(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
 }
 
 // TestHandleQueryEntity_PassthroughPropagatesClassifiedError is the B1
@@ -66,6 +295,11 @@ func TestHandleQueryEntity_PassthroughPropagatesClassifiedError(t *testing.T) {
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, "entity_not_found", ce.Code, "the entity_not_found code must survive the passthrough (404 mapping)")
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=49 column=21 surface=go-assignment:invalidEntityID GraphRAG batch aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=76 column=27 surface=go-assignment:invalidPublicEntityID public query complete-candidate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=152 column=29 surface=go-assignment:invalidFallbackEntityID GraphRAG fatal fallback poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=194 column=27 surface=go-assignment:invalidLookupEntityID entity lookup fatal fallback poison fixture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryPrefix — error-class fidelity (gh#304 primary fix)
@@ -194,6 +428,28 @@ func TestHandleQueryPrefix_SuccessBodyPassesThroughIntact(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryHierarchyStats — error-class fidelity (gh#304 sibling fix)
 // ─────────────────────────────────────────────────────────────────────────────
+
+func TestHandleQueryHierarchyStatsRejectsPoisonedPrefixAggregate(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	response, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{
+		{ID: validID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+	}})
+	require.NoError(t, err)
+	mock := newMockNATSClient()
+	mock.requestClassifiedFunc = func(context.Context, string, []byte, time.Duration) ([]byte, error) {
+		return response, nil
+	}
+	comp := newComponentForHandlerTest(t, mock)
+
+	got, err := comp.handleQueryHierarchyStats(context.Background(), []byte(`{"prefix":"acme.ops"}`))
+	require.Error(t, err)
+	assert.True(t, graph.IsStateContractError(err))
+	assert.Nil(t, got, "poison must fail before hierarchy aggregation")
+}
 
 // TestHandleQueryHierarchyStats_TransientHandlerErrorSurfacesAsError is the
 // regression lock for the hierarchyStats sibling fix (gh#304).
@@ -357,3 +613,5 @@ func TestHandleStrategySpatial_HandlerErrorSurfaces(t *testing.T) {
 	require.Nil(t, resp)
 	assert.True(t, errs.IsTransient(err), "the transient class must survive: %v", err)
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=436 column=21 surface=go-assignment:invalidEntityID hierarchy prefix aggregate poison fixture
