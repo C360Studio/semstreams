@@ -86,14 +86,14 @@ func TestGateway_MapGraphQLToNATSSubject_PathSearch(t *testing.T) {
 	}{
 		{
 			name:            "pathSearch query",
-			query:           `query { pathSearch(startEntity: "test.entity.001", maxDepth: 3) { entities } }`,
+			query:           `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 3) { entities } }`,
 			variables:       nil,
 			expectedSubject: "graph.query.pathSearch",
 		},
 		{
 			name:            "pathSearch with variables",
 			query:           `query PathSearch($start: String!, $depth: Int!) { pathSearch(startEntity: $start, maxDepth: $depth) { entities } }`,
-			variables:       map[string]interface{}{"start": "test.entity.001", "depth": 3},
+			variables:       map[string]interface{}{"start": "acme.ops.test.graph.entity.001", "depth": 3},
 			expectedSubject: "graph.query.pathSearch",
 		},
 	}
@@ -116,12 +116,12 @@ func TestGateway_MapGraphQLToNATSSubject_Entity(t *testing.T) {
 	}{
 		{
 			name:            "entity query by ID",
-			query:           `query { entity(id: "test.entity.001") { id triples } }`,
+			query:           `query { entity(id: "acme.ops.test.graph.entity.001") { id triples } }`,
 			expectedSubject: "graph.query.entity",
 		},
 		{
 			name:            "entity query with alias",
-			query:           `query GetEntity { entity(id: "test.entity.001") { id } }`,
+			query:           `query GetEntity { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 			expectedSubject: "graph.query.entity",
 		},
 	}
@@ -144,12 +144,12 @@ func TestGateway_MapGraphQLToNATSSubject_Relationships(t *testing.T) {
 	}{
 		{
 			name:            "relationships query",
-			query:           `query { relationships(entityId: "test.entity.001") { from to predicate } }`,
+			query:           `query { relationships(entityId: "acme.ops.test.graph.entity.001") { from to predicate } }`,
 			expectedSubject: "graph.query.relationships",
 		},
 		{
 			name:            "outgoing relationships",
-			query:           `query { outgoing: relationships(entityId: "test.entity.001") { to } }`,
+			query:           `query { outgoing: relationships(entityId: "acme.ops.test.graph.entity.001") { to } }`,
 			expectedSubject: "graph.query.relationships",
 		},
 	}
@@ -346,7 +346,7 @@ func TestGateway_ForwardQueryToNATS_Success(t *testing.T) {
 	mock := newMockNATSRequester()
 
 	// Mock successful response from graph-query coordinator
-	expectedResponse := []byte(`{"entities":[{"id":"test.entity.001"}]}`)
+	expectedResponse := []byte(`{"entities":[{"id":"acme.ops.test.graph.entity.001"}]}`)
 	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		assert.Equal(t, "graph.query.pathSearch", subject, "should route to graph.query.pathSearch")
 		return expectedResponse, nil
@@ -359,7 +359,7 @@ func TestGateway_ForwardQueryToNATS_Success(t *testing.T) {
 
 	// Create HTTP request
 	gqlRequest := map[string]interface{}{
-		"query":     `query { pathSearch(startEntity: "test.entity.001", maxDepth: 3) { entities } }`,
+		"query":     `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 3) { entities } }`,
 		"variables": nil,
 	}
 	body, err := json.Marshal(gqlRequest)
@@ -395,7 +395,7 @@ func TestGateway_ForwardQueryToNATS_WithVariables(t *testing.T) {
 		err := json.Unmarshal(data, &payload)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test.entity.001", payload["start_entity"])
+		assert.Equal(t, "acme.ops.test.graph.entity.001", payload["start_entity"])
 		assert.Equal(t, float64(5), payload["max_depth"])
 
 		return []byte(`{"entities":[]}`), nil
@@ -409,7 +409,7 @@ func TestGateway_ForwardQueryToNATS_WithVariables(t *testing.T) {
 	gqlRequest := map[string]interface{}{
 		"query": `query PathSearch($start: String!, $depth: Int!) { pathSearch(startEntity: $start, maxDepth: $depth) { entities } }`,
 		"variables": map[string]interface{}{
-			"start": "test.entity.001",
+			"start": "acme.ops.test.graph.entity.001",
 			"depth": 5,
 		},
 	}
@@ -433,17 +433,17 @@ func TestGateway_ForwardQueryToNATS_MultipleQueryTypes(t *testing.T) {
 	}{
 		{
 			name:            "entity query",
-			query:           `query { entity(id: "test.entity.001") { id } }`,
+			query:           `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 			expectedSubject: "graph.query.entity",
 		},
 		{
 			name:            "relationships query",
-			query:           `query { relationships(entityId: "test.entity.001") { from to } }`,
+			query:           `query { relationships(entityId: "acme.ops.test.graph.entity.001") { from to } }`,
 			expectedSubject: "graph.query.relationships",
 		},
 		{
 			name:            "pathSearch query",
-			query:           `query { pathSearch(startEntity: "test.entity.001", maxDepth: 3) { entities } }`,
+			query:           `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 3) { entities } }`,
 			expectedSubject: "graph.query.pathSearch",
 		},
 	}
@@ -498,7 +498,7 @@ func TestGateway_QueryErrorHandling_NATSTimeout(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -584,7 +584,7 @@ func TestGateway_QueryErrorHandling_ComponentUnavailable(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -626,7 +626,7 @@ func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
 		natsclient.HeaderErrorCode:  []string{graph.ErrorCodeEntityNotFound},
 	}
 	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
-		return []byte(`{"message":"not found: test.entity.001"}`), nil
+		return []byte(`{"message":"not found: acme.ops.test.graph.entity.001"}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)
@@ -635,7 +635,7 @@ func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -662,7 +662,7 @@ func TestGateway_QueryErrorHandling_ClassifiedHandlerError(t *testing.T) {
 	firstErr := errs[0].(map[string]interface{})
 	message, ok := firstErr["message"].(string)
 	require.True(t, ok, "first error must have message field; got %v", firstErr)
-	assert.Contains(t, message, "not found: test.entity.001",
+	assert.Contains(t, message, "not found: acme.ops.test.graph.entity.001",
 		"GraphQL error message must surface the handler text")
 	assert.NotContains(t, message, "natsclient",
 		"GraphQL error message must NOT leak natsclient attribution; got %q", message)
@@ -734,7 +734,7 @@ func TestGateway_ContextTimeout_CancelsNATSRequest(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -777,7 +777,7 @@ func TestGateway_ContextPropagation_HTTPTimeout(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -819,7 +819,7 @@ func TestGateway_ContextPropagation_ClientDisconnect(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { pathSearch(startEntity: "test.entity.001", maxDepth: 10) { entities } }`,
+		"query": `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 10) { entities } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -851,7 +851,7 @@ func TestGateway_GraphQLResponseFormat_Success(t *testing.T) {
 	mock := newMockNATSRequester()
 
 	// Return raw data from coordinator
-	coordinatorResponse := []byte(`{"entities":[{"id":"test.entity.001","triples":[]}]}`)
+	coordinatorResponse := []byte(`{"entities":[{"id":"acme.ops.test.graph.entity.001","triples":[]}]}`)
 	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		return coordinatorResponse, nil
 	}
@@ -862,7 +862,7 @@ func TestGateway_GraphQLResponseFormat_Success(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { pathSearch(startEntity: "test.entity.001", maxDepth: 3) { entities } }`,
+		"query": `query { pathSearch(startEntity: "acme.ops.test.graph.entity.001", maxDepth: 3) { entities } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -909,7 +909,7 @@ func TestGateway_GraphQLResponseFormat_Error(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `query { entity(id: "test.entity.001") { id } }`,
+		"query": `query { entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1295,9 +1295,9 @@ func TestGateway_InlineArgs_EntityQuery(t *testing.T) {
 		err := json.Unmarshal(data, &payload)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test.entity.001", payload["id"], "inline id should be extracted and sent in payload")
+		assert.Equal(t, "acme.ops.test.graph.entity.001", payload["id"], "inline id should be extracted and sent in payload")
 
-		return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+		return []byte(`{"id":"acme.ops.test.graph.entity.001","triples":[]}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)
@@ -1306,7 +1306,7 @@ func TestGateway_InlineArgs_EntityQuery(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entity(id: "test.entity.001") { id } }`,
+		"query": `{ entity(id: "acme.ops.test.graph.entity.001") { id } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1474,9 +1474,9 @@ func TestGateway_InlineArgs_RelationshipsQuery(t *testing.T) {
 		err := json.Unmarshal(data, &payload)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test.entity.001", payload["entity_id"], "inline entityId should map to entity_id in payload")
+		assert.Equal(t, "acme.ops.test.graph.entity.001", payload["entity_id"], "inline entityId should map to entity_id in payload")
 
-		return []byte(`[{"from":"test.entity.001","to":"test.entity.002","predicate":"knows"}]`), nil
+		return []byte(`[{"from":"acme.ops.test.graph.entity.001","to":"acme.ops.test.graph.entity.002","predicate":"social.relationship.knows"}]`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)
@@ -1485,7 +1485,7 @@ func TestGateway_InlineArgs_RelationshipsQuery(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ relationships(entityId: "test.entity.001") { from to predicate } }`,
+		"query": `{ relationships(entityId: "acme.ops.test.graph.entity.001") { from to predicate } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1535,11 +1535,11 @@ func TestGateway_TransformPathSearchVars(t *testing.T) {
 			name: "predicates array forwarded",
 			vars: map[string]interface{}{
 				"startEntity": "a.b.c.d.e.f",
-				"predicates":  []interface{}{"rel.connects", "rel.depends"},
+				"predicates":  []interface{}{"relationship.graph.connects", "relationship.graph.depends"},
 			},
 			expected: map[string]interface{}{
 				"start_entity": "a.b.c.d.e.f",
-				"predicates":   []interface{}{"rel.connects", "rel.depends"},
+				"predicates":   []interface{}{"relationship.graph.connects", "relationship.graph.depends"},
 			},
 		},
 		{
@@ -1580,7 +1580,7 @@ func TestGateway_TransformPathSearchVars(t *testing.T) {
 				"maxDepth":    float64(5),
 				"maxNodes":    float64(100),
 				"direction":   "Incoming",
-				"predicates":  []interface{}{"rel.owns"},
+				"predicates":  []interface{}{"relationship.graph.owns"},
 				"timeout":     "30s",
 				"maxPaths":    float64(10),
 			},
@@ -1589,7 +1589,7 @@ func TestGateway_TransformPathSearchVars(t *testing.T) {
 				"max_depth":    float64(5),
 				"max_nodes":    float64(100),
 				"direction":    "incoming",
-				"predicates":   []interface{}{"rel.owns"},
+				"predicates":   []interface{}{"relationship.graph.owns"},
 				"timeout":      "30s",
 				"max_paths":    float64(10),
 			},

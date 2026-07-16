@@ -29,13 +29,9 @@ const (
 )
 
 func init() {
-	for _, predicate := range []string{
-		droneStatusStatePredicate,
-		missionStatusPhasePredicate,
-		sensorStatusCalibratedPredicate,
-	} {
-		vocabulary.Register(predicate)
-	}
+	vocabulary.Register(droneStatusStatePredicate)
+	vocabulary.Register(missionStatusPhasePredicate)
+	vocabulary.Register(sensorStatusCalibratedPredicate)
 }
 
 // ruleComponentConfig builds the operator-facing component config for a rule

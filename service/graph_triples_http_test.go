@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,16 +18,11 @@ import (
 // fixedTime is a stable timestamp for triple fixtures.
 var fixedTime = time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 
-// makeTriple is a fixture builder for test triples.
-func makeTriple(subject, predicate string, object any, source string, confidence float64) message.Triple {
-	return message.Triple{
-		Subject:    subject,
-		Predicate:  predicate,
-		Object:     object,
-		Source:     source,
-		Confidence: confidence,
-		Timestamp:  fixedTime,
-	}
+// withFixedTime supplies only the stable timestamp; every semantic position
+// remains explicit at the fixture call site.
+func withFixedTime(triple message.Triple) message.Triple {
+	triple.Timestamp = fixedTime
+	return triple
 }
 
 // ---- parseTripleQueryParams ----
@@ -43,12 +39,12 @@ func TestParseTripleQueryParams_Defaults(t *testing.T) {
 }
 
 func TestParseTripleQueryParams_AllParams(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/graph/triples?subject=s&predicate=p&object=o&limit=50", nil)
+	r := httptest.NewRequest(http.MethodGet, "/graph/triples?subject=acme.ops.test.service.entity.1&predicate=test.state.value&object=o&limit=50", nil)
 	p, errMsg := parseTripleQueryParams(r)
 
 	require.Empty(t, errMsg)
-	assert.Equal(t, "s", p.subject)
-	assert.Equal(t, "p", p.predicate)
+	assert.Equal(t, "acme.ops.test.service.entity.1", p.subject)
+	assert.Equal(t, "test.state.value", p.predicate)
 	assert.Equal(t, "o", p.object)
 	assert.Equal(t, 50, p.limit)
 }
@@ -102,56 +98,56 @@ func TestParseTripleQueryParams_LimitMaxExact(t *testing.T) {
 // ---- tripleMatchesQuery ----
 
 func TestTripleMatchesQuery_NoFilters(t *testing.T) {
-	tr := makeTriple("s1", "pred", "val", "src", 1.0)
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "val", Source: "src", Confidence: 1.0})
 	p := tripleQueryParams{limit: 100}
 	assert.True(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_SubjectMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "val", "src", 1.0)
-	p := tripleQueryParams{subject: "s1", limit: 100}
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "val", Source: "src", Confidence: 1.0})
+	p := tripleQueryParams{subject: "acme.ops.test.service.entity.1", limit: 100}
 	assert.True(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_SubjectNoMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "val", "src", 1.0)
-	p := tripleQueryParams{subject: "s2", limit: 100}
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "val", Source: "src", Confidence: 1.0})
+	p := tripleQueryParams{subject: "acme.ops.test.service.entity.2", limit: 100}
 	assert.False(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_PredicateMatch(t *testing.T) {
-	tr := makeTriple("s1", "ops.diagnosis.finding", "found something", "ops-emit-diagnosis", 0.9)
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "ops", "diagnosis", "finding"), Object: "found something", Source: "ops-emit-diagnosis", Confidence: 0.9})
 	p := tripleQueryParams{predicate: "ops.diagnosis.finding", limit: 100}
 	assert.True(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_PredicateNoMatch(t *testing.T) {
-	tr := makeTriple("s1", "ops.diagnosis.finding", "found something", "ops-emit-diagnosis", 0.9)
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "ops", "diagnosis", "finding"), Object: "found something", Source: "ops-emit-diagnosis", Confidence: 0.9})
 	p := tripleQueryParams{predicate: "ops.diagnosis.recommendation", limit: 100}
 	assert.False(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_ObjectStringMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "hello world", "src", 1.0)
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "hello world", Source: "src", Confidence: 1.0})
 	p := tripleQueryParams{object: "hello world", limit: 100}
 	assert.True(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_ObjectStringNoMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "hello world", "src", 1.0)
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "hello world", Source: "src", Confidence: 1.0})
 	p := tripleQueryParams{object: "goodbye", limit: 100}
 	assert.False(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_SubjectAndPredicateBothMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "val", "src", 1.0)
-	p := tripleQueryParams{subject: "s1", predicate: "pred", limit: 100}
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "val", Source: "src", Confidence: 1.0})
+	p := tripleQueryParams{subject: "acme.ops.test.service.entity.1", predicate: "test.state.value", limit: 100}
 	assert.True(t, tripleMatchesQuery(tr, p))
 }
 
 func TestTripleMatchesQuery_SubjectMatchPredicateNoMatch(t *testing.T) {
-	tr := makeTriple("s1", "pred", "val", "src", 1.0)
-	p := tripleQueryParams{subject: "s1", predicate: "other", limit: 100}
+	tr := withFixedTime(message.Triple{Subject: semantictest.EntityID(t, "acme", "ops", "test", "service", "entity", "1"), Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "val", Source: "src", Confidence: 1.0})
+	p := tripleQueryParams{subject: "acme.ops.test.service.entity.1", predicate: "test.state.other", limit: 100}
 	assert.False(t, tripleMatchesQuery(tr, p))
 }
 
@@ -227,7 +223,7 @@ func TestServeGraphTriples_NonEmptyResult(t *testing.T) {
 	triples := []message.Triple{
 		{
 			Subject:    "acme.ops.demo.sys.entity.001",
-			Predicate:  "ops.diagnosis.finding",
+			Predicate:  semantictest.Predicate(t, "ops", "diagnosis", "finding"),
 			Object:     "high error rate",
 			Source:     "ops-emit-diagnosis",
 			Confidence: 0.9,
@@ -235,7 +231,7 @@ func TestServeGraphTriples_NonEmptyResult(t *testing.T) {
 		},
 		{
 			Subject:    "acme.ops.demo.sys.entity.002",
-			Predicate:  "ops.diagnosis.recommendation",
+			Predicate:  semantictest.Predicate(t, "ops", "diagnosis", "recommendation"),
 			Object:     "restart component",
 			Source:     "ops-emit-diagnosis",
 			Confidence: 0.8,
@@ -275,14 +271,14 @@ func TestServeGraphTriples_BackendError(t *testing.T) {
 func TestServeGraphTriples_ParamsForwardedToQuerier(t *testing.T) {
 	querier, captured := captureQuerier([]message.Triple{})
 
-	r := httptest.NewRequest(http.MethodGet, "/graph/triples?subject=sub&predicate=pred&object=obj&limit=42", nil)
+	r := httptest.NewRequest(http.MethodGet, "/graph/triples?subject=acme.ops.test.service.entity.1&predicate=test.state.value&object=obj&limit=42", nil)
 	w := httptest.NewRecorder()
 
 	serveGraphTriples(w, r, querier, nil)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "sub", captured.subject)
-	assert.Equal(t, "pred", captured.predicate)
+	assert.Equal(t, "acme.ops.test.service.entity.1", captured.subject)
+	assert.Equal(t, "test.state.value", captured.predicate)
 	assert.Equal(t, "obj", captured.object)
 	assert.Equal(t, 42, captured.limit)
 }
@@ -317,7 +313,7 @@ func TestServeGraphTriples_ContextAndDatatypeRoundTrip(t *testing.T) {
 	ts := fixedTime
 	triple := message.Triple{
 		Subject:    "acme.ops.demo.sys.entity.001",
-		Predicate:  "ops.diagnosis.finding",
+		Predicate:  semantictest.Predicate(t, "ops", "diagnosis", "finding"),
 		Object:     "high error rate",
 		Source:     "ops-emit-diagnosis",
 		Confidence: 0.9,
@@ -347,7 +343,7 @@ func TestServeGraphTriples_ContextAndDatatypeRoundTrip(t *testing.T) {
 func TestServeGraphTriples_SourcePreservedWhenEmpty(t *testing.T) {
 	triple := message.Triple{
 		Subject:    "acme.ops.demo.sys.entity.001",
-		Predicate:  "ops.test.predicate",
+		Predicate:  semantictest.Predicate(t, "ops", "test", "predicate"),
 		Object:     "value",
 		Source:     "", // explicitly empty
 		Confidence: 1.0,
