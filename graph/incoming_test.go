@@ -18,7 +18,7 @@ func TestIncomingEdgesAddEdge(t *testing.T) {
 	// Add first edge
 	edge1 := IncomingEdge{
 		FromEntityID: sourceID,
-		EdgeType:     "POWERED_BY",
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -45,7 +45,7 @@ func TestIncomingEdgesAddDuplicateEdge(t *testing.T) {
 	// Add first edge
 	edge1 := IncomingEdge{
 		FromEntityID: sourceID,
-		EdgeType:     "POWERED_BY",
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -55,7 +55,7 @@ func TestIncomingEdgesAddDuplicateEdge(t *testing.T) {
 	// Add same edge with different weight (should replace)
 	edge2 := IncomingEdge{
 		FromEntityID: sourceID,
-		EdgeType:     "POWERED_BY",
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       2.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -80,7 +80,7 @@ func TestIncomingEdgesRemoveEdge(t *testing.T) {
 		Incoming: []IncomingEdge{
 			{
 				FromEntityID: source1,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
@@ -94,7 +94,7 @@ func TestIncomingEdgesRemoveEdge(t *testing.T) {
 	}
 
 	// Remove first edge
-	ie.RemoveIncomingEdge(source1, "POWERED_BY")
+	ie.RemoveIncomingEdge(source1, "graph.relation.powered-by")
 
 	if len(ie.Incoming) != 1 {
 		t.Errorf("expected 1 incoming edge after removal, got %d", len(ie.Incoming))
@@ -115,7 +115,7 @@ func TestIncomingEdgesGetByType(t *testing.T) {
 		Incoming: []IncomingEdge{
 			{
 				FromEntityID: source1,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
@@ -127,17 +127,17 @@ func TestIncomingEdgesGetByType(t *testing.T) {
 			},
 			{
 				FromEntityID: source3,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.5,
 				UpdatedAt:    time.Now(),
 			},
 		},
 	}
 
-	poweredByEdges := ie.GetIncomingEdgesByType("POWERED_BY")
+	poweredByEdges := ie.GetIncomingEdgesByType("graph.relation.powered-by")
 
 	if len(poweredByEdges) != 2 {
-		t.Errorf("expected 2 POWERED_BY edges, got %d", len(poweredByEdges))
+		t.Errorf("expected 2 graph.relation.powered-by edges, got %d", len(poweredByEdges))
 	}
 
 	nearEdges := ie.GetIncomingEdgesByType("NEAR")
@@ -162,7 +162,7 @@ func TestIncomingEdgesGetEntityIDs(t *testing.T) {
 		Incoming: []IncomingEdge{
 			{
 				FromEntityID: source1,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
@@ -220,7 +220,7 @@ func TestIncomingEdgesCount(t *testing.T) {
 
 	ie.Incoming = append(ie.Incoming, IncomingEdge{
 		FromEntityID: sourceID,
-		EdgeType:     "POWERED_BY",
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	})
@@ -239,7 +239,7 @@ func TestIncomingEdgesHasIncomingFrom(t *testing.T) {
 		Incoming: []IncomingEdge{
 			{
 				FromEntityID: sourceID,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
@@ -263,15 +263,15 @@ func TestIncomingEdgesHasIncomingOfType(t *testing.T) {
 		Incoming: []IncomingEdge{
 			{
 				FromEntityID: sourceID,
-				EdgeType:     "POWERED_BY",
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 		},
 	}
 
-	if !ie.HasIncomingOfType("POWERED_BY") {
-		t.Error("expected to find incoming edge of type POWERED_BY")
+	if !ie.HasIncomingOfType("graph.relation.powered-by") {
+		t.Error("expected to find incoming edge of type graph.relation.powered-by")
 	}
 
 	if ie.HasIncomingOfType("NON_EXISTENT") {
@@ -293,7 +293,7 @@ func TestIncomingEdgesUpdatedAtModification(t *testing.T) {
 	// Adding an edge should update the timestamp
 	edge := IncomingEdge{
 		FromEntityID: sourceID,
-		EdgeType:     "POWERED_BY",
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -307,7 +307,7 @@ func TestIncomingEdgesUpdatedAtModification(t *testing.T) {
 	newTime := ie.UpdatedAt
 
 	// Removing an edge should also update the timestamp
-	ie.RemoveIncomingEdge(sourceID, "POWERED_BY")
+	ie.RemoveIncomingEdge(sourceID, "graph.relation.powered-by")
 
 	if !ie.UpdatedAt.After(newTime) {
 		t.Error("expected UpdatedAt to be updated after removing edge")

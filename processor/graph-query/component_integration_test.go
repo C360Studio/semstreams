@@ -277,7 +277,7 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 
 	// Test PathSearch request structure
 	req := PathSearchRequest{
-		StartEntity: "test.entity.001",
+		StartEntity: "test.fixture.graph.query.entity.001",
 		MaxDepth:    3,
 	}
 

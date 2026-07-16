@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
@@ -20,7 +21,7 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 	entityID := maximumEntityIDForContract()
 	targetID := maximumEntityIDForContract()
 	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
-	maxPredicate := strings.Join([]string{maxSegment, maxSegment, maxSegment}, ".")
+	maxPredicate := semantictest.Predicate(t, maxSegment, maxSegment, maxSegment)
 	maxPredicateToken := graph.EncodePredicateToken(maxPredicate)
 	entityBytes := len(entityID)
 	predicateBytes := len(maxPredicate)

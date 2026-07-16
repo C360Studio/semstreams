@@ -106,7 +106,7 @@ func TestResolveLabel(t *testing.T) {
 		entity := &gtypes.EntityState{
 			ID: "acme.ops.robotics.gcs.sensor.temp-001",
 			Triples: []message.Triple{
-				{Subject: "acme.ops.robotics.gcs.sensor.temp-001", Predicate: "robotics.sensor.monitored_by", Object: "acme.ops.robotics.gcs.device.042"},
+				{Subject: "acme.ops.robotics.gcs.sensor.temp-001", Predicate: "robotics.sensor.monitored-by", Object: "acme.ops.robotics.gcs.device.042"},
 				{Subject: "acme.ops.robotics.gcs.sensor.temp-001", Predicate: "robotics.sensor.zone", Object: "zone-alpha"},
 			},
 		}
@@ -272,7 +272,7 @@ func TestScoreEntityQuery(t *testing.T) {
 
 	t.Run("triple value match scores moderate", func(t *testing.T) {
 		entity := makeEntity("a.b.c.d.sensor.001",
-			message.Triple{Predicate: "sensor.location", Object: "warehouse"},
+			message.Triple{Predicate: "sensor.identity.location", Object: "warehouse"},
 		)
 		score := scoreEntityQuery(entity, []string{"warehouse"})
 		if score != 0.5 {
@@ -282,7 +282,7 @@ func TestScoreEntityQuery(t *testing.T) {
 
 	t.Run("no match scores zero", func(t *testing.T) {
 		entity := makeEntity("a.b.c.d.drone.001",
-			message.Triple{Predicate: "drone.battery", Object: 85.0},
+			message.Triple{Predicate: "drone.measurement.battery", Object: 85.0},
 		)
 		score := scoreEntityQuery(entity, []string{"warehouse", "logistics"})
 		if score != 0 {
@@ -292,7 +292,7 @@ func TestScoreEntityQuery(t *testing.T) {
 
 	t.Run("partial match proportional", func(t *testing.T) {
 		entity := makeEntity("a.b.c.d.drone.001",
-			message.Triple{Predicate: "drone.status", Object: "active"},
+			message.Triple{Predicate: "drone.state.status", Object: "active"},
 		)
 		// "drone" matches type (1.0), "operations" doesn't match (0)
 		// Total: 1.0 / 2 = 0.5
@@ -304,7 +304,7 @@ func TestScoreEntityQuery(t *testing.T) {
 
 	t.Run("multiple matches accumulate", func(t *testing.T) {
 		entity := makeEntity("a.b.c.d.drone.001",
-			message.Triple{Predicate: "drone.mission", Object: "survey"},
+			message.Triple{Predicate: "drone.assignment.mission", Object: "survey"},
 		)
 		// "drone" matches type (1.0), "survey" matches value (0.5)
 		// Total: 1.5 / 2 = 0.75
@@ -315,8 +315,8 @@ func TestScoreEntityQuery(t *testing.T) {
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		entity := makeEntity("a.b.c.d.Drone.001",
-			message.Triple{Predicate: "drone.Status", Object: "ACTIVE"},
+		entity := makeEntity("a.b.c.d.drone.001",
+			message.Triple{Predicate: "drone.state.status", Object: "ACTIVE"},
 		)
 		score := scoreEntityQuery(entity, []string{"drone", "active"})
 		if score < 0.5 {
@@ -328,13 +328,13 @@ func TestScoreEntityQuery(t *testing.T) {
 func TestFilterEntitiesByQuery_DropsLowScore(t *testing.T) {
 	entities := []*gtypes.EntityState{
 		{ID: "a.b.c.d.drone.001", Triples: []message.Triple{
-			{Predicate: "drone.mission", Object: "survey"},
+			{Predicate: "drone.assignment.mission", Object: "survey"},
 		}},
 		{ID: "a.b.c.d.sensor.002", Triples: []message.Triple{
-			{Predicate: "sensor.location", Object: "hangar"},
+			{Predicate: "sensor.identity.location", Object: "hangar"},
 		}},
 		{ID: "a.b.c.d.worker.003", Triples: []message.Triple{
-			{Predicate: "worker.role", Object: "logistics"},
+			{Predicate: "worker.identity.role", Object: "logistics"},
 		}},
 	}
 
@@ -355,10 +355,10 @@ func TestFilterEntitiesByQuery_DropsLowScore(t *testing.T) {
 func TestFilterEntitiesByQuery_SortsByScore(t *testing.T) {
 	entities := []*gtypes.EntityState{
 		{ID: "a.b.c.d.sensor.001", Triples: []message.Triple{
-			{Predicate: "sensor.type", Object: "temperature"},
+			{Predicate: "sensor.identity.type", Object: "temperature"},
 		}},
 		{ID: "a.b.c.d.drone.002", Triples: []message.Triple{
-			{Predicate: "drone.sensor", Object: "temperature"},
+			{Predicate: "drone.equipment.sensor", Object: "temperature"},
 		}},
 	}
 

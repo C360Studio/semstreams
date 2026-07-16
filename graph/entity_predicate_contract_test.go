@@ -36,9 +36,9 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 
 	entity := &EntityState{Triples: []message.Triple{
 		{Predicate: "valid.fact.name"},
-		{Predicate: "bad.two"},
-		{Predicate: "bad.two"},
-		{Predicate: "bad.fact.has_underscore"},
+		{Predicate: "bad.two"},                 // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+		{Predicate: "bad.two"},                 // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+		{Predicate: "bad.fact.has_underscore"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.fact.has_underscore","reason":"segment_character"}
 	}}
 
 	err := ValidateEntityPredicates(entity)
@@ -47,8 +47,8 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 		t.Fatalf("ValidateEntityPredicates() error = %T %v, want *EntityPredicateContractError", err, err)
 	}
 	want := []InvalidEntityPredicate{
-		{Predicate: "bad.fact.has_underscore", Reason: vocabulary.PredicateReasonSegmentCharacter},
-		{Predicate: "bad.two", Reason: vocabulary.PredicateReasonArity},
+		{Predicate: "bad.fact.has_underscore", Reason: vocabulary.PredicateReasonSegmentCharacter}, // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.fact.has_underscore","reason":"segment_character"}
+		{Predicate: "bad.two", Reason: vocabulary.PredicateReasonArity},                            // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 	}
 	if len(contractErr.Violations) != len(want) {
 		t.Fatalf("violations = %#v, want %#v", contractErr.Violations, want)
@@ -63,7 +63,7 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 func TestMarshalEntityStateRejectsInvalidFinalCandidate(t *testing.T) {
 	t.Parallel()
 
-	entity := &EntityState{Triples: []message.Triple{{Predicate: "legacy.invalid_name"}}}
+	entity := &EntityState{Triples: []message.Triple{{Predicate: "legacy.invalid_name"}}} // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.invalid_name","reason":"arity"}
 	data, err := MarshalEntityState(entity)
 	if err == nil {
 		t.Fatal("MarshalEntityState() error = nil, want predicate contract error")
@@ -89,7 +89,7 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 		},
 		{
 			name:   "noncanonical predicate",
-			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"acme.ops.test.system.widget.001","predicate":"bad.two"}]}`),
+			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"acme.ops.test.system.widget.001","predicate":"bad.two"}]}`), // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 			reason: GraphStateReasonNoncanonicalPredicate,
 		},
 	}
@@ -206,7 +206,7 @@ func TestValidateEntityStateContractDeterministicPrecedence(t *testing.T) {
 		ID: "bad",
 		Triples: []message.Triple{{
 			Subject:   "also-bad",
-			Predicate: "bad.two",
+			Predicate: "bad.two", // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 			Object:    42,
 			Datatype:  message.EntityReferenceDatatype,
 		}},

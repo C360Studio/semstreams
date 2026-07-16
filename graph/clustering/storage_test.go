@@ -25,19 +25,19 @@ func TestCommunityStorageConfig_CreateTriplesOption(t *testing.T) {
 			name: "CreateTriples enabled with default predicate",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 			wantCreateTriples: true,
-			wantPredicate:     "graph.community.member_of",
+			wantPredicate:     "graph.community.member-of",
 		},
 		{
 			name: "CreateTriples enabled with custom predicate",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "custom.community.belongs_to",
+				TriplePredicate: "custom.community.belongs-to",
 			},
 			wantCreateTriples: true,
-			wantPredicate:     "custom.community.belongs_to",
+			wantPredicate:     "custom.community.belongs-to",
 		},
 		{
 			name: "CreateTriples disabled",
@@ -45,13 +45,13 @@ func TestCommunityStorageConfig_CreateTriplesOption(t *testing.T) {
 				CreateTriples: false,
 			},
 			wantCreateTriples: false,
-			wantPredicate:     "",
+			wantPredicate:     "", // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		},
 		{
 			name:              "Default values - CreateTriples false, predicate empty",
 			config:            CommunityStorageConfig{},
 			wantCreateTriples: false,
-			wantPredicate:     "",
+			wantPredicate:     "", // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		},
 	}
 
@@ -82,7 +82,7 @@ func TestNewNATSCommunityStorageWithConfig(t *testing.T) {
 			name: "Config with CreateTriples enabled",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 		},
 		{
@@ -95,7 +95,7 @@ func TestNewNATSCommunityStorageWithConfig(t *testing.T) {
 			name: "Config with custom predicate",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "custom.predicate",
+				TriplePredicate: "custom.community.predicate",
 			},
 		},
 	}
@@ -130,30 +130,37 @@ func TestNATSCommunityStorage_SaveCommunity_CreateTriples(t *testing.T) {
 			name: "CreateTriples enabled - generates member_of triples",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 			community: &Community{
-				ID:      "comm-0-test",
-				Level:   0,
-				Members: []string{"entity1", "entity2", "entity3"},
+				ID:    "comm-0-test",
+				Level: 0,
+				Members: []string{
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "001"),
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "002"),
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "003"),
+				},
 			},
 			wantTripleCount:   3,
-			wantPredicate:     "graph.community.member_of",
+			wantPredicate:     "graph.community.member-of",
 			checkTripleFields: true,
 		},
 		{
 			name: "CreateTriples enabled with custom predicate",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "custom.belongs_to",
+				TriplePredicate: "custom.community.belongs-to",
 			},
 			community: &Community{
-				ID:      "comm-1-custom",
-				Level:   1,
-				Members: []string{"entity4", "entity5"},
+				ID:    "comm-1-custom",
+				Level: 1,
+				Members: []string{
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "004"),
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "005"),
+				},
 			},
 			wantTripleCount:   2,
-			wantPredicate:     "custom.belongs_to",
+			wantPredicate:     "custom.community.belongs-to",
 			checkTripleFields: true,
 		},
 		{
@@ -162,19 +169,22 @@ func TestNATSCommunityStorage_SaveCommunity_CreateTriples(t *testing.T) {
 				CreateTriples: false,
 			},
 			community: &Community{
-				ID:      "comm-0-no-triples",
-				Level:   0,
-				Members: []string{"entity1", "entity2"},
+				ID:    "comm-0-no-triples",
+				Level: 0,
+				Members: []string{
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "001"),
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "002"),
+				},
 			},
 			wantTripleCount:   0,
-			wantPredicate:     "",
+			wantPredicate:     "", // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 			checkTripleFields: false,
 		},
 		{
 			name: "CreateTriples enabled - empty members list",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 			community: &Community{
 				ID:      "comm-0-empty",
@@ -182,7 +192,7 @@ func TestNATSCommunityStorage_SaveCommunity_CreateTriples(t *testing.T) {
 				Members: []string{},
 			},
 			wantTripleCount:   0,
-			wantPredicate:     "graph.community.member_of",
+			wantPredicate:     "graph.community.member-of",
 			checkTripleFields: false,
 		},
 	}
@@ -236,12 +246,12 @@ func TestCommunityTriple_Format(t *testing.T) {
 
 	entityID := "c360.platform1.robotics.mav1.drone.0"
 	communityID := "comm-0-robotics"
-	predicate := "graph.community.member_of"
+	predicate := semantictest.Predicate(t, "graph", "community", "member-of")
 
 	// Expected triple format
 	triple := message.Triple{
 		Subject:    entityID,
-		Predicate:  predicate,
+		Predicate:  semantictest.Predicate(t, "graph", "community", "member-of"),
 		Object:     communityID,
 		Source:     "community_detection",
 		Timestamp:  time.Now(),
@@ -274,12 +284,15 @@ func TestNATSCommunityStorage_SaveCommunity_DualWrite(t *testing.T) {
 			name: "Dual-write enabled - both index and triples",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 			community: &Community{
-				ID:      "comm-0-dual",
-				Level:   0,
-				Members: []string{"entity1", "entity2"},
+				ID:    "comm-0-dual",
+				Level: 0,
+				Members: []string{
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "001"),
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "002"),
+				},
 			},
 			expectTriples:    true,
 			expectIndexWrite: true,
@@ -290,9 +303,11 @@ func TestNATSCommunityStorage_SaveCommunity_DualWrite(t *testing.T) {
 				CreateTriples: false,
 			},
 			community: &Community{
-				ID:      "comm-0-index-only",
-				Level:   0,
-				Members: []string{"entity3"},
+				ID:    "comm-0-index-only",
+				Level: 0,
+				Members: []string{
+					semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "003"),
+				},
 			},
 			expectTriples:    false,
 			expectIndexWrite: true,
@@ -340,9 +355,13 @@ func TestNATSCommunityStorage_BackwardCompatibility(t *testing.T) {
 	ctx := context.Background()
 
 	community := &Community{
-		ID:                 "comm-0-compat",
-		Level:              0,
-		Members:            []string{"entity1", "entity2", "entity3"},
+		ID:    "comm-0-compat",
+		Level: 0,
+		Members: []string{
+			semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "001"),
+			semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "002"),
+			semantictest.EntityID(t, "test", "clustering", "graph", "community", "member", "003"),
+		},
 		StatisticalSummary: "Test community",
 	}
 
@@ -354,7 +373,7 @@ func TestNATSCommunityStorage_BackwardCompatibility(t *testing.T) {
 			name: "With triples enabled",
 			config: CommunityStorageConfig{
 				CreateTriples:   true,
-				TriplePredicate: "graph.community.member_of",
+				TriplePredicate: "graph.community.member-of",
 			},
 		},
 		{
@@ -411,7 +430,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 			membershipTriples: []message.Triple{
 				{
 					Subject:    "c360.platform1.robotics.mav1.drone.0",
-					Predicate:  "graph.community.member_of",
+					Predicate:  "graph.community.member-of",
 					Object:     "comm-0-robotics",
 					Source:     "community_detection",
 					Timestamp:  time.Now(),
@@ -428,7 +447,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 			membershipTriples: []message.Triple{
 				{
 					Subject:    "c360.platform1.robotics.mav1.sensor.0",
-					Predicate:  "graph.community.member_of",
+					Predicate:  "graph.community.member-of",
 					Object:     "comm-0-sensors",
 					Source:     "community_detection",
 					Timestamp:  time.Now(),
@@ -436,7 +455,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 				},
 				{
 					Subject:    "c360.platform1.robotics.mav1.sensor.0",
-					Predicate:  "graph.community.member_of",
+					Predicate:  "graph.community.member-of",
 					Object:     "comm-1-robotics-hierarchy",
 					Source:     "community_detection",
 					Timestamp:  time.Now(),
@@ -467,7 +486,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 
 			// Query for community membership via triple traversal
 			// This simulates PathRAG querying: subject=entityID, predicate=member_of
-			results, err := tripleStore.QueryBySubjectPredicate(ctx, tt.entityID, "graph.community.member_of")
+			results, err := tripleStore.QueryBySubjectPredicate(ctx, tt.entityID, "graph.community.member-of")
 
 			if tt.wantTraversalSuccess {
 				require.NoError(t, err, "Triple traversal should succeed")
@@ -482,7 +501,7 @@ func TestPathRAG_TraverseCommunityMembership(t *testing.T) {
 					if tt.communityID != "" && triple.Object == tt.communityID {
 						found = true
 						assert.Equal(t, tt.entityID, triple.Subject, "Subject should be entity ID")
-						assert.Equal(t, "graph.community.member_of", triple.Predicate,
+						assert.Equal(t, "graph.community.member-of", triple.Predicate,
 							"Predicate should be member_of")
 						assert.Equal(t, tt.communityID, triple.Object, "Object should be community ID")
 					}
@@ -510,7 +529,7 @@ func TestRelationshipTraversal_IncludesCommunityTriples(t *testing.T) {
 	allTriples := []message.Triple{
 		{
 			Subject:    entityID,
-			Predicate:  "robotics.component.powered_by",
+			Predicate:  "robotics.component.powered-by",
 			Object:     "c360.platform1.robotics.mav1.battery.0",
 			Source:     "telemetry",
 			Timestamp:  time.Now(),
@@ -518,7 +537,7 @@ func TestRelationshipTraversal_IncludesCommunityTriples(t *testing.T) {
 		},
 		{
 			Subject:    entityID,
-			Predicate:  "graph.community.member_of",
+			Predicate:  "graph.community.member-of",
 			Object:     "comm-0-drones",
 			Source:     "community_detection",
 			Timestamp:  time.Now(),
@@ -549,10 +568,10 @@ func TestRelationshipTraversal_IncludesCommunityTriples(t *testing.T) {
 
 	for _, triple := range results {
 		switch triple.Predicate {
-		case "graph.community.member_of":
+		case "graph.community.member-of":
 			hasCommunityTriple = true
 			assert.Equal(t, "comm-0-drones", triple.Object)
-		case "robotics.component.powered_by":
+		case "robotics.component.powered-by":
 			hasComponentTriple = true
 		case "robotics.location.near":
 			hasLocationTriple = true

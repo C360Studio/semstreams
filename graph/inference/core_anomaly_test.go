@@ -83,7 +83,7 @@ func TestCoreAnomalyDetector_IsolationAnomaly_HasSuggestion(t *testing.T) {
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
 			highCoreID: {
-				{FromEntityID: highCoreID, ToEntityID: lowCoreID, Predicate: "knows"},
+				{FromEntityID: highCoreID, ToEntityID: lowCoreID, Predicate: "social.relation.knows"},
 			},
 		},
 		incoming: map[string][]RelationshipInfo{},

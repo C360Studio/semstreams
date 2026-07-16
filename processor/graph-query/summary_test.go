@@ -129,7 +129,7 @@ func TestHandleQueryGraphSummary_HappyPath(t *testing.T) {
 			return predicateListResponse(
 				graph.PredicateSummary{Predicate: "agent.web.url", EntityCount: 3},
 				graph.PredicateSummary{Predicate: "agent.loop.outcome", EntityCount: 2},
-				graph.PredicateSummary{Predicate: "source.code.symbol_name", EntityCount: 1},
+				graph.PredicateSummary{Predicate: "source.code.symbol-name", EntityCount: 1},
 			), nil
 		}
 		return nil, errors.New("unexpected subject: " + subject)
@@ -188,7 +188,7 @@ func TestHandleQueryGraphSummary_IncludePredicatesFalse(t *testing.T) {
 			return prefixEnvelope("acme.platform.agent.web.observation.h1"), nil
 		case "graph.index.query.predicateList":
 			predicateCalled = true
-			return predicateListResponse(graph.PredicateSummary{Predicate: "x", EntityCount: 1}), nil
+			return predicateListResponse(graph.PredicateSummary{Predicate: "test.fixture.x", EntityCount: 1}), nil
 		}
 		return nil, errors.New("unexpected subject: " + subject)
 	})

@@ -140,7 +140,7 @@ func TestPredicateQueriesRejectStoredIdentityAndNamespaceAmbiguity(t *testing.T)
 	t.Parallel()
 	comp := createTestComponentWithMockKV(t)
 
-	_, err := comp.handleQueryPredicateNATS(context.Background(), []byte(`{"predicate":"agent.run"}`))
+	_, err := comp.handleQueryPredicateNATS(context.Background(), []byte(`{"predicate":"agent.run"}`)) // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.run","reason":"arity"}
 	require.Error(t, err, "two-part namespace must not be accepted as an exact predicate")
 
 	_, err = comp.handleQueryPredicateListNATS(context.Background(), []byte(`{"namespace":"agent.run.phase"}`))

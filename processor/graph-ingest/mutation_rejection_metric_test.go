@@ -109,9 +109,9 @@ func TestMeteredMutation_PredicateReasonsCountOncePerCandidate(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	const lane = "test.mutation.metric.predicate-contract"
 	contractErr := &graph.EntityPredicateContractError{Violations: []graph.InvalidEntityPredicate{
-		{Predicate: "legacy.one", Reason: vocabulary.PredicateReasonArity},
-		{Predicate: "legacy.two", Reason: vocabulary.PredicateReasonArity},
-		{Predicate: "Legacy.valid.shape", Reason: vocabulary.PredicateReasonSegmentStart},
+		{Predicate: "legacy.one", Reason: vocabulary.PredicateReasonArity},                // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.one","reason":"arity"}
+		{Predicate: "legacy.two", Reason: vocabulary.PredicateReasonArity},                // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.two","reason":"arity"}
+		{Predicate: "Legacy.valid.shape", Reason: vocabulary.PredicateReasonSegmentStart}, // predicate-audit:invalid {"kind":"stored-predicate","value":"Legacy.valid.shape","reason":"segment_start"}
 	}}
 	wrapped := comp.meteredMutation(lane, func(_ context.Context, _ []byte) ([]byte, error) {
 		return nil, errs.WrapInvalid(contractErr, "test", "predicateMetric", "reject candidate")

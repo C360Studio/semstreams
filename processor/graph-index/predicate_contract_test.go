@@ -20,7 +20,7 @@ func TestInvalidReplayedPredicatePoisonsReadiness(t *testing.T) {
 		ID: "acme.ops.test.system.widget.001",
 		Triples: []message.Triple{{
 			Subject:   "acme.ops.test.system.widget.001",
-			Predicate: "legacy.invalid_name",
+			Predicate: "legacy.invalid_name", // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.invalid_name","reason":"arity"}
 		}},
 	}
 	data, err := json.Marshal(state)

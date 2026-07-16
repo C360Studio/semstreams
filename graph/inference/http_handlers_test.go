@@ -105,8 +105,8 @@ func TestHTTPHandler_HandleListPending(t *testing.T) {
 		ID:         "pending-1",
 		Type:       AnomalySemanticStructuralGap,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:a",
-		EntityB:    "entity:b",
+		EntityA:    "test.inference.graph.http.entity.a",
+		EntityB:    "test.inference.graph.http.entity.b",
 		Confidence: 0.75,
 		DetectedAt: time.Now(),
 	}
@@ -114,7 +114,7 @@ func TestHTTPHandler_HandleListPending(t *testing.T) {
 		ID:         "pending-2",
 		Type:       AnomalyCoreIsolation,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:c",
+		EntityA:    "test.inference.graph.http.entity.c",
 		Confidence: 0.65,
 		DetectedAt: time.Now(),
 	}
@@ -123,7 +123,7 @@ func TestHTTPHandler_HandleListPending(t *testing.T) {
 		ID:         "applied-1",
 		Type:       AnomalyTransitivityGap,
 		Status:     StatusApplied,
-		EntityA:    "entity:d",
+		EntityA:    "test.inference.graph.http.entity.d",
 		Confidence: 0.90,
 		DetectedAt: time.Now(),
 	}
@@ -165,8 +165,8 @@ func TestHTTPHandler_HandleGetAnomaly(t *testing.T) {
 		ID:         "test-anomaly-1",
 		Type:       AnomalySemanticStructuralGap,
 		Status:     StatusPending,
-		EntityA:    "entity:test-a",
-		EntityB:    "entity:test-b",
+		EntityA:    "test.inference.graph.http.entity.test-a",
+		EntityB:    "test.inference.graph.http.entity.test-b",
 		Confidence: 0.80,
 		DetectedAt: time.Now(),
 	}
@@ -211,14 +211,14 @@ func TestHTTPHandler_HandleReviewAnomaly(t *testing.T) {
 		ID:         "review-test-1",
 		Type:       AnomalySemanticStructuralGap,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:review-a",
-		EntityB:    "entity:review-b",
+		EntityA:    "test.inference.graph.http.entity.review-a",
+		EntityB:    "test.inference.graph.http.entity.review-b",
 		Confidence: 0.75,
 		DetectedAt: time.Now(),
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "entity:review-a",
-			ToEntity:   "entity:review-b",
-			Predicate:  "related_to",
+			FromEntity: "test.inference.graph.http.entity.review-a",
+			ToEntity:   "test.inference.graph.http.entity.review-b",
+			Predicate:  "inference.relation.related-to",
 			Confidence: 0.75,
 		},
 	}
@@ -262,7 +262,7 @@ func TestHTTPHandler_HandleReviewAnomaly_Reject(t *testing.T) {
 		ID:         "reject-test-1",
 		Type:       AnomalyCoreIsolation,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:reject-a",
+		EntityA:    "test.inference.graph.http.entity.reject-a",
 		Confidence: 0.50,
 		DetectedAt: time.Now(),
 	}
@@ -298,7 +298,7 @@ func TestHTTPHandler_HandleReviewAnomaly_InvalidDecision(t *testing.T) {
 		ID:         "invalid-decision-test",
 		Type:       AnomalySemanticStructuralGap,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:a",
+		EntityA:    "test.inference.graph.http.entity.a",
 		DetectedAt: time.Now(),
 	}
 	require.NoError(t, storage.Save(ctx, anomaly))
@@ -327,7 +327,7 @@ func TestHTTPHandler_HandleReviewAnomaly_WrongState(t *testing.T) {
 		ID:         "already-applied",
 		Type:       AnomalySemanticStructuralGap,
 		Status:     StatusApplied, // Already processed
-		EntityA:    "entity:a",
+		EntityA:    "test.inference.graph.http.entity.a",
 		DetectedAt: time.Now(),
 	}
 	require.NoError(t, storage.Save(ctx, anomaly))
@@ -357,11 +357,11 @@ func TestHTTPHandler_HandleReviewAnomaly_EmptyToEntityRequiresTargetEntity(t *te
 		ID:         "empty-toentity-test",
 		Type:       AnomalyCoreIsolation,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:isolated",
+		EntityA:    "test.inference.graph.http.entity.isolated",
 		Confidence: 0.75,
 		DetectedAt: time.Now(),
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "entity:isolated",
+			FromEntity: "test.inference.graph.http.entity.isolated",
 			ToEntity:   "", // Empty - needs to be filled by reviewer
 			Predicate:  "inference.suggested.peer",
 			Confidence: 0.75,
@@ -403,11 +403,11 @@ func TestHTTPHandler_HandleReviewAnomaly_TargetEntityFillsEmptyToEntity(t *testi
 		ID:         "fill-toentity-test",
 		Type:       AnomalyCoreIsolation,
 		Status:     StatusHumanReview,
-		EntityA:    "entity:isolated",
+		EntityA:    "test.inference.graph.http.entity.isolated",
 		Confidence: 0.75,
 		DetectedAt: time.Now(),
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "entity:isolated",
+			FromEntity: "test.inference.graph.http.entity.isolated",
 			ToEntity:   "", // Empty - will be filled by TargetEntity
 			Predicate:  "inference.suggested.peer",
 			Confidence: 0.75,
@@ -420,7 +420,7 @@ func TestHTTPHandler_HandleReviewAnomaly_TargetEntityFillsEmptyToEntity(t *testi
 	// Approve with TargetEntity to fill empty ToEntity
 	reviewReq := ReviewRequest{
 		Decision:     "approved",
-		TargetEntity: "entity:peer-hub",
+		TargetEntity: "test.inference.graph.http.entity.peer-hub",
 		ReviewedBy:   "test-user",
 	}
 	body, _ := json.Marshal(reviewReq)
@@ -440,8 +440,8 @@ func TestHTTPHandler_HandleReviewAnomaly_TargetEntityFillsEmptyToEntity(t *testi
 	// Verify applier was called with filled ToEntity
 	applier.mu.Lock()
 	require.Len(t, applier.applied, 1)
-	assert.Equal(t, "entity:peer-hub", applier.applied[0].ToEntity)
-	assert.Equal(t, "entity:isolated", applier.applied[0].FromEntity)
+	assert.Equal(t, "test.inference.graph.http.entity.peer-hub", applier.applied[0].ToEntity)
+	assert.Equal(t, "test.inference.graph.http.entity.isolated", applier.applied[0].FromEntity)
 	applier.mu.Unlock()
 }
 

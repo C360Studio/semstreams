@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
@@ -513,7 +515,7 @@ func TestComponent_QueryEntity_ComponentUnavailable(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"id":"test.entity.001"}`)
+	queryData := []byte(`{"id":"test.fixture.graph.query.entity.001"}`)
 
 	response, err := comp.handleQueryEntity(ctx, queryData)
 
@@ -544,7 +546,7 @@ func TestComponent_QueryRelationships_TransformSuccess(t *testing.T) {
 	mockClient := newMockNATSClient()
 
 	// Mock response from graph-index (QueryResponse envelope with OutgoingRelationshipsData)
-	indexResponse := []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.002","predicate":"test.relationship"}]},"timestamp":"2026-01-09T00:00:00Z"}`)
+	indexResponse := []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"test.fixture.relationship"}]},"timestamp":"2026-01-09T00:00:00Z"}`)
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		// Actual query should go to graph-index
 		assert.Equal(t, "graph.index.query.outgoing", subject, "should forward to graph-index")
@@ -552,7 +554,7 @@ func TestComponent_QueryRelationships_TransformSuccess(t *testing.T) {
 		var req map[string]string
 		err := json.Unmarshal(data, &req)
 		require.NoError(t, err)
-		assert.Equal(t, "test.entity.001", req["entity_id"])
+		assert.Equal(t, "test.fixture.graph.query.entity.001", req["entity_id"])
 
 		return indexResponse, nil
 	}
@@ -563,13 +565,13 @@ func TestComponent_QueryRelationships_TransformSuccess(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"entity_id":"test.entity.001"}`)
+	queryData := []byte(`{"entity_id":"test.fixture.graph.query.entity.001"}`)
 
 	response, err := comp.handleQueryRelationships(ctx, queryData)
 
 	assert.NoError(t, err)
 	// Handler transforms graph-index format to normalized API format
-	expectedResponse := `[{"edge_type":"test.relationship","from_entity_id":"test.entity.001","to_entity_id":"test.entity.002"}]`
+	expectedResponse := `[{"edge_type":"test.fixture.relationship","from_entity_id":"test.fixture.graph.query.entity.001","to_entity_id":"test.fixture.graph.query.entity.002"}]`
 	assert.JSONEq(t, expectedResponse, string(response))
 }
 
@@ -588,15 +590,15 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 		switch subject {
 		case "graph.ingest.query.entity":
 			// Return start entity
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return relationships (1 hop) in QueryResponse envelope format
 			var req map[string]string
 			json.Unmarshal(data, &req)
 
-			if req["entity_id"] == "test.entity.001" {
-				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.002","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			if req["entity_id"] == "test.fixture.graph.query.entity.001" {
+				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 
@@ -611,7 +613,7 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -633,21 +635,32 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 
 func TestComponent_PathSearch_MaxDepthEnforced(t *testing.T) {
 	mockClient := newMockNATSClient()
+	chain := make([]string, 20)
+	for i := range chain {
+		chain[i] = semantictest.EntityID(t, "test", "fixture", "graph", "query", "entity", fmt.Sprintf("%03d", i+1))
+	}
+	nextByEntity := make(map[string]string, len(chain)-1)
+	for i := 0; i < len(chain)-1; i++ {
+		nextByEntity[chain[i]] = chain[i+1]
+	}
 
-	callCount := 0
+	var outgoingRequests []string
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
-		callCount++
-
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			// Always return next entity (infinite graph simulation) in QueryResponse envelope format
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			nextID := req["entity_id"] + ".next"
-			return []byte(`{"data":{"relationships":[{"to_entity_id":"` + nextID + `","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			currentID := req["entity_id"]
+			outgoingRequests = append(outgoingRequests, currentID)
+			nextID, ok := nextByEntity[currentID]
+			if !ok {
+				return nil, fmt.Errorf("missing next entity for %q", currentID)
+			}
+			return []byte(`{"data":{"relationships":[{"to_entity_id":"` + nextID + `","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 
 		default:
 			return nil, errors.New("unexpected subject")
@@ -661,15 +674,24 @@ func TestComponent_PathSearch_MaxDepthEnforced(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":3}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":3}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
 
-	// Should stop at max_depth, not traverse infinitely
-	assert.Less(t, callCount, 20, "should respect max depth and not traverse indefinitely")
+	// The backing chain has 20 unique nodes, but depth 3 must fetch outgoing
+	// relationships only for depths 0, 1, and 2. Node 004 is discovered at
+	// depth 3 and must not be expanded to node 005.
+	assert.Equal(t, chain[:3], outgoingRequests)
+	var result PathSearchResponse
+	require.NoError(t, json.Unmarshal(response, &result))
+	require.Len(t, result.Entities, 4)
+	assert.Equal(t, chain[3], result.Entities[3].ID)
+	for _, entity := range result.Entities {
+		assert.NotEqual(t, chain[4], entity.ID)
+	}
 }
 
 func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
@@ -683,7 +705,7 @@ func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
 
 		// Simulate slow response
 		time.Sleep(50 * time.Millisecond)
-		return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+		return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
@@ -695,7 +717,7 @@ func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -721,7 +743,7 @@ func TestComponent_PathSearch_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -745,7 +767,7 @@ func TestComponent_PathSearch_StartEntityNotFound(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"nonexistent.entity","max_depth":2}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.absent","max_depth":2}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -760,7 +782,7 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			var req map[string]string
@@ -768,12 +790,12 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 
 			// Create cycle: 001 -> 002 -> 003 -> 001 (using QueryResponse envelope format)
 			switch req["entity_id"] {
-			case "test.entity.001":
-				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.002","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
-			case "test.entity.002":
-				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.003","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
-			case "test.entity.003":
-				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.001","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			case "test.fixture.graph.query.entity.001":
+				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			case "test.fixture.graph.query.entity.002":
+				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.003","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			case "test.fixture.graph.query.entity.003":
+				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.001","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			default:
 				return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
@@ -789,7 +811,7 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":10}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":10}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -900,16 +922,16 @@ func TestComponent_PathSearch_DirectionIncoming(t *testing.T) {
 
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.002","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.002","triples":[]}`), nil
 
 		case "graph.index.query.incoming":
 			// Return incoming relationships (entities pointing TO this one)
 			var req map[string]string
 			json.Unmarshal(data, &req)
 
-			if req["entity_id"] == "test.entity.002" {
+			if req["entity_id"] == "test.fixture.graph.query.entity.002" {
 				// Entity 001 points to 002
-				return []byte(`{"data":{"relationships":[{"from_entity_id":"test.entity.001","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+				return []byte(`{"data":{"relationships":[{"from_entity_id":"test.fixture.graph.query.entity.001","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 
@@ -929,7 +951,7 @@ func TestComponent_PathSearch_DirectionIncoming(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"test.entity.002","max_depth":2,"direction":"incoming"}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"incoming"}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -956,21 +978,21 @@ func TestComponent_PathSearch_DirectionBoth(t *testing.T) {
 
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.002","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.002","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			if req["entity_id"] == "test.entity.002" {
-				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.entity.003","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			if req["entity_id"] == "test.fixture.graph.query.entity.002" {
+				return []byte(`{"data":{"relationships":[{"to_entity_id":"test.fixture.graph.query.entity.003","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 
 		case "graph.index.query.incoming":
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			if req["entity_id"] == "test.entity.002" {
-				return []byte(`{"data":{"relationships":[{"from_entity_id":"test.entity.001","predicate":"relates_to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			if req["entity_id"] == "test.fixture.graph.query.entity.002" {
+				return []byte(`{"data":{"relationships":[{"from_entity_id":"test.fixture.graph.query.entity.001","predicate":"graph.relation.relates-to"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 
@@ -985,7 +1007,7 @@ func TestComponent_PathSearch_DirectionBoth(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	queryData := []byte(`{"start_entity":"test.entity.002","max_depth":2,"direction":"both"}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.002","max_depth":2,"direction":"both"}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -1014,17 +1036,17 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return multiple relationships with different predicates
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			if req["entity_id"] == "test.entity.001" {
+			if req["entity_id"] == "test.fixture.graph.query.entity.001" {
 				return []byte(`{"data":{"relationships":[
-					{"to_entity_id":"test.entity.002","predicate":"member_of"},
-					{"to_entity_id":"test.entity.003","predicate":"relates_to"},
-					{"to_entity_id":"test.entity.004","predicate":"member_of"}
+					{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"graph.community.member-of"},
+					{"to_entity_id":"test.fixture.graph.query.entity.003","predicate":"graph.relation.relates-to"},
+					{"to_entity_id":"test.fixture.graph.query.entity.004","predicate":"graph.community.member-of"}
 				]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
@@ -1040,8 +1062,8 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	defer comp.Stop(1 * time.Second)
 
 	ctx := context.Background()
-	// Filter to only "member_of" predicate
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2,"predicates":["member_of"]}`)
+	// Filter to only "graph.community.member-of" predicate
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2,"predicates":["graph.community.member-of"]}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -1052,17 +1074,17 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	err = json.Unmarshal(response, &result)
 	require.NoError(t, err)
 
-	// Should have start + 2 member_of targets (002, 004), NOT 003 (relates_to)
+	// Should have start + 2 graph.community.member-of targets (002, 004), NOT 003 (graph.relation.relates-to)
 	// Find entity IDs
 	entityIDs := make(map[string]bool)
 	for _, e := range result.Entities {
 		entityIDs[e.ID] = true
 	}
 
-	assert.True(t, entityIDs["test.entity.001"], "should include start entity")
-	assert.True(t, entityIDs["test.entity.002"], "should include member_of target 002")
-	assert.True(t, entityIDs["test.entity.004"], "should include member_of target 004")
-	assert.False(t, entityIDs["test.entity.003"], "should NOT include relates_to target 003")
+	assert.True(t, entityIDs["test.fixture.graph.query.entity.001"], "should include start entity")
+	assert.True(t, entityIDs["test.fixture.graph.query.entity.002"], "should include graph.community.member-of target 002")
+	assert.True(t, entityIDs["test.fixture.graph.query.entity.004"], "should include graph.community.member-of target 004")
+	assert.False(t, entityIDs["test.fixture.graph.query.entity.003"], "should NOT include graph.relation.relates-to target 003")
 }
 
 func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
@@ -1071,15 +1093,15 @@ func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return relationships that don't match filter
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			if req["entity_id"] == "test.entity.001" {
+			if req["entity_id"] == "test.fixture.graph.query.entity.001" {
 				return []byte(`{"data":{"relationships":[
-					{"to_entity_id":"test.entity.002","predicate":"relates_to"}
+					{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"graph.relation.relates-to"}
 				]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
@@ -1096,7 +1118,12 @@ func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
 
 	ctx := context.Background()
 	// Filter to predicate that doesn't exist
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2,"predicates":["nonexistent_pred"]}`)
+	queryData, err := json.Marshal(map[string]any{
+		"start_entity": "test.fixture.graph.query.entity.001",
+		"max_depth":    2,
+		"predicates":   []string{semantictest.Predicate(t, "test", "fixture", "absent")},
+	})
+	require.NoError(t, err)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -1121,19 +1148,19 @@ func TestComponent_PathSearch_MaxPathsLimit(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return many relationships
 			var req map[string]string
 			json.Unmarshal(data, &req)
-			if req["entity_id"] == "test.entity.001" {
+			if req["entity_id"] == "test.fixture.graph.query.entity.001" {
 				return []byte(`{"data":{"relationships":[
-					{"to_entity_id":"test.entity.002","predicate":"r"},
-					{"to_entity_id":"test.entity.003","predicate":"r"},
-					{"to_entity_id":"test.entity.004","predicate":"r"},
-					{"to_entity_id":"test.entity.005","predicate":"r"},
-					{"to_entity_id":"test.entity.006","predicate":"r"}
+					{"to_entity_id":"test.fixture.graph.query.entity.002","predicate":"graph.relation.related"},
+					{"to_entity_id":"test.fixture.graph.query.entity.003","predicate":"graph.relation.related"},
+					{"to_entity_id":"test.fixture.graph.query.entity.004","predicate":"graph.relation.related"},
+					{"to_entity_id":"test.fixture.graph.query.entity.005","predicate":"graph.relation.related"},
+					{"to_entity_id":"test.fixture.graph.query.entity.006","predicate":"graph.relation.related"}
 				]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 			}
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
@@ -1150,7 +1177,7 @@ func TestComponent_PathSearch_MaxPathsLimit(t *testing.T) {
 
 	ctx := context.Background()
 	// Limit to 3 paths (start + 2 more)
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":2,"max_paths":3}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":2,"max_paths":3}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -1182,14 +1209,14 @@ func TestExtractRelationships_BothEndsPresent(t *testing.T) {
 		{
 			ID: entity001,
 			Triples: []message.Triple{
-				{Subject: entity001, Predicate: "relates_to", Object: entity002},
-				{Subject: entity001, Predicate: "name", Object: "Test Entity"}, // property, not relationship
+				{Subject: entity001, Predicate: "graph.relation.relates-to", Object: entity002},
+				{Subject: entity001, Predicate: "entity.identity.name", Object: "Test Entity"}, // property, not relationship
 			},
 		},
 		{
 			ID: entity002,
 			Triples: []message.Triple{
-				{Subject: entity002, Predicate: "belongs_to", Object: entity001},
+				{Subject: entity002, Predicate: "graph.relation.belongs-to", Object: entity001},
 			},
 		},
 	}
@@ -1220,7 +1247,7 @@ func TestExtractRelationships_OneEndMissing(t *testing.T) {
 		{
 			ID: entity001,
 			Triples: []message.Triple{
-				{Subject: entity001, Predicate: "relates_to", Object: entity999}, // 999 not in set
+				{Subject: entity001, Predicate: "graph.relation.relates-to", Object: entity999}, // 999 not in set
 			},
 		},
 	}
@@ -1235,13 +1262,13 @@ func TestBuildSources_SemanticScores(t *testing.T) {
 	comp := createTestComponent(t)
 
 	entities := []*gtypes.EntityState{
-		{ID: "entity.001"},
-		{ID: "entity.002"},
+		{ID: "test.fixture.graph.query.entity.001"},
+		{ID: "test.fixture.graph.query.entity.002"},
 	}
 
 	semanticHits := []SemanticHit{
-		{EntityID: "entity.001", Score: 0.95},
-		{EntityID: "entity.002", Score: 0.85},
+		{EntityID: "test.fixture.graph.query.entity.001", Score: 0.95},
+		{EntityID: "test.fixture.graph.query.entity.002", Score: 0.85},
 	}
 
 	sources := comp.buildSources(entities, semanticHits, nil)
@@ -1254,17 +1281,17 @@ func TestBuildSources_SemanticScores(t *testing.T) {
 		sourceMap[s.EntityID] = s
 	}
 
-	assert.InDelta(t, 0.95, sourceMap["entity.001"].Relevance, 0.01)
-	assert.InDelta(t, 0.85, sourceMap["entity.002"].Relevance, 0.01)
+	assert.InDelta(t, 0.95, sourceMap["test.fixture.graph.query.entity.001"].Relevance, 0.01)
+	assert.InDelta(t, 0.85, sourceMap["test.fixture.graph.query.entity.002"].Relevance, 0.01)
 }
 
 func TestBuildSources_PositionBased(t *testing.T) {
 	comp := createTestComponent(t)
 
 	entities := []*gtypes.EntityState{
-		{ID: "entity.001"},
-		{ID: "entity.002"},
-		{ID: "entity.003"},
+		{ID: "test.fixture.graph.query.entity.001"},
+		{ID: "test.fixture.graph.query.entity.002"},
+		{ID: semantictest.EntityID(t, "test", "fixture", "graph", "query", "entity", "003")},
 	}
 
 	// No semantic hits - should fall back to position-based scoring
@@ -1274,7 +1301,7 @@ func TestBuildSources_PositionBased(t *testing.T) {
 
 	// First entity should have highest relevance (position-based)
 	// Sorted by relevance descending
-	assert.Equal(t, "entity.001", sources[0].EntityID)
+	assert.Equal(t, "test.fixture.graph.query.entity.001", sources[0].EntityID)
 	assert.Greater(t, sources[0].Relevance, sources[1].Relevance)
 	assert.Greater(t, sources[1].Relevance, sources[2].Relevance)
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,7 +27,7 @@ func TestCreateEntityWithTriplesRequest_OwnerToken_RoundTrip(t *testing.T) {
 		t.Parallel()
 		req := CreateEntityWithTriplesRequest{
 			Entity:     &EntityState{ID: "acme.ops.robotics.gcs.drone.001"},
-			Triples:    []message.Triple{{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "status.phase", Object: "ready"}},
+			Triples:    []message.Triple{{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "entity.status.phase", Object: "ready"}},
 			OwnerToken: "mission-planner#deadbeef01234567",
 			TraceID:    "trace-1",
 		}
@@ -63,13 +64,14 @@ func TestCreateEntityWithTriplesRequest_OwnerToken_RoundTrip(t *testing.T) {
 // empty.
 func TestUpdateEntityWithTriplesRequest_OwnerToken_RoundTrip(t *testing.T) {
 	t.Parallel()
+	oldStatusPredicate := semantictest.Predicate(t, "entity", "status", "old")
 
 	t.Run("present", func(t *testing.T) {
 		t.Parallel()
 		req := UpdateEntityWithTriplesRequest{
 			Entity:           &EntityState{ID: "acme.ops.robotics.gcs.drone.001"},
-			AddTriples:       []message.Triple{{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "status.phase", Object: "running"}},
-			RemoveTriples:    []string{"status.old"},
+			AddTriples:       []message.Triple{{Subject: "acme.ops.robotics.gcs.drone.001", Predicate: "entity.status.phase", Object: "running"}},
+			RemoveTriples:    []string{oldStatusPredicate},
 			ExpectedRevision: 42,
 			OwnerToken:       "rule-pack.my-pack#cafebabe12345678",
 			TraceID:          "trace-2",

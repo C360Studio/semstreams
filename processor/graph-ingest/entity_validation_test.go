@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,7 @@ func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		triples[i] = message.Triple{
 			Subject:    "c360.platform.test.sys.type.001",
-			Predicate:  "test.property." + string(rune('a'+i%26)),
+			Predicate:  semantictest.Predicate(t, "test", "property", string(rune('a'+i%26))),
 			Object:     float64(i),
 			Confidence: 1.0,
 			Timestamp:  time.Now(),

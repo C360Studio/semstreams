@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -86,7 +87,7 @@ func TestQueryOutgoing_Integration(t *testing.T) {
 		Triples: []message.Triple{
 			{
 				Subject:   entityID,
-				Predicate: predicate,
+				Predicate: semantictest.Predicate(t, "robotics", "assigned", "mission"),
 				Object:    targetID,
 			},
 		},
@@ -173,7 +174,7 @@ func TestQueryIncoming_Integration(t *testing.T) {
 		Triples: []message.Triple{
 			{
 				Subject:   sourceID,
-				Predicate: predicate,
+				Predicate: semantictest.Predicate(t, "robotics", "assigned", "mission"),
 				Object:    targetID,
 			},
 		},
@@ -277,7 +278,6 @@ func TestQueryPredicate_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Create test data with multiple entities using same predicate
-	predicate := "robotics.type.drone"
 	entities := []string{
 		"c360.platform.robotics.mav1.drone.001",
 		"c360.platform.robotics.mav1.drone.002",
@@ -296,7 +296,7 @@ func TestQueryPredicate_Integration(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
-					Predicate: predicate,
+					Predicate: semantictest.Predicate(t, "robotics", "type", "drone"),
 					Object:    "drone",
 				},
 			},
@@ -314,7 +314,7 @@ func TestQueryPredicate_Integration(t *testing.T) {
 
 	// Create query request
 	nc := natsClient.GetConnection()
-	request := map[string]string{"predicate": predicate}
+	request := map[string]string{"predicate": semantictest.Predicate(t, "robotics", "type", "drone")}
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
@@ -522,12 +522,12 @@ func TestQueryInvalidRequest_Integration(t *testing.T) {
 		{
 			name:    "predicate empty predicate",
 			subject: "graph.index.query.predicate",
-			request: []byte(`{"predicate": ""}`),
+			request: []byte(`{"predicate": ""}`), // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		},
 		{
 			name:    "predicateStats empty predicate",
 			subject: "graph.index.query.predicateStats",
-			request: []byte(`{"predicate": ""}`),
+			request: []byte(`{"predicate": ""}`), // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		},
 		{
 			name:    "predicateCompound empty predicates",

@@ -267,7 +267,7 @@ func TestSharedSeam_CreateWithTriples_InvalidForeignPredicateCommitsNothing(t *t
 		},
 		Triples: []message.Triple{
 			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},
-			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID},
+			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID}, // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 		},
 	}
 	data, err := json.Marshal(req)
@@ -292,7 +292,7 @@ func TestSharedSeam_UpdateWithTriples_InvalidForeignPredicateCommitsNothing(t *t
 		},
 		AddTriples: []message.Triple{
 			{Subject: flParentID, Predicate: "test.system.label", Object: "Parent"},
-			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID},
+			{Subject: flChildID, Predicate: "legacy.predicate", Object: flParentID}, // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 		},
 	}
 	data, err := json.Marshal(req)

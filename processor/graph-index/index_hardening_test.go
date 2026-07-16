@@ -46,7 +46,7 @@ func TestIncomingIndex_MultiTokenPredicateRoundTrip(t *testing.T) {
 	// to grab exactly 6 tokens for sourceID and the remainder as predicate.
 	targetID := "acme.ops.robotics.gcs.mission.001"
 	sourceID := "acme.ops.robotics.gcs.drone.001"
-	predicate := "robot.arm.joint.angle.current"
+	predicate := "robot.arm.joint.angle.current" // predicate-audit:invalid {"kind":"stored-predicate","value":"robot.arm.joint.angle.current","reason":"arity"}
 
 	key := incomingIndexKey(targetID, sourceID, predicate)
 	got, ok := incomingEntryFromKey(key, targetID)
