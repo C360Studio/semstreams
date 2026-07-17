@@ -8,6 +8,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/projection"
+	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
 )
 
 // Config holds configuration for the RuleProcessor
@@ -29,7 +30,7 @@ type Config struct {
 	AlertCooldownPeriod string `json:"alert_cooldown_period" schema:"type:string,description:Minimum time between repeated alerts (e.g. '2m'),default:2m,category:advanced"`
 
 	// Graph processor integration
-	EnableGraphIntegration bool `json:"enable_graph_integration" schema:"type:bool,description:Enable graph entity creation from rules,default:true,category:basic"`
+	EnableGraphIntegration bool `json:"enable_graph_integration" schema:"type:bool,description:Enable graph entity creation from rules; every rule processor requires an explicit pack_id,default:false,category:basic"`
 
 	// EntityWatchBuckets declares exact six-position entity ID patterns for the
 	// typed EntityState evaluator. ENTITY_STATES is the only supported bucket.
@@ -49,13 +50,12 @@ type Config struct {
 		ReplayPolicy   string `json:"replay_policy"`    // "instant" or "original"
 	} `json:"consumer"`
 
-	// PackID identifies this rule pack as a graph-projection PRODUCER
-	// (ADR-056 #278 inc 2). When set, the composition root binds the pack's
-	// ProjectionContracts under the ownership substrate as owner
-	// "rule-pack.<PackID>". The id must be subject-safe (see Validate); it is
-	// read ONCE at bind time, before the watcher starts — pack-level and
-	// STATIC, never per-rule and never re-derived on hot-reload.
-	PackID string `json:"pack_id,omitempty" schema:"type:string,category:advanced,description:owner = rule-pack.<pack_id>"`
+	// PackID identifies both this rule pack's graph-projection owner and its
+	// graph-event producer identity. Replicas use the same stable value so their
+	// rule-trigger events converge; independently composed packs use distinct
+	// values so processor-local rule IDs cannot collide. Every processor must
+	// declare an explicit non-empty value; there is no default pack identity.
+	PackID string `json:"pack_id" schema:"type:string,category:basic,description:Required stable rule-pack projection owner and graph-event producer identity"`
 
 	// ProjectionContracts are the graph-projection contracts this rule pack
 	// owns (ADR-056 Decision 6). Bound to owner "rule-pack.<PackID>" at the
@@ -92,28 +92,23 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// packIDCharset is the subject-safe charset a PackID may use. It mirrors
-// pkg/ownership.validOwnerID exactly (glob.go) so a config that passes this
-// check can never be rejected later by RegisterOwner — the owner id is
-// "rule-pack.<PackID>", and the "rule-pack." prefix plus any char in this set
-// is itself subject-safe.
-const packIDCharset = "[A-Za-z0-9._=-]"
+// packIDCharset is the exact literal-token charset a PackID may use. The
+// derived owner key is always the fixed two-position key
+// "rule-pack.<PackID>"; PackID cannot inject another dot position.
+const (
+	packIDCharset      = rulepackcontract.PackIDCharset
+	packIDPattern      = "^" + packIDCharset + "+$"
+	maxRulePackIDBytes = rulepackcontract.MaxPackIDBytes
+)
 
 // Validate checks pack ownership and KV-watch declarations before activation.
-// A non-empty PackID must be subject-safe so the derived owner id
-// "rule-pack.<PackID>" is usable directly as a NATS KV key segment. An empty
-// PackID is valid (the pack declares no projection ownership). ENTITY_STATES
-// watch patterns must satisfy the canonical entity ID pattern contract.
+// PackID must be present and one literal KV token so the derived owner key
+// "rule-pack.<PackID>" has fixed arity and every
+// rule-trigger event has a stable producer identity. ENTITY_STATES watch
+// patterns must satisfy the canonical entity ID pattern contract.
 func (c Config) Validate() error {
-	for _, r := range c.PackID {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '-', r == '_', r == '=', r == '.':
-		default:
-			return fmt.Errorf(
-				"rule config: invalid pack_id %q — owner id rule-pack.%s must use only %s (offending char %q)",
-				c.PackID, c.PackID, packIDCharset, string(r))
-		}
+	if err := validatePackID(c.PackID); err != nil {
+		return err
 	}
 	if err := validateEntityWatchBuckets(c.EntityWatchBuckets); err != nil {
 		return fmt.Errorf("rule config: %w", err)
@@ -126,8 +121,24 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// DefaultConfig returns sensible defaults
-func DefaultConfig() Config {
+func validatePackID(packID string) error {
+	return rulepackcontract.ValidateID(packID)
+}
+
+// NewConfig returns the rule defaults with the caller's explicit stable pack
+// identity. There is intentionally no exported identity-free default.
+func NewConfig(packID string) (Config, error) {
+	config := defaultConfig()
+	config.PackID = packID
+	if err := config.Validate(); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+// defaultConfig provides the internal overlay base used by the component
+// factory before it applies the operator's required pack_id.
+func defaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
@@ -158,7 +169,7 @@ func DefaultConfig() Config {
 		},
 		BufferWindowSize:       "10m",
 		AlertCooldownPeriod:    "2m",
-		EnableGraphIntegration: true,
+		EnableGraphIntegration: false,
 		DebounceDelayMs:        0, // Disabled by default for real-time rule evaluation
 		Consumer: struct {
 			Enabled        bool   `json:"enabled"`

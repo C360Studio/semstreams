@@ -10,6 +10,14 @@ import (
 
 func buildRuleProcessorSchema() component.ConfigSchema {
 	schema := component.GenerateConfigSchema(reflect.TypeOf(Config{}))
+	maximumPackIDBytes := maxRulePackIDBytes
+	minimumPackIDBytes := 1
+	packID := schema.Properties["pack_id"]
+	packID.MinLength = &minimumPackIDBytes
+	packID.MaxLength = &maximumPackIDBytes
+	packID.Pattern = packIDPattern
+	schema.Properties["pack_id"] = packID
+	schema.Required = appendRequiredProperty(schema.Required, "pack_id")
 
 	maximumEntityIDBytes := entitytypes.MaxEntityIDBytes
 	disallowAdditional := false
@@ -65,4 +73,13 @@ func buildRuleProcessorSchema() component.ConfigSchema {
 	}
 
 	return schema
+}
+
+func appendRequiredProperty(required []string, property string) []string {
+	for _, existing := range required {
+		if existing == property {
+			return required
+		}
+	}
+	return append(required, property)
 }

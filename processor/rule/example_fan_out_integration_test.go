@@ -170,7 +170,7 @@ func phase1SpawnInvestigators(
 	// entity-watcher path would have populated.
 	coordinator.ID = coordinatorEntityID
 
-	rule, err := NewExpressionRule(rule01)
+	rule, err := NewExpressionRule("direct-expression-test", rule01)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(coordinator),
 		"rule 01 EvaluateEntityState must match a coordinator with next_action=fan_out (drives the production wire including SubstituteConditionValues)")
@@ -208,7 +208,7 @@ func phase2StampCompletions(
 	t.Helper()
 	mutator := &mockTripleMutator{}
 	executor := NewActionExecutorFull(nil, mutator, nil)
-	rule, err := NewExpressionRule(rule02)
+	rule, err := NewExpressionRule("direct-expression-test", rule02)
 	require.NoError(t, err)
 
 	for i, taskID := range taskIDs {
@@ -260,7 +260,7 @@ func phase3FireJoin(
 ) {
 	t.Helper()
 	coordinator.ID = coordinatorEntityID
-	rule, err := NewExpressionRule(rule03)
+	rule, err := NewExpressionRule("direct-expression-test", rule03)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(coordinator),
 		"rule 03 EvaluateEntityState must match when len(gather.completed_child) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
@@ -360,7 +360,7 @@ func TestExampleFanOutPack_EndToEnd_PartialCompletionDoesNotFireJoin(t *testing.
 	coordinator := &gtypes.EntityState{Triples: triples}
 
 	coordinator.ID = "acme.research.agent.agentic-loop.execution.coord-x"
-	rule, err := NewExpressionRule(rule03)
+	rule, err := NewExpressionRule("direct-expression-test", rule03)
 	require.NoError(t, err)
 	assert.False(t, rule.EvaluateEntityState(coordinator),
 		"rule 03 EvaluateEntityState must NOT match at N-1 completions — premature synthesis would lose the slowest child's findings. Drives the production wire so a future refactor that removes the substitution helper from EvaluateEntityState fails this test rather than silently shipping broken.")

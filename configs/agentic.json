@@ -121,6 +121,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "agentic-rules",
         "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
         "ports": {
           "inputs": [

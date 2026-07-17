@@ -117,6 +117,7 @@ func (rp *Processor) loadRules() error {
 	ruleDeps := Dependencies{
 		NATSClient: rp.natsClient,
 		Logger:     rp.logger,
+		PackID:     rp.config.PackID,
 	}
 
 	for _, def := range allDefinitions {

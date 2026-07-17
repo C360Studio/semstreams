@@ -29,6 +29,7 @@ import (
 	"github.com/c360studio/semstreams/flowtemplate"
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
+	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -93,6 +94,9 @@ func run() error {
 
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := rulepackcap.ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("invalid rule-pack composition: %w", err)
 	}
 	if err := graphresearch.ValidateConfig(cfg); err != nil {
 		return fmt.Errorf("invalid capability composition: %w", err)
@@ -227,9 +231,10 @@ func run() error {
 	// the rule processors) and BEFORE StartAll runs inside runWithSignalHandling.
 	// SAME shared helper as cmd/semstreams. Pack contracts are read ONCE,
 	// statically; this is the ONLY rule-pack bind site and must NEVER be invoked
-	// from the hot-reload path. Best-effort / observe-only.
-	if ownerReg != nil {
-		service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger)
+	// from the hot-reload path. Composition identity errors are boot gates;
+	// ownership-substrate bind errors remain observe-only inside the helper.
+	if err := service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger); err != nil {
+		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}
 
 	return runWithSignalHandling(ctx, manager, cliCfg.ShutdownTimeout, func(seedCtx context.Context) error {

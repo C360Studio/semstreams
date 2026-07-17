@@ -19,6 +19,7 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/pkg/retry"
+	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/types"
@@ -44,6 +45,7 @@ type ComponentManager struct {
 	payloadRegistry  *payloadregistry.Registry              // Shared payload registry plumbed via deps.PayloadRegistry to managed components
 	lifecycleManager *lifecycle.Manager                     // Shared Lifecycle harness Manager plumbed via deps.LifecycleManager (ADR-047). Nil when no app workflows are registered.
 	componentConfigs config.ComponentConfigs                // Component configurations
+	rulePackConfigs  config.ComponentConfigs                // Last accepted rule-pack configs, including disabled tombstones
 	platform         types.PlatformMeta                     // Platform identity for components
 	components       map[string]*component.ManagedComponent // Track managed components
 	startOrder       []string                               // Track start order for reverse stop
@@ -179,6 +181,7 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		payloadRegistry:      payloadRegistry,
 		lifecycleManager:     lifecycleManager,
 		componentConfigs:     componentsConfig,
+		rulePackConfigs:      cloneRulePackConfigs(componentsConfig),
 		platform:             platform,
 		components:           make(map[string]*component.ManagedComponent),
 		startOrder:           make([]string, 0),
@@ -1014,11 +1017,11 @@ func (cm *ComponentManager) watchConfigUpdates(ctx context.Context) {
 					cm.logger.Debug("Processing component config update",
 						"component", componentName,
 						"enabled", compConfig.Enabled)
-					cm.handleComponentConfigUpdate(ctx, componentName, compConfig)
+					cm.handleComponentConfigUpdate(ctx, componentName, compConfig, fullConfig)
 				} else {
 					// Component was removed
 					cm.logger.Debug("Component removed from config", "component", componentName)
-					cm.handleComponentRemoval(ctx, componentName)
+					cm.handleComponentRemoval(ctx, componentName, fullConfig)
 				}
 			}
 
@@ -1111,7 +1114,20 @@ func slicesContains(haystack []string, needle string) bool {
 }
 
 // handleComponentConfigUpdate handles configuration updates for a specific component
-func (cm *ComponentManager) handleComponentConfigUpdate(ctx context.Context, name string, cfg types.ComponentConfig) {
+func (cm *ComponentManager) handleComponentConfigUpdate(
+	ctx context.Context,
+	name string,
+	cfg types.ComponentConfig,
+	fullConfig *config.Config,
+) {
+	if err := cm.validateRulePackConfigUpdate(name, cfg, fullConfig); err != nil {
+		cm.logger.Error("Rejected component config update before lifecycle mutation",
+			"component", name,
+			"error", err,
+			"action", "process_restart_required")
+		return
+	}
+
 	// Check if component exists, and snapshot its retained effective config under
 	// the lock. The snapshot is required for the idempotency guard below: the
 	// live PUT-reconfig handler mutates ManagedComponent.Config from the HTTP
@@ -1152,6 +1168,8 @@ func (cm *ComponentManager) handleComponentConfigUpdate(ctx context.Context, nam
 					"error", err,
 					"action", "component_continues_with_old_config")
 				// Component continues running with old config - system remains operational
+			} else {
+				cm.recordAcceptedComponentConfig(name, cfg)
 			}
 		} else {
 			// New component to create
@@ -1167,6 +1185,8 @@ func (cm *ComponentManager) handleComponentConfigUpdate(ctx context.Context, nam
 					"error", err,
 					"action", "will_retry_on_next_config_update")
 				// Other components continue - this one can be retried later
+			} else {
+				cm.recordAcceptedComponentConfig(name, cfg)
 			}
 		}
 	} else if exists {
@@ -1181,12 +1201,23 @@ func (cm *ComponentManager) handleComponentConfigUpdate(ctx context.Context, nam
 				"component", name,
 				"error", err,
 				"action", "component_may_continue_running")
+		} else {
+			cm.recordAcceptedComponentConfig(name, cfg)
 		}
+	} else {
+		cm.recordAcceptedComponentConfig(name, cfg)
 	}
 }
 
 // handleComponentRemoval handles when a component is removed from configuration
-func (cm *ComponentManager) handleComponentRemoval(ctx context.Context, name string) {
+func (cm *ComponentManager) handleComponentRemoval(ctx context.Context, name string, fullConfig *config.Config) {
+	if err := cm.validateRulePackReconciliation(fullConfig); err != nil {
+		cm.logger.Error("Rejected component removal before lifecycle mutation",
+			"component", name,
+			"error", err)
+		return
+	}
+
 	// Check if component exists - need lock for this
 	cm.mu.Lock()
 	existingComp, exists := cm.components[name]
@@ -1204,8 +1235,121 @@ func (cm *ComponentManager) handleComponentRemoval(ctx context.Context, name str
 				"component", name,
 				"error", err,
 				"action", "component_may_continue_running")
+		} else {
+			cm.recordRemovedComponentConfig(name)
+		}
+	} else {
+		cm.recordRemovedComponentConfig(name)
+	}
+}
+
+// validateRulePackConfigUpdate applies both the full-composition uniqueness
+// contract and the process-lifetime static identity contract before any
+// component is stopped, started, registered, or rebound.
+func (cm *ComponentManager) validateRulePackConfigUpdate(
+	name string,
+	proposed types.ComponentConfig,
+	fullConfig *config.Config,
+) error {
+	if err := cm.validateRulePackReconciliation(fullConfig); err != nil {
+		return err
+	}
+
+	cm.mu.RLock()
+	var previous *types.ComponentConfig
+	if managed, ok := cm.components[name]; ok {
+		snapshot := cloneComponentConfig(managed.Config)
+		previous = &snapshot
+	} else if retained, ok := cm.retainedRulePackConfigLocked(name); ok {
+		snapshot := cloneComponentConfig(retained)
+		previous = &snapshot
+	}
+	cm.mu.RUnlock()
+
+	return rulepackcontract.ValidateRuntimeUpdate(name, previous, proposed)
+}
+
+func (cm *ComponentManager) validateRulePackReconciliation(fullConfig *config.Config) error {
+	if err := rulepackcontract.ValidateConfig(fullConfig); err != nil {
+		return err
+	}
+	if fullConfig == nil {
+		return nil
+	}
+
+	for name, proposed := range fullConfig.Components {
+		cm.mu.RLock()
+		var previous *types.ComponentConfig
+		if managed, ok := cm.components[name]; ok {
+			snapshot := cloneComponentConfig(managed.Config)
+			previous = &snapshot
+		} else if retained, ok := cm.retainedRulePackConfigLocked(name); ok {
+			snapshot := cloneComponentConfig(retained)
+			previous = &snapshot
+		}
+		cm.mu.RUnlock()
+		if err := rulepackcontract.ValidateRuntimeUpdate(name, previous, proposed); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (cm *ComponentManager) recordAcceptedComponentConfig(name string, cfg types.ComponentConfig) {
+	if cfg.Name != "rule-processor" {
+		return
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.rulePackConfigs == nil {
+		cm.rulePackConfigs = make(config.ComponentConfigs)
+	}
+	cm.rulePackConfigs[name] = cloneComponentConfig(cfg)
+}
+
+// recordRemovedComponentConfig retains a disabled rule-pack tombstone. That
+// prevents remove-then-add from disguising an in-process re-enable as a new
+// component and bypassing the pre-Start ownership binding.
+func (cm *ComponentManager) recordRemovedComponentConfig(name string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	previous, ok := cm.retainedRulePackConfigLocked(name)
+	if ok && previous.Name == "rule-processor" {
+		previous.Enabled = false
+		if cm.rulePackConfigs == nil {
+			cm.rulePackConfigs = make(config.ComponentConfigs)
+		}
+		cm.rulePackConfigs[name] = cloneComponentConfig(previous)
+		return
+	}
+	delete(cm.rulePackConfigs, name)
+}
+
+func (cm *ComponentManager) retainedRulePackConfigLocked(name string) (types.ComponentConfig, bool) {
+	if retained, ok := cm.rulePackConfigs[name]; ok {
+		return retained, true
+	}
+	retained, ok := cm.componentConfigs[name]
+	if !ok || retained.Name != "rule-processor" {
+		return types.ComponentConfig{}, false
+	}
+	return retained, true
+}
+
+func cloneRulePackConfigs(configs config.ComponentConfigs) config.ComponentConfigs {
+	clones := make(config.ComponentConfigs)
+	for name, cfg := range configs {
+		if cfg.Name == "rule-processor" {
+			clones[name] = cloneComponentConfig(cfg)
+		}
+	}
+	return clones
+}
+
+func cloneComponentConfig(cfg types.ComponentConfig) types.ComponentConfig {
+	clone := cfg
+	clone.Config = append(json.RawMessage(nil), cfg.Config...)
+	return clone
 }
 
 // reconcileComponents compares running components against the desired state in
@@ -1225,7 +1369,14 @@ func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig 
 		return
 	}
 
-	desiredComponents := safeConfig.Get().Components
+	fullConfig := safeConfig.Get()
+	if err := cm.validateRulePackReconciliation(fullConfig); err != nil {
+		cm.logger.Error("Rejected component reconciliation before lifecycle mutation",
+			"error", err,
+			"action", "process_restart_required")
+		return
+	}
+	desiredComponents := fullConfig.Components
 
 	// Snapshot current running components under lock
 	cm.mu.RLock()
@@ -1255,6 +1406,7 @@ func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig 
 				"error", err)
 			continue
 		}
+		cm.recordAcceptedComponentConfig(name, cfg)
 		created++
 	}
 
@@ -1285,6 +1437,12 @@ func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig 
 			cm.logger.Error("Reconcile: failed to stop component",
 				"component", name,
 				"error", err)
+			continue
+		}
+		if inConfig {
+			cm.recordAcceptedComponentConfig(name, cfg)
+		} else {
+			cm.recordRemovedComponentConfig(name)
 		}
 		stopped++
 	}
@@ -1303,6 +1461,12 @@ func (cm *ComponentManager) restartComponentWithNewConfig(
 	// Check for nil component
 	if existingComp == nil {
 		return fmt.Errorf("cannot restart component %s: component not found", name)
+	}
+	if existingComp.Config.Name == "rule-processor" {
+		return fmt.Errorf(
+			"cannot restart rule processor %s in process: pack ownership is bound before ComponentManager.Start",
+			name,
+		)
 	}
 
 	// Deregister the OLD instance's stores before Stop closes them, so the

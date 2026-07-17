@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -137,6 +138,14 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 			},
 			wantError: false,
 		},
+		{
+			name: "graph integration requires pack identity",
+			changes: map[string]any{
+				"enable_graph_integration": true,
+			},
+			wantError: true,
+			errorMsg:  "universally required pack_id",
+		},
 	}
 
 	for _, tt := range tests {
@@ -155,11 +164,32 @@ func TestRuntimeConfigurable_ValidateConfigUpdate(t *testing.T) {
 	}
 }
 
+func TestValidateConfigUpdateAllowsGraphIntegrationWithStablePackIdentity(t *testing.T) {
+	processor := &Processor{config: &Config{PackID: "runtime-opt-in-pack"}}
+	if err := processor.ValidateConfigUpdate(map[string]any{"enable_graph_integration": true}); err != nil {
+		t.Fatalf("ValidateConfigUpdate: %v", err)
+	}
+}
+
+func TestRuntimeConfigRejectsStaticPackIDUpdate(t *testing.T) {
+	processor := &Processor{config: &Config{PackID: "original-pack"}}
+	changes := map[string]any{"pack_id": "replacement-pack"}
+	if err := processor.ValidateConfigUpdate(changes); err == nil || !strings.Contains(err.Error(), "static") {
+		t.Fatalf("ValidateConfigUpdate pack_id error = %v, want static rejection", err)
+	}
+	if err := processor.ApplyConfigUpdate(changes); err == nil || !strings.Contains(err.Error(), "static") {
+		t.Fatalf("ApplyConfigUpdate pack_id error = %v, want static rejection", err)
+	}
+	if processor.config.PackID != "original-pack" {
+		t.Fatalf("runtime update changed pack_id to %q", processor.config.PackID)
+	}
+}
+
 // TestRuntimeConfigurable_ApplyConfigUpdate tests dynamic rule application
 func TestRuntimeConfigurable_ApplyConfigUpdate(t *testing.T) {
 	// Create processor with test dependencies
-	// Use DefaultConfig() to ensure valid duration strings and avoid parse warnings
-	cfg := DefaultConfig()
+	// Use mustTestConfig(t, "rule-test-pack") to ensure valid duration strings and avoid parse warnings
+	cfg := mustTestConfig(t, "rule-test-pack")
 	processor := &Processor{
 		natsClient:  &natsclient.Client{},
 		logger:      slog.Default(),
@@ -223,6 +253,7 @@ func TestRuntimeConfigurable_GetRuntimeConfig(t *testing.T) {
 		config: &Config{
 			BufferWindowSize:       "10m",
 			AlertCooldownPeriod:    "2m",
+			PackID:                 "runtime-config-test",
 			EnableGraphIntegration: true,
 			EntityWatchBuckets:     map[string][]string{"ENTITY_STATES": {"*.robotics.*.*.*.*"}},
 		},
@@ -234,6 +265,7 @@ func TestRuntimeConfigurable_GetRuntimeConfig(t *testing.T) {
 	// Verify all expected fields are present
 	assert.NotNil(t, config["buffer_window_size"])
 	assert.NotNil(t, config["alert_cooldown_period"])
+	assert.Equal(t, "runtime-config-test", config["pack_id"])
 	assert.NotNil(t, config["enable_graph_integration"])
 	assert.NotNil(t, config["entity_watch_buckets"])
 	assert.NotNil(t, config["rules"])
@@ -292,6 +324,7 @@ func TestCreateRuleFromDefinition(t *testing.T) {
 	deps := Dependencies{
 		NATSClient: &natsclient.Client{},
 		Logger:     slog.Default(),
+		PackID:     "runtime-config-factory-test",
 	}
 
 	// Test successful creation
@@ -325,8 +358,8 @@ func TestConfigSchema(t *testing.T) {
 func TestDynamicRuleCRUD(t *testing.T) {
 	ctx := context.Background()
 
-	// Create processor with DefaultConfig() to ensure valid duration strings
-	cfg := DefaultConfig()
+	// Create processor with mustTestConfig(t, "rule-test-pack") to ensure valid duration strings
+	cfg := mustTestConfig(t, "rule-test-pack")
 	processor := &Processor{
 		natsClient:  &natsclient.Client{},
 		logger:      slog.Default(),
@@ -435,7 +468,7 @@ func marshalRuleDefinition(def Definition) json.RawMessage {
 
 // TestUpdateWatchBuckets_NotRunning tests bucket-pattern updates before activation.
 func TestUpdateWatchBuckets_NotRunning(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	cfg.EntityWatchBuckets = map[string][]string{"ENTITY_STATES": {"*.initial.*.*.*.*"}}
 
 	processor := &Processor{
@@ -458,7 +491,7 @@ func TestUpdateWatchBuckets_NotRunning(t *testing.T) {
 
 // TestUpdateWatchBuckets_AddRemove tests adding and removing bucket patterns.
 func TestUpdateWatchBuckets_AddRemove(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 
 	processor := &Processor{
 		logger:           slog.Default(),

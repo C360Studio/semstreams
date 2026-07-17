@@ -136,6 +136,8 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "lifecycle-flow-rules",
+        "enable_graph_integration": true,
         "ports": {
           "inputs": [],
           "outputs": []

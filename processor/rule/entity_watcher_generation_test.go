@@ -47,7 +47,7 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 	newKey := watcherKey(gtypes.BucketEntityStates, newPattern)
 	_, cancelOldOne := context.WithCancel(context.Background())
 	_, cancelOldTwo := context.WithCancel(context.Background())
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "watcher-stop-failure-test")
 	cfg.EntityWatchBuckets = map[string][]string{
 		gtypes.BucketEntityStates: {oldPatternOne, oldPatternTwo},
 	}
@@ -111,7 +111,7 @@ func TestUpdateWatchBucketsRollsBackPreparedAdditions(t *testing.T) {
 	oldWatcher := newTransactionalTestWatcher()
 	preparedWatcher := newTransactionalTestWatcher()
 	originalConfig := map[string][]string{gtypes.BucketEntityStates: {oldPattern}}
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "watcher-rollback-test")
 	cfg.EntityWatchBuckets = cloneEntityWatchBuckets(originalConfig)
 	processor := &Processor{
 		logger:           slog.Default(),
@@ -275,7 +275,7 @@ func TestStaleDeleteDoesNotPurgeNewerPendingWatcherWork(t *testing.T) {
 func TestUpdateWatchBucketsRejectsDuplicatePatternsBeforePrepare(t *testing.T) {
 	t.Parallel()
 
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "watcher-duplicate-test")
 	original := map[string][]string{gtypes.BucketEntityStates: {"acme.old.*.*.*.*"}}
 	cfg.EntityWatchBuckets = cloneEntityWatchBuckets(original)
 	processor := &Processor{

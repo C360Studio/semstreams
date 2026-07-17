@@ -35,7 +35,8 @@ func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
+	config.PackID = "state-cleanup-integration-test"
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"gh358.test.*.*.*.*"}}
 	proc, err := NewProcessor(nc, &config)
 	require.NoError(t, err)

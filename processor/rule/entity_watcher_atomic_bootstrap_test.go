@@ -99,7 +99,11 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	executor := &atomicRecoveryExecutor{}
 	processor.stateTracker = tracker
 	processor.statefulEvaluator = NewStatefulEvaluator(tracker, executor, nil)
-	processor.rules["recovery-rule"] = NewTestRule("recovery-rule", "Recovery Rule", nil, nil)
+	recoveryRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	if err != nil {
+		t.Fatalf("NewTestRule: %v", err)
+	}
+	processor.rules["recovery-rule"] = recoveryRule
 	processor.ruleDefinitions["recovery-rule"] = Definition{
 		ID: "recovery-rule", Name: "Recovery Rule", Type: "test_rule",
 		Entity:     EntityConfig{Pattern: "*.*.*.*.*.*"},
@@ -268,7 +272,8 @@ func TestRuleSharedGuardTransportCloseDegradesWithoutResetPoison(t *testing.T) {
 
 func newAtomicBootstrapProcessor(t *testing.T) *Processor {
 	t.Helper()
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
+	cfg.PackID = "atomic-bootstrap-test"
 	processor, err := NewProcessor(nil, &cfg)
 	if err != nil {
 		t.Fatalf("NewProcessor: %v", err)

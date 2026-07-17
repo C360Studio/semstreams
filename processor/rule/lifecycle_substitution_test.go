@@ -278,7 +278,7 @@ func TestEvaluator_ResolvesLifecyclePhaseConditionField(t *testing.T) {
 
 // TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase drives
 // the SAME production entrypoint StatefulEvaluator uses for initial
-// matching — NewExpressionRule(def) + SetLifecycleManager(mgr) +
+// matching — NewExpressionRule("direct-expression-test", def) + SetLifecycleManager(mgr) +
 // EvaluateEntityState. A regression that drops the
 // PopulateLifecycleStateFields call inside EvaluateEntityState would
 // fail this test ([[feedback_integration_tests_must_drive_production_wire]]).
@@ -298,7 +298,7 @@ func TestExpressionRule_EvaluateEntityState_ResolvesLifecyclePhase(t *testing.T)
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule(def)
+	rule, err := NewExpressionRule("direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestExpressionRule_EvaluateEntityState_LifecyclePhaseMismatch(t *testing.T)
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule(def)
+	rule, err := NewExpressionRule("direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestExpressionRule_NoManagerLeavesLifecyclePhaseUnresolved(t *testing.T) {
 			{Field: "$entity.lifecycle.phase", Operator: expression.OpEqual, Value: "flying"},
 		},
 	}
-	rule, err := NewExpressionRule(def)
+	rule, err := NewExpressionRule("direct-expression-test", def)
 	if err != nil {
 		t.Fatalf("NewExpressionRule: %v", err)
 	}

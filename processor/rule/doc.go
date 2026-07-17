@@ -45,21 +45,23 @@
 // 2. Implement the Rule interface:
 //
 //	type MyRule struct {
-//	    id         string
-//	    conditions []expression.ConditionExpression
+//	    id              string
+//	    triggerEntityID string // canonical six-part ID supplied by configuration
+//	    conditions      []expression.ConditionExpression
 //	}
 //
 //	func (r *MyRule) ExecuteEvents(messages []message.Message) ([]rtypes.Event, error) {
-//	    // Generate events directly in Go code
-//	    // gtypes.Event implements rtypes.Event interface
-//	    event := &gtypes.Event{
-//	        Type:     gtypes.EventEntityUpdate,
-//	        EntityID: "alert.my-rule." + r.id,
-//	        Properties: map[string]interface{}{
-//	            "triggered": true,
-//	            "timestamp": time.Now(),
+//	    event, err := gtypes.NewEntityUpdateEvent(
+//	        r.triggerEntityID,
+//	        map[string]interface{}{"triggered": true, "timestamp": time.Now()},
+//	        gtypes.EventMetadata{
+//	            RuleName: r.id,
+//	            Timestamp: time.Now(),
+//	            Source: "my-rule",
+//	            Reason: "rule triggered",
 //	        },
-//	    }
+//	    )
+//	    if err != nil { return nil, err }
 //	    return []rtypes.Event{event}, nil
 //	}
 //
@@ -110,7 +112,7 @@
 //
 // # Example Usage
 //
-//	config := rule.DefaultConfig()
+//	config, err := rule.NewConfig("example-pack")
 //	config.Ports = &component.PortConfig{
 //	    Inputs: []component.PortDefinition{
 //	        {

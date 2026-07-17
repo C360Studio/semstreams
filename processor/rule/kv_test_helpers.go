@@ -226,7 +226,8 @@ func AssertEventuallyTrue(t *testing.T, condition func() bool, timeout time.Dura
 
 // CreateRuleTestConfig creates a test configuration for rule processor
 func CreateRuleTestConfig(watchPatterns []string) Config {
-	config := DefaultConfig()
+	config := defaultConfig()
+	config.PackID = "rule-test-config"
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: watchPatterns}
 
 	// Set reasonable test values

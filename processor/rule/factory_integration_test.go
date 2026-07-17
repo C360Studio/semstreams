@@ -114,7 +114,7 @@ func TestIntegration_FactoryCreate(t *testing.T) {
 	}
 
 	// Create rule via factory
-	deps := rule.Dependencies{} // Empty dependencies for test
+	deps := rule.Dependencies{PackID: "factory-integration-test"}
 	ruleInstance, err := testFactory.Create("factory-test-001", ruleDef, deps)
 	require.NoError(t, err)
 	require.NotNil(t, ruleInstance)
@@ -186,7 +186,7 @@ func TestIntegration_FactoryErrorHandling(t *testing.T) {
 
 	// Note: test_rule factory accepts any type (permissive for testing)
 	// This test documents the behavior; stricter factories would error here
-	_, err := testFactory.Create("invalid-001", invalidDef, rule.Dependencies{})
+	_, err := testFactory.Create("invalid-001", invalidDef, rule.Dependencies{PackID: "factory-error-test"})
 
 	// test_rule factory is permissive, so this should not error
 	// Future factories (battery_monitor, etc.) should validate type strictly

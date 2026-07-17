@@ -56,7 +56,7 @@ func replaceOwnedTestContracts() []projection.Contract {
 // the load-path and hot-reload-path envelope validators.
 func newReplaceOwnedTestProcessor(t *testing.T) *Processor {
 	t.Helper()
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	cfg.PackID = testReplaceOwnedPackID
 	cfg.ProjectionContracts = replaceOwnedTestContracts()
 	rp, err := NewProcessor(nil, &cfg)

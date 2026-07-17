@@ -56,7 +56,7 @@ func TestProcessor_DebounceZero_NoCoalescingSet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create minimal config
-			config := DefaultConfig()
+			config := mustTestConfig(t, "rule-test-pack")
 			config.DebounceDelayMs = tt.debounceDelayMs
 
 			// Create processor
@@ -95,7 +95,7 @@ func TestProcessor_DebounceZero_ImmediateProcessing(t *testing.T) {
 	// We test that when debounce=0, the callback is invoked directly
 	// instead of going through entityCoalescer.Add()
 
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
 	config.DebounceDelayMs = 0
 
 	testClient, err := natsclient.NewSharedTestClient(
@@ -134,7 +134,7 @@ func TestProcessor_DebounceZero_ImmediateProcessing(t *testing.T) {
 // When: Processor runs
 // Then: No CoalescingSet ticker goroutine is spawned (no CPU waste)
 func TestProcessor_DebounceZero_NoTickerSpinning(t *testing.T) {
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
 	config.DebounceDelayMs = 0
 
 	testClient, err := natsclient.NewSharedTestClient(
@@ -177,7 +177,7 @@ func TestProcessor_DebounceZero_NoTickerSpinning(t *testing.T) {
 // When: Processor is initialized
 // Then: entityCoalescer is created and functional
 func TestProcessor_DebounceNonZero_CoalescingSetCreated(t *testing.T) {
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
 	config.DebounceDelayMs = 100 * time.Millisecond
 
 	testClient, err := natsclient.NewSharedTestClient(
@@ -403,7 +403,7 @@ func TestProcessor_DebounceZero_Transition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultConfig()
+			config := mustTestConfig(t, "rule-test-pack")
 			config.DebounceDelayMs = tt.debounceDelayMs
 
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
@@ -436,7 +436,7 @@ func TestProcessor_DebounceZero_Transition(t *testing.T) {
 // When: Processor is created
 // Then: Configuration is accepted as valid (0 means disabled)
 func TestProcessor_DebounceZero_ConfigValidation(t *testing.T) {
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
 	config.DebounceDelayMs = 0
 
 	testClient, err := natsclient.NewSharedTestClient(
@@ -511,7 +511,7 @@ func TestProcessor_DebounceZero_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DefaultConfig()
+			config := mustTestConfig(t, "rule-test-pack")
 			config.DebounceDelayMs = tt.debounceDelayMs
 
 			processor, err := NewProcessorWithMetrics(testClient.Client, &config, nil)
@@ -541,7 +541,7 @@ func TestProcessor_DebounceZero_EdgeCases(t *testing.T) {
 // When: Processor starts and stops multiple times
 // Then: No goroutine leak, no ticker leak
 func TestProcessor_DebounceZero_NoResourceLeak(t *testing.T) {
-	config := DefaultConfig()
+	config := mustTestConfig(t, "rule-test-pack")
 	config.DebounceDelayMs = 0
 
 	testClient, err := natsclient.NewSharedTestClient(

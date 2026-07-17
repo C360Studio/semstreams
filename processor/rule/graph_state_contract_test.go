@@ -11,7 +11,8 @@ import (
 
 func TestGraphStateContractFailureLatchesRuleEvaluationOff(t *testing.T) {
 	t.Parallel()
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
+	cfg.PackID = "graph-state-contract-test"
 	processor, err := NewProcessor(nil, &cfg)
 	if err != nil {
 		t.Fatalf("NewProcessor: %v", err)

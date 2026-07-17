@@ -12,6 +12,11 @@ import (
 
 // ApplyConfigUpdate applies validated configuration changes
 func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
+	if _, present := changes["pack_id"]; present {
+		return errs.WrapInvalid(
+			fmt.Errorf("pack_id is static and cannot be updated at runtime"),
+			"RuleProcessor", "ApplyConfigUpdate", "reject producer identity update")
+	}
 	var (
 		buckets    map[string][]string
 		hasBuckets bool
@@ -283,6 +288,7 @@ func (rp *Processor) GetRuntimeConfig() map[string]any {
 	return map[string]any{
 		"buffer_window_size":       rp.config.BufferWindowSize,
 		"alert_cooldown_period":    rp.config.AlertCooldownPeriod,
+		"pack_id":                  rp.config.PackID,
 		"enable_graph_integration": rp.config.EnableGraphIntegration,
 		"entity_watch_buckets":     rp.config.EntityWatchBuckets,
 		"rules":                    rulesConfig,

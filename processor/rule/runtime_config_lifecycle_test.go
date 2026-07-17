@@ -38,7 +38,7 @@ func TestApplyConfigUpdate_LifecycleManagerReachesReconciledRules(t *testing.T) 
 	mgr.seed(workflow, &fakeParticipant{EntityIDF: postedEntry, PhaseF: "posted"})
 	mgr.seed(workflow, &fakeParticipant{EntityIDF: claimedEnt, PhaseF: "claimed"})
 
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
 	rp := &Processor{
 		natsClient:  &natsclient.Client{},
 		logger:      slog.Default(),

@@ -335,7 +335,7 @@ func TestNumericCompare_AfterStringifiedObject_UsesNumericSemantics(t *testing.T
 					{Field: semantictest.Predicate(t, "test", "metric", "value"), Operator: tt.operator, Value: tt.compareTo, Required: true},
 				},
 			}
-			rule, err := NewExpressionRule(def)
+			rule, err := NewExpressionRule("typed-substitution-test", def)
 			require.NoError(t, err)
 
 			entityID := semantictest.EntityID(t, "test", "rule", "typed", "numeric", "entity", "001")

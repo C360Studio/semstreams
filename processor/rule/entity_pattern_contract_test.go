@@ -15,7 +15,7 @@ import (
 func TestConfigValidateEntityWatchContract(t *testing.T) {
 	t.Parallel()
 
-	valid := DefaultConfig()
+	valid := mustTestConfig(t, "entity-pattern-valid-test")
 	valid.EntityWatchBuckets = map[string][]string{
 		gtypes.BucketEntityStates: {"acme.*.robotics.*.drone.*"},
 	}
@@ -32,7 +32,7 @@ func TestConfigValidateEntityWatchContract(t *testing.T) {
 		name, buckets := name, buckets
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cfg := DefaultConfig()
+			cfg := mustTestConfig(t, "entity-pattern-invalid-test")
 			cfg.EntityWatchBuckets = buckets
 			require.Error(t, cfg.Validate())
 		})
@@ -53,7 +53,7 @@ func TestValidateDefinitionRejectsMalformedEntityPattern(t *testing.T) {
 func TestEntityPatternDoesNotBecomeMessageSubscription(t *testing.T) {
 	t.Parallel()
 
-	rule, err := NewExpressionRule(Definition{
+	rule, err := NewExpressionRule("entity-pattern-rule-test", Definition{
 		ID: "entity-only", Type: "expression", Enabled: true,
 		Entity: EntityConfig{Pattern: "acme.*.robotics.*.drone.*"},
 	})
@@ -84,7 +84,7 @@ func TestUpdateWatchBucketsRejectsBeforeMutation(t *testing.T) {
 	t.Parallel()
 
 	original := map[string][]string{gtypes.BucketEntityStates: {"acme.*.*.*.*.*"}}
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "entity-pattern-update-test")
 	cfg.EntityWatchBuckets = original
 	processor := &Processor{
 		logger:           slog.Default(),

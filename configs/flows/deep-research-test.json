@@ -179,6 +179,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
+        "pack_id": "deep-research-test-rules",
         "rules_files": [
           "/app/configs/rules/deep-research/01-spawn-researcher.json",
           "/app/configs/rules/deep-research/02-collect-evidence.json",

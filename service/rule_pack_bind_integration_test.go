@@ -40,9 +40,9 @@ func init() {
 // (the production wire under test).
 func ruleComponentConfig(t *testing.T, packID string, contracts []projection.Contract) types.ComponentConfig {
 	t.Helper()
-	rc := rule.DefaultConfig()
+	rc, err := rule.NewConfig(packID)
+	require.NoError(t, err)
 	rc.EnableGraphIntegration = false // keep the (unstarted) processor lean
-	rc.PackID = packID
 	rc.ProjectionContracts = contracts
 	raw, err := json.Marshal(rc)
 	require.NoError(t, err)
@@ -141,19 +141,19 @@ func TestBindRulePackContracts_ClaimInEpochBeforeStart(t *testing.T) {
 	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
 
 	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
-		"rule-processor": ruleComponentConfig(t, "drone-ops.v1",
+		"rule-processor": ruleComponentConfig(t, "drone-ops-v1",
 			[]projection.Contract{droneStatusContract()}),
 	})
 
 	// Production entry. No Start() / StartAll() anywhere in this test.
-	service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
+	require.NoError(t, service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()))
 
 	owner, ok, err := ownerReg.OwnerOf(ctx,
 		"acme.ops.robotics.gcs.drone.001", droneStatusStatePredicate)
 	require.NoError(t, err)
 	require.True(t, ok, "claim must be in the epoch after bind")
-	require.Equal(t, "rule-pack.drone-ops.v1", owner)
-	require.True(t, hb.IsEnrolled("rule-pack.drone-ops.v1"),
+	require.Equal(t, "rule-pack.drone-ops-v1", owner)
+	require.True(t, hb.IsEnrolled("rule-pack.drone-ops-v1"),
 		"a bound static owner must be heartbeat-enrolled")
 }
 
@@ -174,7 +174,7 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 		"rule-processor": ruleComponentConfig(t, "pack-a",
 			[]projection.Contract{droneStatusContract()}),
 	})
-	service.BindRulePackContracts(ctx, managerA, ownerReg, hb, slog.Default())
+	require.NoError(t, service.BindRulePackContracts(ctx, managerA, ownerReg, hb, slog.Default()))
 
 	// pack-b declares the SAME owned cell — overlap.
 	overlapping := droneStatusContract()
@@ -185,7 +185,7 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 	})
 
 	// Must NOT panic / abort — helper swallows the overlap as observe-only.
-	service.BindRulePackContracts(ctx, managerB, ownerReg, hb, slog.Default())
+	require.NoError(t, service.BindRulePackContracts(ctx, managerB, ownerReg, hb, slog.Default()))
 
 	// The cell still belongs to pack-a; pack-b was rejected.
 	owner, ok, err := ownerReg.OwnerOf(ctx,
@@ -205,10 +205,9 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 		"a fresh owner binding the same cell must hit ErrOwnershipOverlap")
 }
 
-// TestBindRulePackContracts_MultiPackAndDuplicate proves: (1) two rule
-// components with DISTINCT pack_ids bind two distinct owners; (2) a duplicate
-// pack_id across components is logged + skipped, not double-bound; (3) a rule
-// component with NO pack_id binds nothing.
+// TestBindRulePackContracts_MultiPackAndDuplicate proves two rule components
+// with DISTINCT pack_ids bind two distinct owners, while a duplicate pack_id
+// in one composition hard-fails before either duplicate is activated.
 func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -226,38 +225,51 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 		}},
 	}
 
-	// Two distinct pack_ids + one no-pack component, all in one manager.
+	// Two distinct pack_ids in one manager.
 	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
-		"rule-drones":   ruleComponentConfig(t, "drone-ops.v1", []projection.Contract{droneStatusContract()}),
-		"rule-missions": ruleComponentConfig(t, "mission-ops.v1", []projection.Contract{missionContract}),
-		"rule-nopack":   ruleComponentConfig(t, "", nil),
+		"rule-drones":   ruleComponentConfig(t, "drone-ops-v1", []projection.Contract{droneStatusContract()}),
+		"rule-missions": ruleComponentConfig(t, "mission-ops-v1", []projection.Contract{missionContract}),
 	})
 
-	service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
+	require.NoError(t, service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()))
 
-	require.True(t, hb.IsEnrolled("rule-pack.drone-ops.v1"))
-	require.True(t, hb.IsEnrolled("rule-pack.mission-ops.v1"))
+	require.True(t, hb.IsEnrolled("rule-pack.drone-ops-v1"))
+	require.True(t, hb.IsEnrolled("rule-pack.mission-ops-v1"))
 
 	dOwner, dOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.drone.001", droneStatusStatePredicate)
 	require.NoError(t, err)
 	require.True(t, dOK)
-	require.Equal(t, "rule-pack.drone-ops.v1", dOwner)
+	require.Equal(t, "rule-pack.drone-ops-v1", dOwner)
 
 	mOwner, mOK, err := ownerReg.OwnerOf(ctx, "acme.ops.robotics.gcs.mission.alpha", missionStatusPhasePredicate)
 	require.NoError(t, err)
 	require.True(t, mOK)
-	require.Equal(t, "rule-pack.mission-ops.v1", mOwner)
+	require.Equal(t, "rule-pack.mission-ops-v1", mOwner)
 
-	// Duplicate pack_id across two components in a second manager: second is
-	// skipped (logged), and re-running bind for an already-bound owner is a
-	// no-op observe-only (the owner already holds the cell). The helper must
-	// not panic and the cell ownership stays put.
+	// Duplicate pack_id across two enabled components is a boot error. The
+	// complete binder set is preflighted before any duplicate owner is minted or
+	// enrolled.
 	dupManager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
 		"rule-a": ruleComponentConfig(t, "dup-pack", []projection.Contract{missionContract2()}),
 		"rule-b": ruleComponentConfig(t, "dup-pack", []projection.Contract{missionContract2()}),
 	})
-	service.BindRulePackContracts(ctx, dupManager, ownerReg, hb, slog.Default())
-	require.True(t, hb.IsEnrolled("rule-pack.dup-pack"))
+	err = service.BindRulePackContracts(ctx, dupManager, ownerReg, hb, slog.Default())
+	require.ErrorContains(t, err, `duplicate enabled rule pack_id "dup-pack"`)
+	require.False(t, hb.IsEnrolled("rule-pack.dup-pack"))
+}
+
+func TestRulePackMissingPackIDRejectedAtFactory(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+
+	raw := json.RawMessage(`{"enable_graph_integration":false}`)
+	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"rule-missing-pack": {
+			Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: true, Config: raw,
+		},
+	})
+	require.Empty(t, manager.ProjectionBinders(), "missing pack_id must prevent processor construction")
 }
 
 // TestRulePackInvalidPackID_RejectedAtFactory proves an illegal pack_id is
@@ -268,14 +280,21 @@ func TestRulePackInvalidPackID_RejectedAtFactory(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer tc.Terminate()
+	invalidRuleConfig, err := rule.NewConfig("valid-test-pack")
+	require.NoError(t, err)
+	invalidRuleConfig.PackID = "bad:pack"
+	invalidRuleConfig.ProjectionContracts = []projection.Contract{droneStatusContract()}
+	invalidRaw, err := json.Marshal(invalidRuleConfig)
+	require.NoError(t, err)
 
 	cfgManager, err := config.NewConfigManager(&config.Config{
 		Platform: config.PlatformConfig{
 			Org: "test", ID: "test-platform", InstanceID: "test-001", Environment: "test",
 		},
 		Components: config.ComponentConfigs{
-			"rule-processor": ruleComponentConfig(t, "bad:pack",
-				[]projection.Contract{droneStatusContract()}),
+			"rule-processor": {
+				Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: true, Config: invalidRaw,
+			},
 		},
 	}, tc.Client, slog.Default())
 	require.NoError(t, err)

@@ -17,6 +17,7 @@ type Metrics struct {
 	bufferExpiredTotal    *prometheus.CounterVec
 	cooldownActive        *prometheus.GaugeVec
 	eventsPublishedTotal  *prometheus.CounterVec
+	graphEventRejections  *prometheus.CounterVec
 	errorsTotal           *prometheus.CounterVec
 	activeRules           prometheus.Gauge
 	stateTransitionsTotal *prometheus.CounterVec // OnEnter/OnExit transitions
@@ -102,6 +103,13 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Help:      "Rule events published to NATS",
 			}, []string{"subject", "event_type"}),
 
+			graphEventRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "graph_event_rejections_total",
+				Help:      "Graph-event batches rejected before publication",
+			}, []string{"lane", "reason"}),
+
 			errorsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "rule",
@@ -147,6 +155,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.bufferExpiredTotal,
 			ruleMetrics.cooldownActive,
 			ruleMetrics.eventsPublishedTotal,
+			ruleMetrics.graphEventRejections,
 			ruleMetrics.errorsTotal,
 			ruleMetrics.activeRules,
 			ruleMetrics.stateTransitionsTotal,

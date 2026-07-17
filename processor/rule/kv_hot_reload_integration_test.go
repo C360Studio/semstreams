@@ -35,7 +35,8 @@ func pollReconcileCount(rcm *ConfigManager, want int, deadline time.Duration) in
 func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Processor {
 	t.Helper()
 
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
+	cfg.PackID = "kv-hot-reload-test"
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
@@ -363,7 +364,8 @@ func TestHotReload_DebounceCoalescing(t *testing.T) {
 func TestHotReload_KVInitFailure(t *testing.T) {
 	// Build a processor with a nil natsClient so InitializeKVStore will fail
 	// with "NATS client is required" and the hot-reload manager is never wired.
-	cfg := DefaultConfig()
+	cfg := mustTestConfig(t, "rule-test-pack")
+	cfg.PackID = "kv-hot-reload-nil-nats-test"
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
