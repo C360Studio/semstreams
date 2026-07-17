@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/resource"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -1278,7 +1279,7 @@ func (p *kvProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
 // "targetID.sourceID.predicate" while OUTGOING_INDEX keeps its flat JSON-array
 // format. The two directions are handled by separate methods.
 func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, direction string) ([]string, error) {
-	if entityID == "" {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetNeighbors", "entityID is empty")
 	}
 
@@ -1288,7 +1289,7 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 	if direction == "outgoing" || direction == "both" {
 		outgoing, err := p.getNeighborsFromBucket(ctx, p.outgoingBucket, entityID)
 		if err != nil {
-			p.logger.Debug("failed to get outgoing neighbors", slog.String("entity", entityID), slog.Any("error", err))
+			return nil, errs.WrapTransient(err, "kvProvider", "GetNeighbors", "outgoing topology read")
 		}
 		for _, n := range outgoing {
 			neighbors[n] = true
@@ -1299,7 +1300,7 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 	if direction == "incoming" || direction == "both" {
 		incoming, err := p.getIncomingNeighbors(ctx, entityID)
 		if err != nil {
-			p.logger.Debug("failed to get incoming neighbors", slog.String("entity", entityID), slog.Any("error", err))
+			return nil, errs.WrapTransient(err, "kvProvider", "GetNeighbors", "incoming topology read")
 		}
 		for _, n := range incoming {
 			neighbors[n] = true
@@ -1341,12 +1342,20 @@ func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstrea
 
 	neighbors := make([]string, 0, len(relationships))
 	for _, rel := range relationships {
-		// Use whichever ID field is populated
-		if rel.ToEntityID != "" {
-			neighbors = append(neighbors, rel.ToEntityID)
-		} else if rel.FromEntityID != "" {
-			neighbors = append(neighbors, rel.FromEntityID)
+		if _, err := vocabulary.ParsePredicate(rel.Predicate); err != nil {
+			return nil, err
 		}
+		// OUTGOING_INDEX rows have exactly one endpoint direction. Accepting a
+		// from_entity_id fallback here lets an INCOMING-shaped or poisoned row
+		// silently become an LPA neighbor.
+		if rel.ToEntityID == "" {
+			return nil, errs.WrapInvalid(errs.ErrInvalidData, "kvProvider", "getNeighborsFromBucket",
+				"OUTGOING_INDEX relationship is missing to_entity_id")
+		}
+		if err := semtypes.ValidateEntityID(rel.ToEntityID); err != nil {
+			return nil, err
+		}
+		neighbors = append(neighbors, rel.ToEntityID)
 	}
 	return neighbors, nil
 }
@@ -1356,6 +1365,12 @@ func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstrea
 // "targetID.sourceID.predicate"; this method scans the prefix entityID.">" and
 // returns distinct source entity IDs.
 func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) ([]string, error) {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return nil, err
+	}
+	if err := natsclient.ValidateKVWildcardFilter(entityID + ".>"); err != nil {
+		return nil, err
+	}
 	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty bucket).
 	keys, err := natsclient.FilteredKeys(ctx, p.incomingBucket, entityID+".>")
 	if err != nil {
@@ -1378,6 +1393,16 @@ func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) 
 			continue
 		}
 		sourceID := strings.Join(parts[:6], ".")
+		if err := semtypes.ValidateEntityID(sourceID); err != nil {
+			continue
+		}
+		predicate, ok := graph.DecodePredicateToken(parts[6])
+		if !ok {
+			continue
+		}
+		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+			continue
+		}
 		if _, dup := seen[sourceID]; !dup {
 			seen[sourceID] = struct{}{}
 			neighbors = append(neighbors, sourceID)

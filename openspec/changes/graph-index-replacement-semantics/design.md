@@ -9,7 +9,11 @@ ENTITY_STATES, delete stale, put missing — to the three remaining stores.
 
 The enforced predicate and entity-ID contracts are what make the owner filters provable: no 5- or 7-part ID can
 exist to alias a wildcard position, and every key/filter maximum is bounded and already unit-proven
-(PREDICATE 321, NAME/CONTEXT 710, INCOMING 902, OUTGOING 256 bytes at `E = 256`).
+(raw PREDICATE 451, NAME/CONTEXT 710, INCOMING 902, OUTGOING 256 bytes at `E = 256`).
+
+The irreversible ownership and discovery choices are recorded in
+[ADR-077](../../../docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md). ADR acceptance does not waive the
+correctness, maximum-conformance, performance, resource, or activation gates below.
 
 ## Decisions
 
@@ -27,8 +31,8 @@ prose shorthand:
 
 | Store | Layout | Arity | Owner | Owner filter |
 |---|---|---:|---|---|
-| PREDICATE | `hash(predicate).entity6` | 7 | entity | `*.entity6` |
-| PREDICATE_CATALOG | `predicate3` | 3 | global name recovery | global projection |
+| PREDICATE | `predicate3.entity6` | 9 | entity | `*.*.*.entity6` |
+| PREDICATE_CATALOG | retired by ADR-078 | none | none | none |
 | NAME | `hash(name).entity6.hex(predicate)` | 8 | entity | `*.entity6.*` |
 | CONTEXT | `entity6.hash(context).hex(predicate)` | 8 | entity | `entity6.*.*` |
 | INCOMING | `target6.source6.hex(predicate)` | 13 | source assertion | `*.*.*.*.*.*.source6.*` |
@@ -72,19 +76,19 @@ INCOMING keeps `(sourceID, predicate)`; NAME keeps its ranking tuple with entity
 
 ### 6. Activation is the announced pre-v1 clean cutover
 
-The wipe/reseed is already mandated by the contract changes; activation rides the same release. Affected buckets
-(PREDICATE, PREDICATE_CATALOG, NAME, INCOMING) initialize behind typed not-ready responses and rebuild only from
-freshly reseeded canonical ENTITY_STATES. Readiness stays false until initial replay reaches the authoritative
-watermark. No old-key reader, no export, no rollback. Generation-based maintenance rebuild remains owned by
-`bounded-storage-operability`.
+The wipe/reseed is already mandated by the contract changes; activation rides the same release. The old PREDICATE
+and PREDICATE_CATALOG state is removed; fresh raw PREDICATE, NAME, and INCOMING buckets initialize behind typed
+not-ready responses and rebuild only from freshly reseeded canonical ENTITY_STATES. Readiness stays false until
+initial replay reaches the authoritative watermark. No old-key reader, dual format, migration, export, or rollback.
+Generation-based maintenance rebuild remains owned by `bounded-storage-operability`.
 
 ## Risks / Trade-offs
 
 - **Leading-wildcard owner filters may scan broadly under churn** → the churn run and absolute budgets gate
   activation; a failing store defers to an explicit dependent mechanism instead of shipping unproven.
 - **Target cleanup could erase valid evidence** → INCOMING ownership is modeled by source, not physical prefix.
-- **Catalog drift** → catalog+membership is one required repaired projection; partial success fails the entity and
-  withholds readiness.
+- **Representation cutover could expose mixed truth** → ADR-078 forbids dual format and requires a deployment-scoped
+  derived-state wipe followed by a readiness-gated rebuild.
 
 ## Open Questions
 

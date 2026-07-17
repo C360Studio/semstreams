@@ -24,7 +24,6 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 	maxPredicate := semantictest.Predicate(t, maxSegment, maxSegment, maxSegment)
 	maxPredicateToken := graph.EncodePredicateToken(maxPredicate)
 	entityBytes := len(entityID)
-	predicateBytes := len(maxPredicate)
 	require.Len(t, maxPredicate, vocabulary.MaxPredicateBytes)
 	require.Equal(t, 194, len(maxPredicate))
 	require.Len(t, maxPredicateToken, 388)
@@ -36,7 +35,7 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 
 	nameHash := nameIndexKey("Alpha")
 	contextHash := contextHashHex("source.alpha")
-	predicateHash := predicateHashHex(maxPredicate)
+	predicateHash := hashPredicateCandidateHex(maxPredicate)
 	alias := "drone.local"
 
 	type filterContract struct {
@@ -58,32 +57,24 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 		ownerFilter     filterContract
 	}{
 		{
-			name:            "predicate current hash",
-			layout:          "hash(predicate).entity6",
+			name:            "predicate production raw",
+			layout:          "predicate3.entity6",
 			key:             predicateIndexKey(maxPredicate, entityID),
-			keyByteFormula:  "65+E",
-			wantKeyBytes:    65 + entityBytes,
-			keyTokenFormula: "1+6",
-			wantKeyTokens:   7,
-			forwardFilters: []filterContract{{
-				value: predicateIndexForwardFilter(maxPredicate), byteFormula: "64+1+11", wantBytes: 76,
-				tokenFormula: "1+6", wantTokens: 7,
-			}},
-			ownerFilter: filterContract{
-				value: "*." + entityID, byteFormula: "2+E", wantBytes: entityBytes + 2,
-				tokenFormula: "1+6", wantTokens: 7,
-			},
-		},
-		{
-			name: "predicate catalog", layout: "predicate3", key: maxPredicate,
-			keyByteFormula: "P<=194", wantKeyBytes: predicateBytes,
-			keyTokenFormula: "3", wantKeyTokens: 3,
+			keyByteFormula:  "E+P+1=E+195",
+			wantKeyBytes:    entityBytes + 195,
+			keyTokenFormula: "3+6",
+			wantKeyTokens:   9,
 			forwardFilters: []filterContract{
-				{value: maxPredicate, byteFormula: "P<=194", wantBytes: 194, tokenFormula: "3", wantTokens: 3},
-				{value: maxSegment + "." + maxSegment + ".*", byteFormula: "2S+3", wantBytes: 131,
-					tokenFormula: "3", wantTokens: 3},
-				{value: maxSegment + ".*.*", byteFormula: "S+4", wantBytes: 68,
-					tokenFormula: "3", wantTokens: 3},
+				{value: predicateIndexForwardFilters(maxPredicate)[0], byteFormula: "P+12", wantBytes: 206,
+					tokenFormula: "3+6", wantTokens: 9},
+				{value: predicateIndexForwardFilters(maxPredicate)[1], byteFormula: "2S+15", wantBytes: 143,
+					tokenFormula: "3+6", wantTokens: 9},
+				{value: predicateIndexForwardFilters(maxPredicate)[2], byteFormula: "S+16", wantBytes: 80,
+					tokenFormula: "3+6", wantTokens: 9},
+			},
+			ownerFilter: filterContract{
+				value: predicateIndexEntityFilter(entityID), byteFormula: "E+6", wantBytes: entityBytes + 6,
+				tokenFormula: "3+6", wantTokens: 9,
 			},
 		},
 		{
@@ -141,21 +132,17 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 				tokenFormula: "variable", wantTokens: 2}},
 		},
 		{
-			name: "predicate raw candidate", layout: "predicate3.entity6",
-			key:            rawPredicateCandidateKey(maxPredicate, entityID),
-			keyByteFormula: "E+P+1=E+195", wantKeyBytes: entityBytes + 195,
-			keyTokenFormula: "3+6", wantKeyTokens: 9,
-			forwardFilters: []filterContract{
-				{value: rawPredicateCandidateForwardFilters(maxPredicate)[0], byteFormula: "P+12", wantBytes: 206,
-					tokenFormula: "3+6", wantTokens: 9},
-				{value: rawPredicateCandidateForwardFilters(maxPredicate)[1], byteFormula: "2S+15", wantBytes: 143,
-					tokenFormula: "3+6", wantTokens: 9},
-				{value: rawPredicateCandidateForwardFilters(maxPredicate)[2], byteFormula: "S+16", wantBytes: 80,
-					tokenFormula: "3+6", wantTokens: 9},
-			},
+			name: "predicate retired hash candidate", layout: "hash(predicate).entity6",
+			key:            hashPredicateCandidateKey(maxPredicate, entityID),
+			keyByteFormula: "65+E", wantKeyBytes: 65 + entityBytes,
+			keyTokenFormula: "1+6", wantKeyTokens: 7,
+			forwardFilters: []filterContract{{
+				value: hashPredicateCandidateForwardFilter(maxPredicate), byteFormula: "64+1+11", wantBytes: 76,
+				tokenFormula: "1+6", wantTokens: 7,
+			}},
 			ownerFilter: filterContract{
-				value: rawPredicateCandidateOwnerFilter(entityID), byteFormula: "E+6", wantBytes: entityBytes + 6,
-				tokenFormula: "3+6", wantTokens: 9,
+				value: hashPredicateCandidateOwnerFilter(entityID), byteFormula: "2+E", wantBytes: entityBytes + 2,
+				tokenFormula: "1+6", wantTokens: 7,
 			},
 		},
 	}
@@ -179,20 +166,20 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 		})
 	}
 
-	assert.Equal(t, predicateHash+".*.*.*.*.*.*", predicateIndexForwardFilter(maxPredicate))
+	assert.Equal(t, predicateHash+".*.*.*.*.*.*", hashPredicateCandidateForwardFilter(maxPredicate))
 	assert.Equal(t, nameHash+".*.*.*.*.*.*.*", nameIndexForwardFilter("Alpha"))
 	assert.Equal(t, targetID+".*.*.*.*.*.*.*", incomingIndexTargetFilter(targetID))
 	assert.Equal(t, []string{
 		maxPredicate + ".*.*.*.*.*.*",
 		maxSegment + "." + maxSegment + ".*.*.*.*.*.*.*",
 		maxSegment + ".*.*.*.*.*.*.*.*",
-	}, rawPredicateCandidateForwardFilters(maxPredicate))
-	assert.Len(t, predicateIndexKey(maxPredicate, entityID), 321)
+	}, predicateIndexForwardFilters(maxPredicate))
+	assert.Len(t, predicateIndexKey(maxPredicate, entityID), 451)
 	assert.Len(t, nameCompositeKey(nameHash, entityID, maxPredicate), 710)
 	assert.Len(t, contextIndexKey(entityID, contextHash, maxPredicate), 710)
 	assert.Len(t, incomingIndexKey(targetID, entityID, maxPredicate), 902)
 	assert.Len(t, entityID, 256)
-	assert.Len(t, rawPredicateCandidateKey(maxPredicate, entityID), 451)
+	assert.Len(t, hashPredicateCandidateKey(maxPredicate, entityID), 321)
 }
 
 func TestGraphIndexKVContract_EntityBoundaryAndAliasAudit(t *testing.T) {

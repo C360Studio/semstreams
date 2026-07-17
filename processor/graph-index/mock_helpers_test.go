@@ -7,13 +7,12 @@ import "sync"
 // impossible after injection. This registry maps the component pointer to its underlying
 // mock buckets so tests can inspect state and inject errors.
 type mockRefs struct {
-	outgoing         *mockKVBucket
-	incoming         *mockKVBucket
-	alias            *mockKVBucket
-	predicate        *mockKVBucket
-	predicateCatalog *mockKVBucket
-	context          *mockKVBucket
-	name             *mockKVBucket
+	outgoing  *mockKVBucket
+	incoming  *mockKVBucket
+	alias     *mockKVBucket
+	predicate *mockKVBucket
+	context   *mockKVBucket
+	name      *mockKVBucket
 }
 
 var (
@@ -63,9 +62,4 @@ func contextMock(comp *Component) *mockKVBucket {
 // nameMock retrieves the mock name bucket for a test component.
 func nameMock(comp *Component) *mockKVBucket {
 	return getMocks(comp).name
-}
-
-// predicateCatalogMock retrieves the mock predicate catalog bucket for a test component.
-func predicateCatalogMock(comp *Component) *mockKVBucket {
-	return getMocks(comp).predicateCatalog
 }

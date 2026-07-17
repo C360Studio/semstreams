@@ -19,9 +19,8 @@ import (
 )
 
 // TestPredicateIndex_LoadScale is the ADR-065-mandated load test: it must
-// demonstrate that handleQueryPredicateListNATS's unfiltered path stays a
-// small, fixed number of round trips (2: one membership Keys(), one
-// catalog Keys()) rather than degenerating into a per-predicate fan-out,
+// demonstrate that handleQueryPredicateListNATS's unfiltered path stays one
+// grouped membership scan rather than degenerating into a per-predicate fan-out,
 // at a corpus shape proportioned to GH #430's real-world trigger (~21k
 // entities, one predicate carried by nearly all of them).
 //

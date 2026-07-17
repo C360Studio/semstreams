@@ -68,13 +68,14 @@ Limits or samples are applied after ordering only on wire surfaces that expose t
 - **WHEN** graph-index restarts and rebuilds the selected derived buckets
 - **THEN** the result identities and order match the pre-restart response
 
-### Requirement: Predicate catalog reports current materialized membership
+### Requirement: Predicate listing reports current materialized membership
 
-While `PREDICATE_CATALOG` exists, predicate-list and namespace-list MUST include only predicates with at least one
-current membership. Vocabulary declaration and historical-use discovery MUST remain vocabulary-registry concerns,
-not graph-index catalog semantics.
+Predicate-list and namespace-list MUST derive from the selected raw PREDICATE_INDEX representation and include only
+predicates with at least one current membership. PREDICATE_CATALOG MUST NOT be consulted or recreated. Vocabulary
+declaration and historical-use discovery MUST remain vocabulary-registry concerns, not graph-index listing
+semantics.
 
-#### Scenario: last member removal retracts the catalog name
+#### Scenario: last member removal retracts the predicate from listings
 
 - **GIVEN** one entity is the final current member of a predicate
 - **WHEN** that entity retracts the predicate and graph-index reaches its revision

@@ -220,7 +220,6 @@ func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
 		graph.BucketPredicateIndex,
 		graph.BucketContextIndex,
 		graph.BucketNameIndex,
-		graph.BucketPredicateCatalog,
 	} {
 		require.NoError(t, js.DeleteKeyValue(ctx, bucket), "wipe bucket %s", bucket)
 	}
@@ -368,15 +367,11 @@ func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
 	assert.Equal(t, entityID, string(aliasEntry.Value))
 
 	// Verify predicate indexes were created: one composite key per
-	// (predicate, entity) pair, hash(predicate)+"."+entityID (ADR-065) —
-	// not a blob keyed on the raw predicate string.
+	// (predicate, entity) pair in the self-describing predicate3.entity6 layout.
 	predicates := []string{"robotics.assigned.mission", "robotics.status.armed", "core.identity.alias"}
 	for _, predicate := range predicates {
 		_, err := graphIndex.predicateBucket.Get(ctx, predicateIndexKey(predicate, entityID))
 		require.NoError(t, err, "predicate index should have a composite-key entry for %s", predicate)
-
-		_, err = graphIndex.predicateCatalogBucket.Get(ctx, predicate)
-		require.NoError(t, err, "predicate catalog should record %s", predicate)
 	}
 }
 
@@ -455,11 +450,8 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 	}, 3*time.Second, 25*time.Millisecond, "outgoing index should exist before deletion")
 
 	// Seed a populated INCOMING row that is physically target-prefixed by entityID
-	// but semantically owned by otherSourceID. PR524's legacy hard-delete can drive
-	// this cleanup with the physical target prefix "entityID.".
-	// Source-axis cleanup across arbitrary target prefixes is intentionally not
-	// asserted here; it remains behind graph-index-fixed-arity-reconciliation's
-	// benchmark and ADR decision.
+	// but semantically owned by another live source. Target retirement must preserve
+	// this assertion while retracting entityID's own assertion against targetID.
 	otherSourceID := "c360.platform.robotics.mav1.sensor.002"
 	require.NoError(t, graphIndex.UpdateIncomingIndex(ctx, entityID, otherSourceID, "core.relationship.related"))
 	require.Eventually(t, func() bool {
@@ -472,20 +464,20 @@ func TestIntegration_EntityDeletion(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		_, outgoingErr := graphIndex.outgoingBucket.Get(ctx, entityID)
-		if !natsclient.IsKVNotFoundError(outgoingErr) {
-			return false
-		}
-		return len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 0
-	}, 3*time.Second, 25*time.Millisecond, "current target-prefix index rows were not retracted")
+		return natsclient.IsKVNotFoundError(outgoingErr) &&
+			len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, targetID)) == 0 &&
+			len(readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)) == 1
+	}, 3*time.Second, 25*time.Millisecond, "source-owned rows were not retracted cleanly")
 
 	// Verify indexes were removed
 	_, err = graphIndex.outgoingBucket.Get(ctx, entityID)
 	assert.True(t, natsclient.IsKVNotFoundError(err), "outgoing index should be deleted, got: %v", err)
 
-	// Physical target-prefix cleanup: the delete path prefix-scans "entityID." and
-	// removes the populated incoming-as-TARGET keyset seeded above.
+	// The target-prefixed row belongs to the still-live source and must survive.
 	targetPrefixedIncoming := readIncomingEntries(ctx, t, graphIndex.incomingBucket, entityID)
-	assert.Empty(t, targetPrefixedIncoming, "the physical entityID target-prefix keyset should be gone")
+	assert.Equal(t, []graph.IncomingEntry{{
+		FromEntityID: otherSourceID, Predicate: "core.relationship.related",
+	}}, targetPrefixedIncoming)
 }
 
 // TestIntegration_MultipleRelationships tests indexing entities with multiple relationships

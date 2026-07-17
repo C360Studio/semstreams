@@ -9,9 +9,9 @@ entity's source-owned INCOMING, NAME, and PREDICATE rows.
 The predicate (PR #532) and entity-ID (`entity-id-contract`) contracts now make fixed-arity owner filters provable:
 every entity-bearing key position holds a validated bounded six-part ID, so `ListKeysFiltered` with exact-position
 wildcards can enumerate one owner's rows. The generalized reconciliation helper already exists in-repo with
-key-contract preflight and unit proof. This change activates replacement for the remaining stores on the CURRENT
-physical layout. It deliberately does not decide predicate representation — that is the separate
-`predicate-raw-key-representation` change, and this change must not wait for it.
+key-contract preflight and unit proof. This change activates replacement for the remaining stores on the
+selected physical layouts. Predicate representation remains owned by `predicate-raw-key-representation`; ADR-078
+has selected raw `predicate3.entity6`, so the two changes activate together in the same clean cutover.
 
 ## What Changes
 
@@ -37,7 +37,8 @@ physical layout. It deliberately does not decide predicate representation — th
 
 ## Non-goals
 
-- Changing any physical key layout or codec (PREDICATE representation is `predicate-raw-key-representation`).
+- Choosing any physical key layout or codec. ADR-078 and `predicate-raw-key-representation` select PREDICATE;
+  this change consumes that decision.
 - Retention, TTL, ObjectStore reachability, cascade, or global GC (retention epic; this change publishes its
   owner-discovery evidence as an input).
 - ALIAS (frozen current behavior, separately owned; audited in the matrix, blocks nothing here).
@@ -49,8 +50,8 @@ physical layout. It deliberately does not decide predicate representation — th
 
 - `graph-index`: ownership matrix, replacement reconciliation for NAME/PREDICATE/source-owned INCOMING, INCOMING
   source ownership, activation gating, retained PR #524 readiness guarantees.
-- `graph-query`: complete-current-projection visibility, deterministic limited results, current-membership catalog
-  semantics, exact-vs-namespace predicate lookup semantics.
+- `graph-query`: complete-current-projection visibility, deterministic limited results, current-membership predicate
+  listing, exact-vs-namespace predicate lookup semantics.
 
 ## Dependencies
 
@@ -68,5 +69,7 @@ Stated as capability gates, not other changes' task numbers:
 - **Framework code:** graph-index reconciliation, query handlers, readiness/rebuild integration, metrics, tests.
 - **Stored data:** covered by the already-announced pre-v1 wipe/reseed; no new preservation obligation.
 - **Consumers:** every product using predicate, by-name, incoming, traversal, or clustering-derived queries.
-- **Architecture:** one ADR (owner discovery + INCOMING ownership) superseding the affected ADR-068 D3 inference;
-  measured owner-discovery evidence handed to the retention epic.
+- **Architecture:** [ADR-077](../../../docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md) records owner
+  discovery + INCOMING ownership and supersedes the affected ADR-068 D3 inference; measured owner-discovery
+  evidence is handed to the retention epic. [ADR-078](../../../docs/adr/078-raw-canonical-predicate-membership-keys.md)
+  selects raw PREDICATE keys and retires PREDICATE_CATALOG.

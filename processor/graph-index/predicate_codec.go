@@ -21,3 +21,8 @@ func decodePredicateToken(token string) (string, bool) { return graph.DecodePred
 // projection that silently drops writes but reports "caught up" is the failure
 // class ADR-066 exists to prevent.
 var errIndexWritePartial = errors.New("graph-index: one or more required index writes failed")
+
+// errAuthoritativeIdentityMismatch marks an ENTITY_STATES row whose canonical
+// value ID does not equal its canonical KV key. The revision cannot be completed:
+// projecting it under either identity would corrupt owner-scoped indexes.
+var errAuthoritativeIdentityMismatch = errors.New("graph-index: authoritative entity key/value identity mismatch")

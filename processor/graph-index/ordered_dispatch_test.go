@@ -327,6 +327,33 @@ func TestAuthoritativeWatcherTreatsDeleteAndPurgeAsTerminalCleanup(t *testing.T)
 	}
 }
 
+func TestAuthoritativeWatcherMalformedDeletePoisonsWithoutCompletingWatermark(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.watermark = revlag.New()
+	states := newMockKVBucket()
+	var gets atomic.Int64
+	states.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
+		gets.Add(1)
+		return nil, jetstream.ErrKeyNotFound
+	}
+	comp.entityStatesBucket = states
+
+	watcher := &orderedTestWatcher{updates: make(chan jetstream.KeyValueEntry, 2)}
+	watcher.updates <- &orderedTestEntry{key: "malformed", revision: 7, op: jetstream.KeyValueDelete}
+	watcher.updates <- nil
+	close(watcher.updates)
+	comp.wg.Add(1)
+	comp.watchEntityStates(context.Background(), &orderedWatchBucket{mockKVBucket: states, watcher: watcher})
+
+	require.Zero(t, gets.Load(), "malformed authoritative key must fail before a bucket read")
+	require.Equal(t, int64(1), comp.failedCount.Load())
+	require.Equal(t, uint64(6), comp.watermark.Indexed(), "poisoned delete revision must remain pending")
+	status := comp.computeIndexStatus(context.Background())
+	require.False(t, status.Ready)
+	require.Equal(t, graph.IndexStateResetRequired, status.State)
+	require.Equal(t, string(graph.GraphStateReasonNoncanonicalEntityID), status.Reason)
+}
+
 type orderedTestWatcher struct {
 	updates chan jetstream.KeyValueEntry
 }

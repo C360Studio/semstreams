@@ -45,10 +45,10 @@ func TestDeleteFromIndexes_Failure_MarksFailed(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 	entityID := "acme.ops.robotics.gcs.drone.004"
-	source := "acme.ops.robotics.gcs.sensor.004"
+	target := "acme.ops.robotics.gcs.mission.004"
 
-	// Seed an incoming edge (entity as target) so the delete path has a key to remove.
-	require.NoError(t, comp.UpdateIncomingIndex(ctx, entityID, source, "robotics.assigned.mission"))
+	// Seed an incoming edge owned by the entity as source so deletion must retract it.
+	require.NoError(t, comp.UpdateIncomingIndex(ctx, target, entityID, "robotics.assigned.mission"))
 
 	// Inject a persistent delete failure on the incoming bucket.
 	incomingMock(comp).deleteFunc = func(_ context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {

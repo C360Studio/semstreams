@@ -1,13 +1,6 @@
 package graphindex
 
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"strings"
-
-	"github.com/c360studio/semstreams/natsclient"
-)
+import "strings"
 
 // predicateIndexMarker is the fixed, content-free value stored at every
 // PREDICATE_INDEX composite key. Empty by construction, not a timestamp:
@@ -16,59 +9,37 @@ import (
 // "most recent," which this design does not guarantee (ADR-065).
 var predicateIndexMarker = []byte{}
 
-// predicateHashHex returns the fixed-width, dot-free hex token used as the
-// PREDICATE_INDEX key prefix for a predicate.
-//
-// The hash+catalog representation remains the active ADR-065 format while the
-// fixed-nine-token candidate is measured under the graph-index reconciliation
-// decision gate. Canonical predicate enforcement is independent of this codec.
-func predicateHashHex(predicate string) string {
-	sum := sha256.Sum256([]byte(predicate))
-	return hex.EncodeToString(sum[:])
-}
-
 // predicateIndexKey builds the PREDICATE_INDEX composite key for one
-// (predicate, entity) membership pair: hash(predicate) + "." + entityID.
+// (predicate, entity) membership pair: predicate3.entity6.
 func predicateIndexKey(predicate, entityID string) string {
-	return predicateHashHex(predicate) + "." + entityID
+	return predicate + "." + entityID
 }
 
-// predicateIndexPrefix builds the KeysByPrefix argument that enumerates
-// every entity currently carrying the given predicate.
-func predicateIndexPrefix(predicate string) string {
-	return predicateHashHex(predicate) + "."
+// predicateIndexForwardFilters returns the exact, domain.category, and domain
+// fixed-nine-token filters for a canonical three-token predicate.
+func predicateIndexForwardFilters(predicate string) []string {
+	parts := strings.Split(predicate, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	entityPositions := "." + wildcardPositions(6)
+	return []string{
+		predicate + entityPositions,
+		parts[0] + "." + parts[1] + ".*" + entityPositions,
+		parts[0] + ".*.*" + entityPositions,
+	}
+}
+
+func predicateIndexForwardFilter(predicate string) string {
+	filters := predicateIndexForwardFilters(predicate)
+	if len(filters) == 0 {
+		return ""
+	}
+	return filters[0]
 }
 
 // predicateIndexEntityFilter enumerates the complete predicate membership set
-// owned by one entity under the current hash(predicate).entity6 layout.
+// owned by one entity under the predicate3.entity6 layout.
 func predicateIndexEntityFilter(entityID string) string {
-	return "*." + entityID
-}
-
-// entityIDFromPredicateKey strips a known predicate's hash prefix from a
-// PREDICATE_INDEX composite key, recovering the entity ID. The hash
-// prefix is fixed-width, so the split is unambiguous regardless of the
-// entity ID's own token count.
-func entityIDFromPredicateKey(key, predicate string) string {
-	return strings.TrimPrefix(key, predicateIndexPrefix(predicate))
-}
-
-// updatePredicateCatalog records that predicate has been seen, so
-// handleQueryPredicateListNATS can recover human-readable predicate names
-// (and serve namespace-prefix queries) without ever prefix-matching the
-// membership bucket itself. Idempotent and cheap: an unconditional Put
-// keyed on the raw, unhashed predicate name. Safe as a key here (unlike
-// on the membership bucket) because PREDICATE_CATALOG carries no
-// membership data — a stray prefix match can only surface a superset of
-// predicate *names* sharing a namespace, never corrupt which entities
-// carry which predicate. See ADR-065.
-func (c *Component) updatePredicateCatalog(ctx context.Context, predicate string) error {
-	if err := natsclient.ValidateKVLiteralKey(predicate); err != nil {
-		return err
-	}
-	if c.predicateCatalogBucket == nil {
-		return nil
-	}
-	_, err := c.predicateCatalogBucket.Put(ctx, predicate, predicateIndexMarker)
-	return err
+	return wildcardPositions(3) + "." + entityID
 }

@@ -14,8 +14,9 @@ the contract changes and consumed by `graph-index-replacement-semantics` — is 
 physical layout is nearly free. After v1 it becomes a migration with compatibility obligations SemStreams has
 declared it will not provide.
 
-This change therefore adopts raw keys as the DEFAULT outcome, gated by absolute proof budgets — not by a
-comparative threshold tournament whose null hypothesis is the legacy layout.
+The absolute representation gates passed, so this change adopts raw keys. The accepted decision and pinned evidence
+are recorded in [ADR-078](../../../docs/adr/078-raw-canonical-predicate-membership-keys.md). Hash-plus-catalog
+measurements remain comparison evidence, not a threshold tournament whose null hypothesis is the legacy layout.
 
 ## What Changes
 
@@ -23,20 +24,18 @@ comparative threshold tournament whose null hypothesis is the legacy layout.
   and retire PREDICATE_CATALOG after cutover.
 - Namespace and exact-predicate queries become direct fixed-arity filters (`domain.*.*.…`, `domain.category.*.…`,
   exact `predicate3.*.*.*.*.*.*`); the owner filter is `*.*.*.entity6`.
-- Acceptance gates are absolute: the 451-byte worst-case key and every filter pass the `nats-kv-keys` budgets and
-  pinned real-NATS maximum/exact-match conformance; reconciliation lifecycle correctness on the raw layout reuses
-  the `graph-index-replacement-semantics` fixtures; the ADR-065 5k/3s CI guard and one 21k sustained-churn run pass
-  on the raw layout. If any absolute gate fails, the failure is recorded in the ADR and hash+catalog remains — as a
-  documented fallback, not a preferred default.
-- One comparative benchmark run (raw vs hash+catalog on identical datasets and fixtures) is recorded as ADR
-  evidence. It informs the record; it is not a selection threshold.
+- The 451-byte maximum and every filter passed the shared budgets and pinned real-NATS conformance. The 5k CI guard
+  and supervised 21k raw run passed absolute latency, convergence, restart, and resource gates; the exact results
+  and reproduction commands are in
+  [operations/32](../../../docs/operations/32-predicate-layout-smoke-harness.md).
+- The hash-plus-catalog companion run is retained only as comparative evidence. It is not a selection threshold.
 - Cutover rides the SAME announced pre-v1 wipe/reseed as `graph-index-replacement-semantics` activation: fresh raw
   buckets initialize behind typed not-ready responses from reseeded canonical ENTITY_STATES. No dual format, no
   old-format reader, no migration, no rollback.
 - NAME/CONTEXT keep `hash(name)`/`hash(context)` (open product content — still motivated) and NAME/CONTEXT/INCOMING
   keep the reversible `hex(predicate)` single-token codec (fixed arity without re-keying three stores); both
   decisions are recorded with their rationale and revisited only on demonstrated query or operational need.
-- Supersede the affected ADR-065 clauses in a new decision record.
+- Supersede the affected ADR-065 clauses with ADR-078.
 
 **BREAKING:** pre-v1 clean cutover only. **Schedule rule:** if this change cannot land inside the announced pre-v1
 wipe window, it MUST NOT silently slip — it converts to an explicit post-v1 migration proposal with the costs
@@ -71,5 +70,4 @@ stated honestly, and the ADR records that the window was missed.
   fixtures.
 - **Stored data:** covered by the same announced wipe/reseed.
 - **Operators:** human-readable predicate keys; one fewer bucket; documented direct filters.
-- **Architecture:** ADR superseding ADR-065's hash+catalog clauses, recording either the raw adoption or the
-  gate-failure fallback.
+- **Architecture:** ADR-078 supersedes ADR-065's hash-plus-catalog representation clauses and selects raw keys.

@@ -14,6 +14,8 @@ import (
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -75,6 +77,9 @@ func newKVRelationshipQuerier(
 }
 
 func (q *kvRelationshipQuerier) GetOutgoingRelationships(ctx context.Context, entityID string) ([]inference.RelationshipInfo, error) {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return nil, err
+	}
 	entry, err := q.outgoingBucket.Get(ctx, entityID)
 	if err != nil {
 		if err == jetstream.ErrKeyNotFound {
@@ -90,6 +95,12 @@ func (q *kvRelationshipQuerier) GetOutgoingRelationships(ctx context.Context, en
 
 	result := make([]inference.RelationshipInfo, len(relationships))
 	for i, rel := range relationships {
+		if err := semtypes.ValidateEntityID(rel.ToEntityID); err != nil {
+			return nil, err
+		}
+		if _, err := vocabulary.ParsePredicate(rel.Predicate); err != nil {
+			return nil, err
+		}
 		result[i] = inference.RelationshipInfo{
 			FromEntityID: entityID,
 			ToEntityID:   rel.ToEntityID,
@@ -100,6 +111,12 @@ func (q *kvRelationshipQuerier) GetOutgoingRelationships(ctx context.Context, en
 }
 
 func (q *kvRelationshipQuerier) GetIncomingRelationships(ctx context.Context, entityID string) ([]inference.RelationshipInfo, error) {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return nil, err
+	}
+	if err := natsclient.ValidateKVWildcardFilter(entityID + ".>"); err != nil {
+		return nil, err
+	}
 	// After composite-key sharding (gh#474): INCOMING_INDEX stores one key per
 	// edge — "targetID.sourceID.predicate" with an empty marker value.
 	// FilteredKeys handles ErrNoKeysFound → nil, nil (no error on empty).
@@ -122,8 +139,14 @@ func (q *kvRelationshipQuerier) GetIncomingRelationships(ctx context.Context, en
 			continue
 		}
 		sourceID := strings.Join(parts[:6], ".")
+		if err := semtypes.ValidateEntityID(sourceID); err != nil {
+			continue
+		}
 		predicate, ok := graph.DecodePredicateToken(parts[6])
 		if !ok || predicate == "" {
+			continue
+		}
+		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
 			continue
 		}
 		result = append(result, inference.RelationshipInfo{

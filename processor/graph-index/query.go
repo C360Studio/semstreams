@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -116,6 +117,10 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 	if req.EntityID == "" {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
+	if err := validateEntityLiteralKey(req.EntityID); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
+			fmt.Errorf("invalid request: entity_id: %w", err))
+	}
 
 	// Cutover-readiness gate (P1d/#6): OUTGOING is also rebuilt from ENTITY_STATES on a
 	// cold/cutover replay, so don't serve a partial owner keyset while catching up.
@@ -199,6 +204,14 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 	if req.EntityID == "" {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty entity_id"))
 	}
+	if err := validateEntityLiteralKey(req.EntityID); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
+			fmt.Errorf("invalid request: entity_id: %w", err))
+	}
+	prefix := incomingIndexPrefix(req.EntityID)
+	if err := validateKVPrefix(prefix); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, err)
+	}
 
 	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
 	// still catching up after a format cutover / cold replay.
@@ -206,12 +219,13 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 		return nil, err
 	}
 
-	keys, err := c.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(req.EntityID))
+	keys, err := c.incomingBucket.KeysByPrefix(ctx, prefix)
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
 
 	entries := make([]graph.IncomingEntry, 0, len(keys))
+	seen := make(map[graph.IncomingEntry]struct{}, len(keys))
 	for _, key := range keys {
 		entry, ok := incomingEntryFromKey(key, req.EntityID)
 		if !ok {
@@ -220,6 +234,10 @@ func (c *Component) handleQueryIncomingNATS(ctx context.Context, data []byte) ([
 				slog.String("entity_id", req.EntityID))
 			continue
 		}
+		if _, duplicate := seen[entry]; duplicate {
+			continue
+		}
+		seen[entry] = struct{}{}
 		entries = append(entries, entry)
 	}
 
@@ -244,12 +262,6 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Readiness gate (gh#474 Codex #6): ALIAS is also a derived reverse index rebuilt on
-	// cutover and covered by the failure gate, so it must not serve partial data either.
-	if err := c.ensureQueryReady(ctx); err != nil {
-		return nil, err
-	}
-
 	var req struct {
 		Alias string `json:"alias"`
 	}
@@ -259,6 +271,12 @@ func (c *Component) handleQueryAliasNATS(ctx context.Context, data []byte) ([]by
 
 	if req.Alias == "" {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty alias"))
+	}
+	if err := natsclient.ValidateKVLiteralKey(req.Alias); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, err)
+	}
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
 	}
 
 	entry, err := c.aliasBucket.Get(ctx, req.Alias)
@@ -282,12 +300,6 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Readiness gate (gh#474 Codex #6): PREDICATE_INDEX is rebuilt on cutover and covered
-	// by the failure gate; don't serve partial predicate memberships.
-	if err := c.ensureQueryReady(ctx); err != nil {
-		return nil, err
-	}
-
 	var req struct {
 		Predicate string  `json:"predicate"`
 		Value     *string `json:"value,omitempty"`
@@ -297,8 +309,11 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
-	if _, err := vocabulary.ParsePredicate(req.Predicate); err != nil {
+	if _, err := validatedPredicateIndexExactFilter(req.Predicate); err != nil {
 		return nil, invalidPredicateQueryError(err)
+	}
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
 	}
 
 	entities, err := c.queryPredicateEntities(ctx, req.Predicate, req.Value, req.Limit)
@@ -315,14 +330,9 @@ func (c *Component) handleQueryPredicateNATS(ctx context.Context, data []byte) (
 // handlers. It looks up the predicate index, optionally filters by value, and applies
 // the limit in a single place so both call sites stay consistent.
 func (c *Component) queryPredicateEntities(ctx context.Context, predicate string, value *string, limit int) ([]string, error) {
-	keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(predicate))
+	entities, err := c.queryPredicateEntityIDs(ctx, predicate)
 	if err != nil {
 		return nil, err
-	}
-
-	entities := make([]string, 0, len(keys))
-	for _, key := range keys {
-		entities = append(entities, entityIDFromPredicateKey(key, predicate))
 	}
 
 	if value != nil && c.entityStatesBucket != nil {
@@ -339,6 +349,26 @@ func (c *Component) queryPredicateEntities(ctx context.Context, predicate string
 	return entities, nil
 }
 
+func (c *Component) queryPredicateEntityIDs(ctx context.Context, predicate string) ([]string, error) {
+	filter, err := validatedPredicateIndexExactFilter(predicate)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := c.predicateBucket.KeysByFilter(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	entities := make([]string, 0, len(keys))
+	for _, key := range keys {
+		storedPredicate, entityID, ok := predicateMembershipFromKey(key)
+		if !ok || storedPredicate != predicate {
+			continue
+		}
+		entities = append(entities, entityID)
+	}
+	return uniqueSortedStrings(entities), nil
+}
+
 // filterEntitiesByPredicateValue filters entity IDs by checking if their entity state
 // contains a triple with the given predicate whose Object matches the specified value.
 // limit is applied early — iteration stops once enough matches are collected.
@@ -352,6 +382,9 @@ func (c *Component) filterEntitiesByPredicateValue(ctx context.Context, entityID
 			return nil, err
 		}
 
+		if err := validateEntityLiteralKey(entityID); err != nil {
+			return nil, err
+		}
 		entry, err := c.entityStatesBucket.Get(ctx, entityID)
 		if err != nil {
 			if natsclient.IsKVNotFoundError(err) {
@@ -402,22 +435,12 @@ func normalizeToString(v any) string {
 
 // handleQueryPredicateListNATS handles predicate list query requests via NATS request/reply.
 // Returns predicates in ascending lexical order with their entity counts —
-// every predicate, or, when
-// the request carries a Namespace, only those sharing that exact domain or
-// domain.category namespace
-// (ADR-065: a deliberate, safe namespace query against PREDICATE_CATALOG's
-// unhashed keys — unlike a prefix query against PREDICATE_INDEX's hashed
-// membership keys, this can't corrupt which entities carry which
-// predicate, since the catalog carries no membership data).
+// every predicate, or, when the request carries a Namespace, only those sharing
+// that exact domain or domain.category namespace. The fixed-nine-token layout
+// makes both namespace scopes exact NATS wildcard filters over membership rows.
 func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	// Readiness gate (gh#474 Codex #6): predicate-list depends on the predicate catalog,
-	// which is rebuilt on cutover; don't serve a partial catalog.
-	if err := c.ensureQueryReady(ctx); err != nil {
-		return nil, err
-	}
 
 	var req graph.PredicateListQuery
 	if len(data) > 0 {
@@ -427,13 +450,18 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byt
 			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 		}
 	}
+	if req.Namespace != "" {
+		if _, parseErr := validatedPredicateNamespaceFilter(strings.TrimSuffix(req.Namespace, ".")); parseErr != nil {
+			return nil, invalidPredicateQueryError(parseErr)
+		}
+	}
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	var predicates []graph.PredicateSummary
 	var err error
 	if req.Namespace != "" {
-		if _, parseErr := vocabulary.ParsePredicateNamespace(req.Namespace); parseErr != nil {
-			return nil, invalidPredicateQueryError(parseErr)
-		}
 		predicates, err = c.listPredicatesByNamespace(ctx, req.Namespace)
 	} else {
 		predicates, err = c.listAllPredicates(ctx)
@@ -448,89 +476,28 @@ func (c *Component) handleQueryPredicateListNATS(ctx context.Context, data []byt
 	}))
 }
 
-// listAllPredicates enumerates every predicate with its entity count via
-// ONE grouped scan of the membership bucket (not a per-predicate
-// KeysByPrefix fan-out, which would cost one bound ephemeral-consumer
-// round trip per catalog entry — see ADR-065). Membership keys are
-// hash(predicate).entityID; grouping on the first token before the first
-// "." buckets every key by its predicate hash without needing to know the
-// predicate strings up front. Catalog names are then forward-hashed to
-// join into that count map — catalog entries whose hash has no members
-// simply report a zero count.
+// listAllPredicates groups one scan of the self-describing predicate3.entity6
+// membership bucket. No catalog or per-predicate fan-out is required.
 func (c *Component) listAllPredicates(ctx context.Context) ([]graph.PredicateSummary, error) {
-	names, err := c.predicateCatalogBucket.Keys(ctx)
+	keys, err := c.predicateBucket.Keys(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(names) == 0 {
-		return []graph.PredicateSummary{}, nil
-	}
-	sort.Strings(names)
-
-	memberKeys, err := c.predicateBucket.Keys(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// A pre-cutover blob-format key (bare predicate string, e.g.
-	// "code.artifact.type") almost always contains a "." too, so it does
-	// NOT reliably fail the Cut below — most real predicates are
-	// multi-token. What actually keeps it inert is the join step: its
-	// first token (e.g. "code") is never a genuine 64-hex-char hash, so
-	// countsByHash[that token] is written but never read by the
-	// predicateHashHex(name) lookup below — it's a dead map entry, not a
-	// skipped one.
-	countsByHash := make(map[string]int, len(names))
-	for _, key := range memberKeys {
-		hash, _, ok := strings.Cut(key, ".")
-		if !ok {
-			continue // single-token key with no "." at all — can't be any predicate's composite key
-		}
-		countsByHash[hash]++
-	}
-
-	predicates := make([]graph.PredicateSummary, 0, len(names))
-	for _, name := range names {
-		predicates = append(predicates, graph.PredicateSummary{
-			Predicate:   name,
-			EntityCount: countsByHash[predicateHashHex(name)],
-		})
-	}
-	return predicates, nil
+	return predicateSummariesFromMembershipKeys(keys), nil
 }
 
-// listPredicatesByNamespace answers a namespace-scoped predicateList
-// request: PREDICATE_CATALOG.KeysByPrefix(prefix) bounds the candidate
-// predicate set server-side before any membership lookup, so a
-// per-predicate KeysByPrefix fan-out against the membership bucket here
-// is fine — the namespace filter, not this loop, is what keeps it cheap.
-func (c *Component) listPredicatesByNamespace(ctx context.Context, prefix string) ([]graph.PredicateSummary, error) {
-	// KeysByPrefix appends NATS wildcard ">" directly onto prefix; ">" is
-	// only meaningful as its own token after a ".", so a prefix missing
-	// its trailing dot silently matches nothing instead of erroring —
-	// exactly the class of prefix-matching footgun this ADR exists to
-	// eliminate elsewhere. Normalize here rather than push the "must end
-	// in a dot" contract onto every future caller of predicateList.
-	if !strings.HasSuffix(prefix, ".") {
-		prefix += "."
-	}
-
-	names, err := c.predicateCatalogBucket.KeysByPrefix(ctx, prefix)
+// listPredicatesByNamespace uses one fixed-nine-token server-side filter for
+// either domain.*.*.entity6 or domain.category.*.entity6.
+func (c *Component) listPredicatesByNamespace(ctx context.Context, namespace string) ([]graph.PredicateSummary, error) {
+	filter, err := validatedPredicateNamespaceFilter(strings.TrimSuffix(namespace, "."))
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(names)
-	predicates := make([]graph.PredicateSummary, 0, len(names))
-	for _, name := range names {
-		keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(name))
-		if err != nil {
-			return nil, err
-		}
-		predicates = append(predicates, graph.PredicateSummary{
-			Predicate:   name,
-			EntityCount: len(keys),
-		})
+	keys, err := c.predicateBucket.KeysByFilter(ctx, filter)
+	if err != nil {
+		return nil, err
 	}
-	return predicates, nil
+	return predicateSummariesFromMembershipKeys(keys), nil
 }
 
 // handleQueryPredicateStatsNATS handles predicate stats query requests via NATS request/reply.
@@ -538,11 +505,6 @@ func (c *Component) listPredicatesByNamespace(ctx context.Context, prefix string
 func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-
-	// Readiness gate (gh#474 Codex #6).
-	if err := c.ensureQueryReady(ctx); err != nil {
-		return nil, err
-	}
 
 	var req struct {
 		Predicate   string `json:"predicate"`
@@ -552,8 +514,11 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
 	}
 
-	if _, err := vocabulary.ParsePredicate(req.Predicate); err != nil {
+	if _, err := validatedPredicateIndexExactFilter(req.Predicate); err != nil {
 		return nil, invalidPredicateQueryError(err)
+	}
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
 	}
 
 	// Default sample limit
@@ -561,16 +526,10 @@ func (c *Component) handleQueryPredicateStatsNATS(ctx context.Context, data []by
 		req.SampleLimit = 10
 	}
 
-	keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(req.Predicate))
+	entities, err := c.queryPredicateEntityIDs(ctx, req.Predicate)
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
-
-	entities := make([]string, 0, len(keys))
-	for _, key := range keys {
-		entities = append(entities, entityIDFromPredicateKey(key, req.Predicate))
-	}
-	sort.Strings(entities) // deterministic sample order
 
 	sampleEntities := entities
 	if len(sampleEntities) > req.SampleLimit {
@@ -590,11 +549,6 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Readiness gate (gh#474 Codex #6).
-	if err := c.ensureQueryReady(ctx); err != nil {
-		return nil, err
-	}
-
 	var req graph.CompoundPredicateQuery
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request"))
@@ -604,7 +558,7 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty predicates"))
 	}
 	for _, predicate := range req.Predicates {
-		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		if _, err := validatedPredicateIndexExactFilter(predicate); err != nil {
 			return nil, invalidPredicateQueryError(err)
 		}
 	}
@@ -613,18 +567,21 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 	if operator != "AND" && operator != "OR" {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: operator must be AND or OR"))
 	}
+	if err := c.ensureQueryReady(ctx); err != nil {
+		return nil, err
+	}
 
 	// Collect entity sets for each predicate
 	entitySets := make([]map[string]struct{}, 0, len(req.Predicates))
 	for _, predicate := range req.Predicates {
-		keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(predicate))
+		entities, err := c.queryPredicateEntityIDs(ctx, predicate)
 		if err != nil {
 			return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 		}
 
-		entitySet := make(map[string]struct{}, len(keys))
-		for _, key := range keys {
-			entitySet[entityIDFromPredicateKey(key, predicate)] = struct{}{}
+		entitySet := make(map[string]struct{}, len(entities))
+		for _, entityID := range entities {
+			entitySet[entityID] = struct{}{}
 		}
 		entitySets = append(entitySets, entitySet)
 	}
@@ -641,6 +598,7 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 	for e := range result {
 		entities = append(entities, e)
 	}
+	sort.Strings(entities)
 
 	// Apply limit if specified
 	if req.Limit > 0 && len(entities) > req.Limit {
@@ -652,6 +610,98 @@ func (c *Component) handleQueryPredicateCompoundNATS(ctx context.Context, data [
 		Operator: operator,
 		Matched:  len(result),
 	}))
+}
+
+func uniqueSortedStrings(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func validatedPredicateIndexExactFilter(predicate string) (string, error) {
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return "", err
+	}
+	filter := predicateIndexForwardFilter(predicate)
+	if err := natsclient.ValidateKVWildcardFilter(filter); err != nil {
+		return "", err
+	}
+	return filter, nil
+}
+
+func validatedPredicateNamespaceFilter(namespace string) (string, error) {
+	if _, err := vocabulary.ParsePredicateNamespace(namespace); err != nil {
+		return "", err
+	}
+	parts := strings.Split(namespace, ".")
+	var filter string
+	switch len(parts) {
+	case 1:
+		filter = namespace + ".*.*." + wildcardPositions(6)
+	case 2:
+		filter = namespace + ".*." + wildcardPositions(6)
+	default:
+		return "", errors.New("predicate namespace must contain one or two tokens")
+	}
+	if err := natsclient.ValidateKVWildcardFilter(filter); err != nil {
+		return "", err
+	}
+	return filter, nil
+}
+
+func predicateMembershipFromKey(key string) (predicate, entityID string, ok bool) {
+	parts := strings.Split(key, ".")
+	if len(parts) != 9 {
+		return "", "", false
+	}
+	predicate = strings.Join(parts[:3], ".")
+	entityID = strings.Join(parts[3:], ".")
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return "", "", false
+	}
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return "", "", false
+	}
+	return predicate, entityID, true
+}
+
+func predicateSummariesFromMembershipKeys(keys []string) []graph.PredicateSummary {
+	entitiesByPredicate := make(map[string]map[string]struct{})
+	for _, key := range uniqueSortedStrings(keys) {
+		predicate, entityID, ok := predicateMembershipFromKey(key)
+		if !ok {
+			continue
+		}
+		entities := entitiesByPredicate[predicate]
+		if entities == nil {
+			entities = make(map[string]struct{})
+			entitiesByPredicate[predicate] = entities
+		}
+		entities[entityID] = struct{}{}
+	}
+	names := make([]string, 0, len(entitiesByPredicate))
+	for predicate := range entitiesByPredicate {
+		names = append(names, predicate)
+	}
+	sort.Strings(names)
+	summaries := make([]graph.PredicateSummary, 0, len(names))
+	for _, predicate := range names {
+		summaries = append(summaries, graph.PredicateSummary{
+			Predicate: predicate, EntityCount: len(entitiesByPredicate[predicate]),
+		})
+	}
+	return summaries
 }
 
 func invalidPredicateQueryError(err error) error {
