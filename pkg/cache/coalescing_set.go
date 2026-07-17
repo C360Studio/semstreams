@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,21 +47,46 @@ func NewCoalescingSet(ctx context.Context, window time.Duration, callback func([
 	return c
 }
 
-// Add adds a key to the pending set. If the key already exists, it is deduplicated.
-// Thread-safe.
-func (c *CoalescingSet) Add(key string) {
+// Add adds a key to the pending set and reports whether it was newly inserted.
+// If the key already exists, it is deduplicated. Thread-safe.
+func (c *CoalescingSet) Add(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, exists := c.pending[key]; exists {
+		return false
+	}
 	c.pending[key] = struct{}{}
+	return true
 }
 
-// Remove removes a key from the pending set if it exists.
+// Remove removes a key from the pending set and reports whether it existed.
 // This is useful when an entity is deleted before the window expires.
 // Thread-safe.
-func (c *CoalescingSet) Remove(key string) {
+func (c *CoalescingSet) Remove(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, exists := c.pending[key]; !exists {
+		return false
+	}
 	delete(c.pending, key)
+	return true
+}
+
+// RemovePrefix removes every pending key with the supplied prefix and returns
+// the number removed.
+// This is useful when several provenance-bearing work items belong to the
+// same logical entity and a delete must retire all of them atomically.
+func (c *CoalescingSet) RemovePrefix(prefix string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	removed := 0
+	for key := range c.pending {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.pending, key)
+			removed++
+		}
+	}
+	return removed
 }
 
 // PendingCount returns the number of keys currently pending in the set.
@@ -69,6 +95,20 @@ func (c *CoalescingSet) PendingCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.pending)
+}
+
+// Drain removes and returns every pending key without invoking the callback.
+// Callers use this after Close when queued work owns external resources that
+// must be released during shutdown.
+func (c *CoalescingSet) Drain() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	keys := make([]string, 0, len(c.pending))
+	for key := range c.pending {
+		keys = append(keys, key)
+	}
+	c.pending = make(map[string]struct{})
+	return keys
 }
 
 // Close stops the background ticker and waits for cleanup to complete.

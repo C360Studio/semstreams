@@ -8,7 +8,7 @@ Rules evaluate against entity state changes in NATS KV. This document covers how
 ENTITY_STATES bucket (NATS KV)
         │
         ▼
-    KV Watcher (pattern: "acme.*.robotics.>")
+    KV Watcher (pattern: "acme.*.robotics.*.*.*")
         │
         ▼
     handleEntityUpdates()
@@ -38,8 +38,8 @@ Enable entity watching by specifying patterns:
 }
 ```
 
-If no patterns are configured, pattern-specific evaluation is disabled; the authoritative graph-state guard remains
-active:
+If no bucket patterns are configured, pattern-specific evaluation is disabled;
+the authoritative `ENTITY_STATES` guard remains active:
 
 ```go
 if len(rp.config.EntityWatchBuckets) == 0 {
@@ -49,8 +49,10 @@ if len(rp.config.EntityWatchBuckets) == 0 {
 
 ## Pattern Syntax
 
-Patterns have exactly six entity-ID positions. Each position is a canonical literal segment or the complete wildcard
-token `*`. `ENTITY_STATES` is the only supported bucket.
+`ENTITY_STATES` patterns have exactly six positions. Each position is a canonical
+literal segment or the single-token wildcard `*`. The terminal wildcard `>` is
+rejected because it hides arity mistakes. This watcher decodes every value as an
+`EntityState`, so `ENTITY_STATES` is the only supported bucket.
 
 ### Wildcards
 
@@ -103,6 +105,22 @@ for _, pattern := range rp.config.EntityWatchBuckets["ENTITY_STATES"] {
 
 Each watcher runs in its own goroutine.
 
+### Safety and Ordering Model
+
+Entity watching uses four distinct mechanisms. They solve different problems and must not be treated as one retention
+or delivery feature:
+
+| Mechanism | Responsibility |
+|-----------|----------------|
+| Authoritative `WatchAll` guard | Validates `ENTITY_STATES` values and advances the revision barrier |
+| Pattern watcher generation | Grants dispatch authority to one exact `(bucket, pattern, generation)` registration |
+| Coalescing window | Groups live work and collapses overlapping active patterns to one current-state fetch per entity |
+| Per-entity evaluation fence | Orders entity work and suppresses stale revisions |
+
+Pattern bootstrap waits for the authoritative guard and bypasses coalescing so recovery semantics keep
+`Bootstrap=true`. Live managed work records its watcher key and generation. Removing and later re-adding the same
+pattern creates a new generation; queued work from the retired generation is rejected before fetching current state.
+
 ## Update Handling
 
 When an entity changes, the watcher receives a KV entry:
@@ -151,16 +169,27 @@ func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.
 
 ### Handling Deletions
 
-When an entity is deleted, rule evaluation is skipped:
+When an entity is deleted, its canonical KV key is matched against each rule's
+`entity.pattern`. Matching stateful rules evaluate `CurrentlyMatching=false`,
+which allows `on_exit` to fire before tracked state is removed. The deleted
+value itself is never decoded or passed to condition evaluation.
+
+Fetch, evaluation, delete transition, and cleanup are serialized per entity and
+fenced by KV revision. This prevents an already-extracted debounce batch from
+evaluating an older snapshot after a completed delete and deduplicates the same
+delete revision delivered by overlapping watchers. Fence entries are retained
+while work is queued or in flight and cannot be evicted in that state. After
+the last active reference leaves, the revision watermark remains in a bounded
+recent-watermark cache for 15 minutes, capped at 65,536 idle entities with LRU
+eviction. These constants establish a fixed memory ceiling while covering
+normal watcher overlap and reconnect replay; they are a dedupe horizon, not an
+operator retention setting or replacement for KV history. Shutdown drains
+queued references and clears idle watermarks.
 
 ```go
-if entityState == nil {
-    rp.logger.Debug("Skipping rule evaluation for deleted entity")
-    return
-}
+matches, err := types.MatchEntityIDPattern(rule.Entity.Pattern, entityKey)
+// Matching stateful rules evaluate false, then StateTracker cleanup runs.
 ```
-
-However, state cleanup occurs via `StateTracker.DeleteAllForEntity()` if configured.
 
 ## Rule Evaluation Path
 
@@ -196,7 +225,9 @@ Which entities trigger rule evaluation:
 
 ```json
 {
-  "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.robotics.*.*.*"]}
+  "entity_watch_buckets": {
+    "ENTITY_STATES": ["acme.*.robotics.*.*.*"]
+  }
 }
 ```
 
@@ -218,12 +249,22 @@ An entity must match both:
 1. Config pattern (to trigger evaluation)
 2. Rule pattern (for rule to apply)
 
+`entity.pattern` is not a NATS subscription subject. Entity-scoped rules are
+selected only on the typed `ENTITY_STATES` path; message rules use their NATS
+input subjects and do not derive subscriptions from this field. The declaration
+is also the lane discriminator: an omitted or empty `entity.pattern` defines a
+message-path rule and is never evaluated for ENTITY_STATES bootstrap, live
+updates, or deletes. Use `*.*.*.*.*.*` when an entity rule intentionally applies
+to every canonical entity ID.
+
 ### Example
 
 ```json
 // Config
 {
-  "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.*.*.*.*"]}
+  "entity_watch_buckets": {
+    "ENTITY_STATES": ["acme.*.*.*.*.*"]
+  }
 }
 
 // Rule 1: Drone battery
@@ -299,20 +340,30 @@ entityBucket, err := rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueC
 })
 ```
 
-Rules can also reference other buckets in their entity configuration:
+Rule-level declarations may repeat the typed bucket explicitly:
 
 ```json
 {
   "entity": {
     "pattern": "*.*.robotics.*.drone.*",
-    "watch_buckets": ["ENTITY_STATES", "PREDICATE_INDEX"]
+    "watch_buckets": ["ENTITY_STATES"]
   }
 }
 ```
 
+Operational KV records such as agent-loop results are not `EntityState` values
+and cannot use this watcher. A rule surface for those records requires a
+separately designed typed decoder and evaluator adapter; the entity watcher does
+not offer an untyped multi-bucket fallback.
+
 ## Graceful Shutdown
 
-Watchers are cleaned up on processor shutdown:
+Shutdown first retires every watcher generation under the dispatch gate, then stops the physical transports. This
+ordering means a failed transport `Stop` cannot leave its old generation authoritative. The processor then closes and
+drains the coalescer, releases every queued fence reference, and clears idle revision watermarks. Cleanup reports an
+error if an active fence reference remains rather than silently leaking ordering state.
+
+Watcher goroutines also observe the processor shutdown signal:
 
 ```go
 case <-rp.shutdown:
@@ -338,7 +389,7 @@ nats kv get ENTITY_STATES "acme.prod.robotics.fleet.drone.d007"
 Look for log entries:
 
 ```
-INFO Started KV watcher pattern="acme.*.robotics.>"
+INFO Started KV watcher bucket="ENTITY_STATES" pattern="acme.*.robotics.*.*.*"
 ```
 
 ### Monitor Updates
@@ -352,9 +403,13 @@ nats kv watch ENTITY_STATES "acme.*.robotics.*.*.*"
 
 Entity watch patterns can be updated at runtime without restarting the processor. When patterns are changed via `ApplyConfigUpdate()`:
 
-1. **Removed patterns**: Watchers for patterns no longer in the list are stopped
-2. **New patterns**: New watchers are started for patterns not previously watched
-3. **Unchanged patterns**: Existing watchers continue uninterrupted
+1. **Prepare additions**: Every new transport is created before the desired set is committed; preparation failure
+   stops all prepared additions and leaves the old set intact
+2. **Commit authority**: New generations are published and removed generations are retired atomically under the
+   dispatch gate
+3. **Stop removals**: Retired physical transports are stopped after they lose authority; stop failures are reported
+   but cannot revive them
+4. **Unchanged patterns**: Existing watchers continue uninterrupted
 
 ```go
 // Example: Update patterns dynamically
@@ -362,7 +417,7 @@ changes := map[string]any{
     "entity_watch_buckets": map[string][]string{
         "ENTITY_STATES": {
             "acme.*.robotics.*.drone.*",
-            "acme.*.logistics.*.*.*",
+            "acme.*.logistics.*.*.*", // New pattern
         },
     },
 }
@@ -377,9 +432,10 @@ This enables:
 ## Limitations
 
 - Patterns only match entity IDs, not triple contents
-- `>` and embedded wildcards are rejected
+- `>` is not part of the entity-pattern language; use exactly six positions
+  with `*` as a complete position when wildcard matching is required
 - High cardinality patterns can cause CPU pressure
-- Deleted entities don't trigger exit actions (state cleaned up separately)
+- Matching stateful rules can fire exit actions before deleted-state cleanup
 
 ## Next Steps
 

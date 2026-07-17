@@ -132,13 +132,21 @@ type Processor struct {
 
 	// KV watchers for entity state changes
 	// Maps pattern string to watcher for dynamic management
-	entityWatchers    []jetstream.KeyWatcher
-	entityWatcherMap  map[string]jetstream.KeyWatcher
-	watcherCtx        context.Context    // Context for watcher goroutines
-	watcherCancelFunc context.CancelFunc // Cancel function for stopping all watchers
+	entityWatchers        []jetstream.KeyWatcher
+	entityWatcherMap      map[string]jetstream.KeyWatcher
+	entityWatcherCancels  map[string]context.CancelFunc
+	entityWatcherUpdateMu sync.Mutex
+	entityDispatchGate    sync.RWMutex
+	entityDispatchRecords map[string]managedEntityWatcher
+	entityNextGeneration  uint64
+	entityBeforeDispatch  func()
+	entityBeforeEvalLock  func(string)
+	watcherCtx            context.Context    // Context for watcher goroutines
+	watcherCancelFunc     context.CancelFunc // Cancel function for stopping all watchers
 
 	// Entity coalescer for batched rule evaluation
-	entityCoalescer *cache.CoalescingSet
+	entityCoalescer       *cache.CoalescingSet
+	entityEvaluationFence entityEvaluationFence
 
 	// Prometheus metrics
 	metrics *Metrics
@@ -258,6 +266,8 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		metricsRegistry:        metricsRegistry,
 		entityWatchers:         make([]jetstream.KeyWatcher, 0),
 		entityWatcherMap:       make(map[string]jetstream.KeyWatcher),
+		entityWatcherCancels:   make(map[string]context.CancelFunc),
+		entityDispatchRecords:  make(map[string]managedEntityWatcher),
 		graphStateGuardReadyCh: make(chan struct{}),
 		graphStateGuardDone:    make(chan struct{}),
 		graphStateProgress:     make(chan struct{}),
@@ -1116,6 +1126,39 @@ func (rp *Processor) Stop(_ time.Duration) error {
 		}
 	}
 
+	// Retire every watcher generation before stopping transports. The dedicated
+	// dispatch gate prevents callbacks that already decoded an entry from
+	// evaluating after shutdown retirement, while NATS Stop runs without the
+	// processor config mutex held.
+	rp.entityWatcherUpdateMu.Lock()
+	rp.entityDispatchGate.Lock()
+	rp.mu.Lock()
+	watcherCancel := rp.watcherCancelFunc
+	watchers := append([]jetstream.KeyWatcher(nil), rp.entityWatchers...)
+	rp.entityWatchers = nil
+	rp.entityWatcherMap = nil
+	rp.entityWatcherCancels = nil
+	rp.entityDispatchRecords = nil
+	rp.watcherCtx = nil
+	rp.watcherCancelFunc = nil
+	rp.mu.Unlock()
+	rp.entityDispatchGate.Unlock()
+	rp.entityWatcherUpdateMu.Unlock()
+
+	if watcherCancel != nil {
+		watcherCancel()
+	}
+	for _, watcher := range watchers {
+		if err := watcher.Stop(); err != nil {
+			rp.logger.Error("Error stopping entity watcher", "error", err)
+		}
+	}
+	// Close outside rp.mu: an in-flight debounce callback snapshots rules under
+	// rp.mu.RLock, and Close waits for that callback to finish.
+	if err := rp.closeEntityEvaluationQueue(); err != nil {
+		rp.logger.Warn("Failed to close entity evaluation queue cleanly", "error", err)
+	}
+
 	// Clean up resources
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
@@ -1127,27 +1170,6 @@ func (rp *Processor) Stop(_ time.Duration) error {
 		}
 	}
 	rp.subscriptions = nil
-
-	// Cancel watcher context to signal all watcher goroutines to stop
-	if rp.watcherCancelFunc != nil {
-		rp.watcherCancelFunc()
-	}
-
-	// Stop all entity watchers
-	for _, watcher := range rp.entityWatchers {
-		if err := watcher.Stop(); err != nil {
-			rp.logger.Error("Error stopping entity watcher", "error", err)
-		}
-	}
-	rp.entityWatchers = nil
-	rp.entityWatcherMap = nil
-
-	// Close entity coalescer
-	if rp.entityCoalescer != nil {
-		if err := rp.entityCoalescer.Close(); err != nil {
-			rp.logger.Warn("Failed to close entity coalescer", "error", err)
-		}
-	}
 
 	// Clean up all rules
 	rp.rules = nil
