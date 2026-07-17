@@ -284,6 +284,16 @@ type TaskMessage struct {
 	Depth    int    `json:"depth,omitempty"`     // Current depth in agent tree (0 = root)
 	MaxDepth int    `json:"max_depth,omitempty"` // Maximum allowed depth
 
+	// MaxIterations is an optional per-spawn iteration budget (gh#528). Nil
+	// means "use the component default" (agentic-loop's Config.MaxIterations).
+	// A non-nil value narrows the spawned loop's budget: agentic-loop computes
+	// the effective ceiling as min(*MaxIterations, component ceiling) at loop
+	// creation — a spawn may narrow its budget, never widen it past the
+	// operator-configured ceiling. Validate rejects a non-nil value below 1.
+	// The publish_agent rule action exposes this as loop_max_iterations
+	// (distinct from the action's own firing-cap max_iterations field).
+	MaxIterations *int `json:"max_iterations,omitempty"`
+
 	// InReplyTo is the bare loop-id this task is a reply to (gh#256). When
 	// set, agentic-loop stamps an agent.loop.reply_to triple (a 6-part loop
 	// entity reference, mirroring agent.loop.parent) on the spawned loop so a
@@ -355,6 +365,9 @@ func (t TaskMessage) Validate() error {
 	}
 	if t.Prompt == "" {
 		return fmt.Errorf("prompt required")
+	}
+	if t.MaxIterations != nil && *t.MaxIterations < 1 {
+		return fmt.Errorf("max_iterations must be >= 1, got %d", *t.MaxIterations)
 	}
 	if t.ToolChoice != nil {
 		if err := t.ToolChoice.Validate(); err != nil {
