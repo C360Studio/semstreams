@@ -1,6 +1,7 @@
 # Predicate Contract Breaking Rename Ledger
 
-**Status:** Cutover review artifact. Reviewed against the SemStreams enforcement diff on 2026-07-14.
+**Status:** Cutover review artifact. Reviewed against the SemStreams enforcement diff on 2026-07-14 and the
+SemConnect owner cutover inventory on 2026-07-17.
 
 This ledger records the predicate identity changes required by ADR-074. It is release documentation, not a
 runtime alias table. No binary, configuration loader, query path, or migration tool may load this file to accept
@@ -189,6 +190,21 @@ mission contract.
 These standard-facing local names are SemStreams predicate identities. Their external RDF/JSON-LD IRI mappings
 remain a separate vocabulary-registration concern and must be regression tested after the rename.
 
+## SemConnect-Owned Connected Systems Predicates
+
+These mappings were discovered in the SemConnect owner inventory after review of the SemStreams enforcement diff.
+They are release mappings for SemConnect's gateway-local vocabulary, not aliases or a transfer of runtime ownership
+back to SemStreams.
+
+| Previous identity | Canonical identity |
+|---|---|
+| `cs-api.deployment.deployedSystems` | `cs-api.deployment.deployed-systems` |
+| `cs-api.samplingfeature.hostedProcedure` | `cs-api.samplingfeature.hosted-procedure` |
+
+SemConnect must update its producers, registrations, exact queries, RDF/JSON-LD mappings, fixtures, and reseed source
+in the same coordinated release. The old mixed-case properties fail the canonical lower-kebab parser and have no
+dual-read path.
+
 ## Examples and Documentation Vocabulary
 
 | Previous identity | Canonical identity |
@@ -288,5 +304,6 @@ make the diff inventory complete, but they are not product migration promises.
   compatibility promise.
 - The inference default-set replacement needs semantic owner sign-off because it is not a mechanical rename.
 - All exact-query consumers and RDF/JSON-LD mappings must be tested with the canonical identities before release.
-- Sister-repository occurrences are not included as new mapping rows. They must consume this exact ledger and
-  may not invent a third identity for an existing contract.
+- Sister-repository occurrences consume this ledger and may not invent a third identity for an existing contract.
+  An owner-approved mapping absent from the initial framework diff is added as an explicit owner-scoped section, as
+  with the SemConnect rows above; it never becomes a runtime alias.

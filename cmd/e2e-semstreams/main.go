@@ -47,13 +47,14 @@ import (
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
-const (
+var (
 	// Version is the semantic version of the E2E test application.
 	Version = "0.1.0-e2e"
 	// BuildTime is the build timestamp, set during compilation.
 	BuildTime = "dev"
-	appName   = "e2e-semstreams"
 )
+
+const appName = "e2e-semstreams"
 
 func main() {
 	defer func() {

@@ -55,7 +55,7 @@ jobs:
           fi
 
           go build \
-            -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -ldflags="-w -s -X main.Version=${VERSION} -X main.GitCommit=${GITHUB_SHA} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o "${OUTPUT_NAME}" \
             ./cmd/semstreams
 

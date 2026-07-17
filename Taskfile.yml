@@ -115,7 +115,7 @@ tasks:
       - task: schema:check-changes
       - go test ./test/contract/...
       - go test -race ./...
-      - go test -race -tags=integration ./...
+      - task: test:integration
 
   # E2E composite tasks
   e2e:tiers:
@@ -126,34 +126,42 @@ tasks:
       - 'echo "[TIERS] Running all inference tier E2E tests..."'
       - 'echo ""'
       - 'echo "=== STRUCTURAL (Rules-Only) ==="'
-      - docker compose -f docker/compose/tiered.yml --profile structural up -d --wait
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant structural --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15
+      - task: e2e:tier
+        vars:
+          PROFILE: structural
+          VARIANT: structural
       - sleep 3
       - 'echo ""'
       - 'echo "=== STATISTICAL (BM25 + LPA) ==="'
-      - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      - task: e2e:tier
+        vars:
+          PROFILE: statistical
+          VARIANT: statistical
       - sleep 3
       - 'echo ""'
       - 'echo "=== SEMANTIC (Neural + LLM) ==="'
-      - docker compose -f docker/compose/tiered.yml --profile semantic up -d --wait
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:8180 --udp-endpoint localhost:14650 --metrics-url http://localhost:9190 --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
+      - task: e2e:tier
+        vars:
+          PROFILE: semantic
+          VARIANT: semantic
+          EXTRA_ARGS: --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190
       - 'echo ""'
       - 'echo "[TIERS] Generating comparison report..."'
-      - cmd: cd cmd/e2e && ./e2e --compare-tiers --output-dir ./test/e2e/results
-        ignore_error: true
+      - cd cmd/e2e && ./e2e --compare-tiers --output-dir ./test/e2e/results
       - 'echo "[OK] All tier tests complete. Results in ./test/e2e/results/"'
 
+  e2e:tier:
+    internal: true
+    requires:
+      vars: [PROFILE, VARIANT]
+    cmds:
+      - defer: docker compose -f docker/compose/tiered.yml --profile {{.PROFILE}} down -v --timeout 15
+      - docker compose -f docker/compose/tiered.yml --profile {{.PROFILE}} up -d --wait --build
+      - cd cmd/e2e && ./e2e --scenario tiered --variant {{.VARIANT}} {{.EXTRA_ARGS}} --output-dir ./test/e2e/results
+
   e2e:all:
-    desc: Run all E2E tests (core -> structural -> statistical -> semantic)
+    desc: Run all E2E tests (core -> inference tiers -> agentic)
     cmds:
       - task: e2e:core
-      - task: e2e:structural
-      - task: e2e:statistical
-      - task: e2e:semantic
+      - task: e2e:tiers
+      - task: e2e:agentic

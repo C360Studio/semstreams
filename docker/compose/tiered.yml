@@ -188,11 +188,11 @@ services:
   # PROFILE: statistical - Only started when --profile statistical is specified
   semstreams:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-production
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: production
+      target: e2e
     container_name: semstreams-tiered-app
     profiles:
       - statistical

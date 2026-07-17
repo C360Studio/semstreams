@@ -1,94 +1,167 @@
 # Sister-repo cutover checklist — pre-v1 breaking wave
 
-Migration target: the breaking tag cut after PR #539 merges (predicates #532 + entity-ID/KV #534/#536 +
-package boundaries #535 + lineage/watcher/event-identity #537–539). One migration, one wipe, per repo.
-Grepped against local checkouts 2026-07-17; re-verify each repo's tree at migration time.
+This checklist coordinates one migration target and one destructive graph-state cutover per product. The beta pins
+below were observed in local checkouts on 2026-07-17. They describe audit starting points, not approved migration
+targets. Re-read each repository's dependency file and record its commit before relying on a pin.
 
-## Universal steps (every repo, in order)
+The migration target is the single breaking SemStreams tag containing all of the following:
 
-1. Bump `c360studio/semstreams` to the breaking tag; build.
-2. Run the shared corpus audits from the semstreams tooling: entity-ID audit + predicate audit over the
-   repo's source, configs, schemas, fixtures, and seed data. Fix every finding (canonical 6-part bounded IDs;
-   3-part predicates; no legacy `lineage.*` / `reply_to` forms).
-3. Every rule-processor config declares an explicit `pack_id` (1–246 ASCII of `[A-Za-z0-9_=-]+` — NO dots),
-   unique across the enabled composition, and sets `enable_graph_integration` EXPLICITLY (the default flipped
-   true→false).
-4. Wipe all NATS state for the deployment (authoritative + derived), restart, reseed from canonical owned
-   sources. There is no migration path, compatibility reader, or rollback by design.
-5. Product e2e green. Record the evidence for the coordinated release notes.
+- predicates PR #532;
+- entity-ID/KV PRs #534 and #536;
+- package boundaries PR #535;
+- lineage, watcher, and event-identity PRs #537–539;
+- graph-index replacement semantics for NAME, PREDICATE, and source-owned INCOMING rows; and
+- the approved predicate-representation decision and its selected implementation.
+
+## Coordinated release order
+
+1. Merge the identity and package-boundary wave through PR #539.
+2. Approve and land graph-index replacement semantics.
+3. Approve the predicate-representation decision and land the selected raw-key or documented fallback
+   implementation.
+4. Pass the combined framework release gates, then cut one breaking tag containing all three bodies of work.
+5. Migrate every product to that tag before its single stop, wipe, restart, and canonical reseed.
+
+The index work does not ship on a later routine bump. It consumes the same pre-v1 wipe window as the identity
+changes. A missed window requires a separate migration proposal; it must not create a second undeclared wipe.
+
+## Universal product procedure
+
+1. Record the observed source pin and commit separately from the common breaking-tag migration target.
+2. Bump to the breaking tag and build before touching persisted state.
+3. Run the shared entity-ID and predicate audits over source, configs, schemas, fixtures, and seed data. Fix every
+   finding: canonical bounded six-part IDs, canonical three-part predicates, and no legacy `lineage.*` or
+   `reply_to` forms.
+4. Give every rule-processor config an explicit `pack_id`. It must be 1–246 ASCII bytes matching
+   `[A-Za-z0-9_=-]+`, contain no dot, and be unique across the enabled composition. Set
+   `enable_graph_integration` explicitly because its default changed from `true` to `false`.
+5. Stop every writer against the target NATS account and capture the rendered deployment configuration.
+6. Derive the deletion set from that configuration and the framework bucket inventory. Remove `ENTITY_STATES`,
+   graph-ingest guard buckets, and every enabled framework-derived graph bucket under its resolved name. Do not
+   remove unrelated product, operational, workflow, or upstream source-system buckets. Never apply a copied
+   default list or wildcard deletion to a shared account. Follow
+   [29 — entity-ID contract clean cutover](29-entity-id-contract-clean-cutover.md) for the current inventory.
+7. Start only migrated producers, reseed from canonical owned sources, wait for index readiness, prove query parity,
+   and restart once without another write to prove replay parity.
+8. Run the affected product E2E suites and complete the evidence envelope below.
+
+There is no compatibility reader, in-place beta-state migration, or rollback. The destructive scope is the
+deployment-derived graph state, not every NATS resource in the account.
+
+## Required evidence envelope
+
+Create one immutable record per product. A cross-product summary may link these records but may not replace them.
+
+| Field | Required evidence |
+|---|---|
+| Product identity | Repository, owner, clean migration commit, and evidence timestamp. |
+| Dependency transition | Observed beta tag and commit; common breaking target tag and SemStreams commit. |
+| Deployment identity | Environment, composition/config commit, NATS context/account, and rendered bucket names. |
+| Corpus gates | Exact audit commands and versions, scope, zero legacy/unclassified findings, and manifest review. |
+| Composition | Component/payload/tool inventory; every `pack_id`; graph-integration mode; uniqueness result. |
+| Package cutover | Removed imports/facades, replacement owner packages, registrations, and generated-artifact diff. |
+| Wipe | Writers stopped; exact buckets removed; intentionally retained product buckets; operator and timestamp. |
+| Reseed/rebuild | Canonical source and version, counts, readiness target/revision, query parity, and replay parity. |
+| Event consumer | Bounded audit result or named consumer with first-create and repeated-replacement proof. |
+| Verification | Exact test/E2E commands, environment, result, artifact link, and product-owner sign-off. |
+| Exceptions | Open blockers or `none`; no silent waiver or compatibility shim. |
+
+Evidence collected from a dirty tree, a different deployment revision, or before the final combined framework
+commit is diagnostic only and must not be promoted to release evidence.
 
 ## Per-repo specifics (heaviest first)
 
-### semconnect (pin beta.141) — HEAVY
-- 45 Go files import the removed OGC bundle (`message/oms`, `parser/sensorml`, `pkg/swecommon`,
-  `vocabulary/{csapi,oms,sosa,swe}`). Self-host the bundle per the ADR-075 owner inventory
-  (semstreams docs/operations/27): equivalent packages, tests, canonical fixtures, vocabulary + payload
-  registration.
-- Explicitly register payload `ogc.oms.v3` in every binary that decodes it (no more ambient registration).
-- CS API entity-ID contract: verify OGC-derived IDs satisfy the bounded 6-part grammar before reseeding.
-- KNOWN LANDMINE: gateway-local predicates `cs-api.deployment.deployedSystems` and
-  `cs-api.samplingfeature.hostedProcedure` are mixed-case — the canonical predicate contract is lower-kebab,
-  enforced fail-closed at the write seam, so these writes are REJECTED post-migration. Case-migrate them during
-  the vocabulary promotion (semconnect#70/#71) and record the renames in the predicate rename ledger.
-- Transferred backlog now filed in-repo: semconnect#69 (swecommon Phase 2), #70 (Feasibility vocabulary
-  promotion), #71 (association/composition predicates + case migration).
+### semconnect — observed beta.141 — HEAVY
 
-### semteams (pin beta.115) — HEAVY (drift + ownership transfer)
-- 31 betas of drift PLUS the wave; budget accordingly.
-- Remove `oasf-generator` / `directory-bridge` / `a2a-adapter` entries from `configs/flow-bootstrap.json` and
-  `configs/e2e-flow-bootstrap.json`; delete stale schemas (`a2a-adapter.v1`, `slim-bridge.v1`,
-  `oasf-generator.v1`, `directory-bridge.v1`).
-- Re-home OASF projection + AGNTCY directory registration as owner (per ADR-075); do NOT copy the deleted
-  A2A/SLIM facades.
-- `pack_id: "semteams"` already present and grammar-safe — verify composition uniqueness.
+- 45 Go files import the removed OGC bundle (`message/oms`, `parser/sensorml`, `pkg/swecommon`, and
+  `vocabulary/{csapi,oms,sosa,swe}`). Self-host the bundle per the ADR-075 owner inventory in
+  [27 — framework package boundary clean break](27-framework-package-boundary-clean-break.md): equivalent packages,
+  tests, canonical fixtures, vocabulary, and payload registration.
+- Explicitly register payload `ogc.oms.v3` in every binary that decodes it. Ambient registration is removed.
+- Verify that every OGC-derived CS API entity ID satisfies the bounded six-part grammar before reseeding.
+- Rename `cs-api.deployment.deployedSystems` to `cs-api.deployment.deployed-systems` and
+  `cs-api.samplingfeature.hostedProcedure` to `cs-api.samplingfeature.hosted-procedure`. The old mixed-case writes
+  fail closed after migration. The mappings are release rows in
+  [24 — predicate breaking rename ledger](24-predicate-breaking-rename-ledger.md).
+- Transferred backlog is filed in SemConnect: #69 (swecommon Phase 2), #70 (Feasibility vocabulary promotion),
+  and #71 (association/composition predicates and case migration).
 
-### semspec (pin beta.134) — MEDIUM
-- 4 of 17 rule-processor configs missing `pack_id` → boot-fail until added.
-- Regenerate `ui/src/lib/types/semstreams.generated.ts` from the reduced OpenAPI; prove the catalog no longer
-  advertises `a2a-adapter.v1`, `directory-bridge.v1`, `github_webhook.v1`, `oasf-generator.v1`,
-  `slim-bridge.v1`.
-- 13 configs already set `enable_graph_integration` explicitly — protected from the default flip; keep them
-  explicit.
+### semteams — observed beta.115 — HEAVY (drift and ownership transfer)
 
-### semdev (pin beta.146) — LIGHT-MEDIUM
-- 3 files import `semstreams/input/github-webhook` — re-home behind `internal/boot` per the ADR-075
-  inventory; own the GitHub executors, webhook types, and workflow/rule policy.
-- `pack_id: "semdev"` present and grammar-safe; `enable_graph_integration` explicit.
-- Transferred backlog now filed in-repo: semdev#2 (comment parent number/id), #3 (specific added/removed label).
+- The checkout was 31 betas behind the observed framework pin; budget for that drift plus this wave.
+- Remove `oasf-generator`, `directory-bridge`, and `a2a-adapter` from `configs/flow-bootstrap.json` and
+  `configs/e2e-flow-bootstrap.json`. Delete stale `a2a-adapter.v1`, `slim-bridge.v1`, `oasf-generator.v1`, and
+  `directory-bridge.v1` schemas.
+- Re-home OASF projection and AGNTCY directory registration as owner. Do not copy the deleted A2A/SLIM facades.
+- `pack_id: "semteams"` was present and grammar-safe; prove composition uniqueness at the migration commit.
 
-### semdragon (pin beta.135) — LIGHT
-- 1 rule-processor config: add `pack_id`; set `enable_graph_integration` explicitly.
+### semspec — observed beta.134 — MEDIUM
 
-### semboids (pin beta.146) — LIGHT
-- 1 rule-processor config: add `pack_id`.
-- Re-run load instrumentation against the new watcher ordering (per-entity serialization + coalescing may
-  shift throughput characteristics); file verified gh issues if regressions appear.
+- Four of 17 observed rule-processor configs lacked `pack_id` and will fail startup until updated.
+- Regenerate `ui/src/lib/types/semstreams.generated.ts` from the reduced OpenAPI. Prove the catalog omits
+  `a2a-adapter.v1`, `directory-bridge.v1`, `github_webhook.v1`, `oasf-generator.v1`, and `slim-bridge.v1`.
+- Thirteen observed configs set `enable_graph_integration` explicitly. Keep the setting explicit and re-audit all
+  configs at the migration commit.
 
-### semops (pin beta.145) — LIGHT, functional check required
-- No grep hits, BUT the ops role reads alert entities: legacy `alert_...` IDs are replaced by
-  `semstreams.framework.graph.rules.alert.<sha256>` (occurrence-scoped — one entity per occurrence).
-  Verify diagnosis queries/aggregations against the new identity scheme and cardinality behavior.
+### semdev — observed beta.146 — LIGHT-MEDIUM
 
-### semlink (pin beta.141) — LIGHT
-- One grep hit to classify (likely an `alert_*` config-key false positive); otherwise universal steps only.
+- Three files imported `semstreams/input/github-webhook`. Re-home them behind `internal/boot` per ADR-075 and own
+  the GitHub executors, webhook types, and workflow/rule policy.
+- `pack_id: "semdev"` was present and grammar-safe, and graph integration was explicit. Re-prove both at the
+  migration commit.
+- Transferred backlog is filed in SemDev: #2 (comment parent number/id) and #3 (specific added/removed label).
 
-### semsource (pin beta.145) — TRIVIAL
-- Correct the stale contributor docs claiming `federation.*` types come from semstreams (documentation
-  release gate from ADR-075); universal steps only.
+### semdragon — observed beta.135 — LIGHT
 
-## Cross-cutting flags
+- One observed rule-processor config needs `pack_id` and an explicit `enable_graph_integration` value.
 
-- The alert/trigger identity change affects ANY repo that queries rule-derived entities — grep is not
-  sufficient proof of absence; check query paths.
-- `graph.events.*` currently has NO consumer anywhere; if a product plans to consume it, note the trigger
-  entities are update-only (never created) and application semantics (replace vs append) are not yet pinned —
-  coordinate with the graph-index replacement-semantics change before building on it.
-- Index hardening (replacement semantics + predicate raw-key decision) lands AFTER the tag and is
-  derived-state only: no second source migration, no second authoritative wipe. Deployments will see a
-  derived-bucket rebuild behind readiness gates on a later routine bump.
+### semboids — observed beta.146 — LIGHT
+
+- One observed rule-processor config needs `pack_id`.
+- Re-run load instrumentation against the new watcher ordering. Per-entity serialization and coalescing may shift
+  throughput. File verified issues for regressions.
+
+### semops — observed beta.145 — LIGHT, functional check required
+
+- The source grep found no direct migration hit, but the ops role reads alert entities. Legacy `alert_...` IDs become
+  `semstreams.framework.graph.rules.alert.<sha256>`, with one entity per occurrence. Verify diagnosis queries and
+  aggregations against the new identity and cardinality behavior.
+
+### semlink — observed beta.141 — LIGHT
+
+- Classify the one observed `alert_*` hit, which may be a config-key false positive. Otherwise apply the universal
+  procedure.
+
+### semsource — observed beta.145 — TRIVIAL
+
+- Correct contributor documentation that says `federation.*` types come from SemStreams. Apply the universal
+  procedure.
+
+### semstreams-ui — observed dependency pin not captured
+
+- Capture the actual dependency and commit at migration time. Regenerate clients from the breaking target and prove
+  that removed schemas, predicates, exact IDs, and package facades are absent.
+
+## Cross-cutting findings
+
+- The alert/trigger identity change affects every product that queries rule-derived entities. A producer-only grep
+  is not proof of absence; inspect query and aggregation paths.
+- A bounded 2026-07-17 audit of the owned repositories listed here found no behavior-bearing consumer of
+  `graph.events.*`. This is not a global claim: it excludes unowned/private repositories, runtime-only subscriptions,
+  and deployments not represented by the audited commits. Record the exact scan scope and commit in each product's
+  evidence envelope.
+- Current graph-event normative text requires a named consumer to prove first-trigger create/upsert and
+  repeated-trigger replacement. The bounded no-consumer result cannot satisfy that wording. Release sign-off remains
+  open until the normative change is amended and approved to accept the bounded no-consumer outcome, or an owned
+  consumer is identified and supplies the required proof.
+- No product may begin consuming `graph.events.*` while that outcome is unresolved. Producers currently emit
+  update-shaped trigger events; must-exist update would reject the first trigger, while append would violate the
+  stable-entity contract.
 
 ## See also
 
-- [27 — framework package boundary clean break](27-framework-package-boundary-clean-break.md) (per-repo owner inventories)
+- [24 — predicate breaking rename ledger](24-predicate-breaking-rename-ledger.md)
+- [25 — predicate corpus audit and release gate](25-predicate-corpus-audit-release-gate.md)
+- [27 — framework package boundary clean break](27-framework-package-boundary-clean-break.md)
 - [29 — entity-ID contract clean cutover](29-entity-id-contract-clean-cutover.md)
-- 30 — rule-event identity clean cutover (lands with the identity slice PR)
+- [30 — rule-event identity clean cutover](30-rule-event-identity-clean-cutover.md)

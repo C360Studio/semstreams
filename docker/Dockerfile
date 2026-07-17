@@ -4,10 +4,10 @@
 # Supports multi-arch: linux/amd64, linux/arm64
 #
 # Build from repository root:
-#   docker build -t semstreams:latest .
+#   docker build --target production -t semstreams:latest .
 #
 # Build with buildx for multi-arch:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
+#   docker buildx build --target production --platform linux/amd64,linux/arm64 \
 #     -t semstreams:latest .
 
 # Build arguments
@@ -45,9 +45,9 @@ ARG TARGETARCH
 # Build main binary with version information
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-w -s \
-      -X main.version=${VERSION} \
-      -X main.commit=${COMMIT_SHA} \
-      -X main.buildDate=${BUILD_DATE}" \
+      -X main.Version=${VERSION} \
+      -X main.GitCommit=${COMMIT_SHA} \
+      -X main.BuildTime=${BUILD_DATE}" \
     -o /build/semstreams-bin \
     ./cmd/semstreams
 
