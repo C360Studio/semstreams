@@ -40,16 +40,21 @@ func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 	target := "acme.ops.robotics.gcs.drone.001"
 	srcA := "acme.ops.robotics.gcs.sensor.001"
 	srcB := "acme.ops.robotics.gcs.sensor.002"
+	poisonSource := "acme.ops.robotics.gcs.sensor.003"
 
 	// Two edges from srcA (distinct predicates) + one from srcB → 2 distinct sources.
 	for _, key := range []string{
-		target + "." + srcA + ".rel.observes",
-		target + "." + srcA + ".rel.controls",
-		target + "." + srcB + ".rel.observes",
+		target + "." + srcA + "." + graph.EncodePredicateToken("robotics.relation.observes"),
+		target + "." + srcA + "." + graph.EncodePredicateToken("robotics.relation.controls"),
+		target + "." + srcB + "." + graph.EncodePredicateToken("robotics.relation.observes"),
 	} {
 		_, putErr := qc.incomingBucket.Put(ctx, key, []byte{})
 		require.NoError(t, putErr)
 	}
+	// A legacy raw/noncanonical predicate suffix is poison under the production
+	// target6.source6.hex(predicate3) contract and must not create a third source.
+	_, err = qc.incomingBucket.Put(ctx, target+"."+poisonSource+".rel.observes", []byte{})
+	require.NoError(t, err)
 
 	sources, err := qc.GetIncomingEdges(ctx, target)
 	require.NoError(t, err)

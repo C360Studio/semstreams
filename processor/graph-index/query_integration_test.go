@@ -350,7 +350,8 @@ func TestContextTimeout_Integration(t *testing.T) {
 
 	// Add data first
 	entityID := "c360.platform.robotics.mav1.drone.001"
-	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID, "target", "predicate"))
+	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID,
+		"c360.platform.robotics.mav1.mission.001", "robotics.assigned.mission"))
 
 	// Create query request
 	nc := natsClient.GetConnection()
@@ -378,7 +379,8 @@ func TestConcurrentQueries_Integration(t *testing.T) {
 	// Add multiple entities
 	for i := 0; i < 10; i++ {
 		entityID := "c360.platform.robotics.mav1.drone." + string(rune('0'+i))
-		require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID, "target", "predicate"))
+		require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID,
+			"c360.platform.robotics.mav1.mission.001", "robotics.assigned.mission"))
 	}
 
 	// Create query requests concurrently

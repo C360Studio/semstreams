@@ -131,7 +131,13 @@ func nameEntryFromKey(key, nameHash string) (entityID, predicate string, ok bool
 	}
 	entityID = strings.Join(parts[:6], ".")
 	predicate, decoded := decodePredicateToken(parts[6])
-	if !decoded || predicate == "" || !message.IsValidEntityID(entityID) {
+	if !decoded || predicate == "" {
+		return "", "", false
+	}
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return "", "", false
+	}
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
 		return "", "", false
 	}
 	return entityID, predicate, true
@@ -190,6 +196,9 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 
 	nameHash := nameIndexKey(name)
 	key := nameCompositeKey(nameHash, entityID, predicate)
+	if err := natsclient.ValidateKVLiteralKey(key); err != nil {
+		return err
+	}
 
 	value, err := json.Marshal(nameCompositeValue{
 		Name:     name,
@@ -282,19 +291,23 @@ func (c *Component) handleQueryByNameNATS(ctx context.Context, data []byte) ([]b
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, errors.New("invalid request: empty name"))
 	}
 
-	// Cutover-readiness gate (P1d): don't serve a partial keyset while the index is
-	// still catching up after a format cutover / cold replay.
+	nameHash := nameIndexKey(req.Name)
+	prefix := nameCompositePrefix(req.Name)
+	if err := validateKVPrefix(prefix); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, err)
+	}
 	if err := c.ensureQueryReady(ctx); err != nil {
 		return nil, err
 	}
-
-	nameHash := nameIndexKey(req.Name)
-	prefix := nameCompositePrefix(req.Name)
 
 	keys, err := c.nameBucket.KeysByPrefix(ctx, prefix)
 	if err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
 	}
+	// Filtered listings are watcher snapshots and may repeat a key concurrent with a
+	// Put. Deduplicate before applying the hydration budget so duplicates cannot
+	// spuriously exhaust it or trigger redundant serial Gets.
+	keys = uniqueSortedStrings(keys)
 	// Hard read budget (gh#474 Codex P2a interim): this handler does one serial Get per
 	// membership below, so a name shared by a huge number of entities is an unbounded
 	// N+1 under the 5s timeout. Refuse with a typed resource-exhausted error rather than

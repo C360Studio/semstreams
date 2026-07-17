@@ -124,10 +124,11 @@ target-prefix hard-delete behavior MUST be removed rather than preserved as a co
 Production replacement and INCOMING lifecycle behavior MUST remain the documented shipped behavior until the
 owner-filter proof passes and the owner-discovery/INCOMING-ownership ADR approves each store's mechanism. When
 reconciliation activates, the pre-v1 release MUST first wipe incompatible authoritative and derived NATS graph
-resources and reseed canonical owned sources; PREDICATE_INDEX, PREDICATE_CATALOG, NAME_INDEX, and INCOMING_INDEX
-MUST initialize from the freshly reseeded ENTITY_STATES behind typed not-ready responses, and readiness MUST stay
-false until initial replay reaches the authoritative watermark. This is a fresh-state release contract, not an
-upgrade path; no reader recognizes old keys and no export, preservation, or rollback is provided.
+resources and reseed canonical owned sources. The old PREDICATE_INDEX and PREDICATE_CATALOG state MUST be removed;
+fresh raw PREDICATE_INDEX, NAME_INDEX, and INCOMING_INDEX buckets MUST initialize from the freshly reseeded
+ENTITY_STATES behind typed not-ready responses, and readiness MUST stay false until initial replay reaches the
+authoritative watermark. This is a fresh-state release contract, not an upgrade path; no reader recognizes old
+keys and no dual format, migration, export, preservation, or rollback is provided.
 
 #### Scenario: a spike cannot silently activate reconciliation
 
@@ -136,7 +137,7 @@ upgrade path; no reader recognizes old keys and no export, preservation, or roll
 - **THEN** production entity updates and deletes retain the documented shipped behavior
 - **AND** no configuration flag or implicit default can activate the candidate path
 
-#### Scenario: current-layout activation starts from canonical fresh state
+#### Scenario: selected-layout activation starts from canonical fresh state
 
 - **GIVEN** owned sources/configurations/fixtures are canonical and incompatible NATS graph resources were wiped
 - **WHEN** reconciliation starts after canonical reseed

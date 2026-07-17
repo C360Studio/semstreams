@@ -40,19 +40,14 @@ func TestIncomingIndex_KeyRoundTrip(t *testing.T) {
 	assert.Equal(t, predicate, got.Predicate)
 }
 
-func TestIncomingIndex_MultiTokenPredicateRoundTrip(t *testing.T) {
-	// A predicate with multiple dot-separated tokens must survive the key round-trip.
-	// The key format is targetID.sourceID.predicate; incomingEntryFromKey uses SplitN
-	// to grab exactly 6 tokens for sourceID and the remainder as predicate.
+func TestIncomingIndex_NoncanonicalPredicateRejectedOnDecode(t *testing.T) {
 	targetID := "acme.ops.robotics.gcs.mission.001"
 	sourceID := "acme.ops.robotics.gcs.drone.001"
 	predicate := "robot.arm.joint.angle.current" // predicate-audit:invalid {"kind":"stored-predicate","value":"robot.arm.joint.angle.current","reason":"arity"}
 
 	key := incomingIndexKey(targetID, sourceID, predicate)
-	got, ok := incomingEntryFromKey(key, targetID)
-	require.True(t, ok)
-	assert.Equal(t, sourceID, got.FromEntityID)
-	assert.Equal(t, predicate, got.Predicate, "multi-token predicate must survive key round-trip")
+	_, ok := incomingEntryFromKey(key, targetID)
+	assert.False(t, ok, "stored noncanonical predicates must be poison rows, not query results")
 }
 
 func TestIncomingIndex_SiblingEntityIDsIsolated(t *testing.T) {
@@ -354,10 +349,9 @@ func TestIncomingIndex_ReaderParity(t *testing.T) {
 	}
 }
 
-// TestEntityDelete_RemovesWholeIncomingKeyset verifies that deleting an entity
-// removes ALL composite incoming keys where it is the target (the whole "targetID.*"
-// keyset), and that a subsequent re-add is not blocked by phantom keys.
-func TestEntityDelete_RemovesWholeIncomingKeyset(t *testing.T) {
+// TestEntityDelete_PreservesLiveSourceIncomingKeyset verifies that deleting a target
+// does not erase assertions owned by sources that still point at it.
+func TestEntityDelete_PreservesLiveSourceIncomingKeyset(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
@@ -384,16 +378,16 @@ func TestEntityDelete_RemovesWholeIncomingKeyset(t *testing.T) {
 	// Delete the target entity.
 	require.NoError(t, comp.DeleteFromIndexes(ctx, targetID))
 
-	// All composite keys under the entity prefix must be gone.
+	// All source-owned assertions under the retired target prefix must survive.
 	keysAfter, err := comp.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(targetID))
 	require.NoError(t, err)
-	assert.Empty(t, keysAfter, "all composite incoming keys must be removed after entity delete")
+	assert.Len(t, keysAfter, 3, "target retirement must preserve live-source assertions")
 
-	// Re-add one edge — must succeed with exactly one key (no phantom).
+	// Re-put one existing edge remains idempotent.
 	require.NoError(t, comp.UpdateIncomingIndex(ctx, targetID, edges[0].id, edges[0].pred))
 	keysReAdded, err := comp.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(targetID))
 	require.NoError(t, err)
-	assert.Len(t, keysReAdded, 1, "re-add after delete must produce exactly one key (no phantom)")
+	assert.Len(t, keysReAdded, 3, "idempotent re-put must not duplicate a source assertion")
 }
 
 // ============================================================================

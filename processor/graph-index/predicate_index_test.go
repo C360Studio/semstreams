@@ -3,14 +3,40 @@ package graphindex
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// seedPredicates writes composite-key memberships (and catalog entries)
+func TestPredicateIndexProductionCodec_RawNineTokenContract(t *testing.T) {
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	predicate := "robotics.status.armed"
+	require.Equal(t, predicate+"."+entityID, predicateIndexKey(predicate, entityID))
+	require.Equal(t, []string{
+		"robotics.status.armed.*.*.*.*.*.*",
+		"robotics.status.*.*.*.*.*.*.*",
+		"robotics.*.*.*.*.*.*.*.*",
+	}, predicateIndexForwardFilters(predicate))
+	require.Equal(t, "*.*.*."+entityID, predicateIndexEntityFilter(entityID))
+}
+
+func TestPredicateIndexProductionCodec_MaximumBoundary(t *testing.T) {
+	entityID := maximumEntityIDForContract()
+	segment := "a" + strings.Repeat("b", 63)
+	predicate := segment + "." + segment + "." + segment
+	require.Len(t, predicateIndexKey(predicate, entityID), 451)
+	for _, filter := range append(predicateIndexForwardFilters(predicate), predicateIndexEntityFilter(entityID)) {
+		require.NoError(t, natsclient.ValidateKVWildcardFilter(filter))
+	}
+}
+
+// seedPredicates writes self-describing composite-key memberships
 // for a map of predicate -> entity IDs, using the production write path
 // so these tests exercise the real key encoding, not a hand-rolled one.
 func seedPredicates(t *testing.T, comp *Component, byPredicate map[string][]string) {
@@ -26,7 +52,7 @@ func seedPredicates(t *testing.T, comp *Component, byPredicate map[string][]stri
 // TestListAllPredicates_NoCrossContamination is the regression test for
 // the bug this ADR exists to fix: a raw dot-prefix design would let
 // a namespace scan silently absorb neighboring predicate identities. The
-// hash-keyed design must keep them fully separate.
+// fixed-nine-token design must keep them fully separate.
 func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
@@ -46,12 +72,61 @@ func TestListAllPredicates_NoCrossContamination(t *testing.T) {
 	assert.Equal(t, 1, byName["agent.run.phase"], "agent.run.phase must report exactly its own 1 entity")
 }
 
-func TestListAllPredicates_EmptyCatalog(t *testing.T) {
+func TestListAllPredicates_EmptyMembershipBucket(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 
 	predicates, err := comp.listAllPredicates(context.Background()) // predicate-audit:unrelated {"column":21,"surface":"go-assignment:predicates","value":"","basis":"reviewed query output returned by predicate index"}
 	require.NoError(t, err)
 	assert.Empty(t, predicates)
+}
+
+func TestPredicateQuery_InvalidPredicateHasNoBucketIO(t *testing.T) {
+	t.Parallel()
+	comp := createTestComponentWithMockKV(t)
+	var listCalls atomic.Int64
+	predicateMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		listCalls.Add(1)
+		return newMockKeyLister(nil), nil
+	}
+
+	_, err := comp.queryPredicateEntityIDs(context.Background(), "agent.run")
+	require.Error(t, err)
+	assert.Zero(t, listCalls.Load(), "invalid predicate must fail before predicate bucket I/O")
+}
+
+func TestPredicateNamespaceQuery_InvalidNamespaceHasNoBucketIO(t *testing.T) {
+	t.Parallel()
+	comp := createTestComponentWithMockKV(t)
+	var listCalls atomic.Int64
+	predicateMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		listCalls.Add(1)
+		return newMockKeyLister(nil), nil
+	}
+
+	_, err := comp.listPredicatesByNamespace(context.Background(), "agent.run.phase")
+	require.Error(t, err)
+	assert.Zero(t, listCalls.Load(), "invalid namespace must fail before predicate bucket I/O")
+}
+
+func TestPredicateQuery_MaximumBoundaryUsesValidatedExactFilter(t *testing.T) {
+	t.Parallel()
+	comp := createTestComponentWithMockKV(t)
+	entityID := maximumEntityIDForContract()
+	segment := "a" + strings.Repeat("b", 63)
+	predicate := segment + "." + segment + "." + segment
+	expectedFilter := predicate + ".*.*.*.*.*.*"
+
+	var listCalls atomic.Int64
+	predicateMock(comp).listFilteredFunc = func(_ context.Context, filters ...string) (jetstream.KeyLister, error) {
+		listCalls.Add(1)
+		require.Equal(t, []string{expectedFilter}, filters)
+		return newMockKeyLister([]string{predicateIndexKey(predicate, entityID)}), nil
+	}
+
+	entities, err := comp.queryPredicateEntityIDs(context.Background(), predicate)
+	require.NoError(t, err)
+	assert.Equal(t, []string{entityID}, entities)
+	assert.EqualValues(t, 1, listCalls.Load())
 }
 
 // TestListPredicatesByNamespace_TrailingDotNormalization is the

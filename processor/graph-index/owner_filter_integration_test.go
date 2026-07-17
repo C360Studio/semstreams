@@ -24,7 +24,6 @@ func TestOwnerFilters_RealNATSExactnessAndCancellation(t *testing.T) {
 	ownerParts := strings.Split(owner, ".")
 	predicate := "robotics.status.armed"
 	predicateToken := encodePredicateToken(predicate)
-	predicateHash := predicateHashHex(predicate)
 	nameHash := nameIndexKey("Alpha")
 	contextHash := contextHashHex("source.alpha")
 
@@ -40,9 +39,9 @@ func TestOwnerFilters_RealNATSExactnessAndCancellation(t *testing.T) {
 			owned:  []string{predicateIndexKey(predicate, owner)},
 			controls: []string{
 				predicateIndexKey(predicate, other),
-				predicateHash + "." + strings.Join(ownerParts[:5], "."),
+				predicate + "." + strings.Join(ownerParts[:5], "."),
 				predicateIndexKey(predicate, owner) + ".extra",
-				owner + "." + predicateHash,
+				owner + "." + predicate,
 			},
 		},
 		{
@@ -93,9 +92,9 @@ func TestOwnerFilters_RealNATSExactnessAndCancellation(t *testing.T) {
 			owned: []string{predicateIndexKey(predicate, owner)},
 			controls: []string{
 				predicateIndexKey("robotics.status.disarmed", owner),
-				predicateHash + "." + strings.Join(ownerParts[:5], "."),
+				predicate + "." + strings.Join(ownerParts[:5], "."),
 				predicateIndexKey(predicate, owner) + ".extra",
-				owner + "." + predicateHash,
+				owner + "." + predicate,
 			},
 		},
 		{

@@ -372,6 +372,14 @@ func TestConfig_Validate_InvalidWorkers(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "workers exceed selected maximum",
+			config: Config{
+				Ports:   DefaultConfig().Ports,
+				Workers: maxGraphIndexWorkers + 1,
+			},
+			wantErr: true,
+		},
+		{
 			name: "negative batch size",
 			config: Config{
 				Ports: &component.PortConfig{
@@ -903,7 +911,8 @@ func TestComponent_DeleteFromIndexes_ValidID(t *testing.T) {
 	entityID := "c360.platform.robotics.mav1.drone.001"
 
 	// Create some index entries first
-	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID, "target", "predicate"))
+	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID,
+		"c360.platform.robotics.mav1.mission.001", "robotics.assigned.mission"))
 	require.NoError(t, comp.UpdateAliasIndex(ctx, "drone-001", entityID))
 
 	// Delete from all indexes
@@ -953,22 +962,6 @@ func TestComponent_DeleteFromAliasIndex_ValidData(t *testing.T) {
 
 	// Delete
 	err := comp.DeleteFromAliasIndex(ctx, alias)
-
-	assert.NoError(t, err)
-}
-
-func TestComponent_DeleteFromIncomingIndex_ValidData(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	targetID := "c360.platform.robotics.mav1.mission.001"
-	sourceID := "c360.platform.robotics.mav1.drone.001"
-
-	// Add entry first
-	require.NoError(t, comp.UpdateIncomingIndex(ctx, targetID, sourceID, "test.edge.predicate"))
-
-	// Delete
-	err := comp.DeleteFromIncomingIndex(ctx, targetID, sourceID)
 
 	assert.NoError(t, err)
 }
@@ -1098,7 +1091,8 @@ func TestComponent_KVError_IncreasesErrorCount(t *testing.T) {
 	}
 
 	// Trigger error
-	_ = comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	_ = comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 
 	// Check error count increased
 	health := comp.Health()
@@ -1118,9 +1112,12 @@ func TestComponent_MultipleErrors_AccumulateCount(t *testing.T) {
 	initialErrors := initialHealth.ErrorCount
 
 	// Trigger multiple errors
-	_ = comp.UpdateOutgoingIndex(ctx, "entity1", "target", "predicate")
-	_ = comp.UpdateOutgoingIndex(ctx, "entity2", "target", "predicate")
-	_ = comp.UpdateOutgoingIndex(ctx, "entity3", "target", "predicate")
+	_ = comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
+	_ = comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.002",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
+	_ = comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.003",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 
 	finalHealth := comp.Health()
 	assert.Greater(t, finalHealth.ErrorCount, initialErrors, "error count should accumulate")
@@ -1141,7 +1138,8 @@ func TestComponent_MetricsUpdate_OnIndexOperation(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Perform operation
-	err := comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	err := comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 	require.NoError(t, err)
 
 	// Check metrics updated
@@ -1198,13 +1196,12 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 
 	// Create mock buckets and wrap them in KVStore so the component field types match.
 	mocks := &mockRefs{
-		outgoing:         newMockKVBucket(),
-		incoming:         newMockKVBucket(),
-		alias:            newMockKVBucket(),
-		predicate:        newMockKVBucket(), // predicate-audit:unrelated {"column":21,"surface":"go-field:predicate","value":"","basis":"reviewed mock KV bucket field, not predicate syntax"}
-		predicateCatalog: newMockKVBucket(),
-		context:          newMockKVBucket(),
-		name:             newMockKVBucket(),
+		outgoing:  newMockKVBucket(),
+		incoming:  newMockKVBucket(),
+		alias:     newMockKVBucket(),
+		predicate: newMockKVBucket(), // predicate-audit:unrelated {"column":21,"surface":"go-field:predicate","value":"","basis":"reviewed mock KV bucket field, not predicate syntax"}
+		context:   newMockKVBucket(),
+		name:      newMockKVBucket(),
 	}
 
 	graphIndexComp := comp.(*Component)
@@ -1212,7 +1209,6 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	graphIndexComp.incomingBucket = nc.NewKVStore(mocks.incoming)
 	graphIndexComp.aliasBucket = nc.NewKVStore(mocks.alias)
 	graphIndexComp.predicateBucket = nc.NewKVStore(mocks.predicate)
-	graphIndexComp.predicateCatalogBucket = nc.NewKVStore(mocks.predicateCatalog)
 	graphIndexComp.contextBucket = nc.NewKVStore(mocks.context)
 	graphIndexComp.nameBucket = nc.NewKVStore(mocks.name)
 	// Initialize lifecycle reporter (normally done in Start())

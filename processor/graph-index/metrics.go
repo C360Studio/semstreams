@@ -10,12 +10,13 @@ import (
 
 // indexMetrics holds Prometheus metrics for the graph-index component.
 type indexMetrics struct {
-	eventsProcessed prometheus.Counter
-	indexUpdates    *prometheus.CounterVec
-	kvOperations    *prometheus.CounterVec
-	watchEvents     *prometheus.CounterVec
-	writeFailures   prometheus.Counter     // gh#474 P1b: required index write ultimately failed
-	reindexEvents   *prometheus.CounterVec // gh#474 P2b: re-index events by result (changed|unchanged)
+	eventsProcessed     prometheus.Counter
+	indexUpdates        *prometheus.CounterVec
+	kvOperations        *prometheus.CounterVec
+	watchEvents         *prometheus.CounterVec
+	writeFailures       prometheus.Counter     // gh#474 P1b: required index write ultimately failed
+	reindexEvents       *prometheus.CounterVec // gh#474 P2b: re-index events by result (changed|unchanged)
+	reconcileOperations *prometheus.CounterVec // owner reconciliation I/O by index, operation, and outcome
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -69,6 +70,13 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 				Name:      "reindex_events_total",
 				Help:      "Re-index events by whether the index-input projection changed (the L2 change-detection data gate)",
 			}, []string{"result"}),
+
+			reconcileOperations: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_index",
+				Name:      "reconcile_operations_total",
+				Help:      "Owner reconciliation KV operations by index type, operation, and outcome",
+			}, []string{"index_type", "operation", "result"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -79,6 +87,7 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = registry.RegisterCounterVec("graph-index", "watch_events_total", metrics.watchEvents)
 			_ = registry.RegisterCounter("graph-index", "write_failures_total", metrics.writeFailures)
 			_ = registry.RegisterCounterVec("graph-index", "reindex_events_total", metrics.reindexEvents)
+			_ = registry.RegisterCounterVec("graph-index", "reconcile_operations_total", metrics.reconcileOperations)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.eventsProcessed)
@@ -87,9 +96,18 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.watchEvents)
 			_ = prometheus.DefaultRegisterer.Register(metrics.writeFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.reindexEvents)
+			_ = prometheus.DefaultRegisterer.Register(metrics.reconcileOperations)
 		}
 	})
 	return metrics
+}
+
+func (m *indexMetrics) recordReconcileOperation(indexType, operation string, err error) {
+	result := "success"
+	if err != nil {
+		result = "failure"
+	}
+	m.reconcileOperations.WithLabelValues(indexType, operation, result).Inc()
 }
 
 // recordEventProcessed increments the events processed counter.

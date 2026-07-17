@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -21,9 +22,8 @@ var incomingIndexMarker = []byte{}
 //
 // The predicate is hex-encoded (encodePredicateToken, gh#474 Codex P1a): a
 // free-form predicate can contain KV-unsafe bytes, and a raw token would make the
-// Put fail asymmetrically vs the hashed PREDICATE_INDEX. Hex keeps it reversible,
-// so the reader recovers the predicate from the key with no value lookup — INCOMING
-// stays a pure prefix key-scan (empty row value).
+// Put fail. Hex keeps it reversible, so the reader recovers the predicate from the
+// key with no value lookup — INCOMING stays a pure prefix key-scan (empty row value).
 //
 // Using the raw targetID as the scan prefix is collision-safe: a valid 6-token
 // entity ID (dot-separated, enforced by IsValidEntityID) cannot be a NATS
@@ -63,6 +63,9 @@ func incomingIndexSourceFilter(sourceID string) string {
 // Returns (entry, true) on success, (zero, false) when the key is malformed
 // (too short, invalid sourceID, or empty predicate after splitting).
 func incomingEntryFromKey(key, targetID string) (graph.IncomingEntry, bool) {
+	if err := semtypes.ValidateEntityID(targetID); err != nil {
+		return graph.IncomingEntry{}, false
+	}
 	prefix := incomingIndexPrefix(targetID)
 	if !strings.HasPrefix(key, prefix) {
 		return graph.IncomingEntry{}, false
@@ -81,7 +84,10 @@ func incomingEntryFromKey(key, targetID string) (graph.IncomingEntry, bool) {
 	if !ok || predicate == "" {
 		return graph.IncomingEntry{}, false
 	}
-	if !message.IsValidEntityID(sourceID) {
+	if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+		return graph.IncomingEntry{}, false
+	}
+	if err := semtypes.ValidateEntityID(sourceID); err != nil {
 		slog.Debug("incoming index: invalid source entity ID parsed from key",
 			slog.String("key", key),
 			slog.String("source_id", sourceID))

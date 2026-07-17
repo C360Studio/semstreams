@@ -10,9 +10,8 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[STATISTICAL] Starting statistical tier E2E test (BM25, no external ML)..."
+      - defer: docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - echo "[OK] Statistical services are healthy (BM25 mode)"
       - echo "[STATISTICAL] Running statistical tier scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      - cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results

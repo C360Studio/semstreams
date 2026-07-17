@@ -11,8 +11,8 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[AGENTIC] Starting agentic tier E2E test..."
-      - docker compose -f docker/compose/agentic.yml up -d --wait --build
       - defer: docker compose -f docker/compose/agentic.yml down -v --timeout 15
+      - docker compose -f docker/compose/agentic.yml up -d --wait --build
       - echo "[OK] Services are healthy (NATS + mock-llm + semstreams)"
       - echo "[AGENTIC] Running agentic tier scenario..."
       - cd cmd/e2e && ./e2e --scenario agentic --output-dir ./test/e2e/results --metrics-url http://localhost:39090

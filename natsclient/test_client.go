@@ -15,11 +15,12 @@ import (
 
 // TestClient provides testcontainers-based NATS for testing
 type TestClient struct {
-	container    testcontainers.Container
-	Client       *Client // Drop-in replacement for existing natsclient.Client
-	URL          string
-	BucketPrefix string // Prefix applied to all KV bucket names for test isolation
-	cleanup      func()
+	container     testcontainers.Container
+	Client        *Client // Drop-in replacement for existing natsclient.Client
+	URL           string
+	MonitoringURL string // Read-only URL for the actual mapped NATS monitoring endpoint
+	BucketPrefix  string // Prefix applied to all KV bucket names for test isolation
+	cleanup       func()
 }
 
 // testConfig holds configuration for test client
@@ -198,6 +199,11 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 		container.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get mapped port: %w", err)
 	}
+	monitoringPort, err := container.MappedPort(ctx, "8222")
+	if err != nil {
+		container.Terminate(ctx)
+		return nil, fmt.Errorf("failed to get mapped monitoring port: %w", err)
+	}
 
 	// Build connection URL
 	url := fmt.Sprintf("nats://%s:%s", host, port.Port())
@@ -230,10 +236,11 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 	}
 
 	testClient := &TestClient{
-		container:    container,
-		Client:       client,
-		URL:          url,
-		BucketPrefix: cfg.bucketPrefix,
+		container:     container,
+		Client:        client,
+		URL:           url,
+		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort.Port()),
+		BucketPrefix:  cfg.bucketPrefix,
 		cleanup: func() {
 			// Use timeout context for drain to prevent hanging, then terminate container
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -346,6 +353,11 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 		container.Terminate(ctx)
 		t.Fatalf("Failed to get mapped port: %v", err)
 	}
+	monitoringPort, err := container.MappedPort(ctx, "8222")
+	if err != nil {
+		container.Terminate(ctx)
+		t.Fatalf("Failed to get mapped monitoring port: %v", err)
+	}
 
 	// Build connection URL
 	url := fmt.Sprintf("nats://%s:%s", host, port.Port())
@@ -378,10 +390,11 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 	}
 
 	testClient := &TestClient{
-		container:    container,
-		Client:       client,
-		URL:          url,
-		BucketPrefix: cfg.bucketPrefix,
+		container:     container,
+		Client:        client,
+		URL:           url,
+		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort.Port()),
+		BucketPrefix:  cfg.bucketPrefix,
 		cleanup: func() {
 			// Use timeout context for drain to prevent hanging, then terminate container
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)

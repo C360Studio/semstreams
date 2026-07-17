@@ -5,6 +5,22 @@ bounded fixture-hygiene lint over statically identifiable candidates; it is not 
 enforcement evidence. This is a clean break that does not preserve, rewrite, inspect, or roll back incompatible beta
 graph state.
 
+## Combined BREAKING Release Entry
+
+This procedure is the one destructive window for the coordinated entity, predicate, and graph-index changes:
+
+- entity IDs are canonical bounded six-part identities;
+- `PREDICATE_INDEX` uses the raw fixed-nine-token `predicate3.entity6` layout selected by
+  [ADR-078](../adr/078-raw-canonical-predicate-membership-keys.md);
+- `PREDICATE_CATALOG` is retired and must not be created, repaired, joined, or read after cutover;
+- NAME, PREDICATE, and source-owned INCOMING projections use complete replacement semantics under
+  [ADR-077](../adr/077-bounded-owner-discovery-and-incoming-ownership.md); and
+- the rule-event constructor, digest identity, PackID, and graph-integration default changes in
+  [30 — rule-event identity clean cutover](30-rule-event-identity-clean-cutover.md) land before this restart.
+
+The single breaking tag contains all of these changes. They do not activate through a later routine bump or a
+second wipe.
+
 ## Breaking Contract
 
 A literal entity ID:
@@ -28,10 +44,12 @@ Before starting the breaking binary:
 
 1. update every entity constructor, literal, relationship reference, pattern, prefix, schema example, test fixture,
    seed, and exact query to the canonical contract;
-2. run the bounded local source gate:
+2. update predicate producers, exact queries, and reseed sources to the canonical three-part contract; and
+3. run both bounded local source gates:
 
 ```bash
 task entity-id:audit
+task predicate:audit
 ```
 
 The command must be green. An intentional negative test requires one exact source classification; it is not
@@ -50,15 +68,19 @@ docker compose -f docker/compose/tiered.yml --profile semantic down -v --remove-
 docker compose -f docker/compose/agentic.yml down -v --remove-orphans --timeout 15
 ```
 
-For a persistent local NATS account, select the intended NATS CLI context and derive the destructive bucket set
-from the rendered deployment configuration and the framework-owned bucket constants:
+For a persistent local NATS account, first create a reviewed command sheet from the exact breaking binary,
+composition, and rendered deployment configuration. Record literal bucket names, including configured overrides;
+do not execute a script whose context or bucket variables are unset. Select the intended NATS CLI context and
+capture it with the command sheet:
 
 ```bash
+nats context select <exact-cutover-context>
 nats context info
 ```
 
-Then remove the authoritative graph state and every derived graph projection enabled by that deployment. The
-default core set is:
+Replace `<exact-cutover-context>` with the literal reviewed context before execution. Resolve the deletion set from
+`graph.FrameworkOwnedBuckets()`, graph-ingest's guard buckets, and the enabled component port bindings. The following
+commands are the literal command sheet only for a deployment that uses every current default bucket name:
 
 ```bash
 nats kv rm ENTITY_STATES
@@ -67,7 +89,6 @@ nats kv rm GRAPH_INGEST_APPLIED_SEQ
 nats kv rm OUTGOING_INDEX
 nats kv rm INCOMING_INDEX
 nats kv rm PREDICATE_INDEX
-nats kv rm PREDICATE_CATALOG
 nats kv rm NAME_INDEX
 nats kv rm CONTEXT_INDEX
 nats kv rm ALIAS_INDEX
@@ -83,22 +104,39 @@ nats kv rm STRUCTURAL_INDEX
 ```
 
 This list is the union of `graph.FrameworkOwnedBuckets()` and graph-ingest's `ENTITY_SUFFIX_INDEX` and
-`GRAPH_INGEST_APPLIED_SEQ` guard buckets at the time of this release. Bucket names may be overridden by deployment
-configuration. Do not copy this list into a shared account without comparing it to the rendered configuration, and
-do not remove unrelated operational or product KV buckets.
+`GRAPH_INGEST_APPLIED_SEQ` guard buckets at the breaking revision. Delete only buckets enabled by the rendered
+deployment. If a binding overrides a name, replace the corresponding command with that literal resolved name. Do
+not copy this list into a shared account, use wildcard deletion, or remove unrelated operational, product,
+workflow, stream, ObjectStore, or upstream source-system state.
+
+`PREDICATE_CATALOG` is intentionally absent from the current-bucket commands because ADR-078 retired it from the
+framework inventory. If the pre-cutover deployment has a legacy catalog under an old or overridden name, record
+that exact legacy name and its removal separately in the same reviewed maintenance-window command sheet. A fresh
+breaking deployment must not recreate it.
+
+The wipe is required for more than entity grammar. Old PREDICATE rows use an incompatible hashed layout; old
+catalog state has no reader; additive NAME, PREDICATE, and INCOMING memberships may contain stale A/B rows; and old
+INCOMING cleanup used the target axis instead of the source owner. A fresh rebuild from canonical `ENTITY_STATES`
+establishes raw predicate keys and complete `[A] -> [B] -> []` replacement behind fail-closed readiness.
 
 There is no local beta-state export or preservation step in this procedure. Source data remains in its independent
 authoritative system; regenerate canonical Graphables from that source after the wipe.
 
 ## Restart and Canonical Reseed
 
-1. Start the matching breaking SemStreams binary against the empty account.
+1. Execute the recorded literal start command for the matching breaking tag against the empty account.
 2. Confirm graph-ingest creates an empty `ENTITY_STATES` bucket and projection owners create their empty buckets.
-3. Start only producers that have passed the new source/configuration gates.
-4. Reseed from canonical source events or regenerate Graphables from the authoritative source system.
-5. Poll graph index status until readiness is true and the indexed revision reaches the current entity-state target.
-6. Run exact entity, exact predicate, namespace, relationship, prefix, and search queries against pinned expected IDs.
-7. Restart SemStreams without another write and prove replay reaches the same readiness revision and query results.
+3. Confirm `PREDICATE_INDEX` is empty and that no `PREDICATE_CATALOG` bucket was created.
+4. Execute only the recorded producer-start and canonical reseed commands that passed the source/configuration gates.
+5. Record the authoritative source revision, input count, and resulting `ENTITY_STATES` revision.
+6. Poll graph-index status until readiness is true and the indexed revision reaches that entity-state target.
+7. Prove raw exact/category/domain predicate queries, owner replacement, relationship, prefix, and search parity.
+8. Restart with the same recorded command and no intervening write. Prove the same readiness revision and results.
+
+The concrete service-manager, container, and reseed commands are product-owned because SemStreams cannot infer an
+upstream authoritative source. They must appear as literal commands in the product evidence envelope defined by
+[31 — sister-repo cutover checklist](31-sister-repo-cutover-checklist.md). “Restart and reseed” without those
+commands, revisions, and counts is not release evidence.
 
 If the deployment returns `graph_state_reset_required`, stop. Find and fix the incompatible producer or injected
 state before wiping again; repeating the wipe cannot correct a source that still emits malformed identities.
@@ -109,19 +147,25 @@ After source, configuration, fixture, schema, and documentation updates are comp
 
 ```bash
 task lint
+go vet -tags=integration ./...
+go vet -tags=live_llm ./...
 go test -race ./...
-go test -race -tags=integration ./...
+go test -race -tags=integration -p 2 ./...
 task schema:generate
 git diff --exit-code -- schemas specs
 go test ./test/contract/...
+go test ./test/release/...
 task e2e:core
 task e2e:structural
-task e2e:agentic
+task e2e:statistical
 task e2e:semantic
+task e2e:agentic
 ```
 
-The final e2e runs must use current source and fresh volumes. Earlier green evidence from the first implementation
-slice does not satisfy the final breaking gate.
+The integration race uses `-p 2` to bound concurrent testcontainer packages. Both tagged vet commands are required;
+skipping tests at runtime does not replace compile-time vet coverage. The final five E2E tiers must use the exact
+breaking revision and fresh volumes. Earlier green evidence from an implementation slice does not satisfy the final
+combined gate.
 
 ## Explicit Non-Features
 
@@ -129,3 +173,11 @@ This pre-v1 cutover provides no permissive flag, legacy validator, alias ledger,
 reader/writer, persisted-state rewriter, online migration, beta-state preservation contract, or rollback path. A
 post-v1 migration design belongs to the operational-retention work; it must not leave pre-v1 compatibility cruft in
 the framework.
+
+## Governing Decisions and Changes
+
+- [ADR-077 — bounded owner discovery and source-owned INCOMING
+  evidence](../adr/077-bounded-owner-discovery-and-incoming-ownership.md)
+- [ADR-078 — raw canonical predicate membership keys](../adr/078-raw-canonical-predicate-membership-keys.md)
+- [`graph-index-replacement-semantics`](../../openspec/changes/graph-index-replacement-semantics/proposal.md)
+- [`predicate-raw-key-representation`](../../openspec/changes/predicate-raw-key-representation/proposal.md)

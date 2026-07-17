@@ -2,7 +2,8 @@
 
 - [ ] 1.1 Pin the complete ownership/filter matrix (layout, arity, owner, literal forward/owner filters,
       overwrite, lifecycle, reset, readiness) in table-driven tests; every literal filter passes the
-      `nats-kv-keys` validators. (Carries over: unit maxima at `E = 256` already proven — 321/710/902/256.)
+      `nats-kv-keys` validators. (Carries over: selected-layout unit maxima at `E = 256` already proven —
+      451/710/902/256.)
 - [ ] 1.2 Define and test the INCOMING source-ownership contract: source fact replacement, source
       removal/tombstone, target retirement preserving live-source assertions, authorized cascade — without
       production wiring.

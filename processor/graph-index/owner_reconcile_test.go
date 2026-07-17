@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,9 +16,277 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestProcessEntityUpdate_ReplacesPublicIndexResults(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	comp.namePredicates = map[string]int{"core.identity.name": 0}
+	ctx := context.Background()
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	targetA := "acme.ops.robotics.gcs.mission.001"
+	targetB := "acme.ops.robotics.gcs.mission.002"
+
+	type fixture struct {
+		nameA         []string
+		nameB         []string
+		predicateA    []string
+		predicateB    []string
+		predicateList []string
+		statusList    []string
+		incomingA     []graph.IncomingEntry
+		incomingB     []graph.IncomingEntry
+	}
+	fixtures := []struct {
+		name    string
+		triples []message.Triple
+		want    fixture
+	}{
+		{
+			name: "A",
+			triples: []message.Triple{
+				{Subject: entityID, Predicate: "core.identity.name", Object: "Alpha"},
+				{Subject: entityID, Predicate: "robotics.status.armed", Object: true},
+				{Subject: entityID, Predicate: "robotics.assigned.mission", Object: targetA},
+			},
+			want: fixture{
+				nameA:      []string{entityID},
+				nameB:      []string{},
+				predicateA: []string{entityID},
+				predicateB: []string{},
+				predicateList: []string{
+					"core.identity.name", "robotics.assigned.mission", "robotics.status.armed",
+				},
+				statusList: []string{"robotics.status.armed"},
+				incomingA:  []graph.IncomingEntry{{FromEntityID: entityID, Predicate: "robotics.assigned.mission"}},
+				incomingB:  []graph.IncomingEntry{},
+			},
+		},
+		{
+			name: "B",
+			triples: []message.Triple{
+				{Subject: entityID, Predicate: "core.identity.name", Object: "Beta"},
+				{Subject: entityID, Predicate: "robotics.status.disarmed", Object: true},
+				{Subject: entityID, Predicate: "robotics.assigned.mission", Object: targetB},
+			},
+			want: fixture{
+				nameA:      []string{},
+				nameB:      []string{entityID},
+				predicateA: []string{},
+				predicateB: []string{entityID},
+				predicateList: []string{
+					"core.identity.name", "robotics.assigned.mission", "robotics.status.disarmed",
+				},
+				statusList: []string{"robotics.status.disarmed"},
+				incomingA:  []graph.IncomingEntry{},
+				incomingB:  []graph.IncomingEntry{{FromEntityID: entityID, Predicate: "robotics.assigned.mission"}},
+			},
+		},
+		{name: "empty", triples: []message.Triple{}, want: fixture{
+			nameA: []string{}, nameB: []string{}, predicateA: []string{}, predicateB: []string{},
+			predicateList: []string{}, statusList: []string{},
+			incomingA: []graph.IncomingEntry{}, incomingB: []graph.IncomingEntry{},
+		}},
+	}
+
+	for _, step := range fixtures {
+		t.Run(step.name, func(t *testing.T) {
+			data, err := json.Marshal(graph.EntityState{ID: entityID, Triples: step.triples})
+			require.NoError(t, err)
+			require.NoError(t, comp.processEntityUpdateFromData(ctx, entityID, data))
+
+			assert.Equal(t, step.want.nameA, queryNameEntityIDs(t, comp, "Alpha"))
+			assert.Equal(t, step.want.nameB, queryNameEntityIDs(t, comp, "Beta"))
+			assert.Equal(t, step.want.predicateA, queryPredicateEntityIDs(t, comp, "robotics.status.armed"))
+			assert.Equal(t, step.want.predicateB, queryPredicateEntityIDs(t, comp, "robotics.status.disarmed"))
+			assert.Equal(t, step.want.predicateList, queryPredicateNames(t, comp, ""))
+			assert.Equal(t, step.want.statusList, queryPredicateNames(t, comp, "robotics.status"))
+			assert.Equal(t, step.want.incomingA, queryIncomingEntries(t, comp, targetA))
+			assert.Equal(t, step.want.incomingB, queryIncomingEntries(t, comp, targetB))
+		})
+	}
+}
+
+func TestDeleteFromIndexes_RetractsOwnedRowsWithoutDeletingLiveSourceAssertions(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	ctx := context.Background()
+	retiredSource := "acme.ops.robotics.gcs.drone.001"
+	liveSource := "acme.ops.robotics.gcs.drone.002"
+	target := "acme.ops.robotics.gcs.mission.001"
+
+	require.NoError(t, comp.reconcilePredicateIndex(ctx, retiredSource, map[string]bool{"robotics.status.armed": true}))
+	require.NoError(t, comp.reconcileNameIndex(ctx, retiredSource, []nameIndexWrite{{
+		name: "Alpha", predicate: "core.identity.name", priority: 0,
+	}}))
+	require.NoError(t, comp.reconcileIncomingIndex(ctx, retiredSource, map[string][]graph.IncomingEntry{
+		target: {{FromEntityID: retiredSource, Predicate: "robotics.assigned.mission"}},
+	}))
+	require.NoError(t, comp.reconcileIncomingIndex(ctx, liveSource, map[string][]graph.IncomingEntry{
+		retiredSource: {{FromEntityID: liveSource, Predicate: "robotics.assigned.mission"}},
+	}))
+
+	require.NoError(t, comp.DeleteFromIndexes(ctx, retiredSource))
+
+	assert.Empty(t, queryNameEntityIDs(t, comp, "Alpha"))
+	assert.Empty(t, queryPredicateEntityIDs(t, comp, "robotics.status.armed"))
+	assert.Empty(t, queryIncomingEntries(t, comp, target), "retired source assertions must be retracted")
+	assert.Equal(t, []graph.IncomingEntry{{
+		FromEntityID: liveSource, Predicate: "robotics.assigned.mission",
+	}}, queryIncomingEntries(t, comp, retiredSource), "live source assertion must survive target retirement")
+}
+
+func TestDeleteFromIndexes_InvalidOwnerHasNoBucketIO(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	var calls atomic.Int64
+	for _, mock := range []*mockKVBucket{outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp), contextMock(comp)} {
+		mock.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+			calls.Add(1)
+			return newMockKeyLister(nil), nil
+		}
+		mock.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
+			calls.Add(1)
+			return nil
+		}
+	}
+
+	err := comp.DeleteFromIndexes(context.Background(), "malformed")
+	require.Error(t, err)
+	assert.Zero(t, calls.Load(), "owner validation must precede every list/delete")
+}
+
+func TestDeleteFromIndexes_LateDeletePlanFailureHasNoDeletesOrSemanticMetrics(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	var deletes atomic.Int64
+	for _, mock := range []*mockKVBucket{
+		outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp), contextMock(comp),
+	} {
+		mock.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
+			deletes.Add(1)
+			return nil
+		}
+	}
+	// Context is deliberately the last list in the production delete plan. If it
+	// cannot be resolved, no earlier family (including OUTGOING) may be retracted.
+	contextMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		return nil, errors.New("late context list unavailable")
+	}
+
+	processedBefore := atomic.LoadInt64(&comp.messagesProcessed)
+	indexUpdatesBefore := make(map[string]float64)
+	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+		indexUpdatesBefore[indexType] = testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType))
+	}
+
+	err := comp.DeleteFromIndexes(context.Background(), entityID)
+	require.Error(t, err)
+	assert.Zero(t, deletes.Load(), "the complete delete plan must resolve before the first delete")
+	assert.Equal(t, processedBefore, atomic.LoadInt64(&comp.messagesProcessed))
+	for indexType, before := range indexUpdatesBefore {
+		assert.Equal(t, before, testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType)), indexType)
+	}
+}
+
+func TestIncomingQuery_InvalidFilterOwnerHasNoBucketIO(t *testing.T) {
+	tests := []string{
+		"malformed",
+		"a.a.a.a.a." + strings.Repeat("e", 247),
+	}
+	for _, entityID := range tests {
+		t.Run(fmt.Sprintf("bytes_%d", len(entityID)), func(t *testing.T) {
+			comp := createTestComponentWithMockKV(t)
+			var lists atomic.Int64
+			incomingMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+				lists.Add(1)
+				return newMockKeyLister(nil), nil
+			}
+
+			_, err := comp.handleQueryIncomingNATS(context.Background(),
+				[]byte(fmt.Sprintf(`{"entity_id":%q}`, entityID)))
+			require.Error(t, err)
+			assert.True(t, errs.IsInvalid(err))
+			assert.Zero(t, lists.Load(), "entity/filter validation must precede filtered listing")
+		})
+	}
+}
+
+func TestPublicIndexQueries_AreSortedAndDeduplicated(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	entityA := "acme.ops.robotics.gcs.drone.001"
+	entityB := "acme.ops.robotics.gcs.drone.002"
+	target := "acme.ops.robotics.gcs.mission.001"
+	predicate := "robotics.status.armed"
+
+	predicateKeys := []string{
+		predicateIndexKey(predicate, entityB),
+		predicateIndexKey(predicate, entityA),
+		predicateIndexKey(predicate, entityB),
+	}
+	predicateMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		return newMockKeyLister(predicateKeys), nil
+	}
+	incomingKeys := []string{
+		incomingIndexKey(target, entityB, "robotics.assigned.mission"),
+		incomingIndexKey(target, entityA, "robotics.assigned.mission"),
+		incomingIndexKey(target, entityB, "robotics.assigned.mission"),
+	}
+	incomingMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		return newMockKeyLister(incomingKeys), nil
+	}
+
+	assert.Equal(t, []string{entityA, entityB}, queryPredicateEntityIDs(t, comp, predicate))
+	assert.Equal(t, []graph.IncomingEntry{
+		{FromEntityID: entityA, Predicate: "robotics.assigned.mission"},
+		{FromEntityID: entityB, Predicate: "robotics.assigned.mission"},
+	}, queryIncomingEntries(t, comp, target))
+}
+
+func queryNameEntityIDs(t *testing.T, comp *Component, name string) []string {
+	t.Helper()
+	body, err := comp.handleQueryByNameNATS(context.Background(), []byte(fmt.Sprintf(`{"name":%q}`, name)))
+	require.NoError(t, err)
+	var response graph.QueryResponse[graph.NameData]
+	require.NoError(t, json.Unmarshal(body, &response))
+	ids := make([]string, 0, len(response.Data.Matches))
+	for _, match := range response.Data.Matches {
+		ids = append(ids, match.EntityID)
+	}
+	return ids
+}
+
+func queryPredicateEntityIDs(t *testing.T, comp *Component, predicate string) []string {
+	t.Helper()
+	body, err := comp.handleQueryPredicateNATS(context.Background(), []byte(fmt.Sprintf(`{"predicate":%q}`, predicate)))
+	require.NoError(t, err)
+	var response graph.PredicateQueryResponse
+	require.NoError(t, json.Unmarshal(body, &response))
+	return response.Data.Entities
+}
+
+func queryIncomingEntries(t *testing.T, comp *Component, entityID string) []graph.IncomingEntry {
+	t.Helper()
+	body, err := comp.handleQueryIncomingNATS(context.Background(), []byte(fmt.Sprintf(`{"entity_id":%q}`, entityID)))
+	require.NoError(t, err)
+	var response graph.IncomingQueryResponse
+	require.NoError(t, json.Unmarshal(body, &response))
+	return response.Data.Relationships
+}
+
+func queryPredicateNames(t *testing.T, comp *Component, namespace string) []string {
+	t.Helper()
+	body, err := comp.handleQueryPredicateListNATS(context.Background(),
+		[]byte(fmt.Sprintf(`{"namespace":%q}`, namespace)))
+	require.NoError(t, err)
+	var response graph.PredicateListQueryResponse
+	require.NoError(t, json.Unmarshal(body, &response))
+	names := make([]string, 0, len(response.Data.Predicates))
+	for _, summary := range response.Data.Predicates {
+		names = append(names, summary.Predicate)
+	}
+	return names
+}
 
 func TestOwnerFilters_MatchOnlyDeclaredOwner(t *testing.T) {
 	owner := "acme.ops.robotics.gcs.drone.001"
@@ -61,6 +330,24 @@ func TestOwnerFilters_MatchOnlyDeclaredOwner(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.True(t, natsSubjectFilterMatch(tt.owned, tt.filter))
 			assert.False(t, natsSubjectFilterMatch(tt.other, tt.filter))
+		})
+	}
+}
+
+func TestOwnerFilters_MaximumEntityIDStayWithinSharedFilterContract(t *testing.T) {
+	owner := "a.a.a.a.a." + strings.Repeat("e", 246)
+	require.Len(t, owner, semtypes.MaxEntityIDBytes)
+	require.NoError(t, semtypes.ValidateEntityID(owner))
+
+	for name, filter := range map[string]string{
+		"predicate": predicateIndexEntityFilter(owner),
+		"name":      nameIndexEntityFilter(owner),
+		"incoming":  incomingIndexSourceFilter(owner),
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, natsclient.ValidateKVWildcardFilter(filter))
+			assert.LessOrEqual(t, len(filter), natsclient.MaxKVWildcardFilterBytes)
+			assert.LessOrEqual(t, len(strings.Split(filter, ".")), natsclient.MaxKVWildcardFilterTokens)
 		})
 	}
 }
@@ -246,12 +533,10 @@ func TestOwnerReconcileSpike_InvalidContractInputHasNoBucketIO(t *testing.T) {
 	}
 }
 
-func TestPredicateReconcile_InvalidCatalogKeyHasNoBucketIO(t *testing.T) {
+func TestPredicateReconcile_InvalidPredicateHasNoBucketIO(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	membership := predicateMock(comp)
-	catalog := predicateCatalogMock(comp)
 	var membershipLists, membershipPuts, membershipDeletes atomic.Int64
-	var catalogLists, catalogPuts, catalogDeletes atomic.Int64
 	membership.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
 		membershipLists.Add(1)
 		return newMockKeyLister(nil), nil
@@ -264,46 +549,20 @@ func TestPredicateReconcile_InvalidCatalogKeyHasNoBucketIO(t *testing.T) {
 		membershipDeletes.Add(1)
 		return nil
 	}
-	catalog.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
-		catalogLists.Add(1)
-		return newMockKeyLister(nil), nil
-	}
-	catalog.putFunc = func(context.Context, string, []byte) (uint64, error) {
-		catalogPuts.Add(1)
-		return 1, nil
-	}
-	catalog.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
-		catalogDeletes.Add(1)
-		return nil
-	}
-
-	err := comp.reconcilePredicateIndexRows(context.Background(), "acme.ops.robotics.gcs.drone.001", []predicateReconcileRow{
-		{predicate: "robotics.status.armed", catalogKey: "bad:key"},
-	})
+	err := comp.reconcilePredicateIndex(context.Background(), "acme.ops.robotics.gcs.drone.001",
+		map[string]bool{"bad:key": true})
 	require.Error(t, err)
 	var classified *errs.ClassifiedError
 	require.ErrorAs(t, err, &classified)
-	assert.Equal(t, natsclient.ErrorCodeKVKeyInvalid, classified.Code)
-	assert.Equal(t, natsclient.KVReasonAlphabet, classified.Detail[natsclient.KVDetailReason])
 	assert.Zero(t, membershipLists.Load())
 	assert.Zero(t, membershipPuts.Load())
 	assert.Zero(t, membershipDeletes.Load())
-	assert.Zero(t, catalogLists.Load())
-	assert.Zero(t, catalogPuts.Load())
-	assert.Zero(t, catalogDeletes.Load())
-
-	// The catalog writer independently preserves the same pre-Put guarantee.
-	err = comp.updatePredicateCatalog(context.Background(), "bad:key")
-	require.ErrorAs(t, err, &classified)
-	assert.Equal(t, natsclient.ErrorCodeKVKeyInvalid, classified.Code)
-	assert.Zero(t, catalogPuts.Load())
 }
 
 func TestPredicateReconcile_OverBoundEntityHasNoBucketIO(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	membership := predicateMock(comp)
-	catalog := predicateCatalogMock(comp)
-	var lists, membershipPuts, membershipDeletes, catalogPuts atomic.Int64
+	var lists, membershipPuts, membershipDeletes atomic.Int64
 	membership.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
 		lists.Add(1)
 		return newMockKeyLister(nil), nil
@@ -315,10 +574,6 @@ func TestPredicateReconcile_OverBoundEntityHasNoBucketIO(t *testing.T) {
 	membership.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
 		membershipDeletes.Add(1)
 		return nil
-	}
-	catalog.putFunc = func(context.Context, string, []byte) (uint64, error) {
-		catalogPuts.Add(1)
-		return 1, nil
 	}
 
 	entityID := "a.a.a.a.a." + strings.Repeat("e", 247)
@@ -332,7 +587,6 @@ func TestPredicateReconcile_OverBoundEntityHasNoBucketIO(t *testing.T) {
 	assert.Zero(t, lists.Load())
 	assert.Zero(t, membershipPuts.Load())
 	assert.Zero(t, membershipDeletes.Load())
-	assert.Zero(t, catalogPuts.Load())
 }
 
 func TestBenchmarkReconcile_OverBoundEntityAxesHaveNoBucketIO(t *testing.T) {

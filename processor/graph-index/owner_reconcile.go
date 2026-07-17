@@ -27,8 +27,8 @@ func (c *Component) reconcileOwnedRows(
 	desired map[string][]byte,
 	overwriteExisting bool,
 ) error {
-	// This helper remains benchmark-only. Validate the complete filter and every
-	// desired physical key before opening a lister or mutating the bucket so a
+	// Validate the complete filter and every desired physical key before opening
+	// a lister or mutating the bucket so a
 	// failed proof is side-effect free and preserves the shared classified error.
 	if err := natsclient.ValidateKVWildcardFilter(ownerFilter); err != nil {
 		return err
@@ -45,6 +45,10 @@ func (c *Component) reconcileOwnedRows(
 	}
 
 	existingKeys, err := bucket.KeysByFilter(ctx, ownerFilter)
+	if c.metrics != nil {
+		c.metrics.recordKVOperation("list", indexName)
+		c.metrics.recordReconcileOperation(indexName, "list", err)
+	}
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.WrapTransient(err, "Component", "reconcileOwnedRows",
@@ -53,6 +57,9 @@ func (c *Component) reconcileOwnedRows(
 
 	existing := make(map[string]struct{}, len(existingKeys))
 	for _, key := range existingKeys {
+		if err := natsclient.ValidateKVLiteralKey(key); err != nil {
+			return err
+		}
 		existing[key] = struct{}{}
 	}
 
@@ -66,7 +73,15 @@ func (c *Component) reconcileOwnedRows(
 
 	var failures []error
 	for _, key := range stale {
-		if delErr := bucket.Delete(ctx, key); delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
+		delErr := bucket.Delete(ctx, key)
+		if natsclient.IsKVNotFoundError(delErr) {
+			delErr = nil
+		}
+		if c.metrics != nil {
+			c.metrics.recordKVOperation("delete", indexName)
+			c.metrics.recordReconcileOperation(indexName, "delete", delErr)
+		}
+		if delErr != nil {
 			atomic.AddInt64(&c.errors, 1)
 			failures = append(failures, fmt.Errorf("delete %s key %q: %w", indexName, key, delErr))
 			c.logger.Debug("failed to retract stale index row",
@@ -77,7 +92,12 @@ func (c *Component) reconcileOwnedRows(
 		if _, alreadyStored := existing[key]; alreadyStored && !overwriteExisting {
 			continue
 		}
-		if _, putErr := bucket.Put(ctx, key, desired[key]); putErr != nil {
+		_, putErr := bucket.Put(ctx, key, desired[key])
+		if c.metrics != nil {
+			c.metrics.recordKVOperation("put", indexName)
+			c.metrics.recordReconcileOperation(indexName, "put", putErr)
+		}
+		if putErr != nil {
 			atomic.AddInt64(&c.errors, 1)
 			failures = append(failures, fmt.Errorf("put %s key %q: %w", indexName, key, putErr))
 			c.logger.Debug("failed to write desired index row",
@@ -92,64 +112,18 @@ func (c *Component) reconcileOwnedRows(
 }
 
 func (c *Component) reconcilePredicateIndex(ctx context.Context, entityID string, predicates map[string]bool) error {
-	rows := make([]predicateReconcileRow, 0, len(predicates))
-	for predicate := range predicates {
-		rows = append(rows, predicateReconcileRow{predicate: predicate, catalogKey: predicate})
-	}
-	return c.reconcilePredicateIndexRows(ctx, entityID, rows)
-}
-
-type predicateReconcileRow struct {
-	predicate  string
-	catalogKey string
-}
-
-// reconcilePredicateIndexRows keeps the physical catalog key explicit so the
-// inactive contract proof can exercise preflight failure independently of the
-// stricter canonical predicate parser. Production always supplies the same
-// canonical predicate for both fields through reconcilePredicateIndex.
-func (c *Component) reconcilePredicateIndexRows(
-	ctx context.Context,
-	entityID string,
-	rows []predicateReconcileRow,
-) error {
 	if err := semtypes.ValidateEntityID(entityID); err != nil {
 		return err
 	}
-	desired := make(map[string][]byte, len(rows))
-	orderedRows := append([]predicateReconcileRow(nil), rows...)
-	for _, row := range orderedRows {
-		predicate := row.predicate
+	desired := make(map[string][]byte, len(predicates))
+	for predicate := range predicates {
 		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
 			return errs.WrapInvalid(err, "Component", "reconcilePredicateIndex", "invalid predicate")
 		}
-		if err := natsclient.ValidateKVLiteralKey(row.catalogKey); err != nil {
-			return err
-		}
 		desired[predicateIndexKey(predicate, entityID)] = predicateIndexMarker
 	}
-
-	if err := c.reconcileOwnedRows(ctx, "predicate", c.predicateBucket,
-		predicateIndexEntityFilter(entityID), desired, false); err != nil {
-		return err
-	}
-
-	// Catalog and membership are one required projection while the hash layout is
-	// active. Re-put every desired name so repair converges either partial order.
-	sort.Slice(orderedRows, func(i, j int) bool {
-		return orderedRows[i].catalogKey < orderedRows[j].catalogKey
-	})
-	var failures []error
-	for _, row := range orderedRows {
-		if err := c.updatePredicateCatalog(ctx, row.catalogKey); err != nil {
-			atomic.AddInt64(&c.errors, 1)
-			failures = append(failures, fmt.Errorf("catalog predicate %q: %w", row.catalogKey, err))
-		}
-	}
-	if err := errors.Join(failures...); err != nil {
-		return errs.WrapTransient(errIndexWritePartial, "Component", "reconcilePredicateIndex", err.Error())
-	}
-	return nil
+	return c.reconcileOwnedRows(ctx, "predicate", c.predicateBucket,
+		predicateIndexEntityFilter(entityID), desired, false)
 }
 
 func (c *Component) reconcileIncomingIndex(

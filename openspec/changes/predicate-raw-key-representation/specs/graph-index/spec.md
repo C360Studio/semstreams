@@ -1,29 +1,28 @@
 ## ADDED Requirements
 
-### Requirement: Predicate membership keys are raw canonical predicates unless an absolute gate fails
+### Requirement: Predicate membership keys are raw canonical predicates
 
 PREDICATE_INDEX MUST adopt the fixed-nine-token layout
 `domain.category.property.org.platform.domain.system.type.instance`, preserving one membership per key and O(E)
-writes, unless a named absolute gate fails. The gates are: the complete worst-case key and every constructed
-filter pass the `nats-kv-keys` budgets and pinned real-NATS maximum/exact-match conformance; the replacement
-lifecycle fixtures pass on the raw layout; and the ADR-065 CI guard plus one sustained-churn run meet the absolute
-latency and resource budgets. A comparative benchmark against hash+catalog MUST be recorded as ADR evidence but
-MUST NOT function as a selection threshold. On any gate failure, the ADR MUST record the specific failed gate and
-retain hash+catalog as the documented fallback.
+writes. PREDICATE_CATALOG MUST be retired. The complete worst-case key and every constructed filter MUST pass the
+`nats-kv-keys` budgets and pinned real-NATS maximum/exact-match conformance. Production activation MUST additionally
+pass the replacement lifecycle, CI, sustained-churn, restart, and resource gates. A server, SDK, predicate grammar,
+entity-ID bound, or layout change MUST rerun the affected evidence before release. Hash-plus-catalog measurements
+MAY be retained as comparative evidence but MUST NOT function as a selection threshold or activation fallback.
 
-#### Scenario: gates pass and raw keys ship
+#### Scenario: raw keys ship after activation gates pass
 
 - **GIVEN** the worst-case raw key and all filters pass budgets and real-NATS conformance
 - **WHEN** the lifecycle fixtures and churn run pass on the raw layout
-- **THEN** the superseding ADR adopts raw keys
-- **AND** PREDICATE_CATALOG is retired after cutover
+- **THEN** PREDICATE_INDEX is created with raw nine-token membership keys
+- **AND** PREDICATE_CATALOG is absent after cutover
 
-#### Scenario: a failed gate falls back with a recorded reason
+#### Scenario: a changed evidence pin cannot inherit the decision run
 
-- **GIVEN** one named absolute gate fails on the raw layout
-- **WHEN** the representation ADR is written
-- **THEN** it records the specific failed gate and evidence
-- **AND** hash+catalog remains with the catalog's consistency obligations intact
+- **GIVEN** the selected NATS server digest, `nats.go` version, grammar bound, or physical layout changes
+- **WHEN** release evidence is evaluated
+- **THEN** the affected maximum, correctness, latency, churn, and resource gates are rerun
+- **AND** prior measurements alone cannot activate the changed implementation
 
 #### Scenario: namespace filters do not over-match
 

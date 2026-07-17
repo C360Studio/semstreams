@@ -109,7 +109,7 @@ func TestUpdatePredicateIndex_SerializationFormat(t *testing.T) {
 	err := comp.UpdatePredicateIndex(ctx, entityID, predicate)
 	require.NoError(t, err)
 
-	// Membership is a composite key, hash(predicate) + "." + entityID —
+	// Membership is a self-describing predicate3.entity6 composite key —
 	// not a per-predicate JSON blob (ADR-065). The value is a content-free
 	// marker; membership identity lives entirely in the key.
 	bucket := predicateMock(comp)
@@ -118,13 +118,6 @@ func TestUpdatePredicateIndex_SerializationFormat(t *testing.T) {
 	bucket.mu.Unlock()
 	assert.True(t, exists, "predicate index should have a composite-key entry for this (predicate, entity) pair")
 
-	// The predicate's human-readable name is recoverable via the catalog,
-	// keyed on the raw (unhashed) name.
-	catalog := predicateCatalogMock(comp)
-	catalog.mu.Lock()
-	_, catalogExists := catalog.data[predicate]
-	catalog.mu.Unlock()
-	assert.True(t, catalogExists, "predicate catalog should record the predicate's name")
 }
 
 // ====================================================================================
@@ -276,26 +269,6 @@ func TestDeleteFromAliasIndex_EmptyAlias_ReturnsError(t *testing.T) {
 
 	assert.Error(t, err, "should reject empty alias")
 	assert.Contains(t, err.Error(), "alias cannot be empty")
-}
-
-func TestDeleteFromIncomingIndex_EmptyTargetID_ReturnsError(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	err := comp.DeleteFromIncomingIndex(ctx, "", "source")
-
-	assert.Error(t, err, "should reject empty target ID")
-	assert.Contains(t, err.Error(), "target ID cannot be empty")
-}
-
-func TestDeleteFromIncomingIndex_EmptySourceID_ReturnsError(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	err := comp.DeleteFromIncomingIndex(ctx, "target", "")
-
-	assert.Error(t, err, "should reject empty source ID")
-	assert.Contains(t, err.Error(), "source ID cannot be empty")
 }
 
 // ====================================================================================
@@ -554,7 +527,7 @@ func TestHandleEntityDelete_RemovesFromIndexes(t *testing.T) {
 	outgoing.mu.Unlock()
 	assert.False(t, stillHasOutgoing, "should remove outgoing entry after delete")
 
-	// Verify ALL composite incoming keys for this entity are removed (prefix scan delete)
+	// The incoming row belongs to sourceID, so target retirement must preserve it.
 	incoming.mu.Lock()
 	var hasAnyIncomingForEntity bool
 	for k := range incoming.data {
@@ -564,7 +537,7 @@ func TestHandleEntityDelete_RemovesFromIndexes(t *testing.T) {
 		}
 	}
 	incoming.mu.Unlock()
-	assert.False(t, hasAnyIncomingForEntity, "should remove all composite incoming keys after delete")
+	assert.True(t, hasAnyIncomingForEntity, "should preserve live-source assertions after target delete")
 }
 
 func TestDeleteFromIndexes_IgnoresKeyNotFoundError(t *testing.T) {
@@ -572,7 +545,7 @@ func TestDeleteFromIndexes_IgnoresKeyNotFoundError(t *testing.T) {
 	ctx := context.Background()
 
 	// Delete non-existent entity - should not error
-	err := comp.DeleteFromIndexes(ctx, "non-existent-entity")
+	err := comp.DeleteFromIndexes(ctx, "acme.ops.robotics.gcs.drone.999")
 
 	assert.NoError(t, err, "should gracefully handle non-existent entity deletion")
 }
@@ -586,7 +559,8 @@ func TestUpdateIndex_RespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	err := comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	err := comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 
 	assert.Error(t, err, "should fail with cancelled context")
 	assert.Contains(t, err.Error(), "context")
@@ -599,7 +573,8 @@ func TestUpdateIndex_RespectsContextTimeout(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond) // Ensure timeout expires
 
-	err := comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	err := comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 
 	// Should either succeed (if fast enough) or fail with timeout
 	if err != nil {
@@ -629,7 +604,8 @@ func TestUpdateIndex_UpdatesMetrics(t *testing.T) {
 	initialProcessed := comp.messagesProcessed
 	initialBytes := comp.bytesProcessed
 
-	err := comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	err := comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 	require.NoError(t, err)
 
 	// Verify metrics incremented
@@ -642,11 +618,13 @@ func TestDeleteFromIndexes_UpdatesMetrics(t *testing.T) {
 	ctx := context.Background()
 
 	// Add entry first
-	require.NoError(t, comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate"))
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	require.NoError(t, comp.UpdateOutgoingIndex(ctx, entityID,
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission"))
 
 	initialProcessed := comp.messagesProcessed
 
-	err := comp.DeleteFromIndexes(ctx, "entity")
+	err := comp.DeleteFromIndexes(ctx, entityID)
 	require.NoError(t, err)
 
 	// Verify metrics incremented
@@ -661,7 +639,8 @@ func TestUpdateIndex_UpdatesLastActivity(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	err := comp.UpdateOutgoingIndex(ctx, "entity", "target", "predicate")
+	err := comp.UpdateOutgoingIndex(ctx, "acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.mission.001", "robotics.assigned.mission")
 	require.NoError(t, err)
 
 	updatedActivity := comp.lastActivity.Load().(time.Time)

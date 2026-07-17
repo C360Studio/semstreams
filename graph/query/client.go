@@ -17,6 +17,8 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -447,6 +449,12 @@ func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 // detector) could serve partial topology. When graph-index reports not-ready this
 // returns ErrorCodeIndexNotReady instead of a partial result.
 func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]string, error) {
+	if err := semtypes.ValidateEntityID(entityID); err != nil {
+		return nil, err
+	}
+	if err := natsclient.ValidateKVWildcardFilter(entityID + ".>"); err != nil {
+		return nil, err
+	}
 	if err := qc.indexNotReadyErr(ctx); err != nil {
 		return nil, err
 	}
@@ -478,6 +486,16 @@ func (qc *natsClient) GetIncomingEdges(ctx context.Context, entityID string) ([]
 			continue
 		}
 		sourceID := strings.Join(parts[:6], ".")
+		if err := semtypes.ValidateEntityID(sourceID); err != nil {
+			continue
+		}
+		predicate, ok := gtypes.DecodePredicateToken(parts[6])
+		if !ok {
+			continue
+		}
+		if _, err := vocabulary.ParsePredicate(predicate); err != nil {
+			continue
+		}
 		if _, dup := seen[sourceID]; !dup {
 			seen[sourceID] = struct{}{}
 			result = append(result, sourceID)

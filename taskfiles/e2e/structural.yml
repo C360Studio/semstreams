@@ -10,9 +10,8 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[STRUCTURAL] Starting structural tier E2E test..."
+      - defer: docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15
       - docker compose -f docker/compose/tiered.yml --profile structural up -d --wait --build
       - echo "[OK] Services are healthy (rules + graph)"
       - echo "[STRUCTURAL] Running structural tier scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant structural --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile structural down -v --timeout 15
+      - cd cmd/e2e && ./e2e --scenario tiered --variant structural --output-dir ./test/e2e/results

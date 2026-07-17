@@ -43,11 +43,15 @@ import (
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
-// Build information constants
-const (
-	Version   = "0.1.0"
+const appName = "semstreams"
+
+var (
+	// Version is the semantic version, replaced with release metadata via -ldflags.
+	Version = "0.1.0"
+	// GitCommit is the source revision, replaced with release metadata via -ldflags.
+	GitCommit = "unknown"
+	// BuildTime is the build timestamp, replaced with release metadata via -ldflags.
 	BuildTime = "dev"
-	appName   = "semstreams"
 )
 
 func main() {
@@ -131,6 +135,7 @@ func run() error {
 
 	slog.Info("SemStreams ready",
 		"version", Version,
+		"git_commit", GitCommit,
 		"build_time", BuildTime)
 
 	// 8. Create remaining infrastructure

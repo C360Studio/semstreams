@@ -2,7 +2,9 @@ package natsclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +21,18 @@ func TestNewTestClient_BasicConnection(t *testing.T) {
 	require.NotNil(t, testClient.Client)
 	assert.True(t, testClient.IsReady())
 	assert.NotEmpty(t, testClient.URL)
+	assert.NotEmpty(t, testClient.MonitoringURL)
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	response, err := httpClient.Get(testClient.MonitoringURL + "/varz") //nolint:gosec // testcontainers URL
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var server struct {
+		Port int `json:"port"`
+	}
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&server))
+	require.Equal(t, 4222, server.Port, "monitoring URL must address the started test container")
 }
 
 func TestNewTestClient_WithFastStartup(t *testing.T) {

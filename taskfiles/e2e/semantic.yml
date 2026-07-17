@@ -10,12 +10,12 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[SEMANTIC] Starting semantic tier E2E test (SemEmbed + SemInstruct)..."
+      - defer: docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
       - docker compose -f docker/compose/tiered.yml --profile semantic up -d --wait --build
       - echo "[OK] ML services are healthy (SemEmbed + SemInstruct)"
       - echo "[SEMANTIC] Running semantic tier scenario..."
       # ML app runs on port 38180 (HTTP), 39190 (metrics), 34650 (UDP) to avoid conflict
       - cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
-      - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
 
   debug:
     desc: Start semantic tier for debugging (leaves containers running)
@@ -45,13 +45,12 @@ tasks:
       - echo "[SEMANTIC-FALLBACK] Testing semantic config graceful degradation (no ML services)..."
       - echo "[SEMANTIC-FALLBACK] Starting NATS only (no semembed/seminstruct)..."
       # Use statistical profile (just NATS + app) but with semantic config
+      - defer: docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - echo "[OK] Services started without ML services"
       - echo "[SEMANTIC-FALLBACK] Running fallback scenario..."
       # Run with semantic-fallback variant to trigger fallback validation
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant semantic-fallback --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      - cd cmd/e2e && ./e2e --scenario tiered --variant semantic-fallback --output-dir ./test/e2e/results
 
   compare:
     desc: Run statistical vs semantic and generate comparison report
@@ -59,18 +58,25 @@ tasks:
     deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
     cmds:
       - echo "[COMPARE] Running statistical variant first..."
-      # --build for parity with the semantic-variant step below (gh#246 follow-up).
-      - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      - task: compare:statistical
       - echo "[COMPARE] Running semantic variant second..."
       - sleep 5
-      - docker compose -f docker/compose/tiered.yml --profile semantic up -d --wait --build
-      - cmd: cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
+      - task: compare:semantic
       - echo "[COMPARE] Generating comparison report..."
-      - cmd: cd cmd/e2e && ./e2e --analyze-comparison --output-dir ./test/e2e/results
-        ignore_error: true
+      - cd cmd/e2e && ./e2e --analyze-comparison --output-dir ./test/e2e/results
       - echo "[OK] Comparison report generated in ./test/e2e/results/"
+
+  compare:statistical:
+    internal: true
+    cmds:
+      # --build so the comparison exercises current source, not a stale cached image.
+      - defer: docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
+      - cd cmd/e2e && ./e2e --scenario tiered --variant statistical --output-dir ./test/e2e/results
+
+  compare:semantic:
+    internal: true
+    cmds:
+      - defer: docker compose -f docker/compose/tiered.yml --profile semantic down -v --timeout 15
+      - docker compose -f docker/compose/tiered.yml --profile semantic up -d --wait --build
+      - cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
