@@ -129,14 +129,14 @@ func TestSubstituteVariables_EntityParts_NoCollisionWithIDOrTriple(t *testing.T)
 }
 
 // gh#160: when two triples share a predicate prefix
-// (e.g. "lineage.researcher-plan" vs "lineage.researcher-plan-entity"),
+// (e.g. "agent.lineage.researcher-plan" vs "agent.lineage.researcher-plan-entity"),
 // the substitution must resolve the longer reference to its own value
 // rather than letting the shorter predicate swallow the longer one and
 // leave the suffix dangling.
 //
 // Pre-fix behaviour depended on triple-iteration order: if the shorter
 // predicate landed first in the loop, `strings.ReplaceAll` would
-// substitute its value inside `$entity.triple.lineage.researcher-plan-entity`
+// substitute its value inside `$entity.triple.agent.lineage.researcher-plan-entity`
 // and leave the literal `-entity` suffix orphaned — producing a phantom
 // subject downstream. Sorting triples by predicate length descending
 // makes the longest match-first, so prefix predicates can never swallow

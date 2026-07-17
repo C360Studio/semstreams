@@ -47,6 +47,8 @@ type loopMetrics struct {
 
 	// Graph-write-before-publish ordering
 	graphWritePublishTimeouts *prometheus.CounterVec
+	// Permanent decoded task-intake rejection. Labels are bounded enums only.
+	taskIntakeRejections *prometheus.CounterVec
 
 	// Tool-call governance (ADR-039)
 	governanceVerdictDuration                *prometheus.HistogramVec
@@ -209,6 +211,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
 			}, []string{"state"}),
 
+			taskIntakeRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "task_intake_rejections_total",
+				Help:      "Permanent structural task-intake rejections by bounded lane and reason",
+			}, []string{"lane", "reason"}),
+
 			// Tool-call governance (ADR-039) drives the timeout-tuning
 			// decision in beta.70 — buckets span 1ms → 5s to capture
 			// both fast in-process rule fires and slow networked
@@ -258,6 +267,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterHistogram("agentic-loop", "context_compaction_tokens_saved", metrics.contextCompactionTokensSaved)
 			_ = registry.RegisterGauge("agentic-loop", "context_compacted_region_tokens", metrics.contextCompactedRegionTokens)
 			_ = registry.RegisterCounterVec("agentic-loop", "graph_write_publish_timeout_total", metrics.graphWritePublishTimeouts)
+			_ = registry.RegisterCounterVec("agentic-loop", "task_intake_rejections_total", metrics.taskIntakeRejections)
 			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
 			_ = registry.RegisterCounter("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
@@ -283,6 +293,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactionTokensSaved)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactedRegionTokens)
 			_ = prometheus.DefaultRegisterer.Register(metrics.graphWritePublishTimeouts)
+			_ = prometheus.DefaultRegisterer.Register(metrics.taskIntakeRejections)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictDuration)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceSubscribeBeforePublishFailures)
@@ -319,6 +330,10 @@ func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 // match persistHandlerResult's terminal-state branches.
 func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 	m.graphWritePublishTimeouts.WithLabelValues(state).Inc()
+}
+
+func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
+	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
 }
 
 // recordLoopCreated increments the loops created counter and active gauge.

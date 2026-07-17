@@ -1,4 +1,4 @@
-# Predicate Cutover: Export, Reset, and Reingest
+# Predicate Cutover: Wipe, Restart, and Canonical Reseed
 
 The canonical predicate release is a beta breaking change. It does not translate old predicate identities or
 mixed-format graph indexes in place.
@@ -24,17 +24,14 @@ tombstones, not unreadable JSON, and projection owners process both as cleanup. 
 consumer degraded or not-ready while it retries, but it does not produce `graph_state_reset_required`. Use this
 runbook only for the typed stored-state poison reasons above.
 
-## Preserve data if required
+## Wipe incompatible state
 
-Before deleting buckets, stop writers and export any beta ENTITY_STATES values or upstream source data required by
-your retention policy. The export is for operator recovery and audit; do not feed unchanged incompatible entity
-JSON back into the canonical deployment.
-
-## Reset incompatible state
-
-With all SemStreams components stopped, delete the authoritative and derived graph buckets used by the deployment:
+Stop every writer and SemStreams process that uses the target NATS account. Delete the authoritative graph state,
+ingest replay guards, and every derived graph bucket used by the deployment:
 
 - `ENTITY_STATES`
+- `ENTITY_SUFFIX_INDEX`
+- `GRAPH_INGEST_APPLIED_SEQ`
 - `OUTGOING_INDEX`
 - `INCOMING_INDEX`
 - `PREDICATE_INDEX`
@@ -44,14 +41,18 @@ With all SemStreams components stopped, delete the authoritative and derived gra
 - `ALIAS_INDEX`
 - enabled spatial, temporal, embedding, structural, community, and anomaly index buckets
 
-Do not delete unrelated operational or application KV buckets. Use the deployment's normal NATS administration
-and backup procedure; bucket names may be overridden by deployment configuration.
+Do not delete unrelated operational or application KV buckets. Bucket names may be overridden by deployment
+configuration, so derive the exact destructive set from the rendered configuration and the current
+`graph.FrameworkOwnedBuckets()` list before execution.
 
-## Reingest canonical sources
+This pre-v1 procedure does not export, inspect, preserve, translate, or roll back incompatible beta graph state.
+Canonical source systems remain authoritative and must be fixed before reseed.
+
+## Restart and reseed canonical sources
 
 1. Deploy the matching breaking SemStreams and owned producer versions.
 2. Start SemStreams so it creates empty graph/index buckets.
-3. Reingest from canonical source events or regenerate Graphables from the authoritative source system.
+3. Reseed from canonical source events or regenerate Graphables from the authoritative source system.
 4. Poll `graph.index.query.status` until `ready` is true and the indexed revision reaches the target revision.
 5. Run exact and namespace query smoke tests for the renamed predicates before reopening writers.
 
@@ -60,5 +61,5 @@ recreate the same poison state.
 
 ## Explicit non-features
 
-There is no runtime alias table, permissive flag, dual reader/writer, or in-process migration command. This is the
-intentional clean beta boundary before v1.
+There is no runtime alias table, permissive flag, dual reader/writer, in-process migration command, beta-state
+preservation contract, or rollback path. This is the intentional clean beta boundary before v1.

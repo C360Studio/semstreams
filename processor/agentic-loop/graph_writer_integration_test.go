@@ -1049,7 +1049,7 @@ func TestWriteModelEndpoints_MissingPlatform_NoOp(t *testing.T) {
 
 // TestWriteLineageTriples_Integration verifies the end-to-end NATS
 // roundtrip: a RelatedLoops map (typed map[string]any after JSON
-// round-trip) emits one lineage.<key> triple per entry through
+// round-trip) emits one agent.lineage.<role-key> triple per entry through
 // graph.mutation.triple.add. The spawned-loop entity ID format and
 // the predicate prefix are both contractual surfaces — drift breaks
 // downstream rule substitution and ops-agent aggregation.
@@ -1066,7 +1066,9 @@ func TestWriteLineageTriples_Integration(t *testing.T) {
 		"researcher": "loop-research-001",
 		"planner":    "loop-plan-002",
 	}
-	w.WriteLineageTriples(ctx, "architect-loop-xyz", related)
+	if err := w.WriteLineageTriples(ctx, "architect-loop-xyz", related); err != nil {
+		t.Fatal(err)
+	}
 
 	triples := collector.getTriples()
 	if len(triples) != 2 {
@@ -1086,7 +1088,10 @@ func TestWriteLineageTriples_Integration(t *testing.T) {
 
 	preds := collector.predicateSet()
 	for _, key := range []string{"researcher", "planner"} {
-		want := agentic.LineageTriplePredicate(key)
+		want, err := agentic.LineageTriplePredicate(key)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !preds[want] {
 			t.Errorf("missing predicate %q", want)
 		}
@@ -1099,14 +1104,14 @@ func TestWriteLineageTriples_Integration(t *testing.T) {
 func TestWriteLineageTriples_NilClient_NoOp(t *testing.T) {
 	w := agenticloop.NewGraphWriterForTest(nil, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 	// Should be a no-op and not panic.
-	w.WriteLineageTriples(context.Background(), "any-loop", map[string]any{"researcher": "x"})
+	if err := w.WriteLineageTriples(context.Background(), "any-loop", map[string]any{"researcher": "x"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// TestWriteLineageTriples_MissingPlatform_NoOp verifies platform-
-// identity gating: a writer with empty Org/Platform skips the write
-// (and logs a warning, but the warning side-effect is observable
-// only via the production logger).
-func TestWriteLineageTriples_MissingPlatform_NoOp(t *testing.T) {
+// TestWriteLineageTriples_MissingPlatformRejected verifies an invalid
+// prospective subject fails before any graph I/O.
+func TestWriteLineageTriples_MissingPlatformRejected(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
@@ -1114,7 +1119,9 @@ func TestWriteLineageTriples_MissingPlatform_NoOp(t *testing.T) {
 	collector.subscribeMutations(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{}) // no Org/Platform
-	w.WriteLineageTriples(ctx, "any-loop", map[string]any{"researcher": "x"})
+	if err := w.WriteLineageTriples(ctx, "any-loop", map[string]any{"researcher": "x"}); err == nil {
+		t.Fatal("WriteLineageTriples error = nil, want invalid subject rejection")
+	}
 
 	if got := len(collector.getTriples()); got != 0 {
 		t.Errorf("missing platform identity should skip the write, got %d triples", got)

@@ -201,13 +201,13 @@ func TestExecutionContext_SubstituteVariables_ScheduleNamespace(t *testing.T) {
 }
 
 // TestSubstituteVariables_AgentRunTripleResolves verifies that the
-// $entity.triple.agent.run substitution token resolves correctly through the
+// $entity.triple.agent.loop.run substitution token resolves correctly through the
 // standard entity-triple substitution layer (M3 grammar-verification per
 // feedback_reference_configs_verify_triple_stamping). The predicate name
-// "agent.run" (LoopRun vocab constant, ADR-053 D7) is verified collision-free
+// "agent.loop.run" (LoopRun vocab constant, ADR-053 D7) is verified collision-free
 // against the substitution grammar at implementation time; this test locks the
 // runtime behavior so a future substitution-layer refactor can't silently break
-// the agent.run namespace without surfacing here.
+// the agent.loop.run predicate without surfacing here.
 func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	t.Parallel()
 
@@ -229,14 +229,14 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	}
 
 	// ADR-053 follow-up: the 6-part run entity ID is the rule-addressable upsert
-	// subject. $entity.triple.agent.run.entity_id must resolve to the full ID so a
+	// subject. $entity.triple.agent.run.entity-id must resolve to the full ID so a
 	// rule can use it as an add_triple/update_triple Subject.
 	gotEntity := ec.SubstituteVariables("$entity.triple.agent.run.entity-id")
 	if want := "acme.ops.agent.chain.execution.root-loop-uuid"; gotEntity != want {
 		t.Errorf("$entity.triple.agent.run.entity-id resolved to %q, want %q", gotEntity, want)
 	}
 
-	// Verify an entity WITHOUT agent.run returns an unresolved token (not empty,
+	// Verify an entity WITHOUT agent.loop.run returns an unresolved token (not empty,
 	// not panic): the substitution layer leaves framework-namespace tokens verbatim.
 	ecNoTriple := &ExecutionContext{
 		EntityID: loopEntityID,
@@ -247,6 +247,6 @@ func TestSubstituteVariables_AgentRunTripleResolves(t *testing.T) {
 	}
 	absent := ecNoTriple.SubstituteVariables("$entity.triple.agent.loop.run")
 	if absent == "root-loop-uuid" {
-		t.Errorf("absent agent.run triple must not resolve to a value, got %q", absent)
+		t.Errorf("absent agent.loop.run triple must not resolve to a value, got %q", absent)
 	}
 }

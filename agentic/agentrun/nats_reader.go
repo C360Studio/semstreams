@@ -91,7 +91,7 @@ func NewNATSLoopTripleReader(client *natsclient.Client) *NATSLoopTripleReader {
 	return &NATSLoopTripleReader{client: client}
 }
 
-// GetLoopRunID reads the agent.run triple from the given loop entity ID.
+// GetLoopRunID reads the agent.loop.run triple from the given loop entity ID.
 // Returns ("", false, nil) when the triple is absent (not an error).
 // Returns ("", false, err) on NATS or decode failures.
 func (r *NATSLoopTripleReader) GetLoopRunID(ctx context.Context, loopEntityID string) (string, bool, error) {

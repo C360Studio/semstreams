@@ -31,6 +31,11 @@ import (
 // schema is the configuration schema for agentic-loop, generated from Config struct tags
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+const (
+	taskIntakeRejectionLane   = "decoded-task"
+	taskIntakeRejectionReason = "structural-invalid"
+)
+
 // Component implements the agentic-loop processor
 type Component struct {
 	config     Config
@@ -78,6 +83,12 @@ type Component struct {
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
 
+	// pendingTaskResults retains the not-yet-published spawn result when a
+	// transient lineage write NAKs the task. Redelivery first hits HandleTask's
+	// active-loop dedup path, then resumes from this result so the original
+	// agent.request is not silently lost. Protected by mu.
+	pendingTaskResults map[string]HandlerResult
+
 	// graphStateReset permanently blocks task intake after this process
 	// observes incompatible authoritative graph state. Start clears the latch;
 	// recovery requires graph reset/canonical reingest and component restart.
@@ -88,6 +99,9 @@ type Component struct {
 	// wire-level approval-response messages without a NATS connection.
 	// Always nil in production.
 	testPublishHook func(subject string, data []byte)
+	// testLineageWriteHook injects lineage-write outcomes without NATS. Always
+	// nil in production.
+	testLineageWriteHook func(context.Context, string, map[string]any) error
 }
 
 type graphStateResetLatch struct {
@@ -922,6 +936,13 @@ func (c *Component) handleTaskMessageWithLifecycle(workCtx, lifecycleCtx context
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
 		return nil
 	}
+	related, hasLineage, err := c.preflightDecodedTask(task)
+	if err != nil {
+		if c.metrics != nil {
+			c.metrics.recordTaskIntakeRejection(taskIntakeRejectionLane, taskIntakeRejectionReason)
+		}
+		return natsclient.TerminateDelivery(err)
+	}
 
 	c.logger.Debug("Processing task message",
 		slog.String("task_id", task.TaskID),
@@ -936,10 +957,17 @@ func (c *Component) handleTaskMessageWithLifecycle(workCtx, lifecycleCtx context
 	}
 
 	if !result.Created {
-		c.logger.Debug("Task deduplicated — loop already active",
+		pending, ok := c.pendingTaskResult(task.TaskID, result.LoopID)
+		if !ok {
+			c.logger.Debug("Task deduplicated — loop already active",
+				slog.String("loop_id", result.LoopID),
+				slog.String("task_id", task.TaskID))
+			return nil
+		}
+		result = pending
+		c.logger.Debug("Resuming task after transient lineage-write NAK",
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
-		return nil
 	}
 
 	c.logger.Debug("Loop created",
@@ -970,10 +998,23 @@ func (c *Component) handleTaskMessageWithLifecycle(workCtx, lifecycleCtx context
 			entity, _ := c.handler.GetLoop(result.LoopID)
 			return c.handleSpawnIdentityFailureWithLifecycle(workCtx, lifecycleCtx, result.LoopID, entity, err)
 		}
-		if rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops].(map[string]any); ok {
-			c.graphWriter.WriteLineageTriples(workCtx, result.LoopID, rawLineage)
+		if hasLineage {
+			if err := c.writeLineageTriples(workCtx, result.LoopID, related); err != nil {
+				if errs.IsTransient(err) {
+					c.rememberPendingTaskResult(task.TaskID, result)
+					c.logger.Warn("graph_writer: transient lineage write failed — task will be redelivered",
+						"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+					return err
+				}
+				c.clearPendingTaskResult(task.TaskID, result.LoopID)
+				c.logger.Error("graph_writer: lineage write failed — halting loop spawn",
+					"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+				entity, _ := c.handler.GetLoop(result.LoopID)
+				return c.handleSpawnIdentityFailureWithLifecycle(workCtx, lifecycleCtx, result.LoopID, entity, err)
+			}
 		}
 	}
+	c.clearPendingTaskResult(task.TaskID, result.LoopID)
 
 	// Record creation only after graph birth succeeds. A poisoned authoritative
 	// read-back rolls creation back and must leave no business metric. Ordinary
@@ -989,6 +1030,86 @@ func (c *Component) handleTaskMessageWithLifecycle(workCtx, lifecycleCtx context
 	// Persist loop state to KV
 	c.persistLoopState(workCtx, result.LoopID)
 	return nil
+}
+
+func (c *Component) writeLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
+	if c.testLineageWriteHook != nil {
+		return c.testLineageWriteHook(ctx, loopID, related)
+	}
+	return c.graphWriter.WriteLineageTriples(ctx, loopID, related)
+}
+
+func (c *Component) rememberPendingTaskResult(taskID string, result HandlerResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingTaskResults == nil {
+		c.pendingTaskResults = make(map[string]HandlerResult)
+	}
+	c.pendingTaskResults[taskID] = result
+}
+
+func (c *Component) pendingTaskResult(taskID, loopID string) (HandlerResult, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result, ok := c.pendingTaskResults[taskID]
+	return result, ok && result.LoopID == loopID
+}
+
+func (c *Component) clearPendingTaskResult(taskID, loopID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result, ok := c.pendingTaskResults[taskID]
+	if ok && result.LoopID == loopID {
+		delete(c.pendingTaskResults, taskID)
+	}
+}
+
+func (c *Component) preflightDecodedTask(task *agentic.TaskMessage) (map[string]any, bool, error) {
+	if err := task.Validate(); err != nil {
+		return nil, false, errs.WrapInvalid(err, "agentic-loop", "handleTaskMessageWithLifecycle", "validate decoded task")
+	}
+	related, hasLineage, err := normalizedRelatedLoops(task.Metadata)
+	if err != nil {
+		return nil, false, errs.WrapInvalid(err, "agentic-loop", "handleTaskMessageWithLifecycle", "decode related_loops metadata")
+	}
+	if !hasLineage || len(related) == 0 {
+		return related, hasLineage, nil
+	}
+
+	// Reserve only an identity value, with no loop-manager or persistence
+	// side effect, so the complete prospective graph batch can be built and
+	// validated before HandleTask creates any loop state.
+	if task.LoopID == "" {
+		task.LoopID = c.handler.loopManager.GenerateLoopID()
+	}
+	prospectiveSubject, err := agentic.TryLoopExecutionEntityID(
+		c.deps.Platform.Org, c.deps.Platform.Platform, task.LoopID)
+	if err != nil {
+		return nil, false, errs.WrapInvalid(err, "agentic-loop", "handleTaskMessageWithLifecycle", "construct prospective lineage subject")
+	}
+	if _, err := buildLineageTriples(prospectiveSubject, related); err != nil {
+		return nil, false, errs.WrapInvalid(err, "agentic-loop", "handleTaskMessageWithLifecycle", "preflight prospective lineage batch")
+	}
+	return related, true, nil
+}
+
+func normalizedRelatedLoops(metadata map[string]any) (map[string]any, bool, error) {
+	raw, present := metadata[agentic.MetadataKeyRelatedLoops]
+	if !present {
+		return nil, false, nil
+	}
+	switch related := raw.(type) {
+	case map[string]any:
+		return related, true, nil
+	case map[string]string:
+		normalized := make(map[string]any, len(related))
+		for key, value := range related {
+			normalized[key] = value
+		}
+		return normalized, true, nil
+	default:
+		return nil, true, fmt.Errorf("metadata %q must be an object, got %T", agentic.MetadataKeyRelatedLoops, raw)
+	}
 }
 
 // handleSpawnIdentityFailure keeps authoritative graph poison out of the loop

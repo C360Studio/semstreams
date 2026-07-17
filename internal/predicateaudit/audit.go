@@ -24,6 +24,7 @@ import (
 type Candidate struct {
 	File      string
 	Line      int
+	Column    int
 	Predicate string
 	Surface   string
 }
@@ -38,7 +39,7 @@ var (
 	substitutionRE = regexp.MustCompile(`\$(?:entity|related)\.triple\.([A-Za-z0-9_.-]+)`)
 	structuredRE   = regexp.MustCompile(
 		`(?i)(?:predicate|predicates|phasePredicate|linkPredicate|referencePredicates|triplePredicate)` +
-			`[[:space:]]*(?::|=)[[:space:]]*["'\x60]([^"'\x60]+)["'\x60]`)
+			`["']?[[:space:]]*(?::|=)[[:space:]]*["'\x60]([^"'\x60]*)["'\x60]`)
 	allowRE        = regexp.MustCompile(`predicate-audit:allow-invalid[[:space:]]+([^[:space:]]+)[[:space:]]+(.+)$`)
 	lifecycleTagRE = regexp.MustCompile(`(?:^|[,[:space:]])predicate=([^,"[:space:]]+)`)
 )
@@ -114,8 +115,9 @@ func Audit(roots ...string) ([]Candidate, []Finding, error) {
 }
 
 type goSymbols struct {
-	byPackage map[string]map[string]string
-	byFile    map[string]map[string]string
+	byPackage   map[string]map[string]string
+	byDirectory map[string]map[string]string
+	byFile      map[string]map[string]string
 }
 
 // collectGoSymbols builds the bounded const table needed to resolve ordinary
@@ -123,20 +125,37 @@ type goSymbols struct {
 // Conflicting same-name symbols in packages with the same short name are
 // dropped so the audit fails by omission rather than guessing a value.
 func collectGoSymbols(roots []string) (*goSymbols, error) {
-	table := &goSymbols{byPackage: make(map[string]map[string]string), byFile: make(map[string]map[string]string)}
+	return collectGoSymbolsMode(roots, false)
+}
+
+func collectGoSymbolsIncludingTests(roots []string) (*goSymbols, error) {
+	return collectGoSymbolsMode(roots, true)
+}
+
+func collectGoSymbolsMode(roots []string, includeTests bool) (*goSymbols, error) {
+	table := &goSymbols{
+		byPackage:   make(map[string]map[string]string),
+		byDirectory: make(map[string]map[string]string),
+		byFile:      make(map[string]map[string]string),
+	}
 	conflicts := make(map[string]map[string]bool)
+	directoryConflicts := make(map[string]map[string]bool)
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
 			if entry.IsDir() {
-				if path != root && ignoredDir(entry.Name()) {
+				ignored := ignoredDir(entry.Name())
+				if includeTests {
+					ignored = ignoredFixtureDir(entry.Name())
+				}
+				if path != root && ignored {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			if filepath.Ext(path) != ".go" || (!includeTests && strings.HasSuffix(path, "_test.go")) {
 				return nil
 			}
 			fset := token.NewFileSet()
@@ -145,7 +164,12 @@ func collectGoSymbols(roots []string) (*goSymbols, error) {
 				return fmt.Errorf("parse Go %s: %w", path, err)
 			}
 			pkg := file.Name.Name
+			directory := filepath.Clean(filepath.Dir(path))
 			table.byFile[path] = make(map[string]string)
+			if table.byDirectory[directory] == nil {
+				table.byDirectory[directory] = make(map[string]string)
+				directoryConflicts[directory] = make(map[string]bool)
+			}
 			if table.byPackage[pkg] == nil {
 				table.byPackage[pkg] = make(map[string]string)
 				conflicts[pkg] = make(map[string]bool)
@@ -165,6 +189,13 @@ func collectGoSymbols(roots []string) (*goSymbols, error) {
 						if !ok {
 							continue
 						}
+						table.byFile[path][name.Name] = value
+						if old, exists := table.byDirectory[directory][name.Name]; exists && old != value {
+							directoryConflicts[directory][name.Name] = true
+							delete(table.byDirectory[directory], name.Name)
+						} else if !directoryConflicts[directory][name.Name] {
+							table.byDirectory[directory][name.Name] = value
+						}
 						if old, exists := table.byPackage[pkg][name.Name]; exists && old != value {
 							conflicts[pkg][name.Name] = true
 							delete(table.byPackage[pkg], name.Name)
@@ -173,7 +204,6 @@ func collectGoSymbols(roots []string) (*goSymbols, error) {
 						if !conflicts[pkg][name.Name] {
 							table.byPackage[pkg][name.Name] = value
 						}
-						table.byFile[path][name.Name] = value
 					}
 				}
 			}
@@ -260,9 +290,11 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		if value == "" || isSymbolicConstant(value) {
 			return
 		}
-		line := fset.Position(expr.Pos()).Line
+		position := fset.Position(expr.Pos())
 		for _, predicate := range literalCandidates(value) {
-			out = append(out, Candidate{File: path, Line: line, Predicate: predicate, Surface: surface})
+			out = append(out, Candidate{
+				File: path, Line: position.Line, Column: position.Column, Predicate: predicate, Surface: surface,
+			})
 		}
 	}
 
@@ -295,9 +327,12 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			if n.Tag != nil {
 				value, err := strconv.Unquote(n.Tag.Value)
 				if err == nil {
-					line := fset.Position(n.Tag.Pos()).Line
+					position := fset.Position(n.Tag.Pos())
 					for _, predicate := range lifecycleTagCandidates(value) {
-						out = append(out, Candidate{File: path, Line: line, Predicate: predicate, Surface: "go-lifecycle-tag"})
+						out = append(out, Candidate{
+							File: path, Line: position.Line, Column: position.Column,
+							Predicate: predicate, Surface: "go-lifecycle-tag",
+						})
 					}
 				}
 			}
@@ -309,9 +344,12 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			if err != nil {
 				break
 			}
-			line := fset.Position(n.Pos()).Line
+			position := fset.Position(n.Pos())
 			for _, predicate := range substitutionCandidates(value) {
-				out = append(out, Candidate{File: path, Line: line, Predicate: predicate, Surface: "go-substitution"})
+				out = append(out, Candidate{
+					File: path, Line: position.Line, Column: position.Column,
+					Predicate: predicate, Surface: "go-substitution",
+				})
 			}
 		}
 		return true
@@ -481,7 +519,14 @@ func deduplicate(in []Candidate) []Candidate {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]Candidate, 0, len(in))
 	for _, candidate := range in {
-		key := fmt.Sprintf("%s:%d:%s:%s", candidate.File, candidate.Line, candidate.Predicate, candidate.Surface)
+		key := fmt.Sprintf(
+			"%s:%d:%d:%s:%s",
+			candidate.File,
+			candidate.Line,
+			candidate.Column,
+			candidate.Predicate,
+			candidate.Surface,
+		)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -494,6 +539,9 @@ func deduplicate(in []Candidate) []Candidate {
 		}
 		if out[i].Line != out[j].Line {
 			return out[i].Line < out[j].Line
+		}
+		if out[i].Column != out[j].Column {
+			return out[i].Column < out[j].Column
 		}
 		return out[i].Predicate < out[j].Predicate
 	})

@@ -124,8 +124,15 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 
 // CreateLoop creates a new loop entity with a generated UUID
 func (m *LoopManager) CreateLoop(taskID, role, model string, maxIterations ...int) (string, error) {
-	loopID := uuid.New().String()
+	loopID := m.GenerateLoopID()
 	return m.CreateLoopWithID(loopID, taskID, role, model, maxIterations...)
+}
+
+// GenerateLoopID returns an identity with the exact UUID semantics used by
+// CreateLoop, without registering or persisting a loop. Intake uses this pure
+// generator to preflight prospective lineage before loop creation.
+func (m *LoopManager) GenerateLoopID() string {
+	return uuid.NewString()
 }
 
 // CreateLoopWithID creates a new loop entity with a specific ID

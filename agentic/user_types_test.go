@@ -544,6 +544,34 @@ func TestTaskMessage_Validate(t *testing.T) {
 	}
 }
 
+func TestTaskMessageValidateRelatedLoopsMetadata(t *testing.T) {
+	base := TaskMessage{TaskID: "task-123", Role: "general", Model: "gpt-4", Prompt: "test"}
+	tests := []struct {
+		name    string
+		related any
+		wantErr string
+	}{
+		{name: "decoded map valid", related: map[string]any{"research-reviewer": "loop-1"}},
+		{name: "direct map valid", related: map[string]string{"researcher": "loop-1"}},
+		{name: "invalid container", related: []any{"loop-1"}, wantErr: "must be an object"},
+		{name: "invalid role key", related: map[string]any{"research_reviewer": "loop-1"}, wantErr: "role key"},
+		{name: "non-string loop ID", related: map[string]any{"researcher": 42}, wantErr: "must be a string"},
+		{name: "empty loop ID", related: map[string]any{"researcher": ""}, wantErr: "must not be empty"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			task := base
+			task.Metadata = map[string]any{MetadataKeyRelatedLoops: test.related}
+			err := task.Validate()
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestTaskMessage_JSONRoundTrip(t *testing.T) {
 	original := TaskMessage{
 		LoopID: "loop-abc",

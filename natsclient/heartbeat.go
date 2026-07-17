@@ -2,12 +2,33 @@ package natsclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// PermanentDeliveryError marks a handler failure as structurally permanent for
+// this exact message. ConsumeWithHeartbeat terminates the JetStream delivery
+// instead of retrying it. Unwrap preserves the handler's typed error contract.
+type PermanentDeliveryError struct {
+	err error
+}
+
+func (e *PermanentDeliveryError) Error() string { return e.err.Error() }
+func (e *PermanentDeliveryError) Unwrap() error { return e.err }
+
+// TerminateDelivery marks err for JetStream Term handling. Transient and
+// cancellation errors must be returned unchanged so their existing NAK paths
+// remain intact.
+func TerminateDelivery(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PermanentDeliveryError{err: err}
+}
 
 // ConsumeWithHeartbeat runs work in a goroutine while periodically calling
 // msg.InProgress() to reset the AckWait clock. This allows short AckWait
@@ -17,7 +38,8 @@ import (
 // message. The caller must NOT call these methods when using this helper.
 //
 // On work success: msg.Ack()
-// On work error: msg.NakWithDelay(30s) to allow breathing room before retry
+// On permanent work error: msg.Term() so structurally invalid data is not retried
+// On other work error: msg.NakWithDelay(30s) to allow breathing room before retry
 // On context cancellation: msg.NakWithDelay(5s) for graceful shutdown
 // On InProgress failure: returns error (message will be redelivered by server)
 func ConsumeWithHeartbeat(
@@ -62,6 +84,13 @@ func ConsumeWithHeartbeat(
 				return ctx.Err()
 			}
 			if err != nil {
+				var permanent *PermanentDeliveryError
+				if errors.As(err, &permanent) {
+					if termErr := msg.Term(); termErr != nil {
+						return errors.Join(err, fmt.Errorf("terminate permanent delivery: %w", termErr))
+					}
+					return err
+				}
 				_ = msg.NakWithDelay(30 * time.Second)
 				return err
 			}

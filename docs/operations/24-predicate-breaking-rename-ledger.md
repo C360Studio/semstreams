@@ -4,8 +4,9 @@
 
 This ledger records the predicate identity changes required by ADR-074. It is release documentation, not a
 runtime alias table. No binary, configuration loader, query path, or migration tool may load this file to accept
-an old identity. Existing beta graph state is reset and reingested as described in
-[`17-predicate-cutover-reset-reingest.md`](17-predicate-cutover-reset-reingest.md).
+an old identity. Incompatible beta graph state is wiped, the framework is restarted, and canonical owned sources are
+reseeded as described in
+[`17-predicate-cutover-clean-wipe.md`](17-predicate-cutover-clean-wipe.md).
 
 ## Review Rules
 
@@ -96,6 +97,11 @@ an old identity. Existing beta graph state is reset and reingested as described 
 The former `agent.capability.oasf_class` has no canonical SemStreams replacement. Its briefly renamed
 `agent.capability.oasf-class` form was also removed by ADR-075's clean transfer of OASF taxonomy and projection
 ownership to SemTeams; see the [framework package boundary inventory](27-framework-package-boundary-clean-break.md).
+
+Related-loop lineage is a semantic migration, not a general textual alias. Genuine sibling-role lineage uses
+exactly `agent.lineage.<role-key>`, where the role key is one static lower-kebab segment of at most 64 bytes. Historical
+run anchors move to the already-declared `agent.loop.run` and `agent.run.entity-id` predicates instead of being
+reminted beneath `agent.lineage`. The former untyped `lineage.*` namespace has no alias or dual-read path.
 
 ## Research Runtime and Reference Rules
 

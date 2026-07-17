@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 func TestToolDefinition_JSONRoundTrip(t *testing.T) {
@@ -673,24 +674,45 @@ func TestLineageTriplePredicate(t *testing.T) {
 	tests := []struct {
 		roleKey string
 		want    string
+		wantErr bool
 	}{
-		{"researcher", "lineage.researcher"},
-		{"planner", "lineage.planner"},
-		{"", "lineage."}, // edge case — caller's responsibility to pass a non-empty key
-		{"deeply.dotted.label", "lineage.deeply.dotted.label"},
+		{roleKey: "researcher", want: "agent.lineage.researcher"},
+		{roleKey: "research-reviewer", want: "agent.lineage.research-reviewer"},
+		{roleKey: "", wantErr: true},
+		{roleKey: "deeply.dotted.label", wantErr: true},
+		{roleKey: "research_reviewer", wantErr: true},
+		{roleKey: "Researcher", wantErr: true},
+		{roleKey: "*", wantErr: true},
+		{roleKey: strings.Repeat("a", vocabulary.MaxPredicateSegmentBytes+1), wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.roleKey, func(t *testing.T) {
-			got := agentic.LineageTriplePredicate(tc.roleKey)
+			got, err := agentic.LineageTriplePredicate(tc.roleKey)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("LineageTriplePredicate(%q) error = nil, want rejection", tc.roleKey)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LineageTriplePredicate(%q): %v", tc.roleKey, err)
+			}
 			if got != tc.want {
 				t.Errorf("LineageTriplePredicate(%q) = %q, want %q", tc.roleKey, got, tc.want)
 			}
 		})
 	}
+}
 
-	// Defence-in-depth: the helper must use the published prefix.
-	if !strings.HasPrefix(agentic.LineageTriplePredicate("x"), agentic.LineageTriplePrefix) {
-		t.Errorf("helper must use LineageTriplePrefix")
+func TestLineageTriplePredicateAuthority(t *testing.T) {
+	predicate := "agent.lineage.research-reviewer"
+	if err := agentic.AuthorizeLineageTriplePredicate(agentic.LineageTripleProducer, predicate); err != nil {
+		t.Fatalf("trusted lineage producer rejected: %v", err)
+	}
+	for _, producer := range []string{"", "rule-engine", "product-agent"} {
+		if err := agentic.AuthorizeLineageTriplePredicate(producer, predicate); err == nil {
+			t.Fatalf("producer %q unexpectedly authorized for %q", producer, predicate)
+		}
 	}
 }
 

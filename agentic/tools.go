@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // ErrToolNotFound is the sentinel returned by tool registries when a
@@ -133,9 +134,9 @@ const MetadataKeyDecideActionAllowlist = "agent.decide.action_allowlist"
 // MetadataKeyRelatedLoops is the TaskMessage.Metadata /
 // ToolCall.Metadata key under which cross-arc loop-ID lineage flows
 // from a spawning rule down to the spawned loop and into its tool
-// calls. The value is a map[string]string keyed by role name (or any
-// product-specific lineage label) where the value is the related
-// loop ID.
+// calls. The value is a map[string]string whose keys are exact static
+// lower-kebab predicate segments (maximum 64 bytes) and whose values are
+// related loop IDs. Keys are neither substituted nor normalized.
 //
 // Use case: a downstream role needs to read_loop_result against an
 // upstream loop without the loop ID being baked into the spawn
@@ -191,18 +192,17 @@ const MetadataKeyRunID = "agent.run_id"
 // org/platform via agentic.ChainExecutionEntityID.
 const MetadataKeyRunEntityID = "agent.run_entity_id"
 
-// LineageTriplePrefix is the predicate prefix for cross-arc loop-ID
-// lineage triples stamped on a spawned loop's entity at loop-creation
-// time. Each entry in TaskMessage.Metadata[MetadataKeyRelatedLoops]
-// becomes a triple of the form:
+// LineageTripleNamespace is the fixed framework-owned namespace for
+// cross-arc loop-ID lineage triples. Each entry in
+// TaskMessage.Metadata[MetadataKeyRelatedLoops] becomes a triple of the form:
 //
 //	subject:   <spawned loop entity ID>
-//	predicate: lineage.<roleKey>          // e.g. lineage.researcher
+//	predicate: agent.lineage.<role-key> // e.g. agent.lineage.research-reviewer
 //	object:    <upstream loop ID string>
 //
 // Downstream rules that fire on the spawned entity read these via the
 // existing $entity.triple.<predicate> substitution, e.g.
-// $entity.triple.lineage.researcher resolves to the upstream loop ID
+// $entity.triple.agent.lineage.researcher resolves to the upstream loop ID
 // without any new substitution-token, tool, or persona-driven echo
 // forwarding.
 //
@@ -210,15 +210,53 @@ const MetadataKeyRunEntityID = "agent.run_entity_id"
 // observability primitives (ADR-033) aggregate cross-arc lineage by
 // scanning predicates with this prefix. Codifying as a public constant
 // keeps producers and consumers aligned without string-literal drift.
-const LineageTriplePrefix = "lineage."
+const LineageTripleNamespace = "agent.lineage"
+
+// LineageTripleProducer is the stable trusted producer identity granted the
+// exact agent.lineage namespace. It names the framework integration boundary,
+// not Triple.Source or caller-controlled task metadata.
+const LineageTripleProducer = "agentic-loop-lineage"
+
+var lineageTripleAuthority = mustLineageTripleAuthority()
+
+func mustLineageTripleAuthority() *vocabulary.PredicateAuthority {
+	authority, err := vocabulary.NewPredicateAuthority(vocabulary.NamespaceDelegation{
+		Producer:  LineageTripleProducer,
+		Namespace: LineageTripleNamespace,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("configure lineage predicate authority: %v", err))
+	}
+	return authority
+}
+
+// AuthorizeLineageTriplePredicate applies the fixed lineage namespace policy
+// for a producer supplied by a trusted framework boundary.
+func AuthorizeLineageTriplePredicate(producer, predicate string) error {
+	return lineageTripleAuthority.Authorize(producer, predicate)
+}
 
 // LineageTriplePredicate returns the canonical predicate for a
-// RelatedLoops role key. Centralises the prefix join so producers
+// RelatedLoops role key. The key is one static lower-kebab predicate segment;
+// validating the complete candidate through vocabulary.ParsePredicate keeps
+// this narrow delegation from becoming unchecked authority to mint arbitrary
+// agent predicates.
+//
+// Centralising construction keeps producers
 // (rule.executePublishAgent / agentic-loop loop-creation path) and
-// consumers (rule authors using $entity.triple.lineage.<key>,
+// consumers (rule authors using $entity.triple.agent.lineage.<key>,
 // ops-agent aggregations) cannot drift on the format.
-func LineageTriplePredicate(roleKey string) string {
-	return LineageTriplePrefix + roleKey
+func LineageTriplePredicate(roleKey string) (string, error) {
+	predicate := LineageTripleNamespace + "." + roleKey
+	parts, err := vocabulary.ParsePredicate(predicate)
+	if err != nil {
+		return "", err
+	}
+	canonical := parts.String()
+	if err := AuthorizeLineageTriplePredicate(LineageTripleProducer, canonical); err != nil {
+		return "", err
+	}
+	return canonical, nil
 }
 
 // ToolErrorKind classifies the source or nature of a tool execution failure.

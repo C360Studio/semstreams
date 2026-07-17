@@ -142,6 +142,118 @@ func TestIntegration_PreexistingPredicatePoisonIsSticky(t *testing.T) {
 	require.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
 }
 
+// TestIntegration_PredicateCleanWipeReseedRestoresQueryParity proves the
+// destructive pre-v1 cutover contract against real NATS. A poisoned process
+// cannot be repaired in place; after stop + complete incompatible-bucket wipe,
+// a canonical reseed restores exact and namespace queries, and a second clean
+// restart replays to the same results.
+func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketEntityStates, Description: "Predicate clean-wipe cutover proof",
+	})
+	require.NoError(t, err)
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
+	_, err = entityBucket.Put(ctx, entityID, poisoned)
+	require.NoError(t, err)
+
+	newIndex := func() *Component {
+		t.Helper()
+		configJSON, marshalErr := json.Marshal(DefaultConfig())
+		require.NoError(t, marshalErr)
+		created, createErr := CreateGraphIndex(configJSON, component.Dependencies{NATSClient: nc})
+		require.NoError(t, createErr)
+		indexComponent := created.(*Component)
+		require.NoError(t, indexComponent.Initialize())
+		return indexComponent
+	}
+	waitReady := func(indexComponent *Component) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			return indexComponent.computeIndexStatus(ctx).Ready
+		}, 5*time.Second, 25*time.Millisecond, "canonical replay never became query-ready")
+	}
+	assertPredicateParity := func(indexComponent *Component) {
+		t.Helper()
+		exactData, queryErr := indexComponent.handleQueryPredicateNATS(
+			ctx, []byte(`{"predicate":"robotics.assigned.mission"}`))
+		require.NoError(t, queryErr)
+		var exact graph.PredicateQueryResponse
+		require.NoError(t, json.Unmarshal(exactData, &exact))
+		require.Equal(t, []string{entityID}, exact.Data.Entities)
+
+		namespaceRequest, marshalErr := json.Marshal(graph.PredicateListQuery{Namespace: "robotics.assigned"})
+		require.NoError(t, marshalErr)
+		namespaceData, queryErr := indexComponent.handleQueryPredicateListNATS(ctx, namespaceRequest)
+		require.NoError(t, queryErr)
+		var namespace graph.PredicateListQueryResponse
+		require.NoError(t, json.Unmarshal(namespaceData, &namespace))
+		require.Equal(t, []graph.PredicateSummary{
+			{Predicate: "robotics.assigned.mission", EntityCount: 1},
+			{Predicate: "robotics.assigned.team", EntityCount: 1},
+		}, namespace.Data.Predicates)
+	}
+
+	poisonedIndex := newIndex()
+	require.NoError(t, poisonedIndex.Start(ctx))
+	require.Eventually(t, func() bool {
+		status := poisonedIndex.computeIndexStatus(ctx)
+		return !status.Ready && status.State == graph.IndexStateResetRequired &&
+			status.Reason == string(graph.GraphStateReasonNoncanonicalPredicate)
+	}, 5*time.Second, 25*time.Millisecond, "poisoned replay never latched reset-required")
+	require.NoError(t, poisonedIndex.Stop(5*time.Second))
+
+	// This is the graph-index-owned subset of the operator runbook's complete
+	// resource set. Every bucket exists because Start created it before replay.
+	for _, bucket := range []string{
+		graph.BucketEntityStates,
+		graph.BucketOutgoingIndex,
+		graph.BucketIncomingIndex,
+		graph.BucketAliasIndex,
+		graph.BucketPredicateIndex,
+		graph.BucketContextIndex,
+		graph.BucketNameIndex,
+		graph.BucketPredicateCatalog,
+	} {
+		require.NoError(t, js.DeleteKeyValue(ctx, bucket), "wipe bucket %s", bucket)
+	}
+
+	entityBucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketEntityStates, Description: "Canonical predicate reseed",
+	})
+	require.NoError(t, err)
+	canonical := graph.EntityState{
+		ID: entityID,
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: "robotics.assigned.mission", Object: "acme.ops.robotics.gcs.mission.001", Source: "test", Timestamp: time.Now()},
+			{Subject: entityID, Predicate: "robotics.assigned.team", Object: "alpha", Source: "test", Timestamp: time.Now()},
+		},
+	}
+	canonicalData, err := graph.MarshalEntityState(&canonical)
+	require.NoError(t, err)
+	_, err = entityBucket.Put(ctx, entityID, canonicalData)
+	require.NoError(t, err)
+
+	reseededIndex := newIndex()
+	require.NoError(t, reseededIndex.Start(ctx))
+	waitReady(reseededIndex)
+	assertPredicateParity(reseededIndex)
+	require.NoError(t, reseededIndex.Stop(5*time.Second))
+
+	replayedIndex := newIndex()
+	require.NoError(t, replayedIndex.Start(ctx))
+	waitReady(replayedIndex)
+	assertPredicateParity(replayedIndex)
+	require.NoError(t, replayedIndex.Stop(5*time.Second))
+}
+
 // TestIntegration_KVWatchToIndexFlow tests the full KV watch -> index update flow
 func TestIntegration_KVWatchToIndexFlow(t *testing.T) {
 	// Create test NATS client with KV support

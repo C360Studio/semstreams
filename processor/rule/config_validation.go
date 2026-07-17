@@ -3,6 +3,7 @@ package rule
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -301,6 +302,30 @@ var validRunScopeValues = map[string]bool{
 func validateActionLists(def Definition) error {
 	check := func(label string, actions []Action) error {
 		for i, a := range actions {
+			if a.RelatedLoops != nil && a.Type != ActionTypePublishAgent {
+				return errs.WrapInvalid(
+					fmt.Errorf("rule %s %s[%d] related_loops is only valid on publish_agent actions", def.ID, label, i),
+					"RuleProcessor", "ValidateDefinition", "validate related_loops action type")
+			}
+			if len(a.RelatedLoops) > 0 {
+				keys := make([]string, 0, len(a.RelatedLoops))
+				for key := range a.RelatedLoops {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, key := range keys {
+					if _, err := agentic.LineageTriplePredicate(key); err != nil {
+						return errs.WrapInvalid(
+							fmt.Errorf("rule %s %s[%d] related_loops role key %q: %w", def.ID, label, i, key, err),
+							"RuleProcessor", "ValidateDefinition", "validate related_loops role key")
+					}
+					if a.RelatedLoops[key] == "" {
+						return errs.WrapInvalid(
+							fmt.Errorf("rule %s %s[%d] related_loops role key %q has an empty source value", def.ID, label, i, key),
+							"RuleProcessor", "ValidateDefinition", "validate related_loops source value")
+					}
+				}
+			}
 			if isTripleMutationAction(a.Type) {
 				if strings.Contains(a.Predicate, "$") {
 					return errs.WrapInvalid(

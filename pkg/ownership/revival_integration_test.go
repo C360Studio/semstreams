@@ -32,7 +32,7 @@ func TestIntegration_WatchRevival_QuiescesOnSupersession(t *testing.T) {
 	updates := make(chan struct{}, 32)
 	regA.setRevivalUpdates(updates)
 
-	if err := regA.RegisterOwner(ctx, reg_(owner, sysPat, "sensorml.process.label")); err != nil {
+	if err := regA.RegisterOwner(ctx, systemOwnerRegistration(owner)); err != nil {
 		t.Fatalf("regA RegisterOwner: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestIntegration_WatchRevival_QuiescesOnSupersession(t *testing.T) {
 	if regA.Incarnation() == regB.Incarnation() {
 		t.Fatal("regA and regB must have distinct incarnations for the test to be meaningful")
 	}
-	if err := regB.RegisterOwner(ctx, reg_(owner, sysPat, "sensorml.process.label")); err != nil {
+	if err := regB.RegisterOwner(ctx, systemOwnerRegistration(owner)); err != nil {
 		t.Fatalf("regB RegisterOwner: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestIntegration_WatchRevival_NoQuiesceOnBenignBump(t *testing.T) {
 	}
 	updates := make(chan struct{}, 32)
 	regA.setRevivalUpdates(updates)
-	if err := regA.RegisterOwner(ctx, reg_(mine, sysPat, "sensorml.process.label")); err != nil {
+	if err := regA.RegisterOwner(ctx, systemOwnerRegistration(mine)); err != nil {
 		t.Fatalf("regA RegisterOwner: %v", err)
 	}
 
@@ -103,7 +103,13 @@ func TestIntegration_WatchRevival_NoQuiesceOnBenignBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureBuckets B: %v", err)
 	}
-	if err := regB.RegisterOwner(ctx, reg_("benign-bump-other", "c360.other.*.*.*.*", "test.value.p")); err != nil {
+	if err := regB.RegisterOwner(ctx, Registration{
+		Owner: "benign-bump-other",
+		Claims: []OwnerClaim{{
+			Owner: "benign-bump-other", Pattern: "c360.other.*.*.*.*", Mode: ModeReplaceOwned,
+			Predicates: []string{"test.value.p"},
+		}},
+	}); err != nil {
 		t.Fatalf("regB RegisterOwner: %v", err)
 	}
 
