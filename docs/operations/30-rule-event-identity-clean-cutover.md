@@ -57,7 +57,9 @@ Before starting the breaking binary:
 
 The entity-ID wipe, restart, reseed, replay, and query-parity procedure is
 [`29-entity-id-contract-clean-cutover.md`](29-entity-id-contract-clean-cutover.md). Apply this identity migration before
-that clean restart so no legacy event or anonymous rule-pack producer can repopulate the empty graph.
+that clean restart so no legacy event or anonymous rule-pack producer can repopulate the empty graph. That same
+window activates ADR-077 replacement semantics and ADR-078's raw `predicate3.entity6` layout with no
+`PREDICATE_CATALOG`; it is not a later derived-state migration.
 
 ## Required Proof
 
@@ -65,16 +67,35 @@ Capture green output after all constructor, schema, configuration, and fixture m
 
 ```bash
 task lint
+go vet -tags=integration ./...
+go vet -tags=live_llm ./...
 go test -race ./...
-go test ./test/contract/...
+go test -race -tags=integration -p 2 ./...
 task schema:generate
 git diff --exit-code -- schemas specs
+go test ./test/contract/...
+go test ./test/release/...
+task e2e:core
 task e2e:structural
+task e2e:statistical
+task e2e:semantic
 task e2e:agentic
 ```
 
+The integration race uses `-p 2` to bound concurrent testcontainer packages. Both tagged vet commands and all five
+fresh-volume E2E tiers are mandatory for the combined breaking tag, even when a narrower rule-event slice passed
+earlier.
+
 Owned products must record the exact SemStreams revision, their migrated PackIDs, explicit graph-integration modes,
-constructor call sites, and affected product e2e result before v1 release and archive. Because SemStreams currently
-has no in-repo `graph.events.*` consumer, that checklist must also name the consuming repository and prove that the
-first trigger creates or upserts the stable trigger entity while later triggers replace/update it. A must-exist
-update consumer rejects the first trigger; append semantics violate the stable-entity contract.
+constructor call sites, and affected product E2E result before v1 release and archive. Record the event-consumer
+classification in [31 — sister-repo cutover checklist](31-sister-repo-cutover-checklist.md). A named consumer must
+prove that the first trigger creates or upserts the stable trigger entity and later triggers replace/update it. A
+must-exist update consumer rejects the first trigger; append semantics violate the stable-entity contract. The
+current bounded no-consumer audit remains an open release item until its normative amendment is approved or a
+consumer supplies that proof.
+
+The combined wipe and index activation are governed by
+[ADR-077](../adr/077-bounded-owner-discovery-and-incoming-ownership.md),
+[ADR-078](../adr/078-raw-canonical-predicate-membership-keys.md),
+[`graph-index-replacement-semantics`](../../openspec/changes/graph-index-replacement-semantics/proposal.md), and
+[`predicate-raw-key-representation`](../../openspec/changes/predicate-raw-key-representation/proposal.md).
