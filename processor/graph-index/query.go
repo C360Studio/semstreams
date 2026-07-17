@@ -401,7 +401,8 @@ func normalizeToString(v any) string {
 }
 
 // handleQueryPredicateListNATS handles predicate list query requests via NATS request/reply.
-// Returns predicates with their entity counts — every predicate, or, when
+// Returns predicates in ascending lexical order with their entity counts —
+// every predicate, or, when
 // the request carries a Namespace, only those sharing that exact domain or
 // domain.category namespace
 // (ADR-065: a deliberate, safe namespace query against PREDICATE_CATALOG's
@@ -464,6 +465,7 @@ func (c *Component) listAllPredicates(ctx context.Context) ([]graph.PredicateSum
 	if len(names) == 0 {
 		return []graph.PredicateSummary{}, nil
 	}
+	sort.Strings(names)
 
 	memberKeys, err := c.predicateBucket.Keys(ctx)
 	if err != nil {
@@ -516,6 +518,7 @@ func (c *Component) listPredicatesByNamespace(ctx context.Context, prefix string
 	if err != nil {
 		return nil, err
 	}
+	sort.Strings(names)
 	predicates := make([]graph.PredicateSummary, 0, len(names))
 	for _, name := range names {
 		keys, err := c.predicateBucket.KeysByPrefix(ctx, predicateIndexPrefix(name))

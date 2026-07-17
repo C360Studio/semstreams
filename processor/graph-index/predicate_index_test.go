@@ -84,6 +84,30 @@ func TestListPredicatesByNamespace_TrailingDotNormalization(t *testing.T) {
 	}
 }
 
+func TestPredicateListsAreLexicallySorted(t *testing.T) {
+	comp := createTestComponentWithMockKV(t)
+	seedPredicates(t, comp, map[string][]string{
+		"robotics.assigned.team":    {"c360.a.b.c.d.e1"},
+		"robotics.assigned.mission": {"c360.a.b.c.d.e1"},
+		"agent.run.identity":        {"c360.a.b.c.d.e1"},
+	})
+
+	all, err := comp.listAllPredicates(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []graph.PredicateSummary{
+		{Predicate: "agent.run.identity", EntityCount: 1},
+		{Predicate: "robotics.assigned.mission", EntityCount: 1},
+		{Predicate: "robotics.assigned.team", EntityCount: 1},
+	}, all)
+
+	assigned, err := comp.listPredicatesByNamespace(context.Background(), "robotics.assigned")
+	require.NoError(t, err)
+	assert.Equal(t, []graph.PredicateSummary{
+		{Predicate: "robotics.assigned.mission", EntityCount: 1},
+		{Predicate: "robotics.assigned.team", EntityCount: 1},
+	}, assigned)
+}
+
 func TestListPredicatesByNamespace_NoMatches(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	seedPredicates(t, comp, map[string][]string{
