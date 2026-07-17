@@ -53,51 +53,25 @@ Both profiles require exact match sets, the 451-byte maximum raw key, exact fina
 bucket-handle restart parity, zero slow consumers, bounded NATS RSS, and temporary filtered consumers returning to
 their baseline. Silence or an omitted resource scrape is a failed evidence run.
 
-The CI profile passed all absolute checks. Its purpose is regression detection, not a source for comparative layout
-selection.
+The CI profile is a regression guard, not a source for comparative layout selection. The revision-pinned acceptance
+results follow.
 
-## Supervised 21k raw result
+## Pre-tag owner-filter acceptance record
 
-| Phase or operation | Recorded result |
-|---|---:|
-| Seed throughput | 83,557 rows/s |
-| Maximum membership key | 451 bytes |
-| Exact predicate | p95 31.920 ms; p99 47.825 ms |
-| Entity owner | p95 2.465 ms |
-| Maximum-length entity owner | p95 1.154 ms |
-| Category namespace | p95 29.474 ms |
-| Domain namespace | p95 27.705 ms |
-| Exact predicate under churn | p95 31.245 ms |
-| Churn completion | 2,000 mutations; exact convergence |
-
-Resource evidence:
-
-| Signal | Before | High-water | After |
-|---|---:|---:|---:|
-| NATS RSS | 18.2 MB | — | 46.9 MB |
-| NATS subscriptions | 68 | — | 68 |
-| Slow consumers | 0 | — | 0 |
-| Membership consumers | 0 | 1 | 0 |
-| Catalog consumers | 0 | 0 | 0 |
-
-The raw layout passed every absolute representation gate. Hash-plus-catalog figures emitted by the companion run
-are comparison evidence only; no raw-versus-hash ratio or delta is a selection threshold.
-
-## Pending pre-tag owner-filter acceptance record
-
-The tables below are the required acceptance shape for the follow-up revision. Do not fill them from an uncommitted
-worktree or from an earlier decision run. Record the clean revision before executing either profile, and keep task
-`graph-index-replacement-semantics` 2.2 open until every row passes.
+Both owner-filter profiles ran from the clean follow-up revision. Every row passed its absolute budget and exact
+match-set assertion.
 
 | Provenance | Required value |
 |---|---|
-| SemStreams revision | Pending follow-up commit SHA |
+| SemStreams revision | `0a7af2889a7ca3010924832e6c8c5d7896e2aa97` |
 | Worktree state | Clean before both commands |
-| Run timestamp and timezone | Pending |
-| Host CPU and memory | Pending |
-| Docker client/server | Pending |
+| Run timestamp and timezone | 2026-07-17 15:56:10–15:58:42 CDT |
+| Host CPU and memory | Apple M3 Pro; 12 CPU; 38,654,705,664 bytes RAM |
+| Docker allocation | 23,744 MB |
+| Docker client/server | 29.6.1/29.6.1; testcontainers API 1.51; CLI API 1.55 |
 | NATS server and image digest | `nats:2.12.4-alpine` and the pinned digest above |
 | Go SDK | `github.com/nats-io/nats.go v1.48.0` |
+| Evidence capture | [In-tree raw phase appendix](evidence/graph-index-pre-tag-0a7af288.md) |
 
 Owner-filter latency rows use the exact output from `TestIntegration_OwnerFilterLoadHarness`. The CI shape is
 5,000 entities at four workers. The full shape is 21,000 entities at both the configured four-worker shape and the
@@ -106,67 +80,88 @@ proof appears in the maximum-key table rather than the per-worker latency table.
 
 | Store | Maximum key bytes | Owner discovery | Exact real-NATS match | Result |
 |---|---:|---|---|---|
-| PREDICATE | 451 | `*.*.*.entity6` | Pending | Pending |
-| NAME | 710 | `*.entity6.*` | Pending | Pending |
-| INCOMING | 902 | `*.*.*.*.*.*.source6.*` | Pending | Pending |
-| CONTEXT | 710 | `entity6.*.*` | Pending | Pending |
-| OUTGOING | 256 | Exact `entity6` key | Pending | Pending |
+| PREDICATE | 451 | `*.*.*.entity6` | Exact one-row match | PASS |
+| NAME | 710 | `*.entity6.*` | Exact one-row match | PASS |
+| INCOMING | 902 | `*.*.*.*.*.*.source6.*` | Exact one-row match | PASS |
+| CONTEXT | 710 | `entity6.*.*` | Exact one-row match | PASS |
+| OUTGOING | 256 | Exact `entity6` key | Put/Get value parity | PASS |
 
 The owner harness emits one `phase=seed` record before exercising either worker shape. Preserve it as the ingest
 baseline for task 2.2; it is distinct from the raw-versus-hash predicate candidate seed measurement below.
 
 | Profile | Entities | Seed rows | Elapsed | Throughput | Result |
 |---|---:|---:|---:|---:|---|
-| 5k CI | 5,000 | Pending | Pending | Pending | Pending |
-| 21k full | 21,000 | Pending | Pending | Pending | Pending |
+| 5k CI | 5,000 | 20,020 | 515.482834 ms | 38,837.4 rows/s | PASS |
+| 21k full | 21,000 | 52,020 | 1.184951042 s | 43,900.5 rows/s | PASS |
 
 | Profile | Workers | Store | p50 | p95 | p99 | Max | Result |
 |---|---:|---|---:|---:|---:|---:|---|
-| 5k CI | 4 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
-| 5k CI | 4 | NAME | Pending | Pending | Pending | Pending | Pending |
-| 5k CI | 4 | INCOMING | Pending | Pending | Pending | Pending | Pending |
-| 5k CI | 4 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 4 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 4 | NAME | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 4 | INCOMING | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 4 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 16 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 16 | NAME | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 16 | INCOMING | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 16 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | PREDICATE | 1.857667 | 2.664542 | 2.664542 | 3.100250 | PASS |
+| 5k CI | 4 | NAME | 1.732667 | 1.789667 | 1.789667 | 1.802125 | PASS |
+| 5k CI | 4 | INCOMING | 2.351834 | 2.376125 | 2.376125 | 2.958458 | PASS |
+| 5k CI | 4 | CONTEXT | 1.835041 | 1.879583 | 1.879583 | 1.975709 | PASS |
+| 21k full | 4 | PREDICATE | 4.328875 | 9.863375 | 11.532875 | 13.068250 | PASS |
+| 21k full | 4 | NAME | 1.212792 | 2.099708 | 2.680291 | 2.935375 | PASS |
+| 21k full | 4 | INCOMING | 7.027291 | 12.106750 | 16.291458 | 19.293542 | PASS |
+| 21k full | 4 | CONTEXT | 1.402959 | 2.484541 | 2.493125 | 2.736333 | PASS |
+| 21k full | 16 | PREDICATE | 10.855917 | 19.568375 | 23.123792 | 23.422042 | PASS |
+| 21k full | 16 | NAME | 3.971959 | 7.266209 | 7.294167 | 7.694000 | PASS |
+| 21k full | 16 | INCOMING | 33.343792 | 57.322959 | 66.022958 | 69.496584 | PASS |
+| 21k full | 16 | CONTEXT | 3.941916 | 7.602083 | 7.732625 | 7.779083 | PASS |
+
+All latency values above are milliseconds. The full owner-filter harness passed in 45.764 seconds.
 
 Record the concurrent phase separately because its catch-up, queue, and consumer evidence is per worker shape, not
 per store.
 
 | Profile | Workers | Operations | Catch-up | Throughput | Queue high-water | Consumers base/high/after | Result |
 |---|---:|---:|---:|---:|---:|---|---|
-| 5k CI | 4 | Pending | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 4 | Pending | Pending | Pending | Pending | Pending | Pending |
-| 21k full | 16 | Pending | Pending | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | 20 | 10.453292 ms | 1,913.3 ops/s | 16 | 0/3/0 | PASS |
+| 21k full | 4 | 120 | 122.427167 ms | 980.2 ops/s | 116 | 0/6/0 | PASS |
+| 21k full | 16 | 120 | 114.719333 ms | 1,046.0 ops/s | 104 | 0/14/0 | PASS |
 
 | Profile | Workers | NATS RSS before/after | Subscriptions before/after | Slow consumers | Result |
 |---|---:|---|---|---:|---|
-| 5k CI | 4 | Pending | Pending | Pending | Pending |
-| 21k full | 4 | Pending | Pending | Pending | Pending |
-| 21k full | 16 | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | 43,667,456/65,789,952 | 83/83 | 0 | PASS |
+| 21k full | 4 | 76,013,568/93,159,424 | 83/83 | 0 | PASS |
+| 21k full | 16 | 93,159,424/92,635,136 | 83/83 | 0 | PASS |
 
-## Pending pre-tag predicate comparison
+## Pre-tag predicate comparison
 
-Run `TestIntegration_PredicateLayoutSmoke` on the same clean follow-up revision. These values are descriptive
-comparison evidence only; each candidate is evaluated against the absolute budget.
+`TestIntegration_PredicateLayoutSmoke` ran on the same clean follow-up revision and passed in 75.623 seconds. These
+values are descriptive comparison evidence only; each candidate was evaluated against the absolute budget.
 
-| Operation | Hash plus catalog | Raw nine-token | Notes |
-|---|---:|---:|---|
-| Seed throughput | Pending | Pending | Include catalog rows for hash. |
-| Maximum key bytes | Pending | Pending | Expected 321 and 451. |
-| Exact predicate p95/p99 | Pending | Pending | Same 21,000-member result set. |
-| Entity owner p95/p99 | Pending | Pending | One expected member. |
-| Maximum owner p95/p99 | Pending | Pending | Maximum canonical entity ID. |
-| Namespace p95/p99 | Pending | Pending | Catalog join versus raw category/domain filters. |
-| Exact under churn p95/p99 | Pending | Pending | Four writers, 2,000 mutations. |
-| Membership consumers | Pending | Pending | Baseline/high-water/after. |
-| Catalog consumers | Pending | Pending | Hash only; raw must remain 0/0/0. |
-| NATS RSS | Pending | Pending | Before/after bytes. |
+| Candidate | Membership/catalog rows | Seed elapsed | Throughput | Maximum key | Result |
+|---|---:|---:|---:|---:|---|
+| Hash plus catalog | 21,021/22 | 500.248416 ms | 42,065.1 rows/s | 321 bytes | PASS |
+| Raw nine-token | 21,021/0 | 462.533333 ms | 45,447.5 rows/s | 451 bytes | PASS |
+
+| Candidate | Operation | p95 ms | p99 ms |
+|---|---|---:|---:|
+| Hash plus catalog | Exact predicate | 316.419750 | 323.088708 |
+| Raw nine-token | Exact predicate | 268.287333 | 269.328542 |
+| Hash plus catalog | Entity owner | 5.820750 | 17.336167 |
+| Raw nine-token | Entity owner | 7.901000 | 9.793208 |
+| Hash plus catalog | Maximum owner | 1.581375 | 1.706167 |
+| Raw nine-token | Maximum owner | 1.736042 | 2.261292 |
+| Hash plus catalog | Namespace catalog join | 333.641500 | 336.952084 |
+| Raw nine-token | Category namespace | 274.753333 | 286.406875 |
+| Raw nine-token | Domain namespace | 278.815417 | 292.620875 |
+| Hash plus catalog | Exact under churn | 307.110334 | 321.958125 |
+| Raw nine-token | Exact under churn | 270.770500 | 284.744875 |
+
+| Candidate | Membership consumers | Catalog consumers | NATS RSS before/after | Slow consumers |
+|---|---|---|---|---:|
+| Hash plus catalog | 0/1/0 | 0/1/0 | 16,482,304/43,134,976 | 0 |
+| Raw nine-token | 0/1/0 | 0/0/0 | 18,055,168/51,933,184 | 0 |
+
+Both candidates converged exactly after four writers and 2,000 mutations, released temporary consumers to their
+baselines, and passed fresh-bucket-handle restart parity. The raw layout remains selected by ADR-078; no comparison
+ratio is an acceptance threshold.
+
+This measured owner-discovery matrix is the bounded mechanism and resource input for the
+[graph-retention epic (gh#527)](https://github.com/C360Studio/semstreams/issues/527). It does not select retention,
+TTL, cascade, or global GC policy.
 
 ## Interpreting a run
 

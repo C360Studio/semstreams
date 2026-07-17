@@ -28,11 +28,12 @@
       Evidence: `owner_filter_integration_test.go`, `owner_reconcile_test.go`,
       `owner_filter_load_integration_test.go`, and `replacement_reconcile_integration_test.go` provide the named
       correctness fixtures. Performance acceptance remains task 2.2.
-- [ ] 2.2 Performance: existing ADR-065 5k/3s CI guard + one sustained-churn run on the 21k profile at the
+- [x] 2.2 Performance: existing ADR-065 5k/3s CI guard + one sustained-churn run on the 21k profile at the
       configured worker shape and one stress shape; record latency (p95 ≤ 3s, p99 ≤ 5s, none at 10s), ingest
       throughput, queue growth, catch-up time, temporary-consumer high-water/return-to-baseline.
-      Pending evidence: the revision-pinned 5k and 21k acceptance tables in
-      `docs/operations/32-predicate-layout-smoke-harness.md`.
+      Evidence: revision-pinned 5k/4-worker and 21k/4+16-worker results in
+      `docs/operations/32-predicate-layout-smoke-harness.md` record every required latency, throughput, queue,
+      catch-up, consumer, resource, convergence, and restart gate.
 - [x] 2.3 Select and enforce the graph-index worker maximum in validated configuration.
       Evidence: `maxGraphIndexWorkers` is 16; `Config.Validate` and `component_test.go` reject larger values.
 - [x] 2.4 Add malformed-axis and complete-key/filter pre-I/O controls for production CONTEXT, OUTGOING, and every
@@ -40,18 +41,19 @@
       from the superseded fixed-arity change's entity-id-contract handoff; it is not waived by the split.
       Evidence: `review_remediation_test.go`, `owner_reconcile_test.go`, and
       `replacement_reconcile_integration_test.go` prove rejection before derived-index I/O and fail-closed state.
-- [ ] 2.5 Pass pinned real-NATS maximum key/filter exact-match conformance for every bounded graph-index layout at
+- [x] 2.5 Pass pinned real-NATS maximum key/filter exact-match conformance for every bounded graph-index layout at
       the canonical 256-byte entity bound; representative-corpus success does not substitute for governed maxima.
       Inherited obligation — the shared unit bound is a prerequisite, not duplicate proof.
-      Implementation-ready evidence: the harness covers PREDICATE, NAME, INCOMING, CONTEXT, and a real-NATS
-      256-byte OUTGOING Put/Get. Completion awaits the clean revision-pinned rerun of all five rows.
+      Evidence: the clean revision-pinned harness passed PREDICATE 451, NAME 710, INCOMING 902, CONTEXT 710, and
+      real-NATS OUTGOING 256-byte Put/Get rows on the ADR-pinned server and SDK.
 
 ## 3. Decision and Activation
 
 - [x] 3.1 Write and approve the owner-discovery + INCOMING-ownership ADR from the correctness and budget evidence;
       a failed store defers to an explicitly specified dependent bounded mechanism, which becomes a completion
       dependency of this change.
-      Evidence: ADR-077 was accepted on 2026-07-17; activation remains gated by open task 2.2.
+      Evidence: ADR-077 was accepted on 2026-07-17. Activation remains gated by open task 3.2 and the remaining
+      closeout and product release gates.
 - [ ] 3.2 Activate reconciliation for NAME, PREDICATE, and source-owned INCOMING inside the announced pre-v1
       wipe/reseed: affected buckets initialize behind typed not-ready, rebuild from reseeded canonical
       ENTITY_STATES, readiness held until the authoritative replay watermark. Preserve keyed ordering,
@@ -81,8 +83,10 @@
       and shuffled replay; prove the next completed clustering cycle consumes reconciled truth.
       Evidence: `replacement_reconcile_integration_test.go` covers the complete production path and waits for a
       post-retirement clustering revision containing only live members.
-- [ ] 5.2 Publish the measured owner-discovery matrix as retention-epic input (no retention policy here); correct
+- [x] 5.2 Publish the measured owner-discovery matrix as retention-epic input (no retention policy here); correct
       gh#527 cross-links.
+      Evidence: operations guide 32 publishes the revision-pinned matrix and links it to gh#527 without selecting
+      retention policy.
 - [ ] 5.3 Supersede the affected ADR-068 D3 clauses; update KV Twofer, index-reference, reset, and query-ordering
       docs.
 - [ ] 5.4 Run lint, race, contracts, real-NATS integration, structural e2e, and affected product suites.
