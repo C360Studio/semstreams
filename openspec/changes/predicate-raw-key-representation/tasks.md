@@ -6,8 +6,10 @@
 - [x] 1.2 Pass pinned real-NATS maximum-key and exact-match conformance for the raw layout, including malformed
       shorter/longer keys and neighboring-namespace controls (`domain.category.*` must not match
       `domain.categoryx.*`).
-- [ ] 1.3 Run the `graph-index-replacement-semantics` lifecycle fixtures (`[A] -> [B] -> []`, restart, repair,
+- [x] 1.3 Run the `graph-index-replacement-semantics` lifecycle fixtures (`[A] -> [B] -> []`, restart, repair,
       shuffled replay, concurrent mutation to a declared final revision) against the raw layout.
+      Evidence: `replacement_reconcile_integration_test.go` runs those fixtures against production
+      `predicate3.entity6` keys, including public readiness, repair, restart, and replay parity.
 - [x] 1.4 Pass the ADR-065 5k/3s CI guard and one 21k sustained-churn run on the raw layout at the configured
       worker shape; same absolute budgets as replacement-semantics (p95 ≤ 3s, p99 ≤ 5s, none at 10s, no leaks).
 
@@ -25,12 +27,19 @@
 
 - [ ] 3.1 Include the raw PREDICATE_INDEX bucket in the announced wipe/reseed; initialize behind typed not-ready
       from freshly reseeded canonical ENTITY_STATES; readiness held until the authoritative replay watermark.
-- [ ] 3.2 Convert exact/namespace query handlers and graph-clustering readers to direct filters; retire
+      Implementation-ready evidence: operations guide 29 contains the combined deployment-derived wipe and the
+      replacement integration proves raw initialization, watermark gating, and canonical replay. Check this task
+      only after the coordinated tag and deployment wipe/reseed execute.
+- [x] 3.2 Convert exact/namespace query handlers and graph-clustering readers to direct filters; retire
       PREDICATE_CATALOG and its consistency/repair machinery; remove every old-format reader and rejected-candidate
       helper.
-- [ ] 3.3 Prove exact, namespace, list, stats, compound, traversal, restart, repair, and limited-result parity on
+      Evidence: production graph-index and graph-clustering use raw direct filters; catalog/hash code remains only in
+      the explicit comparative test candidate.
+- [x] 3.3 Prove exact, namespace, list, stats, compound, traversal, restart, repair, and limited-result parity on
       the raw representation against the frozen fixtures; prove clustering parity after its next independently
       completed detection cycle.
+      Evidence: `replacement_reconcile_integration_test.go` and focused graph-index/query tests cover the frozen
+      public fixtures and a later production clustering cycle.
 - [x] 3.4 Close the fallback branch: the absolute representation gates passed and ADR-078 selected raw keys.
       Hash-plus-catalog remains comparison evidence only, not an activation option or selection threshold.
 

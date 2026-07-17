@@ -25,7 +25,9 @@ tasks:
       # packages run at once — mirrors CI. Unbounded parallelism (default
       # -p=GOMAXPROCS, e.g. 12 on a dev laptop) thrashes the Docker host and makes
       # contention-sensitive full-stack tests / container starts flake (gh#511/#199).
-      - go test -race -tags=integration -p 2 ./...
+      # -timeout=20m is an explicit per-package budget for serial Docker-backed
+      # evidence; -count=1 prevents cached results from masquerading as a fresh run.
+      - go test -race -tags=integration -p 2 -timeout=20m -count=1 ./...
       - echo "[OK] Integration tests complete"
 
   integration:iot:

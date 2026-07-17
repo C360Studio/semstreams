@@ -45,18 +45,26 @@ type ownerLoadProfile struct {
 
 func activeOwnerLoadProfile() ownerLoadProfile {
 	if os.Getenv("GRAPH_INDEX_OWNER_FILTER_FULL") == "1" {
-		return ownerLoadProfile{
-			name: "full", entities: 21_000, nameContext: 5_000, spread: 20,
-			repetitions: 30, churnPerWriter: 200, workerShapes: []int{4, maxGraphIndexWorkers},
-			operationBudget: 10 * time.Second, p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
-			maxServerRSSBytes: 2 << 30,
-		}
+		return ownerLoadFullProfile()
 	}
+	return ownerLoadCIProfile()
+}
+
+func ownerLoadCIProfile() ownerLoadProfile {
 	return ownerLoadProfile{
 		name: "ci", entities: 5_000, nameContext: 5_000, spread: 20,
 		repetitions: 5, churnPerWriter: 50, workerShapes: []int{4},
 		operationBudget: 3 * time.Second, p95Budget: 3 * time.Second, p99Budget: 3 * time.Second,
 		maxServerRSSBytes: 1 << 30,
+	}
+}
+
+func ownerLoadFullProfile() ownerLoadProfile {
+	return ownerLoadProfile{
+		name: "full", entities: 21_000, nameContext: 5_000, spread: 20,
+		repetitions: 30, churnPerWriter: 200, workerShapes: []int{4, maxGraphIndexWorkers},
+		operationBudget: 10 * time.Second, p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
+		maxServerRSSBytes: 2 << 30,
 	}
 }
 
@@ -274,12 +282,16 @@ func runOwnerLoadWorkerShape(
 		})
 	dispatcher.Start(dispatchCtx)
 
-	var consumerHighWater atomic.Int64
-	for _, count := range baselines {
-		if int64(count) > consumerHighWater.Load() {
-			consumerHighWater.Store(int64(count))
-		}
+	consumerHighWater := make(map[string]*atomic.Int64, len(fixtures))
+	var aggregateConsumerHighWater atomic.Int64
+	var aggregateConsumerBaseline int64
+	for _, fixture := range fixtures {
+		count := int64(baselines[fixture.name])
+		consumerHighWater[fixture.name] = &atomic.Int64{}
+		consumerHighWater[fixture.name].Store(count)
+		aggregateConsumerBaseline += count
 	}
+	aggregateConsumerHighWater.Store(aggregateConsumerBaseline)
 	sampleCtx, stopSampling := context.WithCancel(ctx)
 	samplerErrs := make(chan error, 1)
 	var samplerWG sync.WaitGroup
@@ -287,6 +299,7 @@ func runOwnerLoadWorkerShape(
 	go func() {
 		defer samplerWG.Done()
 		for sampleCtx.Err() == nil {
+			var aggregate int64
 			for _, fixture := range fixtures {
 				info, infoErr := fixture.stream.Info(sampleCtx)
 				if infoErr != nil {
@@ -295,14 +308,11 @@ func runOwnerLoadWorkerShape(
 					}
 					return
 				}
-				for {
-					current := consumerHighWater.Load()
-					if int64(info.State.Consumers) <= current ||
-						consumerHighWater.CompareAndSwap(current, int64(info.State.Consumers)) {
-						break
-					}
-				}
+				count := int64(info.State.Consumers)
+				aggregate += count
+				storeOwnerLoadHighWater(consumerHighWater[fixture.name], count)
 			}
+			storeOwnerLoadHighWater(&aggregateConsumerHighWater, aggregate)
 			runtime.Gosched()
 		}
 	}()
@@ -367,17 +377,28 @@ func runOwnerLoadWorkerShape(
 		assertOwnerLoadLatency(t, label, samples, profile)
 	}
 	require.LessOrEqual(t, queueHighWater, 1000, "dispatcher queue must remain bounded")
-	t.Logf("phase=concurrent workers=%d operations=%d catch_up=%s throughput=%.1f_ops_per_second queue_high_water=%d consumer_high_water=%d",
-		workers, resultCount, catchUp, float64(resultCount)/catchUp.Seconds(), queueHighWater,
-		consumerHighWater.Load())
+	t.Logf("phase=concurrent workers=%d operations=%d catch_up=%s throughput=%.1f_ops_per_second queue_high_water=%d",
+		workers, resultCount, catchUp, float64(resultCount)/catchUp.Seconds(), queueHighWater)
 
 	for _, fixture := range fixtures {
 		fixture := fixture
 		require.Eventually(t, func() bool {
 			info, infoErr := fixture.stream.Info(ctx)
-			return infoErr == nil && info.State.Consumers == baselines[fixture.bucket]
+			return infoErr == nil && info.State.Consumers == baselines[fixture.name]
 		}, 5*time.Second, 20*time.Millisecond, "%s temporary consumers did not return to baseline", fixture.name)
 	}
+	afterConsumers := ownerLoadConsumerCounts(t, ctx, fixtures)
+	require.Equal(t, baselines, afterConsumers, "temporary consumers must return to every per-store baseline")
+	aggregateConsumerAfter := 0
+	for _, count := range afterConsumers {
+		aggregateConsumerAfter += count
+	}
+	t.Logf("phase=consumers workers=%d aggregate_baseline=%d aggregate_high=%d aggregate_after=%d predicate_baseline=%d predicate_high=%d predicate_after=%d name_baseline=%d name_high=%d name_after=%d incoming_baseline=%d incoming_high=%d incoming_after=%d context_baseline=%d context_high=%d context_after=%d",
+		workers, aggregateConsumerBaseline, aggregateConsumerHighWater.Load(), aggregateConsumerAfter,
+		baselines["predicate"], consumerHighWater["predicate"].Load(), afterConsumers["predicate"],
+		baselines["name"], consumerHighWater["name"].Load(), afterConsumers["name"],
+		baselines["incoming"], consumerHighWater["incoming"].Load(), afterConsumers["incoming"],
+		baselines["context"], consumerHighWater["context"].Load(), afterConsumers["context"])
 
 	// Writers only touched their own deterministic rows. Restore the seeded truth,
 	// then prove every forward result is exact again.
@@ -405,9 +426,26 @@ func runOwnerLoadWorkerShape(
 	require.LessOrEqual(t, phaseAfter.Subscriptions, phaseBefore.Subscriptions+2,
 		"temporary list subscriptions must be released")
 	require.Zero(t, phaseAfter.SlowConsumers, "load gate must not create slow consumers")
-	t.Logf("phase=resource workers=%d cpu_before=%.2f cpu_after=%.2f rss_before=%d rss_after=%d subscriptions_before=%d subscriptions_after=%d",
+	t.Logf("phase=resource workers=%d cpu_before=%.2f cpu_after=%.2f rss_before=%d rss_after=%d subscriptions_before=%d subscriptions_after=%d slow_consumers=%d",
 		workers, phaseBefore.CPU, phaseAfter.CPU, phaseBefore.Mem, phaseAfter.Mem,
-		phaseBefore.Subscriptions, phaseAfter.Subscriptions)
+		phaseBefore.Subscriptions, phaseAfter.Subscriptions, phaseAfter.SlowConsumers)
+}
+
+func storeOwnerLoadHighWater(counter *atomic.Int64, value int64) {
+	for {
+		current := counter.Load()
+		if value <= current || counter.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func TestStoreOwnerLoadHighWater(t *testing.T) {
+	var counter atomic.Int64
+	storeOwnerLoadHighWater(&counter, 2)
+	storeOwnerLoadHighWater(&counter, 1)
+	storeOwnerLoadHighWater(&counter, 5)
+	require.Equal(t, int64(5), counter.Load())
 }
 
 func measureOwnerLoadFilter(
@@ -449,7 +487,7 @@ func ownerLoadConsumerCounts(t *testing.T, ctx context.Context, fixtures []owner
 	for _, fixture := range fixtures {
 		info, err := fixture.stream.Info(ctx)
 		require.NoError(t, err)
-		counts[fixture.bucket] = info.State.Consumers
+		counts[fixture.name] = info.State.Consumers
 	}
 	return counts
 }
@@ -462,8 +500,50 @@ func ownerLoadQueueDepth[T any](dispatcher *keyedDispatcher[T]) int {
 	return depth
 }
 
+func ownerLoadChurnIndex(writer, iteration int, profile ownerLoadProfile) int {
+	if profile.nameContext <= 1 {
+		panic("owner load churn domain must contain a measured owner and at least one non-owner")
+	}
+	measured := profile.nameContext / 2
+	index := (writer*profile.churnPerWriter + iteration) % (profile.nameContext - 1)
+	if index >= measured {
+		index++
+	}
+	return index
+}
+
+func TestOwnerLoadChurnIndexExcludesMeasuredOwner(t *testing.T) {
+	tests := []ownerLoadProfile{
+		ownerLoadCIProfile(),
+		ownerLoadFullProfile(),
+	}
+	for _, profile := range tests {
+		t.Run(profile.name, func(t *testing.T) {
+			measured := profile.nameContext / 2
+			measuredEntity := ownerLoadEntityID(measured)
+			for _, workers := range profile.workerShapes {
+				for writer := 0; writer < workers; writer++ {
+					for iteration := 0; iteration < profile.churnPerWriter; iteration++ {
+						index := ownerLoadChurnIndex(writer, iteration, profile)
+						require.NotEqual(t, measured, index)
+						require.GreaterOrEqual(t, index, 0)
+						require.Less(t, index, profile.nameContext)
+						for _, domain := range []string{"predicate", "name", "incoming", "context"} {
+							key, _ := ownerLoadChurnRow(domain, writer, iteration, profile)
+							require.NotContains(t, key, measuredEntity, "%s writer %d iteration %d", domain, writer, iteration)
+						}
+					}
+				}
+			}
+		})
+	}
+	require.Panics(t, func() {
+		ownerLoadChurnIndex(0, 0, ownerLoadProfile{nameContext: 1})
+	})
+}
+
 func ownerLoadChurnRow(name string, writer, iteration int, profile ownerLoadProfile) (string, []byte) {
-	index := (writer*profile.churnPerWriter + iteration) % profile.nameContext
+	index := ownerLoadChurnIndex(writer, iteration, profile)
 	entityID := ownerLoadEntityID(index)
 	switch name {
 	case "predicate":
@@ -488,24 +568,38 @@ func assertOwnerLoadMaxima(t *testing.T, ctx context.Context, js jetstream.JetSt
 	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
 	maxPredicate := maxSegment + "." + maxSegment + "." + maxSegment
 	rows := []struct {
+		name   string
 		key    string
 		filter string
+		bytes  int
 	}{
-		{predicateIndexKey(maxPredicate, entityID), predicateIndexEntityFilter(entityID)},
-		{nameCompositeKey(nameIndexKey("Maximum"), entityID, maxPredicate), nameIndexEntityFilter(entityID)},
-		{incomingIndexKey(entityID, entityID, maxPredicate), incomingIndexSourceFilter(entityID)},
-		{contextIndexKey(entityID, contextHashHex("maximum"), maxPredicate), contextIndexEntityFilter(entityID)},
+		{"predicate", predicateIndexKey(maxPredicate, entityID), predicateIndexEntityFilter(entityID), 451},
+		{"name", nameCompositeKey(nameIndexKey("Maximum"), entityID, maxPredicate), nameIndexEntityFilter(entityID), 710},
+		{"incoming", incomingIndexKey(entityID, entityID, maxPredicate), incomingIndexSourceFilter(entityID), 902},
+		{"context", contextIndexKey(entityID, contextHashHex("maximum"), maxPredicate), contextIndexEntityFilter(entityID), 710},
 	}
 	for _, row := range rows {
 		require.NoError(t, natsclient.ValidateKVLiteralKey(row.key))
 		require.NoError(t, natsclient.ValidateKVWildcardFilter(row.filter))
+		require.Len(t, row.key, row.bytes, row.name)
 		_, err := store.Put(ctx, row.key, []byte{1})
 		require.NoError(t, err)
 		keys, err := store.KeysByFilter(ctx, row.filter)
 		require.NoError(t, err)
 		require.Equal(t, []string{row.key}, keys)
 	}
-	t.Logf("phase=maxima entity_bytes=%d predicate_bytes=%d key_bytes=[451,710,902,710]",
+	// OUTGOING_INDEX is keyed directly by the source entity rather than an owner
+	// wildcard. Exercise its production Put/Get shape at the governed 256-byte
+	// entity maximum in the same real-NATS bucket.
+	require.NoError(t, natsclient.ValidateKVLiteralKey(entityID))
+	require.Len(t, entityID, 256, "outgoing")
+	outgoingValue := []byte(`[{"to_entity_id":"acme.ops.load.graph.target.hub","predicate":"robotics.assigned.hub"}]`)
+	_, err = store.Put(ctx, entityID, outgoingValue)
+	require.NoError(t, err)
+	outgoingEntry, err := store.Get(ctx, entityID)
+	require.NoError(t, err)
+	require.Equal(t, outgoingValue, outgoingEntry.Value)
+	t.Logf("phase=maxima entity_bytes=%d predicate_bytes=%d key_bytes predicate=451 name=710 incoming=902 context=710 outgoing=256",
 		len(entityID), len(maxPredicate))
 }
 
