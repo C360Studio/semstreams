@@ -26,6 +26,12 @@ Grepped against local checkouts 2026-07-17; re-verify each repo's tree at migrat
   registration.
 - Explicitly register payload `ogc.oms.v3` in every binary that decodes it (no more ambient registration).
 - CS API entity-ID contract: verify OGC-derived IDs satisfy the bounded 6-part grammar before reseeding.
+- KNOWN LANDMINE: gateway-local predicates `cs-api.deployment.deployedSystems` and
+  `cs-api.samplingfeature.hostedProcedure` are mixed-case — the canonical predicate contract is lower-kebab,
+  enforced fail-closed at the write seam, so these writes are REJECTED post-migration. Case-migrate them during
+  the vocabulary promotion (semconnect#70/#71) and record the renames in the predicate rename ledger.
+- Transferred backlog now filed in-repo: semconnect#69 (swecommon Phase 2), #70 (Feasibility vocabulary
+  promotion), #71 (association/composition predicates + case migration).
 
 ### semteams (pin beta.115) — HEAVY (drift + ownership transfer)
 - 31 betas of drift PLUS the wave; budget accordingly.
@@ -48,6 +54,7 @@ Grepped against local checkouts 2026-07-17; re-verify each repo's tree at migrat
 - 3 files import `semstreams/input/github-webhook` — re-home behind `internal/boot` per the ADR-075
   inventory; own the GitHub executors, webhook types, and workflow/rule policy.
 - `pack_id: "semdev"` present and grammar-safe; `enable_graph_integration` explicit.
+- Transferred backlog now filed in-repo: semdev#2 (comment parent number/id), #3 (specific added/removed label).
 
 ### semdragon (pin beta.135) — LIGHT
 - 1 rule-processor config: add `pack_id`; set `enable_graph_integration` explicitly.
