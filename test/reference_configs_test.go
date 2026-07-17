@@ -36,11 +36,19 @@ import (
 // tripleRefRe matches both $entity.triple.* and $related.triple.*
 // references in any string field of a config. Capture group 1 is
 // the predicate path. Stops on whitespace, quote, brace, comma, or
-// any of the supported `.length` / `.triples` suffixes so we capture
-// the predicate name without the suffix (suffixes are handled by
-// the substitution layer — `.length` from #149, `.triples` from
-// ADR-048 PR 4).
-var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:\.(?:length|triples)\b|[^\w.]|$)`)
+// any of the supported `.length` / `.triples` / `.value` suffixes so we
+// capture the predicate name without the suffix (suffixes are handled
+// by the substitution layer — `.length` from #149, `.triples` from
+// ADR-048 PR 4, `.value` from gh#519 / rule-evaluation-completeness).
+//
+// This is a syntactic strip, not the substitution layer's arity
+// disambiguation for `.value` (see applyTripleValueSubstitutions in
+// processor/rule/execution_context.go): a predicate genuinely named
+// with a literal ".value" trailing segment would be mis-stripped here.
+// Same known/accepted collision this lint already carries for
+// `.length` (see tripleLengthRe's doc comment in execution_context.go);
+// no shipped reference config does this today.
+var tripleRefRe = regexp.MustCompile(`\$(?:entity|related)\.triple\.([\w.]+?)(?:\.(?:length|triples|value)\b|[^\w.]|$)`)
 
 // rulesStampedPredicates is the allowlist of predicates that rules
 // stamp on entities themselves (via add_triple / update_triple etc.)

@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // unresolvedTemplateVarRe matches any $entity.*, $related.*, $state.*,
@@ -84,6 +85,32 @@ var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]
 // value in a prompt or property MUST parse it as JSON per the
 // canonical persona-prose template in ADR-048.
 var tripleTriplesRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]+?)\.triples\b`)
+
+// tripleValueRe matches candidate scalar-value suffix references on
+// entity or related triples (gh#519 / rule-evaluation-completeness):
+//
+//	$entity.triple.<predicate>.value
+//	$related.triple.<predicate>.value
+//
+// Capture group 1 is the namespace ("entity" or "related"); group 2 is
+// the CANDIDATE predicate — the text before the trailing `.value`.
+// "Candidate" because matching this regex is necessary but not
+// sufficient: applyTripleValueSubstitutions still runs arity
+// disambiguation (vocabulary.ParsePredicate) on group 2 before treating
+// the match as a `.value` token. See that function's doc comment for
+// the full contract.
+//
+// The capture group's character class OVERLAPS the literal "value" it's
+// anchored against (both contain a-z). Go's regexp (RE2) resolves this
+// with Perl-style greedy-then-backtrack-to-fit semantics: a greedy `+`
+// capture initially consumes the rest of the string, then gives back
+// the minimum needed for the trailing literal `\.value\b` to match —
+// which is exactly the LAST occurrence of `.value` in the token. That is
+// precisely the "trailing suffix" semantic this feature needs: for
+// `$entity.triple.a.value.b.value`, group 2 captures "a.value.b" (a
+// legal 3-part predicate), not "a" or "a.value". Covered by
+// TestTripleValueSubstitution_SuffixIsTheFinalDotValue.
+var tripleValueRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9][a-z0-9.-]*)\.value\b`)
 
 // ExecutionContext carries typed data through the rule evaluation → action pipeline.
 // It replaces the previous (entityID, relatedID string) action signature, providing
@@ -202,6 +229,15 @@ func (ec *ExecutionContext) RuleID() string {
 //     or the path doesn't resolve — see message_substitution.go.
 //
 // Entity triple values can be accessed via $entity.triple.<predicate> syntax.
+// Three graceful suffix forms exist for the common "the predicate might
+// not be present" cases — .length (count), .triples (JSON array of all
+// values), and .value (scalar object, gh#519): all three resolve to a
+// zero-ish value (0, "[]", "") on an absent predicate WITHOUT tripping
+// the unresolved-template warning below. See applyTripleValueSubstitutions
+// for the .value suffix's arity-disambiguation contract (it only applies
+// when the text before ".value" parses as a canonical 3-part predicate;
+// otherwise the whole sequence is the literal predicate, unchanged
+// bare-form behavior).
 //
 // If any template variable survives substitution (e.g. $entity.triple.X
 // where X isn't on the entity at fire time — a common race with
@@ -277,6 +313,13 @@ func (ec *ExecutionContext) substituteVariablesWith(template string, overlay map
 	// substitution so the suffix semantic is preserved against
 	// list-Object stringification.
 	result = ec.applyTripleTriplesSubstitutions(result)
+
+	// Scalar-value substitutions (gh#519 / rule-evaluation-completeness).
+	// Same pre-pass discipline as .length/.triples — runs before the
+	// generic triple substitution so an arity-valid `.value` suffix
+	// isn't orphaned by the generic loop stringifying a shorter/prefix
+	// predicate match first.
+	result = ec.applyTripleValueSubstitutions(result)
 
 	// Entity triple substitutions (e.g., $entity.triple.agent.role → triple value).
 	//
@@ -542,6 +585,95 @@ func (ec *ExecutionContext) applyTripleTriplesSubstitutions(template string) str
 	})
 }
 
+// applyTripleValueSubstitutions replaces every
+// `$entity.triple.<predicate>.value` / `$related.triple.<predicate>.value`
+// token with the scalar object value of the FIRST triple carrying that
+// predicate — gh#519 / rule-evaluation-completeness. This is the
+// documented scalar-graceful member completing the `.length`/`.triples`
+// family: a warn-free way to read a scalar triple value into a condition
+// or template without tripping the unresolved-template WARN when the
+// entity legitimately doesn't carry the predicate.
+//
+// ARITY DISAMBIGUATION is the core design contract, made possible by PR
+// #532's canonical predicate grammar (vocabulary.ParsePredicate): the
+// trailing `.value` is a recognized suffix IFF the text before it parses
+// as a canonical 3-part `domain.category.property` predicate. When it
+// does not parse (e.g. "a.b" is only 2 segments), the ENTIRE captured
+// sequence INCLUDING ".value" is a literal predicate name — this pass
+// leaves the token untouched and falls through unchanged to the generic
+// triple-substitution loop below, which already resolves literal
+// predicates, including ones that happen to end in ".value" (see the
+// "literal predicate ending in .value is not truncated" spec scenario).
+// No presence heuristic, no ambiguity — purely syntactic, decided before
+// any triple lookup happens.
+//
+// Must run BEFORE the generic triple-substitution loop for the same
+// reason as .length/.triples (see applyTripleLengthSubstitutions):
+// otherwise the generic loop could stringify a shorter/prefix predicate
+// match first and orphan the ".value" suffix on the result.
+//
+// Resolution semantics once arity disambiguation selects the `.value`
+// interpretation:
+//
+//   - Predicate present on entity → first matching triple's Object,
+//     rendered with the same scalar formatting the generic loop uses
+//     (fmt.Sprintf("%v", ...)). "First" = first occurrence in
+//     entity.Triples order — the same canonical-ordering precedent as
+//     lookupTripleObjectTyped and collectPredicateValues. Multi-valued
+//     predicate selection beyond first-match is out of scope (see the
+//     proposal's Non-goals).
+//   - Predicate absent (no matching triple, OR Entity/Related is nil for
+//     the referenced namespace) → empty string, SILENTLY. No Warn/Debug
+//     log fires here — contrast .length/.triples, which do log on the
+//     nil-entity case. The entire point of `.value` is a warn-free
+//     scalar-graceful read: logging on the equally-common "entity not in
+//     scope" case would defeat that purpose.
+//
+// Because a recognized `.value` token is ALWAYS replaced (with either a
+// value or ""), it never survives to warnUnresolvedTemplateVars — no
+// separate suppression list is needed there. The fallback-literal case
+// (arity disambiguation says "not a suffix") is unaffected: if the
+// literal predicate isn't present either, the token survives untouched
+// and the existing unresolved-template warning fires exactly as it does
+// today for any other unresolved literal predicate — the bare
+// `$entity.triple.<predicate>` form's behavior is unchanged, per spec.
+func (ec *ExecutionContext) applyTripleValueSubstitutions(template string) string {
+	return tripleValueRe.ReplaceAllStringFunc(template, func(match string) string {
+		parts := tripleValueRe.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match // defensive — shouldn't happen given the regex
+		}
+		namespace, candidate := parts[1], parts[2]
+
+		if _, err := vocabulary.ParsePredicate(candidate); err != nil {
+			// Arity disambiguation: candidate isn't a canonical 3-part
+			// predicate, so ".value" is part of the literal predicate
+			// name, not a recognized suffix. Leave untouched — the
+			// generic triple-substitution loop resolves it (or, if
+			// absent, it survives to trip the unchanged bare-form
+			// unresolved-template warning).
+			return match
+		}
+
+		var entity *gtypes.EntityState
+		switch namespace {
+		case "entity":
+			entity = ec.Entity
+		case "related":
+			entity = ec.Related
+		}
+		if entity == nil {
+			return ""
+		}
+		for _, triple := range entity.Triples {
+			if triple.Predicate == candidate {
+				return fmt.Sprintf("%v", triple.Object)
+			}
+		}
+		return ""
+	})
+}
+
 // collectPredicateValues iterates every triple on entity matching
 // predicate and produces a flat []string of element values. List-
 // shaped Objects (Pattern B) contribute all their elements; scalar
@@ -683,6 +815,17 @@ func coerceTripleObjectToStrings(obj any) ([]string, bool) {
 // substitution without the warning side-effect can bypass it in the future,
 // and so the warning message stays consistent regardless of which caller
 // triggered it.
+//
+// A recognized `.length` / `.triples` / `.value` suffix token never
+// reaches this function still `$`-prefixed: each pre-pass (see
+// applyTripleLengthSubstitutions / applyTripleTriplesSubstitutions /
+// applyTripleValueSubstitutions) unconditionally replaces its matched
+// tokens — with a real value, or with the documented absent-predicate
+// sentinel (0 / "[]" / "") — so no separate suppression list is needed
+// here. Only the arity-disambiguation fallback case for `.value` (the
+// text before it isn't a valid 3-part predicate, so the whole sequence
+// is a literal predicate) can still surface here unresolved, and that is
+// intentional: it is exactly the unchanged bare-form behavior.
 func (ec *ExecutionContext) warnUnresolvedTemplateVars(template, result string) {
 	leftovers := unresolvedTemplateVarRe.FindAllString(result, -1)
 	if len(leftovers) == 0 {

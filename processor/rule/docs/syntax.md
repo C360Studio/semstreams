@@ -229,6 +229,40 @@ Object, predicate, and `update_kv` fields support template variables:
 | `$related.id` | Related entity ID (pair rules) |
 | `$now` | Current UTC timestamp in RFC3339 format |
 
+### Scalar-Graceful Triple Suffixes
+
+Three suffix forms on `$entity.triple.<predicate>` / `$related.triple.<predicate>`
+resolve gracefully when the predicate isn't present on the entity, instead of
+leaving the literal token in place and logging the unresolved-template warning:
+
+| Suffix | Resolves to | On an absent predicate |
+|--------|-------------|-------------------------|
+| `.length` | Decimal count of a list-shaped Object (#149) | `"0"` |
+| `.triples` | JSON-encoded array of every matching value (ADR-048) | `"[]"` |
+| `.value` | The triple's scalar object value (gh#519) | `""`, and — unlike `.length`/`.triples` — **silently**, no Debug log either |
+
+`.value` is arity-disambiguated: the suffix is only recognized when the text before
+it parses as a canonical 3-part `domain.category.property` predicate (the contract
+enforced by `vocabulary.ParsePredicate`). `$entity.triple.metrics.sample.value`
+resolves as the LITERAL predicate `metrics.sample.value` (not a suffixed read of
+`metrics.sample`) because `metrics.sample` is only two segments — it fails the
+arity test, so the whole token is treated as an ordinary (non-suffixed)
+`$entity.triple.<predicate>` reference and behaves exactly like the bare form,
+warning included if unresolved. This is what lets `.value` power warn-free
+field-to-field condition comparisons:
+
+```json
+{
+  "field": "openspec.validated",
+  "operator": "eq",
+  "value": "$entity.triple.openspec.change.revision.value"
+}
+```
+
+On an entity that doesn't carry `openspec.change.revision`, this resolves to `""`
+and the condition simply evaluates false — no WARN flood across entities that
+legitimately don't carry the optional predicate.
+
 `$now` is particularly useful in `update_kv` payloads to timestamp state changes:
 
 ```json
